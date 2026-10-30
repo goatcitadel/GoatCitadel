@@ -3,6 +3,11 @@ import {
   composeRuntimeAdminRouteDependencies,
   resolveDevVerificationVaultKey,
 } from "./gateway-route-composition-runtime.js";
+import {
+  createGatewayRouteCompositionPort,
+  type GatewayRouteCompositionPort,
+} from "./gateway-route-composition-port.js";
+import { MOBILE_PUSH_EXPO_ACCESS_TOKEN_ENV, MOBILE_PUSH_EXPO_SECRET_PROVIDER_ID } from "./mobile-push-provider.js";
 
 const mocks = vi.hoisted(() => ({
   createCronRoutePort: vi.fn((service: { ping: () => string }) => ({
@@ -199,31 +204,17 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(setSecret).not.toHaveBeenCalled();
   });
 
-  it("ignores the verifier Vault key when dev verification is disabled and preserves keychain fallback/fail-closed behavior", () => {
+  it("ignores the verifier Vault key when dev verification is disabled and keeps the Vault closed without touching the keychain", () => {
     vi.stubEnv("GOATCITADEL_VERIFY_VAULT_KEY_BASE64", Buffer.alloc(32, 0x76).toString("base64"));
-    const storedKey = Buffer.alloc(32, 0x55);
     const gateway = createGateway();
     gateway.devDiagnostics.isEnabled.mockReturnValue(false);
-    const getSecret = vi.fn(() => storedKey.toString("base64"));
-    const setSecret = vi.fn();
-    (gateway as any).secretStore = { isAvailable: vi.fn(() => true), getSecret, setSecret };
-    const deps = composeRuntimeAdminRouteDependencies(gateway as never) as any;
+    const store = createSecretStore();
+    store.getSecret.mockReturnValue(Buffer.alloc(32, 0x55).toString("base64"));
+    const deps = composeRuntimeAdminRouteDependencies(throughRealRoutePort({ ...gateway, secretStore: store })) as any;
 
-    expect(deps.vaultKey("citadel-a")).toEqual(storedKey);
-    expect(getSecret).toHaveBeenCalledWith("citadel:citadel-a:vault_master_key");
-    expect(setSecret).not.toHaveBeenCalled();
-
-    const unavailableGateway = createGateway();
-    unavailableGateway.devDiagnostics.isEnabled.mockReturnValue(false);
-    const unavailableGetSecret = vi.fn();
-    (unavailableGateway as any).secretStore = {
-      isAvailable: vi.fn(() => false),
-      getSecret: unavailableGetSecret,
-      setSecret: vi.fn(),
-    };
-    const unavailableDeps = composeRuntimeAdminRouteDependencies(unavailableGateway as never) as any;
-    expect(unavailableDeps.vaultKey("citadel-a")).toBeUndefined();
-    expect(unavailableGetSecret).not.toHaveBeenCalled();
+    expect(deps.vaultKey("citadel-a")).toBeUndefined();
+    expect(store.getSecret).not.toHaveBeenCalled();
+    expect(store.setSecret).not.toHaveBeenCalled();
   });
 
   it("wires runtime/admin route domains to the gateway facade and extracted route ports", async () => {
@@ -443,6 +434,92 @@ describe("composeRuntimeAdminRouteDependencies", () => {
     expect(backup.pruneRetention).toHaveBeenCalledWith({ dryRun: true });
   });
 });
+
+describe("runtime/admin readers of the OS key store through the real route port", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps a mobile push device token in the OS keychain the gateway owns", async () => {
+    vi.stubEnv(MOBILE_PUSH_EXPO_ACCESS_TOKEN_ENV, "");
+    const gateway = createGateway();
+    const store = createSecretStore();
+    const upsertActiveRegistration = vi.fn(async (input: Record<string, unknown>) => ({
+      ...input,
+      lifecycleState: "active",
+      revision: 1,
+      registeredAt: input.now,
+      updatedAt: input.now,
+    }));
+    const host = {
+      ...gateway,
+      secretStore: store,
+      storage: {
+        ...gateway.storage,
+        mobilePush: { ...gateway.storage.mobilePush, upsertActiveRegistration },
+        audit: { append: vi.fn(async () => undefined) },
+      },
+    };
+    const deps = composeRuntimeAdminRouteDependencies(throughRealRoutePort(host)) as any;
+
+    // The Expo credential is looked up in the same store, so a keychain-held token is not ignored.
+    expect(store.getProviderApiKey).toHaveBeenCalledWith(MOBILE_PUSH_EXPO_SECRET_PROVIDER_ID);
+    await expect(
+      deps.mobile.registerMobilePush(
+        { provider: "expo", enabled: true, token: "ExponentPushToken[device-1]" },
+        { grantId: "grant-1", deviceId: "device-1", companionSessionId: "companion-1" },
+      ),
+    ).resolves.toMatchObject({ enabled: true, deliveryAvailability: "unavailable" });
+    expect(store.setSecret).toHaveBeenCalledWith(
+      expect.stringMatching(/^mobile-push:mpr_[a-f0-9]+$/u),
+      "ExponentPushToken[device-1]",
+    );
+    expect(upsertActiveRegistration).toHaveBeenCalledWith(
+      expect.objectContaining({ tokenSecretRef: expect.stringMatching(/^keychain:goatcitadel:mobile-push:mpr_/u) }),
+    );
+  });
+
+  it("gives mobile push no key store when the OS keychain cannot be used", async () => {
+    vi.stubEnv(MOBILE_PUSH_EXPO_ACCESS_TOKEN_ENV, "");
+    const gateway = createGateway();
+    const store = createSecretStore();
+    store.isAvailable.mockReturnValue(false);
+    const deps = composeRuntimeAdminRouteDependencies(throughRealRoutePort({ ...gateway, secretStore: store })) as any;
+
+    await expect(
+      deps.mobile.registerMobilePush(
+        { provider: "expo", enabled: true, token: "ExponentPushToken[device-1]" },
+        { grantId: "grant-1", deviceId: "device-1", companionSessionId: "companion-1" },
+      ),
+    ).rejects.toThrow();
+    expect(store.getProviderApiKey).not.toHaveBeenCalled();
+    expect(store.setSecret).not.toHaveBeenCalled();
+  });
+});
+
+/** Builds the port the way GatewayService does, so a reader sees exactly what a real gateway hands it. */
+function throughRealRoutePort(host: object): GatewayRouteCompositionPort {
+  const fallback = new Map<PropertyKey, unknown>();
+  const gateway = new Proxy(host, {
+    get: (target, key) => {
+      if (key in target) return Reflect.get(target, key);
+      if (!fallback.has(key)) fallback.set(key, vi.fn());
+      return fallback.get(key);
+    },
+  });
+  return createGatewayRouteCompositionPort(gateway as never, gateway as never);
+}
+
+function createSecretStore() {
+  return {
+    isAvailable: vi.fn(() => true),
+    isWriteCustodySafe: vi.fn(() => true),
+    getSecret: vi.fn((_account: string): string | undefined => undefined),
+    setSecret: vi.fn(),
+    deleteSecret: vi.fn(),
+    getProviderApiKey: vi.fn((_providerId: string): string | undefined => undefined),
+  };
+}
 
 function createGateway() {
   return {

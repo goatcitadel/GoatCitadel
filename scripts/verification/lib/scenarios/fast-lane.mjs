@@ -174,6 +174,13 @@ export const FAST_LANE_COMMANDS = Object.freeze([
     title: "Gateway async boundary",
     args: ["verify:gateway:async-boundary"],
   },
+  {
+    // Counts Gateway host callbacks and dependency accesses against the pinned baseline. It needs no build, and
+    // while only the nightly release proof ran it, a rise reached main before anything reported it.
+    id: "fast.architecture-metrics",
+    title: "Gateway architecture metrics",
+    args: ["verify:architecture:metrics"],
+  },
 ]);
 
 export const FAST_LANE_STAGES = Object.freeze([
@@ -248,7 +255,14 @@ export const FAST_LANE_STAGES = Object.freeze([
   {
     id: "fast.post-tests",
     mode: "serial",
-    commands: ["fast.smoke", "fast.build", "fast.mc-next-boot", "fast.docs", "fast.gateway-async-boundary"],
+    commands: [
+      "fast.smoke",
+      "fast.build",
+      "fast.mc-next-boot",
+      "fast.docs",
+      "fast.gateway-async-boundary",
+      "fast.architecture-metrics",
+    ],
   },
 ]);
 

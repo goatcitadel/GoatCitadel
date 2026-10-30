@@ -311,6 +311,7 @@ describe("visible Chat session", () => {
           sessionId: "channel-1",
           turns: turnIds.map((turnId) => ({
             turnId,
+            userMessage: { messageId: `user-${turnId}`, content: `User ${turnId}` },
             branch: { isSelectedPath: true },
             trace: { status: "completed" },
           })),

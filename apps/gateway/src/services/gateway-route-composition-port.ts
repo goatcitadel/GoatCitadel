@@ -133,7 +133,10 @@ export interface GatewayRouteCompositionPort {
   readonly recentChannelSetupTests: Map<string, ChannelSetupRecentTestCacheEntry>;
   readonly researchService: ResearchService;
   readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
+  /** The OS key store, present only while it can be used. Each reader decides whether it may write keys. */
   readonly secretStore?: SecretStoreService;
+  /** The same key store, read by channel credential custody. */
+  readonly channelSecretStore?: SecretStoreService;
   readonly deviceTokenVault: DeviceTokenVault;
   readonly storage: Storage;
   readonly taskLifecycleService: TaskLifecycleService;
@@ -315,6 +318,11 @@ export function createGatewayRouteCompositionPort(
   gateway: GatewayRouteCompositionHost,
   privateDependencies: GatewayRouteCompositionPrivateDependencies,
 ): GatewayRouteCompositionPort {
+  // Read when composed, never at construction. Without a usable OS keychain every reader sees none and says so.
+  const usableSecretStore = (): SecretStoreService | undefined => {
+    const store = gateway.secretStore;
+    return store?.isAvailable() ? store : undefined;
+  };
   return {
     createRemoteWorkerExecutionOwners: () => gateway.createRemoteWorkerExecutionOwners(),
     mcpAdministration: privateDependencies.mcpAdministration,
@@ -373,6 +381,13 @@ export function createGatewayRouteCompositionPort(
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
+    get secretStore() {
+      return usableSecretStore();
+    },
+    // Channel credential custody reads its own member, under the same rule.
+    get channelSecretStore() {
+      return usableSecretStore();
+    },
     deviceTokenVault: gateway.deviceTokenVault,
     steerService: gateway.steerService,
     storage: gateway.storage,

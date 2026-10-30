@@ -170,6 +170,8 @@ export * from "./utf8-truncation.js";
 export * from "./channel-access.js";
 export * from "./channel-wizard.js";
 export * from "./channel-address-host.js";
+export * from "./channel-reply-window.js";
+export * from "./public-web-address.js";
 export * from "./channel-probes.js";
 export * from "./channel-setup-evidence.js";
 export * from "./research.js";

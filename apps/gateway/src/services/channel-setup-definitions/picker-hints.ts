@@ -36,7 +36,7 @@ export const CHANNEL_PICKER_HINTS: Readonly<Record<string, ChannelPickerHintEntr
   teams: { group: "team_chat", note: "Sends only" },
   "google-chat": { group: "team_chat", note: "Receiving needs a public web address" },
 
-  whatsapp: { group: "phone_apps", note: "Business account + public web address" },
+  whatsapp: { group: "phone_apps", note: "Business account + public web address", minutes: 15 },
   line: { group: "phone_apps", note: "Receiving needs a public web address" },
   wecom: { group: "phone_apps", note: "Receiving needs a public web address" },
   qqbot: { group: "phone_apps", note: "Needs a public web address" },

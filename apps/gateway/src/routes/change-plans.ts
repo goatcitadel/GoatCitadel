@@ -121,6 +121,10 @@ const firecrawlConfigurationSchema = nonEmptyStrict({
   defaultReadBackend: z.enum(["native", "firecrawl"]).optional(),
   fallbackToNative: z.boolean().optional(),
 });
+// Shape only: the plan service runs `checkPublicWebAddress`, so a problem answers with its own sentence.
+const publicWebAddressConfigurationSchema = z
+  .object({ publicWebAddress: z.string().trim().min(1).max(400).nullable() })
+  .strict();
 const meshConfigurationSchema = nonEmptyStrict({
   enabled: z.boolean().optional(),
   mode: z.enum(["lan", "wan", "tailnet"]).optional(),
@@ -230,6 +234,12 @@ const requestSchema = z.discriminatedUnion("kind", [
         z.object({ operation: z.literal("memory_configuration"), config: memoryConfigurationSchema }).strict(),
         z
           .object({ operation: z.literal("web_firecrawl_configuration"), config: firecrawlConfigurationSchema })
+          .strict(),
+        z
+          .object({
+            operation: z.literal("public_web_address_configuration"),
+            config: publicWebAddressConfigurationSchema,
+          })
           .strict(),
         z
           .object({

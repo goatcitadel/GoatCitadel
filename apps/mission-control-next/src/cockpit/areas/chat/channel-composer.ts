@@ -1,4 +1,8 @@
-import type { ChatMessagingChannelStatus } from "@goatcitadel/contracts";
+import {
+  WHATSAPP_REPLY_WINDOW_CLOSED,
+  isChannelReplyWindowClosed,
+  type ChatMessagingChannelStatus,
+} from "@goatcitadel/contracts";
 import type { ChannelConversationContext } from "./channel-conversation";
 
 /**
@@ -6,12 +10,16 @@ import type { ChannelConversationContext } from "./channel-conversation";
  * - `ask`: the operator's own conversation with the channel's bot; a message is a question to GoatCitadel and the
  *   answer also goes to the channel.
  * - `post`: someone else's direct conversation, or a group; a message is posted there as the bot, word for word.
+ *
+ * `replyWindow` is present once the conversation's own turns are loaded: the channel and when the person last wrote.
+ * Whether the provider's reply window has closed is read from it at the time the composer is drawn.
  */
 export interface ChannelReply {
   mode: "ask" | "post";
   channelLabel: string;
   targetTitle: string;
   status: ChatMessagingChannelStatus;
+  replyWindow?: { channelKey: string; lastInboundAt?: string };
 }
 
 /**
@@ -21,8 +29,14 @@ export interface ChannelReply {
  */
 export type ChannelCheck = "checking" | "unavailable";
 
-/** Why a channel conversation cannot be replied to. Only a removed or switched-off channel blocks. */
-export type ChannelReplyBlock = { kind: "channel-removed"; message: string } | { kind: "channel-off"; message: string };
+/**
+ * Why a channel conversation cannot be replied to. A removed or switched-off channel blocks, and so does a provider's
+ * reply window that has closed.
+ */
+export type ChannelReplyBlock =
+  | { kind: "channel-removed"; message: string }
+  | { kind: "channel-off"; message: string }
+  | { kind: "reply-window-closed"; message: string };
 
 export type ChannelCheckBlock =
   | { kind: "channel-checking"; message: string }
@@ -33,14 +47,29 @@ const CHECKING_MESSAGE = "Checking this channel…";
 const UNAVAILABLE_MESSAGE = "Couldn't check this channel. Try again from Messaging.";
 const FILES_MESSAGE = "Files aren't sent in channel conversations. Remove them to send.";
 
-/** The composer's channel behavior for an open conversation, or nothing for a mission chat. */
-export function describeChannelReply(channel: ChannelConversationContext | undefined): ChannelReply | undefined {
+/**
+ * The composer's channel behavior for an open conversation, or nothing for a mission chat. Pass `inbound` once the
+ * conversation's own turns are known, with the time the person last wrote (nothing when none of the turns is theirs);
+ * until then no claim is made about the provider's reply window.
+ */
+export function describeChannelReply(
+  channel: ChannelConversationContext | undefined,
+  inbound?: { lastInboundAt: string | undefined },
+): ChannelReply | undefined {
   if (!channel) return undefined;
   return {
     mode: channel.own ? "ask" : "post",
     channelLabel: channel.channelLabel,
     targetTitle: channel.title,
     status: channel.status,
+    ...(inbound
+      ? {
+          replyWindow: {
+            channelKey: channel.channelKey,
+            ...(inbound.lastInboundAt ? { lastInboundAt: inbound.lastInboundAt } : {}),
+          },
+        }
+      : {}),
   };
 }
 
@@ -78,12 +107,19 @@ export function channelReplySubmitLabel(reply: ChannelReply | undefined): string
 
 /**
  * A removed channel keeps its conversations readable but cannot send; an off channel can be turned back on. A channel
- * that needs attention stays sendable: the Gateway answers with its own message if it cannot deliver.
+ * that needs attention stays sendable: the Gateway answers with its own message if it cannot deliver. A WhatsApp
+ * conversation cannot be replied to once the person's last message is 24 hours old; it reopens when they write again.
+ * The Gateway refuses such a send too, with the same sentence.
  */
-export function channelReplyBlock(reply: ChannelReply | undefined): ChannelReplyBlock | null {
+export function channelReplyBlock(reply: ChannelReply | undefined, now: Date = new Date()): ChannelReplyBlock | null {
   if (reply?.status === "removed")
     return { kind: "channel-removed", message: "This channel was removed. Its conversations stay readable." };
   if (reply?.status === "off") return { kind: "channel-off", message: `Turn ${reply.channelLabel} back on to reply.` };
+  if (
+    reply?.replyWindow &&
+    isChannelReplyWindowClosed(reply.replyWindow.channelKey, reply.replyWindow.lastInboundAt, now)
+  )
+    return { kind: "reply-window-closed", message: WHATSAPP_REPLY_WINDOW_CLOSED };
   return null;
 }
 

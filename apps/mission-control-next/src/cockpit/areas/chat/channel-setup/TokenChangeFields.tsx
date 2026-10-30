@@ -1,8 +1,11 @@
 import { useEffect } from "react";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
+import { Callout } from "../../../ui/Callout";
 import { BotToken } from "./DiscordTokenStep";
 import { SlackTokensStep } from "./SlackTokensStep";
 import type { CheckedTokens, TokenInputs } from "./token-change-model";
+import { TokenField } from "./TokenField";
+import { WHATSAPP_META_APP_STEPS } from "./whatsapp-setup-model";
 
 /** What the field step of a token change is given: where to keep what is typed, and what the last check found. */
 export interface TokenFieldsProps {
@@ -94,5 +97,48 @@ export function SlackTokenFields({ workspaceId, connectionId, checked, busy, err
       error={error}
       onCheck={() => onCheck({ botToken: botToken.value, appToken: appToken.value })}
     />
+  );
+}
+
+/** The two sentences that say where the new token is made, and what it has to match. */
+const WHATSAPP_TOKEN_HELP = `${WHATSAPP_META_APP_STEPS[3]} It has to be for the same Meta app and phone number WhatsApp uses now.`;
+
+/**
+ * WhatsApp's access token field, with the button of the other token pages. It is the only secret this page asks for:
+ * the App secret and the IDs stay with the saved channel. What is typed lives only in the volatile credential store: it
+ * is dropped once the token has been checked, and when the field goes. The value arrives as `botToken`, the name
+ * `TokenInputs` gives the first of its two fields.
+ */
+export function WhatsAppTokenFields({ workspaceId, connectionId, checked, busy, error, onCheck }: TokenFieldsProps) {
+  // A half-typed token is not work worth a leave review.
+  const token = useCredentialInput(`channel:${workspaceId}:whatsapp:${connectionId}:new-access-token`, "", undefined, {
+    label: "New WhatsApp access token",
+    active: false,
+  });
+  const { discard } = token;
+  useEffect(() => {
+    if (checked) discard();
+  }, [checked, discard]);
+  useEffect(() => discard, [discard]);
+  return (
+    <>
+      <p className="text-sm text-fg-secondary">{WHATSAPP_TOKEN_HELP}</p>
+      {error ? (
+        <Callout tone="error" announce={false}>
+          <p>{error}</p>
+        </Callout>
+      ) : null}
+      <TokenField
+        label="Access token"
+        value={token.value}
+        onChange={token.setValue}
+        busy={busy}
+        button={{
+          label: "Check token",
+          checking: busy,
+          onCheck: () => onCheck({ botToken: token.value, appToken: "" }),
+        }}
+      />
+    </>
   );
 }

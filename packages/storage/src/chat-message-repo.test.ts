@@ -795,6 +795,49 @@ describe("ChatMessageRepository", () => {
     assert.equal(repo.countAfter("sess-missing", at(0)), 0);
   });
 
+  it("finds the person's newest message, never a reply", () => {
+    const repo = createRepo();
+    const at = (second: number) => `2026-03-05T01:00:${String(second).padStart(2, "0")}.000Z`;
+    repo.upsertMany([
+      message({ messageId: "c-old", sessionId: "sess-latest", sourceAuthority: "external_channel", timestamp: at(2) }),
+      message({ messageId: "c-new", sessionId: "sess-latest", sourceAuthority: "external_channel", timestamp: at(5) }),
+      // Written later than the person's message, but not theirs: the operator's own, the assistant's reply and a
+      // reply that claims channel authority never count.
+      message({ messageId: "o-new", sessionId: "sess-latest", sourceAuthority: "operator", timestamp: at(7) }),
+      message({
+        messageId: "a-new",
+        sessionId: "sess-latest",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "agent",
+        sourceAuthority: "trusted_lifecycle",
+        timestamp: at(8),
+      }),
+      message({
+        messageId: "a-spoof",
+        sessionId: "sess-latest",
+        role: "assistant",
+        actorType: "agent",
+        actorId: "agent",
+        sourceAuthority: "external_channel",
+        timestamp: at(9),
+      }),
+      // Another session's newer message never leaks in, and a session with only replies has none.
+      message({
+        messageId: "other-new",
+        sessionId: "sess-other",
+        sourceAuthority: "external_channel",
+        timestamp: at(30),
+      }),
+      message({ messageId: "only-operator", sessionId: "sess-replies", sourceAuthority: "operator", timestamp: at(4) }),
+    ]);
+
+    assert.equal(repo.latestChannelMessageAt("sess-latest"), at(5));
+    assert.equal(repo.latestChannelMessageAt("sess-other"), at(30));
+    assert.equal(repo.latestChannelMessageAt("sess-replies"), undefined);
+    assert.equal(repo.latestChannelMessageAt("sess-missing"), undefined);
+  });
+
   it("falls back on malformed count, cursor, and list rows", () => {
     assert.equal(createGuardRepo({ countRow: "not a row" }).countBySession("sess-1"), 0);
     assert.equal(createGuardRepo({ countRow: { count: "bad" } }).countBySession("sess-1"), 0);

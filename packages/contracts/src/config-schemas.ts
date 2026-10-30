@@ -453,6 +453,8 @@ export const AssistantConfigInputSchema = z
     auditDir: z.string().optional(),
     workspaceDir: z.string().optional(),
     worktreesDir: z.string().optional(),
+    /** The https address the internet uses to reach this installation. Checked and normalized on load. */
+    publicWebAddress: z.string().optional(),
     auth: z
       .object({
         mode: z.enum(["none", "token", "basic"]).optional(),

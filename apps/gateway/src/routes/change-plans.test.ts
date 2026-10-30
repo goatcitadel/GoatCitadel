@@ -1,6 +1,6 @@
 import Fastify from "fastify";
 import { describe, expect, it, vi } from "vitest";
-import { SemanticValidationError } from "@goatcitadel/contracts";
+import { PUBLIC_WEB_ADDRESS_NOT_PUBLIC, SemanticValidationError, ValidationError } from "@goatcitadel/contracts";
 import { registerChangePlanRoutes } from "./change-plans.js";
 
 function build(evolution: Record<string, unknown>) {
@@ -157,6 +157,76 @@ describe("Change Plan resource routes", () => {
       expect(response.statusCode).toBe(400);
     }
     expect(create).toHaveBeenCalledTimes(5);
+    await app.close();
+  });
+
+  it("accepts the public web address intent as a bounded string or null, and nothing beside it", async () => {
+    const create = vi.fn(async () => ({ planId: "plan-1", status: "awaiting_confirmation", revision: 1 }));
+    const app = build({ create });
+    const post = (config: unknown, extra: Record<string, unknown> = {}) =>
+      app.inject({
+        method: "POST",
+        url: "/api/v1/change-plans",
+        payload: {
+          request: {
+            kind: "runtime_configuration",
+            change: { operation: "public_web_address_configuration", config, ...extra },
+          },
+        },
+      });
+
+    for (const publicWebAddress of ["https://example.com", "  https://example.com/goat  ", null]) {
+      expect((await post({ publicWebAddress })).statusCode).toBe(201);
+    }
+    // The schema trims, as it does for the other typed strings.
+    expect(create).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        request: {
+          kind: "runtime_configuration",
+          change: {
+            operation: "public_web_address_configuration",
+            config: { publicWebAddress: "https://example.com/goat" },
+          },
+        },
+      }),
+    );
+
+    for (const body of [
+      post({}),
+      post({ publicWebAddress: 42 }),
+      post({ publicWebAddress: "" }),
+      post({ publicWebAddress: "   " }),
+      post({ publicWebAddress: "x".repeat(401) }),
+      post({ publicWebAddress: "https://example.com", baseUrl: "https://example.com" }),
+      post({ publicWebAddress: "https://example.com" }, { enabled: true }),
+    ]) {
+      expect((await body).statusCode).toBe(400);
+    }
+    expect(create).toHaveBeenCalledTimes(3);
+    await app.close();
+  });
+
+  it("answers an address problem the plan service finds with a 400 and its sentence", async () => {
+    const create = vi.fn(async () => {
+      throw new ValidationError({ message: PUBLIC_WEB_ADDRESS_NOT_PUBLIC });
+    });
+    const app = build({ create });
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/change-plans",
+      payload: {
+        request: {
+          kind: "runtime_configuration",
+          change: {
+            operation: "public_web_address_configuration",
+            config: { publicWebAddress: "https://192.168.1.5" },
+          },
+        },
+      },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.json()).toMatchObject({ error: PUBLIC_WEB_ADDRESS_NOT_PUBLIC, code: "FIELD_INVALID" });
     await app.close();
   });
 

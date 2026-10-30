@@ -67,6 +67,8 @@ export async function patchSettings(input: {
   readAccessMode?: "roots_only" | "approval_required" | "full_disk";
   outsideRootWriteMode?: "deny" | "approval_required";
   networkAllowlist?: string[];
+  /** The https address the internet uses to reach this installation; `null` clears it. Saved on its own. */
+  publicWebAddress?: string | null;
   operatorWriteRootChange?: OperatorWriteRootChange;
   globalToolAccessChange?: GlobalToolAccessChange;
   toolGroupChange?: ToolGroupChange;

@@ -9,10 +9,11 @@ reviewed checks, governed activation, then first-message verification.
 
 - Start from **Needs attention**, **Connected accounts**, **Resume setup**, or
   **Add channel**. Repair and credential rotation hydrate a revision-bound draft.
-- In the Cockpit, Telegram, Discord and Slack are added from Chat › Messaging:
-  select **+ Add**, then the channel (see "Telegram quick setup", "Discord quick
-  setup" and "Slack quick setup" below). The picker opens the other channels in
-  Settings › Channels with that channel already chosen.
+- In the Cockpit, Telegram, Discord, Slack and WhatsApp are added from Chat ›
+  Messaging: select **+ Add**, then the channel (see "Telegram quick setup",
+  "Discord quick setup", "Slack quick setup" and "WhatsApp quick setup" below).
+  The picker opens the other channels in Settings › Channels with that channel
+  already chosen.
 - Complete account credentials and choose destinations. Slack and Telegram use
   editable destination cards with one explicit default. Discovery adds candidates
   for review and preserves existing thread information and selections.
@@ -305,6 +306,238 @@ lists Slack at "About 5 min".
   the app from the manifest, installing it, both tokens, hi, a direct-message
   reply, a mention in a channel, Turn on, and a socket refresh after a few hours.
 
+## WhatsApp quick setup
+
+New WhatsApp setups use Meta's WhatsApp Business Cloud API with your own Meta
+app. Meta delivers messages only to a public `https://` address, so unlike
+Telegram, Discord and Slack this page needs a public web address (see "Public web
+address" below). The picker lists WhatsApp at "About 15 min" with the note
+"Business account + public web address". Personal WhatsApp QR linking is not
+offered, and nothing on the page uses an unofficial client.
+
+- **Where.** Chat › Messaging › **+ Add** › **WhatsApp** opens
+  `/chat/messaging/add/whatsapp`. The page has six steps, each opening when the one
+  before it checks out (step 2 is instructions and is always open):
+  1. **Give GoatCitadel a public web address.** The step shows the same field as
+     Settings › Channels and is done once an address is saved. GoatCitadel doesn't
+     provide one: use your own domain, reverse proxy or tunnel.
+  2. **Make your Meta app.** **Open Meta for Developers** opens
+     `https://developers.facebook.com/apps`. The step lists where each value is
+     found: create an app for WhatsApp ("Connect with customers through WhatsApp");
+     in API Setup, the Phone number ID and the WhatsApp Business Account ID (Meta's
+     test number is fine); in App settings › Basic, the App ID and the App secret;
+     in Business Settings › System users, a token for this app with the
+     `whatsapp_business_messaging` and `whatsapp_business_management` permissions.
+  3. **Paste your WhatsApp details.** The five values are the access token, the
+     Phone number ID, the WhatsApp Business Account ID, the App ID and the App
+     secret (the IDs are digits only). One **Check** asks Meta, in this order and
+     stopping at the first refusal, with read-only calls:
+     `GET /{phone-number-id}?fields=display_phone_number,verified_name` (the
+     number is real and has a verified name), `GET /debug_token` (the token is
+     valid, was made for this App ID, and when it stops working), `GET
+     /{business-account-id}/phone_numbers?fields=id&limit=100` (the number belongs
+     to the account) and `GET /{business-account-id}/subscribed_apps` (whether this
+     app already receives the account's messages). The calls go to
+     `https://graph.facebook.com/v23.0`. The access token and the App secret are
+     stored as masked credentials and the page never shows them again; the IDs are
+     saved on the draft. The step names the number ("Works. Your number is … (the
+     verified name).").
+     Meta's answer to a failed call becomes one fixed sentence, and never a quote of
+     the request or of Meta's text: the token was refused, the number or the
+     account wasn't found, the number isn't in the account, the token belongs to
+     another Meta app, or the App ID and secret were refused. Any other answer in
+     which Meta refused the request (a `403`, a `429`, or another error code) says
+     "Meta refused the request. Check that the access token has the
+     whatsapp_business_management and whatsapp_business_messaging permissions.",
+     and only a call that got no readable answer (no network, a timeout, or Meta
+     down) says "GoatCitadel couldn't reach Meta." Only Meta's numeric error code
+     is read. A Graph error with code `190` (Graph's access-token error) says
+     the token was refused whatever the HTTP status, which is how an expired
+     temporary token reads. Only the first 100 numbers of the account are read:
+     the next page's address carries the access token, so it is never followed.
+     A token that stops working (`debug_token` gives an expiry that isn't `0`)
+     shows a note, "This token stops working <time>.", that tells you to make a
+     system user's token and change the key from WhatsApp's page once it's on. The
+     note doesn't block the setup, and step 3 stays closed: reopening it would need
+     all five values again.
+  4. **Point Meta at GoatCitadel.** You set Meta's address by hand; GoatCitadel
+     only makes the address and the token and then listens. The step shows the
+     **Callback URL** (the public web address, then
+     `/api/v1/integrations/connections/<draft id>/whatsapp/webhook`) and the
+     **Verify token** as copy fields. In your Meta app, open WhatsApp ›
+     Configuration, paste both, choose Verify and save, and subscribe to
+     `messages`. The page makes the verify token (32 characters) and stores it with
+     the other secrets, and shows it only while the page holds it: after a reload
+     it is not shown again, and **Make a new verify token** makes one to paste into
+     Meta (offered only while the page holds none and Meta hasn't checked the
+     address). A **Check** repeated after a failure keeps the stored token, so an
+     address Meta has already checked stays valid.
+     For a setup draft made on the Chat page, GoatCitadel answers Meta's
+     verification request at that address (see "The setup listener" below). The
+     page asks every six
+     seconds, for ten minutes, whether Meta has checked the address, and then
+     notes the time on the draft (`webhookCheckedAt`). It says "Meta checked your
+     address just now." only when that page session saw the check arrive, and "Meta
+     has checked your address." for everything that stays on screen or comes back
+     from the draft. After ten minutes without a check the step says "Meta hasn't
+     checked your address yet. Choose Verify and save in Meta, then check again."
+     and offers **Check again**, which waits another round. When Meta's
+     `subscribed_apps` doesn't list this app, the step offers **Let this app
+     receive your number's messages**, which calls `POST
+     /{business-account-id}/subscribed_apps` with the access token and no body.
+     That is the only write GoatCitadel makes to Meta during setup, and it runs only
+     from that button. If the call fails after it was sent (no answer, a 5xx, or an
+     answer that can't be read), Meta may have applied it, so the page says
+     "GoatCitadel couldn't tell whether Meta subscribed the app. Choose Let this app
+     receive your number's messages again; repeating it is safe." and the request is
+     recorded as attempted rather than released for a retry. The step is done when
+     Meta has checked the address and the app is subscribed.
+  5. **Say hi from your phone.** The page shows a one-time code as a QR code, a
+     `wa.me` link (`https://wa.me/<number's digits>?text=<code>`) and plain text.
+     Send the code from your phone, as it is, to the number. With Meta's test
+     number the phone may first need to be added under API Setup › To. The same
+     listener hears it (see below) and the page asks every six seconds. The code
+     works for ten minutes and **New code** replaces an expired one. The person
+     whose message carries the code becomes the bot's only allowed sender and its
+     recorded owner, and their WhatsApp number becomes the default recipient.
+  6. **Turn on.** The step lists what will change (only that person can message
+     the bot, replies go to them, a test message GoatCitadel sends that WhatsApp
+     can't remove afterwards, and `graph.facebook.com` if it is not yet allowed),
+     then sends the test message and applies the activation Change Plan in place.
+     If the approval cannot be given there, the step links to Inbox or Settings.
+     WhatsApp offers no way to remove a message, so when GoatCitadel can't remove
+     the test message the step says "GoatCitadel couldn't remove its test message.
+     Delete it in WhatsApp if you like."
+- **The setup listener.** Until Turn on, the draft's address is
+  `/api/v1/integrations/connections/<draft id>/whatsapp/webhook`, and a new
+  connection keeps its draft's ID, so the same address goes on working when the
+  connection is turned on. Only a draft made on this page for a new connection
+  (`setupPage: "messaging"`, create mode) is answered; any other id is a 404, as
+  before. For such a draft GoatCitadel answers Meta's verification `GET`
+  (`hub.mode=subscribe`, `hub.challenge`, `hub.verify_token`) with the challenge
+  when the verify token matches, and hears a delivery signed with
+  `X-Hub-Signature-256` (HMAC-SHA256 of the exact body, keyed with the App secret
+  the page stored) for the draft's Phone number ID. A text message whose whole text
+  is the draft's one-time code is remembered; every other signed delivery is
+  answered 200 and forgotten. Nothing starts a conversation, creates a session or
+  reaches an agent. What the listener remembers is in memory only, per draft, for
+  15 minutes (at most 32 drafts, the oldest dropped first): the time Meta checked
+  the address, and the code with the sender's number and name. It keeps no message
+  text, message id or timestamp, and a restart forgets it. A wrong or missing
+  signature is a 401 and a verification with the wrong token is a 401, with fixed
+  sentences. A verified delivery spends an accepted-delivery rate limit of the same
+  size as a saved connection's, and the 256 KiB body limit and Host check apply. The listener
+  exists for Chat-made drafts only; a draft made in Settings has no listener.
+- **Receive mode.** The connection is a signed webhook, the way every WhatsApp
+  connection is. Inbound routing needs both the App secret and the verify token,
+  and the page stores both.
+- **Who can message the bot.** The person who says hi becomes the bot's only
+  allowed sender and its recorded owner (`allowedSenders`, `ownerActorIds` and
+  `inboundAccessMode: "allowlist"`). Pairing for other people is not on this page
+  yet: anyone else who messages the number is dropped by the allowlist with a
+  `channel.sender_not_allowlisted` diagnostic. Add more numbers (digits only) to
+  `allowedSenders` in Settings › Channels.
+- **The 24-hour reply window.** WhatsApp allows a free-form message only within
+  24 hours of the person's last message, and each new message of theirs starts it
+  again; Meta refuses a later one with error code `131047`. In a WhatsApp
+  conversation under Messaging, GoatCitadel refuses it first, in two places, with
+  the sentence "WhatsApp allows a reply only within 24 hours of their last message.
+  Once they message again, you can reply.":
+  1. **The Chat composer.** For a WhatsApp conversation the composer is off once
+     the window has closed, the sentence is its reason line (the one status line it
+     already has), and Send does nothing. The composer re-checks whenever it draws, with no timer, so a
+     composer left idle across the 24th hour stays on until the next draw.
+  2. **GoatCitadel.** The operator's send (`sendOperatorDeskMessage`) is refused
+     with a 409 and the same sentence before anything is accepted or sent, in both
+     the plain and the streaming path.
+
+  The window is measured from the time GoatCitadel stored for the person's last
+  message in that conversation, to the second, and it closes at exactly 24 hours. A
+  WhatsApp conversation with no stored message from the person counts as closed.
+  GoatCitadel's stored time can differ a little from Meta's, so a send near the end
+  can still pass and then be refused by Meta with `131047`. Other channels have no
+  window. The refusal is for WhatsApp conversations under Messaging only: a local
+  or mission chat bound to a WhatsApp connection with **Save binding** has no
+  conversation, so its send posts as it always has and Meta refuses a late one
+  itself. **Answers the agent writes are not checked**: the agent replies to a
+  message it has just been given, so an answer sent after the window closes may
+  not arrive. Meta reports that afterwards as a delivery status, which GoatCitadel
+  doesn't read yet (it ignores every status update). Turn on's test message and the key page's test message are plain text,
+  so Meta delivers them only within 24 hours of the recipient's last message to the
+  number; have them message it first.
+- **Changing the key.** Chat › Messaging › the channel's page › **Change the
+  key** (`/chat/messaging/<connection id>/key`) asks for the access token alone,
+  checks it with Meta against the connection's saved Phone number ID, WhatsApp
+  Business Account ID, App ID and App secret (the same four calls as step 3), and
+  saves it with the same in-place approval. It is offered only for a WhatsApp
+  connection that keeps all four of those; a connection made in Settings without
+  them keeps its link to Settings. Its save step says that WhatsApp delivers the
+  test message only within 24 hours of the person's last message and can't remove
+  it.
+- **Starting and resuming.** The page marks its draft (`setupPage: "messaging"`)
+  as soon as the draft is made, before any key is stored, so even a draft whose
+  first check failed goes on there. Opening the page again goes on with the newest
+  unfinished one, or the one the address names; the stored token is checked with
+  Meta again, the number and the expiry come back, and who said hi comes back from
+  the draft (as the number: the draft keeps no name). A check noted on the draft
+  skips the wait for Meta. **Start over** discards the draft and its stored keys,
+  and Meta's Callback URL then points at a draft that no longer exists.
+- **Allowed hosts.** GoatCitadel calls `graph.facebook.com`. When it isn't in the
+  network allowlist, the Turn on step lists it as a change, and Turn on adds it
+  through its own approved Change Plan. Turn on approves only the plan it created or
+  resumed and never uses the Settings approval skip.
+- **Settings.** Settings › Channels keeps WhatsApp's guide for the other ways to
+  connect, such as environment-variable keys and a send-only connection, and the
+  page links to it as **More options in Settings**. The guide keeps the App ID and
+  the WhatsApp Business Account ID (`appId`, `businessAccountId`) with the
+  connection. A setup begun on this page goes on here.
+- **Not yet run against a real account.** Browser proof used a sandbox that blocked
+  all outbound traffic and answered Meta from a local stub. The operator still owes
+  the real-account checks: creating a Meta app, pasting the five values, setting the
+  Callback URL, saying hi, Turn on, a reply within the window, and a reply after 24
+  hours.
+
+## Public web address
+
+Some channels (WhatsApp today) need to tell a vendor where on the internet to send
+messages. GoatCitadel can't know that address, so the operator sets it once.
+
+- **Where.** Settings › Channels › **Public web address** (the field also appears
+  on step 1 of the WhatsApp page). **Save address** stores it; **Clear** removes it.
+  It is stored as `assistant.publicWebAddress` in the assistant config and returned
+  by `GET /api/v1/settings` as `publicWebAddress` (absent when none is set).
+- **Saving is a Settings change.** `PATCH /api/v1/settings` with `publicWebAddress`
+  (a string, or `null` to clear) makes, when the Control Plane is on, a Change Plan
+  with the operation `public_web_address_configuration` and the risk `caution`; the
+  Control Plane's own refusal of a request that changes a second setting applies
+  as for any Settings change. The operator's click approves the plan in place, the
+  way Settings approves Firecrawl's address. A bad address is a 400 with its
+  sentence and no plan is made. Chat's Change Plan tool does not offer this
+  operation: the operator sets the address, a model in Chat does not.
+- **What is accepted.** The address is trimmed and must be a full `https://`
+  address of at most 200 characters, with no user name or password, nothing after
+  `?` or `#`, and a host the internet can reach (not `localhost`, a private,
+  loopback or link-local address, or an IPv4-mapped IPv6 form of one). A path prefix
+  is allowed. It is stored tidied: lower-case host, no port the scheme assumes, no
+  trailing slash. The problems are fixed sentences that never repeat what was typed:
+  "Enter a full address that starts with https://.", "Use an https:// address. Meta
+  and the other services send only to secure addresses.", "Leave the user name and
+  password out of the address.", "Leave out anything after ? or #.", "Use an
+  address the internet can reach, not one on this computer or your home network."
+  and "Use an address under 200 characters." The same check runs in the field, in
+  the PATCH, when a Change Plan is made and applied, and when the config loads
+  (a saved value that fails is dropped with a logged fixed sentence, never the
+  address). Names such as `.local` and single-label hosts are not refused.
+- **What uses it.** The WhatsApp page builds its Callback URL from it. Every
+  channel webhook address block (Settings › Channels, and the Classic guide) shows
+  the full address, public web address first, then the connection's path, with
+  **Copy**. With no address set the block shows the placeholder
+  `https://<your public address>` and a **Set your public web address** link.
+- **What it doesn't do.** It doesn't make GoatCitadel reachable. The operator
+  provides the domain, reverse proxy or tunnel, and should keep token auth on for
+  any installation reachable from outside (see "Before You Start" in the
+  [Communication Channel Setup Guide](./COMMUNICATION_CHANNEL_SETUP_GUIDE.md)).
+
 ## Channel boundaries
 
 | Channel | Supported setup and completion evidence |
@@ -312,7 +545,7 @@ lists Slack at "About 5 min".
 | Telegram | Bot identity, explicit chats/default, how messages are received (polling by default; a webhook secret only for web-address delivery) and coordinated pairing/sender allowlist; an authorized incoming message and linked provider-accepted reply. |
 | Discord | Paired direct messages or separately allowlisted server/guild/channel/user/role rules; identity/intents and invitation guidance; the Chat page lets in only the person Discord names as the bot's maker. DM-only destination checks may remain deferred until runtime activation and pairing. |
 | Slack | Explicit adoption of a bound OAuth install or existing supported credentials, workspace/channel membership and scopes, signed Events callbacks when configured, or Socket Mode with an app-level token (the Chat page's way); linked ingress/reply evidence for conversations. |
-| WhatsApp | Business Cloud API sender phone-number resource and recipient. Both app secret and webhook verify token are needed for inbound routing. Personal WhatsApp QR linking is unavailable. |
+| WhatsApp | Business Cloud API sender phone-number resource and recipient. Both app secret and webhook verify token are needed for inbound routing. The Chat page (needs a public web address) checks the five values with Meta, answers Meta's address check and hears a signed one-time code from the one person who becomes the allowed sender; free-form replies are allowed only within 24 hours of that person's last message. Personal WhatsApp QR linking is unavailable. |
 | LINE | Messaging API identity and user/group/room destinations; sender authorization is distinct from destination selection. Signed webhook ingress and its reply prove a conversation. |
 | Nextcloud Talk | Registered bot/room and shared signing token, reviewed live send and signed callback; authorized ingress and linked reply. |
 | ntfy | Server/topic/auth and subscription guidance; dry-run, published notification and manual receipt remain distinct. |
@@ -438,7 +671,7 @@ channel runtime, parity, revisions, storage migration, accessibility, visual and
 documentation lanes. Browser proof uses disposable runtime data and test-owned
 processes; it does not change installed accounts or operate another agent's stack.
 
-Live Telegram/Discord/Slack acceptance remains a separate operator-designated
+Live Telegram/Discord/Slack/WhatsApp acceptance remains a separate operator-designated
 sandbox pass. Check approved and rejected senders, linked replies, approvals,
 attachments, scheduled delivery, reconnect and duplicate events. For every result,
 record the connection revision, provider receipt, timestamp and any deferred or

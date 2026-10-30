@@ -28,11 +28,11 @@ export function composeMemoryKnowledgeRouteDependencies(
     listApprovalEffects: (approvalId) => gateway.storage.approvalEffects.listByApproval(approvalId),
     listSideEffectsForWorkspace: (workspaceId) => gateway.storage.externalSideEffectRuns.listByWorkspace(workspaceId),
   };
-  // Signing key lives in the OS keychain (same store the Vault master key uses). Generated lazily
-  // on first receipt; the public key is derived and embedded in each receipt for offline verify.
-  const evidenceReceiptSigningKeys = new KeychainEvidenceReceiptSigningKeyProvider({
-    secretStore: gateway.secretStore,
-  });
+  // The signing key is meant to live in the OS keychain, generated lazily on first receipt, but that
+  // waits for the operator's approval: the provider has no write-custody check (macOS puts the key
+  // on argv) and a lookup miss silently mints a replacement key. Until then building a receipt fails
+  // closed; verifying one never needs this provider.
+  const evidenceReceiptSigningKeys = new KeychainEvidenceReceiptSigningKeyProvider();
   // C3 Compliance Export reuses the B1 receipt data port + signing key, adding only a range-listing
   // source. durable_runs has no time/workspace index, so we list recent runs (newest first) and the
   // service filters in-memory by range/workspace; see ComplianceExportService for the bound.

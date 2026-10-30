@@ -4,7 +4,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { Storage } from "@goatcitadel/storage";
-import type { ChatSessionBindingRecord, IntegrationConnection } from "@goatcitadel/contracts";
+import {
+  WHATSAPP_REPLY_WINDOW_CLOSED,
+  type ChatSessionBindingRecord,
+  type IntegrationConnection,
+} from "@goatcitadel/contracts";
 import {
   acceptOperatorDeskTurn,
   buildDeskDeliveryPrefix,
@@ -223,6 +227,117 @@ describe("channel desk turns", () => {
     await expect(
       routeOperatorDeskSend({ ...base, binding: binding(), connection: connection({ enabled: false }) }, host),
     ).resolves.toEqual({ mode: "blocked", message: "Turn Telegram back on to reply." });
+    expect(host).not.toHaveBeenCalled();
+  });
+
+  it("refuses a WhatsApp desk send outside the window, in both modes", async () => {
+    const now = new Date("2026-10-29T12:00:00.000Z");
+    const hoursAgo = (hours: number) => new Date(now.getTime() - hours * 60 * 60 * 1000).toISOString();
+    const whatsapp = connection({
+      connectionId: "whatsapp-1",
+      catalogId: "channel.whatsapp",
+      key: "whatsapp",
+      label: "WhatsApp",
+    });
+    const session = resolveSessionRoute({ channel: "whatsapp", account: "whatsapp-1", peer: OWNER_ID });
+    const base = {
+      sessionId: session.sessionId,
+      sessionKey: session.sessionKey,
+      content: "hi",
+      idempotencyKey: "request-1",
+      now: () => now,
+    };
+    const own = binding({ sessionId: session.sessionId, connectionId: "whatsapp-1" });
+    const someoneElses = binding({
+      sessionId: session.sessionId,
+      connectionId: "whatsapp-1",
+      conversation: { kind: "direct", counterpartActorId: "9999" },
+    });
+    const host = vi.fn(async () => ({
+      event: { receivedAt: now.toISOString() },
+      messageId: "message-1",
+      turnId: "turn-1",
+    }));
+    const route = (input: Parameters<typeof routeOperatorDeskSend>[0]) =>
+      routeOperatorDeskSend(input, host as unknown as Parameters<typeof routeOperatorDeskSend>[1]);
+    const closed = { mode: "blocked", message: WHATSAPP_REPLY_WINDOW_CLOSED };
+
+    // Closed: their last message is 25 hours old, or there is none on record. Nothing is accepted.
+    for (const lastInboundAt of [hoursAgo(25), hoursAgo(24), undefined]) {
+      await expect(route({ ...base, binding: own, connection: whatsapp, lastInboundAt })).resolves.toEqual(closed);
+      await expect(route({ ...base, binding: someoneElses, connection: whatsapp, lastInboundAt })).resolves.toEqual(
+        closed,
+      );
+    }
+    expect(host).not.toHaveBeenCalled();
+
+    // Open: their last message is an hour old, so the send goes on as it does today.
+    await expect(
+      route({ ...base, binding: someoneElses, connection: whatsapp, lastInboundAt: hoursAgo(1) }),
+    ).resolves.toEqual({ mode: "post" });
+    await expect(
+      route({ ...base, binding: own, connection: whatsapp, lastInboundAt: hoursAgo(1) }),
+    ).resolves.toMatchObject({ mode: "ask", response: { sessionId: session.sessionId, turnId: "turn-1" } });
+    expect(host).toHaveBeenCalledOnce();
+
+    // Another channel has no window, and no last message on record keeps its send as it is today.
+    host.mockClear();
+    const telegram = resolveSessionRoute({ channel: "telegram", account: "telegram-1", peer: OWNER_ID });
+    const telegramBase = { ...base, sessionId: telegram.sessionId, sessionKey: telegram.sessionKey };
+    await expect(
+      route({
+        ...telegramBase,
+        binding: binding({
+          sessionId: telegram.sessionId,
+          conversation: { kind: "direct", counterpartActorId: "9999" },
+        }),
+        connection: connection(),
+      }),
+    ).resolves.toEqual({ mode: "post" });
+    await expect(
+      route({ ...telegramBase, binding: binding({ sessionId: telegram.sessionId }), connection: connection() }),
+    ).resolves.toMatchObject({ mode: "ask" });
+    expect(host).toHaveBeenCalledOnce();
+
+    // A channel that is switched off says so, whatever the window says.
+    await expect(
+      route({
+        ...base,
+        binding: own,
+        connection: { ...whatsapp, enabled: false },
+        lastInboundAt: hoursAgo(25),
+      }),
+    ).resolves.toEqual({ mode: "blocked", message: "Turn WhatsApp back on to reply." });
+  });
+
+  it("keeps a local or mission chat bound to WhatsApp sending as it did, with no reply window", async () => {
+    const now = new Date("2026-10-29T12:00:00.000Z");
+    const whatsapp = connection({
+      connectionId: "whatsapp-1",
+      catalogId: "channel.whatsapp",
+      key: "whatsapp",
+      label: "WhatsApp",
+    });
+    // "Save binding" on a local chat: no channel conversation, and no message from the person on record.
+    const { conversation: _conversation, ...savedBinding } = binding({
+      sessionId: "local-1",
+      connectionId: "whatsapp-1",
+    });
+    const host = vi.fn();
+    await expect(
+      routeOperatorDeskSend(
+        {
+          sessionId: "local-1",
+          sessionKey: "local-1",
+          content: "hi",
+          idempotencyKey: "request-1",
+          binding: savedBinding,
+          connection: whatsapp,
+          now: () => now,
+        },
+        host,
+      ),
+    ).resolves.toEqual({ mode: "post" });
     expect(host).not.toHaveBeenCalled();
   });
 

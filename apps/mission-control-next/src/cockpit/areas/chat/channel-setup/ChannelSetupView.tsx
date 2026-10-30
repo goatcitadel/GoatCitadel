@@ -13,6 +13,7 @@ import { SlackSetupPage } from "./SlackSetupPage";
 import { TelegramKeyChange } from "./TelegramKeyChange";
 import { TelegramSetupPage } from "./TelegramSetupPage";
 import { useChannelPickerGroups } from "./use-channel-picker-groups";
+import { WhatsAppSetupPage } from "./WhatsAppSetupPage";
 
 /** The views this page shows: a channel's setup, and a channel's key change. */
 export type ChannelSetupViewTarget = Extract<MessagingView, { kind: "setup" | "change_key" }>;
@@ -40,6 +41,7 @@ export const SETUP_PAGES: ReadonlyMap<string, ComponentType<SetupPageProps>> = n
   ["telegram", TelegramSetupPage],
   ["discord", DiscordSetupPage],
   ["slack", SlackSetupPage],
+  ["whatsapp", WhatsAppSetupPage],
 ]);
 
 /**
@@ -54,6 +56,7 @@ export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePagePr
   ["telegram", TelegramKeyChange],
   ["discord", ChannelTokenChange],
   ["slack", ChannelTokenChange],
+  ["whatsapp", ChannelTokenChange],
 ]);
 
 /**

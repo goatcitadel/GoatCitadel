@@ -1,4 +1,9 @@
-import { CHANGE_PLAN_RUNTIME_FEATURE_FLAGS, type ChangePlanRequest } from "@goatcitadel/contracts";
+import {
+  CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
+  ValidationError,
+  checkPublicWebAddress,
+  type ChangePlanRequest,
+} from "@goatcitadel/contracts";
 
 type RuntimeChange = Extract<ChangePlanRequest, { kind: "runtime_configuration" }>["change"];
 type RuntimeChangeFor<Operation extends RuntimeChange["operation"]> = Extract<RuntimeChange, { operation: Operation }>;
@@ -17,6 +22,8 @@ export interface SettingsChangePlanInput {
   readonly readAccessMode?: RuntimeChangeFor<"read_access_policy">["mode"];
   readonly outsideRootWriteMode?: RuntimeChangeFor<"outside_root_write_policy">["mode"];
   readonly networkAllowlist?: readonly string[];
+  /** `null` clears the address. */
+  readonly publicWebAddress?: string | null;
   readonly operatorWriteRootChange?: Omit<RuntimeChangeFor<"operator_write_root">, "operation">;
   readonly globalToolAccessChange?: Omit<RuntimeChangeFor<"tool_global_access">, "operation">;
   readonly toolGroupChange?: Omit<RuntimeChangeFor<"tool_group_access">, "operation">;
@@ -64,6 +71,9 @@ type RuntimeFeatureFlag = RuntimeChangeFor<"feature_flag">["flag"];
  * use the same adapters as Chat and treat the explicit Save click as the plan's
  * confirmation. More complex/secret/path-bearing owners retain their dedicated
  * routes until their Control Plane adapters are registered.
+ *
+ * Throws a `ValidationError` (a 400 that carries its own sentence) for a public web address that fails its check,
+ * so no plan is made for one.
  */
 export function settingsChangePlanRequest(input: SettingsChangePlanInput): ChangePlanRequest | null {
   const mutationKeys = Object.keys(input).filter((key) => key !== "expectedRevision");
@@ -99,6 +109,24 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
       return input.networkAllowlist
         ? { kind: "runtime_configuration", change: { operation: "network_allowlist", entries: input.networkAllowlist } }
         : null;
+    case "publicWebAddress": {
+      const typed = input.publicWebAddress;
+      if (typed === undefined) return null;
+      if (typed === null) {
+        return {
+          kind: "runtime_configuration",
+          change: { operation: "public_web_address_configuration", config: { publicWebAddress: null } },
+        };
+      }
+      // A problem is the operator's to fix, so it is a 400 with its own sentence and no plan is made. The plan carries
+      // the tidied address, which is what the operator reviews and approves.
+      const checked = checkPublicWebAddress(typed);
+      if (!checked.ok) throw new ValidationError({ message: checked.problem });
+      return {
+        kind: "runtime_configuration",
+        change: { operation: "public_web_address_configuration", config: { publicWebAddress: checked.address } },
+      };
+    }
     case "operatorWriteRootChange":
       return input.operatorWriteRootChange
         ? {

@@ -68,7 +68,13 @@ export class KeychainEvidenceReceiptSigningKeyProvider implements EvidenceReceip
     if (this.cached) {
       return this.cached;
     }
-    if (!this.secretStore || !this.secretStore.isAvailable()) {
+    if (!this.secretStore) {
+      throw new EvidenceReceiptSigningKeyUnavailableError(
+        "Evidence Receipt signing has no key store on this host yet, so new receipts cannot be built. " +
+          "Receipt verification still works offline.",
+      );
+    }
+    if (!this.secretStore.isAvailable()) {
       throw new EvidenceReceiptSigningKeyUnavailableError(
         "OS keychain is unavailable, so the Evidence Receipt signing key cannot be loaded or created on this host. " +
           "Receipt verification still works offline; only building new receipts requires the keychain.",

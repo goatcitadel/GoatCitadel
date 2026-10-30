@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { WHATSAPP_REPLY_WINDOW_CLOSED } from "@goatcitadel/contracts";
 import { committedCommandDraft, composerSendBlock } from "./composer-send-block";
 
 type SendBlockProps = Parameters<typeof composerSendBlock>[0];
@@ -94,6 +95,30 @@ describe("composerSendBlock in a channel conversation", () => {
       kind: "channel-off",
       message: "Turn Telegram back on to reply.",
     });
+  });
+
+  it("blocks a WhatsApp reply outside the 24-hour window, behind a removed or off channel's own reason", () => {
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const windowed = (status: "on" | "off" | "removed", hours: number) => ({
+      ...reply(status),
+      channelLabel: "WhatsApp",
+      replyWindow: { channelKey: "whatsapp", lastInboundAt: hoursAgo(hours) },
+    });
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: windowed("on", 25) }))).toEqual({
+      kind: "reply-window-closed",
+      message: WHATSAPP_REPLY_WINDOW_CLOSED,
+    });
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: windowed("on", 1) }))).toBeNull();
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: windowed("off", 25) }))?.kind).toBe(
+      "channel-off",
+    );
+    expect(composerSendBlock(sendProps({ draft: "Hello", channelReply: windowed("removed", 25) }))?.kind).toBe(
+      "channel-removed",
+    );
+    // The read-only earlier version still comes first.
+    expect(composerSendBlock(sendProps({ historicalReadOnly: true, channelReply: windowed("on", 25) }))?.kind).toBe(
+      "historical",
+    );
   });
 
   it("leaves a channel that is on or needs attention sendable", () => {

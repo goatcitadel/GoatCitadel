@@ -68,7 +68,18 @@ jobs:
         env:
           GOATCITADEL_STORAGE_MIGRATION_BASE_REF: ${{ github.event.pull_request.base.sha || (github.ref == 'refs/heads/main' && github.event.before) || '' }}
         run: >-
-          pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.coverage.gateway.smoke,fast.coverage.gateway.exercise,fast.smoke,fast.build,fast.mc-next-boot,fast.docs,fast.gateway-async-boundary
+          pnpm verify:fast --commands=fast.skills-catalog,fast.repo-hygiene,fast.storage-migration-parity,fast.extensions-sdk-build,fast.extensions-sdk-package,fast.typecheck,fast.coverage.gateway.smoke,fast.coverage.gateway.exercise,fast.smoke,fast.build,fast.mc-next-boot,fast.docs,fast.gateway-async-boundary,fast.architecture-metrics
+
+      # fast.architecture-metrics runs its own verification lane, and the checks part below uploads only the fast
+      # run. Print the regressions here so a red run names the file that rose without a local re-run.
+      - name: Show architecture metrics regressions
+        if: failure()
+        run: |
+          for compare in artifacts/verification/*-architecture-metrics-*/diagnostics/architecture-metrics-compare.json; do
+            if [ -f "$compare" ]; then
+              node -e 'for (const line of JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8")).regressions ?? []) console.log(line)' "$compare"
+            fi
+          done
 
       - name: Stage checks part
         if: always()

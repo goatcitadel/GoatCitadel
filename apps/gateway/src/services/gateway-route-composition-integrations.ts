@@ -63,6 +63,7 @@ import * as channelSetupService from "./channel-setup-service.js";
 import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
 import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import { createConnectionSecretReferenceResolver } from "./channel-secret-resolution.js";
+import { createWhatsAppSetupListener } from "./whatsapp-setup-listener.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import {
   createExternalSideEffectReplayRecords,
@@ -95,6 +96,8 @@ export function composeIntegrationChannelRouteDependencies(
   });
   const notificationRouting = createNotificationRoutingServiceForGateway(gateway);
   const channelSetupDeps = createChannelSetupHostForGateway(gateway, integrationDiagnostics, integrationChannel);
+  // The one listener for WhatsApp setup drafts made on the Messaging page; the webhook port answers Meta through it.
+  const whatsAppSetupListener = createWhatsAppSetupListener(channelSetupDeps);
   const channelOAuth = createChannelOAuthStagingService(gateway, channelSetupDeps);
   const channelSetup = createChannelSetupRoutePort({
     createChannelSetupDraft: (input) => channelSetupService.createChannelSetupDraft(channelSetupDeps, input),
@@ -138,6 +141,9 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.discoverChannelSetupTelegramTargets(channelSetupDeps, input),
     checkDiscordSetup: (input) => channelSetupService.checkDiscordSetup(channelSetupDeps, input),
     checkSlackSetup: (input) => channelSetupService.checkSlackSetup(channelSetupDeps, input),
+    checkWhatsAppSetup: (input) =>
+      channelSetupService.checkWhatsAppSetup(channelSetupDeps, whatsAppSetupListener, input),
+    subscribeWhatsAppSetupApp: (input) => channelSetupService.subscribeWhatsAppSetupApp(channelSetupDeps, input),
     acknowledgeChannelSetupTest: (draftId, input, actorId) =>
       channelSetupService.acknowledgeChannelSetupTest(channelSetupDeps, draftId, input, actorId),
     getChannelSetupJourney: (connectionId) =>
@@ -323,12 +329,15 @@ export function composeIntegrationChannelRouteDependencies(
   const integrationWebhooks = createIntegrationWebhookRoutePort({
     acceptInboundChannelEvent: (input) => gateway.acceptInboundChannelEvent(input),
     acceptInboundChannelEvents: (inputs) => gateway.acceptInboundChannelEvents(inputs),
+    answerWhatsAppSetupCheck: (draftId, query) => whatsAppSetupListener.answerCheck(draftId, query),
     awaitInboundChannelCommandResult: (eventId) => gateway.awaitInboundChannelCommandResult(eventId),
     findRemoteActionTokenId: (token) => gateway.findRemoteActionTokenId(token),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
       gateway.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
     hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
+    hearWhatsAppSetupDelivery: (draftId, rawBody, signature) =>
+      whatsAppSetupListener.hearDelivery(draftId, rawBody, signature),
     ingestChannelMessage: (channel, idempotencyKey, input) =>
       gateway.ingestChannelMessage(channel, idempotencyKey, input),
     isVoiceInboundEnabled: async () => (await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled")) === true,
@@ -443,7 +452,7 @@ export async function deliverNotificationToChannel(
   return { status: "delivered", attemptCount: 1 };
 }
 
-async function deliverNotificationToWebhook(
+export async function deliverNotificationToWebhook(
   gateway: GatewayRouteCompositionPort,
   target: NotificationTarget,
   event: NotificationEventRecord,
@@ -452,14 +461,17 @@ async function deliverNotificationToWebhook(
   const secretStore = gateway.secretStore;
   if (!secretStore?.isAvailable()) return { status: "failed", lastError: "OS keychain is unavailable." };
   if (!target.webhookUrlSecretRef) return { status: "failed", lastError: "Webhook destination is unavailable." };
-  const urlValue = secretStore.getSecret(accountFromNotificationSecretRef(target.webhookUrlSecretRef));
+  // Both references are checked before any keychain read: a target never reaches a non-notification entry.
+  const urlAccount = accountFromNotificationSecretRef(target.webhookUrlSecretRef, "webhookUrlSecretRef");
+  const credentialAccount = target.credentialSecretRef
+    ? accountFromNotificationSecretRef(target.credentialSecretRef, "credentialSecretRef")
+    : undefined;
+  const urlValue = secretStore.getSecret(urlAccount);
   if (!urlValue) return { status: "failed", lastError: "Webhook destination secret is unavailable." };
   const url = parseAllowedNotificationWebhookUrl(urlValue, (candidate) =>
     gateway.isConnectionUrlAllowlisted(candidate),
   );
-  const credential = target.credentialSecretRef
-    ? secretStore.getSecret(accountFromNotificationSecretRef(target.credentialSecretRef))
-    : undefined;
+  const credential = credentialAccount ? secretStore.getSecret(credentialAccount) : undefined;
 
   const maxAttempts = 3;
   let lastRunId: string | undefined;
@@ -615,11 +627,11 @@ function createIntegrationChannelPortForGateway(
 ): IntegrationChannelServicePort {
   const storage = gateway.storage;
   const discordRuntimeService = gateway.discordRuntimeService;
-  const secretStore = gateway.secretStore;
+  const channelSecretStore = gateway.channelSecretStore;
   const streams = getChannelStreamRuntime(gateway);
   return {
     storage,
-    ...(secretStore ? { channelSecrets: new ChannelSecretCustodyService(secretStore) } : {}),
+    ...(channelSecretStore ? { channelSecrets: new ChannelSecretCustodyService(channelSecretStore) } : {}),
     publishRealtime: async (eventType, source, payload, options) => {
       await gateway.publishRealtime(eventType, source, payload, options);
     },
@@ -719,12 +731,21 @@ function reportGoogleSignInCleanupFailure(
 }
 
 /**
+ * The replay key (shared by integration replay records and the Citadel Ward request vault) stays out
+ * of the OS keychain until the operator approves minting it there. Its sealed-record guard counts
+ * replay records but not sealed Ward approvals, so a lookup miss after a restart could replace the key
+ * and strand pending Ward approvals. Until then nothing is sealed: replays cannot be rebuilt and
+ * Ward-gated actions stay blocked, as before.
+ */
+const HELD_REPLAY_KEY_STORE = undefined;
+
+/**
  * The single construction site for the integration-action host. Used by the route
  * composition above AND by the gateway's approved dry-run commit replay, so the two
  * callers can never drift apart on which gateway capabilities the action runtime sees.
  */
 export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompositionPort): IntegrationActionHost {
-  const { storage, secretStore } = gateway;
+  const { storage } = gateway;
   return {
     storage,
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
@@ -738,7 +759,7 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     mutationStore: gateway.mutationIdempotencyStore,
     sideEffectRunStore: storage.externalSideEffectRuns,
     replayRecords: createExternalSideEffectReplayRecords({
-      resolveKey: sharedExternalSideEffectReplayKeyResolver(secretStore, storage.externalSideEffectRuns),
+      resolveKey: sharedExternalSideEffectReplayKeyResolver(HELD_REPLAY_KEY_STORE, storage.externalSideEffectRuns),
       runs: storage.externalSideEffectRuns,
     }),
     createApproval: (input) => gateway.createApproval(input),
@@ -754,8 +775,7 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
  * approved request retries a transient outage instead of failing the approval.
  */
 export function buildCitadelWardRequestVaultForGateway(gateway: GatewayRouteCompositionPort): CitadelWardRequestVault {
-  const { storage, secretStore } = gateway;
   return createCitadelWardRequestVault(
-    sharedExternalSideEffectReplayKeyResolverOrThrow(secretStore, storage.externalSideEffectRuns),
+    sharedExternalSideEffectReplayKeyResolverOrThrow(HELD_REPLAY_KEY_STORE, gateway.storage.externalSideEffectRuns),
   );
 }

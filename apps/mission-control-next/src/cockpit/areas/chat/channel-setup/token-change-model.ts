@@ -1,7 +1,7 @@
 import { SAVE_KEY_WORDING } from "./telegram-key-change-model";
 import type { TurnOnWording } from "./TurnOnStep";
 
-/** What changing a Discord or Slack channel's tokens has to know: what a check found, and whether the bot changed. */
+/** What changing a Discord, Slack or WhatsApp channel's tokens has to know: what a check found, and whether the bot changed. */
 
 /** The secrets a channel's tokens are, as the page's fields hold them. A channel with one token ignores the other. */
 export interface TokenInputs {

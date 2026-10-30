@@ -293,6 +293,32 @@ describe("chat rendering tail coverage", () => {
     expect(split.tail).toBe('```json {"ok":true}```\n\noutro tail');
   });
 
+  it("shows sentences in an untagged fence as wrapped text that still copies", async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    vi.stubGlobal("navigator", { clipboard: { writeText } });
+    const draft = "Hi Sam,\n\nThanks for the update. I can make Tuesday at 3pm if that still works.";
+
+    renderer = create(<AssistantMessageRenderer role="assistant" content={`\`\`\`\n${draft}\n\`\`\``} />);
+
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-code-shell" })).toHaveLength(0);
+    expect(renderer.root.findAllByType("pre")).toHaveLength(0);
+    const body = renderer.root.findByProps({ className: "mc-assistant-prose-fence-body" });
+    expect(body.props.children).toBe(draft);
+    expect(normalizedTextOf(renderer.toJSON())).toContain("text");
+    const copyButton = renderer.root.findByProps({ className: "mc-assistant-code-copy" });
+    expect(copyButton.props["aria-label"]).toBe("Copy text");
+
+    await act(async () => {
+      copyButton.props.onClick();
+      await Promise.resolve();
+    });
+    expect(writeText).toHaveBeenCalledWith(draft);
+
+    renderer.update(<AssistantMessageRenderer role="assistant" content={`\`\`\`markdown\n${draft}\n\`\`\``} />);
+    expect(renderer.root.findAllByProps({ className: "mc-assistant-prose-fence-body" })).toHaveLength(0);
+    expect(renderer.root.findAllByType("pre")).toHaveLength(1);
+  });
+
   it("renders empty fenced code blocks as block code, not inline ticks", () => {
     renderer = create(<AssistantMessageRenderer role="assistant" content={"```\n```"} />);
 

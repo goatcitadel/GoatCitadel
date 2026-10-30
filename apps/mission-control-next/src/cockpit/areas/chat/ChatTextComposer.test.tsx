@@ -2,6 +2,7 @@
 import { act, createRef, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WHATSAPP_REPLY_WINDOW_CLOSED } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import {
   ChatTextComposer,
@@ -923,6 +924,42 @@ describe("channel conversation composer", () => {
     const draft = container.querySelector("textarea")!;
     expect(draft.disabled).toBe(true);
     expect(draft.placeholder).toBe("Turn Telegram back on to reply.");
+  });
+
+  it("says why a WhatsApp reply can't go once their last message is a day old, in the one reason line", async () => {
+    const hoursAgo = (hours: number) => new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    const whatsapp = { ...post, channelLabel: "WhatsApp" } as const;
+    const props = composerProps({
+      channelReply: { ...whatsapp, replyWindow: { channelKey: "whatsapp", lastInboundAt: hoursAgo(25) } },
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const reason = container.querySelector("#cockpit-chat-send-reason");
+    expect(reason?.textContent).toBe(WHATSAPP_REPLY_WINDOW_CLOSED);
+    // The sentence rides the composer's existing reason line: no second live region appears for it.
+    expect(container.querySelectorAll('[role="status"], [role="alert"], [aria-live]')).toHaveLength(1);
+    expect(reason?.getAttribute("role")).toBe("status");
+    const draft = container.querySelector("textarea")!;
+    expect(draft.disabled).toBe(true);
+    expect(draft.placeholder).toBe(WHATSAPP_REPLY_WINDOW_CLOSED);
+    expect(draft.getAttribute("aria-describedby")).toBe("cockpit-chat-send-reason");
+    expect(sendButton().disabled).toBe(true);
+    expect(cockpitSendBlockReason(props)).toBe(WHATSAPP_REPLY_WINDOW_CLOSED);
+    await act(async () =>
+      container
+        .querySelector("textarea")!
+        .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true })),
+    );
+    expect(props.onSend).not.toHaveBeenCalled();
+
+    // An hour after their message the window is open, and nothing is blocked.
+    const open = composerProps({
+      channelReply: { ...whatsapp, replyWindow: { channelKey: "whatsapp", lastInboundAt: hoursAgo(1) } },
+    });
+    await act(async () => root.render(<ChatTextComposer props={open} />));
+    expect(container.querySelector("#cockpit-chat-send-reason")).toBeNull();
+    expect(container.querySelectorAll('[role="status"], [role="alert"], [aria-live]')).toHaveLength(0);
+    expect(container.querySelector("textarea")!.disabled).toBe(false);
+    expect(container.querySelector("textarea")!.placeholder).toBe("Posts to Maya on WhatsApp as your bot");
   });
 
   it("stays sendable while the channel needs attention", async () => {
