@@ -241,7 +241,11 @@ function senderOfCode(payload: unknown, code: string): WhatsAppSetupCodeSender |
   return sender;
 }
 
-/** The name on the sender's own profile. A name that belongs to someone else is never borrowed. */
+/**
+ * The name on the sender's profile: the contact whose `wa_id` is the sender's number, or else the only contact the
+ * delivery carries, even when its `wa_id` differs from the sender's `from`. With several contacts and none of them the
+ * sender's, there is no name.
+ */
 function nameOf(actorId: string, contacts: Array<Record<string, unknown>>): string | undefined {
   const own =
     contacts.find((contact) => asString(contact.wa_id) === actorId) ??

@@ -345,8 +345,13 @@ offered, and nothing on the page uses an unofficial client.
      Meta's answer to a failed call becomes one fixed sentence, and never a quote of
      the request or of Meta's text: the token was refused, the number or the
      account wasn't found, the number isn't in the account, the token belongs to
-     another Meta app, the App ID and secret were refused, or GoatCitadel couldn't
-     reach Meta. A Graph error with code `190` (Graph's access-token error) says
+     another Meta app, or the App ID and secret were refused. Any other answer in
+     which Meta refused the request (a `403`, a `429`, or another error code) says
+     "Meta refused the request. Check that the access token has the
+     whatsapp_business_management and whatsapp_business_messaging permissions.",
+     and only a call that got no readable answer (no network, a timeout, or Meta
+     down) says "GoatCitadel couldn't reach Meta." Only Meta's numeric error code
+     is read. A Graph error with code `190` (Graph's access-token error) says
      the token was refused whatever the HTTP status, which is how an expired
      temporary token reads. Only the first 100 numbers of the account are read:
      the next page's address carries the access token, so it is never followed.
@@ -430,12 +435,13 @@ offered, and nothing on the page uses an unofficial client.
   `allowedSenders` in Settings › Channels.
 - **The 24-hour reply window.** WhatsApp allows a free-form message only within
   24 hours of the person's last message, and each new message of theirs starts it
-  again; Meta refuses a later one with error code `131047`. GoatCitadel refuses it
-  first, in two places, with the sentence "WhatsApp allows a reply only within 24
-  hours of their last message. Once they message again, you can reply.":
-  1. **The Chat composer.** For a WhatsApp conversation the composer is off, the
-     sentence is its reason line (the one status line it already has), and Send
-     does nothing. The composer re-checks whenever it draws, with no timer, so a
+  again; Meta refuses a later one with error code `131047`. In a WhatsApp
+  conversation under Messaging, GoatCitadel refuses it first, in two places, with
+  the sentence "WhatsApp allows a reply only within 24 hours of their last message.
+  Once they message again, you can reply.":
+  1. **The Chat composer.** For a WhatsApp conversation the composer is off once
+     the window has closed, the sentence is its reason line (the one status line it
+     already has), and Send does nothing. The composer re-checks whenever it draws, with no timer, so a
      composer left idle across the 24th hour stays on until the next draw.
   2. **GoatCitadel.** The operator's send (`sendOperatorDeskMessage`) is refused
      with a 409 and the same sentence before anything is accepted or sent, in both
@@ -446,7 +452,10 @@ offered, and nothing on the page uses an unofficial client.
   WhatsApp conversation with no stored message from the person counts as closed.
   GoatCitadel's stored time can differ a little from Meta's, so a send near the end
   can still pass and then be refused by Meta with `131047`. Other channels have no
-  window. **Answers the agent writes are not checked**: the agent replies to a
+  window. The refusal is for WhatsApp conversations under Messaging only: a local
+  or mission chat bound to a WhatsApp connection with **Save binding** has no
+  conversation, so its send posts as it always has and Meta refuses a late one
+  itself. **Answers the agent writes are not checked**: the agent replies to a
   message it has just been given, so an answer sent after the window closes may
   not arrive. Meta reports that afterwards as a delivery status, which GoatCitadel
   doesn't read yet (it ignores every status update). Turn on's test message and the key page's test message are plain text,
