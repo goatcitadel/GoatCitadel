@@ -31,20 +31,14 @@ export interface CapabilitySkillDiscoverSources {
   presentSourceCatalog(catalog: SkillSourceCatalog, query: string | undefined, limit: number): SkillSourceListResponse;
   /** The skills installed at runtime, with where each one's source file says it came from. */
   listInstalledSources(): readonly InstalledSkillSource[];
-  /** The workspace's installs still on their way in, or stopped on the way. */
+  /**
+   * The workspace's installs still on their way in, or stopped on the way. A read that fails logs its own error, so
+   * Discover only goes on without the marks.
+   */
   listInstalls(workspaceId: string): Promise<readonly CapabilitySkillInstall[]>;
 }
 
-export type CapabilitySkillDiscoverReadSource = "installs";
-
-/** Called with the real error of a failed read, so the response can carry plain wording only. */
-export type CapabilitySkillDiscoverFailureReporter = (
-  source: CapabilitySkillDiscoverReadSource,
-  error: unknown,
-) => void;
-
 export interface CapabilitySkillDiscoverOptions {
-  reportFailure?: CapabilitySkillDiscoverFailureReporter;
   /** The clock the marketplaces' cache counts its 10 minutes on. */
   now?: () => Date;
 }
@@ -71,7 +65,7 @@ export class CapabilitySkillDiscoverService {
 
   public constructor(
     private readonly sources: CapabilitySkillDiscoverSources,
-    private readonly options: CapabilitySkillDiscoverOptions = {},
+    options: CapabilitySkillDiscoverOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
     this.marketplaces = createUsageCache(
@@ -126,13 +120,12 @@ export class CapabilitySkillDiscoverService {
 
   /**
    * The installs in progress, to mark their sources. Without them an in-progress source reads as available, and
-   * installing it again meets the same guards, so Discover is still answered and the failure goes to the log.
+   * installing it again meets the same guards, so Discover is still answered. The failed read has logged its own error.
    */
   private async readInstalls(workspaceId: string): Promise<readonly CapabilitySkillInstall[]> {
     try {
       return await this.sources.listInstalls(workspaceId);
-    } catch (error) {
-      this.options.reportFailure?.("installs", error);
+    } catch {
       return [];
     }
   }

@@ -2,6 +2,7 @@ import {
   skillCategoryFor,
   SHIPPED_SKILL_PACKS,
   TRUSTED_GIT_FORGE_HOSTS,
+  namesGitRepository,
   type CapabilitySkillDiscoverItem,
   type CapabilitySkillDiscoverState,
   type CapabilitySkillInstall,
@@ -172,7 +173,7 @@ function listingItem(listing: DiscoverListing, context: DiscoverContext): Capabi
     providerLabel: context.providerLabels.get(listing.sourceProvider) ?? listing.sourceProvider,
     state,
     ...(install ? { install } : {}),
-    listingUrl: listing.sourceUrl,
+    ...(isHttpsUrl(listing.sourceUrl) ? { listingUrl: listing.sourceUrl } : {}),
     ...(installedName !== undefined ? { installedSkillId: `extra:${installedName}` } : {}),
   };
 }
@@ -187,7 +188,10 @@ function gitInstallFor(listing: DiscoverListing): CapabilitySkillSource | undefi
   return isTrustedGitAddress(sourceRef) ? { kind: "git", sourceRef } : undefined;
 }
 
-/** `https` on an exact trusted forge host, with no credentials, query or fragment: the review refuses the rest. */
+/**
+ * `https` on an exact trusted forge host, with no credentials, query or fragment, and a path that names a repository
+ * (an owner and a repository): the review refuses the rest.
+ */
 function isTrustedGitAddress(value: string): boolean {
   try {
     const url = new URL(value);
@@ -197,8 +201,21 @@ function isTrustedGitAddress(value: string): boolean {
       url.password === "" &&
       url.search === "" &&
       url.hash === "" &&
-      TRUSTED_GIT_FORGE_HOSTS.includes(url.hostname.toLowerCase())
+      TRUSTED_GIT_FORGE_HOSTS.includes(url.hostname.toLowerCase()) &&
+      namesGitRepository(url.pathname)
     );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Whether an address is a plain `https` link. A listing's address is shown as a link the operator may follow, so
+ * `javascript:`, `data:` and unencrypted addresses are never offered, whatever the listing says.
+ */
+function isHttpsUrl(value: string): boolean {
+  try {
+    return new URL(value).protocol === "https:";
   } catch {
     return false;
   }

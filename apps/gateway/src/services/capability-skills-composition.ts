@@ -14,10 +14,7 @@ import {
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
 import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from "./capability-skill-actions-service.js";
-import {
-  CapabilitySkillDiscoverService,
-  type CapabilitySkillDiscoverReadSource,
-} from "./capability-skill-discover-service.js";
+import { CapabilitySkillDiscoverService } from "./capability-skill-discover-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { ShippedSkillDirs } from "./capability-skills-projection.js";
 import { CapabilitySkillsService, type CapabilitySkillsSource } from "./capability-skills-service.js";
@@ -182,16 +179,14 @@ export function composeCapabilitySkills({
       },
       reportFailedStep,
     ),
-    discover: new CapabilitySkillDiscoverService(
-      {
-        readSourceCatalog: (options) => skillSources.readSourceCatalog(options),
-        presentSourceCatalog: (catalog, query, limit) => skillSources.presentSourceCatalog(catalog, query, limit),
-        listInstalledSources: () => skillSources.listInstalledSources(),
-        // The installs the Skills tab lists, so a source on its way in reads the same in Discover.
-        listInstalls: async (workspaceId) => (await skillsService.installs(workspaceId)).installs,
-      },
-      { reportFailure: reportFailedRead },
-    ),
+    discover: new CapabilitySkillDiscoverService({
+      readSourceCatalog: (options) => skillSources.readSourceCatalog(options),
+      presentSourceCatalog: (catalog, query, limit) => skillSources.presentSourceCatalog(catalog, query, limit),
+      listInstalledSources: () => skillSources.listInstalledSources(),
+      // The installs the Skills tab lists, so a source on its way in reads the same in Discover. That read logs its
+      // own failure, so Discover logs none.
+      listInstalls: async (workspaceId) => (await skillsService.installs(workspaceId)).installs,
+    }),
   };
 }
 
@@ -231,7 +226,7 @@ async function readAllPendingApprovals(
 }
 
 /** The operator sees a plain line; the real error stays in the redacted server log. */
-function reportFailedRead(source: CapabilitySkillsSource | CapabilitySkillDiscoverReadSource, error: unknown): void {
+function reportFailedRead(source: CapabilitySkillsSource, error: unknown): void {
   const diagnostic =
     error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
   log.error("a Capabilities skills source could not be read", {

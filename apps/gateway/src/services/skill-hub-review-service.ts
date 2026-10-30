@@ -11,6 +11,7 @@ import {
   diffSkillPermissionEnvelopes,
   findShippedSkillPack,
   isGoatError,
+  namesGitRepository,
   normalizeSkillPermissionEnvelope,
   type GovernanceJourneyEventRecord,
   type SkillHubBlockerCode,
@@ -834,7 +835,7 @@ function normalizeHttpsSource(
         message: "Production Git review supports exact trusted public forge hosts only.",
       });
     }
-    if (parsed.pathname.split("/").filter(Boolean).length < 2) {
+    if (!namesGitRepository(parsed.pathname)) {
       throw new ValidationError({ field: "sourceRef", message: "Git source URL does not identify a repository." });
     }
   }

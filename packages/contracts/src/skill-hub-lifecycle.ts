@@ -47,6 +47,15 @@ export function hasSealedApprovalLinkage(kind: string): boolean {
 export const TRUSTED_GIT_FORGE_HOSTS: readonly string[] = ["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"];
 
 /**
+ * Whether a Git address's path names a repository, as production Git review requires: an owner and a repository, so at
+ * least two path segments (`/owner/repo`, `/owner/repo/tree/main/skills/x`; not `/owner`). Review refuses the rest, so
+ * anything that offers an install of a Git address asks the same.
+ */
+export function namesGitRepository(pathname: string): boolean {
+  return pathname.split("/").filter(Boolean).length >= 2;
+}
+
+/**
  * The blocker codes an operator can meet on a Skill Hub source: the review's own (`standardizedBlockers`), every
  * governance code a stored snapshot can carry (`SkillGovernanceBlockerCode`: the sticky audit floor, the permission
  * diff and version drift), and the install guard's "already there" codes. A snapshot or guard can hold other codes;

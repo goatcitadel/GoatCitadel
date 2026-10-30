@@ -386,6 +386,68 @@ describe("SkillImportService source catalog", () => {
     expect(service.presentSourceCatalog(catalog, undefined, 100).items).toHaveLength(catalog.items.length);
   });
 
+  it("keeps only a marketplace's own https links to its listing pages", async () => {
+    const hrefs = [
+      // Kept: relative to the marketplace, and absolute on its own host (www. included).
+      "/skills/zebra-planner",
+      "https://skillsmp.com/skills/quokka-notes",
+      "https://www.skillsmp.com/docs/getting-started",
+      "https://agentskill.sh/Learn/intro",
+      "https://agentskill.sh/skill/single-form",
+      // Dropped: the marketplace's name only appears inside the link.
+      "javascript:void(agentskill.sh/skills/hostile-script)",
+      "data:text/html,agentskill.sh/skills/hostile-data",
+      "https://evil.example/agentskill.sh/skills/hostile-path",
+      "https://evil.example/skillsmp.com/skills/hostile-other",
+      "//evil.example/agentskill.sh/skills/hostile-relative",
+      "https://agentskill.sh.evil.example/skills/hostile-suffix",
+      "https://notagentskill.sh/skills/hostile-prefix",
+      "https://user:secret@evil.example/skills/hostile-credentials",
+      // Dropped: not https, or not a listing page.
+      "http://agentskill.sh/skills/plain-http",
+      "https://agentskill.sh/other/skills/not-first-segment",
+      "https://agentskill.sh/skills-extra/lookalike-segment",
+      "https://agentskill.sh/",
+      "#top",
+      "mailto:someone@agentskill.sh",
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(`<html><body>${hrefs.map((href) => `<a href="${href}">x</a>`).join("")}</body></html>`),
+      ),
+    );
+    const service = new SkillImportService(rootDir, createSystemSettingsRepo() as never);
+
+    const catalog = await service.readSourceCatalog();
+
+    const marketplaceUrls = catalog.items
+      .filter((item) => item.sourceProvider === "agentskill" || item.sourceProvider === "skillsmp")
+      .map((item) => item.sourceUrl);
+    expect(marketplaceUrls).toEqual(
+      expect.arrayContaining([
+        "https://agentskill.sh/skills/zebra-planner",
+        "https://skillsmp.com/skills/quokka-notes",
+        "https://www.skillsmp.com/docs/getting-started",
+        "https://agentskill.sh/Learn/intro",
+        "https://agentskill.sh/skill/single-form",
+      ]),
+    );
+    expect(marketplaceUrls.filter((url) => url.includes("hostile") || url.includes("lookalike"))).toEqual([]);
+    expect(marketplaceUrls.some((url) => /^(?:javascript|data|mailto):/u.test(url))).toBe(false);
+    expect(marketplaceUrls.some((url) => url.startsWith("http://"))).toBe(false);
+    expect(marketplaceUrls.some((url) => url.includes("plain-http") || url.includes("not-first-segment"))).toBe(false);
+    expect(marketplaceUrls.every((url) => new URL(url).protocol === "https:")).toBe(true);
+    // Every marketplace listing (curated or read) is on that marketplace's own host.
+    for (const item of catalog.items.filter((entry) => entry.sourceProvider === "agentskill")) {
+      expect(new URL(item.sourceUrl).hostname.replace(/^www\./u, ""), item.sourceUrl).toBe("agentskill.sh");
+    }
+    for (const item of catalog.items.filter((entry) => entry.sourceProvider === "skillsmp")) {
+      expect(new URL(item.sourceUrl).hostname.replace(/^www\./u, ""), item.sourceUrl).toBe("skillsmp.com");
+    }
+  });
+
   it("lists the installed skills' recorded sources, leaving out a folder with no readable source file", async () => {
     const extraRoot = path.join(rootDir, "skills", "extra");
     fs.mkdirSync(path.join(extraRoot, "git-skill"), { recursive: true });

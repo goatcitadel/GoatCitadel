@@ -8,6 +8,7 @@ import {
   assertSkillHubBoundedMetadata,
   isSkillHubOperationKind,
   isSkillHubOperationSettlementDisposition,
+  namesGitRepository,
   skillHubArtifactBundleRelPath,
 } from "./skill-hub-lifecycle.js";
 
@@ -131,5 +132,20 @@ describe("Skill Hub blocker codes", () => {
 
   it("names the four public forges Git review trusts, lower-case and exact", () => {
     expect([...TRUSTED_GIT_FORGE_HOSTS].sort()).toEqual(["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"]);
+  });
+
+  it("asks a Git address for an owner and a repository, however it is slashed", () => {
+    for (const pathname of [
+      "/owner/repo",
+      "/owner/repo/",
+      "owner/repo",
+      "/owner/repo/tree/main/skills/x",
+      "//owner//repo",
+    ]) {
+      expect(namesGitRepository(pathname), pathname).toBe(true);
+    }
+    for (const pathname of ["", "/", "/owner", "/owner/", "owner", "//"]) {
+      expect(namesGitRepository(pathname), pathname).toBe(false);
+    }
   });
 });

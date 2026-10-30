@@ -202,6 +202,13 @@ describe("Capabilities skill discovery", () => {
         installability: "not_installable",
       }),
       listing("Review only", { sourceUrl: "https://github.com/example/review-only", installability: "review_only" }),
+      // The review asks a Git address for an owner and a repository, so an owner's page can't be installed.
+      listing("Owner only", { sourceUrl: "https://github.com/owner", installability: "direct" }),
+      listing("Host only", { sourceUrl: "https://github.com/", installability: "direct" }),
+      listing("Repository with a slash", {
+        sourceUrl: "https://github.com/example/slashed/",
+        installability: "direct",
+      }),
       listing("No flag", { sourceUrl: "https://github.com/example/no-flag" }),
       listing("Other host", { sourceUrl: "https://example.com/example/other-host", installability: "direct" }),
       listing("Plain http", { sourceUrl: "http://github.com/example/plain-http", installability: "direct" }),
@@ -232,9 +239,15 @@ describe("Capabilities skill discovery", () => {
       install: { kind: "git", sourceRef: "https://codeberg.org/example/listing-then-repo" },
       listingUrl: "https://clawhub.ai/example/listing-then-repo",
     });
+    expect(byName("Repository with a slash")).toMatchObject({
+      state: "available",
+      install: { kind: "git", sourceRef: "https://github.com/example/slashed/" },
+    });
     for (const name of [
       "Not installable",
       "Review only",
+      "Owner only",
+      "Host only",
       "No flag",
       "Other host",
       "Plain http",
@@ -247,6 +260,43 @@ describe("Capabilities skill discovery", () => {
     }
     // The packs are the only items that install without a Git address.
     expect(itemOf(items, "pack:himalaya").install).toEqual({ kind: "pack", packId: "himalaya" });
+  });
+
+  it("offers a listing's address only when it is https", async () => {
+    const sources = sourcesAnswering([
+      listing("Secure", { sourceUrl: "https://clawhub.ai/someone/secure" }),
+      listing("Plain http", { sourceUrl: "http://clawhub.ai/someone/plain-http" }),
+      listing("Script", { sourceUrl: "javascript:void(agentskill.sh/skills/script)" }),
+      listing("Data", { sourceUrl: "data:text/html,agentskill.sh/skills/data" }),
+      listing("Not an address", { sourceUrl: "agentskill.sh/skills/not-an-address" }),
+    ]);
+
+    const { items } = await new CapabilitySkillDiscoverService(sources).list(WORKSPACE);
+
+    const byName = (name: string) => items.find((item) => item.name === name);
+    expect(byName("Secure")?.listingUrl).toBe("https://clawhub.ai/someone/secure");
+    for (const name of ["Plain http", "Script", "Data", "Not an address"]) {
+      expect(byName(name), name).toBeDefined();
+      expect(byName(name)?.listingUrl, name).toBeUndefined();
+    }
+  });
+
+  it("never hands out a hostile link a marketplace page carries", async () => {
+    stubMarketplaces(() => ({
+      agentskill: {
+        html: `<a href="/skills/zebra-planner">ok</a>
+          <a href="javascript:void(agentskill.sh/skills/zebra-script)">x</a>
+          <a href="data:text/html,agentskill.sh/skills/zebra-data">x</a>
+          <a href="https://evil.example/agentskill.sh/skills/zebra-away">x</a>`,
+      },
+      skillsmp: { html: homePage("skillsmp", []) },
+    }));
+
+    const response = await wire().list(WORKSPACE, { query: "zebra" });
+
+    const zebras = response.items.filter((item) => item.name.toLowerCase().includes("zebra"));
+    expect(zebras.map((item) => item.listingUrl)).toEqual(["https://agentskill.sh/skills/zebra-planner"]);
+    expect(JSON.stringify(response)).not.toMatch(/javascript:|data:text|evil\.example/u);
   });
 
   it("sends a listing's address only through the public projection", async () => {
@@ -421,7 +471,6 @@ describe("Capabilities skill discovery", () => {
   });
 
   it("still lists everything when the installs can't be read", async () => {
-    const reportFailure = vi.fn();
     const sources = sourcesAnswering(
       [listing("Trusted", { sourceUrl: "https://github.com/example/trusted", installability: "direct" })],
       {
@@ -431,11 +480,10 @@ describe("Capabilities skill discovery", () => {
       },
     );
 
-    const { items } = await new CapabilitySkillDiscoverService(sources, { reportFailure }).list(WORKSPACE);
+    const { items } = await new CapabilitySkillDiscoverService(sources).list(WORKSPACE);
 
     expect(itemOf(items, "pack:himalaya")).toMatchObject({ state: "available" });
     expect(items.find((item) => item.name === "Trusted")).toMatchObject({ state: "available" });
-    expect(reportFailure).toHaveBeenCalledWith("installs", expect.any(Error));
   });
 
   it("keeps packs and curated entries when a marketplace is down, and names it", async () => {

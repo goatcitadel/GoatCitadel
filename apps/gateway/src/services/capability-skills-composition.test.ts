@@ -619,10 +619,13 @@ describe("composeCapabilitySkills discover", () => {
 
       expect(response.items.find((item) => item.id === "pack:himalaya")).toMatchObject({ state: "available" });
       expect(JSON.stringify(response)).not.toContain("storage is locked");
+      // One line, from the read that failed; Discover adds none of its own.
       const logged = stderr.mock.calls
         .map(([chunk]) => String(chunk))
-        .filter((line) => line.includes('"source":"installs"'));
+        .filter((line) => line.includes("a Capabilities skills source could not be read"));
       expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain('"source":"skill_hub"');
+      expect(logged[0]).toContain("storage is locked");
     } finally {
       stderr.mockRestore();
     }

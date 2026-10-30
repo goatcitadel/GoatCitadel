@@ -3077,41 +3077,54 @@ function looksLikeLocalSource(value: string): boolean {
   );
 }
 
+/** Each marketplace's own host and the first path segments of its pages that list skills. */
+const MARKETPLACE_LISTING_PAGES = {
+  agentskill: { host: "agentskill.sh", segments: new Set(["skill", "skills", "learn", "readme"]) },
+  skillsmp: { host: "skillsmp.com", segments: new Set(["skill", "skills", "docs", "marketplace"]) },
+} as const;
+
 function extractMarketplaceLinks(provider: "agentskill" | "skillsmp", html: string): string[] {
   const hrefRegex = /href\s*=\s*["']([^"']+)["']/gi;
   const found = new Set<string>();
   let match: RegExpExecArray | null = hrefRegex.exec(html);
   while (match) {
-    const href = match[1] ?? "";
-    const absolute = toAbsoluteMarketplaceUrl(provider, href);
-    if (!absolute) {
-      match = hrefRegex.exec(html);
-      continue;
+    const listing = toMarketplaceListingUrl(provider, match[1] ?? "");
+    if (listing) {
+      found.add(listing);
     }
-    if (provider === "agentskill" && !/agentskill\.sh\/(skills?|learn|readme)/i.test(absolute)) {
-      match = hrefRegex.exec(html);
-      continue;
-    }
-    if (provider === "skillsmp" && !/skillsmp\.com\/(skills?|docs|marketplace)/i.test(absolute)) {
-      match = hrefRegex.exec(html);
-      continue;
-    }
-    found.add(absolute);
     match = hrefRegex.exec(html);
   }
   return [...found];
 }
 
-function toAbsoluteMarketplaceUrl(provider: "agentskill" | "skillsmp", href: string): string | undefined {
+/**
+ * A scraped link, kept only when it is an `https` link on the marketplace's own host (`www.` allowed) whose first path
+ * segment is one of its listing pages. The page is untrusted, so the scheme, host and path are read from the parsed URL,
+ * never searched for in the text: `javascript:void(agentskill.sh/skills/x)` and `https://evil.example/agentskill.sh/skills/x`
+ * both mention the marketplace, and neither is its link. A relative link resolves against the marketplace.
+ */
+function toMarketplaceListingUrl(provider: "agentskill" | "skillsmp", href: string): string | undefined {
   const trimmed = href.trim();
-  if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("mailto:")) {
+  if (!trimmed) {
     return undefined;
   }
-  if (/^https?:\/\//i.test(trimmed)) {
-    return trimmed;
+  const page = MARKETPLACE_LISTING_PAGES[provider];
+  let url: URL;
+  try {
+    url = new URL(trimmed, `https://${page.host}`);
+  } catch {
+    return undefined;
   }
-  const base = provider === "agentskill" ? "https://agentskill.sh" : "https://skillsmp.com";
-  return new URL(trimmed, base).toString();
+  if (
+    url.protocol !== "https:" ||
+    url.username ||
+    url.password ||
+    url.hostname.toLowerCase().replace(/^www\./u, "") !== page.host
+  ) {
+    return undefined;
+  }
+  const firstSegment = url.pathname.split("/")[1]?.toLowerCase() ?? "";
+  return page.segments.has(firstSegment) ? url.toString() : undefined;
 }
 
 async function resolveSkillDir(rootDir: string): Promise<string> {
