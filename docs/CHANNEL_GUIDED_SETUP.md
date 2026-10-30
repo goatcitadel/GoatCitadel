@@ -492,12 +492,13 @@ messages. GoatCitadel can't know that address, so the operator sets it once.
   It is stored as `assistant.publicWebAddress` in the assistant config and returned
   by `GET /api/v1/settings` as `publicWebAddress` (absent when none is set).
 - **Saving is a Settings change.** `PATCH /api/v1/settings` with `publicWebAddress`
-  (a string, or `null` to clear) makes a Change Plan with the operation
-  `public_web_address_configuration` and the risk `caution`. The operator's click
-  approves it in place, the way Settings approves Firecrawl's address. A bad
-  address is a 400 with its sentence and no plan is made. Chat's Change Plan tool
-  does not offer this operation: the operator sets the address, a model in Chat
-  does not.
+  (a string, or `null` to clear) makes, when the Control Plane is on, a Change Plan
+  with the operation `public_web_address_configuration` and the risk `caution`; the
+  Control Plane's own refusal of a request that changes a second setting applies
+  as for any Settings change. The operator's click approves the plan in place, the
+  way Settings approves Firecrawl's address. A bad address is a 400 with its
+  sentence and no plan is made. Chat's Change Plan tool does not offer this
+  operation: the operator sets the address, a model in Chat does not.
 - **What is accepted.** The address is trimmed and must be a full `https://`
   address of at most 200 characters, with no user name or password, nothing after
   `?` or `#`, and a host the internet can reach (not `localhost`, a private,
