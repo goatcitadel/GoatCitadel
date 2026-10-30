@@ -28,7 +28,7 @@ It now serves as the published package and repo-native contract baseline for:
 
 ### 1. Add-ons (removed)
 
-Add-ons, including the Arena add-on, were removed in Capabilities hub Phase 4. GoatCitadel no longer has an add-on catalog, service, or install, launch and stop routes, and Settings › Advanced shows capability packs only. Plugins replace add-ons in a later release.
+Add-ons, including the Arena add-on, were removed. GoatCitadel no longer has an add-on catalog, service, or install, launch and stop routes, and Settings › Advanced shows capability packs only. Plugins replace add-ons in a later release.
 
 The add-on contract types in `packages/contracts/src/addons.ts` and the add-on helpers in `@goatcitadel/extensions-sdk` stay only until the SDK is trimmed. They are not an operator surface.
 
@@ -153,7 +153,7 @@ These are still true after this document lands:
 
 ## Safe Claims Now
 
-- GoatCitadel has a documented author contract baseline for add-ons and broader extension work.
+- GoatCitadel has a documented author contract baseline for integration plugins and broader extension work.
 - GoatCitadel now has a published `@goatcitadel/extensions-sdk` package for manifest validation and file-loading helpers.
 - GoatCitadel now has a schema-validated reference add-on scaffold in `templates/addons/reference-separate-repo-addon/`.
 - GoatCitadel now has a local installable reference integration-plugin scaffold in `templates/integration-plugins/reference-integration-plugin/`.

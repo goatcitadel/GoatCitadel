@@ -54,7 +54,6 @@ The first operator surface is `mission_control`.
 
 - Contract types live in `packages/contracts/src/a2ui.ts`.
 - The paired companion bootstrap contract now lives in `docs/COMPANION_CONTRACT.md` and `packages/contracts/src/companion.ts`.
-- The live follow-on parity report includes the resolved contract under the canvas lane.
 - The integration catalog now treats `automation.canvas-a2ui` as a named capability surface instead of a generic visual-workspace placeholder.
 - Mission Control can now generate and export A2UI proof data from live runtime state before operators record a bundle.
 - The current concrete Mission-Control-first proof action is the Office Lab handoff plus directed move path: selecting an agent must change both the `Citadel One` readout and the Inspector panel from zone context to agent context, then a seat/tile command must appear in both the readout and the Inspector canvas-command field.
