@@ -88,7 +88,7 @@ export function ChatTurnRail({
                 <span
                   aria-hidden="true"
                   className={cn(
-                    "block h-0.5 rounded-full transition-[width,background-color] motion-reduce:transition-none",
+                    "block h-0.5 rounded-full transition-all motion-reduce:transition-none",
                     current ? "w-3 bg-accent" : "w-2 bg-line-strong group-hover/tick:w-3 group-hover/tick:bg-fg-muted",
                   )}
                 />
