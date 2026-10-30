@@ -48,7 +48,7 @@ It is not just a chat UI. It is a chat-first, multi-provider, skill-aware worksp
 | Projects | Workspace and project organization | Structured, navigable |
 | Library | Skills, memory, files, artifacts, capability evidence | Inspectable, provenance-aware |
 | Ops | Runtime health, activity, cost, diagnostics, backups, release proof | Operational, high-signal |
-| Settings | Providers, models, tools, integrations, channels, auth, workspace controls | Clear, progressive, safe |
+| Settings | Providers, models, tools, auth, workspace controls; integrations and MCP are set up in Capabilities, channels in Chat › Messaging | Clear, progressive, safe |
 
 ## North Star
 

@@ -6,6 +6,8 @@ Source audit: 2026-10-01 UTC. All 25 destinations have native compositions or ex
 
 The seven pages and per-page section tabs exist. `RAIL_GROUPS.settings` retains the design's 22 sections and adds Add-ons, Workspace capabilities and Citadel capabilities: 25 destinations. Search includes individual control terms; section hashes and old routes remain recognized. All 25 indexed destinations currently point to cockpit routes, including the separate `/settings/first-run` wizard. Explicit classic compatibility links preserve owner access.
 
+**Settings › Connections retired (2026-10-30).** The Cockpit's Settings now has six pages. Its editors moved unchanged: MCP servers, Integrations and Web & Search to Capabilities › Connectors › Advanced setup (`/capabilities/connectors/advanced`), Channels and the public web address to Chat › Messaging › Advanced channel setup (`/chat/messaging/advanced`), and Add-ons & packs to Settings › Advanced until the Plugins tab replaces it. Old `/settings/connections` and `/settings/<section>` addresses redirect to those homes, and the MCP and Google sign-in returns land on Advanced setup. Classic keeps its own pages and the shared `RAIL_GROUPS`. The `Connections / …` rows below record the evidence from before the move; the controls they name are the ones that moved.
+
 `settings-index.ts` currently sets `completeNative` for all 25 destinations. This flag suppresses a repeated navigation card and describes source composition, not browser certification. Explicit compatibility links remain available inside the owning controls.
 
 - **Native:** named actions are composed into cockpit through the existing shared owner lifecycle.

@@ -59,7 +59,7 @@ The Gateway and Mission Control run locally; models can run locally or through a
 
 ## Tour The Cockpit
 
-Mission Control opens in the **Cockpit** layout: seven areas built around one question, _what needs me right now?_ The sidebar carries **Chat**, **Inbox**, **Work**, **Capabilities**, **Library**, and **System**, with **Settings** in the gear menu. **Capabilities** holds your connectors, a **Tools** tab where you switch a group of built-in tools, such as Files, Web search or Browser, off for the AI (the Core group always stays on), and a **Skills** tab that lists your installed skills by category, with a switch that follows your approval setting, how often each was used, and a panel that shows the skill's instructions. The switcher at the top of the sidebar picks the active Citadel and workspace; it changes your view, not who owns the work or what it may access.
+Mission Control opens in the **Cockpit** layout: seven areas built around one question, _what needs me right now?_ The sidebar carries **Chat**, **Inbox**, **Work**, **Capabilities**, **Library**, and **System**, with **Settings** in the gear menu. **Capabilities** holds your connectors, with **Advanced setup** for the full MCP server, integration and web search settings behind them, a **Tools** tab where you switch a group of built-in tools, such as Files, Web search or Browser, off for the AI (the Core group always stays on), and a **Skills** tab that lists your installed skills by category, with a switch that follows your approval setting, how often each was used, and a panel that shows the skill's instructions. The switcher at the top of the sidebar picks the active Citadel and workspace; it changes your view, not who owns the work or what it may access.
 
 The images are regenerated from a sanitized demo runtime built from shipped defaults (captured 2026-10-11). Every conversation, task, and record in them is fictional demo content, and the seeded Chat answers are labeled as seeded rather than model-generated. Release visual proof is owned by the checked-in visual regression baselines and `pnpm verify:visual:regression`.
 
@@ -130,10 +130,11 @@ The hero image above is Chat. Conversation, planning, research, supervised agent
 
 - **General**: Bright sky (light) and Lifted navy (dark) themes, comfortable or compact density, Guided or Expert mode, notifications, and application updates.
 - **Models**: guided provider setup, model catalog and routing, ChatGPT sign-in for OpenAI Codex, and Local AI.
-- **Connections**: messaging channels, integrations, and MCP servers.
 - **Safety**: Chat permission profiles, tool approval mode and grants, trust and policy, lifecycle hooks, and budgets.
 - **Citadel**: overview, workspaces, guided setup with the Mason, Wards, Council, Vault, and Blueprint.
-- **Access and Advanced**: device access and gateway auth, managed runtime, daemon diagnostics, voice runtime, and llama.cpp setup.
+- **Access and Advanced**: device access and gateway auth, managed runtime, daemon diagnostics, voice runtime, llama.cpp setup, and the experimental Add-ons & packs.
+
+MCP servers, integration connections, and web search keys are set up in **Capabilities › Connectors › Advanced setup**, and every channel's full settings and the public web address are in **Chat › Messaging › Advanced channel setup**.
 
 ### First run — your first answer in three steps
 

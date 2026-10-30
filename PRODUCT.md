@@ -29,12 +29,13 @@ Progressive disclosure serves all three: beginners never face expert fields by d
 
 | Surface | Purpose |
 | --- | --- |
-| Chat | Conversation, drafting, planning, research, approvals, agentic work, artifacts, and code-capability context |
+| Chat | Conversation, drafting, planning, research, approvals, agentic work, artifacts, code-capability context, and messaging channels with their setup |
 | Inbox | Every decision waiting on the operator, in one list |
 | Work | Operational tasks and runs |
+| Capabilities | Connectors, tools, and skills the AI can use, with Advanced setup for MCP servers, integrations, and web search |
 | Library | Skills, memory, files, artifacts, and capability evidence, with provenance |
 | System | Runtime health, activity, cost, diagnostics, backups, and release proof |
-| Settings | Providers, models, tools, integrations, channels, auth, and workspace controls, in seven pages |
+| Settings | Providers, models, tools, auth, and workspace controls, in six pages |
 
 The cockpit is the default layout. The Classic shell remains only as an explicit rollback surface and receives no new product work.
 

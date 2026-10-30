@@ -12,7 +12,7 @@ reviewed checks, governed activation, then first-message verification.
 - In the Cockpit, Telegram, Discord, Slack and WhatsApp are added from Chat ›
   Messaging: select **+ Add**, then the channel (see "Telegram quick setup",
   "Discord quick setup", "Slack quick setup" and "WhatsApp quick setup" below).
-  The picker opens the other channels in Settings › Channels with that channel
+  The picker opens the other channels in Chat › Messaging › Advanced channel setup with that channel
   already chosen.
 - Complete account credentials and choose destinations. Slack and Telegram use
   editable destination cards with one explicit default. Discovery adds candidates
@@ -74,7 +74,7 @@ public web address and no webhook secret. Delivery to a public HTTPS web address
      the approval cannot be given there, the step links to Inbox or Settings.
 - **Receive mode.** The connection stores `receiveMode`: `poll` (the default for
   new connections), `webhook` (Telegram sends to a public web address and the
-  webhook secret fields apply) or `off`. Settings › Channels offers the same
+  webhook secret fields apply) or `off`. Chat › Messaging › Advanced channel setup offers the same
   choice. Existing connections are not switched: one with a webhook secret stays
   `webhook` and one without stays `off` until an operator changes it.
 - **Who can message the bot.** Polling uses the same update handler as the web
@@ -102,9 +102,13 @@ public web address and no webhook secret. Delivery to a public HTTPS web address
   key** (`/chat/messaging/<connection id>/key`) checks a new key and saves it with
   the same in-place approval. It keeps the connection's receive mode and does not
   offer to stop a web address.
-- **Settings.** Settings › Channels points to Messaging, and
-  `/settings/connections?channel=<catalog id>#channels` opens with that channel
-  preselected, for example `channel.slack`.
+- **Advanced channel setup.** Chat › Messaging › Advanced channel setup
+  (`/chat/messaging/advanced`) holds every channel's full settings and the public
+  web address; it moved there unchanged when Settings › Connections was retired
+  (2026-10-30). `/chat/messaging/advanced?channel=<catalog id>` opens with that
+  channel preselected, for example `channel.slack`, and the old
+  `/settings/connections` and `/settings/channels` addresses redirect there,
+  keeping `?channel=` and a Change Plan's return fields.
 
 ## Discord quick setup
 
@@ -146,8 +150,8 @@ min".
      place. If the approval cannot be given there, the step links to Inbox or
      Settings.
 - **Receive mode.** The draft saves `runtimeMode: "gateway"`, so GoatCitadel logs
-  in to Discord and stays connected. A webhook with no bot (send-only) is a
-  Settings option.
+  in to Discord and stays connected. A webhook with no bot (send-only) is an
+  Advanced channel setup option.
 - **Who can message the bot.** Discord says who made the bot (`GET
   /applications/@me`: the app's owner, or a team's owner first and then its
   accepted members), and that cannot be faked, so the page has no "say hi" step.
@@ -183,13 +187,13 @@ min".
   key** (`/chat/messaging/<connection id>/key`) checks a new token and saves it
   with the same in-place approval. It is offered only for a Discord connection
   that receives through the bot; a webhook-only (bridge) connection keeps its
-  link to Settings. The page warns when the token belongs to a different bot than
+  link to Advanced channel setup. The page warns when the token belongs to a different bot than
   the one saved with the connection, and keeps saving locked while Message
   Content Intent is off.
-- **Settings.** Settings › Channels keeps Discord's guide for the other ways to
+- **Advanced channel setup.** Chat › Messaging › Advanced channel setup keeps Discord's guide for the other ways to
   connect, such as a webhook with no bot, and the page links to it as **More
-  options in Settings**. A setup begun on this page goes on here; only Telegram
-  sends new setups from Settings to Chat.
+  options in Advanced channel setup**. A setup begun on this page goes on here; only Telegram
+  sends new setups from Advanced channel setup to its own page.
 - **Not yet run against a real bot.** Browser proof used a sandbox that blocked
   all outbound traffic. The operator still owes the real-account checks: token,
   intent, invite, a direct message, a mention in the chosen channel, and Turn on.
@@ -198,7 +202,7 @@ min".
 
 New Slack setups receive over Socket Mode: GoatCitadel opens a connection to
 Slack, so no public web address is needed. Delivery to a public web address (the
-signed Events API webhook) and the OAuth sign-in stay in Settings. The picker
+signed Events API webhook) and the OAuth sign-in stay in Advanced channel setup. The picker
 lists Slack at "About 5 min".
 
 - **Where.** Chat › Messaging › **+ Add** › **Slack** opens
@@ -240,10 +244,10 @@ lists Slack at "About 5 min".
      Settings.
 - **Receive mode.** The connection stores `receiveMode`: `socket` (the page's
   choice; the app-level token is stored as `appToken`) or `webhook` (Slack posts
-  signed events to a public web address). Settings › Channels offers the same
+  signed events to a public web address). Chat › Messaging › Advanced channel setup offers the same
   choice. Connections saved before the choice existed receive by `webhook`.
   Socket Mode always lets in only allowlisted senders, as every stream channel
-  does: a connection switched to it in Settings is saved with
+  does: a connection switched to it in Advanced channel setup is saved with
   `inboundAccessMode: "allowlist"`, and a socket event is checked as allowlist-only
   even on a connection still saved as open, so a legacy open connection is never
   open to the whole workspace. The web address route is unchanged.
@@ -294,13 +298,13 @@ lists Slack at "About 5 min".
   key** (`/chat/messaging/<connection id>/key`) asks for both tokens, checks
   them and saves them with the same in-place approval. It is offered only for a
   Slack connection whose `receiveMode` is `socket`; webhook and OAuth connections
-  keep their link to Settings. A connection made on the Slack page saved no bot
+  keep their link to Advanced channel setup. A connection made on the Slack page saved no bot
   identity to compare, so the page cannot warn that the tokens belong to a
   different bot.
-- **Settings.** Settings › Channels keeps Slack's guide for the other ways to
+- **Advanced channel setup.** Chat › Messaging › Advanced channel setup keeps Slack's guide for the other ways to
   connect: an incoming webhook with no app, the signed web address and the OAuth
   sign-in, which is unchanged. The page links to it as **More options in
-  Settings**. A setup begun on this page goes on here.
+  Advanced channel setup**. A setup begun on this page goes on here.
 - **Not yet run against a real app.** Browser proof used a sandbox that blocked
   all outbound traffic. The operator still owes the real-account checks: creating
   the app from the manifest, installing it, both tokens, hi, a direct-message
@@ -319,7 +323,7 @@ offered, and nothing on the page uses an unofficial client.
   `/chat/messaging/add/whatsapp`. The page has six steps, each opening when the one
   before it checks out (step 2 is instructions and is always open):
   1. **Give GoatCitadel a public web address.** The step shows the same field as
-     Settings › Channels and is done once an address is saved. GoatCitadel doesn't
+     Chat › Messaging › Advanced channel setup and is done once an address is saved. GoatCitadel doesn't
      provide one: use your own domain, reverse proxy or tunnel.
   2. **Make your Meta app.** **Open Meta for Developers** opens
      `https://developers.facebook.com/apps`. The step lists where each value is
@@ -427,7 +431,7 @@ offered, and nothing on the page uses an unofficial client.
   signature is a 401 and a verification with the wrong token is a 401, with fixed
   sentences. A verified delivery spends an accepted-delivery rate limit of the same
   size as a saved connection's, and the 256 KiB body limit and Host check apply. The listener
-  exists for Chat-made drafts only; a draft made in Settings has no listener.
+  exists for Chat-made drafts only; a draft made in Advanced channel setup has no listener.
 - **Receive mode.** The connection is a signed webhook, the way every WhatsApp
   connection is. Inbound routing needs both the App secret and the verify token,
   and the page stores both.
@@ -436,7 +440,7 @@ offered, and nothing on the page uses an unofficial client.
   `inboundAccessMode: "allowlist"`). Pairing for other people is not on this page
   yet: anyone else who messages the number is dropped by the allowlist with a
   `channel.sender_not_allowlisted` diagnostic. Add more numbers (digits only) to
-  `allowedSenders` in Settings › Channels.
+  `allowedSenders` in Chat › Messaging › Advanced channel setup.
 - **The 24-hour reply window.** WhatsApp allows a free-form message only within
   24 hours of the person's last message, and each new message of theirs starts it
   again; Meta refuses a later one with error code `131047`. In a WhatsApp
@@ -470,8 +474,8 @@ offered, and nothing on the page uses an unofficial client.
   checks it with Meta against the connection's saved Phone number ID, WhatsApp
   Business Account ID, App ID and App secret (the same four calls as step 3), and
   saves it with the same in-place approval. It is offered only for a WhatsApp
-  connection that keeps all four of those; a connection made in Settings without
-  them keeps its link to Settings. Its save step says that WhatsApp delivers the
+  connection that keeps all four of those; a connection made in Advanced channel setup without
+  them keeps its link to Advanced channel setup. Its save step says that WhatsApp delivers the
   test message only within 24 hours of the person's last message and can't remove
   it.
 - **Starting and resuming.** The page marks its draft (`setupPage: "messaging"`)
@@ -486,9 +490,9 @@ offered, and nothing on the page uses an unofficial client.
   network allowlist, the Turn on step lists it as a change, and Turn on adds it
   through its own approved Change Plan. Turn on approves only the plan it created or
   resumed and never uses the Settings approval skip.
-- **Settings.** Settings › Channels keeps WhatsApp's guide for the other ways to
+- **Advanced channel setup.** Chat › Messaging › Advanced channel setup keeps WhatsApp's guide for the other ways to
   connect, such as environment-variable keys and a send-only connection, and the
-  page links to it as **More options in Settings**. The guide keeps the App ID and
+  page links to it as **More options in Advanced channel setup**. The guide keeps the App ID and
   the WhatsApp Business Account ID (`appId`, `businessAccountId`) with the
   connection. A setup begun on this page goes on here.
 - **Not yet run against a real account.** Browser proof used a sandbox that blocked
@@ -502,7 +506,7 @@ offered, and nothing on the page uses an unofficial client.
 Some channels (WhatsApp today) need to tell a vendor where on the internet to send
 messages. GoatCitadel can't know that address, so the operator sets it once.
 
-- **Where.** Settings › Channels › **Public web address** (the field also appears
+- **Where.** Chat › Messaging › Advanced channel setup › **Public web address** (the field also appears
   on step 1 of the WhatsApp page). **Save address** stores it; **Clear** removes it.
   It is stored as `assistant.publicWebAddress` in the assistant config and returned
   by `GET /api/v1/settings` as `publicWebAddress` (absent when none is set).
@@ -511,7 +515,7 @@ messages. GoatCitadel can't know that address, so the operator sets it once.
   with the operation `public_web_address_configuration` and the risk `caution`; the
   Control Plane's own refusal of a request that changes a second setting applies
   as for any Settings change. The operator's click approves the plan in place, the
-  way Settings approves Firecrawl's address. A bad address is a 400 with its
+  way Capabilities › Connectors › Advanced setup approves Firecrawl's address. A bad address is a 400 with its
   sentence and no plan is made. Chat's Change Plan tool does not offer this
   operation: the operator sets the address, a model in Chat does not.
 - **What is accepted.** The address is trimmed and must be a full `https://`
@@ -529,7 +533,7 @@ messages. GoatCitadel can't know that address, so the operator sets it once.
   (a saved value that fails is dropped with a logged fixed sentence, never the
   address). Names such as `.local` and single-label hosts are not refused.
 - **What uses it.** The WhatsApp page builds its Callback URL from it. Every
-  channel webhook address block (Settings › Channels, and the Classic guide) shows
+  channel webhook address block (Chat › Messaging › Advanced channel setup, and the Classic guide) shows
   the full address, public web address first, then the connection's path, with
   **Copy**. With no address set the block shows the placeholder
   `https://<your public address>` and a **Set your public web address** link.
