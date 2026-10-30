@@ -35,8 +35,9 @@ const NO_ITEMS: readonly CapabilitySkillDiscoverItem[] = [];
  * The Discover view: GoatCitadel's own packs and the curated skills before any search, and what the Gateway finds on the
  * skill sites once two characters have been typed and the typing has paused. It only lists and words what the Gateway
  * returned: the Gateway says whether a source can be installed, is installed or is between steps, and the view never
- * merges lists or works a state out. The buttons narrow the list in the browser. A search that failed shows its error
- * and Try again, and never says nothing matched.
+ * merges lists or works a state out. The buttons narrow the list in the browser. While a new term loads, the last list
+ * and its buttons stay, with "Searching…" beside them. A search that failed shows its error and Try again, and never
+ * says nothing matched.
  */
 export function DiscoverView({
   workspaceId,
@@ -103,10 +104,15 @@ export function DiscoverView({
   }
 
   const lastVersion = lastVersionNote(view);
-  const unavailable = unavailableProvidersLine(response.unavailableProviders);
+  // The last list stands in while a new term loads: it keeps its buttons, and nothing it found (or didn't, or which
+  // sites it missed) is said of the new term.
+  const searching = query.isPlaceholderData;
+  const unavailable = searching ? undefined : unavailableProvidersLine(response.unavailableProviders);
   // Nothing found while a site couldn't be searched is not "no match": the site that was down may have had one. The
   // response doesn't say how many sites were asked, so any site that couldn't be searched makes an empty answer open.
   const inconclusive = items.length === 0 && unavailable !== undefined;
+  // The list's own term: the Gateway's echo for a list standing in, else the term asked for.
+  const listTerm = searching ? response.query : term;
   return (
     <div className="space-y-4">
       {bar}
@@ -117,8 +123,10 @@ export function DiscoverView({
         </NoticeLine>
       ) : null}
       {unavailable && !inconclusive ? <NoticeLine>{unavailable}</NoticeLine> : null}
-      {view.phase === "checking" ? <p className="text-sm text-fg-muted">{CHECKING_FOR_CHANGES}</p> : null}
-      {inconclusive ? (
+      {view.phase === "checking" ? (
+        <p className="text-sm text-fg-muted">{searching && term ? "Searching…" : CHECKING_FOR_CHANGES}</p>
+      ) : null}
+      {searching && shown.length === 0 ? null : inconclusive ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
           <NoticeLine>{unavailable}</NoticeLine>
           {retry}
@@ -159,7 +167,7 @@ export function DiscoverView({
         />
       ) : (
         <Section
-          title={term ? "Search results" : "Suggested skills"}
+          title={listTerm ? "Search results" : "Suggested skills"}
           description={
             shown.length === items.length
               ? plural(items.length, "skill")

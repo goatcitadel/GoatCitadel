@@ -46,12 +46,15 @@ export function skillDetailQuery(workspaceId: string, skillId: string) {
 /**
  * The skills on offer to install. `q` is the search term the Gateway should search for, or empty for the list it gives
  * without one (packs and curated listings, nothing online). Only a term of two or more characters may be passed: the
- * Gateway refuses a shorter one.
+ * Gateway refuses a shorter one. While a new term loads, the last list of the same workspace stands in for it
+ * (`isPlaceholderData`), so the list and its buttons stay on screen; another workspace's list never does, because its
+ * installed marks are that workspace's.
  */
 export function skillDiscoverQuery(workspaceId: string, q: string) {
   return queryOptions({
     queryKey: queryKeys.capabilitySkillDiscover(workspaceId, q),
     queryFn: ({ signal }) => fetchCapabilitySkillDiscover(workspaceId, { ...(q ? { q } : {}), signal }),
+    placeholderData: (previous, previousQuery) => (previousQuery?.queryKey[2] === workspaceId ? previous : undefined),
   });
 }
 

@@ -372,6 +372,41 @@ describe("Import from Git", () => {
     expect(field()?.value).toBe("https://git.example.com/acme/skills");
     expect(address()).toBe("/capabilities/skills?shell=cockpit");
   });
+
+  it("shows a refusal only while the field holds the address it was about", async () => {
+    api.reviewCapabilitySkill.mockRejectedValue(
+      new ApiRequestError("refused", {
+        kind: "http",
+        method: "POST",
+        path: "/api/v1/capabilities/skills/reviews",
+        status: 422,
+        body: {
+          error: "That address can't be checked.",
+          code: "SKILL_SOURCE_REFUSED",
+          details: { reason: "UNTRUSTED_GIT_HOST" },
+        },
+      }),
+    );
+    await renderTab("/capabilities/skills?shell=cockpit");
+    await press(button("Import from Git"));
+    await type("https://git.example.com/acme/skills");
+    await press(button("Check", body()));
+    const refusal = "GoatCitadel installs skills only from GitHub, GitLab, Bitbucket or Codeberg.";
+    expect(body()?.querySelector('[role="alert"]')?.textContent).toBe(refusal);
+    expect(field()?.getAttribute("aria-invalid")).toBe("true");
+
+    // Edited: the refusal was about the old address, so it goes, and the field is no longer marked.
+    await type("https://github.com/acme/skills");
+    expect(body()?.textContent).not.toContain(refusal);
+    expect(field()?.getAttribute("aria-invalid")).not.toBe("true");
+    await type("");
+    expect(body()?.textContent).not.toContain(refusal);
+
+    // The same address again, spaces aside: the refusal is about it.
+    await type(" https://git.example.com/acme/skills ");
+    expect(body()?.querySelector('[role="alert"]')?.textContent).toBe(refusal);
+    expect(field()?.getAttribute("aria-invalid")).toBe("true");
+  });
 });
 
 describe("Over an open skill panel", () => {

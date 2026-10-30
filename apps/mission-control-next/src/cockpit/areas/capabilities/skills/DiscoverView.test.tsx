@@ -396,6 +396,64 @@ describe("Discover", () => {
     expect(button("Try again")).toBeUndefined();
   });
 
+  it("recovers from a search that couldn't be finished to the list Try again finds", async () => {
+    api.fetchCapabilitySkillDiscover.mockImplementation(async (_workspaceId: string, options: { q?: string }) =>
+      options.q ? discoverOf([], { unavailableProviders: ["AgentSkill", "SkillsMP"] }) : discoverOf(),
+    );
+    await render();
+    await type("review");
+    await vi.waitFor(() => expect(text()).toContain("AgentSkill and SkillsMP couldn't be searched right now."), {
+      timeout: 3_000,
+    });
+
+    // The sites answer this time, with a match.
+    api.fetchCapabilitySkillDiscover.mockImplementation(async () => discoverOf([REVIEW], { query: "review" }));
+    await click(button("Try again"));
+    expect(names()).toEqual(["Design review"]);
+    expect(section("Search results")?.textContent).toContain("1 skill");
+    expect(text()).not.toContain("couldn't be searched right now.");
+    expect(button("Try again")).toBeUndefined();
+    expect(alerts()).toHaveLength(0);
+  });
+
+  it("keeps the last list and its buttons while a new term loads, and says it is searching", async () => {
+    const answers = new Map<string, (response: CapabilitySkillDiscoverResponse) => void>();
+    api.fetchCapabilitySkillDiscover.mockImplementation((_workspaceId: string, options: { q?: string }) =>
+      options.q
+        ? new Promise<CapabilitySkillDiscoverResponse>((resolve) => answers.set(options.q!, resolve))
+        : Promise.resolve(discoverOf()),
+    );
+    await render();
+    await type("mail");
+    await vi.waitFor(() => expect(answers.has("mail")).toBe(true), { timeout: 3_000 });
+    await settle();
+
+    // The plain list and its buttons stay while the term loads; the search shows beside them.
+    expect(names()).toEqual(PLAIN.map((entry) => entry.name));
+    expect(chips("Categories")).toEqual(["All", "Coding", "Design", "Email and messages"]);
+    expect(chips("Where it came from")).toEqual(["All", "GoatCitadel", "AgentSkill", "ClawHub"]);
+    expect(section("Suggested skills")).toBeDefined();
+    expect(text()).toContain("Searching…");
+
+    await act(async () => answers.get("mail")!(discoverOf([HIMALAYA], { query: "mail" })));
+    await settle();
+    expect(names()).toEqual(["Himalaya"]);
+    expect(section("Search results")).toBeDefined();
+    expect(text()).not.toContain("Searching…");
+
+    // What one term found, or didn't, is never said of the next while it loads.
+    await type("zzz");
+    await vi.waitFor(() => expect(answers.has("zzz")).toBe(true), { timeout: 3_000 });
+    await act(async () => answers.get("zzz")!(discoverOf([], { query: "zzz" })));
+    await settle();
+    expect(text()).toContain("No skills match zzz");
+    await type("yyy");
+    await vi.waitFor(() => expect(answers.has("yyy")).toBe(true), { timeout: 3_000 });
+    await settle();
+    expect(text()).toContain("Searching…");
+    expect(text()).not.toContain("No skills match");
+  });
+
   it("never says No skills match when the search failed", async () => {
     api.fetchCapabilitySkillDiscover.mockImplementation(async (_workspaceId: string, options: { q?: string }) => {
       if (options.q) throw httpFailure(503);
@@ -769,8 +827,10 @@ describe("a skill's panel opened from Discover", () => {
     expect(searchBox().value).toBe("");
 
     await click(button("pull-request", panel));
-    // The tag searches the tab the panel was opened from, and the panel closes.
+    // The tag searches the tab the panel was opened from, and the panel closes. The router is a stub here, so staying
+    // on Discover is proven by nothing moving the address.
     expect(inspector.close).toHaveBeenCalledTimes(1);
+    expect(route.navigate).not.toHaveBeenCalled();
     expect(tab("Discover").getAttribute("aria-selected")).toBe("true");
     expect(searchBox().value).toBe("pull-request");
     await vi.waitFor(() => expect(discoverCalls().some(([, options]) => options.q === "pull-request")).toBe(true), {

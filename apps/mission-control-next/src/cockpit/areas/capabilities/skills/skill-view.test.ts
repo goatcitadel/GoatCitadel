@@ -372,4 +372,15 @@ describe("skillSearchSuggestion", () => {
   it("says what the box searches when there are no skills", () => {
     expect(skillSearchSuggestion([])).toBe("Search skills");
   });
+
+  it("never suggests the catch-all category, which searches for nothing in particular", () => {
+    const items = [
+      skill({ category: "other" }),
+      skill({ category: "other" }),
+      skill({ category: "other" }),
+      skill({ category: "writing" }),
+    ];
+    expect(skillSearchSuggestion(items)).toBe('Try "writing and docs"');
+    expect(skillSearchSuggestion([skill({ category: "other" }), skill({ category: "other" })])).toBe("Search skills");
+  });
 });

@@ -1018,6 +1018,8 @@ export interface CapabilitySkillDiscoverResponse {
 **As built (PR 3c):**
 - Discover renders while the installed list loads or fails; only the Installed segment shows that state. `?view=discover` survives opening and closing a panel (R48).
 - An empty search while any marketplace couldn't be searched reads "`<labels>` couldn't be searched right now." with "Try again", not "No skills match" (R59).
+- The placeholder never suggests the catch-all "Other"; with no other category it reads "Search skills" (final review M4).
+- While a new term loads, the last list of the same workspace and its buttons stay, with "Searching…" beside them; nothing that list found, or didn't, is said of the new term (final review M6).
 - Both new query keys sit under the `"skills"` prefix, and the installs key joins `SETTINGS_READER_KEYS`. A skill change refreshes them through the event map, but Skill Hub installs publish no event of their own, so the install flow polls instead (R47).
 
 ### Task 15: Install panel, install flow and Import from Git
@@ -1129,6 +1131,7 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - The flow polls the installs read: every second for the first 30 reads while a step applies and every 3 seconds after, and every 5 to 30 seconds while a step waits, to stay under the route's rate limit. A new request starts that count again.
 - Discover and the installs list are read again whenever an install's step changes (on its way, declined back to the step before, stopped or done) and whenever a step's request answers, so a waiting or declined install shows as "Install not finished" with "Continue" at once; the installed list is read again only once switching on is done (final review I1).
 - The hosts line reads "May reach `<hosts>`": the hosts are the addresses the check found in files it flagged for network use, not traffic it saw (final review M7).
+- A refusal under the Git address shows, and marks the field, only while the field still holds the address it was about (final review M5).
 - A decline is a note in the plain colour; a request that didn't go through (refused, or never answered) keeps the failure colour. After switching on stopped, the panel says "It's installed. It can't be switched on from here yet.", because whether a stop that needs a manual fix left the skill off isn't known.
 
 ### Task 16: Public truth, checks and proof (PR 3c)
