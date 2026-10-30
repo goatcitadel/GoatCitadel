@@ -1,6 +1,6 @@
 # Plugin And Add-on SDK Contract
 
-Last updated: 2026-04-11
+Last updated: 2026-10-30
 Scope: `GC-P2-11` extension / plugin SDK breadth
 
 ## Purpose
@@ -26,22 +26,11 @@ It now serves as the published package and repo-native contract baseline for:
 
 ## Current Extension Families
 
-### 1. Add-ons
+### 1. Add-ons (removed)
 
-Add-ons are repo-external applications with explicit catalog and lifecycle management.
+Add-ons, including the Arena add-on, were removed in Capabilities hub Phase 4. GoatCitadel no longer has an add-on catalog, service, or install, launch and stop routes, and Settings › Advanced shows capability packs only. Plugins replace add-ons in a later release.
 
-Current repo-native contract surface:
-
-- `packages/contracts/src/addons.ts`
-- `apps/gateway/src/routes/addons.ts`
-
-Today’s add-on model assumes:
-
-- `runtimeType = "separate_repo_app"`
-- explicit trust and consent handling
-- install, update, launch, stop, and uninstall lifecycle routes
-- optional web entry behavior via `webEntryMode`
-- explicit health checks and runtime status
+The add-on contract types in `packages/contracts/src/addons.ts` and the add-on helpers in `@goatcitadel/extensions-sdk` stay only until the SDK is trimmed. They are not an operator surface.
 
 ### 2. Integration Plugins
 
@@ -107,7 +96,9 @@ The operator surface already exists in code. The author surface is what this doc
 
 ## Minimum Add-on Author Contract
 
-An add-on author should currently assume the following minimum contract:
+Retired: add-ons were removed in Phase 4 (see above). This section stays only until the SDK trim removes the add-on helpers.
+
+The last add-on author contract was:
 
 ### Metadata
 
@@ -157,7 +148,6 @@ These are still true after this document lands:
 
 - the published author package is `@goatcitadel/extensions-sdk@1.0.0`
 - the source of that package lives in `packages/extensions-sdk/`
-- the repo-native starter-pack export path bundles the current contract doc plus reference scaffolds
 - the local installable reference integration-plugin scaffold lives in `templates/integration-plugins/reference-integration-plugin/`
 - compatibility still depends on the documented package contract plus the repo-native operator/runtime surfaces that consume it
 
@@ -167,13 +157,12 @@ These are still true after this document lands:
 - GoatCitadel now has a published `@goatcitadel/extensions-sdk` package for manifest validation and file-loading helpers.
 - GoatCitadel now has a schema-validated reference add-on scaffold in `templates/addons/reference-separate-repo-addon/`.
 - GoatCitadel now has a local installable reference integration-plugin scaffold in `templates/integration-plugins/reference-integration-plugin/`.
-- GoatCitadel now has a repo-native starter-pack export path that bundles the contract doc plus the reference add-on and integration-plugin scaffolds.
-- GoatCitadel already has a meaningful operator lifecycle for add-ons and integration plugins.
-- The public SDK story is anchored in the published `@goatcitadel/extensions-sdk` package, the reference scaffolds, and the tested starter-pack export path.
+- GoatCitadel already has a meaningful operator lifecycle for integration plugins.
+- The public SDK story is anchored in the published `@goatcitadel/extensions-sdk` package and the reference scaffolds.
 - npm plugin packages are downloaded through the network allowlist and verified against SRI sha512 (operator-pinned or registry-published) before they are recorded as verified; local plugin folders get a deterministic sha256 file-manifest hash; git and URL sources are recorded as unverified. A mismatch quarantines and disables the plugin. The registry host (`registry.npmjs.org`) must be in the network allowlist, otherwise npm plugins are recorded as unverified and disabled; local hashes are checked at install time only.
 
 ## Recommended Next Slice
 
-1. Add install/enable/disable/reporting smoke coverage before widening the public claim past the current starter-pack export path.
+1. Add install/enable/disable/reporting smoke coverage before widening the public claim past the current package contract.
 2. Keep `@goatcitadel/extensions-sdk` versioned and prepublish-checked as the public author boundary.
 3. Only after that, widen the runtime contract beyond lifecycle metadata if it is still justified.

@@ -139,7 +139,6 @@ Use only when touching these areas:
 - retired local acceleration surfaces
 - macOS experimental DMG
 - Linux experimental tarball
-- add-ons
 - external channels and integrations
 - remote MCP / A2A
 
@@ -435,7 +434,7 @@ Routes:
 - `/settings/runtime`
 - `/settings/local-ai`
 - `/settings/workspaces`
-- `/settings/addons` (in the Cockpit, Settings › Advanced › Add-ons & packs)
+- `/settings/addons` (capability packs only; in the Cockpit, Settings › Advanced, opened from `#addons`)
 - `/settings/integrations` (in the Cockpit, redirects to `/capabilities/connectors/advanced#integration-connections`)
 - `/settings/channels` (in the Cockpit, redirects to `/chat/messaging/advanced`)
 - `/settings/mcp` (in the Cockpit, redirects to `/capabilities/connectors/advanced#mcp-servers`)
@@ -1146,7 +1145,7 @@ Steps:
 1. Preview local capability pack.
 2. Install/stage a pack if safe.
 3. Export preview/evidence.
-4. Inspect Settings -> Add-ons and Library -> Capabilities.
+4. Inspect Settings -> Capability packs (`/settings/addons`) and Library -> Capabilities.
 
 Expected:
 
@@ -1943,7 +1942,7 @@ Expected:
 
 Result:
 
-## Integrations, Channels, MCP, A2A, Add-ons
+## Integrations, Channels, MCP, A2A
 
 ### INT-01 Integrations Overview
 
@@ -2168,25 +2167,6 @@ Expected:
 - Push/gRPC remain explicit Gateway transports.
 - Network allowlists and audit apply.
 - Missing config fails closed.
-
-Result:
-
-### ADDON-01 Add-ons Experimental Lifecycle
-
-Steps:
-
-1. Open `/settings/addons`.
-2. Inspect catalog/source/trust tier.
-3. Install a safe reference add-on only after review.
-4. Launch/stop/update/disable/uninstall.
-5. Inspect health checks and install location.
-
-Expected:
-
-- Surface is experimental.
-- Add-on install is never silent.
-- Install path is outside core checkout.
-- Trust metadata is visible and not treated as cryptographic proof.
 
 Result:
 

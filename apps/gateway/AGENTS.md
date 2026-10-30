@@ -49,7 +49,7 @@ Preserve the authority model in `docs/CANONICAL_RUNTIME_STATE_MODEL.md`.
 
 - Deny-wins policy, tool grants, risk gates, path jails, realpath/symlink checks, network allowlists, auth classes, and approval gates are cumulative and non-bypassable.
 - Bind workspace, actor, session, project, and capability scope on the server. Do not trust caller-provided ownership or broaden scope through a convenience fallback.
-- Inactive skills, candidates, proposals, add-ons, connectors, and capabilities remain inspectable-only until their governed activation path succeeds.
+- Inactive skills, candidates, proposals, connectors, and capabilities remain inspectable-only until their governed activation path succeeds.
 - Secrets belong in dedicated credential/OAuth/keychain owner flows. Keep them out of transcripts, model context, ordinary settings projections, change plans, logs, URLs, and generic persistence.
 - New or changed routes must preserve auth, rate-limit, schema-validation, bounded-read, idempotency, audit, and error-redaction posture appropriate to the route class.
 
