@@ -346,6 +346,25 @@ describe("Import from Git", () => {
     });
   });
 
+  it("keeps a user name or token in the address from leaving the browser", async () => {
+    await renderTab("/capabilities/skills?shell=cockpit");
+    await press(button("Import from Git"));
+
+    for (const typed of [
+      "https://user:ghp_secret@github.com/acme/skills",
+      "https://user@github.com/acme/skills",
+      "https://:ghp_secret@github.com/acme/skills",
+    ]) {
+      await type(typed);
+      await press(button("Check", body()));
+      expect(body()?.querySelector('[role="alert"]')?.textContent).toBe(
+        "Leave your user name and token out of the address, like https://github.com/name/repo.",
+      );
+      expect(field()?.getAttribute("aria-invalid")).toBe("true");
+    }
+    expect(api.reviewCapabilitySkill).not.toHaveBeenCalled();
+  });
+
   it("explains a Git host it won't install from", async () => {
     api.reviewCapabilitySkill.mockRejectedValue(
       new ApiRequestError("refused", {

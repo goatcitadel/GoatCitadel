@@ -5,21 +5,30 @@ import { Field } from "../../../ui/Field";
 import { cockpitInputClass } from "../../../ui/input-class";
 
 const NOT_HTTPS = "Enter an https address, like https://github.com/name/repo.";
+const HAS_CREDENTIALS = "Leave your user name and token out of the address, like https://github.com/name/repo.";
 
-/** Whether the browser can send an address at all: an `https:` URL that parses. Which hosts are allowed is the Gateway's. */
-function httpsAddress(value: string): string | undefined {
+/**
+ * The address the browser may send, or why it won't: an `https:` URL that parses, with no user name or token in it,
+ * since those must never leave the browser. Which hosts are allowed is the Gateway's.
+ */
+function sendableAddress(value: string): { sourceRef: string } | { refusal: string } {
   const address = value.trim();
+  let url: URL;
   try {
-    return new URL(address).protocol === "https:" ? address : undefined;
+    url = new URL(address);
   } catch {
-    return undefined;
+    return { refusal: NOT_HTTPS };
   }
+  if (url.protocol !== "https:") return { refusal: NOT_HTTPS };
+  if (url.username !== "" || url.password !== "") return { refusal: HAS_CREDENTIALS };
+  return { sourceRef: address };
 }
 
 /**
  * "Import from Git": a Git repository address and a Check button. The browser only refuses what isn't an https
- * address; GoatCitadel's checks decide the rest, and a refusal shows under the field (`error`) only while the field
- * still holds the address it was about (spaces around it aside), so editing the address clears it.
+ * address or carries a user name or token; GoatCitadel's checks decide the rest, and a refusal shows under the field
+ * (`error`) only while the field still holds the address it was about (spaces around it aside), so editing the
+ * address clears it.
  */
 export function SkillGitImport({
   checking,
@@ -32,24 +41,28 @@ export function SkillGitImport({
   onCheck: (source: CapabilitySkillSource) => void;
 }) {
   const [value, setValue] = useState("");
-  const [invalid, setInvalid] = useState(false);
+  // Why the browser won't send the address in the field, until it is edited.
+  const [invalid, setInvalid] = useState<string | undefined>(undefined);
   // The address the last check was sent for: a refusal is about that one.
   const [checked, setChecked] = useState<string | undefined>(undefined);
   const refusal = error && checked !== undefined && value.trim() === checked ? error : undefined;
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    const sourceRef = httpsAddress(value);
-    setInvalid(!sourceRef);
-    if (!sourceRef) return;
-    setChecked(sourceRef);
-    onCheck({ kind: "git", sourceRef });
+    const address = sendableAddress(value);
+    if ("refusal" in address) {
+      setInvalid(address.refusal);
+      return;
+    }
+    setInvalid(undefined);
+    setChecked(address.sourceRef);
+    onCheck({ kind: "git", sourceRef: address.sourceRef });
   };
   return (
     <form className="space-y-3" onSubmit={submit} noValidate>
       <Field
         label="Git repository address"
         help="From GitHub, GitLab, Bitbucket or Codeberg"
-        {...(invalid ? { error: NOT_HTTPS } : refusal ? { error: refusal } : {})}
+        {...(invalid ? { error: invalid } : refusal ? { error: refusal } : {})}
         required
       >
         {(props) => (
@@ -62,7 +75,7 @@ export function SkillGitImport({
             value={value}
             onChange={(event) => {
               setValue(event.target.value);
-              setInvalid(false);
+              setInvalid(undefined);
             }}
             className={cockpitInputClass}
           />
