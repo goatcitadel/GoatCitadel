@@ -1,6 +1,4 @@
 import type {
-  AddonSlotRegistration,
-  FetchAddonSlotsParams,
   ProviderSecretStatus,
   ProviderSecretMutationResponse,
   OpenAICodexOAuthStatus,
@@ -11,12 +9,6 @@ import type {
   LlamaCppHuggingFaceDownloadStatus,
 } from "./platform.js";
 import type {
-  AddonActionResponse,
-  AddonCatalogEntry,
-  AddonInstalledRecord,
-  AddonInstallRequest,
-  AddonStatusRecord,
-  AddonUninstallResponse,
   CapabilityPackExportResponse,
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
@@ -74,78 +66,6 @@ import type {
 } from "./types.js";
 
 import { request } from "./client-core.js";
-
-export async function fetchAddonsCatalog(): Promise<{ items: AddonCatalogEntry[] }> {
-  return request<{ items: AddonCatalogEntry[] }>("/api/v1/addons/catalog");
-}
-
-export async function fetchInstalledAddons(): Promise<{ items: AddonInstalledRecord[] }> {
-  return request<{ items: AddonInstalledRecord[] }>("/api/v1/addons/installed");
-}
-
-export async function fetchAddonStatus(addonId: string): Promise<AddonStatusRecord> {
-  return request<AddonStatusRecord>(`/api/v1/addons/${encodeURIComponent(addonId)}/status`);
-}
-
-export async function fetchAddonSlots(params: FetchAddonSlotsParams = {}): Promise<{ items: AddonSlotRegistration[] }> {
-  const query = new URLSearchParams();
-  if (params.route) {
-    query.set("route", params.route);
-  }
-  if (params.slot) {
-    query.set("slot", params.slot);
-  }
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<{ items: AddonSlotRegistration[] }>(`/api/v1/addons/slots${suffix}`);
-}
-
-export async function installAddon(addonId: string, input: AddonInstallRequest): Promise<AddonActionResponse> {
-  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/install`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function updateAddon(addonId: string): Promise<AddonActionResponse> {
-  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/update`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function enableAddon(addonId: string): Promise<AddonActionResponse> {
-  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/enable`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function disableAddon(addonId: string): Promise<AddonActionResponse> {
-  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/disable`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function launchAddon(addonId: string): Promise<AddonActionResponse> {
-  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/launch`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function stopAddon(addonId: string): Promise<AddonActionResponse> {
-  return request<AddonActionResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/stop`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function uninstallAddon(addonId: string): Promise<AddonUninstallResponse> {
-  return request<AddonUninstallResponse>(`/api/v1/addons/${encodeURIComponent(addonId)}/uninstall`, {
-    method: "DELETE",
-  });
-}
 
 export async function fetchCapabilityPacks(): Promise<{ items: CapabilityPackManifest[] }> {
   return request<{ items: CapabilityPackManifest[] }>("/api/v1/capability-packs");

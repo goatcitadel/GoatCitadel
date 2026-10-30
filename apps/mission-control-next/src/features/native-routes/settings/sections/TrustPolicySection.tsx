@@ -23,10 +23,24 @@ import {
   normalizeDeclaredGovernance,
 } from "./TrustPolicyRowDetails";
 
-import type { TrustPolicyDashboardStatus, TrustPolicyMatrixRow, TrustPolicyStatusFilter, TrustPolicyKindFilter } from "../trust-policy-types";
+import type {
+  TrustPolicyDashboardStatus,
+  TrustPolicyMatrixRow,
+  TrustPolicyStatusFilter,
+  TrustPolicyKindFilter,
+} from "../trust-policy-types";
 export type { TrustPolicyMatrixRow, TrustPolicyDeclaredGovernanceView } from "../trust-policy-types";
 import { buildTrustPolicyRows } from "../trust-policy-rows";
-import { summarizeTrustPolicyRows, filterTrustPolicyRows, normalizeTrustPolicyStatus, labelForTrustPolicyStatus, labelForCallableState, formatList, formatLastUse, formatEvidenceDate } from "../trust-policy-filters";
+import {
+  summarizeTrustPolicyRows,
+  filterTrustPolicyRows,
+  normalizeTrustPolicyStatus,
+  labelForTrustPolicyStatus,
+  labelForCallableState,
+  formatList,
+  formatLastUse,
+  formatEvidenceDate,
+} from "../trust-policy-filters";
 import { useTrustPolicySnapshot } from "../use-trust-policy-snapshot";
 
 export function TrustPolicySection({ activeWorkspaceId, route, navigate }: SettingsSectionProps) {
@@ -45,7 +59,14 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
   const openOwner = (row: TrustPolicyMatrixRow) => {
     const [ownerArea, ownerSection] = (row.owner ?? "Settings").split(" / ");
     const area = ownerArea === "Library" ? "library" : ownerArea === "Ops" ? "ops" : "settings";
-    const destinations = { Permissions: "permissions", Tools: "tools", MCP: "mcp", "Add-ons": "addons", Skills: "skills", Capabilities: "capabilities", Approvals: "approvals" } as const;
+    const destinations = {
+      Permissions: "permissions",
+      Tools: "tools",
+      MCP: "mcp",
+      Skills: "skills",
+      Capabilities: "capabilities",
+      Approvals: "approvals",
+    } as const;
     const section = destinations[ownerSection as keyof typeof destinations] ?? "general";
     navigate({ area, section, theme: route.theme });
   };
@@ -54,101 +75,139 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
   return (
     <SettingsSectionShell loading={loading && !data} error={error} onRetry={reload}>
       <SettingsLoadWarnings issues={data?.issues ?? []} onRetry={reload} />
-      <p className="mc-next-settings-field-note">Gateway snapshot · recorded scopes may differ · {data?.snapshot.generatedAt ? `Snapshot ${formatEvidenceDate(data.snapshot.generatedAt)}` : "Snapshot time unavailable"}</p>
-      <SettingsButtonRow><NativeButton variant="outline" onClick={() => void reload()}>Refresh snapshot</NativeButton></SettingsButtonRow>
+      <p className="mc-next-settings-field-note">
+        Gateway snapshot · recorded scopes may differ ·{" "}
+        {data?.snapshot.generatedAt
+          ? `Snapshot ${formatEvidenceDate(data.snapshot.generatedAt)}`
+          : "Snapshot time unavailable"}
+      </p>
+      <SettingsButtonRow>
+        <NativeButton variant="outline" onClick={() => void reload()}>
+          Refresh snapshot
+        </NativeButton>
+      </SettingsButtonRow>
       <NativeDisclosureCard id="trust-snapshot-summary" title="Snapshot summary and setting owners">
-      <SettingsGrid variant="detail-wide">
-        <NativeCard
-          density="compact"
-          className="mc-next-settings-panel"
-          title="Trust & Policy snapshot"
-          subtitle="Read-only dashboard for the capability, tool, and source posture across recorded scopes. Open owner surfaces to edit."
-          stats={[
-            { label: "Rows", value: available ? String(rows.length) : "Unavailable" },
-            { label: "Visible", value: available ? String(visibleRows.length) : "Unavailable" },
-            { label: "Ready", value: available ? String(summary.ready) : "Unavailable" },
-            {
-              label: "Needs review",
-              value: available ? String(summary.blocked + summary.quarantined + summary.approval_required + summary.medium_trust) : "Unavailable",
-            },
-          ]}
-        >
-          <NativeMetricGrid
-            items={[
-              { label: "Ready", value: available ? String(summary.ready) : "Unavailable", meta: "Callable under current policy" },
-              { label: "Not callable", value: available ? String(summary.not_callable) : "Unavailable", meta: "Inspectable or setup-only" },
-              { label: "Blocked", value: available ? String(summary.blocked) : "Unavailable", meta: "Denied or missing required state" },
-              { label: "Quarantined", value: available ? String(summary.quarantined) : "Unavailable", meta: "Held out of runtime use" },
-              { label: "Approval required", value: available ? String(summary.approval_required) : "Unavailable", meta: "Human gate expected" },
-              {
-                label: "Medium trust",
-                value: available ? String(summary.medium_trust) : "Unavailable",
-                meta: "Elevated declarations to review",
-              },
-              { label: "Experimental", value: available ? String(summary.experimental) : "Unavailable", meta: "Visible with release caveats" },
-              { label: "Unknown", value: available ? String(summary.unknown) : "Unavailable", meta: "Snapshot lacks enough evidence" },
-            ]}
-          />
-          <SettingsButtonRow>
-            <NativeButton variant="secondary" onClick={() => void reload()}>
-              <RefreshCw size={16} />
-              Refresh snapshot
-            </NativeButton>
-          </SettingsButtonRow>
-        </NativeCard>
-        <SettingsStack>
+        <SettingsGrid variant="detail-wide">
           <NativeCard
             density="compact"
             className="mc-next-settings-panel"
-            title="Edit owners"
-            subtitle="This page does not replace the existing editors; it keeps their trust signals together."
+            title="Trust & Policy snapshot"
+            subtitle="Read-only dashboard for the capability, tool, and source posture across recorded scopes. Open owner surfaces to edit."
+            stats={[
+              { label: "Rows", value: available ? String(rows.length) : "Unavailable" },
+              { label: "Visible", value: available ? String(visibleRows.length) : "Unavailable" },
+              { label: "Ready", value: available ? String(summary.ready) : "Unavailable" },
+              {
+                label: "Needs review",
+                value: available
+                  ? String(summary.blocked + summary.quarantined + summary.approval_required + summary.medium_trust)
+                  : "Unavailable",
+              },
+            ]}
           >
-            <SettingsActionList
-              ariaLabel="Trust and policy owner routes"
+            <NativeMetricGrid
               items={[
                 {
-                  label: "Permissions",
-                  description: "Permission profiles, active defaults, and Local Operator Override evidence.",
-                  onClick: () => navigate({ area: "settings", section: "permissions", theme: route.theme }),
+                  label: "Ready",
+                  value: available ? String(summary.ready) : "Unavailable",
+                  meta: "Callable under current policy",
                 },
                 {
-                  label: "Tools",
-                  description: "Tool catalog and scoped allow or deny grants.",
-                  onClick: () => navigate({ area: "settings", section: "tools", theme: route.theme }),
+                  label: "Not callable",
+                  value: available ? String(summary.not_callable) : "Unavailable",
+                  meta: "Inspectable or setup-only",
                 },
                 {
-                  label: "MCP",
-                  description: "MCP server posture, templates, local stdio setup, and tool visibility.",
-                  onClick: () => navigate({ area: "settings", section: "mcp", theme: route.theme }),
+                  label: "Blocked",
+                  value: available ? String(summary.blocked) : "Unavailable",
+                  meta: "Denied or missing required state",
                 },
                 {
-                  label: "Skills",
-                  description: "Skill lifecycle, sources, import policy, and activation posture.",
-                  onClick: () => navigate({ area: "library", section: "skills", theme: route.theme }),
+                  label: "Quarantined",
+                  value: available ? String(summary.quarantined) : "Unavailable",
+                  meta: "Held out of runtime use",
                 },
                 {
-                  label: "Capabilities",
-                  description: "Inspectable and callable catalog detail.",
-                  onClick: () => navigate({ area: "library", section: "capabilities", theme: route.theme }),
+                  label: "Approval required",
+                  value: available ? String(summary.approval_required) : "Unavailable",
+                  meta: "Human gate expected",
                 },
                 {
-                  label: "Approvals",
-                  description: "Pending decisions, replay, and approval history.",
-                  onClick: () => navigate({ area: "ops", section: "approvals", theme: route.theme }),
+                  label: "Medium trust",
+                  value: available ? String(summary.medium_trust) : "Unavailable",
+                  meta: "Elevated declarations to review",
+                },
+                {
+                  label: "Experimental",
+                  value: available ? String(summary.experimental) : "Unavailable",
+                  meta: "Visible with release caveats",
+                },
+                {
+                  label: "Unknown",
+                  value: available ? String(summary.unknown) : "Unavailable",
+                  meta: "Snapshot lacks enough evidence",
                 },
               ]}
-              maxHeight=""
             />
+            <SettingsButtonRow>
+              <NativeButton variant="secondary" onClick={() => void reload()}>
+                <RefreshCw size={16} />
+                Refresh snapshot
+              </NativeButton>
+            </SettingsButtonRow>
           </NativeCard>
-        </SettingsStack>
-      </SettingsGrid>
+          <SettingsStack>
+            <NativeCard
+              density="compact"
+              className="mc-next-settings-panel"
+              title="Edit owners"
+              subtitle="This page does not replace the existing editors; it keeps their trust signals together."
+            >
+              <SettingsActionList
+                ariaLabel="Trust and policy owner routes"
+                items={[
+                  {
+                    label: "Permissions",
+                    description: "Permission profiles, active defaults, and Local Operator Override evidence.",
+                    onClick: () => navigate({ area: "settings", section: "permissions", theme: route.theme }),
+                  },
+                  {
+                    label: "Tools",
+                    description: "Tool catalog and scoped allow or deny grants.",
+                    onClick: () => navigate({ area: "settings", section: "tools", theme: route.theme }),
+                  },
+                  {
+                    label: "MCP",
+                    description: "MCP server posture, templates, local stdio setup, and tool visibility.",
+                    onClick: () => navigate({ area: "settings", section: "mcp", theme: route.theme }),
+                  },
+                  {
+                    label: "Skills",
+                    description: "Skill lifecycle, sources, import policy, and activation posture.",
+                    onClick: () => navigate({ area: "library", section: "skills", theme: route.theme }),
+                  },
+                  {
+                    label: "Capabilities",
+                    description: "Inspectable and callable catalog detail.",
+                    onClick: () => navigate({ area: "library", section: "capabilities", theme: route.theme }),
+                  },
+                  {
+                    label: "Approvals",
+                    description: "Pending decisions, replay, and approval history.",
+                    onClick: () => navigate({ area: "ops", section: "approvals", theme: route.theme }),
+                  },
+                ]}
+                maxHeight=""
+              />
+            </NativeCard>
+          </SettingsStack>
+        </SettingsGrid>
       </NativeDisclosureCard>
       <NativeCard
         density="compact"
         className="mc-next-settings-panel"
         title="Trust matrix"
         subtitle="Capability, tool, and source rows with callable posture, grants, blockers, and last-use evidence."
-
       >
         {rows.length > 0 ? (
           <>
@@ -168,7 +227,12 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
                   items={visibleRows.map((row) => ({
                     id: row.id,
                     title: displayTrustRowLabel(row.label),
-                    meta: [...new Set([labelForKind(row.kind), row.trustState ? humanizeToken(row.trustState) : labelForCallableState(row)])].join(" · "),
+                    meta: [
+                      ...new Set([
+                        labelForKind(row.kind),
+                        row.trustState ? humanizeToken(row.trustState) : labelForCallableState(row),
+                      ]),
+                    ].join(" · "),
                     body: row.blockers?.[0] ?? row.actionNeeded ?? "Inspect effective policy",
                     status: { label: labelForTrustPolicyStatus(row.status), tone: trustRowTone(row.status) },
                   }))}
@@ -177,7 +241,9 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
                   emptyLabel="No matching policy rows."
                   maxHeight="min(62vh, 40rem)"
                 />
-                <NativeDisclosureCard id="trust-full-matrix" title="Full matrix"><TrustPolicyMatrix rows={visibleRows} /></NativeDisclosureCard>
+                <NativeDisclosureCard id="trust-full-matrix" title="Full matrix">
+                  <TrustPolicyMatrix rows={visibleRows} />
+                </NativeDisclosureCard>
               </>
             ) : (
               <SettingsEmptyState label="No Trust & Policy rows match the current filter." />
@@ -187,14 +253,40 @@ export function TrustPolicySection({ activeWorkspaceId, route, navigate }: Setti
           <TrustPolicyEmptyState hasIssues={Boolean(data?.issues.length)} />
         )}
       </NativeCard>
-      <DetailInspector open={selectedId !== null} title={selected ? displayTrustRowLabel(selected.label) : "Policy details unavailable"} onClose={() => setSelectedId(null)}>
-        {selected ? <>
-          <p><TrustPolicyStatusBadge status={selected.status} /> · {labelForCallableState(selected)}</p>
-          <dl className="mc-next-detail-fields"><dt>Source</dt><dd>{selected.source ?? "Unavailable"}</dd><dt>Trust state</dt><dd>{selected.trustState ?? "Unknown"}</dd><dt>Grants</dt><dd>{formatList(selected.grants, "No grants attached")}</dd><dt>Blockers</dt><dd>{formatList(selected.blockers, "No blockers reported")}</dd></dl>
-          <p>{selected.actionNeeded}</p><NativeButton variant="outline" onClick={() => openOwner(selected)}>Open {selected.owner ?? "setting owner"}</NativeButton>
-          <TrustPolicyRowDetails row={selected} />
-          <details><summary>Declared governance and retained evidence</summary>{renderDeclaredGovernance(selected)}<p>{formatLastUse(selected)}</p></details>
-        </> : <p role="status">This row is unavailable in the latest snapshot. Refresh or inspect its setting owner.</p>}
+      <DetailInspector
+        open={selectedId !== null}
+        title={selected ? displayTrustRowLabel(selected.label) : "Policy details unavailable"}
+        onClose={() => setSelectedId(null)}
+      >
+        {selected ? (
+          <>
+            <p>
+              <TrustPolicyStatusBadge status={selected.status} /> · {labelForCallableState(selected)}
+            </p>
+            <dl className="mc-next-detail-fields">
+              <dt>Source</dt>
+              <dd>{selected.source ?? "Unavailable"}</dd>
+              <dt>Trust state</dt>
+              <dd>{selected.trustState ?? "Unknown"}</dd>
+              <dt>Grants</dt>
+              <dd>{formatList(selected.grants, "No grants attached")}</dd>
+              <dt>Blockers</dt>
+              <dd>{formatList(selected.blockers, "No blockers reported")}</dd>
+            </dl>
+            <p>{selected.actionNeeded}</p>
+            <NativeButton variant="outline" onClick={() => openOwner(selected)}>
+              Open {selected.owner ?? "setting owner"}
+            </NativeButton>
+            <TrustPolicyRowDetails row={selected} />
+            <details>
+              <summary>Declared governance and retained evidence</summary>
+              {renderDeclaredGovernance(selected)}
+              <p>{formatLastUse(selected)}</p>
+            </details>
+          </>
+        ) : (
+          <p role="status">This row is unavailable in the latest snapshot. Refresh or inspect its setting owner.</p>
+        )}
       </DetailInspector>
     </SettingsSectionShell>
   );

@@ -1,6 +1,4 @@
 import type {
-  AddonRuntimeStatus,
-  AddonTrustTier,
   CapabilityCatalogEntry,
   FilesystemReadAccessMode,
   LocalOperatorOverrideRecord,
@@ -181,26 +179,9 @@ export interface TrustPolicySkill {
   source: "skills.lifecycle";
 }
 
-export interface TrustPolicyAddon {
-  addonId?: string;
-  label?: string;
-  trustTier?: AddonTrustTier | string;
-  category?: string;
-  runtimeType?: string;
-  webEntryMode?: string;
-  sameOwnerAsGoatCitadel?: boolean;
-  status: AddonRuntimeStatus | "not_installed" | string;
-  posture: TrustPolicyPosture;
-  enabled?: boolean;
-  source: "addons.catalog" | "addons.installed";
-  installedAt?: string;
-  updatedAt?: string;
-  lastError?: string;
-}
-
 export interface TrustPolicyLastUseEvidence {
-  source: "skills.lifecycle" | "mcp.servers" | "addons.installed" | string;
-  subjectType: "skill" | "mcp_server" | "addon" | string;
+  source: "skills.lifecycle" | "mcp.servers" | string;
+  subjectType: "skill" | "mcp_server" | string;
   subjectId?: string;
   lastUsedAt?: string;
   usageCount?: number;
@@ -228,7 +209,6 @@ export interface TrustPolicySnapshot {
   };
   mcpServers: TrustPolicyMcpServer[];
   skills: TrustPolicySkill[];
-  addons: TrustPolicyAddon[];
   lastUseEvidence: TrustPolicyLastUseEvidence[];
 }
 

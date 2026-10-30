@@ -85,7 +85,7 @@ export const ANATOMY_RULES = [
     // Workstream G moved the provider, MCP, hooks, budget, approval, permission, tool and appearance forms onto Field;
     // the rest (mostly Citadel editors, plus the per-tool access selects in FilesystemToolAccessPanel) ratchet down
     // from here.
-    budget: 83,
+    budget: 82,
     help: "wrap Settings inputs in ui/Field so the label, help, required marker and error stay tied to the control",
     // A text-like control in Settings that does not spread Field's render props ({...props}, {...fieldProps}, {...field}).
     // Checkboxes, radios, hidden and file inputs carry their own label pattern and stay out.

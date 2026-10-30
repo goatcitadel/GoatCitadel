@@ -79,7 +79,7 @@ describe("trust API", () => {
       sources: [
         { key: "permissionProfiles", owner: "tools.permissionProfiles", status: "available", itemCount: 1 },
         { key: "mcpServers", owner: "mcp.servers", status: "available", itemCount: 1 },
-        { key: "addons.installed", owner: "addons.installed", status: "unavailable", itemCount: 0 },
+        { key: "skills", owner: "skills.lifecycle", status: "unavailable", itemCount: 0 },
       ],
       permissionProfiles: [
         {
@@ -121,7 +121,6 @@ describe("trust API", () => {
         },
       ],
       skills: [],
-      addons: [],
       lastUseEvidence: [],
     };
     const fetchMock = vi.fn(async () => jsonResponse(snapshot));
@@ -134,7 +133,7 @@ describe("trust API", () => {
     expect(result.permissionProfiles[0]?.posture).toBe("callable");
     expect(result.capabilities.callable[0]?.posture).toBe("callable");
     expect(result.mcpServers[0]?.posture).toBe("quarantined");
-    expect(result.sources.find((source) => source.key === "addons.installed")?.status).toBe("unavailable");
+    expect(result.sources.find((source) => source.key === "skills")?.status).toBe("unavailable");
   });
 
   it("carries declared governance metadata and medium-trust posture through the snapshot", async () => {
@@ -166,7 +165,6 @@ describe("trust API", () => {
           source: "skills.lifecycle",
         },
       ],
-      addons: [],
       lastUseEvidence: [],
     };
     const fetchMock = vi.fn(async () => jsonResponse(snapshot));

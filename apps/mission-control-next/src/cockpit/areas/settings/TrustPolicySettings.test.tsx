@@ -57,7 +57,6 @@ beforeEach(() => {
     sources: [{ key: "skills", owner: "skills.lifecycle", status: "available", itemCount: 1 }],
     permissionProfiles: [],
     localOperatorOverrides: [],
-    addons: [],
     mcpServers: [],
     capabilities: { inspectable: [], callable: [] },
     toolGrants: [
@@ -141,6 +140,18 @@ describe("native Trust evidence", () => {
     );
     expect(api.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/skills?shell=cockpit");
     expect(fetch).not.toHaveBeenCalled();
+  });
+  it("lists no add-on rows", async () => {
+    // A Gateway that still sent add-on records (the cast stands for that older shape) must not put them on the page.
+    snapshot = {
+      ...snapshot,
+      addons: [{ addonId: "legacy-addon", label: "Legacy add-on", status: "installed", posture: "callable" }],
+    } as unknown as TrustPolicySnapshot;
+    await render();
+    expect(container.textContent).toContain("2 matching rows");
+    expect(container.textContent).not.toContain("Legacy add-on");
+    expect(container.querySelector('a[href="/settings/advanced#addons"]')).toBeNull();
+    expect(container.textContent).not.toContain("Settings / Add-ons");
   });
   it("carries native owner scope, query and fragment context without authorizing a mutation", async () => {
     window.history.replaceState(

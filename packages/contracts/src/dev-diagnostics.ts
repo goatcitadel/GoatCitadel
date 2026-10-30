@@ -14,7 +14,6 @@ export type DevDiagnosticsCategory =
   | "voice"
   | "meet"
   | "mcp"
-  | "addons"
   | "office"
   | "dependency";
 

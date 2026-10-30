@@ -324,6 +324,12 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
+  it("maps no add-on events", () => {
+    for (const type of ["addon_installed", "addon_updated", "addon_enabled", "addon_launched", "addon_uninstalled"]) {
+      expect(resolveRealtimeEvent(event(type, "system")).kind).toBe("unmapped");
+    }
+  });
+
   it("maps workspace lifecycle under system to the directory readers only", () => {
     expect(resolveRealtimeEvent(event("workspace_updated", "system"))).toEqual({
       kind: "mapped",

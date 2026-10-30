@@ -50,7 +50,7 @@ describe("cockpit settings index", () => {
       ),
     );
     expect(pages.flatMap((page) => page.entries).some((entry) => moved.has(entry.section))).toBe(false);
-    // Add-ons & packs waits on Advanced for the Plugins tab.
+    // Capability packs wait on Advanced for the Plugins tab.
     expect(
       buildSettingsIndex()
         .find((page) => page.id === "advanced")
@@ -116,8 +116,8 @@ describe("cockpit settings index", () => {
   it.each([
     ["desktop system permission", "General"],
     ["archive restore", "Workspaces"],
-    // Integrations moved to Capabilities › Connectors › Advanced setup; Add-ons & packs is still here, on Advanced.
-    ["capability pack import export", "Add-ons & packs"],
+    // Integrations moved to Capabilities › Connectors › Advanced setup; Capability packs are still here, on Advanced.
+    ["capability pack import export", "Capability packs"],
     ["select activate chat", "Permissions"],
     ["signing", "Hooks"],
     ["basic password", "Access & devices"],
@@ -154,7 +154,7 @@ describe("cold Settings destination projection", () => {
       "Access",
       "Advanced",
     ]);
-    // Four sections moved out with Connections; Add-ons & packs stays, on Advanced.
+    // Four sections moved out with Connections; Capability packs stay, on Advanced.
     expect(destinations.flatMap((page) => page.entries)).toHaveLength(discovery ? 19 : 22);
     expect(
       fullPages.map((page) => ({

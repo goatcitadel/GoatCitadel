@@ -93,7 +93,7 @@ describe("SettingsLoadWarnings degraded semantics", () => {
   it("announces partial source failures and exposes a retry action", () => {
     const markup = renderToStaticMarkup(
       <SettingsLoadWarnings
-        issues={[{ label: "Add-on catalog", message: "Deterministic outage" }]}
+        issues={[{ label: "Pack catalog", message: "Deterministic outage" }]}
         onRetry={() => undefined}
       />,
     );

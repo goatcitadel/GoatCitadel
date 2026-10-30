@@ -158,9 +158,7 @@ const settingsMocks = vi.hoisted(() => {
     deleteOpenAICodexOAuthCredential: fn(),
     deletePersonality: fn(),
     deleteProviderSecret: fn(),
-    disableAddon: fn(),
     disconnectMcpServer: fn(),
-    enableAddon: fn(),
     exportCapabilityPack: fn(),
     discoverTelegramTargets: fn(),
     discoverTelegramSetupTargets: fn(),
@@ -170,8 +168,6 @@ const settingsMocks = vi.hoisted(() => {
     acknowledgeChannelSetupTest: fn(),
     fetchChannelSetupJourney: fn(),
     fetchChannelSetupDraftEvidence: fn(),
-    fetchAddonStatus: fn(),
-    fetchAddonsCatalog: fn(),
     fetchActiveLocalOperatorOverrides: fn(),
     fetchAgenticRuns: fn(),
     fetchAutonomousActivationGrants: fn(),
@@ -203,7 +199,6 @@ const settingsMocks = vi.hoisted(() => {
       vi.fn<typeof import("@goatcitadel/mission-control-shared/api/client").fetchDeviceAccessGrants>(),
     fetchGoogleMeetPrerequisiteStatus: fn(),
     fetchGoogleMeetSessions: fn(),
-    fetchInstalledAddons: fn(),
     fetchIntegrationCatalog: fn(),
     fetchIntegrationConnectionDiagnostics: fn(),
     fetchIntegrationConnections: vi.fn(),
@@ -241,7 +236,6 @@ const settingsMocks = vi.hoisted(() => {
     fetchWorkspaces: fn(),
     finalizeChannelSetupDraft: fn(),
     getCachedModelProbe: vi.fn(),
-    installAddon: fn(),
     installCapabilityPack: fn(),
     installLocalCapabilityPack: fn(),
     installVoiceRuntime: fn(),
@@ -249,7 +243,6 @@ const settingsMocks = vi.hoisted(() => {
       (error: unknown) => error instanceof Error && error.name === "ApiRequestError" && "status" in error,
     ),
     invokeIntegrationConnectionAction: fn(),
-    launchAddon: fn(),
     listCitadels: fn(),
     materializeStagedCapabilityPack: fn(),
     loadModelsForProvider: fn(["gpt-5.4-mini"]),
@@ -325,7 +318,6 @@ const settingsMocks = vi.hoisted(() => {
     startChangePlanProviderOAuth: vi.fn(async () => await settingsMocks.startOpenAICodexOAuthDeviceFlow()),
     startSlackOAuth: fn(),
     stageExternalConnectorAction: fn(),
-    stopAddon: fn(),
     stopDaemon: fn(),
     stopLlamaCppRuntime: fn(),
     stopNpuRuntime: fn(),
@@ -335,8 +327,6 @@ const settingsMocks = vi.hoisted(() => {
           ...args: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").testChannelSetupDraft>
         ) => Promise<unknown>
       >(),
-    uninstallAddon: fn(),
-    updateAddon: fn(),
     updateChannelSetupDraft:
       vi.fn<
         (
@@ -446,13 +436,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   deleteOpenAICodexOAuthCredential: settingsMocks.deleteOpenAICodexOAuthCredential,
   deletePersonality: settingsMocks.deletePersonality,
   deleteProviderSecret: settingsMocks.deleteProviderSecret,
-  disableAddon: settingsMocks.disableAddon,
   disconnectMcpServer: settingsMocks.disconnectMcpServer,
-  enableAddon: settingsMocks.enableAddon,
   exportCapabilityPack: settingsMocks.exportCapabilityPack,
   discoverTelegramTargets: settingsMocks.discoverTelegramTargets,
-  fetchAddonStatus: settingsMocks.fetchAddonStatus,
-  fetchAddonsCatalog: settingsMocks.fetchAddonsCatalog,
   fetchActiveLocalOperatorOverrides: settingsMocks.fetchActiveLocalOperatorOverrides,
   fetchAgenticRuns: settingsMocks.fetchAgenticRuns,
   fetchAutonomousActivationGrants: settingsMocks.fetchAutonomousActivationGrants,
@@ -478,7 +464,6 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchDeviceAccessGrants: settingsMocks.fetchDeviceAccessGrants,
   fetchGoogleMeetPrerequisiteStatus: settingsMocks.fetchGoogleMeetPrerequisiteStatus,
   fetchGoogleMeetSessions: settingsMocks.fetchGoogleMeetSessions,
-  fetchInstalledAddons: settingsMocks.fetchInstalledAddons,
   fetchIntegrationCatalog: settingsMocks.fetchIntegrationCatalog,
   fetchIntegrationConnectionDiagnostics: settingsMocks.fetchIntegrationConnectionDiagnostics,
   fetchIntegrationConnections: settingsMocks.fetchIntegrationConnections,
@@ -524,13 +509,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchWorkspaces: settingsMocks.fetchWorkspaces,
   listCitadels: settingsMocks.listCitadels,
   finalizeChannelSetupDraft: settingsMocks.finalizeChannelSetupDraft,
-  installAddon: settingsMocks.installAddon,
   installCapabilityPack: settingsMocks.installCapabilityPack,
   installLocalCapabilityPack: settingsMocks.installLocalCapabilityPack,
   installVoiceRuntime: settingsMocks.installVoiceRuntime,
   isApiRequestError: settingsMocks.isApiRequestError,
   invokeIntegrationConnectionAction: settingsMocks.invokeIntegrationConnectionAction,
-  launchAddon: settingsMocks.launchAddon,
   materializeStagedCapabilityPack: settingsMocks.materializeStagedCapabilityPack,
   patchSettings: settingsMocks.patchSettings,
   patchGatewayAuthSettings: settingsMocks.patchGatewayAuthSettings,
@@ -561,13 +544,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   startChangePlanProviderOAuth: settingsMocks.startChangePlanProviderOAuth,
   startSlackOAuth: settingsMocks.startSlackOAuth,
   stageExternalConnectorAction: settingsMocks.stageExternalConnectorAction,
-  stopAddon: settingsMocks.stopAddon,
   stopDaemon: settingsMocks.stopDaemon,
   stopLlamaCppRuntime: settingsMocks.stopLlamaCppRuntime,
   stopNpuRuntime: settingsMocks.stopNpuRuntime,
   testChannelSetupDraft: settingsMocks.testChannelSetupDraft,
-  uninstallAddon: settingsMocks.uninstallAddon,
-  updateAddon: settingsMocks.updateAddon,
   updateChannelSetupDraft: settingsMocks.updateChannelSetupDraft,
   updateExternalConnectorActionReviewState: settingsMocks.updateExternalConnectorActionReviewState,
   updateExternalConnectorServiceReviewState: settingsMocks.updateExternalConnectorServiceReviewState,
@@ -1342,37 +1322,6 @@ function setupResponses() {
     if (!grant) throw new Error("Unknown fixture device grant");
     return { grant: { ...grant, revokedAt: "2026-09-30T12:00:00.000Z" } };
   });
-  settingsMocks.fetchAddonsCatalog.mockResolvedValue({
-    items: [
-      {
-        addonId: "pixel-office",
-        label: "Pixel Office",
-        description: "Workspace visualizer",
-        category: "visual",
-        trustTier: "trusted",
-        owner: "goatcitadel",
-        runtimeType: "web",
-        webEntryMode: "iframe",
-        launchUrl: "http://localhost:9000",
-        installCommands: [{ command: "pnpm", args: ["install"], note: "Install assets" }],
-      },
-    ],
-  });
-  settingsMocks.fetchInstalledAddons.mockResolvedValue({
-    items: [{ addonId: "pixel-office", runtimeStatus: "running", installedAt: "2026-04-24T12:00:00.000Z" }],
-  });
-  settingsMocks.fetchAddonStatus.mockResolvedValue({
-    addonId: "pixel-office",
-    status: "running",
-    healthChecks: [{ key: "http", status: "ok", message: "Serving" }],
-  });
-  settingsMocks.installAddon.mockResolvedValue({ ok: true });
-  settingsMocks.updateAddon.mockResolvedValue({ ok: true });
-  settingsMocks.enableAddon.mockResolvedValue({ ok: true });
-  settingsMocks.disableAddon.mockResolvedValue({ ok: true });
-  settingsMocks.launchAddon.mockResolvedValue({ ok: true });
-  settingsMocks.stopAddon.mockResolvedValue({ ok: true });
-  settingsMocks.uninstallAddon.mockResolvedValue({ ok: true });
   settingsMocks.fetchCapabilityPacks.mockResolvedValue({
     items: [
       {
@@ -2545,7 +2494,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(generalText).toContain("No active provider");
 
     const quickRouteButtons = buttons(general.root, "Open").filter((node) => collectText(node).trim() === "Open");
-    expect(quickRouteButtons).toHaveLength(17);
+    expect(quickRouteButtons).toHaveLength(16);
     for (const button of quickRouteButtons) {
       await click(button);
     }
@@ -2560,7 +2509,6 @@ describe("SettingsNativePage broad native sections", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "mcp", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "tools", theme: "ops" });
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "permissions", theme: "ops" });
-    expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "addons", theme: "ops" });
 
     navigate.mockClear();
     const budget = await mount("budget", { navigate });
@@ -2579,7 +2527,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
   });
 
-  it("renders general, access, onboarding demo, runtime, workspace, channel, tool, and add-on flows", async () => {
+  it("renders general, access, onboarding demo, runtime, workspace, channel, tool, and capability pack flows", async () => {
     const generalNavigate = vi.fn();
     const general = await mount("general", { navigate: generalNavigate });
     await act(async () => {
@@ -2954,99 +2902,17 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.revokeToolGrant).toHaveBeenCalledWith("grant-1");
 
     // The real route mounts one settings owner at a time. Retire earlier
-    // journey renderers so their dirty registries cannot block Add-ons tabs.
+    // journey renderers so their dirty registries cannot block the pack editor.
     await act(async () => {
       for (const renderer of mountedSettingsRenderers.splice(0)) renderer.unmount();
     });
-    const arena = {
-      addonId: "arena",
-      label: "Arena",
-      description: "Optional AI gladiator arena add-on for match play, commentary, and fun agent battles.",
-      owner: "spurnout",
-      repoUrl: "https://github.com/spurnout/goatcitadel-arena",
-      sameOwnerAsGoatCitadel: true,
-      trustTier: "restricted",
-      category: "fun_optional",
-      runtimeType: "separate_repo_app",
-      webEntryMode: "external_local_url",
-      requiresSeparateRepoDownload: true,
-      installCommands: [
-        { command: "git", args: ["init", "<install-dir>"] },
-        {
-          command: "git",
-          args: [
-            "-C",
-            "<install-dir>",
-            "fetch",
-            "--depth",
-            "1",
-            "--no-tags",
-            "https://github.com/spurnout/goatcitadel-arena",
-            "afce1692c9504aee816423fbb0dcb6bd24496053",
-          ],
-        },
-        {
-          command: "git",
-          args: ["-C", "<install-dir>", "checkout", "--detach", "afce1692c9504aee816423fbb0dcb6bd24496053"],
-        },
-        { command: "corepack", args: ["pnpm", "install", "--frozen-lockfile"] },
-        { command: "corepack", args: ["pnpm", "-r", "run", "build"] },
-      ],
-      healthChecks: [
-        { key: "provenance", status: "warn", message: "Separate repository owned by the same publisher." },
-      ],
-    } satisfies import("@goatcitadel/contracts").AddonCatalogEntry;
-    settingsMocks.fetchAddonsCatalog.mockResolvedValue({ items: [arena] });
-    settingsMocks.fetchInstalledAddons.mockResolvedValue({ items: [] });
-    settingsMocks.fetchAddonStatus.mockResolvedValue({
-      addon: arena,
-      status: "not_installed",
-      healthChecks: arena.healthChecks,
-    });
-    const addons = await mount("addons");
+    const packs = await mount("addons");
     await flush();
-    expect(collectText(addons.root)).toContain("1.0 add-on posture");
-    expect(collectText(addons.root)).toContain("Experimental local extensions");
-    expect(collectText(addons.root)).toContain("Local-only boundary");
-    expect(collectText(addons.root)).toContain("Add-on catalog");
-    expect(settingsMocks.fetchCapabilityPacks).not.toHaveBeenCalled();
-    expect(collectText(addons.root)).toContain("Arena");
-    await click(findButton(addons.root, "Inspect"));
-    expect(findButton(addons.root, "Launch").props.disabled).toBe(true);
-    expect(findButton(addons.root, "Update").props.disabled).toBe(true);
-    await click(findButton(addons.root, "Install"));
-    const installReview = addons.root
-      .findAllByType(ConfirmModal)
-      .find((modal) => modal.props.open && modal.props.title === "Review add-on install");
-    expect(installReview).toBeDefined();
-    expect(installReview?.props.message).toContain(arena.repoUrl);
-    expect(installReview?.props.message).toContain("starts disabled");
-    expect(installReview?.props.message).toContain("download and build repository code on this computer");
-    for (const command of arena.installCommands) {
-      expect(installReview?.props.message).toContain([command.command, ...command.args].join(" "));
-    }
-    await act(async () => {
-      installReview?.props.onCancel();
-      await flush();
-    });
-    expect(addons.root.findAllByType(ConfirmModal).some((modal) => modal.props.open)).toBe(false);
-    for (const mutation of [
-      settingsMocks.installAddon,
-      settingsMocks.updateAddon,
-      settingsMocks.enableAddon,
-      settingsMocks.disableAddon,
-      settingsMocks.launchAddon,
-      settingsMocks.stopAddon,
-      settingsMocks.uninstallAddon,
-    ]) {
-      expect(mutation).not.toHaveBeenCalled();
-    }
-    await click(findButton(addons.root, "Capability packs"));
     expect(settingsMocks.fetchCapabilityPacks).toHaveBeenCalled();
-    expect(collectText(addons.root)).toContain("Operator Pack");
-    expect(collectText(addons.root)).toContain("No capability is installed, enabled, connected or invoked by staging.");
-    await click(findButton(addons.root, "Add-ons"));
-    expect(collectText(addons.root)).toContain("Add-on catalog");
+    expect(collectText(packs.root)).toContain("Operator Pack");
+    expect(collectText(packs.root)).toContain("No capability is installed, enabled, connected or invoked by staging.");
+    expect(collectText(packs.root)).not.toContain("Add-on");
+    expect(collectText(packs.root)).not.toContain("Arena");
     expect(settingsMocks.installCapabilityPack).not.toHaveBeenCalled();
     expect(settingsMocks.materializeStagedCapabilityPack).not.toHaveBeenCalled();
     expect(settingsMocks.installLocalCapabilityPack).not.toHaveBeenCalled();
@@ -3999,7 +3865,6 @@ describe("SettingsNativePage broad native sections", () => {
 
   it("ignores stale portable previews and retains the exact draft after failed staging", async () => {
     const page = await mount("addons");
-    await click(findButton(page.root, "Capability packs"));
     await click(findButton(page.root, "Import pack"));
     const manifest = (packId: string): CapabilityPackManifest => ({
       packId,
@@ -4085,7 +3950,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(settingsMocks.installLocalCapabilityPack).toHaveBeenCalledTimes(1);
   });
 
-  it("registers Runtime and Add-ons editor drafts with the global navigation guard", async () => {
+  it("registers Runtime and Capability packs editor drafts with the global navigation guard", async () => {
     const runtime = await mount("runtime");
     await click(findButton(runtime.root, "Configure llama.cpp"));
     await change(runtime.root.findByProps({ value: "http://127.0.0.1:8080/v1" }), "http://127.0.0.1:9090/v1");
@@ -4093,10 +3958,9 @@ describe("SettingsNativePage broad native sections", () => {
     runtime.unmount();
     __resetFormDirtyRegistryForTests();
 
-    const addons = await mount("addons");
-    await click(findButton(addons.root, "Capability packs"));
-    await click(findButton(addons.root, "Import pack"));
-    await change(addons.root.findByType("textarea"), '{"packId":"draft-pack"}');
+    const packs = await mount("addons");
+    await click(findButton(packs.root, "Import pack"));
+    await change(packs.root.findByType("textarea"), '{"packId":"draft-pack"}');
     expect(hasDirtySections()).toBe(true);
   });
 
@@ -4753,15 +4617,12 @@ describe("SettingsNativePage partial gateway responses", () => {
     expect(collectText(permissions.root)).toContain("Permission profiles");
   });
 
-  it("renders the add-ons section when catalog and pack payloads are empty", async () => {
-    settingsMocks.fetchAddonsCatalog.mockResolvedValue({});
-    settingsMocks.fetchInstalledAddons.mockResolvedValue({});
+  it("renders the capability packs section when the bundled catalog payload is empty", async () => {
     settingsMocks.fetchCapabilityPacks.mockResolvedValue({});
-    settingsMocks.fetchStagedCapabilityPacks.mockResolvedValue({});
 
-    const addons = await mount("addons");
+    const packs = await mount("addons");
 
-    expect(collectText(addons.root)).toContain("Add-on catalog");
+    expect(collectText(packs.root)).toContain("Capability pack staging and review record installation evidence only.");
   });
 
   it("keeps provider advice defensive when the advice payload is empty", async () => {
@@ -4776,12 +4637,11 @@ describe("SettingsNativePage partial gateway responses", () => {
     expect(text).toContain("Provider advice is advisory only.");
   });
 
-  it("renders the general posture counts when workspace, integration, MCP, tool, and add-on payloads are empty", async () => {
+  it("renders the general posture counts when workspace, integration, MCP, and tool payloads are empty", async () => {
     settingsMocks.fetchWorkspaces.mockResolvedValue({});
     settingsMocks.fetchIntegrationConnections.mockResolvedValue({});
     settingsMocks.fetchMcpServers.mockResolvedValue({});
     settingsMocks.fetchToolCatalog.mockResolvedValue({});
-    settingsMocks.fetchInstalledAddons.mockResolvedValue({});
 
     const general = await mount("general");
     await act(async () => {

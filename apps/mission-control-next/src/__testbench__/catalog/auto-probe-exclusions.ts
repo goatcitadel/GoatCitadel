@@ -103,7 +103,6 @@ export const AUTO_PROBE_EXCLUSIONS: readonly AutoProbeExclusion[] = [
 /** Areas whose reads may reach the network. On the real gateway, auto-probes skip them until reviewed. */
 export const REAL_TARGET_NETWORK_DOMAINS: ReadonlySet<string> = new Set([
   "a2a",
-  "addons",
   "channels",
   "comms",
   "integrations",

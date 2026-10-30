@@ -398,9 +398,9 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
     area: "settings",
     section: "addons",
     status: "experimental",
-    releaseAction: "Inspect add-on posture without implying a full marketplace/install lifecycle.",
+    releaseAction: "Preview bundled capability packs without implying a full marketplace/install lifecycle.",
     verification: "verify:surface:regression label check",
-    note: "Add-ons stay experimental until permission grants, durable logs, rollback, and marketplace boundaries are proven.",
+    note: "Capability packs stay experimental until plugins replace them.",
   },
   {
     area: "settings",

@@ -654,7 +654,6 @@ describe("streaming and HTTP helpers", () => {
     expect(isTrustedGatewayHost("api.example.com", "api.example.com")).toBe(true);
     expect(isTrustedGatewayHost("evil.com")).toBe(false);
     expect(inferOriginSurface("/api/v1/chat/stream")).toBe("chat");
-    expect(inferOriginSurface("/api/v1/addons")).toBe("addons");
     expect(inferOriginSurface("/api/v1/voice")).toBe("voice");
     expect(inferOriginSurface("/api/v1/mcp")).toBe("mcp");
     expect(inferOriginSurface("/api/v1/integrations")).toBe("integrations");

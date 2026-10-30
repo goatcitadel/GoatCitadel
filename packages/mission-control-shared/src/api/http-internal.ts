@@ -182,9 +182,6 @@ export function inferOriginSurface(path: string): string {
   if (path.startsWith("/api/v1/chat")) {
     return "chat";
   }
-  if (path.startsWith("/api/v1/addons")) {
-    return "addons";
-  }
   if (path.startsWith("/api/v1/voice")) {
     return "voice";
   }
