@@ -1142,6 +1142,15 @@
   border-color: color-mix(in oklab, var(--gc-risk-danger) 38%, var(--border));
 }
 
+/* Sentences a model fenced: the reply's own font, wrapped, with the line breaks it wrote. */
+.mc-assistant-prose-fence-body {
+  padding: 0.72rem;
+  color: var(--foreground);
+  line-height: 1.55;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .mc-assistant-code-block {
   position: relative;
   margin: 0;
