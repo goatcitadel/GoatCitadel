@@ -360,6 +360,10 @@ export function useWhatsAppSetup(workspaceId: string, resumeDraftId?: string): W
     const { draft, addressCheckedAt, busy } = current();
     // After Meta's check, a new token would break an address that works.
     if (!draft || addressCheckedAt || busy) return;
+    // The wait for Meta's check stops while the token is written, so its ten minutes ending can't drop the write's own
+    // answer and leave the page busy. It starts again below.
+    const waiting = stopAsking.current !== null;
+    invalidate();
     const live = follow();
     const set = begin();
     const token = createVerifyToken();
@@ -374,6 +378,8 @@ export function useWhatsAppSetup(workspaceId: string, resumeDraftId?: string): W
     } catch (error) {
       const latest = await latestDraft(draft.draftId);
       set({ ...(latest ? { draft: latest } : {}), busy: false, error: whatsAppFailure(error) });
+      // Meta may still check the address with the token it has, so a wait that was running goes on.
+      if (waiting && live()) listenForAddress(set, live);
       return;
     }
     // Meta checks with the new token, so the wait starts over.

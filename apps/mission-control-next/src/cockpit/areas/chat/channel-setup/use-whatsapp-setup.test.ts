@@ -889,6 +889,44 @@ describe("useWhatsAppSetup, the verify token", () => {
     expect(current.verifyToken).toBe(first);
     expect(current.draft?.revision).toBe(7);
     expect(current.busy).toBe(false);
+    // The wait for Meta's check with the old token goes on.
+    api.checkWhatsAppSetup.mockClear();
+    await advance(WHATSAPP_LISTEN_POLL_MS);
+    expect(api.checkWhatsAppSetup).toHaveBeenCalledTimes(1);
+  });
+
+  it("finishes a new verify token whose write is out when the wait for Meta's check would run out", async () => {
+    await mountReady();
+    const before = current.draft!;
+    // Nine of the ten minutes pass with nothing heard.
+    await advance(SETUP_CODE_TTL_MS - 10 * WHATSAPP_LISTEN_POLL_MS);
+    expect(current.addressExpired).toBe(false);
+    let finish: (value: ChannelSetupDraft) => void = () => undefined;
+    api.submitChannelSetupDraftSecrets.mockReturnValue(new Promise<ChannelSetupDraft>((resolve) => (finish = resolve)));
+    let making: Promise<void> = Promise.resolve();
+    await act(async () => {
+      making = current.newVerifyToken();
+      await Promise.resolve();
+    });
+    expect(current.busy).toBe(true);
+
+    // The ten minutes end while the token is being written.
+    await advance(20 * WHATSAPP_LISTEN_POLL_MS);
+    await act(async () => {
+      finish(draft({ ...before, revision: before.revision + 1 }));
+      await making;
+    });
+    await settle();
+
+    expect(current.busy).toBe(false);
+    expect(current.verifyToken).toBe(api.submitChannelSetupDraftSecrets.mock.lastCall![1].values.webhookVerifyToken);
+    expect(current.draft?.revision).toBe(before.revision + 1);
+    expect(current.addressExpired).toBe(false);
+    expect(current.error).toBeUndefined();
+    // Meta is asked about the new token, for ten new minutes.
+    api.checkWhatsAppSetup.mockClear();
+    await advance(WHATSAPP_LISTEN_POLL_MS);
+    expect(api.checkWhatsAppSetup).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the token once Meta has checked the address", async () => {
