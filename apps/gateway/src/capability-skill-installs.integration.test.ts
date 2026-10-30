@@ -336,6 +336,46 @@ describe(
         expect.objectContaining({ event: "operator_approval_skipped" }),
       );
     });
+
+    it("checks a source afresh after an install that didn't finish, as a new check", async () => {
+      // Two checks of one pack, each asked to install; the second installs first, so the first one's install finds the
+      // skill already there when its approval applies, and stops.
+      const first = await gateway.checkPack("github-cli", "check-github-cli-first");
+      const second = await gateway.checkPack("github-cli", "check-github-cli-second");
+      expect([first.step, second.step]).toEqual(["check_passed", "check_passed"]);
+      const firstInstall = await gateway.requestStep(first.snapshotId, "install_inactive");
+      const secondInstall = await gateway.requestStep(second.snapshotId, "install_inactive");
+      expect([firstInstall.status, secondInstall.status]).toEqual(["waiting", "waiting"]);
+      await gateway.approve(secondInstall.approvalId);
+      await vi.waitFor(
+        async () => expect((await gateway.readInstall(second.snapshotId))?.step).toBe("installed_off"),
+        STEP_WAIT,
+      );
+      await gateway.approve(firstInstall.approvalId);
+      await vi.waitFor(
+        async () => expect((await gateway.readInstall(first.snapshotId))?.step).toBe("failed"),
+        STEP_WAIT,
+      );
+      const failed = await gateway.readInstall(first.snapshotId);
+      expect(failed?.failure).toBe("GoatCitadel's checks stopped the install.");
+
+      // Asking for the same step again runs nothing: here the checks refuse it, since the skill is there now.
+      const retry = await gateway.inject("POST", OPERATIONS_URL, {
+        workspaceId: WORKSPACE_ID,
+        snapshotId: first.snapshotId,
+        operationKind: "install_inactive",
+      });
+      expect(retry.statusCode, retry.body).toBe(409);
+      expect(retry.json()).toMatchObject({ details: { reason: "blocked" } });
+      expect((await gateway.readInstall(first.snapshotId))?.step).toBe("failed");
+
+      // A fresh check (a new key) is a new check, not the stopped one: here it finds the skill installed already.
+      const again = await gateway.checkPack("github-cli", "check-github-cli-again");
+      expect(again.snapshotId).not.toBe(first.snapshotId);
+      expect(again.step).toBe("blocked");
+      expect(again.blockers).toEqual(expect.arrayContaining(["CANDIDATE_ALREADY_EXISTS"]));
+      expect((await gateway.readInstall(first.snapshotId))?.step).toBe("failed");
+    });
   },
 );
 
