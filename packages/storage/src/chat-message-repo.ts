@@ -164,6 +164,7 @@ export class ChatMessageRepository {
   private readonly upsertStmt;
   private readonly countStmt;
   private readonly countChannelMessagesAfterStmt;
+  private readonly latestChannelMessageAtStmt;
   private readonly listLatestStmt;
   private readonly listAtOrBeforeSeqStmt;
   private readonly listAtOrBeforeSeqOffsetStmt;
@@ -231,6 +232,13 @@ export class ChatMessageRepository {
         AND role = 'user'
         AND source_authority = 'external_channel'
         AND timestamp > ?
+    `);
+    this.latestChannelMessageAtStmt = db.prepare(`
+      SELECT MAX(timestamp) AS latest
+      FROM chat_messages
+      WHERE session_id = ?
+        AND role = 'user'
+        AND source_authority = 'external_channel'
     `);
     this.listLatestStmt = db.prepare(`
       SELECT *
@@ -626,6 +634,18 @@ export class ChatMessageRepository {
     return Number(row?.count ?? 0);
   }
 
+  /**
+   * The time of the newest message a person sent through a channel in this session: role `user` with source authority
+   * `external_channel`, the same messages `countAfter` counts. Replies and operator messages never count, so this is
+   * "when did they last write", which is what a provider's reply window runs from. A session none of them wrote in
+   * gives `undefined`.
+   */
+  public latestChannelMessageAt(sessionId: string): string | undefined {
+    const row: unknown = this.latestChannelMessageAtStmt.get(sessionId);
+    const latest = isRecord(row) ? row.latest : undefined;
+    return typeof latest === "string" && latest ? latest : undefined;
+  }
+
   public get(messageId: string): ChatMessageRecord | undefined {
     const row = toChatMessageRow(this.getStmt.get(messageId));
     return row ? this.mapRow(row) : undefined;
@@ -638,7 +658,9 @@ export class ChatMessageRepository {
     for (let offset = 0; offset < ids.length; offset += 400) {
       const batch = ids.slice(offset, offset + 400);
       // One index probe per session (newest visible message) instead of ranking every message.
-      const rows = this.db.prepare(`
+      const rows = this.db
+        .prepare(
+          `
         SELECT wanted.session_id AS session_id, (
           SELECT message.content FROM chat_messages message
           WHERE message.session_id = wanted.session_id
@@ -646,7 +668,9 @@ export class ChatMessageRepository {
           ORDER BY message.seq DESC LIMIT 1
         ) AS content
         FROM (${batch.map(() => "SELECT CAST(? AS TEXT) AS session_id").join(" UNION ALL ")}) wanted
-      `).all(...batch) as Array<{ session_id: string; content: string | null }>;
+      `,
+        )
+        .all(...batch) as Array<{ session_id: string; content: string | null }>;
       for (const row of rows) {
         if (row.content !== null && row.content !== undefined) result.set(row.session_id, row.content);
       }

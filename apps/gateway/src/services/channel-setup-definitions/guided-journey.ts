@@ -91,7 +91,7 @@ const POSTURE: Record<string, { summary: string; prerequisites: string[]; firstM
   },
   whatsapp: {
     summary:
-      "Send WhatsApp messages from a WhatsApp Business number through Meta's Cloud API. Receiving messages needs a public HTTPS address. Personal WhatsApp (QR code linking) isn't supported.",
+      "Send and receive WhatsApp messages through your own Meta app. Meta delivers messages only to a public https:// address, so GoatCitadel needs one. The quickest setup is WhatsApp in Chat › Messaging.",
     prerequisites: [
       "A Meta app with WhatsApp set up, its phone number ID, and a permanent System User access token.",
       "The recipient messages your business number first; WhatsApp delivers the plain-text test only in the 24 hours after that.",
@@ -213,7 +213,9 @@ const ADVANCED_KEYS = new Set([
  * operator saw. Change it whenever the text of any guide, or the text the guides share, changes. Changing it also makes
  * older setup test results out of date, so those tests run again.
  */
-export const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-29";
+export const GUIDED_CONTENT_VERSION_SUFFIX = ".guided-2026-10-29-whatsapp";
+/** WhatsApp's fields that hold Meta's numeric IDs, which get a number keyboard. */
+const WHATSAPP_NUMERIC_ID_KEYS: ReadonlySet<string> = new Set(["phoneNumberId", "appId", "businessAccountId"]);
 /** A draft value `hydrate` sets when the saved connection was open access. It is never part of the saved config. */
 const OPEN_ACCESS_MARKER = "inboundAccessWasOpen";
 /** Webhook inbound that is always default-deny: the runtime ignores a stored open_legacy mode for these. */
@@ -383,7 +385,7 @@ function guidedField(
 ): ChannelSetupFieldDefinition {
   const key = runtime.definition.catalog.key;
   const secretKeys = runtime.definition.adapter.secretFieldKeys;
-  if (key === "whatsapp" && field.key === "phoneNumberId") return { ...field, inputMode: "numeric" };
+  if (key === "whatsapp" && WHATSAPP_NUMERIC_ID_KEYS.has(field.key)) return { ...field, inputMode: "numeric" };
   if (field.key === "targets")
     return { ...field, type: "target-list", targetAddressKey: key === "telegram" ? "chatId" : "channel" };
   // Both ids are required while the bot listens in a server channel; a direct-message setup hides them and is not asked.

@@ -1,7 +1,9 @@
 import {
   CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS,
+  checkPublicWebAddress,
   ConflictError,
   SemanticValidationError,
+  ValidationError,
   type ChangePlanRecord,
   type ChangePlanRuntimeFeatureFlag,
   type ChangePlanRuntimeConfigurationRequest,
@@ -321,6 +323,14 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       await validateLlamaSetup(this.deps, request.change, workspaceId);
       return;
     }
+    if (request.change.operation === "public_web_address_configuration") {
+      // The settings owner runs the same check at apply; a plan for an address it would refuse is never prepared. The
+      // sentence is the whole answer, and it never repeats what was typed.
+      const { publicWebAddress } = request.change.config;
+      const checked = publicWebAddress === null ? undefined : checkPublicWebAddress(publicWebAddress);
+      if (checked && !checked.ok) throw new ValidationError({ message: checked.problem });
+      return;
+    }
     if (
       request.change.operation === "operator_write_root" ||
       request.change.operation === "tool_global_access" ||
@@ -389,6 +399,9 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
       return { memory: { ...request.change.config } };
     case "web_firecrawl_configuration":
       return { web: { firecrawl: { ...request.change.config } } };
+    case "public_web_address_configuration":
+      // The settings owner checks and tidies it; `null` clears it.
+      return { publicWebAddress: request.change.config.publicWebAddress };
     case "web_search_configuration":
       return { web: { search: { engineOrder: [...request.change.config.engineOrder] } } };
     case "web_search_credential":
@@ -448,6 +461,8 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesMemory(settings, request.change.config);
     case "web_firecrawl_configuration":
       return matchesPartial(settings.web.firecrawl, request.change.config);
+    case "public_web_address_configuration":
+      return matchesPublicWebAddress(request.change.config.publicWebAddress, settings);
     case "web_search_configuration":
       return sameList(settings.web.search.engineOrder, request.change.config.engineOrder);
     case "web_search_credential":
@@ -587,6 +602,8 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
         "Future web reads may use the reviewed external service posture.",
         "caution",
       );
+    case "public_web_address_configuration":
+      return describePublicWebAddress(request.change.config.publicWebAddress);
     case "web_search_configuration": {
       const [defaultEngine, ...backups] = request.change.config.engineOrder;
       const order = request.change.config.engineOrder.join(" → ");
@@ -655,6 +672,39 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
       };
     }
   }
+}
+
+/** The settings owner stores the tidied address, so a plan that carries an untidied one is held to the tidied form. */
+function matchesPublicWebAddress(publicWebAddress: string | null, settings: RuntimeSettings): boolean {
+  if (publicWebAddress === null) return settings.publicWebAddress === undefined;
+  const checked = checkPublicWebAddress(publicWebAddress);
+  return checked.ok && settings.publicWebAddress === checked.address;
+}
+
+/** Names the tidied address, never what was typed: an address that fails its check is not shown at all. */
+function describePublicWebAddress(publicWebAddress: string | null) {
+  const impact =
+    "Channel setup pages build their web addresses from this one. Saving it does not make this computer reachable from the internet.";
+  if (publicWebAddress === null) {
+    return {
+      title: "Clear the public web address",
+      summary: "Clear GoatCitadel's public web address",
+      completedSummary: "GoatCitadel's public web address is cleared",
+      impact,
+      risk: "caution" as const,
+    };
+  }
+  const checked = checkPublicWebAddress(publicWebAddress);
+  const named = checked.ok ? ` to ${checked.address}` : "";
+  return {
+    title: "Set the public web address",
+    summary: `Set GoatCitadel's public web address${named}`,
+    completedSummary: checked.ok
+      ? `GoatCitadel's public web address is now ${checked.address}`
+      : "GoatCitadel's public web address is set",
+    impact,
+    risk: "caution" as const,
+  };
 }
 
 function featureFlagName(flag: string): string {

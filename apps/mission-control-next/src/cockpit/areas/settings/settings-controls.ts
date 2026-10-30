@@ -69,6 +69,9 @@ export const CitadelBlueprintSettings = preloadable(async () => ({
 export const ChannelsSettings = preloadable(async () => ({
   default: (await import("./ChannelsSettings")).ChannelsSettings,
 }));
+export const PublicWebAddressSettings = preloadable(async () => ({
+  default: (await import("./PublicWebAddressSettings")).PublicWebAddressSettings,
+}));
 export const CitadelOverviewSettings = preloadable(async () => ({
   default: (await import("./CitadelOverviewSettings")).CitadelOverviewSettings,
 }));
@@ -117,7 +120,7 @@ const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }
   "citadel-capabilities": [CapabilityScopesSettings],
   "workspace-capabilities": [CapabilityScopesSettings],
   integrations: [IntegrationConnectionsSettings],
-  channels: [ChannelsSettings],
+  channels: [PublicWebAddressSettings, ChannelsSettings],
   mcp: [McpServersSettings],
   "web-search": [WebSearchSettings],
   addons: [AddonsSettings, PortablePacksSettings],

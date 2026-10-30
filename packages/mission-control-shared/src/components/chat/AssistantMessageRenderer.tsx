@@ -34,6 +34,7 @@ import {
 import { AssistantStreamingTailContext, HighlightedCode } from "./HighlightedCode";
 import { LazyOpenUiStructuredBlock } from "./LazyOpenUiStructuredBlock";
 import { isGoatOpenUiRendererEnabled } from "./openui-flag";
+import { isProseFence } from "./prose-fence";
 import { rehypeFadeNewWords } from "./rehype-fade-new-words";
 import { useSteadyStreamText } from "./use-steady-stream-text";
 import { useMediaQuery } from "../../hooks/useMediaQuery";
@@ -410,25 +411,44 @@ function AssistantCodeBlock({
     }
   }
 
-  const copyLabel = copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy unavailable" : "Copy code";
+  // Sentences a model fenced (often a draft to copy) read as wrapped text; the Copy button stays.
+  const isProse = isProseFence(language, trimmed);
+  const idleCopyLabel = isProse ? "Copy text" : "Copy code";
+  const copyLabel = copyState === "copied" ? "Copied" : copyState === "failed" ? "Copy unavailable" : idleCopyLabel;
+
+  const copyButton = (
+    <button
+      type="button"
+      className={cn(
+        "mc-assistant-code-copy",
+        copyState === "copied" ? "copied" : "",
+        copyState === "failed" ? "failed" : "",
+      )}
+      onClick={() => void handleCopy()}
+      aria-label={copyLabel}
+      title={copyLabel}
+    >
+      {copyState === "copied" ? <Check size={12} strokeWidth={2.4} /> : <Copy size={12} strokeWidth={2.4} />}
+    </button>
+  );
+
+  if (isProse) {
+    return (
+      <div className="mc-assistant-code-shell mc-assistant-prose-fence" data-language={language ?? undefined}>
+        <div className="mc-assistant-code-header">
+          <span className="mc-assistant-code-language">text</span>
+          {copyButton}
+        </div>
+        <div className="mc-assistant-prose-fence-body">{trimmed}</div>
+      </div>
+    );
+  }
 
   const codeBlock = (
     <div className="mc-assistant-code-shell" data-language={language ?? undefined}>
       <div className="mc-assistant-code-header">
         <span className="mc-assistant-code-language">{language ?? "code"}</span>
-        <button
-          type="button"
-          className={cn(
-            "mc-assistant-code-copy",
-            copyState === "copied" ? "copied" : "",
-            copyState === "failed" ? "failed" : "",
-          )}
-          onClick={() => void handleCopy()}
-          aria-label={copyLabel}
-          title={copyLabel}
-        >
-          {copyState === "copied" ? <Check size={12} strokeWidth={2.4} /> : <Copy size={12} strokeWidth={2.4} />}
-        </button>
+        {copyButton}
       </div>
       <pre className="mc-assistant-code-block">
         <HighlightedCode code={trimmed} language={language} codeClassName={codeClassName} codeProps={codeProps} />

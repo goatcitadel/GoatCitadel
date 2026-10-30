@@ -11,6 +11,7 @@ import { evaluateChannelSetupEligibility } from "./channel-setup-eligibility.js"
 export { discoverChannelSetupTelegramTargets } from "./channel-setup-telegram-discovery.js";
 export { checkDiscordSetup } from "./channel-setup-discord-check.js";
 export { checkSlackSetup } from "./channel-setup-slack-check.js";
+export { checkWhatsAppSetup, subscribeWhatsAppSetupApp } from "./channel-setup-whatsapp-check.js";
 import {
   assertDraftRevision,
   custodyInitialDraftSecrets,
@@ -709,6 +710,27 @@ export async function reconcileChannelSetupDraftSecretCustody(
     invalidated: 0,
     scrubbed: 0,
   };
+  const recordDevDiagnostic: ChannelSetupHost["recordDevDiagnostic"] = (input) => host.recordDevDiagnostic(input);
+  // A temporary credential found unusable is deleted. A delete that fails leaves it in secure storage and is reported
+  // with the draft, the field and the error's type only; the draft is still scrubbed and startup goes on.
+  const deleteUnusableTemporary = (draft: ChannelSetupDraft, fieldKey: string, secretRef: string): void => {
+    try {
+      host.channelSecrets?.deleteTemporary(secretRef);
+    } catch (error) {
+      recordDevDiagnostic({
+        level: "warn",
+        category: "integrations",
+        event: "channel_setup.secret_reconciliation.delete_failed",
+        message: `Could not remove an unusable credential for draft ${draft.draftId}; it stays in secure storage.`,
+        context: {
+          draftId: draft.draftId,
+          catalogId: draft.catalogId,
+          fieldKey,
+          errorType: error instanceof Error ? error.name : "unknown",
+        },
+      });
+    }
+  };
 
   for (const initial of drafts) {
     const runtime = requireChannelSetupDefinition(initial.catalogId);
@@ -748,7 +770,7 @@ export async function reconcileChannelSetupDraftSecretCustody(
         result.migrated += 1;
       } catch (error) {
         // Conversion failure must still result in a scrubbed, non-callable draft.
-        host.recordDevDiagnostic({
+        recordDevDiagnostic({
           level: "warn",
           category: "integrations",
           event: "channel_setup.secret_reconciliation.conversion_failed",
@@ -779,7 +801,9 @@ export async function reconcileChannelSetupDraftSecretCustody(
           fieldKey,
         });
       } catch {
-        if (state.secretRef && state.custody === "temporary") host.channelSecrets?.deleteTemporary(state.secretRef);
+        if (state.secretRef && state.custody === "temporary") {
+          deleteUnusableTemporary(current, fieldKey, state.secretRef);
+        }
         nextSecretState[fieldKey] = { configured: false, custody: "temporary" };
         replacementFields.add(fieldKey);
         invalid = true;
@@ -808,7 +832,7 @@ export async function reconcileChannelSetupDraftSecretCustody(
     result.scrubbed += 1;
     if (invalid) result.invalidated += 1;
     host.recentChannelSetupTests.delete(current.draftId);
-    host.recordDevDiagnostic({
+    recordDevDiagnostic({
       level: invalid ? "warn" : "info",
       category: "integrations",
       event: invalid

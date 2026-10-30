@@ -8,12 +8,12 @@ import { channelSetupHref } from "../../../app/routes";
 import { isChatSetupDraft } from "./setup-draft-session";
 
 /** Channels with a setup page of their own in Chat. The picker opens it; the rest are set up in Settings. */
-export const CONVERTED_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack"]);
+export const CONVERTED_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack", "whatsapp"]);
 
 /**
- * Channels Settings hands every new setup to Chat. Discord and Slack also have a page in Chat, but Settings still
- * starts their other ways (Discord webhook-only, Slack webhook-only and OAuth), so only a draft made on the Chat page
- * goes on there.
+ * Channels Settings hands every new setup to Chat. Discord, Slack and WhatsApp also have a page in Chat, but Settings
+ * still starts their other ways (Discord webhook-only, Slack webhook-only and OAuth, WhatsApp's own steps), so only a
+ * draft made on the Chat page goes on there.
  */
 export const CHAT_ONLY_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram"]);
 
@@ -21,7 +21,7 @@ export const CHAT_ONLY_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram"
  * Channels whose key is changed on its own page in Chat. Settings changes every other channel's key. A page in
  * `ChannelSetupView` backs each one; this list is here so the channel page can link to it without loading the pages.
  */
-export const KEY_CHANGE_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack"]);
+export const KEY_CHANGE_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack", "whatsapp"]);
 
 const textOf = (value: unknown): string | undefined =>
   typeof value === "string" && value.trim() ? value.trim() : undefined;
@@ -40,11 +40,24 @@ function discordUsesBot(config: Readonly<Record<string, unknown>>): boolean {
 }
 
 /**
- * Whether this connection's key is changed on a page of its own in Chat. Telegram always; Discord and Slack only where
- * the page fits, because it asks for the tokens of a bot: a Discord webhook-only (bridge) connection has no bot token,
- * and a Slack webhook or OAuth connection has no app-level token (Socket Mode is what uses one). Those keep their
- * change in Settings. The one predicate decides both the channel page's link and the view that opens, so they cannot
- * disagree.
+ * Whether a WhatsApp connection keeps what the page's check asks Meta with besides the new token: the number's, the
+ * account's and the app's IDs, and the app secret (or the variable that holds it). The page replaces the access token
+ * alone and reads the rest from the saved connection, as the gateway's check does. A connection saved without them,
+ * such as a send-only one made in Settings, cannot be checked there. The public config shows a secret as a marker or
+ * a name, never its value, which is all this needs.
+ */
+function whatsAppKeepsCheckDetails(config: Readonly<Record<string, unknown>>): boolean {
+  const ids = ["phoneNumberId", "businessAccountId", "appId"].every((key) => textOf(config[key]) !== undefined);
+  return ids && ["appSecret", "appSecretEnv"].some((key) => textOf(config[key]) !== undefined);
+}
+
+/**
+ * Whether this connection's key is changed on a page of its own in Chat. Telegram always; Discord, Slack and WhatsApp
+ * only where the page fits. Discord's and Slack's pages ask for the tokens of a bot: a Discord webhook-only (bridge)
+ * connection has no bot token, and a Slack webhook or OAuth connection has no app-level token (Socket Mode is what
+ * uses one). WhatsApp's page asks for the access token alone, so a connection without the saved IDs and app secret it
+ * checks the token with does not fit. A connection the page does not fit keeps its change in Settings. The one
+ * predicate decides both the channel page's link and the view that opens, so they cannot disagree.
  */
 export function hasChatKeyChangePage(connection: Pick<IntegrationConnection, "key" | "config">): boolean {
   if (!KEY_CHANGE_CHANNELS.has(connection.key)) return false;
@@ -53,6 +66,8 @@ export function hasChatKeyChangePage(connection: Pick<IntegrationConnection, "ke
       return discordUsesBot(connection.config);
     case "slack":
       return textOf(connection.config.receiveMode) === "socket";
+    case "whatsapp":
+      return whatsAppKeepsCheckDetails(connection.config);
     default:
       return true;
   }

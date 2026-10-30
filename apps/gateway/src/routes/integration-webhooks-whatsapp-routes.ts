@@ -1,5 +1,11 @@
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { NotFoundError } from "@goatcitadel/contracts";
 import { buildChannelConversation } from "../services/channel-conversation.js";
+import {
+  createAcceptedWebhookRateLimit,
+  enforceAcceptedWebhookRateLimit,
+  type AcceptedWebhookRateLimit,
+} from "../services/webhook-rate-limit.js";
 import {
   deriveWhatsAppWebhookEventIdempotencyKey,
   normalizeWhatsAppWebhookPayloads,
@@ -22,6 +28,8 @@ import {
   dispatchInboundWebhookMessage,
   readHeaderValue,
   readQueryString,
+  validateWebhookHostHeader,
+  type WebhookRawBodyRequest,
 } from "./webhook-handler-factory.js";
 import { connectionParamsSchema } from "./integration-webhook-schemas.js";
 
@@ -29,8 +37,21 @@ type WhatsAppDispatchPayload = Array<
   Exclude<ReturnType<typeof normalizeWhatsAppWebhookPayloads>[number], { kind: "ignore" }>
 >;
 
+type WhatsAppWebhookRequest = FastifyRequest & Partial<WebhookRawBodyRequest>;
+
+/** The sentences a refused setup-draft delivery is answered with. None of them can carry anything Meta sent. */
+const SETUP_DELIVERY_REFUSALS = {
+  400: "Invalid WhatsApp webhook payload",
+  401: "Invalid WhatsApp webhook signature",
+  403: "WhatsApp webhook does not match this connection",
+} as const;
+
 export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
   const routeOptions = createWebhookRouteOptions("whatsappRawBody");
+  // The accepted-delivery limit for a setup draft's address, made with the helper the saved-connection handler uses
+  // (same limit, window and key). Like every limiter made that way it has its own store; an id is never both a saved
+  // connection and a setup draft, so no address is counted in two places.
+  const setupDeliveryRateLimit = createAcceptedWebhookRateLimit(fastify, "whatsapp");
   fastify.get(
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
     {
@@ -50,6 +71,13 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
       try {
         connection = await fastify.services.integrationWebhooks.getIntegrationConnection(params.data.connectionId);
       } catch (error) {
+        // An address that is no saved connection may be a setup draft made on the Messaging page.
+        if (
+          error instanceof NotFoundError &&
+          (await answerSetupCheck(fastify, request, reply, params.data.connectionId))
+        ) {
+          return reply;
+        }
         return reply.code(404).send({ error: (error as Error).message });
       }
       if (connection.key !== "whatsapp") {
@@ -83,6 +111,8 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
     "/api/v1/integrations/connections/:connectionId/whatsapp/webhook",
     {
       ...routeOptions,
+      // Ahead of the saved-connection handler: an address that is no saved connection may be a setup draft's.
+      preHandler: (request, reply) => answerSetupDelivery(fastify, setupDeliveryRateLimit, request, reply),
       config: {
         ...routeOptions.config,
         rateLimit: {
@@ -232,4 +262,107 @@ export function registerWhatsAppWebhookRoutes(fastify: FastifyInstance): void {
       },
     }),
   );
+}
+
+/**
+ * Meta's address check for a WhatsApp setup draft that is not a saved connection yet. Answers it and returns true when
+ * the listener did; returns false when the address is no setup draft either, so the 404 stays what it always was.
+ */
+async function answerSetupCheck(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  connectionId: string,
+): Promise<boolean> {
+  const webhooks = fastify.services.integrationWebhooks;
+  if (typeof webhooks.answerWhatsAppSetupCheck !== "function") {
+    return false;
+  }
+  const query = request.query as Record<string, unknown>;
+  const answer = (await webhooks.answerWhatsAppSetupCheck(connectionId, {
+    mode: readQueryString(query, "hub.mode"),
+    verifyToken: readQueryString(query, "hub.verify_token"),
+    challenge: readQueryString(query, "hub.challenge"),
+  })) as { status?: unknown; challenge?: unknown } | undefined;
+  if (answer?.status === 200 && typeof answer.challenge === "string") {
+    reply.type("text/plain").send(answer.challenge);
+    return true;
+  }
+  if (answer?.status === 400) {
+    reply.code(400).send({ error: "Invalid WhatsApp webhook verification query" });
+    return true;
+  }
+  if (answer?.status === 401) {
+    reply.code(401).send({ error: "Invalid WhatsApp webhook verify token" });
+    return true;
+  }
+  return false;
+}
+
+/**
+ * A delivery for an address that is no saved connection. When it is a setup draft made on the Messaging page, the
+ * listener checks the signature and hears the setup code; the delivery is answered as ignored and never reaches a
+ * conversation. The size limit, the raw body and the ingress rate limit are the route's own, so they apply here as they do
+ * to a saved connection. The accepted-delivery limit applies where the saved-connection handler applies it, once the
+ * signature has passed: a 200 from the listener means a setup draft, a valid signature and the draft's phone number, so
+ * only then is the limit spent (and 429 answered when it is used up). Unsigned, wrongly signed and unknown addresses never
+ * spend it. Returns the reply once it has answered, and nothing when the saved-connection handler is to answer: a saved
+ * connection, a bad address or Host header, a missing body, an address that is no setup draft, and any lookup that failed
+ * for a reason other than "not found".
+ */
+async function answerSetupDelivery(
+  fastify: FastifyInstance,
+  rateLimit: AcceptedWebhookRateLimit | undefined,
+  request: WhatsAppWebhookRequest,
+  reply: FastifyReply,
+): Promise<FastifyReply | undefined> {
+  const webhooks = fastify.services.integrationWebhooks;
+  const params = connectionParamsSchema.safeParse(request.params);
+  const rawBody = request.whatsappRawBody;
+  if (
+    !params.success ||
+    !rawBody ||
+    validateWebhookHostHeader(request) ||
+    typeof webhooks.hearWhatsAppSetupDelivery !== "function" ||
+    !(await isMissingConnection(fastify, params.data.connectionId))
+  ) {
+    return undefined;
+  }
+
+  const connectionId = params.data.connectionId;
+  const heard = (await webhooks.hearWhatsAppSetupDelivery(
+    connectionId,
+    rawBody.toString("utf8"),
+    readHeaderValue(request.headers["x-hub-signature-256"]),
+  )) as { status?: unknown } | undefined;
+  if (heard?.status === 200) {
+    if (await enforceAcceptedWebhookRateLimit(rateLimit, request, reply)) {
+      return reply;
+    }
+    return reply.send(createIgnoredWebhookReply(undefined, "setup_listening"));
+  }
+  if (heard?.status === 400 || heard?.status === 401 || heard?.status === 403) {
+    if (heard.status !== 400) {
+      request.log.warn(
+        {
+          channel: "whatsapp",
+          connectionId,
+          reason: heard.status === 401 ? "setup_signature_mismatch" : "setup_connection_binding_mismatch",
+        },
+        "Rejected inbound webhook because verification failed.",
+      );
+    }
+    return reply.code(heard.status).send({ error: SETUP_DELIVERY_REFUSALS[heard.status] });
+  }
+  return undefined;
+}
+
+/** Whether the connection lookup said "not found", which is the only answer that makes an address a candidate setup draft. */
+async function isMissingConnection(fastify: FastifyInstance, connectionId: string): Promise<boolean> {
+  try {
+    await fastify.services.integrationWebhooks.getIntegrationConnection(connectionId);
+    return false;
+  } catch (error) {
+    return error instanceof NotFoundError;
+  }
 }

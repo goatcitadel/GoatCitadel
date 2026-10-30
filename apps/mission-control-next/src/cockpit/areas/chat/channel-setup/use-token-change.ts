@@ -45,7 +45,7 @@ async function keepDraftValues(
 }
 
 /**
- * Changing a Discord or Slack channel's tokens. The draft is made, or found, on the first check, never by visiting the
+ * Changing a Discord, Slack or WhatsApp channel's tokens. The draft is made, or found, on the first check, never by visiting the
  * page. A check stores the new tokens on the draft's secure store (both of Slack's in one write), asks the channel's
  * own service what they belong to, and keeps on the draft what the saved channel follows from that, leaving every
  * other setting as it was. The tokens themselves are never kept here, and neither is any message that mentions them:

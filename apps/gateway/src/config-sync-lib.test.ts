@@ -143,7 +143,13 @@ describe("sandbox root persistence", () => {
         },
       },
     } as unknown as GatewayRuntimeConfig;
-    const payload = buildUnifiedConfigPayloadFromRuntime(runtimeConfig, {} as never, {} as never, { jobs: [] }, relativeSerializer);
+    const payload = buildUnifiedConfigPayloadFromRuntime(
+      runtimeConfig,
+      {} as never,
+      {} as never,
+      { jobs: [] },
+      relativeSerializer,
+    );
     const sandbox = (payload.toolPolicy as { sandbox: Record<string, unknown> }).sandbox;
     expect(sandbox.operatorWriteRoots).toEqual([
       { allowDelete: true, preset: "os_temp" },
@@ -153,6 +159,28 @@ describe("sandbox root persistence", () => {
     expect(runtimeConfig.toolPolicy.sandbox.operatorWriteRoots).toEqual(operatorWriteRoots);
     expect(sandbox).not.toHaveProperty("runtimeWriteProtection");
     expect(runtimeConfig.toolPolicy.sandbox.runtimeWriteProtection).toBeDefined();
+  });
+
+  it("persists the public web address when one is set, and leaves the key out when none is", () => {
+    const build = (assistant: Record<string, unknown>) =>
+      buildUnifiedConfigPayloadFromRuntime(
+        {
+          rootDir,
+          assistant: { auth: { token: {} }, ...assistant },
+          budgets: {},
+          toolPolicy: { tools: {}, sandbox: { writeJailRoots: [], readOnlyRoots: [] } },
+        } as unknown as GatewayRuntimeConfig,
+        {} as never,
+        {} as never,
+        { jobs: [] },
+        relativeSerializer,
+      );
+
+    expect(build({ publicWebAddress: "https://example.com/goat" }).assistant).toMatchObject({
+      publicWebAddress: "https://example.com/goat",
+    });
+    expect(build({}).assistant).not.toHaveProperty("publicWebAddress");
+    expect(build({ publicWebAddress: undefined }).assistant).not.toHaveProperty("publicWebAddress");
   });
 });
 

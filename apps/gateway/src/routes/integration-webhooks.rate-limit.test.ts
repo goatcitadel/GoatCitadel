@@ -1,12 +1,18 @@
 import Fastify, { type FastifyInstance, type InjectOptions } from "fastify";
 import rateLimit from "@fastify/rate-limit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { NotFoundError, type ChannelSetupDraft } from "@goatcitadel/contracts";
 import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
+import type { ChannelSetupHost } from "../services/channel-setup-service.js";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import { isLoopbackRateLimitAllowlisted } from "../services/webhook-rate-limit.js";
+import { createWhatsAppSetupListener } from "../services/whatsapp-setup-listener.js";
+import { buildWhatsAppWebhookSignature } from "../services/whatsapp-webhook.js";
 import { integrationWebhookRoutes } from "./integration-webhooks.js";
 
 const CONNECTION_ID = "11111111-1111-1111-1111-111111111111";
+const SETUP_APP_SECRET = "setup-app-secret";
+const SETUP_PHONE_NUMBER_ID = "106540352242922";
 const INGRESS_MAX = 4;
 const ACCEPTED_MAX = 2;
 const ENV_KEYS = ["GOATCITADEL_RATE_LIMIT_MAX_WEBHOOK_INGRESS", "GOATCITADEL_RATE_LIMIT_MAX_WEBHOOK_ACCEPTED"] as const;
@@ -192,7 +198,118 @@ describe("signed webhook staged rate limits", () => {
     expect(Number(exhausted.headers["x-ratelimit-reset"])).toBeGreaterThan(0);
     expect(Number(exhausted.headers["retry-after"])).toBeGreaterThan(0);
   });
+
+  it("keeps invalid WhatsApp setup-draft traffic out of the accepted bucket and limits verified deliveries", async () => {
+    const listener = createWhatsAppSetupDraftListener();
+    const hearWhatsAppSetupDelivery = vi.fn((draftId: string, rawBody: string, signature: string | undefined) =>
+      listener.hearDelivery(draftId, rawBody, signature),
+    );
+    app = await buildRateLimitedWebhookApp({
+      // The address is no saved connection: only a setup draft can answer it.
+      getIntegrationConnection: vi.fn((connectionId: string) => {
+        throw new NotFoundError({ entity: "Integration connection", id: connectionId });
+      }),
+      hearWhatsAppSetupDelivery,
+    });
+
+    const invalidIp = "203.0.113.100";
+    const invalidStatuses: number[] = [];
+    for (let attempt = 0; attempt < ACCEPTED_MAX + 1; attempt += 1) {
+      invalidStatuses.push((await injectWhatsAppSetup(app, invalidIp, "wrong-app-secret")).statusCode);
+    }
+    expect(invalidStatuses).toEqual([401, 401, 401]);
+
+    const validAfterInvalid = await injectWhatsAppSetup(app, invalidIp, SETUP_APP_SECRET);
+    expect(validAfterInvalid.statusCode).toBe(200);
+    expect(validAfterInvalid.json()).toEqual({ accepted: true, ignored: true, reason: "setup_listening" });
+    expect(validAfterInvalid.headers["x-ratelimit-limit"]).toBe(String(ACCEPTED_MAX));
+    expect(validAfterInvalid.headers["x-ratelimit-remaining"]).toBe("1");
+
+    const acceptedIp = "203.0.113.101";
+    const first = await injectWhatsAppSetup(app, acceptedIp, SETUP_APP_SECRET);
+    const second = await injectWhatsAppSetup(app, acceptedIp, SETUP_APP_SECRET);
+    const exhausted = await injectWhatsAppSetup(app, acceptedIp, SETUP_APP_SECRET);
+
+    expect([first.statusCode, second.statusCode, exhausted.statusCode]).toEqual([200, 200, 429]);
+    expect(exhausted.headers["x-ratelimit-limit"]).toBe(String(ACCEPTED_MAX));
+    expect(exhausted.headers["x-ratelimit-remaining"]).toBe("0");
+    expect(Number(exhausted.headers["x-ratelimit-reset"])).toBeGreaterThan(0);
+    expect(Number(exhausted.headers["retry-after"])).toBeGreaterThan(0);
+    expect(exhausted.json()).toMatchObject({
+      error: "Accepted webhook callback rate limit exceeded",
+      retryAfterSeconds: expect.any(Number),
+    });
+
+    // An address that is no draft either never reaches a 200, so it never spends the accepted bucket: 404, 404, 404.
+    const unknown = "22222222-2222-4222-8222-222222222222";
+    const unknownStatuses: number[] = [];
+    for (let attempt = 0; attempt < ACCEPTED_MAX + 1; attempt += 1) {
+      unknownStatuses.push((await injectWhatsAppSetup(app, "203.0.113.102", SETUP_APP_SECRET, unknown)).statusCode);
+    }
+    expect(unknownStatuses).toEqual([404, 404, 404]);
+  });
 });
+
+/** The real setup listener over a host that holds one WhatsApp draft made on the Messaging setup page. */
+function createWhatsAppSetupDraftListener() {
+  const draft = {
+    draftId: CONNECTION_ID,
+    revision: 2,
+    catalogId: "channel.whatsapp",
+    lifecycleMode: "create",
+    draft: { setupPage: "messaging", phoneNumberId: SETUP_PHONE_NUMBER_ID, setupCode: "Kp4mZ9qRtW" },
+    secretState: {},
+    enabled: true,
+  } as unknown as ChannelSetupDraft;
+  const host = {
+    storage: {
+      channelSetupDrafts: {
+        get: async (draftId: string) => {
+          if (draftId !== CONNECTION_ID) throw new NotFoundError({ entity: "Channel setup draft", id: draftId });
+          return draft;
+        },
+      },
+    },
+    resolveConnectionSecret: (_config: unknown, directKey: string) =>
+      directKey === "appSecret" ? SETUP_APP_SECRET : undefined,
+  } as unknown as ChannelSetupHost;
+  return createWhatsAppSetupListener(host);
+}
+
+/** A Meta delivery to the draft's number, signed with `signingSecret`: right only when it is the draft's app secret. */
+async function injectWhatsAppSetup(
+  app: FastifyInstance,
+  remoteAddress: string,
+  signingSecret: string,
+  connectionId = CONNECTION_ID,
+) {
+  const body = JSON.stringify({
+    object: "whatsapp_business_account",
+    entry: [
+      {
+        changes: [
+          {
+            field: "messages",
+            value: {
+              metadata: { phone_number_id: SETUP_PHONE_NUMBER_ID },
+              messages: [{ from: "16505551234", id: "wamid.SETUP", type: "text", text: { body: "hello there" } }],
+            },
+          },
+        ],
+      },
+    ],
+  });
+  return app.inject({
+    method: "POST",
+    url: `/api/v1/integrations/connections/${connectionId}/whatsapp/webhook`,
+    remoteAddress,
+    headers: {
+      "content-type": "application/json",
+      "x-hub-signature-256": buildWhatsAppWebhookSignature(body, signingSecret),
+    },
+    payload: body,
+  });
+}
 
 async function buildRateLimitedWebhookApp(integrationWebhooks: Record<string, unknown>): Promise<FastifyInstance> {
   const next = Fastify();

@@ -627,6 +627,14 @@ describe("AssistantConfigInputSchema", () => {
     expect(result.web?.firecrawl?.defaultReadBackend).toBe("firecrawl");
   });
 
+  it("types the public web address as an optional string", () => {
+    expect(AssistantConfigInputSchema.parse({ publicWebAddress: "https://example.com" }).publicWebAddress).toBe(
+      "https://example.com",
+    );
+    expect(AssistantConfigInputSchema.parse({}).publicWebAddress).toBeUndefined();
+    expect(() => AssistantConfigInputSchema.parse({ publicWebAddress: 42 })).toThrow();
+  });
+
   it("rejects when auth.mode is an invalid value", () => {
     const input = { auth: { mode: "oauth2" } };
     expect(() => AssistantConfigInputSchema.parse(input)).toThrow();

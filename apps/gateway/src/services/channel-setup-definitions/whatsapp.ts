@@ -1,4 +1,8 @@
-import type { ChannelSetupDefinition, ChannelSetupIssue } from "@goatcitadel/contracts";
+import {
+  resolveChannelOwnerActorIds,
+  type ChannelSetupDefinition,
+  type ChannelSetupIssue,
+} from "@goatcitadel/contracts";
 import type { ChannelSetupRuntimeDefinition } from "./common.js";
 import {
   COMMON_FAILURES,
@@ -16,6 +20,9 @@ import {
   requiredFieldIssue,
   malformedFieldIssue,
 } from "./common.js";
+
+/** The shape of Meta's numeric IDs (phone number, app, WhatsApp Business Account): digits only, six or more. */
+const NUMERIC_ID_PATTERN = /^\d{6,}$/;
 
 export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
   const catalog = requireCatalog("channel.whatsapp");
@@ -173,6 +180,34 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
               placeholder: "WHATSAPP_APP_SECRET",
             },
             {
+              key: "appId",
+              label: "App ID",
+              type: "id",
+              required: false,
+              explanation: "The ID of your Meta app. It is a number, and it is not secret.",
+              whyNeeded: "Optional. Chat › Messaging keeps it with this connection when you set WhatsApp up there.",
+              whereToFind: [paragraph("Copy the App ID from your Meta app's Basic settings in the App Dashboard.")],
+              looksLike: "123456789012345",
+              commonMistakes: ["Pasting the app secret or the access token here. The App ID is digits only."],
+              canChangeLater: true,
+            },
+            {
+              key: "businessAccountId",
+              label: "WhatsApp Business Account ID",
+              type: "id",
+              required: false,
+              explanation: "The ID of the WhatsApp Business Account your phone number belongs to. It is a number.",
+              whyNeeded: "Optional. Chat › Messaging keeps it with this connection when you set WhatsApp up there.",
+              whereToFind: [
+                paragraph(
+                  "In Meta's App Dashboard open WhatsApp › API Setup and copy the WhatsApp Business Account ID.",
+                ),
+              ],
+              looksLike: "123456789012345",
+              commonMistakes: ["Using the Phone number ID. It is a different number."],
+              canChangeLater: true,
+            },
+            {
               key: "webhookVerifyToken",
               label: "Webhook verify token",
               type: "secret",
@@ -322,6 +357,9 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
         ["appSecret", "appSecretEnv", "webhookSecret", "webhookSecretEnv"],
         ["webhookVerifyToken", "webhookVerifyTokenEnv", "verifyToken", "verifyTokenEnv"],
       ]);
+      const appId = readString(config, "appId");
+      const businessAccountId = readString(config, "businessAccountId");
+      const ownerActorIds = resolveChannelOwnerActorIds(config);
       return {
         draft: {
           accessTokenEnv: readString(config, "accessTokenEnv") ?? readString(config, "tokenEnv"),
@@ -329,6 +367,10 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
           webhookVerifyTokenEnv: readString(config, "webhookVerifyTokenEnv") ?? readString(config, "verifyTokenEnv"),
           phoneNumberId: readString(config, "phoneNumberId"),
           defaultTarget: readString(config, "defaultTarget"),
+          // Left out when the connection has none, as normalize leaves them out of the saved config.
+          ...(appId ? { appId } : {}),
+          ...(businessAccountId ? { businessAccountId } : {}),
+          ...(ownerActorIds.length > 0 ? { ownerActorIds } : {}),
         },
         hydration: {
           status: hasConfiguredSecret ? "opaque-secret" : "clean",
@@ -364,6 +406,9 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
                 : "unknown",
             phoneNumberId: readString(config, "phoneNumberId") ? "configured" : "missing",
             defaultTarget: readString(config, "defaultTarget") ? "configured" : "missing",
+            appId: appId ? "configured" : "unknown",
+            businessAccountId: businessAccountId ? "configured" : "unknown",
+            ownerActorIds: ownerActorIds.length > 0 ? "configured" : "unknown",
           },
           warnings: hasConfiguredSecret
             ? [
@@ -381,6 +426,9 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
       const preservedAppSecretEnv = readLegacyString(draft, "appSecretEnv", "webhookSecretEnv");
       const preservedVerifyToken = readLegacyString(draft, "webhookVerifyToken", "verifyToken");
       const preservedVerifyTokenEnv = readLegacyString(draft, "webhookVerifyTokenEnv", "verifyTokenEnv");
+      const ownerActorIds = resolveChannelOwnerActorIds(draft.draft);
+      // appId, businessAccountId and ownerActorIds are left out when the draft has none, so finalize keeps the saved
+      // connection's own values instead of overwriting them with nothing.
       return compactRecord({
         accessTokenEnv: readString(draft.draft, "accessTokenEnv") ?? preservedAccessTokenEnv,
         accessToken: readString(draft.draft, "accessToken") ?? preservedAccessToken,
@@ -390,6 +438,9 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
         webhookVerifyToken: readString(draft.draft, "webhookVerifyToken") ?? preservedVerifyToken,
         phoneNumberId: readString(draft.draft, "phoneNumberId"),
         defaultTarget: readString(draft.draft, "defaultTarget"),
+        appId: readString(draft.draft, "appId"),
+        businessAccountId: readString(draft.draft, "businessAccountId"),
+        ownerActorIds: ownerActorIds.length > 0 ? ownerActorIds : undefined,
       });
     },
     validate(draft) {
@@ -416,13 +467,24 @@ export function createWhatsAppDefinition(): ChannelSetupRuntimeDefinition {
       }
       if (!phoneNumberId) {
         issues.push(requiredFieldIssue("phoneNumberId", "Phone number ID is required."));
-      } else if (!/^\d{6,}$/.test(phoneNumberId)) {
+      } else if (!NUMERIC_ID_PATTERN.test(phoneNumberId)) {
         issues.push(
           malformedFieldIssue("phoneNumberId", "Phone number ID should look like a numeric WhatsApp sender id."),
         );
       }
       if (!readString(draft.draft, "defaultTarget")) {
         issues.push(requiredFieldIssue("defaultTarget", "Default recipient is required."));
+      }
+      // Both IDs are optional. The messages name the Meta page to copy from and never repeat what was typed.
+      const appId = readString(draft.draft, "appId");
+      if (appId && !NUMERIC_ID_PATTERN.test(appId)) {
+        issues.push(malformedFieldIssue("appId", "Use the App ID from your Meta app's Basic settings: digits only."));
+      }
+      const businessAccountId = readString(draft.draft, "businessAccountId");
+      if (businessAccountId && !NUMERIC_ID_PATTERN.test(businessAccountId)) {
+        issues.push(
+          malformedFieldIssue("businessAccountId", "Use the WhatsApp Business Account ID from API Setup: digits only."),
+        );
       }
       return issues;
     },

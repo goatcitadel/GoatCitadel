@@ -289,4 +289,30 @@ describe("Evolution Control Plane Change Plan contract", () => {
       install({ templateId: "linear", enableChatConnectors: true, policy: { approvalPosture: "nothing_asks" } }),
     ).toBe(false);
   });
+
+  it("accepts the public web address operation as a string to set or null to clear", () => {
+    const publicWebAddress = (config: unknown, extra: Record<string, unknown> = {}) =>
+      isChangePlanRequest({
+        kind: "runtime_configuration",
+        change: { operation: "public_web_address_configuration", config, ...extra },
+      });
+    expect(publicWebAddress({ publicWebAddress: "https://example.com" })).toBe(true);
+    expect(publicWebAddress({ publicWebAddress: null })).toBe(true);
+
+    expect(publicWebAddress({})).toBe(false);
+    expect(publicWebAddress(null)).toBe(false);
+    expect(publicWebAddress({ publicWebAddress: undefined })).toBe(false);
+    expect(publicWebAddress({ publicWebAddress: 42 })).toBe(false);
+    expect(publicWebAddress({ publicWebAddress: "" })).toBe(false);
+    expect(publicWebAddress({ publicWebAddress: "x".repeat(401) })).toBe(false);
+    expect(publicWebAddress({ publicWebAddress: "bad\0byte" })).toBe(false);
+    expect(publicWebAddress({ publicWebAddress: "https://example.com", baseUrl: "https://example.com" })).toBe(false);
+    expect(publicWebAddress({ publicWebAddress: "https://example.com" }, { enabled: true })).toBe(false);
+    expect(
+      isChangePlanRequest({
+        kind: "runtime_configuration",
+        change: { operation: "public_web_address_configuration", publicWebAddress: "https://example.com" },
+      }),
+    ).toBe(false);
+  });
 });

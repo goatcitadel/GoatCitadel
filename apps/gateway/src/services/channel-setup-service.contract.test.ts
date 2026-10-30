@@ -80,6 +80,61 @@ describe("channel-setup-service contract behavior", () => {
     expect(reconciled.lastFailureCategory).toBe("credential_rejected");
   });
 
+  it("reports an unusable temporary credential it can't delete, and goes on with the other drafts", async () => {
+    const host = createHost();
+    const withLegacyKey = async (token: string) => {
+      const created = await createChannelSetupDraft(host, { catalogId: "channel.discord" });
+      await host.storage.channelSetupDrafts.update(created.draftId, {
+        expectedRevision: created.revision,
+        draft: { ...created.draft, botToken: token },
+      });
+      return created.draftId;
+    };
+    // Drafts on both sides of the broken one, so one comes after it whatever the listing order.
+    const before = await withLegacyKey("legacy-before");
+    const created = await createChannelSetupDraft(host, { catalogId: "channel.discord" });
+    const broken = await setChannelSetupDraftSecrets(host, created.draftId, {
+      expectedRevision: created.revision,
+      values: { botToken: "synthetic-broken-fixture" },
+    });
+    const brokenRef = broken.secretState.botToken!.secretRef!;
+    const after = await withLegacyKey("legacy-after");
+    const custody = host.channelSecrets!;
+    const assertUsable = custody.assertUsableForDraft.bind(custody);
+    vi.spyOn(custody, "assertUsableForDraft").mockImplementation((secretRef, input) => {
+      if (secretRef === brokenRef) throw new Error("The channel credential is unavailable from secure storage.");
+      assertUsable(secretRef, input);
+    });
+    vi.spyOn(custody, "deleteTemporary").mockImplementation((secretRef) => {
+      throw new Error(`keychain refused to delete ${secretRef} synthetic-broken-fixture`);
+    });
+    host.diagnostics.mockClear();
+
+    const result = await reconcileChannelSetupDraftSecretCustody(host);
+
+    expect(result).toMatchObject({ scanned: 3, migrated: 2, invalidated: 1, scrubbed: 3 });
+    const brokenNow = await host.storage.channelSetupDrafts.get(broken.draftId);
+    expect(brokenNow.secretState.botToken).toEqual({ configured: false, custody: "temporary" });
+    for (const draftId of [before, after]) {
+      const migrated = await host.storage.channelSetupDrafts.get(draftId);
+      expect(migrated.secretState.botToken, draftId).toMatchObject({ configured: true, custody: "temporary" });
+    }
+    const reports = host.diagnostics.mock.calls
+      .map(([input]) => input as { event: string; level: string; context?: Record<string, unknown> })
+      .filter((input) => input.event === "channel_setup.secret_reconciliation.delete_failed");
+    expect(reports).toHaveLength(1);
+    expect(reports[0]).toMatchObject({
+      level: "warn",
+      category: "integrations",
+      context: { draftId: broken.draftId, catalogId: "channel.discord", fieldKey: "botToken", errorType: "Error" },
+    });
+    // Bounded and secret-free: neither the reference nor anything the failure said is reported.
+    const reported = JSON.stringify(host.diagnostics.mock.calls);
+    expect(reported).not.toContain(brokenRef);
+    expect(reported).not.toContain("keychain refused");
+    expect(reported).not.toContain("synthetic-broken-fixture");
+  });
+
   it("blocks live testing for invalid drafts without probing connectors", async () => {
     const host = createHost();
     const draft = await createChannelSetupDraft(host, {
