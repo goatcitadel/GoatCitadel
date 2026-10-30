@@ -10,7 +10,6 @@ import { isGoogleOAuthReturnFragment } from "../../../features/native-routes/set
 
 const DEFAULT_SECTIONS: Record<string, string> = {
   models: "providers",
-  connections: "integrations",
   citadel: "workspaces",
 };
 
@@ -42,10 +41,11 @@ export function selectedSettingsSection(page: SettingsIndexPage, routeSection: s
             hash === "claude-cli-warm-continuation" ||
             hash === "chat-thinking-stream"
           ? "providers"
-          : // A provider sign-in lands here; the MCP section must mount so it can hand the result back.
+          : // A provider sign-in lands on Capabilities › Connectors › Advanced setup; the MCP section must mount so it
+            // can hand the result back.
             isMcpOAuthReturnFragment(hash)
             ? "mcp"
-            : // Google sign-in lands here too; Integrations mounts the saved connection that finishes it.
+            : // Google sign-in lands there too; Integrations mounts the saved connection that finishes it.
               isGoogleOAuthReturnFragment(hash)
               ? "integrations"
               : hash;

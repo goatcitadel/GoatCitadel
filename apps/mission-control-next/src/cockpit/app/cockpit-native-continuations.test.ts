@@ -28,7 +28,9 @@ describe("internal native owner continuations", () => {
       "/library/proposal/proposal%3Areview",
     ],
     ["/settings/safety#approval-mode", "/settings/safety"],
-    ["/settings/connections#addons", "/settings/connections"],
+    // The retired Settings › Connections opens its sections' new homes, with the scope and query carried.
+    ["/settings/connections#addons", "/settings/advanced"],
+    ["/settings/connections#mcp-servers", "/capabilities/connectors/advanced"],
   ])("keeps canonical target and carried scope/query for %s", (input, pathname) => {
     const result = resolveCockpitContinuation(input, context);
     expect(result.kind).toBe("native");

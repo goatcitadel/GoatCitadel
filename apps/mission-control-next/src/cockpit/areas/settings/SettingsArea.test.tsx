@@ -238,13 +238,15 @@ describe("Settings section tabs", () => {
     expect(container.querySelector('a[href="/settings/models#local-ai"]')?.textContent).toBe("Models › Local AI");
     expect(owner.mounted.mock.calls.filter(([name]) => name === "Llama owner")).toHaveLength(1);
   });
-  it("puts the public web address above the channel setup that builds its addresses from it", async () => {
-    await render("/settings/connections?shell=cockpit#channels");
-    await vi.waitFor(() => expect(container.textContent).toContain("Channels owner"));
-    const text = container.textContent ?? "";
-    expect(text).toContain("Public web address owner");
-    expect(text.indexOf("Public web address owner")).toBeLessThan(text.indexOf("Channels owner"));
-    expect(text).not.toContain("does not match");
+  it("has no Connections page, and keeps Add-ons & packs on Advanced, reached by its link", async () => {
+    await render("/settings/advanced?shell=cockpit#addons");
+    await vi.waitFor(() => expect(container.textContent).toContain("Add-ons owner"));
+    expect(container.textContent).toContain("Packs owner");
+    // Experimental, so it is no tab: Advanced shows one section at a time, as Connections did with it.
+    expect(container.querySelector('[role="tablist"][aria-label$=" sections"]')).toBeNull();
+    expect(container.textContent).not.toContain("Runtime owner");
+    expect(container.querySelector('a[href^="/settings/connections"]')).toBeNull();
+    expect(container.textContent).not.toContain("does not match");
   });
   it("links Trust & policy to the one explanation of how rules combine", async () => {
     await render("/settings/safety?shell=cockpit#trust-policy");
@@ -336,7 +338,7 @@ describe("Settings section tabs", () => {
   });
   it("keeps all grouped owner destinations in ordered tabs with native hrefs", async () => {
     const pages = buildSettingsIndex();
-    expect(pages.flatMap((page) => page.entries)).toHaveLength(26);
+    expect(pages.flatMap((page) => page.entries)).toHaveLength(22);
     expect(pages.flatMap((page) => page.entries).every((entry) => !entry.href.includes("shell="))).toBe(true);
     for (const page of pages) {
       window.history.replaceState(null, "", `/settings/${page.id}?shell=cockpit`);
