@@ -901,7 +901,7 @@ A rejected or expired approval doesn't count as pending, so the item reads as th
 - A refused source is a 422 `SKILL_SOURCE_REFUSED` with the review's code as `details.reason`. `TRUSTED_GIT_FORGE_HOSTS` moved to contracts. A Git address outside those hosts is refused first (`UNTRUSTED_GIT_HOST`) and is always reviewed as `git_url` (R40).
 - A pack is `{ kind: "pack", packId }` read from the recorded folder, so no server path leaves the Gateway, and an installed pack reads "Built in" (R42, R43).
 - Hub owners reach the composition as plain readers, with two GatewayService lines. The guard test also covers `createSkillHubApproval`. A reused approved Hub approval answers `approved` without being resolved again. The installs read lists the newest 100 checks (R44).
-- The skip's flag description and `SKIP_FACTS` name the skill install (R45). A Git source's description is whatever its check keeps, or empty (R53).
+- The skip's flag description and `SKIP_FACTS` name the skill install (R45). A Git source's description is always empty today, because its check keeps none, so the panel leaves out "What it does" for it (R53).
 - The installs read takes an optional `snapshotId` and then returns that check at any step, and its response carries `operatorApprovalSkip` (R55, R47).
 - Skill Hub approvals keep their linkage exactly as the Hub binds it: the approvals owner adds no request attribution and no wait-run id to them (R56).
 
@@ -1124,7 +1124,7 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - Blocker codes and listing addresses appear only in `TechnicalDetails`. The scripts line reads "Includes scripts. Installing it doesn't run them." (R49).
 - The panel also shows the declared read and write paths and hosts in "What it asks for", though the global constraint keeps paths in `TechnicalDetails` (R54).
 - Deleting `LibrarySkillPacks` removed one live region, so the live-region budget moved by exactly the new regions minus one (R49).
-- The browser still drives `activate` after `install_inactive`. With the tab closed between the two, the install stays at `installed_off`, and Discover and the panel offer "Switch on" (R50).
+- The browser still drives `activate` after `install_inactive`. With the tab closed between the two, the install stays at `installed_off`. Discover shows the row as "Install not finished" with "Continue", which opens the panel, and the panel offers "Switch on" (R50).
 - "Continue" opens the install named by the Discover item's `installSnapshotId`; the browser no longer matches a source to an install itself (R60).
 - The flow polls the installs read: every second for the first 30 reads while a step applies and every 3 seconds after, and every 5 to 30 seconds while a step waits, to stay under the route's rate limit.
 
@@ -1199,4 +1199,4 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - The skill-source scraper kept any link containing a marketplace's address, so `javascript:` and look-alike links reached the sources list and Discover. Fixed in this PR: only `https` links on the marketplace's own host are kept (R58).
 - Resolving a Skill Hub approval through a remote action token would break its binding, because the token's ids are merged into the linkage (R57, follow-up). This PR's flow approves in place and never issues one.
 - A failed switch-on leaves the skill installed and off, with no way to switch it on from the cockpit: a fresh check reads "already installed", and the old check's switch-on approval is reused (follow-up). A `failedStep` field on `CapabilitySkillInstall` would also let the panel offer the right retry after a reload.
-- Sealed-linkage approvals show no run link in the Inbox or the runtime lifecycle read, and carry no request ids (R56, follow-up if it matters).
+- Sealed-linkage approvals show no run link in the Inbox and carry no request ids. The runtime lifecycle read still finds their run through the wait-run reservation, labelled as an approval wait run, which ranks below a run id taken from the linkage (R56, follow-up if it matters).
