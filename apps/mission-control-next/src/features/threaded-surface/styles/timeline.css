@@ -1079,6 +1079,26 @@
   font-size: var(--text-md);
 }
 
+/* Typeset math (KaTeX); a wide display formula scrolls on its own instead of widening the message. */
+.mc-assistant-math-display,
+.mc-assistant-math-source {
+  margin: 0.6rem 0;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-inline: contain;
+}
+
+.mc-assistant-math-display .katex-display {
+  margin: 0;
+}
+
+.mc-assistant-math-source {
+  font-family: var(--mc-font-mono);
+  font-size: var(--text-md);
+  white-space: pre;
+}
+
 .mc-assistant-code-shell {
   margin: 0.6rem 0;
   border: 1px solid color-mix(in oklab, var(--border) 78%, transparent);

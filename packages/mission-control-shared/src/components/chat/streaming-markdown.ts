@@ -1,12 +1,16 @@
 import type { Definition, Root, RootContent } from "mdast";
 import remarkGfm from "remark-gfm";
+import remarkMath, { type Options as RemarkMathOptions } from "remark-math";
 import remarkParse from "remark-parse";
 import { unified } from "unified";
 import { healStreamingMarkdownTail } from "./streaming-markdown-heal";
 
-// The same CommonMark + GFM parser used by ReactMarkdown. No boundary grammar of
+/** Math only between `$$` signs, so a price such as "$5 and $10" stays text (see normalizeMathDelimiters). */
+export const CHAT_MATH_OPTIONS: RemarkMathOptions = { singleDollarTextMath: false };
+
+// The same CommonMark + GFM + math parser used by ReactMarkdown. No boundary grammar of
 // our own: a partial new line never establishes a completed top-level block.
-const parser = unified().use(remarkParse).use(remarkGfm).freeze();
+const parser = unified().use(remarkParse).use(remarkGfm).use(remarkMath, CHAT_MATH_OPTIONS).freeze();
 const MAX_RETAINED_BLOCKS = 512;
 
 export interface RetainedMarkdownBlock {
@@ -147,9 +151,9 @@ function plainTailTree(
   return holdBackPartialTable(tree, pending);
 }
 
-/** Whether the text still being written sits in a code or raw HTML block, even one nested in a quote or list. */
+/** Whether the text still being written sits in a code, math or raw HTML block, even one nested in a quote or list. */
 function endsInsideRawBlock(node: RootContent): boolean {
-  if (node.type === "code" || node.type === "html") return true;
+  if (node.type === "code" || node.type === "math" || node.type === "html") return true;
   const children = "children" in node ? (node.children as RootContent[]) : [];
   const last = children.at(-1);
   return last ? endsInsideRawBlock(last) : false;

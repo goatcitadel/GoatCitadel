@@ -504,6 +504,21 @@ html[data-shell="cockpit"] .mc-dialog-content {
   .cockpit-chat-content .mc-assistant-table-scroll {
     overflow-x: auto;
   }
+  /* Typeset math (KaTeX); a wide display formula scrolls on its own instead of widening the message. */
+  .cockpit-chat-content :is(.mc-assistant-math-display, .mc-assistant-math-source) {
+    margin: 0.5rem 0;
+    max-width: 100%;
+    overflow-x: auto;
+    overflow-y: hidden;
+  }
+  .cockpit-chat-content .mc-assistant-math-display .katex-display {
+    margin: 0;
+  }
+  .cockpit-chat-content .mc-assistant-math-source {
+    font-family: var(--font-mono);
+    font-size: var(--text-sm);
+    white-space: pre;
+  }
   .cockpit-chat-content .mc-assistant-markdown table {
     width: 100%;
     border-collapse: collapse;

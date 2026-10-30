@@ -83,3 +83,13 @@ describe("splitIncremental tail healing", () => {
     expect(textOf(state.tailTree)).toContain("**b");
   });
 });
+
+describe("healStreamingMarkdownTail with math", () => {
+  it.each([
+    ["Product $$a*b$$ and **bold", "Product $$a*b$$ and **bold**"],
+    ["Still arriving $$a*b", "Still arriving $$a*b"],
+    ["$$x_1 ~~ y$$ done", "$$x_1 ~~ y$$ done"],
+  ])("counts no markers inside math: %j", (input, expected) => {
+    expect(healStreamingMarkdownTail(input)).toBe(expected);
+  });
+});

@@ -1,4 +1,5 @@
 import type { ChatCitationRecord, MemoryCitationProvenance, MemoryRetrievalMatchSignals } from "@goatcitadel/contracts";
+import { normalizeMathDelimiters } from "./math-delimiters";
 import { readInlineCodeRanges } from "./streaming-markdown";
 
 const RAW_HTML_BLOCK_RE = /<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
@@ -27,7 +28,7 @@ export function normalizeCitationDisplayText(content: string | undefined | null)
   if (!content) {
     return undefined;
   }
-  const normalized = stripHtmlNoiseOutsideCode(decodeJsonUnicodeEscapes(content));
+  const normalized = stripHtmlNoiseOutsideCode(decodeJsonUnicodeEscapes(content), false);
   return normalized.trim() || undefined;
 }
 
@@ -107,10 +108,10 @@ export function decodeJsonUnicodeEscapes(content: string): string {
   );
 }
 
-function stripHtmlNoiseOutsideCode(content: string): string {
+function stripHtmlNoiseOutsideCode(content: string, math = true): string {
   const parts = splitMarkdownFenceSegments(content);
   const normalized = parts
-    .map((part) => (part.kind === "code" ? part.value : stripHtmlNoise(part.value)))
+    .map((part) => (part.kind === "code" ? part.value : stripHtmlNoise(part.value, math)))
     .join("")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -120,9 +121,11 @@ function stripHtmlNoiseOutsideCode(content: string): string {
   return "HTML-only content omitted.";
 }
 
-function stripHtmlNoise(content: string): string {
+/** `math` also turns the math delimiters models write into the `$$` form Chat renders (see normalizeMathDelimiters). */
+function stripHtmlNoise(content: string, math = true): string {
+  const delimit = math ? normalizeMathDelimiters : (text: string) => text;
   const ranges = readInlineCodeRanges(content);
-  if (ranges.length === 0) return stripHtmlNoiseProse(content);
+  if (ranges.length === 0) return delimit(stripHtmlNoiseProse(content));
 
   // Shield literal code before the prose-only HTML cleanup. Whole HTML blocks
   // surrounding a span still disappear, and collision checks include decoded
@@ -139,7 +142,7 @@ function stripHtmlNoise(content: string): string {
     cursor = range.end;
   }
   parts.push(content.slice(cursor));
-  return stripHtmlNoiseProse(parts.join("")).replace(
+  return delimit(stripHtmlNoiseProse(parts.join(""))).replace(
     new RegExp(`${marker}:(\\d+)\\x00`, "g"),
     (token, index: string) => code[Number(index)] ?? token,
   );
