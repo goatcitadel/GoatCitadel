@@ -367,8 +367,9 @@ offered, and nothing on the page uses an unofficial client.
      Meta (offered only while the page holds none and Meta hasn't checked the
      address). A **Check** repeated after a failure keeps the stored token, so an
      address Meta has already checked stays valid.
-     GoatCitadel answers Meta's verification request at that address while the
-     listener runs (see "The setup listener" below). The page asks every six
+     For a setup draft made on the Chat page, GoatCitadel answers Meta's
+     verification request at that address (see "The setup listener" below). The
+     page asks every six
      seconds, for ten minutes, whether Meta has checked the address, and then
      notes the time on the draft (`webhookCheckedAt`). It says "Meta checked your
      address just now." only when that page session saw the check arrive, and "Meta
@@ -446,8 +447,9 @@ offered, and nothing on the page uses an unofficial client.
   GoatCitadel's stored time can differ a little from Meta's, so a send near the end
   can still pass and then be refused by Meta with `131047`. Other channels have no
   window. **Answers the agent writes are not checked**: the agent replies to a
-  message it has just been given, and a later refusal from Meta shows as a failed
-  delivery. Turn on's test message and the key page's test message are plain text,
+  message it has just been given, so an answer sent after the window closes may
+  not arrive. Meta reports that afterwards as a delivery status, which GoatCitadel
+  doesn't read yet (it ignores every status update). Turn on's test message and the key page's test message are plain text,
   so Meta delivers them only within 24 hours of the recipient's last message to the
   number; have them message it first.
 - **Changing the key.** Chat › Messaging › the channel's page › **Change the
