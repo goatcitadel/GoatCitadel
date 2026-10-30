@@ -1,5 +1,6 @@
 import type { ChatCitationRecord, MemoryCitationProvenance, MemoryRetrievalMatchSignals } from "@goatcitadel/contracts";
-import { readInlineCodeRanges } from "./streaming-markdown";
+import { normalizeMathDelimiters } from "./math-delimiters";
+import { readCodeRanges, readInlineCodeRanges } from "./streaming-markdown";
 
 const RAW_HTML_BLOCK_RE = /<(script|style|svg|math|canvas)\b[^>]*>[\s\S]*?<\/\1\s*>/gi;
 const RAW_HTML_TAG_RE = /<\/?[A-Za-z][^>\n]{0,1000}>/g;
@@ -27,7 +28,7 @@ export function normalizeCitationDisplayText(content: string | undefined | null)
   if (!content) {
     return undefined;
   }
-  const normalized = stripHtmlNoiseOutsideCode(decodeJsonUnicodeEscapes(content));
+  const normalized = stripHtmlNoiseOutsideCode(decodeJsonUnicodeEscapes(content), false);
   return normalized.trim() || undefined;
 }
 
@@ -107,10 +108,10 @@ export function decodeJsonUnicodeEscapes(content: string): string {
   );
 }
 
-function stripHtmlNoiseOutsideCode(content: string): string {
+function stripHtmlNoiseOutsideCode(content: string, math = true): string {
   const parts = splitMarkdownFenceSegments(content);
   const normalized = parts
-    .map((part) => (part.kind === "code" ? part.value : stripHtmlNoise(part.value)))
+    .map((part) => (part.kind === "code" ? part.value : stripHtmlNoise(part.value, math)))
     .join("")
     .replace(/\n{3,}/g, "\n\n")
     .trim();
@@ -120,7 +121,39 @@ function stripHtmlNoiseOutsideCode(content: string): string {
   return "HTML-only content omitted.";
 }
 
-function stripHtmlNoise(content: string): string {
+/** `math` also turns the math delimiters models write into the `$$` form Chat renders (see normalizeMathDelimiters). */
+function stripHtmlNoise(content: string, math = true): string {
+  const stripped = stripHtmlNoiseOutsideInlineCode(content);
+  return math ? normalizeMathOutsideCode(stripped) : stripped;
+}
+
+/**
+ * Math delimiters rewritten in prose only. Every code node the parser finds stays as written, inline or block: an
+ * indented block or a fence inside a quote or list (top-level fences never reach here), so the code and its Copy
+ * button keep `\[x\]` and `$x$` intact.
+ */
+function normalizeMathOutsideCode(text: string): string {
+  if (!text.includes("$") && !text.includes("\\")) return text;
+  const ranges = readCodeRanges(text);
+  if (ranges.length === 0) return normalizeMathDelimiters(text);
+  let marker = "\u0000goat-math-code";
+  while (text.includes(marker)) marker += "_";
+  const code: string[] = [];
+  let shielded = "";
+  let cursor = 0;
+  for (const range of ranges) {
+    shielded += `${text.slice(cursor, range.start)}${marker}:${code.length}\u0000`;
+    code.push(text.slice(range.start, range.end));
+    cursor = range.end;
+  }
+  shielded += text.slice(cursor);
+  return normalizeMathDelimiters(shielded).replace(
+    new RegExp(`${marker}:(\\d+)\\x00`, "g"),
+    (token, index: string) => code[Number(index)] ?? token,
+  );
+}
+
+function stripHtmlNoiseOutsideInlineCode(content: string): string {
   const ranges = readInlineCodeRanges(content);
   if (ranges.length === 0) return stripHtmlNoiseProse(content);
 

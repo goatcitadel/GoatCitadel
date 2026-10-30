@@ -11,9 +11,15 @@ import {
 import { Check, Copy, FileDown } from "lucide-react";
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import remarkMath from "remark-math";
 import type { Root } from "mdast";
-import type { Processor } from "unified";
-import { createIncrementalSplitState, splitIncremental, type IncrementalSplitState } from "./streaming-markdown";
+import type { Pluggable, Processor } from "unified";
+import {
+  CHAT_MATH_OPTIONS,
+  createIncrementalSplitState,
+  splitIncremental,
+  type IncrementalSplitState,
+} from "./streaming-markdown";
 export {
   createIncrementalSplitState,
   splitIncremental,
@@ -31,6 +37,7 @@ import {
   normalizeAssistantDisplayTextIncremental,
   type IncrementalDisplayTextState,
 } from "./assistant-display-text";
+import { ChatMathFormula } from "./ChatMathFormula";
 import { AssistantStreamingTailContext, HighlightedCode } from "./HighlightedCode";
 import { LazyOpenUiStructuredBlock } from "./LazyOpenUiStructuredBlock";
 import { isGoatOpenUiRendererEnabled } from "./openui-flag";
@@ -41,7 +48,8 @@ import { useMediaQuery } from "../../hooks/useMediaQuery";
 
 export type AssistantStreamPresentationMode = "smooth" | "instant";
 
-const MARKDOWN_REMARK_PLUGINS = [remarkGfm];
+const MATH_PLUGIN: Pluggable = [remarkMath, CHAT_MATH_OPTIONS];
+const MARKDOWN_REMARK_PLUGINS = [remarkGfm, MATH_PLUGIN];
 const FADE_NEW_WORDS_PLUGINS = [rehypeFadeNewWords];
 const WORKSPACE_FILE_DOWNLOAD_PATH = "/api/v1/files/download";
 const WORKSPACE_FILE_OBJECT_URL_REVOKE_DELAY_MS = 5 * 60 * 1000;
@@ -181,6 +189,10 @@ function createMarkdownComponents({ allowGeneratedUi }: { allowGeneratedUi: bool
     code({ children, className, node, ...props }) {
       const content = String(children ?? "");
       const language = /language-([a-z0-9_+-]+)/i.exec(className ?? "")?.[1];
+      // `$$` math (see remark-math) and a ```math fence, as GitHub reads it.
+      if (language === "math") {
+        return <ChatMathFormula tex={content.replace(/\n$/, "")} display={!/\bmath-inline\b/.test(className ?? "")} />;
+      }
       const isBlock = isMarkdownCodeBlock(content, className, node);
       if (isBlock) {
         return (
@@ -481,6 +493,7 @@ const MemoizedMarkdownBlock = memo(function MemoizedMarkdownBlock({
       tree
         ? [
             remarkGfm,
+            MATH_PLUGIN,
             function useParsedTree(this: Processor) {
               // Reuse the AST already parsed for semantic boundaries. ReactMarkdown still
               // owns GFM-to-HTML conversion, safe links and all existing code renderers.

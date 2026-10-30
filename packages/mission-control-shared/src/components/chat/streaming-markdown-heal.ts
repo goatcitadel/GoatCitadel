@@ -72,6 +72,11 @@ function maskAllInlineCode(block: string): string {
   return openAt < 0 ? masked : masked.slice(0, openAt) + "x".repeat(masked.length - openAt);
 }
 
+/** The block with `$$` math blanked out, including math still waiting for its closer. */
+function maskMath(block: string): string {
+  return block.replace(/\$\$[\s\S]*?(?:\$\$|$)/g, (math) => "x".repeat(math.length));
+}
+
 /** A link still arriving, shown as its words. The match is found outside code, then cut from the real text. */
 function unwrapPartialLink(block: string, pattern: RegExp): string {
   const match = pattern.exec(maskAllInlineCode(block));
@@ -98,8 +103,10 @@ export function healStreamingMarkdownTail(text: string): string {
   // ends in a backtick, which would otherwise lengthen the closing run).
   const { masked, openAt, openRun } = scanInlineCode(block);
   if (openAt >= 0) return `${head}${block}${block.endsWith("`") ? " " : ""}${"`".repeat(openRun)}`;
-  const star = markerState(masked, /\*+/g);
-  const strike = markerState(masked, /~~/g).bold;
+  // `$$` math counts no markers either: "$$a*b$$" is a product, not the start of italics.
+  const prose = maskMath(masked);
+  const star = markerState(prose, /\*+/g);
+  const strike = markerState(prose, /~~/g).bold;
   // Half of a closing ** has arrived: finish it.
   if (star.bold && star.italic && star.lastAtEnd && star.lastLength === 1) return `${head}${block}*`;
   const close = `${star.italic ? "*" : ""}${star.bold ? "**" : ""}${strike ? "~~" : ""}`;
