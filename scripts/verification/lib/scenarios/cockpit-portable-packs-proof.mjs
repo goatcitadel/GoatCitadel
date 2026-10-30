@@ -413,7 +413,12 @@ export async function runCockpitPortablePacksProof({ context, browser, stack, ci
             .getByRole("navigation", { name: "Settings pages", exact: true })
             .getByRole("link", { name: "Advanced", exact: true })
             .click();
-          await page.getByRole("tab", { name: "Add-ons & packs", exact: true }).click();
+          // Capability packs have no tab on Advanced; the page opens from its #addons anchor. Set it in this
+          // document, never with a reload, so the app-session lock on pack writes stays in place.
+          await page.evaluate(() => {
+            window.location.hash = "addons";
+          });
+          await panel.getByRole("heading", { name: "Capability packs", exact: true }).waitFor();
           await panel.getByText(/^Pack action outcome is unconfirmed\./u).waitFor();
           assert.equal(
             await panel

@@ -2963,47 +2963,6 @@ export async function runDeepEcosystemLane(context, _options = {}) {
     await runScenario(
       context,
       {
-        id: "ecosystem.addons.arena",
-        lane: "deep-ecosystem",
-        title: "Arena add-on catalog and status",
-        subsystem: "addons",
-      },
-      async () => {
-        const catalog = await requestJson(stack.gatewayUrl, "/api/v1/addons/catalog");
-        const arenaEntry = Array.isArray(catalog.body?.items)
-          ? catalog.body.items.find((item) => item.addonId === "arena")
-          : undefined;
-        let status = null;
-        if (arenaEntry) {
-          status = await requestJson(stack.gatewayUrl, "/api/v1/addons/arena/status");
-        }
-        const outPath = path.join(context.artifactRoot, "provider-results", "arena-status.json");
-        await writeJson(outPath, {
-          catalog: catalog.body,
-          status: status?.body ?? null,
-        });
-        return {
-          status: arenaEntry ? "passed" : "failed",
-          error: arenaEntry ? undefined : "Arena add-on is missing from the catalog.",
-          artifacts: {
-            diagnostics: [relativeToRun(context, outPath)],
-            screenshots: [],
-            traces: [],
-            logs: [],
-            perf: [],
-            playwright: [],
-          },
-          metrics: {
-            hasArenaCatalogEntry: Boolean(arenaEntry),
-            launchUrlPresent: Boolean(status?.body?.launchUrl),
-          },
-        };
-      },
-    );
-
-    await runScenario(
-      context,
-      {
         id: "ecosystem.mesh.status",
         lane: "deep-ecosystem",
         title: "Mesh and onboarding readiness endpoints",
@@ -3307,7 +3266,6 @@ async function assertHighRiskRouteFamiliesAreOperatorGated(gatewayUrl, manifestI
     // without coupling the auth proof to an in-flight config-generation reconciliation.
     { family: "llm", method: "GET", url: "/api/v1/llm/providers" },
     { family: "integrations", method: "GET", url: "/api/v1/integrations/catalog" },
-    { family: "addons", method: "GET", url: "/api/v1/addons/catalog" },
     { family: "capabilities", method: "GET", url: "/api/v1/capabilities/catalog" },
     { family: "code-mode", method: "GET", url: "/api/v1/code-mode/runs" },
   ];

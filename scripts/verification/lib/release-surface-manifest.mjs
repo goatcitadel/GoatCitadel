@@ -469,7 +469,7 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
   {
     slug: "settings-addons",
     href: "/settings/addons",
-    readyText: "Add-ons",
+    readyText: "Capability packs",
     expectedArea: "settings",
     expectedSection: "addons",
     interaction: "open-inspector",
