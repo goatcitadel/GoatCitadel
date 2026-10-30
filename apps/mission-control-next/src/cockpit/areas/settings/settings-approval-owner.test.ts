@@ -26,6 +26,19 @@ function fixture(owner: SettingsApprovalOwner): ChangePlanRecord {
       target: { ...base.target, resourceId: change.operation },
     };
   }
+  if (owner === "public-web-address")
+    return {
+      ...base,
+      origin: { surface: "settings", workspaceId: "default" },
+      request: {
+        kind: "runtime_configuration",
+        change: {
+          operation: "public_web_address_configuration",
+          config: { publicWebAddress: "https://goat.example.com" },
+        },
+      },
+      target: { ...base.target, resourceId: "public_web_address_configuration" },
+    };
   if (owner === "claude-cli-tool-bridge")
     return {
       ...base,
@@ -99,6 +112,7 @@ const owners: SettingsApprovalOwner[] = [
   "claude-cli-tool-bridge",
   "claude-cli-warm-continuation",
   "chat-thinking-stream",
+  "public-web-address",
 ];
 
 describe("native Settings exact approval owner binding", () => {
@@ -161,6 +175,7 @@ describe("native Settings exact approval owner binding", () => {
     "claude-cli-tool-bridge",
     "claude-cli-warm-continuation",
     "chat-thinking-stream",
+    "public-web-address",
   ] as const)("rejects another runtime operation for %s even with the expected target", (owner) => {
     const plan = fixture(owner);
     const foreign: ChangePlanRecord = {

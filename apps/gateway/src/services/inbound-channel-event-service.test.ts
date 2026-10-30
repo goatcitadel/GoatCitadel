@@ -5,7 +5,11 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EventIngestService, resolveSessionRoute } from "@goatcitadel/gateway-core";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
-import { CHANNEL_INGRESS_ACCEPTED_REVISION_KEY, NotFoundError } from "@goatcitadel/contracts";
+import {
+  CHANNEL_INGRESS_ACCEPTED_REVISION_KEY,
+  NotFoundError,
+  WHATSAPP_REPLY_WINDOW_CLOSED,
+} from "@goatcitadel/contracts";
 import type {
   ChatChannelConversation,
   ChatMessageRecord,
@@ -734,6 +738,7 @@ describe("InboundChannelEventService", () => {
         },
       },
       sessions: { getBySessionId: async () => ({ sessionKey: desk.session.sessionKey }) },
+      chatMessages: { latestChannelMessageAt: async () => undefined },
     };
     const send = () =>
       gateway.sendOperatorDeskMessage(desk.session.sessionId, { content: "Any news?", idempotencyKey: "request-9" });
@@ -757,6 +762,56 @@ describe("InboundChannelEventService", () => {
     await expect(send()).resolves.toEqual({ mode: "post" });
     binding = undefined;
     await expect(send()).resolves.toEqual({ mode: "post" });
+  });
+
+  it("refuses a WhatsApp desk send from the person's last message in the session, accepting nothing", async () => {
+    const desk = await createDeskHarness();
+    const accept = vi.spyOn(desk.harness.service, "acceptOperatorDeskEvent");
+    let lastInboundAt: string | undefined;
+    const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
+    gateway.inboundChannelEventService = desk.harness.service;
+    gateway.storage = {
+      chatSessionBindings: {
+        get: async () => ({
+          sessionId: desk.session.sessionId,
+          transport: "integration",
+          connectionId: "whatsapp-1",
+          target: "4242",
+          conversation: { kind: "direct", counterpartActorId: "4242" },
+          writable: true,
+        }),
+      },
+      integrationConnections: {
+        get: async () => ({
+          connectionId: "whatsapp-1",
+          key: "whatsapp",
+          label: "WhatsApp",
+          enabled: true,
+          status: "connected",
+          config: { ownerActorIds: ["4242"] },
+        }),
+      },
+      sessions: { getBySessionId: async () => ({ sessionKey: desk.session.sessionKey }) },
+      chatMessages: {
+        latestChannelMessageAt: async (sessionId: string) =>
+          sessionId === desk.session.sessionId ? lastInboundAt : "wrong session",
+      },
+    };
+    const closed = { mode: "blocked", message: WHATSAPP_REPLY_WINDOW_CLOSED };
+    const send = () =>
+      gateway.sendOperatorDeskMessage(desk.session.sessionId, { content: "Any news?", idempotencyKey: "request-10" });
+
+    // Their last message is two days old, or there is none on record.
+    lastInboundAt = new Date(Date.now() - 48 * 60 * 60 * 1000).toISOString();
+    await expect(send()).resolves.toEqual(closed);
+    lastInboundAt = undefined;
+    await expect(send()).resolves.toEqual(closed);
+    expect(accept).not.toHaveBeenCalled();
+
+    // Their last message is an hour old, so the window is open and the question is accepted.
+    lastInboundAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await expect(send()).resolves.toMatchObject({ mode: "ask" });
+    expect(accept).toHaveBeenCalledOnce();
   });
 
   it("refuses desk events through the provider acceptance path", async () => {

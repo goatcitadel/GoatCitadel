@@ -1,21 +1,53 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ChannelSetupDefinition } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { CockpitNavigationProvider } from "../../../../cockpit/app/CockpitNavigationProvider";
 import { ChannelConnectionWebhook, ChannelFirstMessageWebhook, ChannelWebhookAddress } from "./ChannelWebhookAddress";
+
+// The public web address is read from the Gateway's settings; no test here may reach a real Gateway for it.
+const api = vi.hoisted(() => ({ fetchSettings: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/client", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
+  fetchSettings: api.fetchSettings,
+}));
 
 const SLACK_PATH = "/api/v1/integrations/connections/conn-1/slack/webhook";
 const SLACK_ADDRESS = `https://<your public address>${SLACK_PATH}`;
+const WHATSAPP_PATH = "/api/v1/integrations/connections/conn-1/whatsapp/webhook";
 const NOTE =
   "GoatCitadel doesn't provide a public address. Put your own HTTPS address (a reverse proxy or tunnel) in front of GoatCitadel, then give the vendor this address.";
+const NOTE_WITH_ADDRESS = "Built from your public web address. Give the vendor this address.";
 const WORKS_ONCE_FINISHED = "This address works once you finish and the connection is on.";
 
 let root: Root;
 let container: HTMLDivElement;
 
+/** Renders where there is no query client, as the Classic guide does, and lets the address read settle. */
 async function show(element: React.ReactElement) {
   await act(async () => root.render(element));
+  await settle();
+}
+
+async function settle() {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
+/** Renders inside the Cockpit's query client and navigation, which the address then shares. */
+async function showInCockpit(element: React.ReactElement) {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CockpitNavigationProvider>{element}</CockpitNavigationProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  await settle();
 }
 
 const copyButton = () =>
@@ -61,6 +93,7 @@ const telegramLike = webhookDefinition(
 );
 
 beforeEach(() => {
+  api.fetchSettings.mockResolvedValue({ revision: 1, networkAllowlist: [] });
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -70,6 +103,7 @@ afterEach(async () => {
   await act(async () => root.unmount());
   container.remove();
   Reflect.deleteProperty(navigator, "clipboard");
+  vi.resetAllMocks();
 });
 
 describe("ChannelWebhookAddress", () => {
@@ -292,5 +326,74 @@ describe("ChannelConnectionWebhook", () => {
     expect(container.textContent).toBe("");
     await show(<ChannelConnectionWebhook connection={connection("channel.slack")} definitions={undefined} />);
     expect(container.textContent).toBe("");
+  });
+});
+
+describe("ChannelWebhookAddress with the public web address", () => {
+  const withAddress = (publicWebAddress: string) =>
+    api.fetchSettings.mockResolvedValue({ revision: 2, networkAllowlist: [], publicWebAddress });
+  const code = () => container.querySelector("code")?.textContent;
+  const setAddressLink = () =>
+    [...container.querySelectorAll("a")].find((item) => item.textContent === "Set your public web address");
+  const notes = () => [...container.querySelectorAll("p")].map((item) => item.textContent);
+
+  it("shows and copies the full address once the public web address is set", async () => {
+    const writeText = vi.fn(async () => undefined);
+    withClipboard(writeText);
+    withAddress("https://goat.example.com");
+    await showInCockpit(<ChannelWebhookAddress path={WHATSAPP_PATH} />);
+
+    expect(code()).toBe(`https://goat.example.com${WHATSAPP_PATH}`);
+    expect(notes()).toContain(NOTE_WITH_ADDRESS);
+    expect(notes()).not.toContain(NOTE);
+    expect(setAddressLink()).toBeUndefined();
+
+    await act(async () => copyButton()!.click());
+
+    expect(writeText).toHaveBeenCalledExactlyOnceWith(`https://goat.example.com${WHATSAPP_PATH}`);
+    expect(copyButton()?.textContent).toBe("Copied");
+    expect(announces()).toBeNull();
+  });
+
+  it("puts the path after any prefix the address carries", async () => {
+    withAddress("https://goat.example.com/goat");
+    await showInCockpit(<ChannelWebhookAddress path={WHATSAPP_PATH} />);
+    expect(code()).toBe(`https://goat.example.com/goat${WHATSAPP_PATH}`);
+  });
+
+  it("reads the address where there is no query client, as in the Classic guide", async () => {
+    withAddress("https://goat.example.com");
+    await show(<ChannelWebhookAddress path={WHATSAPP_PATH} />);
+    expect(code()).toBe(`https://goat.example.com${WHATSAPP_PATH}`);
+    expect(api.fetchSettings).toHaveBeenCalledOnce();
+  });
+
+  it("keeps today's placeholder and copy without it, and links to where to set it", async () => {
+    await showInCockpit(<ChannelWebhookAddress path={WHATSAPP_PATH} />);
+
+    expect(code()).toBe(`https://<your public address>${WHATSAPP_PATH}`);
+    expect(notes()).toContain(NOTE);
+    expect(notes()).not.toContain(NOTE_WITH_ADDRESS);
+    const target = new URL(setAddressLink()!.href);
+    expect(target.pathname).toBe("/settings/connections");
+    expect(target.hash).toBe("#channels");
+  });
+
+  it("links to the Cockpit's Settings from the Classic guide too", async () => {
+    await show(<ChannelWebhookAddress path={WHATSAPP_PATH} />);
+
+    const target = new URL(setAddressLink()!.href);
+    expect(target.pathname).toBe("/settings/connections");
+    expect(target.hash).toBe("#channels");
+    expect(target.searchParams.get("shell")).toBe("cockpit");
+  });
+
+  it("keeps the placeholder when the settings can't be read", async () => {
+    api.fetchSettings.mockRejectedValue(new Error("offline"));
+    await showInCockpit(<ChannelWebhookAddress path={WHATSAPP_PATH} />);
+
+    expect(code()).toBe(`https://<your public address>${WHATSAPP_PATH}`);
+    expect(notes()).toContain(NOTE);
+    expect(container.textContent).not.toContain("offline");
   });
 });

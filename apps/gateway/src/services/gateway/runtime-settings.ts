@@ -22,6 +22,8 @@ export interface RuntimeSettings {
   toolApprovalMode: ToolApprovalMode;
   budgetMode: "saver" | "balanced" | "power";
   workspaceDir: string;
+  /** The https address the internet uses to reach this installation. Absent when the operator has not set one. */
+  publicWebAddress?: string;
   writeJailRoots: string[];
   readOnlyRoots: string[];
   /** Operator-opened folders outside the write jail, for model-driven filesystem tools only. */

@@ -110,6 +110,7 @@ describe("the pages ChannelSetupView chooses between", () => {
     expect(SETUP_PAGES.has("telegram")).toBe(true);
     expect(SETUP_PAGES.has("discord")).toBe(true);
     expect(SETUP_PAGES.has("slack")).toBe(true);
+    expect(SETUP_PAGES.has("whatsapp")).toBe(true);
   });
 
   it("has a key page for exactly the channels the channel page sends there", () => {

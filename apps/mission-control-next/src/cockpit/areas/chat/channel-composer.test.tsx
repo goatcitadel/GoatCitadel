@@ -2,7 +2,11 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { ChatMessagingOverview } from "@goatcitadel/contracts";
+import {
+  WHATSAPP_REPLY_WINDOW_CLOSED,
+  type ChatMessagingOverview,
+  type ChatThreadTurnRecord,
+} from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { describeChannelConversation, type ChannelConversationContext } from "./channel-conversation";
 import {
@@ -23,6 +27,7 @@ function channelContext(overrides: Partial<ChannelConversationContext> = {}): Ch
   return {
     sessionId: "channel-1",
     connectionId: "conn-1",
+    channelKey: "telegram",
     channelLabel: "Telegram",
     title: "Maya",
     kind: "direct",
@@ -32,6 +37,9 @@ function channelContext(overrides: Partial<ChannelConversationContext> = {}): Ch
     ...overrides,
   };
 }
+
+const NOW = new Date("2026-10-29T12:00:00Z");
+const hoursAgo = (hours: number) => new Date(NOW.getTime() - hours * 60 * 60 * 1000).toISOString();
 
 const post: ChannelReply = { mode: "post", channelLabel: "Telegram", targetTitle: "Maya", status: "on" };
 const ask: ChannelReply = { mode: "ask", channelLabel: "Telegram", targetTitle: "You", status: "on" };
@@ -59,6 +67,19 @@ describe("describeChannelReply", () => {
   it("carries the channel's status and says nothing for a mission chat", () => {
     expect(describeChannelReply(channelContext({ status: "needs_attention" }))?.status).toBe("needs_attention");
     expect(describeChannelReply(undefined)).toBeUndefined();
+  });
+
+  it("carries the channel and the person's last message only once the conversation's turns are known", () => {
+    const whatsapp = channelContext({ channelKey: "whatsapp", channelLabel: "WhatsApp" });
+    expect(describeChannelReply(whatsapp, { lastInboundAt: "2026-10-28T12:00:00Z" })).toMatchObject({
+      replyWindow: { channelKey: "whatsapp", lastInboundAt: "2026-10-28T12:00:00Z" },
+    });
+    // The turns are known and none is from the person: there is no last message to carry.
+    expect(describeChannelReply(whatsapp, { lastInboundAt: undefined })?.replyWindow).toEqual({
+      channelKey: "whatsapp",
+    });
+    // Not known yet (the thread is loading): nothing is claimed about the window.
+    expect(describeChannelReply(whatsapp)).not.toHaveProperty("replyWindow");
   });
 });
 
@@ -143,6 +164,37 @@ describe("channel reply copy", () => {
     expect(channelReplyBlock(undefined)).toBeNull();
   });
 
+  it("blocks a WhatsApp reply once their last message is 24 hours old, in either mode", () => {
+    const window = (lastInboundAt: string | undefined) => ({
+      replyWindow: { channelKey: "whatsapp", ...(lastInboundAt ? { lastInboundAt } : {}) },
+    });
+    const closed = { kind: "reply-window-closed", message: WHATSAPP_REPLY_WINDOW_CLOSED };
+    for (const reply of [post, ask]) {
+      expect(channelReplyBlock({ ...reply, ...window(hoursAgo(25)) }, NOW)).toEqual(closed);
+      expect(channelReplyBlock({ ...reply, ...window(hoursAgo(24)) }, NOW)).toEqual(closed);
+      expect(channelReplyBlock({ ...reply, ...window(undefined) }, NOW)).toEqual(closed);
+      expect(channelReplyBlock({ ...reply, ...window(hoursAgo(1)) }, NOW)).toBeNull();
+    }
+    // The window is WhatsApp's alone, and a turned-off or removed channel says that first.
+    expect(
+      channelReplyBlock({ ...post, replyWindow: { channelKey: "telegram", lastInboundAt: hoursAgo(25) } }, NOW),
+    ).toBeNull();
+    expect(channelReplyBlock({ ...post, status: "off", ...window(hoursAgo(25)) }, NOW)?.kind).toBe("channel-off");
+    expect(channelReplyBlock({ ...post, status: "removed", ...window(hoursAgo(25)) }, NOW)?.kind).toBe(
+      "channel-removed",
+    );
+    // A conversation whose turns are not known yet is not blocked on a guess; the Gateway still refuses a late send.
+    expect(channelReplyBlock(post, NOW)).toBeNull();
+  });
+
+  it("puts the window sentence in the placeholder and keeps the submit label plain", () => {
+    // The placeholder and the label read the clock themselves, so this one is dated from it.
+    const dayAndAnHourAgo = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    const closed = { ...post, replyWindow: { channelKey: "whatsapp", lastInboundAt: dayAndAnHourAgo } };
+    expect(channelReplyPlaceholder(closed)).toBe(WHATSAPP_REPLY_WINDOW_CLOSED);
+    expect(channelReplySubmitLabel(closed)).toBe("Send");
+  });
+
   it("blocks sending while the channel is being checked or could not be checked", () => {
     expect(channelCheckBlock("checking")).toEqual({ kind: "channel-checking", message: "Checking this channel…" });
     expect(channelCheckBlock("unavailable")).toEqual({
@@ -184,9 +236,11 @@ describe("useChannelComposerProps", () => {
   let client: QueryClient;
   let seen: Array<ReturnType<typeof useChannelComposerProps<Active>>>;
 
-  function activeProps(draft = "hi") {
+  type ThreadView = { sessionId: string; turns: readonly ChatThreadTurnRecord[] };
+  function activeProps(draft = "hi", thread?: ThreadView | null) {
     return {
       draft,
+      thread,
       isDragActive: true,
       onDragEnter: vi.fn(),
       onDragOver: vi.fn(),
@@ -194,6 +248,12 @@ describe("useChannelComposerProps", () => {
       onDrop: vi.fn(),
       onComposerPaste: vi.fn(),
     };
+  }
+  function turnAt(turnId: string, timestamp: string, sourceAuthority: string) {
+    return {
+      turnId,
+      userMessage: { messageId: `user-${turnId}`, timestamp, sourceAuthority },
+    } as unknown as ChatThreadTurnRecord;
   }
   type Active = ReturnType<typeof activeProps>;
 
@@ -268,6 +328,38 @@ describe("useChannelComposerProps", () => {
     await mount({ active: { ...active, draft: "hi!" }, channel, session: held });
     expect(seen.at(-1)).not.toBe(first);
     expect(seen.at(-1)?.draft).toBe("hi!");
+  });
+
+  it("reads the person's last message from the open conversation's turns for WhatsApp's reply window", async () => {
+    const whatsapp = channelContext({ channelKey: "whatsapp", channelLabel: "WhatsApp" });
+    const turns = [
+      turnAt("t1", hoursAgo(30), "external_channel"),
+      turnAt("t2", hoursAgo(26), "external_channel"),
+      // Written later than theirs but not theirs: a desk message never reopens the window.
+      turnAt("t3", hoursAgo(2), "operator"),
+    ];
+    await mount({ active: activeProps("hi", { sessionId: "channel-1", turns }), channel: whatsapp, session: held });
+    expect(seen.at(-1)?.channelReply?.replyWindow).toEqual({ channelKey: "whatsapp", lastInboundAt: hoursAgo(26) });
+
+    // Their message arrives: the same conversation now carries it.
+    const reopened = [...turns, turnAt("t4", hoursAgo(1), "external_channel")];
+    await mount({
+      active: activeProps("hi", { sessionId: "channel-1", turns: reopened }),
+      channel: whatsapp,
+      session: held,
+    });
+    expect(seen.at(-1)?.channelReply?.replyWindow).toEqual({ channelKey: "whatsapp", lastInboundAt: hoursAgo(1) });
+  });
+
+  it("claims nothing about the window until the open conversation's own turns are loaded", async () => {
+    const whatsapp = channelContext({ channelKey: "whatsapp", channelLabel: "WhatsApp" });
+    const turns = [turnAt("t1", hoursAgo(30), "external_channel")];
+    // No thread yet, no thread at all, and a thread that is another conversation's.
+    for (const thread of [undefined, null, { sessionId: "another-session", turns }]) {
+      await mount({ active: activeProps("hi", thread), channel: whatsapp, session: held });
+      expect(seen.at(-1)?.channelReply).toBeDefined();
+      expect(seen.at(-1)?.channelReply).not.toHaveProperty("replyWindow");
+    }
   });
 
   it("takes files from neither a drop nor a paste in a channel conversation", async () => {

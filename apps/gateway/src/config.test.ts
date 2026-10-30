@@ -266,6 +266,44 @@ describe("loadGatewayConfig", () => {
     });
   });
 
+  describe("public web address", () => {
+    async function loadWithAddress(publicWebAddress: unknown) {
+      const { rootDir, configDir } = await createConfigFixture();
+      const assistantPath = path.join(configDir, "assistant.config.json");
+      const assistantConfig = JSON.parse(await readFile(assistantPath, "utf8")) as Record<string, unknown>;
+      await writeJson(assistantPath, { ...assistantConfig, publicWebAddress });
+      return await loadGatewayConfig(rootDir);
+    }
+
+    it("is unset when the config does not name one", async () => {
+      const { rootDir } = await createConfigFixture();
+
+      const config = await loadGatewayConfig(rootDir);
+
+      expect(config.assistant.publicWebAddress).toBeUndefined();
+      expect(Object.hasOwn(config.assistant, "publicWebAddress")).toBe(false);
+    });
+
+    it("reads the address tidied", async () => {
+      const config = await loadWithAddress("  https://Example.com/goat/ ");
+
+      expect(config.assistant.publicWebAddress).toBe("https://example.com/goat");
+    });
+
+    it.each([
+      ["a plain http address", "http://example.com"],
+      ["an address on a home network", "https://192.168.1.5"],
+      ["an address with a login", "https://user:pw@example.com"],
+      ["text that is not an address", "not an address"],
+      ["an empty string", ""],
+      ["a blank string", "   "],
+    ])("leaves the address unset for %s", async (_label, value) => {
+      const config = await loadWithAddress(value);
+
+      expect(Object.hasOwn(config.assistant, "publicWebAddress")).toBe(false);
+    });
+  });
+
   it("coerces the durable baseline on even when config asks to disable it", async () => {
     const { rootDir } = await createConfigFixture();
 

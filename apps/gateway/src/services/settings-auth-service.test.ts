@@ -14,6 +14,13 @@ import {
 } from "@goatcitadel/storage";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
+  PUBLIC_WEB_ADDRESS_HAS_EXTRA,
+  PUBLIC_WEB_ADDRESS_HAS_LOGIN,
+  PUBLIC_WEB_ADDRESS_NOT_HTTPS,
+  PUBLIC_WEB_ADDRESS_NOT_PUBLIC,
+  PUBLIC_WEB_ADDRESS_NOT_URL,
+  PUBLIC_WEB_ADDRESS_TOO_LONG,
+  ValidationError,
   type ApprovalCreateInput,
   type ApprovalRequest,
   type ApprovalResolveInput,
@@ -782,6 +789,53 @@ describe("settings-auth-service durable settings", () => {
       "web.firecrawl.apiKeyEnv must be FIRECRAWL_API_KEY, FIRECRAWL_KEY, or GOATCITADEL_FIRECRAWL_API_KEY",
     );
     expect(host.config.assistant.web.firecrawl.apiKeyEnv).toBeUndefined();
+  });
+
+  it("stores the public web address tidied, shows it in the settings, and removes it on null", async () => {
+    const host = buildHost();
+    expect(await getSettings(host)).not.toHaveProperty("publicWebAddress");
+
+    const set = await updateSettings(host, { publicWebAddress: "  https://Example.com/goat/ " });
+
+    expect(set.publicWebAddress).toBe("https://example.com/goat");
+    expect(host.config.assistant.publicWebAddress).toBe("https://example.com/goat");
+    expect((await getSettings(host)).publicWebAddress).toBe("https://example.com/goat");
+    expect(JSON.parse(JSON.stringify(projectSettingsPublicValue(await getSettings(host))))).toMatchObject({
+      publicWebAddress: "https://example.com/goat",
+    });
+
+    const cleared = await updateSettings(host, { publicWebAddress: null });
+
+    expect(cleared).not.toHaveProperty("publicWebAddress");
+    expect(await getSettings(host)).not.toHaveProperty("publicWebAddress");
+    expect(Object.hasOwn(host.config.assistant, "publicWebAddress")).toBe(false);
+  });
+
+  it("keeps the public web address through a save that does not mention it", async () => {
+    const host = buildHost();
+    await updateSettings(host, { publicWebAddress: "https://example.com" });
+
+    await updateSettings(host, { budgetMode: "saver" });
+
+    expect(host.config.assistant.publicWebAddress).toBe("https://example.com");
+  });
+
+  it.each([
+    ["http://example.com", PUBLIC_WEB_ADDRESS_NOT_HTTPS],
+    ["example.com", PUBLIC_WEB_ADDRESS_NOT_URL],
+    ["https://user:pw@example.com", PUBLIC_WEB_ADDRESS_HAS_LOGIN],
+    ["https://example.com/?a=1", PUBLIC_WEB_ADDRESS_HAS_EXTRA],
+    ["https://localhost", PUBLIC_WEB_ADDRESS_NOT_PUBLIC],
+    ["https://" + "a".repeat(200) + ".com", PUBLIC_WEB_ADDRESS_TOO_LONG],
+  ])("refuses the public web address %s with its sentence and keeps the one already set", async (address, sentence) => {
+    const host = buildHost();
+    await updateSettings(host, { publicWebAddress: "https://example.com" });
+
+    const error = await updateSettings(host, { publicWebAddress: address }).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(ValidationError);
+    expect((error as ValidationError).message).toBe(sentence);
+    expect(host.config.assistant.publicWebAddress).toBe("https://example.com");
   });
 
   it("applies mesh and llama.cpp updates while normalizing retired NPU settings", async () => {

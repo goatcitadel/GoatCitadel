@@ -38,8 +38,9 @@ type SendBlockProps = Pick<
 /**
  * Why the composer will not send right now. `route-checking` is the only transient kind:
  * an explicit send may still start, because the controller runs its own fresh preflight
- * before dispatch. A channel conversation adds `channel-removed` and `channel-off`, and one whose channel is not
- * known yet adds `channel-checking` and `channel-unavailable`; none of these sends.
+ * before dispatch. A channel conversation adds `channel-removed`, `channel-off` and `reply-window-closed` (WhatsApp's
+ * 24 hours), and one whose channel is not known yet adds `channel-checking` and `channel-unavailable`; none of these
+ * sends.
  */
 export type ComposerSendBlock =
   | { kind: "route-checking"; message: string }

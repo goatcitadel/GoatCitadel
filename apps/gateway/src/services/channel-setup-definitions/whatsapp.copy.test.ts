@@ -78,7 +78,7 @@ describe("WhatsApp setup guide: what it says up front (item 7)", () => {
     const wizard = guide().definition.wizard;
 
     expect(wizard.introSummary).toBe(
-      "Send WhatsApp messages from a WhatsApp Business number through Meta's Cloud API. Receiving messages needs a public HTTPS address. Personal WhatsApp (QR code linking) isn't supported.",
+      "Send and receive WhatsApp messages through your own Meta app. Meta delivers messages only to a public https:// address, so GoatCitadel needs one. The quickest setup is WhatsApp in Chat › Messaging.",
     );
     expect(wizard.prerequisites).toEqual([
       "A Meta app with WhatsApp set up, its phone number ID, and a permanent System User access token.",
@@ -162,7 +162,7 @@ describe("WhatsApp setup guide: where to find the values (items 2 and 5)", () =>
 });
 
 describe("WhatsApp setup guide: receiving is its own optional step (item 3, A12)", () => {
-  it("puts the four inbound fields in a step of their own, ahead of the sender and test steps", () => {
+  it("puts the inbound fields in a step of their own, ahead of the sender and test steps", () => {
     expect(stepIds()).toEqual([
       "overview",
       "collect-values-identity",
@@ -176,6 +176,8 @@ describe("WhatsApp setup guide: receiving is its own optional step (item 3, A12)
     expect(fieldKeys("receive-messages")).toEqual([
       "appSecret",
       "appSecretEnv",
+      "appId",
+      "businessAccountId",
       "webhookVerifyToken",
       "webhookVerifyTokenEnv",
     ]);

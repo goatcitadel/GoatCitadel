@@ -16,6 +16,7 @@ import {
   ConfigValidationError,
   LlmConfigFileSchema,
   ToolPolicyConfigSchema,
+  checkPublicWebAddress,
   clampInt,
   normalizeWebSearchEngineOrder,
   type WebSearchNativeEngine,
@@ -45,6 +46,11 @@ export interface AssistantConfig {
   capabilities: CapabilityRuntimeConfig;
   workspaceDir: string;
   worktreesDir: string;
+  /**
+   * The https address the internet uses to reach this installation, as `checkPublicWebAddress` tidies it. Absent when
+   * the operator has not set one. Channels build the web addresses their setup pages show from it.
+   */
+  publicWebAddress?: string;
   auth: AuthConfig;
   approvalExplainer: ApprovalExplainerConfig;
   shellExplainerPolicy: ShellExplainerPolicyConfig;
@@ -1139,6 +1145,18 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   }
 }
 
+/**
+ * A saved public web address is checked on every load, so a hand-edited file cannot give channels an address they
+ * cannot use. One that fails is left unset and the reason is logged: the sentence only, never the address.
+ */
+function readSavedPublicWebAddress(value: unknown): string | undefined {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  const checked = checkPublicWebAddress(value);
+  if (checked.ok) return checked.address;
+  configLog.warn("ignoring the saved public web address", { problem: checked.problem });
+  return undefined;
+}
+
 function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig {
   const approvalExplainerDefaults: ApprovalExplainerConfig = {
     enabled: true,
@@ -1181,6 +1199,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const distillerInput = (qmdInput.distiller ?? {}) as Partial<MemoryConfig["qmd"]["distiller"]>;
   const webInput = (input.web ?? {}) as Partial<WebRuntimeConfig>;
   const firecrawlInput = (webInput.firecrawl ?? {}) as Partial<FirecrawlRuntimeConfig>;
+  const publicWebAddress = readSavedPublicWebAddress(input.publicWebAddress);
   const sqlite: SqliteTuningConfig = {
     cacheSizeKb: clampInt(sqliteInput.cacheSizeKb, 65_536, 4_096, 262_144),
     tempStoreMemory: sqliteInput.tempStoreMemory ?? true,
@@ -1232,6 +1251,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     },
     workspaceDir: input.workspaceDir ?? "./workspace",
     worktreesDir: input.worktreesDir ?? "./.worktrees",
+    ...(publicWebAddress ? { publicWebAddress } : {}),
     auth: {
       mode: authInput.mode ?? "none",
       allowLoopbackBypass: authInput.allowLoopbackBypass ?? false,

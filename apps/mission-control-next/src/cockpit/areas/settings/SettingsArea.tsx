@@ -39,6 +39,7 @@ import {
   LocalAiSettings,
   CitadelBlueprintSettings,
   ChannelsSettings,
+  PublicWebAddressSettings,
   CitadelOverviewSettings,
   CitadelMasonSettings,
   CitadelWardsSettings,
@@ -141,7 +142,12 @@ export function SettingsArea() {
       case "integrations":
         return <IntegrationConnectionsSettings workspaceId={activeWorkspaceId ?? ""} />;
       case "channels":
-        return <ChannelsSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />;
+        return (
+          <>
+            <PublicWebAddressSettings />
+            <ChannelsSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />
+          </>
+        );
       case "mcp":
         return <McpServersSettings workspaceId={activeWorkspaceId ?? ""} />;
       case "web-search":

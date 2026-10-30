@@ -86,6 +86,8 @@ export function buildUnifiedConfigPayloadFromRuntime(
     auditDir: runtimeConfig.assistant.auditDir,
     workspaceDir: runtimeConfig.assistant.workspaceDir,
     worktreesDir: runtimeConfig.assistant.worktreesDir,
+    // Left out when unset, so clearing the address removes the key from the saved file.
+    ...(runtimeConfig.assistant.publicWebAddress ? { publicWebAddress: runtimeConfig.assistant.publicWebAddress } : {}),
     auth: {
       mode: runtimeConfig.assistant.auth.mode,
       allowLoopbackBypass: runtimeConfig.assistant.auth.allowLoopbackBypass,
@@ -123,8 +125,8 @@ export function buildUnifiedConfigPayloadFromRuntime(
       // path: it is re-resolved on the server at every load.
       ...(runtimeConfig.toolPolicy.sandbox.operatorWriteRoots
         ? {
-            operatorWriteRoots: runtimeConfig.toolPolicy.sandbox.operatorWriteRoots.map(({ path: rootPath, ...root }) =>
-              root.preset ? root : { ...root, path: serializeSandboxRoot(rootPath) },
+            operatorWriteRoots: runtimeConfig.toolPolicy.sandbox.operatorWriteRoots.map(
+              ({ path: rootPath, ...root }) => (root.preset ? root : { ...root, path: serializeSandboxRoot(rootPath) }),
             ),
           }
         : {}),

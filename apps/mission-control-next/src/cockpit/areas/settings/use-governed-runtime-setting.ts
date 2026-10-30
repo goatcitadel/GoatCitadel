@@ -33,6 +33,13 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
   read: (settings: RuntimeSettingsResponse) => T | undefined;
   fallback: T;
   patch: (value: T) => SettingsPatch;
+  /**
+   * The form the Gateway stores a submitted value in when it tidies it, such as an address it lower-cases and drops a
+   * trailing slash from. A save is confirmed when the saved value equals this form, and the draft then shows it.
+   */
+  normalize?: (submitted: T) => T;
+  /** Runs once for each save the saved settings confirm, with the value as saved, however long its approval took. */
+  onSaved?: (saved: T) => void;
   operation: string;
   matchesPlan?: (plan: ChangePlanRecord, submitted: T) => boolean;
   copy: { staleDraft: string; changedElsewhere: string; saved: string };
@@ -61,8 +68,14 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
     key: draft.key,
     operation: options.operation,
     matchesPlan: options.matchesPlan,
-    matches: (savedSettings, submitted) => options.read(savedSettings) === submitted,
-    acceptSaved: draft.acceptSaved,
+    matches: (savedSettings, submitted) =>
+      options.read(savedSettings) === (options.normalize?.(submitted) ?? submitted),
+    ...(options.normalize ? { savedValue: options.normalize } : {}),
+    acceptSaved: (savedValue, savedRevision, submitted) => {
+      const clean = draft.acceptSaved(savedValue, savedRevision, submitted);
+      options.onSaved?.(savedValue);
+      return clean;
+    },
     reload: () => settings.refetch(),
   });
   const [busy, setBusy] = useState(false);
@@ -70,20 +83,24 @@ export function useGovernedRuntimeSetting<T extends GovernedSettingValue>(option
   const [notice, setNotice] = useState<GovernedSettingNotice | null>(null);
   const confirmed = settingsChangeIsConfirmed(change.change);
 
-  async function save(): Promise<boolean> {
+  /**
+   * Saves the draft. A control whose draft has just been replaced by an action of its own, such as Clear, passes that
+   * value: the draft it renders has not caught up yet, so the value to save is the one it names.
+   */
+  async function save(value?: T): Promise<boolean> {
+    const submitted = value ?? draft.value;
     if (
       !ready ||
       !settings.data ||
       settings.isFetching ||
       draft.hasRemoteChanges ||
-      !draft.isDirty ||
+      !(value === undefined ? draft.isDirty : value !== current) ||
       outcomeUncertain ||
       !change.beginSave()
     )
       return false;
     setBusy(true);
     setNotice(null);
-    const submitted = draft.value;
     const baseRevision = Number(draft.baseRevision);
     let mutationAttempted = false;
     try {

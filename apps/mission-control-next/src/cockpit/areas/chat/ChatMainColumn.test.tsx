@@ -180,6 +180,18 @@ it("shows Telegram's own key page for a Telegram channel's key change, with a wa
 it.each([
   ["discord", "Discord", { runtimeMode: "gateway" }, "Change Discord's token", "Paste the new token"],
   ["slack", "Slack", { receiveMode: "socket" }, "Change Slack's tokens", "Paste the new tokens"],
+  [
+    "whatsapp",
+    "WhatsApp",
+    {
+      phoneNumberId: "106540352242922",
+      businessAccountId: "102290129340398",
+      appId: "670843887433847",
+      appSecret: "[REDACTED]",
+    },
+    "Change WhatsApp's access token",
+    "Paste the new token",
+  ],
 ])(
   "shows %s's own token page for the key change of a connection that uses a bot, with a way back to the channel page",
   async (key, label, config, title, step) => {
@@ -209,6 +221,18 @@ it.each([
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
   expect(container.textContent).toContain("You can't change a key from Chat yet. Settings has it.");
+  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
+  expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
+  expect(container.textContent).not.toContain("Paste the new token");
+  expect(container.querySelector('input[type="password"]')).toBeNull();
+});
+
+it("points the key change of a send-only WhatsApp connection at Settings: it has no saved App ID or secret to check the token with", async () => {
+  api.fetchIntegrationConnections.mockResolvedValue({
+    items: [connectionOf("whatsapp", "WhatsApp", { phoneNumberId: "106540352242922", accessToken: "[REDACTED]" })],
+  });
+  await render({ kind: "change_key", connectionId: "conn-1" });
+  expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
   expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
   expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
   expect(container.textContent).not.toContain("Paste the new token");

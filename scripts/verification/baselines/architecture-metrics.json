@@ -107,7 +107,7 @@
   "gatewayRouteCompositionVariadicAnyMethodCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumerCount": 0,
   "gatewayRouteCompositionFactoryExternalConsumers": [],
-  "gatewayRouteCompositionPortMemberCount": 187,
+  "gatewayRouteCompositionPortMemberCount": 188,
   "legacyRouteServiceFactoryVariadicAnyCount": 2,
   "legacyRoutePortAliasCount": 35,
   "totalHostCallbacks": 1104,

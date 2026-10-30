@@ -6,16 +6,21 @@ import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js
 
 /** Bind setup to the same connection, diagnostics and secret custody owners. */
 export function composeChannelSetupHost(
-  gateway: Pick<GatewayRouteCompositionPort, "storage" | "recentChannelSetupTests" | "secretStore" | "recordDevDiagnostic">,
+  gateway: Pick<
+    GatewayRouteCompositionPort,
+    "storage" | "recentChannelSetupTests" | "channelSecretStore" | "recordDevDiagnostic"
+  >,
   integrationDiagnostics: IntegrationDiagnosticsService,
   integrationChannel: IntegrationChannelService,
 ): ChannelSetupHost {
+  // Read once: the port gives it only while the key store can be used.
+  const channelSecretStore = gateway.channelSecretStore;
   return {
     storage: gateway.storage,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
     commitChannelSetupConnection: (draftId, expectedRevision, input, onCommitted) =>
       integrationChannel.finalizeChannelSetupConnection(draftId, expectedRevision, input, onCommitted),
-    ...(gateway.secretStore ? { channelSecrets: new ChannelSecretCustodyService(gateway.secretStore) } : {}),
+    ...(channelSecretStore ? { channelSecrets: new ChannelSecretCustodyService(channelSecretStore) } : {}),
     buildIntegrationConnectionChecks: (connection) =>
       integrationDiagnostics.buildIntegrationConnectionChecks(connection),
     createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),

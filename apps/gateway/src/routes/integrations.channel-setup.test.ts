@@ -7,6 +7,7 @@ import {
   decorateIntegrationServices,
   integrationsRoutes,
 } from "./integrations-test-fixtures.js";
+import { installRouteAccessTracking } from "./route-access.js";
 
 describe("channel setup routes", () => {
   let app: FastifyInstance | null = null;
@@ -625,5 +626,271 @@ describe("channel setup routes", () => {
       expect(limited.statusCode).toBe(429);
       expect(checkSlackSetup).toHaveBeenCalledTimes(20);
     });
+  });
+
+  describe("WhatsApp setup check", () => {
+    const url = "/api/v1/channels/whatsapp/setup-check";
+    const draftId = "11111111-1111-1111-1111-111111111111";
+    const result = {
+      number: { displayNumber: "+1 555-078-3881", verifiedName: "Goat Shop" },
+      tokenExpiresAt: "2026-01-01T00:00:00.000Z",
+      appSubscribed: true,
+      addressCheckedAt: "2026-10-29T12:00:00.000Z",
+      codeSender: { actorId: "16505551234", displayName: "Sheena" },
+    };
+
+    async function appWith(checkWhatsAppSetup: ReturnType<typeof vi.fn>, options: { rateLimited?: true } = {}) {
+      app = Fastify();
+      decorateIntegrationServices(app, { checkWhatsAppSetup });
+      if (options.rateLimited) await app.register(rateLimit, { global: false, allowList: [] });
+      await app.register(integrationsRoutes);
+      return app;
+    }
+
+    it("passes a draft check through, and is never cached", async () => {
+      const checkWhatsAppSetup = vi.fn(async () => result);
+      const server = await appWith(checkWhatsAppSetup);
+      const payload = { draftId, expectedRevision: 3, askMeta: true, setupCode: "Ab3dEf7hJk" };
+      const response = await server.inject({ method: "POST", url, payload });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual(result);
+      expect(checkWhatsAppSetup).toHaveBeenCalledExactlyOnceWith(payload);
+      const bare = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(bare.statusCode).toBe(200);
+      expect(checkWhatsAppSetup).toHaveBeenLastCalledWith({ draftId, expectedRevision: 3 });
+      const listening = await server.inject({
+        method: "POST",
+        url,
+        payload: { draftId, expectedRevision: 3, askMeta: false },
+      });
+      expect(listening.statusCode).toBe(200);
+      expect(checkWhatsAppSetup).toHaveBeenLastCalledWith({ draftId, expectedRevision: 3, askMeta: false });
+    });
+
+    it("takes a strict body", async () => {
+      const checkWhatsAppSetup = vi.fn(async () => result);
+      const server = await appWith(checkWhatsAppSetup);
+      for (const payload of [
+        { draftId, expectedRevision: 3, accessToken: "EAAG" },
+        { draftId, expectedRevision: 3, appSecret: "secret" },
+        { draftId, expectedRevision: 3, token: "EAAG" },
+        { draftId, expectedRevision: 3, phoneNumberId: "106540352242922" },
+        { draftId, expectedRevision: 3, source: "draft" },
+        { draftId, expectedRevision: 3, checkAppToken: true },
+        { draftId, expectedRevision: 3, askMeta: "yes" },
+        { draftId, expectedRevision: 3, askMeta: 1 },
+        { draftId, expectedRevision: 3, askMeta: null },
+        { draftId: "not-a-guid", expectedRevision: 3 },
+        { draftId, expectedRevision: 0 },
+        { draftId, expectedRevision: 1.5 },
+        { draftId, expectedRevision: "3" },
+        { draftId },
+        { expectedRevision: 3 },
+        {},
+      ]) {
+        const response = await server.inject({ method: "POST", url, payload });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(response.headers["cache-control"]).toBe("no-store");
+      }
+      expect(checkWhatsAppSetup).not.toHaveBeenCalled();
+    });
+
+    it("takes a setup code of 6 to 32 letters and digits", async () => {
+      const checkWhatsAppSetup = vi.fn(async () => result);
+      const server = await appWith(checkWhatsAppSetup);
+      const bad = [
+        "Ab3dE",
+        "a".repeat(33),
+        "Ab3dEf 7hJk",
+        "Ab3dEf-7hJk",
+        "Ab3dEf7hJk\n",
+        " Ab3dEf7hJk",
+        "Ab3dEf7hJ_",
+        "Ab3dEf7hJé",
+        "",
+        12345678,
+        null,
+      ];
+      for (const setupCode of bad) {
+        const response = await server.inject({
+          method: "POST",
+          url,
+          payload: { draftId, expectedRevision: 3, setupCode },
+        });
+        expect(response.statusCode, JSON.stringify(setupCode)).toBe(400);
+      }
+      expect(checkWhatsAppSetup).not.toHaveBeenCalled();
+      for (const setupCode of ["a".repeat(6), "Z".repeat(32), "Ab3dEf7hJk"]) {
+        const response = await server.inject({
+          method: "POST",
+          url,
+          payload: { draftId, expectedRevision: 3, setupCode },
+        });
+        expect(response.statusCode, setupCode).toBe(200);
+      }
+      expect(checkWhatsAppSetup).toHaveBeenCalledTimes(3);
+    });
+
+    it("answers a refusal with 400 and its fixed sentence", async () => {
+      const refusal = "Meta didn't accept the access token.";
+      const checkWhatsAppSetup = vi.fn().mockRejectedValue(new ValidationError({ message: refusal }));
+      const server = await appWith(checkWhatsAppSetup);
+      const response = await server.inject({
+        method: "POST",
+        url,
+        payload: { draftId, expectedRevision: 3, askMeta: true },
+      });
+      expect(response.statusCode).toBe(400);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({ error: refusal });
+    });
+
+    it("answers anything unexpected with a generic 500 that quotes nothing", async () => {
+      const checkWhatsAppSetup = vi
+        .fn()
+        .mockRejectedValue(
+          new Error(
+            "Authorization: Bearer EAAG-access 670843887433847|app-secret https://graph.facebook.com/v23.0/debug_token?input_token=EAAG-access",
+          ),
+        );
+      const server = await appWith(checkWhatsAppSetup);
+      const response = await server.inject({
+        method: "POST",
+        url,
+        payload: { draftId, expectedRevision: 3, askMeta: true },
+      });
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain("EAAG-access");
+      expect(response.body).not.toContain("app-secret");
+      expect(response.body).not.toContain("input_token");
+    });
+
+    it("allows 20 checks a minute, then answers 429", async () => {
+      const checkWhatsAppSetup = vi.fn(async () => result);
+      const server = await appWith(checkWhatsAppSetup, { rateLimited: true });
+      for (let index = 0; index < 20; index += 1) {
+        const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+        expect(response.statusCode).toBe(200);
+      }
+      const limited = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(limited.statusCode).toBe(429);
+      expect(checkWhatsAppSetup).toHaveBeenCalledTimes(20);
+    });
+  });
+
+  describe("WhatsApp setup subscribe", () => {
+    const url = "/api/v1/channels/whatsapp/setup-subscribe";
+    const draftId = "11111111-1111-1111-1111-111111111111";
+
+    async function appWith(subscribeWhatsAppSetupApp: ReturnType<typeof vi.fn>, options: { rateLimited?: true } = {}) {
+      app = Fastify();
+      decorateIntegrationServices(app, { subscribeWhatsAppSetupApp });
+      if (options.rateLimited) await app.register(rateLimit, { global: false, allowList: [] });
+      await app.register(integrationsRoutes);
+      return app;
+    }
+
+    it("passes a draft through, and is never cached", async () => {
+      const subscribeWhatsAppSetupApp = vi.fn(async () => ({ appSubscribed: true }));
+      const server = await appWith(subscribeWhatsAppSetupApp);
+      const payload = { draftId, expectedRevision: 3 };
+      const response = await server.inject({ method: "POST", url, payload });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual({ appSubscribed: true });
+      expect(subscribeWhatsAppSetupApp).toHaveBeenCalledExactlyOnceWith(payload);
+    });
+
+    it("takes a strict body", async () => {
+      const subscribeWhatsAppSetupApp = vi.fn(async () => ({ appSubscribed: true }));
+      const server = await appWith(subscribeWhatsAppSetupApp);
+      for (const payload of [
+        { draftId, expectedRevision: 3, askMeta: true },
+        { draftId, expectedRevision: 3, setupCode: "Ab3dEf7hJk" },
+        { draftId, expectedRevision: 3, accessToken: "EAAG" },
+        { draftId, expectedRevision: 3, businessAccountId: "102290129340398" },
+        { draftId, expectedRevision: 3, source: "draft" },
+        { draftId: "not-a-guid", expectedRevision: 3 },
+        { draftId, expectedRevision: 0 },
+        { draftId, expectedRevision: 1.5 },
+        { draftId, expectedRevision: "3" },
+        { draftId },
+        { expectedRevision: 3 },
+        {},
+      ]) {
+        const response = await server.inject({ method: "POST", url, payload });
+        expect(response.statusCode, JSON.stringify(payload)).toBe(400);
+        expect(response.headers["cache-control"]).toBe("no-store");
+      }
+      expect(subscribeWhatsAppSetupApp).not.toHaveBeenCalled();
+    });
+
+    it("answers a refusal with 400 and its fixed sentence", async () => {
+      const refusal =
+        "Meta didn't let this app receive the account's messages. Check that the access token can manage the account.";
+      const subscribeWhatsAppSetupApp = vi.fn().mockRejectedValue(new ValidationError({ message: refusal }));
+      const server = await appWith(subscribeWhatsAppSetupApp);
+      const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(response.statusCode).toBe(400);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toMatchObject({ error: refusal });
+    });
+
+    it("records a subscribe Meta may have applied as attempted, and a refusal as a clean failure", async () => {
+      const unknown =
+        "GoatCitadel couldn't tell whether Meta subscribed the app. Choose Let this app receive your number's messages again; repeating it is safe.";
+      const refusal = "Meta refused the request.";
+      for (const [error, committed] of [
+        [Object.assign(new ValidationError({ message: unknown }), { mutationCommitted: true }), true],
+        [new ValidationError({ message: refusal }), false],
+      ] as const) {
+        const server = await appWith(vi.fn().mockRejectedValue(error));
+        let seen: unknown;
+        server.addHook("onResponse", async (request) => {
+          seen = (request as { mutationCommitted?: boolean }).mutationCommitted === true;
+        });
+        const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({ error: error.message });
+        expect(seen).toBe(committed);
+        await server.close();
+      }
+    });
+
+    it("answers anything unexpected with a generic 500 that quotes nothing", async () => {
+      const subscribeWhatsAppSetupApp = vi
+        .fn()
+        .mockRejectedValue(new Error("POST /102290129340398/subscribed_apps Authorization: Bearer EAAG-access"));
+      const server = await appWith(subscribeWhatsAppSetupApp);
+      const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(response.statusCode).toBe(500);
+      expect(response.body).not.toContain("EAAG-access");
+      expect(response.body).not.toContain("subscribed_apps");
+    });
+
+    it("allows 20 subscriptions a minute, then answers 429", async () => {
+      const subscribeWhatsAppSetupApp = vi.fn(async () => ({ appSubscribed: true }));
+      const server = await appWith(subscribeWhatsAppSetupApp, { rateLimited: true });
+      for (let index = 0; index < 20; index += 1) {
+        const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+        expect(response.statusCode).toBe(200);
+      }
+      const limited = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+      expect(limited.statusCode).toBe(429);
+      expect(subscribeWhatsAppSetupApp).toHaveBeenCalledTimes(20);
+    });
+  });
+
+  it("puts both WhatsApp setup routes in the operator access class", async () => {
+    app = Fastify();
+    installRouteAccessTracking(app);
+    decorateIntegrationServices(app, { checkWhatsAppSetup: vi.fn(), subscribeWhatsAppSetupApp: vi.fn() });
+    await app.register(integrationsRoutes);
+    for (const url of ["/api/v1/channels/whatsapp/setup-check", "/api/v1/channels/whatsapp/setup-subscribe"]) {
+      expect(app.routeAccessManifest.filter((entry) => entry.url === url)).toEqual([
+        { method: "POST", url, accessClass: "operator", classificationSource: "policy", tracked: true },
+      ]);
+    }
   });
 });

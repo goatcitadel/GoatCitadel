@@ -99,7 +99,7 @@ function TokenChangeSteps({
     <div className="space-y-3">
       {botChange && !saved ? <Warning>{botChange}</Warning> : null}
       <TurnOnStep
-        changes={[KEY_CHANGE_TEST_MESSAGE, ...hosts.missing.map(hostChange)]}
+        changes={[channel.testMessage ?? KEY_CHANGE_TEST_MESSAGE, ...hosts.missing.map(hostChange)]}
         turnOn={turnOn}
         wording={channel.wording}
         onTurnOn={() => {
@@ -154,9 +154,9 @@ function TokenChangeSteps({
 }
 
 /**
- * Changing a Discord or Slack channel's tokens from its page in Chat: paste the new token (Slack's two), have them
- * checked, then save them. Saving is the same step as turning a channel on (a test message, then the change, approved in
- * place), with the words of changing a key. A channel that is not Discord or Slack is changed in Settings.
+ * Changing a Discord, Slack or WhatsApp channel's token from its page in Chat: paste the new token (Slack's two), have
+ * them checked, then save them. Saving is the same step as turning a channel on (a test message, then the change,
+ * approved in place), with the words of changing a key. Any other channel is changed in Settings.
  */
 export function ChannelTokenChange({
   connection,

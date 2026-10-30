@@ -299,6 +299,16 @@ describe("ChannelPage", () => {
   it.each([
     ["discord", "Discord", { runtimeMode: "gateway" }],
     ["slack", "Slack", { receiveMode: "socket" }],
+    [
+      "whatsapp",
+      "WhatsApp",
+      {
+        phoneNumberId: "106540352242922",
+        businessAccountId: "102290129340398",
+        appId: "670843887433847",
+        appSecret: "[REDACTED]",
+      },
+    ],
   ])("changes %s's key here, in Chat, on its own page, when it uses a bot", async (key, label, config) => {
     load({
       connection: connection({ catalogId: `channel.${key}`, key, label, config }),
@@ -317,6 +327,20 @@ describe("ChannelPage", () => {
     load({
       connection: connection({ catalogId: `channel.${key}`, key, label: key, config }),
       overview: overviewOf(channel({ channelKey: key, label: key })),
+    });
+    await mount();
+    expect(keyLinks()).toEqual(["/settings/connections#channels"]);
+  });
+
+  it("keeps the key of a send-only WhatsApp connection in Settings: Chat's page has no saved App ID or secret to check the new token with", async () => {
+    load({
+      connection: connection({
+        catalogId: "channel.whatsapp",
+        key: "whatsapp",
+        label: "WhatsApp",
+        config: { phoneNumberId: "106540352242922", accessToken: "[REDACTED]" },
+      }),
+      overview: overviewOf(channel({ channelKey: "whatsapp", label: "WhatsApp" })),
     });
     await mount();
     expect(keyLinks()).toEqual(["/settings/connections#channels"]);

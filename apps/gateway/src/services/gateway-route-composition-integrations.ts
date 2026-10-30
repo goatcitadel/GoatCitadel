@@ -63,6 +63,7 @@ import * as channelSetupService from "./channel-setup-service.js";
 import { composeChannelSetupHost } from "./channel-setup-host-composition.js";
 import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import { createConnectionSecretReferenceResolver } from "./channel-secret-resolution.js";
+import { createWhatsAppSetupListener } from "./whatsapp-setup-listener.js";
 import * as connectorDiagnosticsHelpers from "./connector-diagnostics-helpers.js";
 import {
   createExternalSideEffectReplayRecords,
@@ -95,6 +96,8 @@ export function composeIntegrationChannelRouteDependencies(
   });
   const notificationRouting = createNotificationRoutingServiceForGateway(gateway);
   const channelSetupDeps = createChannelSetupHostForGateway(gateway, integrationDiagnostics, integrationChannel);
+  // The one listener for WhatsApp setup drafts made on the Messaging page; the webhook port answers Meta through it.
+  const whatsAppSetupListener = createWhatsAppSetupListener(channelSetupDeps);
   const channelOAuth = createChannelOAuthStagingService(gateway, channelSetupDeps);
   const channelSetup = createChannelSetupRoutePort({
     createChannelSetupDraft: (input) => channelSetupService.createChannelSetupDraft(channelSetupDeps, input),
@@ -138,6 +141,9 @@ export function composeIntegrationChannelRouteDependencies(
       channelSetupService.discoverChannelSetupTelegramTargets(channelSetupDeps, input),
     checkDiscordSetup: (input) => channelSetupService.checkDiscordSetup(channelSetupDeps, input),
     checkSlackSetup: (input) => channelSetupService.checkSlackSetup(channelSetupDeps, input),
+    checkWhatsAppSetup: (input) =>
+      channelSetupService.checkWhatsAppSetup(channelSetupDeps, whatsAppSetupListener, input),
+    subscribeWhatsAppSetupApp: (input) => channelSetupService.subscribeWhatsAppSetupApp(channelSetupDeps, input),
     acknowledgeChannelSetupTest: (draftId, input, actorId) =>
       channelSetupService.acknowledgeChannelSetupTest(channelSetupDeps, draftId, input, actorId),
     getChannelSetupJourney: (connectionId) =>
@@ -323,12 +329,15 @@ export function composeIntegrationChannelRouteDependencies(
   const integrationWebhooks = createIntegrationWebhookRoutePort({
     acceptInboundChannelEvent: (input) => gateway.acceptInboundChannelEvent(input),
     acceptInboundChannelEvents: (inputs) => gateway.acceptInboundChannelEvents(inputs),
+    answerWhatsAppSetupCheck: (draftId, query) => whatsAppSetupListener.answerCheck(draftId, query),
     awaitInboundChannelCommandResult: (eventId) => gateway.awaitInboundChannelCommandResult(eventId),
     findRemoteActionTokenId: (token) => gateway.findRemoteActionTokenId(token),
     getIntegrationConnection: (connectionId) => integrationChannel.getIntegrationConnection(connectionId),
     cancelLatestActiveChatTurnForSession: (sessionId, cancelledBy) =>
       gateway.cancelLatestActiveChatTurnForSession(sessionId, cancelledBy),
     hasRunningTurn: (sessionId) => gateway.hasRunningTurn(sessionId),
+    hearWhatsAppSetupDelivery: (draftId, rawBody, signature) =>
+      whatsAppSetupListener.hearDelivery(draftId, rawBody, signature),
     ingestChannelMessage: (channel, idempotencyKey, input) =>
       gateway.ingestChannelMessage(channel, idempotencyKey, input),
     isVoiceInboundEnabled: async () => (await gateway.isFeatureEnabled("channelVoiceInboundV1Enabled")) === true,
@@ -615,11 +624,11 @@ function createIntegrationChannelPortForGateway(
 ): IntegrationChannelServicePort {
   const storage = gateway.storage;
   const discordRuntimeService = gateway.discordRuntimeService;
-  const secretStore = gateway.secretStore;
+  const channelSecretStore = gateway.channelSecretStore;
   const streams = getChannelStreamRuntime(gateway);
   return {
     storage,
-    ...(secretStore ? { channelSecrets: new ChannelSecretCustodyService(secretStore) } : {}),
+    ...(channelSecretStore ? { channelSecrets: new ChannelSecretCustodyService(channelSecretStore) } : {}),
     publishRealtime: async (eventType, source, payload, options) => {
       await gateway.publishRealtime(eventType, source, payload, options);
     },

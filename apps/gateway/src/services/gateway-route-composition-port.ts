@@ -134,6 +134,8 @@ export interface GatewayRouteCompositionPort {
   readonly researchService: ResearchService;
   readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   readonly secretStore?: SecretStoreService;
+  /** The key store for channel credential custody only, present only while it can be used. */
+  readonly channelSecretStore?: SecretStoreService;
   readonly deviceTokenVault: DeviceTokenVault;
   readonly storage: Storage;
   readonly taskLifecycleService: TaskLifecycleService;
@@ -373,6 +375,12 @@ export function createGatewayRouteCompositionPort(
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
+    // Channel custody only, and only while the key store can be used: without an OS keychain channel setup keeps no
+    // custody and says so. Read when composed, never at construction. The port's generic `secretStore` stays unset.
+    get channelSecretStore() {
+      const store = gateway.secretStore;
+      return store?.isAvailable() ? store : undefined;
+    },
     deviceTokenVault: gateway.deviceTokenVault,
     steerService: gateway.steerService,
     storage: gateway.storage,

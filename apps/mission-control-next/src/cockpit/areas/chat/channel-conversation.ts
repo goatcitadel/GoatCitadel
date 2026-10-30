@@ -13,6 +13,8 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 export interface ChannelConversationContext {
   sessionId: string;
   connectionId: string;
+  /** The channel's kind (`telegram`, `whatsapp`), which decides rules that belong to the provider. */
+  channelKey: string;
   channelLabel: string;
   title: string;
   kind: "direct" | "group";
@@ -38,6 +40,7 @@ export function describeChannelConversation(
     return {
       sessionId,
       connectionId: channel.connectionId,
+      channelKey: channel.channelKey,
       channelLabel: channel.label,
       title: conversation.title,
       kind: conversation.kind,
@@ -120,6 +123,20 @@ export function findNewChannelMessages(
   );
   const first = fresh[0];
   return first ? { turnId: first.turnId, count: fresh.length } : undefined;
+}
+
+/**
+ * When the person last wrote through the channel: the newest message that arrived through it, never a reply or the
+ * operator's own desk message. A provider's reply window (WhatsApp's 24 hours) runs from this moment. Nothing when
+ * these turns hold no message from them.
+ */
+export function latestChannelTurnAt(turns: readonly ChatThreadTurnRecord[]): string | undefined {
+  let newest: string | undefined;
+  for (const turn of turns) {
+    const { sourceAuthority, timestamp } = turn.userMessage;
+    if (sourceAuthority === "external_channel" && isNewerThan(timestamp, newest)) newest = timestamp;
+  }
+  return newest;
 }
 
 /** The divider's words; the count reads like every other count in the cockpit. */

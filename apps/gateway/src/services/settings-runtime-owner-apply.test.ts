@@ -3,6 +3,7 @@ import fsPromises from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { PUBLIC_WEB_ADDRESS_NOT_HTTPS } from "@goatcitadel/contracts";
 import { GatewayService } from "./gateway-service.js";
 import { LlmService } from "./llm-service.js";
 import { buildSettingsCandidate, type SettingsConfigCandidate } from "./settings-auth-service.js";
@@ -282,6 +283,100 @@ describe("Gateway settings owner transaction", () => {
       expect(spy).not.toHaveBeenCalled();
     }
   });
+
+  it("builds a candidate with the public web address, or without it, and leaves the live config alone", async () => {
+    const unified = JSON.parse(
+      fs.readFileSync(path.resolve(process.cwd(), "../../config/goatcitadel.example.json"), "utf8"),
+    ) as Record<string, any>;
+    const config = {
+      rootDir: path.resolve(process.cwd(), "../.."),
+      assistant: { ...structuredClone(unified.assistant), publicWebAddress: "https://live.example.com" },
+      toolPolicy: structuredClone(unified.toolPolicy),
+      budgets: structuredClone(unified.budgets),
+      llm: structuredClone(unified.llm),
+    };
+    const before = structuredClone(config);
+    const llmService = new LlmService(
+      config.llm,
+      {},
+      { networkAllowlist: config.toolPolicy.sandbox.networkAllowlist, enforceNetworkAllowlist: true },
+    );
+    const features = structuredClone(config.assistant.features);
+    const deps = {
+      config: config as never,
+      llmService,
+      meshService: { updateOptions: vi.fn() },
+      npuSidecar: {
+        getStatus: () => ({ desiredState: "stopped", processState: "stopped" }) as never,
+        updateConfig: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      },
+      llamaCppRuntime: {
+        getStatus: () => ({ desiredState: "stopped", processState: "stopped" }) as never,
+        updateConfig: vi.fn(),
+        start: vi.fn(),
+        stop: vi.fn(),
+      },
+      readFeatureFlags: async () => structuredClone(features),
+      readSettingsRevision: () => 9,
+      updateFeatureFlags: vi.fn(),
+      assertDeploymentProfileUpdate: () => undefined,
+      assertFirecrawlRuntimeUpdate: () => undefined,
+    };
+
+    const set = await buildSettingsCandidate(deps, {
+      expectedRevision: 9,
+      publicWebAddress: "https://Next.example.com/",
+    });
+    expect(set.config.assistant.publicWebAddress).toBe("https://next.example.com");
+    expect(set.settings.publicWebAddress).toBe("https://next.example.com");
+
+    const cleared = await buildSettingsCandidate(deps, { expectedRevision: 9, publicWebAddress: null });
+    expect(Object.hasOwn(cleared.config.assistant, "publicWebAddress")).toBe(false);
+    expect(cleared.settings).not.toHaveProperty("publicWebAddress");
+
+    // A refusal is the owner's own sentence, not a message wrapped around it.
+    await expect(
+      buildSettingsCandidate(deps, { expectedRevision: 9, publicWebAddress: "http://example.com" }),
+    ).rejects.toMatchObject({ name: "ValidationError", message: PUBLIC_WEB_ADDRESS_NOT_HTTPS, httpStatus: 400 });
+
+    expect(config).toEqual(before);
+  });
+
+  it("saves the public web address with the settings, and drops it from the saved config when cleared", async () => {
+    const { runtime, generation, root } = await buildAutonomySettingsGatewayHarness();
+    const savedAssistant = async () =>
+      (
+        JSON.parse(await fsPromises.readFile(path.join(root, "config", "goatcitadel.json"), "utf8")) as {
+          assistant: Record<string, unknown>;
+        }
+      ).assistant;
+    expect(await runtime.getSettings()).not.toHaveProperty("publicWebAddress");
+
+    await runtime.updateSettings({ expectedRevision: 1, publicWebAddress: "https://Example.com/goat/" });
+
+    expect((await runtime.getSettings()).publicWebAddress).toBe("https://example.com/goat");
+    expect(runtime.config.assistant.publicWebAddress).toBe("https://example.com/goat");
+    expect(generation.getActivePayload().assistant).toMatchObject({ publicWebAddress: "https://example.com/goat" });
+    expect(await savedAssistant()).toMatchObject({ publicWebAddress: "https://example.com/goat" });
+
+    // A refused address changes nothing: not the setting, not the saved file, not the revision.
+    await expect(
+      runtime.updateSettings({ expectedRevision: 2, publicWebAddress: "http://example.com" }),
+    ).rejects.toMatchObject({
+      message: PUBLIC_WEB_ADDRESS_NOT_HTTPS,
+    });
+    expect(runtime.config.assistant.publicWebAddress).toBe("https://example.com/goat");
+    expect(await savedAssistant()).toMatchObject({ publicWebAddress: "https://example.com/goat" });
+
+    await runtime.updateSettings({ expectedRevision: 2, publicWebAddress: null });
+
+    expect(await runtime.getSettings()).not.toHaveProperty("publicWebAddress");
+    expect(Object.hasOwn(runtime.config.assistant, "publicWebAddress")).toBe(false);
+    expect(await savedAssistant()).not.toHaveProperty("publicWebAddress");
+    expect(generation.getActivePayload().assistant).not.toHaveProperty("publicWebAddress");
+  }, 30_000);
 
   it("does not enter runtime owners until the durable commit decision exists", async () => {
     const root = await fsPromises.mkdtemp(path.join(os.tmpdir(), "goatcitadel-settings-owner-marker-"));

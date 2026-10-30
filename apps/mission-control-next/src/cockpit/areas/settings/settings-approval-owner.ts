@@ -15,7 +15,8 @@ export type SettingsApprovalOwner =
   | "chat-thinking-stream"
   | "settings-approval-skip"
   | "firecrawl"
-  | "search-engine-order";
+  | "search-engine-order"
+  | "public-web-address";
 export type SettingsApprovalReceipt = Pick<ChangePlanRecord, "planId" | "revision" | "status" | "requiredAction">;
 
 function identifier(value: unknown): value is string {
@@ -88,6 +89,7 @@ export function settingsApprovalOwnerBinding(
       "budget-mode",
       "firecrawl",
       "search-engine-order",
+      "public-web-address",
     ].includes(owner)
   ) {
     const operation =
@@ -103,7 +105,9 @@ export function settingsApprovalOwnerBinding(
                 ? "web_firecrawl_configuration"
                 : owner === "search-engine-order"
                   ? "web_search_configuration"
-                  : "llama_cpp_setup";
+                  : owner === "public-web-address"
+                    ? "public_web_address_configuration"
+                    : "llama_cpp_setup";
     expectedWorkspace = owner === "llama-setup" ? workspaceId : "default";
     matches =
       plan.kind === "runtime_configuration" &&
