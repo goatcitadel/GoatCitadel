@@ -113,13 +113,25 @@ describe("ChannelPicker", () => {
     expect(tile("Telegram").textContent).not.toContain("public web address");
   });
 
-  it("opens Telegram's, Slack's and WhatsApp's own setup pages and sends the rest to Settings", async () => {
+  it("opens Telegram's, Slack's and WhatsApp's own setup pages and sends the rest to Advanced channel setup", async () => {
     api.fetchChannelSetupDefinitions.mockResolvedValue({ items: DEFINITIONS });
     await mount();
     expect(pathOf(tile("Telegram"))).toMatch(/^\/chat\/messaging\/add\/telegram\?/);
     expect(pathOf(tile("Slack"))).toMatch(/^\/chat\/messaging\/add\/slack\?/);
     expect(pathOf(tile("WhatsApp"))).toMatch(/^\/chat\/messaging\/add\/whatsapp\?/);
-    expect(pathOf(tile("Matrix"))).toBe("/settings/connections?channel=channel.matrix&shell=cockpit#channels");
+    expect(pathOf(tile("Matrix"))).toBe("/chat/messaging/advanced?channel=channel.matrix&shell=cockpit");
+  });
+
+  it("links Advanced channel setup, where every channel's full settings are, without choosing a channel", async () => {
+    api.fetchChannelSetupDefinitions.mockResolvedValue({ items: DEFINITIONS });
+    await mount();
+    const advanced = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (link) => link.textContent === "Advanced channel setup",
+    );
+    expect(advanced?.closest("p")?.textContent).toBe(
+      "Every channel's full settings, and the public web address, are in Advanced channel setup.",
+    );
+    expect(pathOf(advanced!)).toBe("/chat/messaging/advanced?shell=cockpit");
   });
 
   it("reads the definitions once and keeps them for the session", async () => {

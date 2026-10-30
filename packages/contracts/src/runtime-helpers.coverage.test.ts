@@ -121,6 +121,9 @@ describe("chat contract helpers", () => {
       interrupted_by_restart: "retry",
       skill_security_blocked: "review_skill_security",
       guidance_security_blocked: "review_workspace_guidance",
+      provider_rate_limited: "wait_and_retry",
+      context_too_long: "shorten_conversation",
+      provider_billing: "check_provider_plan",
       unknown: "retry",
     };
 
@@ -140,6 +143,9 @@ describe("chat contract helpers", () => {
       "check_gateway_connection",
       "review_skill_security",
       "review_workspace_guidance",
+      "wait_and_retry",
+      "shorten_conversation",
+      "check_provider_plan",
     ];
     for (const action of actions) {
       expect(getChatTurnRecoveryActionLabel(action)).toBeTypeOf("string");

@@ -11,12 +11,16 @@ const LazyChannelPicker = lazy(async () => ({
 const LazyChannelSetupView = lazy(async () => ({
   default: (await import("./channel-setup/ChannelSetupView")).ChannelSetupView,
 }));
+const LazyChannelAdvancedSetup = lazy(async () => ({
+  default: (await import("./channel-setup/ChannelAdvancedSetup")).ChannelAdvancedSetup,
+}));
 
 /** What names the view, so a view that fails resets when the address changes to another one. */
 function viewKey(view: MessagingView): string {
   switch (view.kind) {
     case "picker":
-      return "picker";
+    case "advanced":
+      return view.kind;
     case "setup":
       // Another setup of the same channel is another page: what one showed must not carry over to the next.
       return `setup:${view.channelKey}:${view.draftId ?? ""}`;
@@ -36,6 +40,8 @@ function MessagingViewHost({ view }: { view: MessagingView }) {
             <LazyChannelPage connectionId={view.connectionId} workspaceId={workspaceId} />
           ) : view.kind === "picker" ? (
             <LazyChannelPicker workspaceId={workspaceId} />
+          ) : view.kind === "advanced" ? (
+            <LazyChannelAdvancedSetup />
           ) : (
             <LazyChannelSetupView view={view} workspaceId={workspaceId} />
           )}
@@ -47,7 +53,7 @@ function MessagingViewHost({ view }: { view: MessagingView }) {
 
 /**
  * Chat's main column: the open conversation, or a Messaging view in its place (a channel's page, the add-channel
- * picker, a channel's setup). The conversation keeps its draft, scroll and selection, but is suspended while a view
+ * picker, a channel's setup, Advanced channel setup). The conversation keeps its draft, scroll and selection, but is suspended while a view
  * shows, so it neither marks messages read nor claims the inspector for something nobody is looking at. The
  * conversation list beside it stays. Everything in the column knows whether the open conversation is a channel
  * conversation (`ChannelConversationScope`).

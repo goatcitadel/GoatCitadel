@@ -93,7 +93,7 @@ export async function runCockpitAddonsProof({ context, browser, stack, citadelId
             await route.abort("failed");
           });
           page = await browserContext.newPage();
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#addons"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/advanced?shell=cockpit#addons"), {
             waitUntil: "domcontentloaded",
           });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
@@ -150,7 +150,7 @@ export async function runCockpitAddonsProof({ context, browser, stack, citadelId
             .click();
           await page
             .getByRole("navigation", { name: "Settings pages", exact: true })
-            .getByRole("link", { name: "Connections", exact: true })
+            .getByRole("link", { name: "Advanced", exact: true })
             .click();
           await page.getByRole("tab", { name: "Add-ons & packs", exact: true }).click();
           await panel.getByRole("alert").filter({ hasText: "outcome is uncertain" }).waitFor();

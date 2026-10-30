@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { publicWebAddressFor } from "@goatcitadel/contracts";
 import { useMissingHosts } from "../../../../features/native-routes/settings/channel-hosts";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
-import { channelPageHref, channelPickerHref } from "../../../app/routes";
+import { channelAdvancedSetupHref, channelPageHref, channelPickerHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
@@ -12,7 +12,6 @@ import {
   usePublicWebAddress,
   usePublicWebAddressSettings,
 } from "../../settings/PublicWebAddressField";
-import { settingsChannelSetupHref } from "./channel-picker-model";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
 import { TurnOnStep, turnOnStatus } from "./TurnOnStep";
@@ -335,9 +334,9 @@ export function WhatsAppSetupPage({
             Start over
           </Button>
         )}
-        {/* Settings keeps WhatsApp's own steps, which also set it up. */}
-        <NativeOwnerLink href={settingsChannelSetupHref(WHATSAPP_CATALOG_ID)} scope={workspaceId} className="text-sm">
-          More options in Settings
+        {/* Advanced channel setup keeps WhatsApp's own steps, which also set it up. */}
+        <NativeOwnerLink href={channelAdvancedSetupHref(WHATSAPP_CATALOG_ID)} scope={workspaceId} className="text-sm">
+          More options in Advanced channel setup
         </NativeOwnerLink>
       </div>
     </SetupFrame>

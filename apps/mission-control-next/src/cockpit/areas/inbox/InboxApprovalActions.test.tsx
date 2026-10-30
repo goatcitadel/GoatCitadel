@@ -710,13 +710,15 @@ it("explains an expiry sweep on a settled record instead of presenting it as an 
   expect(container.querySelector("button")).toBeNull();
 });
 
-it("names the Settings page for an MCP server question instead of a missing control (IN-04)", () => {
+it("names the page for an MCP server question instead of a missing control (IN-04)", () => {
   renderActions({
     ...approval,
     mcpElicitation: { elicitationId: "elicitation-a" } as ApprovalRequest["mcpElicitation"],
   });
   const link = [...container.querySelectorAll("a")].find((entry) => entry.textContent === "Open MCP servers");
-  expect(link?.getAttribute("href")).toContain("/settings/mcp");
+  expect(link?.getAttribute("href")).toContain("/capabilities/connectors/advanced");
+  expect(link?.getAttribute("href")).toContain("#mcp-servers");
+  expect(link?.closest("p")?.textContent).toContain("listed in Capabilities › Connectors › Advanced setup.");
   expect(container.textContent).not.toContain("Inspect persisted approval");
   expect(container.textContent).not.toContain("in Approvals");
   expect(api.resolveApproval).not.toHaveBeenCalled();

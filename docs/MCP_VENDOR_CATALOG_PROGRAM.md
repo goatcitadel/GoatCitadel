@@ -39,7 +39,7 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 
 ### B. OAuth callback hand-off (Gateway)
 
-`GET /api/v1/mcp/oauth/callback` (public, rate-limited, silent request logging) exchanges nothing. When the sign-in was started from an allowed Mission Control origin, it redirects there (`/settings/connections#mcp-oauth-return&state=…&code=…`) with the result in the URL fragment only. That tab clears the fragment and forwards the result over a same-origin `BroadcastChannel` to the tab holding the in-memory request, which pre-fills the code and state. In Settings, the operator still completes the exchange through the existing reviewed "Review authorization completion" step; a Capabilities install or Connect completes it on its own when the returned state matches the sign-in it started. Unknown, expired or malformed callbacks render a page and never redirect.
+`GET /api/v1/mcp/oauth/callback` (public, rate-limited, silent request logging) exchanges nothing. When the sign-in was started from an allowed Mission Control origin, it redirects there (`/capabilities/connectors/advanced#mcp-oauth-return&state=…&code=…`; an older `/settings/connections#mcp-oauth-return&…` address redirects there with its fragment) with the result in the URL fragment only. That tab clears the fragment and forwards the result over a same-origin `BroadcastChannel` to the tab holding the in-memory request, which pre-fills the code and state. In Advanced setup's MCP servers section, the operator still completes the exchange through the existing reviewed "Review authorization completion" step; a Capabilities install or Connect completes it on its own when the returned state matches the sign-in it started. Unknown, expired or malformed callbacks render a page and never redirect.
 
 ### C. Vendor templates (Gateway)
 
@@ -50,7 +50,7 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 
 ### D. Cockpit configuration and management (Mission Control Next)
 
-- A searchable vendor catalog in Settings › Connections › MCP servers › Register, with category filter, sign-in type, required hosts, provenance and risk notes on each card.
+- A searchable vendor catalog in Capabilities › Connectors › Advanced setup › MCP servers › Register, with category filter, sign-in type, required hosts, provenance and risk notes on each card.
 - A "Needs network access" notice with an explicit operator action that adds the named hosts to the network allowlist, following the Firecrawl settings precedent. The change goes through the governed settings patch, so it may wait for approval in Inbox.
 - The connect flow picks up the callback fragment, pre-fills the code and state, and leaves the reviewed completion step in place. Readiness (`needs_auth`, `ready`, `expired`) stays visible on each server.
 
@@ -74,7 +74,7 @@ Everything stays under the existing Gateway governance: deny-wins policy, the ne
 
 - Dynamic client registration runs through the shared external side-effect ledger (`mcp_oauth_client_registration`), recorded completed, failed before sending, or unknown after sending, with public identifiers only. A start that stops after registration reached the vendor says the provider may hold an unused client instead of "nothing changed"; the client itself is not cleaned up automatically.
 - A shipped pack's snapshot records its absolute directory as `sourceRef`, so moving the installation changes the pack's source identity.
-- The provider return lands on Cockpit Settings › Connections, which opens the MCP section so it can hand the result back; the Classic shell does not consume it.
+- The provider return lands on Cockpit Capabilities › Connectors › Advanced setup, which opens the MCP section so it can hand the result back; the Classic shell does not consume it.
 - "Allow host" adds the MCP server's own host. The sign-in provider may use other hosts, which the error names when they are blocked.
 - The default redirect is `http://127.0.0.1:8787/api/v1/mcp/oauth/callback`; a Gateway on another port needs `oauth.redirectUri`.
 

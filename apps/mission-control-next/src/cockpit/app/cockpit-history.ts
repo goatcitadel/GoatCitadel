@@ -1,6 +1,7 @@
 import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 import { SHELL_HISTORY_POSITION, SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
-import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
+import { buildConnectorSetupDestinations, buildSettingsDestinations } from "../areas/settings/settings-destinations";
+import { CONNECTOR_SETUP_PATH } from "./routes";
 import {
   COCKPIT_LOCATION_EVENT,
   afterCockpitSheetsClose,
@@ -50,7 +51,10 @@ export function cockpitHref(href: string): string | null {
   }
 }
 
-/** Settings force-mounts its sections. Only a recognized tab on the same actual page stays mounted. */
+/**
+ * Settings and Capabilities › Connectors › Advanced setup force-mount their sections. Only a recognized tab on the same
+ * actual page stays mounted.
+ */
 export function retainsSettingsPage(from: string, to: string): boolean {
   const sourceHref = cockpitHref(from),
     targetHref = cockpitHref(to);
@@ -59,7 +63,10 @@ export function retainsSettingsPage(from: string, to: string): boolean {
   const target = new URL(targetHref, "http://cockpit.invalid");
   if (source.pathname !== target.pathname || source.search !== target.search || source.hash === target.hash)
     return false;
-  const page = buildSettingsDestinations().find((candidate) => source.pathname === `/settings/${candidate.id}`);
+  const page =
+    source.pathname === CONNECTOR_SETUP_PATH
+      ? { entries: buildConnectorSetupDestinations() }
+      : buildSettingsDestinations().find((candidate) => source.pathname === `/settings/${candidate.id}`);
   return Boolean(
     page &&
     page.entries.some((entry) => {

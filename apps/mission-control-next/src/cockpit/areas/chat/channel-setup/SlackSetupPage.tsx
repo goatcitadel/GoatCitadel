@@ -1,11 +1,10 @@
 import { useEffect, useRef, useState } from "react";
 import { HOSTS_UNKNOWN, useMissingHosts } from "../../../../features/native-routes/settings/channel-hosts";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
-import { channelPageHref, channelPickerHref } from "../../../app/routes";
+import { channelAdvancedSetupHref, channelPageHref, channelPickerHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
-import { settingsChannelSetupHref } from "./channel-picker-model";
 import { CODE_EXPIRED, WAITING_FOR_HI } from "./SayHiStep";
 import { SetupFrame } from "./SetupFrame";
 import { SetupSteps, type SetupStepView } from "./SetupSteps";
@@ -279,9 +278,9 @@ export function SlackSetupPage({
             Start over
           </Button>
         )}
-        {/* Settings keeps the other ways to connect Slack, such as a webhook with no app or the OAuth sign-in. */}
-        <NativeOwnerLink href={settingsChannelSetupHref(SLACK_CATALOG_ID)} scope={workspaceId} className="text-sm">
-          More options in Settings
+        {/* Advanced channel setup keeps Slack's other ways: a webhook with no app, or the OAuth sign-in. */}
+        <NativeOwnerLink href={channelAdvancedSetupHref(SLACK_CATALOG_ID)} scope={workspaceId} className="text-sm">
+          More options in Advanced channel setup
         </NativeOwnerLink>
       </div>
     </SetupFrame>

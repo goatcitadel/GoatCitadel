@@ -375,16 +375,16 @@ describe("ChannelWebhookAddress with the public web address", () => {
     expect(notes()).toContain(NOTE);
     expect(notes()).not.toContain(NOTE_WITH_ADDRESS);
     const target = new URL(setAddressLink()!.href);
-    expect(target.pathname).toBe("/settings/connections");
-    expect(target.hash).toBe("#channels");
+    expect(target.pathname).toBe("/chat/messaging/advanced");
+    expect(target.hash).toBe("#public-web-address");
   });
 
-  it("links to the Cockpit's Settings from the Classic guide too", async () => {
+  it("links to the Cockpit's Advanced channel setup from the Classic guide too", async () => {
     await show(<ChannelWebhookAddress path={WHATSAPP_PATH} />);
 
     const target = new URL(setAddressLink()!.href);
-    expect(target.pathname).toBe("/settings/connections");
-    expect(target.hash).toBe("#channels");
+    expect(target.pathname).toBe("/chat/messaging/advanced");
+    expect(target.hash).toBe("#public-web-address");
     expect(target.searchParams.get("shell")).toBe("cockpit");
   });
 

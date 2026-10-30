@@ -2,8 +2,11 @@ import type { FastifyInstance } from "fastify";
 import { createOAuthCallbackHandoff } from "./oauth-callback-handoff.js";
 
 export const MCP_OAUTH_CALLBACK_PATH = "/api/v1/mcp/oauth/callback";
-/** Mission Control route that receives the hand-off; the code travels only in the URL fragment. */
-export const MCP_OAUTH_RETURN_ROUTE = "/settings/connections";
+/**
+ * Mission Control route that receives the hand-off (Capabilities › Connectors › Advanced setup, which opens MCP
+ * servers); the code travels only in the URL fragment.
+ */
+export const MCP_OAUTH_RETURN_ROUTE = "/capabilities/connectors/advanced";
 export const MCP_OAUTH_RETURN_FRAGMENT = "mcp-oauth-return";
 
 const handoff = createOAuthCallbackHandoff({

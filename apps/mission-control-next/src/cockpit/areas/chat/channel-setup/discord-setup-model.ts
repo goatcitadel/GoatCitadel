@@ -58,7 +58,7 @@ export function discordInServers(servers: readonly ChannelSetupPerson[]): string
  * setup cannot go further here.
  */
 export const DISCORD_NO_MAKERS =
-  "Discord didn't say who made this bot, so GoatCitadel can't tell who to let in. Use More options in Settings instead.";
+  "Discord didn't say who made this bot, so GoatCitadel can't tell who to let in. Use More options in Advanced channel setup instead.";
 
 export const DISCORD_TEAM_LEGEND = "Your bot belongs to a team. Who can message it?";
 export const DISCORD_SERVER_LEGEND = "Which server?";

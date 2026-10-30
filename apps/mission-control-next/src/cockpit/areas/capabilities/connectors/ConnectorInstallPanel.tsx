@@ -14,7 +14,7 @@ import type { ConnectorInstall } from "./use-connector-install";
 const ASKS_FIRST_LINE =
   "Reads run on their own. Anything that creates or changes something asks you first. You can change this later.";
 
-/** Templates that are set up in Settings instead: no path here takes their key or their sign-in setup yet. */
+/** Templates that are set up in Advanced setup instead: no path here takes their key or their sign-in setup yet. */
 const SET_UP_ELSEWHERE: Readonly<Partial<Record<CapabilityConnectorReason, string>>> = {
   needs_api_key: "Needs an API key.",
   missing_sign_in_setup: "Sign-in isn't set up for this app yet.",
@@ -25,7 +25,7 @@ const SET_UP_ELSEWHERE: Readonly<Partial<Record<CapabilityConnectorReason, strin
  * notes), how it connects and the hosts the install allows, what will ask first, and the one button that installs it
  * through a reviewed change, then signs in, switches it on and connects. When Chat can't use connectors because MCP in
  * Chat is off, a pre-ticked box turns that on with the install. An app that needs an API key or a sign-in setup is sent
- * to Settings instead, and says nothing about what an install here would do.
+ * to Advanced setup instead, and says nothing about what an install here would do.
  */
 export function ConnectorInstallPanel({
   item,
@@ -97,7 +97,7 @@ export function ConnectorInstallPanel({
         <p className="text-sm text-fg-secondary">
           {elsewhere}{" "}
           <NativeOwnerLink scope={item.id} href={connectorSettingsHref(item)}>
-            Set up in Settings
+            Open Advanced setup
           </NativeOwnerLink>
         </p>
       ) : (
@@ -111,7 +111,7 @@ export function ConnectorInstallPanel({
       )}
 
       <NativeOwnerLink scope={item.id} href={connectorSettingsHref(item)} className="text-sm">
-        Advanced setup in Settings
+        Advanced setup
       </NativeOwnerLink>
 
       <TechnicalDetails>

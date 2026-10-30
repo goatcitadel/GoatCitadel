@@ -248,7 +248,7 @@ describe("whatsAppFailure", () => {
 
   it("says the page needs secure storage for GoatCitadel's one sentence about it, at any status", () => {
     expect(WHATSAPP_NO_KEY_STORE).toBe(
-      "This page stores your keys in this computer's secure storage, which isn't available here. Use WhatsApp's guide in Settings with environment variables instead.",
+      "This page stores your keys in this computer's secure storage, which isn't available here. Use WhatsApp's guide in Advanced channel setup with environment variables instead.",
     );
     expect(WHATSAPP_NO_KEY_STORE).toContain(WHATSAPP_NO_KEY_STORE_LINK);
     for (const status of [400, 422, 503]) {

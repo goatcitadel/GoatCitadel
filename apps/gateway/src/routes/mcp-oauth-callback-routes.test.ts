@@ -26,7 +26,7 @@ describe("MCP OAuth callback hand-off", () => {
     expect(response.statusCode).toBe(303);
     const location = new URL(response.headers.location as string);
     expect(location.origin).toBe("http://127.0.0.1:5173");
-    expect(location.pathname).toBe("/settings/connections");
+    expect(location.pathname).toBe("/capabilities/connectors/advanced");
     expect(location.search).toBe("");
     expect(location.hash).toBe("#mcp-oauth-return&state=state-1&code=abc%2F123");
     expect(response.headers["cache-control"]).toBe("no-store");

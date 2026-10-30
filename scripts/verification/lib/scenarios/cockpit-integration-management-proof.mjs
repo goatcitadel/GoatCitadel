@@ -46,7 +46,7 @@ export async function runCockpitIntegrationManagementProof({ context, browser, s
           if (["POST", "PATCH", "DELETE"].includes(request.method()))
             writes.push({ method: request.method(), path: new URL(request.url()).pathname });
         });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#integration-connections"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#integration-connections"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         await page.getByRole("button", { name: "Add and manage integrations", exact: true }).click();
         const management = page.getByRole("region", { name: "Integration management", exact: true });

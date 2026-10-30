@@ -1,5 +1,9 @@
 import { getRouteReleaseScope, RAIL_ITEMS, type ReleaseSurfaceStatus } from "../../../app/route-model";
-import { buildSettingsDestinations } from "./settings-destinations";
+import {
+  buildConnectorSetupDestinations,
+  buildSettingsDestinations,
+  type SettingsDestinationEntry,
+} from "./settings-destinations";
 
 export interface SettingsIndexEntry {
   section: string;
@@ -59,29 +63,33 @@ const CONTROL_TERMS: Record<string, string> = {
   runtime: "managed command path alias enabled auto start daemon voice transcription install runtime",
 };
 
+function indexEntry(entry: SettingsDestinationEntry): SettingsIndexEntry {
+  const item =
+    RAIL_ITEMS.settings.find((candidate) => candidate.section === entry.section) ??
+    RAIL_ITEMS.library.find((candidate) => candidate.section === entry.section);
+  return {
+    section: entry.section,
+    discoverable: entry.discoverable,
+    releaseStatus: entry.releaseStatus,
+    releaseNote: getRouteReleaseScope(item!).note,
+    anchor: entry.anchor,
+    tabLabel: entry.tabLabel,
+    completeNative: entry.completeNative,
+    label: entry.label,
+    description: entry.description,
+    href: entry.href,
+    searchTerms: CONTROL_TERMS[entry.section] ?? "",
+  };
+}
+
 /** A destination describes the Cockpit settings page and anchor that own one rail section. */
 export function buildSettingsIndex({ discovery = false }: { discovery?: boolean } = {}): SettingsIndexPage[] {
-  return buildSettingsDestinations({ discovery }).map((page) => ({
-    ...page,
-    entries: page.entries.map((entry) => {
-      const item =
-        RAIL_ITEMS.settings.find((candidate) => candidate.section === entry.section) ??
-        RAIL_ITEMS.library.find((candidate) => candidate.section === entry.section);
-      return {
-        section: entry.section,
-        discoverable: entry.discoverable,
-        releaseStatus: entry.releaseStatus,
-        releaseNote: getRouteReleaseScope(item!).note,
-        anchor: entry.anchor,
-        tabLabel: entry.tabLabel,
-        completeNative: entry.completeNative,
-        label: entry.label,
-        description: entry.description,
-        href: entry.href,
-        searchTerms: CONTROL_TERMS[entry.section] ?? "",
-      };
-    }),
-  }));
+  return buildSettingsDestinations({ discovery }).map((page) => ({ ...page, entries: page.entries.map(indexEntry) }));
+}
+
+/** Capabilities › Connectors › Advanced setup, as a page of section tabs like a Settings page. */
+export function buildConnectorSetupPage(): SettingsIndexPage {
+  return { id: "connector-setup", label: "Advanced setup", entries: buildConnectorSetupDestinations().map(indexEntry) };
 }
 
 export function searchSettingsPages(pages: SettingsIndexPage[], query: string): SettingsIndexPage[] {

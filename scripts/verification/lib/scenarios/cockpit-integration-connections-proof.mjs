@@ -74,7 +74,7 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
             writes.push({ method: request.method(), pathname, body: request.postDataJSON() });
           }
         });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#integration-connections"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#integration-connections"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         await page.waitForFunction((value) => document.documentElement.dataset.theme === value, theme);
         const panel = page.getByRole("region", { name: "Integration connections", exact: true });

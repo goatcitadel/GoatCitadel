@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
-import { channelKeyChangeHref } from "../../app/routes";
+import { channelAdvancedSetupHref, channelKeyChangeHref } from "../../app/routes";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -12,17 +12,16 @@ import { useChannelLifecycle } from "./use-channel-lifecycle";
 
 /**
  * A connection with a key page of its own in Chat changes its key there; every other connection's, such as a Discord
- * webhook or a Slack OAuth install, is still changed in Settings.
+ * webhook or a Slack OAuth install, is still changed in Advanced channel setup.
  */
 function keyChangeHref(connection: IntegrationConnection): string {
-  return hasChatKeyChangePage(connection)
-    ? channelKeyChangeHref(connection.connectionId)
-    : "/settings/connections#channels";
+  return hasChatKeyChangePage(connection) ? channelKeyChangeHref(connection.connectionId) : channelAdvancedSetupHref();
 }
 
 /**
  * Turn the channel off or on (reversible, so a plain button) or remove it (red, and asked about first), and the way to
- * a new key. Both write through the connection owners Settings uses; Settings keeps its own lifecycle controls.
+ * a new key. Both write through the connection owners Advanced channel setup uses, which keeps its own lifecycle
+ * controls.
  */
 export function ManageSection({
   connection,

@@ -1,11 +1,14 @@
 import { describe, expect, it } from "vitest";
 import {
+  channelAdvancedSetupHref,
   channelKeyChangeHref,
   channelPageConnectionId,
   channelPageHref,
   channelPickerHref,
   channelSetupHref,
   COCKPIT_AREAS,
+  CONNECTOR_SETUP_PATH,
+  connectorSetupHref,
   messagingView,
   parseCockpitLocation,
 } from "./routes";
@@ -108,6 +111,24 @@ describe("cockpit routes", () => {
       kind: "change_key",
       connectionId: "conn/1",
     });
+  });
+
+  it("names Advanced channel setup, which never names a connection, and builds its address", () => {
+    expect(channelAdvancedSetupHref()).toBe("/chat/messaging/advanced");
+    expect(channelAdvancedSetupHref("channel.matrix")).toBe("/chat/messaging/advanced?channel=channel.matrix");
+    expect(messagingView(parseCockpitLocation(channelAdvancedSetupHref()).rest, "?channel=channel.matrix")).toEqual({
+      kind: "advanced",
+    });
+    expect(messagingView(["messaging", "advanced", "x"])).toBeNull();
+    expect(channelPageConnectionId(["messaging", "advanced"])).toBeNull();
+  });
+
+  it("builds Capabilities › Connectors › Advanced setup's addresses, one per section", () => {
+    expect(CONNECTOR_SETUP_PATH).toBe("/capabilities/connectors/advanced");
+    expect(connectorSetupHref()).toBe(CONNECTOR_SETUP_PATH);
+    expect(connectorSetupHref("mcp")).toBe("/capabilities/connectors/advanced#mcp-servers");
+    expect(connectorSetupHref("integrations")).toBe("/capabilities/connectors/advanced#integration-connections");
+    expect(connectorSetupHref("web-search")).toBe("/capabilities/connectors/advanced#web-search");
   });
 
   it("lists primary areas with non-conflicting sequence keys", () => {

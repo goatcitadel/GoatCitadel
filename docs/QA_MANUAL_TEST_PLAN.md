@@ -435,10 +435,10 @@ Routes:
 - `/settings/runtime`
 - `/settings/local-ai`
 - `/settings/workspaces`
-- `/settings/addons`
-- `/settings/integrations`
-- `/settings/channels`
-- `/settings/mcp`
+- `/settings/addons` (in the Cockpit, Settings › Advanced › Add-ons & packs)
+- `/settings/integrations` (in the Cockpit, redirects to `/capabilities/connectors/advanced#integration-connections`)
+- `/settings/channels` (in the Cockpit, redirects to `/chat/messaging/advanced`)
+- `/settings/mcp` (in the Cockpit, redirects to `/capabilities/connectors/advanced#mcp-servers`)
 - `/settings/tools`
 - `/settings/hooks`
 
@@ -1949,7 +1949,7 @@ Result:
 
 Steps:
 
-1. Open `/settings/integrations`.
+1. Open `/settings/integrations` (Cockpit: Capabilities › Connectors › Advanced setup › Integrations).
 2. Inspect all visible connectors.
 3. For each visible beta/native connector, identify setup/action path or blocked copy.
 
@@ -1980,7 +1980,7 @@ Channels to cover when configured:
 
 Steps:
 
-1. Open `/settings/channels`.
+1. Open `/settings/channels` (Cockpit: Chat › Messaging › Advanced channel setup).
 2. Create or edit connection.
 3. Run guided auth/check/test/retest.
 4. Send a test message when supported.
@@ -2065,7 +2065,7 @@ Result:
 
 Steps:
 
-1. Open `/settings/mcp`.
+1. Open `/settings/mcp` (Cockpit: Capabilities › Connectors › Advanced setup › MCP servers).
 2. Configure a safe local stdio server.
 3. Inspect tool/resource discovery.
 4. Invoke a safe tool through governed path.

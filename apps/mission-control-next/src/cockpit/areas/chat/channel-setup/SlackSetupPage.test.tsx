@@ -418,7 +418,7 @@ describe("SlackSetupPage", () => {
     expect(states()).toEqual(["current", "current", "locked", "locked", "locked"]);
   });
 
-  it("does not go on with a setup made in Settings", async () => {
+  it("does not go on with a setup made in Advanced channel setup", async () => {
     api.fetchChannelSetupDrafts.mockResolvedValue({
       items: [draft({ revision: 5, draft: {}, secretState: TOKENS_STORED })],
     });
@@ -468,15 +468,18 @@ describe("SlackSetupPage", () => {
     expect(steps()[1]!.textContent).toContain("Tokens work. Your bot is @goatcitadel in Goat Team.");
   });
 
-  it("has a way back to the channel list and on to Settings' other ways", async () => {
+  it("has a way back to the channel list and on to Advanced channel setup's other ways", async () => {
     await mount();
     expect(new URL(link("Back to channels")!.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe(
       "/chat/messaging/add",
     );
-    const more = new URL(link("More options in Settings")!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(more.pathname).toBe("/settings/connections");
+    const more = new URL(
+      link("More options in Advanced channel setup")!.getAttribute("href")!,
+      "http://cockpit.invalid",
+    );
+    expect(more.pathname).toBe("/chat/messaging/advanced");
     expect(more.searchParams.get("channel")).toBe("channel.slack");
-    expect(more.hash).toBe("#channels");
+    expect(more.hash).toBe("");
     expect(button("Start over")).toBeDefined();
   });
 
@@ -894,7 +897,7 @@ describe("SlackSetupPage, turning it on", () => {
     expect(steps()[3]!.textContent).toContain(DIRECT);
     expect(button("Start over")).toBeUndefined();
     expect(button("Turn on")).toBeUndefined();
-    expect(link("More options in Settings")).toBeDefined();
+    expect(link("More options in Advanced channel setup")).toBeDefined();
   });
 
   it("turns on for a chosen channel, and says which when it is done", async () => {

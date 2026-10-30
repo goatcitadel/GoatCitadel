@@ -1,5 +1,6 @@
 import type { DesktopUpdateStatus } from "@goatcitadel/contracts";
 import { formatAbsoluteTime, plural } from "@goatcitadel/mission-control-shared/content/format";
+import { channelAdvancedSetupHref, connectorSetupHref } from "../../app/routes";
 import type { BackupTrustState } from "./backup-trust";
 import type { HealthCheck } from "./health-overview";
 import { backupHealthCheck, BACKUP_INSPECT_PATH, RUNTIME_INSPECT_PATH, deriveHealthChecks } from "./health-overview";
@@ -128,10 +129,10 @@ function deriveCurrentSystemHealthChecks(
   const channels = (() => {
     if (sources.channels.state === "deferred") return null;
     if (sources.channels.state === "unavailable")
-      return unknown("channels", "Channels", "Channel runtime status could not be read.", "/settings/channels");
+      return unknown("channels", "Channels", "Channel runtime status could not be read.", channelAdvancedSetupHref());
     const { enabledCount, checked } = sources.channels.value;
     if (!enabledCount)
-      return notSetUp("channels", "Channels", "No channel connection is enabled.", "/settings/channels");
+      return notSetUp("channels", "Channels", "No channel connection is enabled.", channelAdvancedSetupHref());
     const ready = checked.filter((entry) => entry.runtime.state === "current" && entry.runtime.value.ready).length;
     const notReady = checked.filter((entry) => entry.runtime.state === "current" && !entry.runtime.value.ready).length;
     const missing = enabledCount - ready - notReady;
@@ -139,7 +140,7 @@ function deriveCurrentSystemHealthChecks(
       return {
         id: "channels",
         title: "Channels",
-        inspectPath: "/settings/channels",
+        inspectPath: channelAdvancedSetupHref(),
         detail: `${notReady} enabled ${notReady === 1 ? "channel is" : "channels are"} not ready${missing ? `; ${missing} more could not be checked` : ""}.`,
         status: { label: "Needs review", tone: "waiting" },
       } satisfies HealthCheck;
@@ -148,12 +149,12 @@ function deriveCurrentSystemHealthChecks(
         "channels",
         "Channels",
         `${ready} of ${enabledCount} enabled channel runtimes reported ready; the rest could not be checked.`,
-        "/settings/channels",
+        channelAdvancedSetupHref(),
       );
     return {
       id: "channels",
       title: "Channels",
-      inspectPath: "/settings/channels",
+      inspectPath: channelAdvancedSetupHref(),
       detail: `${enabledCount} enabled channel ${enabledCount === 1 ? "runtime reports" : "runtimes report"} ready.`,
       status: { label: "Ready", tone: "done" },
     } satisfies HealthCheck;
@@ -166,7 +167,7 @@ function deriveCurrentSystemHealthChecks(
         "integrations",
         "Integrations",
         "Connection records could not be listed.",
-        "/settings/integrations",
+        connectorSetupHref("integrations"),
       );
     const enabled = sources.connections.value.filter(
       (connection) => connection.enabled && connection.kind !== "channel",
@@ -176,7 +177,7 @@ function deriveCurrentSystemHealthChecks(
         "integrations",
         "Integrations",
         "No non-channel integration connection is enabled.",
-        "/settings/integrations",
+        connectorSetupHref("integrations"),
       );
     const errors = enabled.filter((connection) => connection.status === "error").length;
     const disconnected = enabled.filter((connection) => connection.status === "disconnected").length;
@@ -184,7 +185,7 @@ function deriveCurrentSystemHealthChecks(
       return {
         id: "integrations",
         title: "Integrations",
-        inspectPath: "/settings/integrations",
+        inspectPath: connectorSetupHref("integrations"),
         detail: `${plural(errors, "connection error")} and ${plural(disconnected, "disconnected connection")} recorded.`,
         status: { label: "Needs review", tone: errors ? "failed" : "waiting" },
       } satisfies HealthCheck;
@@ -192,7 +193,7 @@ function deriveCurrentSystemHealthChecks(
       "integrations",
       "Integrations",
       `${plural(enabled.length, "enabled connection record")} ${enabled.length === 1 ? "has" : "have"} no error status. Live diagnostics were not run.`,
-      "/settings/integrations",
+      connectorSetupHref("integrations"),
     );
   })();
 

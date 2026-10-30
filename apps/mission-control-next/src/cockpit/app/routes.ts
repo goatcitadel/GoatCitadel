@@ -41,6 +41,8 @@ export function channelPageHref(connectionId: string): string {
 
 /** The segment after `messaging` that opens the add-channel views instead of naming a connection. */
 const ADD_SEGMENT = "add";
+/** The segment after `messaging` that opens Advanced channel setup instead of naming a connection. */
+const ADVANCED_SEGMENT = "advanced";
 const KEY_SEGMENT = "key";
 /** A channel's catalog key: lowercase letters, digits and hyphens, starting with a letter. */
 const CHANNEL_KEY_PATTERN = /^[a-z][a-z0-9-]{0,39}$/u;
@@ -50,7 +52,8 @@ export type MessagingView =
   | { kind: "channel"; connectionId: string }
   | { kind: "picker" }
   | { kind: "setup"; channelKey: string; draftId?: string }
-  | { kind: "change_key"; connectionId: string };
+  | { kind: "change_key"; connectionId: string }
+  | { kind: "advanced" };
 
 /** The query parameter naming the unfinished setup a channel's setup page goes on with. */
 const SETUP_DRAFT_PARAM = "draft";
@@ -69,6 +72,35 @@ export function channelSetupHref(channelKey: string, draftId?: string): string {
 /** The page for replacing one connected channel's key. */
 export function channelKeyChangeHref(connectionId: string): string {
   return `/chat/${CHANNEL_PAGE_SEGMENT}/${encodeURIComponent(connectionId)}/${KEY_SEGMENT}`;
+}
+
+/** The query parameter Advanced channel setup reads to open a new setup of that channel (its catalog id). */
+const ADVANCED_CHANNEL_PARAM = "channel";
+
+/**
+ * Advanced channel setup: every channel's full settings and the public web address. Given a channel's catalog id, it
+ * opens with a new setup of that channel chosen.
+ */
+export function channelAdvancedSetupHref(catalogId?: string): string {
+  const page = `/chat/${CHANNEL_PAGE_SEGMENT}/${ADVANCED_SEGMENT}`;
+  return catalogId ? `${page}?${new URLSearchParams({ [ADVANCED_CHANNEL_PARAM]: catalogId })}` : page;
+}
+
+/** Capabilities › Connectors › Advanced setup: the full editors for MCP servers, integrations and web search. */
+export const CONNECTOR_SETUP_PATH = "/capabilities/connectors/advanced";
+
+/** The sections of Advanced setup, by the Settings section id each editor kept. */
+export type ConnectorSetupSection = "mcp" | "integrations" | "web-search";
+
+const CONNECTOR_SETUP_ANCHORS: Readonly<Record<ConnectorSetupSection, string>> = {
+  mcp: "mcp-servers",
+  integrations: "integration-connections",
+  "web-search": "web-search",
+};
+
+/** Advanced setup, opened on one section when one is named. */
+export function connectorSetupHref(section?: ConnectorSetupSection): string {
+  return section ? `${CONNECTOR_SETUP_PATH}#${CONNECTOR_SETUP_ANCHORS[section]}` : CONNECTOR_SETUP_PATH;
 }
 
 /** An id that is not blank, padded or holding control characters. */
@@ -97,13 +129,15 @@ function setupDraftId(search: string): string | undefined {
  * - `messaging/<connectionId>` is that channel's page, with the id readable;
  * - `messaging/add` is the picker, and `messaging/add/<channelKey>` that channel's setup, with a well-formed key
  *   (and, when `?draft=` names one readable setup, that setup to go on with);
- * - `messaging/<connectionId>/key` is the page for changing that channel's key.
+ * - `messaging/<connectionId>/key` is the page for changing that channel's key;
+ * - `messaging/advanced` is Advanced channel setup (so, like `add`, it never names a connection).
  * Anything else, including extra segments, is not a Messaging view.
  */
 export function messagingView(rest: readonly string[], search = ""): MessagingView | null {
   if (rest[0] !== CHANNEL_PAGE_SEGMENT) return null;
   const [, second, third] = rest;
   if (second === undefined || rest.length > 3) return null;
+  if (second === ADVANCED_SEGMENT) return rest.length === 2 ? { kind: "advanced" } : null;
   if (second === ADD_SEGMENT) {
     if (rest.length === 2) return { kind: "picker" };
     if (third === undefined || !CHANNEL_KEY_PATTERN.test(third)) return null;

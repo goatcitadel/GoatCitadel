@@ -130,6 +130,9 @@ const failureClasses: Record<ChatTurnFailureClass, string> = {
   interrupted_by_restart: "GoatCitadel restarted",
   skill_security_blocked: "a skill was blocked by security checks",
   guidance_security_blocked: "guidance was blocked by security checks",
+  provider_rate_limited: "the model provider is limiting requests",
+  context_too_long: "the conversation is too long for the model",
+  provider_billing: "the model provider turned the request down for account reasons",
   unknown: "unknown",
 };
 export const presentFailureClass = (value: ChatTurnFailureClass) => failureClasses[value] ?? "unknown";

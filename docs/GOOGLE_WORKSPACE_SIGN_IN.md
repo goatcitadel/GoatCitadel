@@ -12,7 +12,7 @@ Google Workspace has no vendor-hosted MCP server, so Google sign-in is native to
 
 Google's installed-app OAuth, the same path `gog` and Hermes Agent use:
 
-1. The operator creates an OAuth client of type **Desktop app** in a Google Cloud project with the Gmail API and Google Calendar API enabled, then saves its client ID on a **Gmail and Google Calendar** connection (`automation.gmail`) in Settings › Connections › Integrations.
+1. The operator creates an OAuth client of type **Desktop app** in a Google Cloud project with the Gmail API and Google Calendar API enabled, then saves its client ID on a **Gmail and Google Calendar** connection (`automation.gmail`) in Capabilities › Connectors › Advanced setup › Integrations.
 2. **Connect Google** opens a scope review. Each capability maps to one scope and is requested only when ticked:
 
    | Capability | Scope | Tools |
@@ -23,7 +23,7 @@ Google's installed-app OAuth, the same path `gog` and Hermes Agent use:
    | Create Calendar events | `calendar.events` | `calendar.create_event` |
 
 3. `POST …/google-oauth/start` stores the client secret (when entered) in the OS keychain, creates a PKCE S256 verifier kept only in Gateway memory for ten minutes, and returns Google's consent URL with `access_type=offline` and `prompt=consent`. Installed apps get no incremental consent, so every connect asks for the whole reviewed set.
-4. Google redirects to the loopback callback `http://127.0.0.1:<GATEWAY_PORT>/api/v1/integrations/google/oauth/callback` (override per connection with `redirectUri`, loopback HTTP with this path only). The callback is the shared MCP fragment hand-off: it exchanges nothing and forwards `state` and `code` to `/settings/connections#google-oauth-return&…`; the tab that started Connect Google completes it over a same-origin `BroadcastChannel`.
+4. Google redirects to the loopback callback `http://127.0.0.1:<GATEWAY_PORT>/api/v1/integrations/google/oauth/callback` (override per connection with `redirectUri`, loopback HTTP with this path only). The callback is the shared MCP fragment hand-off: it exchanges nothing and forwards `state` and `code` to `/capabilities/connectors/advanced#google-oauth-return&…` (an older `/settings/connections#google-oauth-return&…` address redirects there with its fragment); the tab that started Connect Google completes it over a same-origin `BroadcastChannel`.
 5. `POST …/google-oauth/complete` checks the single-use state and verifier, exchanges the code (`code_verifier`, `client_secret`, `redirect_uri`) and records the scopes Google actually granted. Capabilities the operator unticked on Google's page stay off.
 
 ## Custody and ledger

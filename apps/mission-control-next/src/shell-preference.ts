@@ -128,6 +128,9 @@ export function classicFallbackPath(pathname: string): string {
     };
     if (detail && cockpitOnlySettings[detail]) return cockpitOnlySettings[detail];
   }
+  // Advanced setup and Advanced channel setup took over Settings › Connections, which Classic still has.
+  if (pathname === "/capabilities/connectors/advanced") return "/settings/mcp";
+  if (pathname === "/chat/messaging/advanced") return "/settings/channels";
   if (segment === "__gallery") return "/settings/general";
   return pathname;
 }

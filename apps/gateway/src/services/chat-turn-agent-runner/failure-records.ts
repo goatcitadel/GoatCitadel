@@ -6,7 +6,30 @@ import type {
   ChatTurnFailureRecord,
 } from "@goatcitadel/contracts";
 import { getChatTurnRecoveryAction, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
+import { classifyProviderFailure, type ProviderFailureClass } from "../llm-completion-helpers.js";
 import { toPlainRecord } from "./usage-and-attribution.js";
+
+/** Provider refusals that Chat names on their own; the rest fall through to the message checks below. */
+const PROVIDER_FAILURE_CLASSES: Partial<Record<ProviderFailureClass, ChatTurnFailureClass>> = {
+  rate_limited: "provider_rate_limited",
+  context_overflow: "context_too_long",
+  business_denial: "provider_billing",
+};
+
+/**
+ * A 429 whose quota is per period ("requests per minute", "TPM") is a rate limit the operator waits out. The shared
+ * classifier reads any "quota" as an account refusal, which suits failover but would send Chat to the billing page.
+ */
+const HTTP_429 = /\(429(?=[)\s:])/;
+const PERIOD_QUOTA = /\b(per\s+(second|minute|hour|day)|(requests|tokens)\s+per|rpm|tpm|rpd|tpd)\b/i;
+
+function classifyChatProviderFailure(error: Error): ChatTurnFailureClass | undefined {
+  const providerClass = classifyProviderFailure(error);
+  if (providerClass === "business_denial" && HTTP_429.test(error.message) && PERIOD_QUOTA.test(error.message)) {
+    return "provider_rate_limited";
+  }
+  return PROVIDER_FAILURE_CLASSES[providerClass];
+}
 
 export function buildChatTurnFailureRecord(
   failureClass: ChatTurnFailureClass,
@@ -20,6 +43,7 @@ export function buildChatTurnFailureRecord(
     message,
     retryable:
       failureClass !== "auth_required" &&
+      failureClass !== "provider_billing" &&
       failureClass !== "skill_security_blocked" &&
       failureClass !== "guidance_security_blocked",
     recommendedAction,
@@ -89,6 +113,11 @@ export function classifyChatTurnFailure(input: {
   const errorFailureClass = (input.error as { failureClass?: unknown } | undefined)?.failureClass;
   if (errorFailureClass === "skill_security_blocked" || errorFailureClass === "guidance_security_blocked") {
     return errorFailureClass;
+  }
+  // The provider's own refusal ended the turn, so it outranks an earlier tool failure the model may have worked past.
+  const providerFailureClass = input.error instanceof Error ? classifyChatProviderFailure(input.error) : undefined;
+  if (providerFailureClass) {
+    return providerFailureClass;
   }
   if (hasToolBlockedFailure(input.toolRuns)) {
     return "tool_blocked";

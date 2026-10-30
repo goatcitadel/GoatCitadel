@@ -5,7 +5,15 @@ import { TOOLS_HREF, toolHref, toolNameFromCapabilityId } from "../areas/capabil
 import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
 import { buildAppHref, parseAppRoute } from "../../app/route-model";
 import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
-import { messagingView, parseCockpitLocation } from "./routes";
+import { isGoogleOAuthReturnFragment } from "../../features/native-routes/settings/google-oauth-return";
+import { isMcpOAuthReturnFragment } from "../../features/native-routes/settings/mcp-oauth-return";
+import {
+  channelAdvancedSetupHref,
+  CONNECTOR_SETUP_PATH,
+  connectorSetupHref,
+  messagingView,
+  parseCockpitLocation,
+} from "./routes";
 import { isDevDiagnosticsEnabled } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 
 export type CockpitResolution =
@@ -101,6 +109,37 @@ function capabilitiesAddressFor(parts: readonly string[], url: URL): string | un
   if (selection?.kind === "skill") return skillItemHref(skillIdFromCapabilityId(selection.id));
   if (selection?.kind === "tool") return toolHref(toolNameFromCapabilityId(selection.id));
   return undefined;
+}
+
+/** The hashes and section paths of the retired Settings › Connections, by where each lives now. */
+const RETIRED_CONNECTIONS_HOMES: Readonly<Record<string, string>> = {
+  "mcp-servers": connectorSetupHref("mcp"),
+  mcp: connectorSetupHref("mcp"),
+  "integration-connections": connectorSetupHref("integrations"),
+  integrations: connectorSetupHref("integrations"),
+  "web-search": connectorSetupHref("web-search"),
+  channels: channelAdvancedSetupHref(),
+  addons: "/settings/advanced#addons",
+};
+
+/**
+ * Where an address of the retired Settings › Connections (2026-10-30) lives now, as a path with its hash, or undefined
+ * for any other Settings address. Bookmarks and sign-ins that were under way keep working: a provider's sign-in return
+ * keeps its fragment and lands on Capabilities › Connectors › Advanced setup, which hands it back. Any other hash, or
+ * none, opens Advanced setup on its first section. `/settings/channels`, `/settings/mcp`, `/settings/integrations` and
+ * `/settings/web-search` follow their sections; `/settings/addons` is still a Settings section and resolves there.
+ */
+function retiredConnectionsAddress(section: string, hash: string): string | undefined {
+  if (section === "connections") {
+    if (isMcpOAuthReturnFragment(hash) || isGoogleOAuthReturnFragment(hash)) return `${CONNECTOR_SETUP_PATH}#${hash}`;
+    return (
+      (Object.hasOwn(RETIRED_CONNECTIONS_HOMES, hash) ? RETIRED_CONNECTIONS_HOMES[hash] : undefined) ??
+      CONNECTOR_SETUP_PATH
+    );
+  }
+  return section !== "addons" && Object.hasOwn(RETIRED_CONNECTIONS_HOMES, section)
+    ? RETIRED_CONNECTIONS_HOMES[section]
+    : undefined;
 }
 
 /** Conversation publication follows route coverage, including root/alias entries, but never Projects. */
@@ -263,8 +302,22 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
     if (!catalog.invalidSelection && catalog.selection !== null && Object.hasOwn(catalogKinds, catalog.selection.kind))
       return native();
   }
-  if (area === "capabilities" && (parts.length === 1 || (parts.length === 2 && capabilitiesViews.has(section!))))
+  if (
+    area === "capabilities" &&
+    (parts.length === 1 ||
+      (parts.length === 2 && capabilitiesViews.has(section!)) ||
+      url.pathname === CONNECTOR_SETUP_PATH)
+  )
     return native();
+  const retired =
+    area === "settings" && parts.length === 2 ? retiredConnectionsAddress(section!, url.hash.slice(1)) : undefined;
+  if (retired) {
+    const target = new URL(retired, url);
+    // The page's own query (a channel to set up, the workspace, the shell) travels; the hash is the new home's.
+    target.searchParams.forEach((value, key) => url.searchParams.set(key, value));
+    url.hash = target.hash;
+    return native(target.pathname);
+  }
   if (
     area === "settings" &&
     (parts.length === 1 ||

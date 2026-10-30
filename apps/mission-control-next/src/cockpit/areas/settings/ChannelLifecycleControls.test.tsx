@@ -54,7 +54,7 @@ beforeEach(async () => {
   __resetChannelMutationStateForTests();
   __resetIntegrationConnectionMutationsForTests();
   setGatewayCallerScope("caller-a");
-  window.history.replaceState(null, "", "/settings/connections#channels");
+  window.history.replaceState(null, "", "/chat/messaging/advanced");
   await new Promise((resolve) => setTimeout(resolve, 0));
   api.fetchChannelSetupDraft.mockResolvedValue(draft);
   api.discardChannelSetupDraft.mockResolvedValue({ draftId: draft.draftId, deleted: true });

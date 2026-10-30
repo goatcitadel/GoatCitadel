@@ -6,7 +6,7 @@ import type { ChannelSetupDefinition, IntegrationConnection } from "@goatcitadel
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { MessagingView } from "../../app/routes";
 import { ChatMainColumn } from "./ChatMainColumn";
-import { settingsChannelSetupHref } from "./channel-setup/channel-picker-model";
+import { channelAdvancedSetupHref } from "../../app/routes";
 
 const api = vi.hoisted(() => ({ fetchChannelSetupDefinitions: vi.fn(), fetchIntegrationConnections: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
@@ -146,15 +146,15 @@ it("shows the channel picker in place of the conversation", async () => {
   expect(live.effects).toBe(1);
 });
 
-it("sends a channel without its own setup page to Settings", async () => {
+it("sends a channel without its own setup page to Advanced channel setup", async () => {
   await render({ kind: "setup", channelKey: "mattermost" });
   expect(container.querySelector("h1")?.textContent).toBe("Add Mattermost");
-  expect(container.textContent).toContain("Set up Mattermost in Settings");
-  const target = link("Set up Mattermost in Settings");
-  const expected = new URL(settingsChannelSetupHref("channel.mattermost"), "http://cockpit.invalid");
+  expect(container.textContent).toContain("Set up Mattermost in Advanced channel setup");
+  const target = link("Set up Mattermost in Advanced channel setup");
+  const expected = new URL(channelAdvancedSetupHref("channel.mattermost"), "http://cockpit.invalid");
   expect(target.pathname).toBe(expected.pathname);
   expect(target.searchParams.get("channel")).toBe("channel.mattermost");
-  expect(target.hash).toBe("#channels");
+  expect(target.hash).toBe("");
   expect(link("Back to channels").pathname).toBe("/chat/messaging/add");
   expect(conversationHidden()).toBe("none");
 });
@@ -171,7 +171,7 @@ it("shows Telegram's own key page for a Telegram channel's key change, with a wa
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change Telegram's key");
   expect(container.textContent).toContain("Paste the new key");
-  expect(container.textContent).not.toContain("Change the key in Settings");
+  expect(container.textContent).not.toContain("Change the key in Advanced channel setup");
   expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
   expect(conversationHidden()).toBe("none");
   expect(live.effects).toBe(0);
@@ -199,7 +199,7 @@ it.each([
     await render({ kind: "change_key", connectionId: "conn-1" });
     expect(container.querySelector("h1")?.textContent).toBe(title);
     expect(container.textContent).toContain(step);
-    expect(container.textContent).not.toContain("Change the key in Settings");
+    expect(container.textContent).not.toContain("Change the key in Advanced channel setup");
     expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
     expect(conversationHidden()).toBe("none");
     expect(live.effects).toBe(0);
@@ -216,40 +216,40 @@ it.each([
   ["a Discord connection with only a webhook", "discord", "Discord", { webhookUrl: "[REDACTED]" }],
   ["a Slack webhook connection", "slack", "Slack", { receiveMode: "webhook", webhookUrl: "[REDACTED]" }],
   ["a Slack OAuth connection", "slack", "Slack", { authMode: "oauth", receiveMode: "webhook", slackTeamId: "T1" }],
-])("points the key change of %s at Settings, with no token page", async (_name, key, label, config) => {
+])("points the key change of %s at Advanced channel setup, with no token page", async (_name, key, label, config) => {
   api.fetchIntegrationConnections.mockResolvedValue({ items: [connectionOf(key, label, config)] });
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
-  expect(container.textContent).toContain("You can't change a key from Chat yet. Settings has it.");
-  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
+  expect(container.textContent).toContain("This channel's key is changed in Advanced channel setup.");
+  expect(link("Change the key in Advanced channel setup").pathname).toBe("/chat/messaging/advanced");
   expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
   expect(container.textContent).not.toContain("Paste the new token");
   expect(container.querySelector('input[type="password"]')).toBeNull();
 });
 
-it("points the key change of a send-only WhatsApp connection at Settings: it has no saved App ID or secret to check the token with", async () => {
+it("points the key change of a send-only WhatsApp connection at Advanced channel setup: it has no saved App ID or secret to check the token with", async () => {
   api.fetchIntegrationConnections.mockResolvedValue({
     items: [connectionOf("whatsapp", "WhatsApp", { phoneNumberId: "106540352242922", accessToken: "[REDACTED]" })],
   });
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
-  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
+  expect(link("Change the key in Advanced channel setup").pathname).toBe("/chat/messaging/advanced");
   expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
   expect(container.textContent).not.toContain("Paste the new token");
   expect(container.querySelector('input[type="password"]')).toBeNull();
 });
 
-it("points a key change for any other channel at Settings, with a way back to the channel page", async () => {
+it("points a key change for any other channel at Advanced channel setup, with a way back to the channel page", async () => {
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
   expect(link("Back to channel").pathname).toBe("/chat/messaging/conn-1");
-  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
+  expect(link("Change the key in Advanced channel setup").pathname).toBe("/chat/messaging/advanced");
   expect(conversationHidden()).toBe("none");
 });
 
-it("points a key change at Settings when the channel cannot be read", async () => {
+it("points a key change at Advanced channel setup when the channel cannot be read", async () => {
   api.fetchIntegrationConnections.mockRejectedValue(new Error("offline"));
   await render({ kind: "change_key", connectionId: "conn-1" });
   expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
-  expect(link("Change the key in Settings").pathname).toBe("/settings/connections");
+  expect(link("Change the key in Advanced channel setup").pathname).toBe("/chat/messaging/advanced");
 });

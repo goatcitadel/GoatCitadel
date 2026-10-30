@@ -37,7 +37,7 @@ export async function runCockpitMcpRegistrationProof({ context, browser, stack, 
             writes.push({ method: request.method(), route, body: request.postDataJSON() });
           else unexpected.push(`${request.method()} ${route}`);
         });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
         const registration = page.getByRole("dialog", { name: "Register MCP server", exact: true });
@@ -105,8 +105,9 @@ export async function runCockpitMcpRegistrationProof({ context, browser, stack, 
           existingIds: [...before.items.map((item) => item.serverId), receipt.serverId] });
         await page.unroute("**/api/v1/mcp/servers", lose);
         await registration.getByRole("button", { name: "Close registration", exact: true }).click(); await leave.getByRole("button", { name: "Keep draft and close", exact: true }).click();
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "General", exact: true }).click();
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Connections", exact: true }).click();
+        // Leave Advanced setup for the Connectors list and come back, so the MCP section mounts again.
+        await page.getByRole("link", { name: "Back to Connectors", exact: true }).click();
+        await page.getByRole("link", { name: "Advanced setup", exact: true }).click();
         await page.getByRole("tab", { name: "MCP servers", exact: true }).click();
         await panel.getByRole("button", { name: "Register MCP server", exact: true }).click();
         await registration.getByText(/^MCP registration outcome is unconfirmed/).first().waitFor();

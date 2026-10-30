@@ -15,8 +15,8 @@ import {
 } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadReadingPrimitives";
 import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
-import { CircleAlert, OctagonAlert, TriangleAlert } from "lucide-react";
-import { presentAttachmentType, presentFailureClass } from "./chat-vocabulary";
+import { OctagonAlert, TriangleAlert } from "lucide-react";
+import { presentAttachmentType } from "./chat-vocabulary";
 import { describeChannelMessageSource, type ChannelConversationContext } from "./channel-conversation";
 import { useInChannelConversation } from "./channel-conversation-scope";
 import { ChannelNewMessagesDivider } from "./ChannelNewMessagesDivider";
@@ -33,6 +33,7 @@ import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatTurnDetails } from "./ChatTurnDetails";
+import { ChatTurnFailureCard } from "./ChatTurnFailureCard";
 import { ChatTurnThinking } from "./ChatTurnThinking";
 import { TurnReceipt } from "./ChatTurnReceipt";
 
@@ -85,6 +86,7 @@ export const Turn = memo(function Turn({
   onInspectTurn,
   onOpenArtifact,
   onReviewPlan,
+  onNewConversation,
 }: {
   turn: ChatThreadTurnRecord;
   /** One-based position in the conversation, when known. */
@@ -101,6 +103,8 @@ export const Turn = memo(function Turn({
   onInspectTurn?: (turnId: string) => void;
   onOpenArtifact?: (turnId: string, artifactId?: string) => void;
   onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
+  /** Opens a fresh conversation, offered when this one has grown too long for the model. Callers keep it stable. */
+  onNewConversation?: () => void;
 }) {
   const assistantText = previewText ?? turn.assistantMessage?.content ?? "";
   const failed = turn.trace.status === "failed";
@@ -123,7 +127,10 @@ export const Turn = memo(function Turn({
       {newMessageCount ? <ChannelNewMessagesDivider count={newMessageCount} /> : null}
       {/* Heading navigation moves message by message; the visible "You" and "Assistant" labels stay as they are. */}
       <h2 className="sr-only">{source?.heading ?? "You said"}</h2>
-      <div className="cockpit-chat-user-bubble ml-auto rounded-lg border border-line-subtle bg-raised p-3">
+      <div
+        data-turn-prompt
+        className="cockpit-chat-user-bubble ml-auto rounded-lg border border-line-subtle bg-raised p-3"
+      >
         <p className="mb-1 text-xs font-medium text-fg-muted">
           {source?.label ?? "You"} · <ActorTimestamp timestamp={turn.userMessage.timestamp ?? ""} />
         </p>
@@ -190,24 +197,13 @@ export const Turn = memo(function Turn({
         <p className="text-xs text-fg-muted">{presentChatTurnStatus(turn.trace.status).label}</p>
       ) : null}
       {failed || partial ? (
-        <div
-          role="note"
-          className={`flex gap-2 rounded-md border p-2 text-sm text-fg-secondary ${failed ? "border-status-failed" : "border-status-waiting"}`}
-          aria-label="Response recovery"
-        >
-          {failed ? (
-            <CircleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-status-failed" />
-          ) : (
-            <TriangleAlert aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-status-waiting" />
-          )}
-          <p>
-            {partial ? "This answer may be incomplete." : !assistantText ? "This response failed." : ""}
-            {turn.trace.failure?.failureClass && turn.trace.failure.failureClass !== "unknown"
-              ? ` Cause: ${presentFailureClass(turn.trace.failure.failureClass)}.`
-              : ""}{" "}
-            {recoveryHint(turn, resendable)}
-          </p>
-        </div>
+        <ChatTurnFailureCard
+          failed={failed}
+          answered={Boolean(assistantText)}
+          failureClass={turn.trace.failure?.failureClass}
+          hint={recoveryHint(turn, resendable)}
+          onNewConversation={actions.historicalReadOnly ? undefined : onNewConversation}
+        />
       ) : null}
       {turn.assistantMessage ||
       turn.toolRuns.length ||

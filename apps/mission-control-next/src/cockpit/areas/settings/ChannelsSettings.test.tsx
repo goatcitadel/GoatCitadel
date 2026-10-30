@@ -83,18 +83,18 @@ afterEach(async () => {
   container.remove();
 });
 
-describe("Settings channels point to Messaging", () => {
-  it("opens with a plain pointer to Messaging above the existing intro", async () => {
+describe("Advanced channel setup points to the channel picker", () => {
+  it("opens with a plain pointer to the quicker setup pages above the existing intro", async () => {
     await mount("");
     const intro = container.querySelector("header");
     const pointer = intro?.querySelector("p");
-    expect(pointer?.textContent).toBe("Add and manage channels from Messaging in Chat. Open Messaging");
+    expect(pointer?.textContent).toBe("Some channels have a quicker setup page of their own. Add a channel");
     expect(intro?.querySelectorAll("p")).toHaveLength(2);
     expect(intro?.querySelectorAll("p")[1]?.textContent).toContain("Connections and setup drafts belong");
     // Not a live region: the shell's live-region budget has no room for this line.
     expect(intro?.querySelector("[role], [aria-live]")).toBeNull();
     const link = pointer?.querySelector("a");
-    expect(link?.textContent).toBe("Open Messaging");
+    expect(link?.textContent).toBe("Add a channel");
     expect(new URL(link!.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe("/chat/messaging/add");
   });
 

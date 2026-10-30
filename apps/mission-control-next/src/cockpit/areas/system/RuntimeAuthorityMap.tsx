@@ -2,6 +2,7 @@ import { useState } from "react";
 import type { RuntimeAuthorityItem, RuntimeAuthorityReference } from "@goatcitadel/contracts";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useRuntimeAuthorityProjection } from "@goatcitadel/mission-control-shared/hooks/useRuntimeAuthorityProjection";
+import { connectorSetupHref } from "../../app/routes";
 import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -25,7 +26,7 @@ function hrefFor(reference: RuntimeAuthorityReference): string {
     case "release_evidence":
       return "/system/diagnostics";
     case "external_side_effects":
-      return "/settings/integrations";
+      return connectorSetupHref("integrations");
   }
 }
 

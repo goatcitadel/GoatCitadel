@@ -230,19 +230,19 @@ describe("Connector panel", () => {
 
   it("links Advanced setup to the MCP section", async () => {
     await renderPanel(LINEAR.id);
-    const advanced = link("Advanced setup in Settings");
+    const advanced = link("Advanced setup");
     expect(advanced).toBeDefined();
     const target = new URL(advanced!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname).toBe("/settings/connections");
+    expect(target.pathname).toBe("/capabilities/connectors/advanced");
     expect(target.hash).toBe("#mcp-servers");
   });
 
-  it("explains when Chat can't use connectors yet, with a link to Settings", async () => {
+  it("explains when Chat can't use connectors yet, with a link to Advanced setup", async () => {
     const blocked = { ...LINEAR, chat: { available: false, blockedBy: "mcp_in_chat_off" } } as const;
     await renderPanel(LINEAR.id, [blocked]);
     expect(text()).toContain("Chat can't use connectors yet");
-    const target = new URL(link("See Chat access in Settings")!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname + target.hash).toBe("/settings/connections#mcp-servers");
+    const target = new URL(link("See Chat access in Advanced setup")!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname + target.hash).toBe("/capabilities/connectors/advanced#mcp-servers");
   });
 
   it("says why Chat can't use connectors when background runs are off, with the same link", async () => {
@@ -251,15 +251,15 @@ describe("Connector panel", () => {
     expect(text()).toContain("Chat can't use connectors while background runs are off");
     // The other cause's sentence would send the operator to the wrong switch.
     expect(text()).not.toContain("Chat can't use connectors yet");
-    const target = new URL(link("See Chat access in Settings")!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname + target.hash).toBe("/settings/connections#mcp-servers");
+    const target = new URL(link("See Chat access in Advanced setup")!.getAttribute("href")!, "http://cockpit.invalid");
+    expect(target.pathname + target.hash).toBe("/capabilities/connectors/advanced#mcp-servers");
   });
 
   it("keeps the general Chat sentence when the Gateway names no cause", async () => {
     const blocked = { ...LINEAR, chat: { available: false } } as const;
     await renderPanel(LINEAR.id, [blocked]);
     expect(text()).toContain("Chat can't use connectors yet");
-    expect(link("See Chat access in Settings")).toBeDefined();
+    expect(link("See Chat access in Advanced setup")).toBeDefined();
   });
 
   it("stays quiet about Chat when Chat can use it", async () => {

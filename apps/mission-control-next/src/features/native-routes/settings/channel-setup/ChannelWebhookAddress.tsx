@@ -20,12 +20,12 @@ import { inboundWebhookPath } from "./channel-wizard-model";
 /** Until the operator sets their public web address, this placeholder is the only form of it any copy may show. */
 const PUBLIC_ADDRESS_PLACEHOLDER = "https://<your public address>";
 const SET_ADDRESS_LABEL = "Set your public web address";
-const SET_ADDRESS_PATH = "/settings/connections";
-const SET_ADDRESS_ANCHOR = "#channels";
+const SET_ADDRESS_PATH = "/chat/messaging/advanced";
+const SET_ADDRESS_ANCHOR = "#public-web-address";
 
 /**
- * The address a vendor posts messages to, as the Gateway path behind the operator's own public web address (Settings ›
- * Channels), or behind a placeholder until it is set. It adds no live region: Copied is only the button's label, and a
+ * The address a vendor posts messages to, as the Gateway path behind the operator's own public web address (Advanced
+ * channel setup), or behind a placeholder until it is set. It adds no live region: Copied is only the button's label, and a
  * clipboard that is missing or refuses leaves it on Copy. `notLiveYet` is for a new setup, whose address is known
  * before it exists as a connection.
  */
@@ -98,8 +98,8 @@ function WebhookAddress({ path, notLiveYet, className }: { path: string; notLive
 }
 
 /**
- * The way to Settings › Channels. The Cockpit moves there in place, after the leave review of anything unsaved; the
- * Classic guide has no such navigation, so its link opens the same page in the Cockpit shell.
+ * The way to Chat › Messaging › Advanced channel setup. The Cockpit moves there in place, after the leave review of
+ * anything unsaved; the Classic guide has no such navigation, so its link opens the same page in the Cockpit shell.
  */
 function SetPublicWebAddressLink() {
   const inCockpit = useContext(CockpitNavigationContext) !== null;

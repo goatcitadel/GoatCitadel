@@ -47,9 +47,9 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
     >
       <header className="space-y-1">
         <p className="text-sm text-fg-secondary">
-          Add and manage channels from Messaging in Chat.{" "}
+          Some channels have a quicker setup page of their own.{" "}
           <NativeOwnerLink href={channelPickerHref()} scope={workspaceId}>
-            Open Messaging
+            Add a channel
           </NativeOwnerLink>
         </p>
         <p className="text-sm text-fg-secondary">
