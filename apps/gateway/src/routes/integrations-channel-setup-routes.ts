@@ -169,6 +169,8 @@ export function registerChannelSetupIntegrationRoutes(fastify: FastifyInstance):
       try {
         return reply.send(await fastify.services.channelSetup.subscribeWhatsAppSetupApp(parsed.data));
       } catch (error) {
+        // A subscribe Meta may have applied is recorded as attempted, never released for a retry as a clean failure.
+        await markMutationCommittedFromError(request, error);
         return sendRouteError(reply, error, request.log);
       }
     },

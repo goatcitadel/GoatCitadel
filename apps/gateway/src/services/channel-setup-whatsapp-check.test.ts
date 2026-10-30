@@ -12,6 +12,7 @@ import {
   WHATSAPP_NUMBER_NOT_IN_ACCOUNT,
   WHATSAPP_OTHER_APP,
   WHATSAPP_SUBSCRIBE_REFUSED,
+  WHATSAPP_SUBSCRIBE_UNKNOWN,
   WHATSAPP_TOKEN_REJECTED,
   WHATSAPP_UNREACHABLE,
   checkWhatsAppSetup,
@@ -650,10 +651,14 @@ describe("WhatsApp setup subscribe", () => {
       expectOnlyThe(await failure(subscribe(fake)), WHATSAPP_SUBSCRIBE_REFUSED);
       expect(fake.calls).toHaveLength(1);
     }
-    for (const body of [{ success: false }, {}, { success: "true" }]) {
-      const fake = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: { body } });
-      expectOnlyThe(await failure(subscribe(fake)), WHATSAPP_SUBSCRIBE_REFUSED);
-    }
+    const declined = fakeHost({
+      ...happy(),
+      [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: { body: { success: false } },
+    });
+    const refusal = await failure(subscribe(declined));
+    expectOnlyThe(refusal, WHATSAPP_SUBSCRIBE_REFUSED);
+    // Meta said no, so nothing was applied: the attempt is a clean failure the operator may simply try again.
+    expect((refusal as { mutationCommitted?: unknown }).mutationCommitted).toBeUndefined();
   });
 
   it("says the access token was refused, not that the app was, for code 190 whatever the HTTP status", async () => {
@@ -676,22 +681,27 @@ describe("WhatsApp setup subscribe", () => {
     }
   });
 
-  it("says Meta was unreachable for any other trouble, without quoting anything", async () => {
+  it("says it couldn't tell, and records the attempt, when the POST may have reached Meta", async () => {
+    // The POST was sent, so Meta may have applied it: unknown after sending, never a clean failure to retry silently.
+    const unknown = async (fake: Fake) => {
+      const error = await failure(subscribe(fake));
+      expectOnlyThe(error, WHATSAPP_SUBSCRIBE_UNKNOWN);
+      expect((error as { mutationCommitted?: unknown }).mutationCommitted).toBe(true);
+    };
     for (const reply of [leaky(500), leaky(503, 2), leaky(404)]) {
-      const fake = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: reply });
-      expectOnlyThe(await failure(subscribe(fake)), WHATSAPP_UNREACHABLE);
+      await unknown(fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: reply }));
     }
     const broken = fakeHost(happy());
     broken.fetchWithTimeout.mockRejectedValue(
       new Error(`request to ${GRAPH}${BUSINESS_ACCOUNT_ID}/subscribed_apps failed: Bearer ${ACCESS_TOKEN}`),
     );
-    expectOnlyThe(await failure(subscribe(broken)), WHATSAPP_UNREACHABLE);
-    // An answer that is not JSON says nothing about whether Meta let the app in: it is unreachable, not refused.
+    await unknown(broken);
     const garbled = fakeHost(happy());
     garbled.fetchWithTimeout.mockResolvedValue(new Response(`not json ${ACCESS_TOKEN}`, { status: 200 }));
-    expectOnlyThe(await failure(subscribe(garbled)), WHATSAPP_UNREACHABLE);
-    const list = fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: { body: [] } });
-    expectOnlyThe(await failure(subscribe(list)), WHATSAPP_UNREACHABLE);
+    await unknown(garbled);
+    for (const body of [[], {}, { success: "true" }]) {
+      await unknown(fakeHost({ ...happy(), [`POST ${BUSINESS_ACCOUNT_ID}/subscribed_apps`]: { body } }));
+    }
   });
 
   it("asks Meta nothing without the access token or the account ID", async () => {

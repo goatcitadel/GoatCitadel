@@ -837,6 +837,27 @@ describe("channel setup routes", () => {
       expect(response.json()).toMatchObject({ error: refusal });
     });
 
+    it("records a subscribe Meta may have applied as attempted, and a refusal as a clean failure", async () => {
+      const unknown =
+        "GoatCitadel couldn't tell whether Meta subscribed the app. Choose Let this app receive your number's messages again; repeating it is safe.";
+      const refusal = "Meta refused the request.";
+      for (const [error, committed] of [
+        [Object.assign(new ValidationError({ message: unknown }), { mutationCommitted: true }), true],
+        [new ValidationError({ message: refusal }), false],
+      ] as const) {
+        const server = await appWith(vi.fn().mockRejectedValue(error));
+        let seen: unknown;
+        server.addHook("onResponse", async (request) => {
+          seen = (request as { mutationCommitted?: boolean }).mutationCommitted === true;
+        });
+        const response = await server.inject({ method: "POST", url, payload: { draftId, expectedRevision: 3 } });
+        expect(response.statusCode).toBe(400);
+        expect(response.json()).toMatchObject({ error: error.message });
+        expect(seen).toBe(committed);
+        await server.close();
+      }
+    });
+
     it("answers anything unexpected with a generic 500 that quotes nothing", async () => {
       const subscribeWhatsAppSetupApp = vi
         .fn()

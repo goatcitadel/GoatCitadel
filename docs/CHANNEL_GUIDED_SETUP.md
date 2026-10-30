@@ -386,8 +386,12 @@ offered, and nothing on the page uses an unofficial client.
      receive your number's messages**, which calls `POST
      /{business-account-id}/subscribed_apps` with the access token and no body.
      That is the only write GoatCitadel makes to Meta during setup, and it runs only
-     from that button. The step is done when Meta has checked the address and the
-     app is subscribed.
+     from that button. If the call fails after it was sent (no answer, a 5xx, or an
+     answer that can't be read), Meta may have applied it, so the page says
+     "GoatCitadel couldn't tell whether Meta subscribed the app. Choose Let this app
+     receive your number's messages again; repeating it is safe." and the request is
+     recorded as attempted rather than released for a retry. The step is done when
+     Meta has checked the address and the app is subscribed.
   5. **Say hi from your phone.** The page shows a one-time code as a QR code, a
      `wa.me` link (`https://wa.me/<number's digits>?text=<code>`) and plain text.
      Send the code from your phone, as it is, to the number. With Meta's test

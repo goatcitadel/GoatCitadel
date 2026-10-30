@@ -25,6 +25,8 @@ export const WHATSAPP_SUBSCRIBE_REFUSED =
 export const WHATSAPP_META_REFUSED =
   "Meta refused the request. Check that the access token has the whatsapp_business_management and whatsapp_business_messaging permissions.";
 export const WHATSAPP_UNREACHABLE = "GoatCitadel couldn't reach Meta.";
+export const WHATSAPP_SUBSCRIBE_UNKNOWN =
+  "GoatCitadel couldn't tell whether Meta subscribed the app. Choose Let this app receive your number's messages again; repeating it is safe.";
 export const WHATSAPP_DETAILS_MISSING = "Paste all five WhatsApp details first.";
 export const WHATSAPP_DRAFT_ONLY = "Choose a WhatsApp setup draft to check.";
 
@@ -127,18 +129,34 @@ export async function subscribeWhatsAppSetupApp(
   const { accessToken, businessAccountId } = meta.details;
   if (!accessToken || !businessAccountId) throw fail(WHATSAPP_DETAILS_MISSING);
 
-  const answer = await meta.ask({
-    path: `${businessAccountId}/subscribed_apps`,
-    credential: accessToken,
-    post: true,
-  });
+  let answer: GraphAnswer;
+  try {
+    answer = await meta.ask({ path: `${businessAccountId}/subscribed_apps`, credential: accessToken, post: true });
+  } catch (error) {
+    // The POST may have reached Meta before the call failed, so the outcome is unknown, never a failure before sending.
+    throw isUnreachable(error) ? subscribeOutcomeUnknown() : error;
+  }
   if (!answer.ok) {
     if (answer.status === 400 || answer.status === 401 || answer.status === 403) throw fail(WHATSAPP_SUBSCRIBE_REFUSED);
-    return refusedOrUnreachable(answer);
+    if (answer.status < 500 && errorCodeOf(answer.body) !== undefined) throw fail(WHATSAPP_META_REFUSED);
+    throw subscribeOutcomeUnknown();
   }
-  if (!answer.body) return unreachable();
-  if (answer.body.success !== true) throw fail(WHATSAPP_SUBSCRIBE_REFUSED);
+  if (answer.body?.success === false) throw fail(WHATSAPP_SUBSCRIBE_REFUSED);
+  if (answer.body?.success !== true) throw subscribeOutcomeUnknown();
   return { appSubscribed: true };
+}
+
+/**
+ * Meta answered in a way that doesn't say whether the subscription took (no answer, a 5xx, or an answer that can't be
+ * read). The error is marked committed so the request's idempotency claim records the attempt instead of releasing it
+ * for a silent retry; the operator repeats the click, which is safe because subscribing an app twice changes nothing.
+ */
+function subscribeOutcomeUnknown(): ValidationError & { mutationCommitted: true } {
+  return Object.assign(fail(WHATSAPP_SUBSCRIBE_UNKNOWN), { mutationCommitted: true as const });
+}
+
+function isUnreachable(error: unknown): boolean {
+  return error instanceof ValidationError && error.message === WHATSAPP_UNREACHABLE;
 }
 
 /** The WhatsApp draft at the revision the operator is looking at. Create, edit and rotate drafts all qualify. */
