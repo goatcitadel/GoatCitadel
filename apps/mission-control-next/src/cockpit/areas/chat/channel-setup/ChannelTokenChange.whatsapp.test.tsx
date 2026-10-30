@@ -8,6 +8,7 @@ import type {
   IntegrationConnection,
   WhatsAppSetupCheckResult,
 } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetCredentialInputsForTests } from "../../../../features/native-routes/settings/credential-input-owner";
 import { ChannelTokenChange } from "./ChannelTokenChange";
@@ -302,6 +303,28 @@ describe("ChannelTokenChange for WhatsApp", () => {
       await toChecked(connection(), { appSubscribed: true });
       expect(steps()[0]!.querySelector('[data-tone="error"]')?.textContent).toBe(WHATSAPP_CHECK_FAILED);
       expect(states()).toEqual(["current", "locked"]);
+    });
+
+    it("says GoatCitadel's own sentence when Meta refuses the token", async () => {
+      const said = "That access token was made for a different Meta app.";
+      arrange();
+      api.checkWhatsAppSetup.mockRejectedValue(
+        new ApiRequestError("API error 400", {
+          kind: "http",
+          method: "POST",
+          path: "/x",
+          status: 400,
+          body: { error: said },
+        }),
+      );
+      await mount(connection());
+      await checkToken();
+
+      expect(container.querySelectorAll('[data-tone="error"]')).toHaveLength(1);
+      expect(steps()[0]!.querySelector('[data-tone="error"]')?.textContent).toBe(said);
+      expect(status()).toBe(said);
+      expect(states()).toEqual(["current", "locked"]);
+      expect(container.textContent).not.toContain("SECRET");
     });
   });
 

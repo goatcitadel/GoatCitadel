@@ -23,7 +23,12 @@ import {
 import { saveKeyWording, type TokenCheckOutcome, type TokenInputs } from "./token-change-model";
 import { DiscordTokenFields, SlackTokenFields, WhatsAppTokenFields, type TokenFieldsProps } from "./TokenChangeFields";
 import type { TurnOnWording } from "./TurnOnStep";
-import { WHATSAPP_CATALOG_ID, WHATSAPP_CHECK_FAILED, WHATSAPP_TURN_ON_WORDING } from "./whatsapp-setup-model";
+import {
+  WHATSAPP_CATALOG_ID,
+  WHATSAPP_CHECK_FAILED,
+  WHATSAPP_TURN_ON_WORDING,
+  whatsAppFailure,
+} from "./whatsapp-setup-model";
 
 /** The draft a check reads its stored tokens from, at the version the page is looking at. */
 export interface TokenCheckDraft {
@@ -186,9 +191,10 @@ const WHATSAPP: TokenChangeChannel = {
         // saved without a note on this page.
         draftValues: {},
       };
-    } catch {
-      // What a failure carried is never kept: it can quote the request the token travelled in.
-      throw new Error(WHATSAPP_CHECK_FAILED);
+    } catch (error) {
+      // GoatCitadel's own sentence when it sent one (another Meta app's token, say), else the fixed one: nothing else a
+      // failure carried is kept, because it can quote the request the token travelled in.
+      return { kind: "rejected", error: whatsAppFailure(error) };
     }
   },
   Fields: WhatsAppTokenFields,

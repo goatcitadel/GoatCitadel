@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import type { ChannelSetupDraft, WhatsAppSetupCheckResult } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { TOKEN_CHANGE_CHANNELS } from "./token-change-channels";
 import { WHATSAPP_CATALOG_ID, WHATSAPP_CHECK_FAILED, WHATSAPP_TURN_ON_WORDING } from "./whatsapp-setup-model";
@@ -50,14 +51,8 @@ beforeEach(() => {
   api.fetchChannelSetupDraft.mockResolvedValue(rotateDraft());
 });
 
-/** The error a check ends in, so a test can look at everything it carries. */
-async function failure(promise: Promise<unknown>): Promise<Error> {
-  const caught = await promise.then(
-    () => undefined,
-    (error: unknown) => error,
-  );
-  expect(caught).toBeInstanceOf(Error);
-  return caught as Error;
+function httpError(status: number, body?: unknown): ApiRequestError {
+  return new ApiRequestError(`API error ${status}`, { kind: "http", method: "POST", path: "/x", status, body });
 }
 
 describe("the channels whose key is changed on ChannelTokenChange", () => {
@@ -156,22 +151,38 @@ describe("the WhatsApp entry", () => {
       expect(Object.keys(input).sort()).toEqual(["askMeta", "draftId", "expectedRevision"]);
     });
 
-    it("throws the one sentence a failed check comes to, never the error it had", async () => {
-      api.checkWhatsAppSetup.mockRejectedValue(
+    it("says GoatCitadel's own sentence when Meta refuses the token", async () => {
+      for (const said of [
+        "That access token was made for a different Meta app.",
+        "Meta didn't accept the access token.",
+        "Meta refused the request. Check that the access token has the whatsapp_business_management and whatsapp_business_messaging permissions.",
+      ]) {
+        api.checkWhatsAppSetup.mockRejectedValue(httpError(400, { error: said }));
+        await expect(WHATSAPP.check(REF)).resolves.toEqual({ kind: "rejected", error: said });
+      }
+      expect(api.fetchChannelSetupDraft).not.toHaveBeenCalled();
+    });
+
+    it("says the one sentence a failed check comes to for anything else, never the error it had", async () => {
+      const leaks = [
         Object.assign(new Error(`GET /v23.0/${PHONE_NUMBER_ID} with Bearer ${ACCESS_TOKEN} failed`), {
           body: { error: `Bearer ${ACCESS_TOKEN}.` },
           cause: new Error(ACCESS_TOKEN),
         }),
-      );
-      const error = await failure(WHATSAPP.check(REF));
-      expect(error.message).toBe(WHATSAPP.failed);
-      expect(error.cause).toBeUndefined();
-      expect([error.message, error.stack ?? "", JSON.stringify(error)].join("\n")).not.toContain(ACCESS_TOKEN);
+        httpError(500, { error: `Bearer ${ACCESS_TOKEN}.` }),
+        httpError(400, { error: `Bearer ${ACCESS_TOKEN}` }),
+      ];
+      for (const leak of leaks) {
+        api.checkWhatsAppSetup.mockRejectedValue(leak);
+        const outcome = await WHATSAPP.check(REF);
+        expect(outcome).toEqual({ kind: "rejected", error: WHATSAPP.failed });
+        expect(JSON.stringify(outcome)).not.toContain(ACCESS_TOKEN);
+      }
     });
 
-    it("throws that sentence when Meta gave no number, and reads no draft", async () => {
+    it("says that sentence when Meta gave no number, and reads no draft", async () => {
       api.checkWhatsAppSetup.mockResolvedValue({ appSubscribed: true });
-      expect((await failure(WHATSAPP.check(REF))).message).toBe(WHATSAPP.failed);
+      await expect(WHATSAPP.check(REF)).resolves.toEqual({ kind: "rejected", error: WHATSAPP.failed });
       expect(api.fetchChannelSetupDraft).not.toHaveBeenCalled();
     });
 
@@ -183,14 +194,11 @@ describe("the WhatsApp entry", () => {
         "holds a number that is not text",
         () => api.fetchChannelSetupDraft.mockResolvedValue(rotateDraft({ phoneNumberId: 106540352242922 })),
       ],
-    ])(
-      "throws that sentence when the draft %s: which number the token is for cannot be said",
-      async (_name, arrange) => {
-        arrange();
-        const error = await failure(WHATSAPP.check(REF));
-        expect(error.message).toBe(WHATSAPP.failed);
-        expect(error.message).not.toContain(ACCESS_TOKEN);
-      },
-    );
+    ])("says that sentence when the draft %s: which number the token is for cannot be said", async (_name, arrange) => {
+      arrange();
+      const outcome = await WHATSAPP.check(REF);
+      expect(outcome).toEqual({ kind: "rejected", error: WHATSAPP.failed });
+      expect(JSON.stringify(outcome)).not.toContain(ACCESS_TOKEN);
+    });
   });
 });
