@@ -105,9 +105,10 @@ function sourcesAnswering(
 function install(
   source: CapabilitySkillInstall["source"],
   step: CapabilitySkillInstall["step"] = "installed_off",
+  snapshotId = "skill-hub-review-1",
 ): CapabilitySkillInstall {
   return {
-    snapshotId: "skill-hub-review-1",
+    snapshotId,
     name: "A skill",
     description: "",
     source,
@@ -434,26 +435,69 @@ describe("Capabilities skill discovery", () => {
       ],
       {
         listInstalls: vi.fn(async () => [
-          install({ kind: "pack", packId: "himalaya" }, "installed_off"),
-          install({
-            kind: "git",
-            sourceRef: "https://www.github.com/Example/Between-Steps.git",
-            host: "www.github.com",
-          }),
-          install({ kind: "git", sourceRef: "https://github.com/example/waiting" }, "waiting_install"),
+          install({ kind: "pack", packId: "himalaya" }, "installed_off", "check-pack"),
+          install(
+            {
+              kind: "git",
+              sourceRef: "https://www.github.com/Example/Between-Steps.git",
+              host: "www.github.com",
+            },
+            "installed_off",
+            "check-between",
+          ),
+          install({ kind: "git", sourceRef: "https://github.com/example/waiting" }, "waiting_install", "check-waiting"),
         ]),
       },
     );
 
     const { items } = await new CapabilitySkillDiscoverService(sources).list(WORKSPACE);
 
-    expect(itemOf(items, "pack:himalaya")).toMatchObject({ state: "installing", install: { kind: "pack" } });
+    // Each names the check whose install Continue opens.
+    expect(itemOf(items, "pack:himalaya")).toMatchObject({
+      state: "installing",
+      install: { kind: "pack" },
+      installSnapshotId: "check-pack",
+    });
     expect(itemOf(items, "pack:github-cli")).toMatchObject({ state: "available" });
+    expect(itemOf(items, "pack:github-cli").installSnapshotId).toBeUndefined();
     const byName = (name: string) => items.find((item) => item.name === name);
-    expect(byName("Between steps")).toMatchObject({ state: "installing" });
-    expect(byName("Waiting")).toMatchObject({ state: "installing" });
+    expect(byName("Between steps")).toMatchObject({ state: "installing", installSnapshotId: "check-between" });
+    expect(byName("Waiting")).toMatchObject({ state: "installing", installSnapshotId: "check-waiting" });
     expect(byName("Untouched")).toMatchObject({ state: "available" });
+    expect(byName("Untouched")?.installSnapshotId).toBeUndefined();
     expect(sources.listInstalls).toHaveBeenCalledWith(WORKSPACE);
+  });
+
+  it("names the install that is still on its way in when a newer one of the same source stopped", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const repository = { kind: "git", sourceRef: "https://github.com/example/twice" } as const;
+    const sources = sourcesAnswering(
+      [listing("Twice", { sourceUrl: "https://github.com/example/twice", installability: "direct" })],
+      {
+        // Newest first, as the installs read lists them.
+        listInstalls: vi.fn(async () => [
+          install({ kind: "pack", packId: "himalaya" }, "failed", "pack-failed"),
+          install({ kind: "pack", packId: "himalaya" }, "waiting_install", "pack-waiting"),
+          install({ kind: "pack", packId: "github-cli" }, "failed", "cli-failed-newer"),
+          install({ kind: "pack", packId: "github-cli" }, "failed", "cli-failed-older"),
+          install({ ...repository, sourceRef: "https://www.github.com/example/twice.git" }, "failed", "git-failed"),
+          install(repository, "waiting_switch_on", "git-waiting"),
+        ]),
+      },
+    );
+
+    const { items } = await new CapabilitySkillDiscoverService(sources).list(WORKSPACE);
+
+    expect(itemOf(items, "pack:himalaya")).toMatchObject({ state: "installing", installSnapshotId: "pack-waiting" });
+    // Every install of it stopped: the newest.
+    expect(itemOf(items, "pack:github-cli")).toMatchObject({
+      state: "installing",
+      installSnapshotId: "cli-failed-newer",
+    });
+    expect(items.find((item) => item.name === "Twice")).toMatchObject({
+      state: "installing",
+      installSnapshotId: "git-waiting",
+    });
   });
 
   it("reads an installed pack as installed, not installing", async () => {
@@ -468,6 +512,7 @@ describe("Capabilities skill discovery", () => {
     const { items } = await new CapabilitySkillDiscoverService(sources).list(WORKSPACE);
 
     expect(itemOf(items, "pack:himalaya")).toMatchObject({ state: "installed" });
+    expect(itemOf(items, "pack:himalaya").installSnapshotId).toBeUndefined();
   });
 
   it("still lists everything when the installs can't be read", async () => {

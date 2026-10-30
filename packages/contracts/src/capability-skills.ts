@@ -324,6 +324,11 @@ export interface CapabilitySkillDiscoverItem {
   listingUrl?: string;
   /** The installed skill's id, at `installed`, when the install can name it. */
   installedSkillId?: string;
+  /**
+   * At `installing`: the check whose install is on its way in (the installs list's `snapshotId`), so "Continue" opens
+   * that install. With more than one for the source, the newest that didn't stop, else the newest.
+   */
+  installSnapshotId?: string;
 }
 
 /**

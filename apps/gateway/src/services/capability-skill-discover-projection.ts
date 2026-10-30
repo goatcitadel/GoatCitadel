@@ -32,10 +32,13 @@ export interface InstalledSourceIndex {
   references: ReadonlyMap<string, string>;
 }
 
-/** The installs on their way in, by what a Discover item can be matched on. */
+/**
+ * The installs on their way in, by what a Discover item can be matched on. Each value is the check whose install
+ * "Continue" opens: the newest one for the source that didn't stop, else the newest.
+ */
 export interface InstallingIndex {
-  packs: ReadonlySet<string>;
-  references: ReadonlySet<string>;
+  packs: ReadonlyMap<string, string>;
+  references: ReadonlyMap<string, string>;
 }
 
 /** What Discover knows about the listings' providers and about what is installed, read once per answer. */
@@ -79,18 +82,24 @@ export function indexInstalledSources(installed: readonly InstalledSkillSource[]
   return { packs, references };
 }
 
+/** `installs` is the installs list, newest first, as the installs read returns it. */
 export function indexInstalling(installs: readonly CapabilitySkillInstall[]): InstallingIndex {
-  const packs = new Set<string>();
-  const references = new Set<string>();
-  for (const { source } of installs) {
-    if (source.kind === "pack") {
-      packs.add(source.packId);
-    } else {
-      const reference = normalizeSourceReference(source.sourceRef);
-      if (reference) references.add(reference);
-    }
+  const packs = new Map<string, CapabilitySkillInstall>();
+  const references = new Map<string, CapabilitySkillInstall>();
+  for (const install of installs) {
+    const { source } = install;
+    const key = source.kind === "pack" ? source.packId : normalizeSourceReference(source.sourceRef);
+    if (!key) continue;
+    const index = source.kind === "pack" ? packs : references;
+    const chosen = index.get(key);
+    // The newest comes first; a newer install that stopped gives way to an older one still on its way in.
+    if (!chosen || (chosen.step === "failed" && install.step !== "failed")) index.set(key, install);
   }
-  return { packs, references };
+  return { packs: checkIds(packs), references: checkIds(references) };
+}
+
+function checkIds(index: ReadonlyMap<string, CapabilitySkillInstall>): ReadonlyMap<string, string> {
+  return new Map([...index].map(([key, install]) => [key, install.snapshotId]));
 }
 
 /** The providers' names that couldn't be read, once each, in the order the owner reported them. */
@@ -118,11 +127,8 @@ export function packMatchesTerm(pack: ShippedSkillPack, term: string): boolean {
 export function buildPackItems(context: DiscoverContext, term: string | undefined): CapabilitySkillDiscoverItem[] {
   return SHIPPED_SKILL_PACKS.filter((pack) => term === undefined || packMatchesTerm(pack, term)).map((pack) => {
     const installedName = context.installed.packs.get(pack.packId);
-    const state: CapabilitySkillDiscoverState = installedName
-      ? "installed"
-      : context.installing.packs.has(pack.packId)
-        ? "installing"
-        : "available";
+    const installing = installedName ? undefined : context.installing.packs.get(pack.packId);
+    const state: CapabilitySkillDiscoverState = installedName ? "installed" : installing ? "installing" : "available";
     return {
       id: `pack:${pack.packId}`,
       name: pack.label,
@@ -133,6 +139,7 @@ export function buildPackItems(context: DiscoverContext, term: string | undefine
       state,
       install: { kind: "pack", packId: pack.packId },
       ...(installedName ? { installedSkillId: `extra:${installedName}` } : {}),
+      ...(installing ? { installSnapshotId: installing } : {}),
     };
   });
 }
@@ -154,16 +161,18 @@ function listingItem(listing: DiscoverListing, context: DiscoverContext): Capabi
     .map((reference) => (reference ? context.installed.references.get(reference) : undefined))
     .find((name) => name !== undefined);
   const installing =
-    install?.kind === "git" && context.installing.references.has(normalizeSourceReference(install.sourceRef) ?? "");
+    install?.kind === "git"
+      ? context.installing.references.get(normalizeSourceReference(install.sourceRef) ?? "")
+      : undefined;
   // The owner's flag also counts: it knows installs by its own key, though it can't name the skill.
-  const state: CapabilitySkillDiscoverState =
-    installedName !== undefined || listing.alreadyInstalled === true
-      ? "installed"
-      : installing
-        ? "installing"
-        : install
-          ? "available"
-          : "view_only";
+  const installed = installedName !== undefined || listing.alreadyInstalled === true;
+  const state: CapabilitySkillDiscoverState = installed
+    ? "installed"
+    : installing
+      ? "installing"
+      : install
+        ? "available"
+        : "view_only";
   return {
     id: `source:${listing.canonicalKey}`,
     name: listing.name,
@@ -175,6 +184,7 @@ function listingItem(listing: DiscoverListing, context: DiscoverContext): Capabi
     ...(install ? { install } : {}),
     ...(isHttpsUrl(listing.sourceUrl) ? { listingUrl: listing.sourceUrl } : {}),
     ...(installedName !== undefined ? { installedSkillId: `extra:${installedName}` } : {}),
+    ...(!installed && installing ? { installSnapshotId: installing } : {}),
   };
 }
 
