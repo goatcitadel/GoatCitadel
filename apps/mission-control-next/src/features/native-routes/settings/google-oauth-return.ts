@@ -1,5 +1,5 @@
 // Google's sign-in redirect reaches GoatCitadel's loopback callback, which hands the result to
-// Settings › Connections in the URL fragment. The tab that started Connect Google completes it.
+// Capabilities › Connectors › Advanced setup in the URL fragment. The tab that started Connect Google completes it.
 import { createOAuthReturnChannel, type OAuthReturn } from "./oauth-return-channel";
 
 export type GoogleOAuthReturn = OAuthReturn;

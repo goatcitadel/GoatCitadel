@@ -188,11 +188,15 @@ describe("Connect Google", () => {
     expect(link.getAttribute("rel")).toBe("noopener noreferrer");
 
     // Another sign-in's return is ignored.
-    window.history.replaceState(null, "", "/settings/connections#google-oauth-return&state=other&code=x");
+    window.history.replaceState(null, "", "/capabilities/connectors/advanced#google-oauth-return&state=other&code=x");
     await act(async () => void consumeGoogleOAuthReturnFragment());
     expect(api.completeGoogleWorkspaceOAuth).not.toHaveBeenCalled();
 
-    window.history.replaceState(null, "", `/settings/connections#google-oauth-return&state=${STATE}&code=4%2F0Adeu`);
+    window.history.replaceState(
+      null,
+      "",
+      `/capabilities/connectors/advanced#google-oauth-return&state=${STATE}&code=4%2F0Adeu`,
+    );
     await act(async () => void consumeGoogleOAuthReturnFragment());
     await settle();
     expect(window.location.hash).toBe("#integration-connections");
@@ -223,7 +227,7 @@ describe("Connect Google", () => {
     window.history.replaceState(
       null,
       "",
-      `/settings/connections#google-oauth-return&state=${STATE}&error=access_denied`,
+      `/capabilities/connectors/advanced#google-oauth-return&state=${STATE}&error=access_denied`,
     );
     await act(async () => void consumeGoogleOAuthReturnFragment());
     await settle();
@@ -283,7 +287,11 @@ describe("Connect Google", () => {
     expect(api.disconnectGoogleWorkspaceOAuth).toHaveBeenCalledWith(CONNECTION_ID);
     expect(container!.textContent).not.toContain("Open Google sign-in");
 
-    window.history.replaceState(null, "", `/settings/connections#google-oauth-return&state=${STATE}&code=late`);
+    window.history.replaceState(
+      null,
+      "",
+      `/capabilities/connectors/advanced#google-oauth-return&state=${STATE}&code=late`,
+    );
     await act(async () => void consumeGoogleOAuthReturnFragment());
     await settle();
     expect(api.completeGoogleWorkspaceOAuth).not.toHaveBeenCalled();

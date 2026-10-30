@@ -1,4 +1,5 @@
-// The Gateway's MCP OAuth callback redirects here with the provider result in the URL fragment.
+// The Gateway's MCP OAuth callback redirects to Capabilities › Connectors › Advanced setup with the provider result in
+// the URL fragment.
 // The tab that receives it forwards the result to the tab holding the in-memory authorization
 // request over a same-origin BroadcastChannel, then clears the fragment. Nothing is stored, and
 // the operator still reviews the completion before the Gateway sends the code anywhere.
