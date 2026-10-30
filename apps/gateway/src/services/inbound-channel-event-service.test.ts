@@ -807,6 +807,11 @@ describe("InboundChannelEventService", () => {
     lastInboundAt = undefined;
     await expect(send()).resolves.toEqual(closed);
     expect(accept).not.toHaveBeenCalled();
+
+    // Their last message is an hour old, so the window is open and the question is accepted.
+    lastInboundAt = new Date(Date.now() - 60 * 60 * 1000).toISOString();
+    await expect(send()).resolves.toMatchObject({ mode: "ask" });
+    expect(accept).toHaveBeenCalledOnce();
   });
 
   it("refuses desk events through the provider acceptance path", async () => {

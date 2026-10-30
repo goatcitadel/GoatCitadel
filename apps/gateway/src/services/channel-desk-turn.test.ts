@@ -310,6 +310,37 @@ describe("channel desk turns", () => {
     ).resolves.toEqual({ mode: "blocked", message: "Turn WhatsApp back on to reply." });
   });
 
+  it("keeps a local or mission chat bound to WhatsApp sending as it did, with no reply window", async () => {
+    const now = new Date("2026-10-29T12:00:00.000Z");
+    const whatsapp = connection({
+      connectionId: "whatsapp-1",
+      catalogId: "channel.whatsapp",
+      key: "whatsapp",
+      label: "WhatsApp",
+    });
+    // "Save binding" on a local chat: no channel conversation, and no message from the person on record.
+    const { conversation: _conversation, ...savedBinding } = binding({
+      sessionId: "local-1",
+      connectionId: "whatsapp-1",
+    });
+    const host = vi.fn();
+    await expect(
+      routeOperatorDeskSend(
+        {
+          sessionId: "local-1",
+          sessionKey: "local-1",
+          content: "hi",
+          idempotencyKey: "request-1",
+          binding: savedBinding,
+          connection: whatsapp,
+          now: () => now,
+        },
+        host,
+      ),
+    ).resolves.toEqual({ mode: "post" });
+    expect(host).not.toHaveBeenCalled();
+  });
+
   it("refuses a desk question whose session key does not name its session", async () => {
     const host = vi.fn();
     await expect(

@@ -9,8 +9,8 @@
  * - `post`: any other conversation (a group, or someone else's direct conversation). The text is posted into the
  *   conversation as written, which is the existing verbatim path. Anything less certain than "ask" is "post", so a
  *   desk send never starts a turn on another person's behalf.
- * - `blocked`: the channel is removed, switched off, or not connected, or it is WhatsApp and the person's last message
- *   is more than 24 hours old; nothing is sent.
+ * - `blocked`: the channel is removed, switched off, or not connected, or it is a WhatsApp conversation and the
+ *   person's last message is 24 hours old or more; nothing is sent.
  *
  * Everything here is a pure decision or builder. The Gateway reads the binding, connection and session, and commits
  * the event through the inbound worker's own acceptance path.
@@ -354,10 +354,10 @@ export async function acceptOperatorDeskTurn(
 
 /**
  * Decides what one desk send does and, in the operator's own conversation, accepts it. A missing binding, a mission
- * session, or any conversation that is not provably the operator's own keeps the existing verbatim path. A WhatsApp
- * reply outside the 24-hour window is blocked in either mode, once a removed or switched-off channel has been ruled
- * out. A desk question is text only: files, non-text parts, a template or a workspace snapshot are refused, never
- * dropped.
+ * session, or any conversation that is not provably the operator's own keeps the existing verbatim path. A reply in a
+ * WhatsApp conversation outside the 24-hour window is blocked in either mode, once a removed or switched-off channel
+ * has been ruled out; a local or mission chat bound to WhatsApp has no conversation and no window. A desk question is
+ * text only: files, non-text parts, a template or a workspace snapshot are refused, never dropped.
  */
 export async function routeOperatorDeskSend(
   input: Omit<OperatorDeskTurnInput, "binding"> &
@@ -389,8 +389,10 @@ export async function routeOperatorDeskSend(
   if (mode === "blocked") {
     return { mode, message: describeBlockedDeskReply(connection) };
   }
-  // The window is the provider's, so it ends a reply in either mode, and before anything is accepted.
-  if (isChannelReplyWindowClosed(connection?.key, lastInboundAt, now?.() ?? new Date())) {
+  // The window is the provider's, so it ends a reply in either mode, and before anything is accepted. It is read only
+  // in a channel conversation: a local or mission chat bound with "Save binding" has none, so it posts as it always has
+  // and Meta refuses a late send itself.
+  if (binding.conversation && isChannelReplyWindowClosed(connection?.key, lastInboundAt, now?.() ?? new Date())) {
     return { mode: "blocked", message: WHATSAPP_REPLY_WINDOW_CLOSED };
   }
   if (mode === "post") {
