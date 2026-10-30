@@ -9,6 +9,7 @@ import {
   WHATSAPP_ADDRESS_NOT_CHECKED,
   WHATSAPP_CHECK_FAILED,
   WHATSAPP_LISTEN_POLL_MS,
+  WHATSAPP_NO_KEY_STORE,
   whatsAppDraftWithSender,
   type WhatsAppDetails,
 } from "./whatsapp-setup-model";
@@ -416,6 +417,31 @@ describe("useWhatsAppSetup, checking the details", () => {
     await run(() => current.checkDetails(DETAILS));
     expect(current.error).toBe(WHATSAPP_CHECK_FAILED);
     expect(current.number).toBeNull();
+  });
+
+  it("says the page needs secure storage when GoatCitadel has none for the keys, and quotes nothing else", async () => {
+    arrangeCheck();
+    api.submitChannelSetupDraftSecrets.mockRejectedValueOnce(
+      httpError(422, { error: "Secure channel credential storage is unavailable." }),
+    );
+    await mount();
+    await run(() => current.checkDetails(DETAILS));
+    expect(current.error).toBe(WHATSAPP_NO_KEY_STORE);
+    expect(current.busy).toBe(false);
+    expect(api.checkWhatsAppSetup).not.toHaveBeenCalled();
+
+    for (const failure of [
+      httpError(422, { error: `Channel credential field accessToken is ${ACCESS_TOKEN}.` }),
+      httpError(500, { error: "Secure channel credential storage is unavailable. Bearer leaked." }),
+      httpError(500, { error: "OS keychain backend is unavailable on this host" }),
+    ]) {
+      api.submitChannelSetupDraftSecrets.mockRejectedValueOnce(failure);
+      await run(() => current.checkDetails(DETAILS));
+      expect(current.error).toBe(WHATSAPP_CHECK_FAILED);
+      expect(JSON.stringify(current)).not.toContain("SECRET");
+      expect(JSON.stringify(current)).not.toContain("leaked");
+    }
+    expect(api.checkWhatsAppSetup).not.toHaveBeenCalled();
   });
 
   it("goes on with the same draft and the same verify token after a failure", async () => {

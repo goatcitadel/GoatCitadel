@@ -207,16 +207,33 @@ export function whatsAppTurnOnChanges({
 /** The longest sentence of GoatCitadel's own that is passed on. Anything longer is not one of its fixed sentences. */
 const LONGEST_SENTENCE = 300;
 
-/**
- * Why a check or a subscribe failed, as one sentence to show. A 400 carries one of GoatCitadel's own fixed sentences
- * about the details ("Meta didn't accept the access token."), which is said as it is. Every other failure, and a 400
- * that carries no such sentence, says the fixed one: what a failure carried is never shown, because it can quote the
- * request the token travelled in.
- */
-export function whatsAppFailure(error: unknown): string {
-  if (!isApiRequestError(error) || error.status !== 400) return WHATSAPP_CHECK_FAILED;
+/** GoatCitadel's sentence when it has no secure storage for channel keys, whatever status it comes with. */
+const NO_KEY_STORE_SAID = "Secure channel credential storage is unavailable.";
+
+/** What the page says for it: keys pasted here need secure storage, and Settings' guide takes environment variables. */
+export const WHATSAPP_NO_KEY_STORE =
+  "This page stores your keys in this computer's secure storage, which isn't available here. Use WhatsApp's guide in Settings with environment variables instead.";
+/** The words of `WHATSAPP_NO_KEY_STORE` that link to WhatsApp's guide in Settings. */
+export const WHATSAPP_NO_KEY_STORE_LINK = "WhatsApp's guide in Settings";
+
+/** The sentence a GoatCitadel error carries, from its body; empty when it carries none. */
+function saidBy(error: { body?: unknown }): string {
   const body: unknown = error.body;
   const fields = typeof body === "object" && body !== null ? (body as Record<string, unknown>) : {};
-  const said = textOf(fields.error) || textOf(fields.message);
+  return textOf(fields.error) || textOf(fields.message);
+}
+
+/**
+ * Why a check or a subscribe failed, as one sentence to show. A 400 carries one of GoatCitadel's own fixed sentences
+ * about the details ("Meta didn't accept the access token."), which is said as it is. GoatCitadel's one sentence for
+ * having no secure key storage is matched exactly, at any status, and said as `WHATSAPP_NO_KEY_STORE`. Every other
+ * failure, and a 400 that carries no such sentence, says the fixed one: what a failure carried is never shown, because
+ * it can quote the request the token travelled in.
+ */
+export function whatsAppFailure(error: unknown): string {
+  if (!isApiRequestError(error)) return WHATSAPP_CHECK_FAILED;
+  const said = saidBy(error);
+  if (said === NO_KEY_STORE_SAID) return WHATSAPP_NO_KEY_STORE;
+  if (error.status !== 400) return WHATSAPP_CHECK_FAILED;
   return said.length <= LONGEST_SENTENCE && said.endsWith(".") ? said : WHATSAPP_CHECK_FAILED;
 }

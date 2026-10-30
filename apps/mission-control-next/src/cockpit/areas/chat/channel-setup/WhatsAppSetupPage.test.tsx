@@ -22,6 +22,7 @@ import {
   WHATSAPP_CODE_EXPIRED,
   WHATSAPP_LISTEN_POLL_MS,
   WHATSAPP_META_APP_STEPS,
+  WHATSAPP_NO_KEY_STORE,
   WHATSAPP_NOT_SUBSCRIBED,
   WHATSAPP_POINT_META_TEXT,
   WHATSAPP_PUBLIC_ADDRESS_TEXT,
@@ -471,6 +472,26 @@ describe("WhatsAppSetupPage, the steps before Meta checks the address", () => {
     await checkDetails();
     expect(steps()[2]!.textContent).toContain("Meta didn't accept the access token.");
     expect(status()).toBe("Meta didn't accept the access token.");
+  });
+
+  it("says the page needs secure storage, and links WhatsApp's guide in Settings, when there is none", async () => {
+    api.submitChannelSetupDraftSecrets.mockRejectedValue(
+      httpError(422, { error: "Secure channel credential storage is unavailable." }),
+    );
+    await mount();
+    await checkDetails();
+
+    const third = steps()[2]!;
+    expect(third.textContent).toContain(WHATSAPP_NO_KEY_STORE);
+    expect(container.textContent).not.toContain("Secure channel credential storage is unavailable.");
+    expect(status()).toBe(WHATSAPP_NO_KEY_STORE);
+    const guide = link("WhatsApp's guide in Settings");
+    expect(guide?.textContent).toBe("WhatsApp's guide in Settings");
+    expect(third.contains(guide ?? null)).toBe(true);
+    // The same place as the page's own Settings link.
+    expect(guide?.getAttribute("href")).toBe(link("More options in Settings")?.getAttribute("href"));
+    expect(api.checkWhatsAppSetup).not.toHaveBeenCalled();
+    expect(liveRegions()).toHaveLength(1);
   });
 
   it("shows the token's end as a calm note", async () => {

@@ -12,6 +12,8 @@ import {
   WHATSAPP_LISTEN_POLL_MS,
   WHATSAPP_META_APPS_HREF,
   WHATSAPP_META_APP_STEPS,
+  WHATSAPP_NO_KEY_STORE,
+  WHATSAPP_NO_KEY_STORE_LINK,
   WHATSAPP_POINT_META_TEXT,
   WHATSAPP_PUBLIC_ADDRESS_TEXT,
   WHATSAPP_SAY_HI_TEXT,
@@ -242,6 +244,34 @@ describe("whatsAppFailure", () => {
     expect(whatsAppFailure(new Error("Authorization: Bearer EAAB-SECRET-TOKEN"))).toBe(WHATSAPP_CHECK_FAILED);
     expect(whatsAppFailure("Bearer EAAB-SECRET-TOKEN")).toBe(WHATSAPP_CHECK_FAILED);
     expect(whatsAppFailure(undefined)).toBe(WHATSAPP_CHECK_FAILED);
+  });
+
+  it("says the page needs secure storage for GoatCitadel's one sentence about it, at any status", () => {
+    expect(WHATSAPP_NO_KEY_STORE).toBe(
+      "This page stores your keys in this computer's secure storage, which isn't available here. Use WhatsApp's guide in Settings with environment variables instead.",
+    );
+    expect(WHATSAPP_NO_KEY_STORE).toContain(WHATSAPP_NO_KEY_STORE_LINK);
+    for (const status of [400, 422, 503]) {
+      const failure = httpError(status, { error: "Secure channel credential storage is unavailable." });
+      expect(whatsAppFailure(failure), String(status)).toBe(WHATSAPP_NO_KEY_STORE);
+    }
+    expect(whatsAppFailure(httpError(422, { message: "Secure channel credential storage is unavailable." }))).toBe(
+      WHATSAPP_NO_KEY_STORE,
+    );
+  });
+
+  it("matches that sentence exactly, and says the fixed sentence for anything near it", () => {
+    for (const said of [
+      "Secure channel credential storage is unavailable. Bearer EAAB-SECRET-TOKEN.",
+      "secure channel credential storage is unavailable.",
+      "OS keychain backend is unavailable on this host",
+      "Channel credential field accessToken must be submitted through secure input.",
+    ]) {
+      for (const status of [422, 500]) {
+        expect(whatsAppFailure(httpError(status, { error: said })), `${status} ${said}`).toBe(WHATSAPP_CHECK_FAILED);
+      }
+    }
+    expect(whatsAppFailure(new Error("Secure channel credential storage is unavailable."))).toBe(WHATSAPP_CHECK_FAILED);
   });
 });
 

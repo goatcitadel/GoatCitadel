@@ -21,6 +21,7 @@ import { useTurnOn, type TurnOnState } from "./use-turn-on";
 import { useWhatsAppSetup, type WhatsAppSetupState } from "./use-whatsapp-setup";
 import { WhatsAppAddressStep } from "./WhatsAppAddressStep";
 import { NO_WHATSAPP_IDS, WhatsAppDetailsStep, type WhatsAppIds } from "./WhatsAppDetailsStep";
+import { WhatsAppFailureText } from "./WhatsAppFailureText";
 import { WhatsAppSayHiStep } from "./WhatsAppSayHiStep";
 import {
   WHATSAPP_ADDRESS_CHECKED,
@@ -266,7 +267,7 @@ export function WhatsAppSetupPage({
           onAccessToken={accessToken.setValue}
           busy={busy}
           checking={checking}
-          error={setup.error}
+          error={setup.error ? <WhatsAppFailureText error={setup.error} workspaceId={workspaceId} /> : undefined}
           onCheck={() => void checkDetails()}
         />
       ),
@@ -322,7 +323,9 @@ export function WhatsAppSetupPage({
       <SetupSteps steps={steps} status={statusLine(setup, checking, turnOn)} />
       {pageError ? (
         <Callout tone="error" announce={false}>
-          <p>{pageError}</p>
+          <p>
+            <WhatsAppFailureText error={pageError} workspaceId={workspaceId} />
+          </p>
         </Callout>
       ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line-subtle pt-4">

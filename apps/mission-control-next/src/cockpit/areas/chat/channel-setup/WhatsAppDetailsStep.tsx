@@ -1,3 +1,4 @@
+import type { ReactNode } from "react";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { Field } from "../../../ui/Field";
@@ -47,7 +48,8 @@ export function WhatsAppDetailsStep({
   busy: boolean;
   /** The check itself is in flight. */
   checking: boolean;
-  error?: string;
+  /** The failure's one sentence, as the page draws it. */
+  error?: ReactNode;
   onCheck: () => void;
 }) {
   const all =
