@@ -1,3 +1,4 @@
+import { CONNECTOR_SETUP_PATH } from "../../app/routes";
 import type { UseQueryResult } from "@tanstack/react-query";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
@@ -28,7 +29,7 @@ export function SearchEngineOrderControl({ settings }: { settings: UseQueryResul
     settings,
     draftKey: "web:system:search-engine-order",
     draftLabel: "Search engine order",
-    recovery: { path: "/settings/connections", anchor: WEB_SEARCH_ANCHOR },
+    recovery: { path: CONNECTOR_SETUP_PATH, anchor: WEB_SEARCH_ANCHOR },
     read: readEngineOrder,
     fallback: "duckduckgo,bing,google",
     patch: (value) => ({ web: { search: { engineOrder: decodeEngineOrder(value) } } }),

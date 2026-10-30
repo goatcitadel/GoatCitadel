@@ -311,6 +311,22 @@ describe("Connectors tab", () => {
     expect(button("Add your own")).toBeDefined();
   });
 
+  it.each([
+    ["a list", [SLACK, LINEAR]],
+    ["nothing to list", []],
+  ])("links Advanced setup, the full settings behind the list, with %s", async (_name, items) => {
+    api.fetchCapabilityConnectors.mockResolvedValue(response(items));
+    await render();
+    await vi.waitFor(() => expect(text()).toContain("Every MCP server setting"));
+    const link = [...container.querySelectorAll<HTMLAnchorElement>("a")].find(
+      (anchor) => anchor.textContent === "Advanced setup",
+    );
+    expect(link?.closest("p")?.textContent).toBe(
+      "Every MCP server setting, integration connection and web search key is in Advanced setup.",
+    );
+    expect(new URL(link!.href).pathname).toBe("/capabilities/connectors/advanced");
+  });
+
   it("keeps rows and shows an issue line when one source failed", async () => {
     api.fetchCapabilityConnectors.mockResolvedValue(
       response([SLACK, NOTION], [{ source: "integration", message: "Gmail's sign-in status couldn't be read." }]),

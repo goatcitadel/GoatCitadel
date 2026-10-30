@@ -200,9 +200,13 @@ async function flush() {
   });
 }
 
-/** The provider's redirect reaching Settings in this tab, which hands it on. */
+/** The provider's redirect reaching Advanced setup in this tab, which hands it on. */
 async function returnFromProvider(state: string, code = "code-1") {
-  window.history.replaceState(null, "", `/settings/connections#mcp-oauth-return&state=${state}&code=${code}`);
+  window.history.replaceState(
+    null,
+    "",
+    `/capabilities/connectors/advanced#mcp-oauth-return&state=${state}&code=${code}`,
+  );
   await act(async () => {
     consumeMcpOAuthReturnFragment();
   });
@@ -487,7 +491,7 @@ describe("useConnectorInstall", () => {
     expect(plans.fetchChangePlan).not.toHaveBeenCalled();
   });
 
-  it("links a refusal that sends the app to Settings", async () => {
+  it("links a refusal that sends the app to Advanced setup", async () => {
     install.installCapabilityConnector.mockRejectedValueOnce(
       new ApiRequestError("Linear needs an API key. Set it up in Settings.", {
         kind: "http",
@@ -503,8 +507,8 @@ describe("useConnectorInstall", () => {
     expect(latest.state).toMatchObject({
       phase: "failed",
       step: "plan",
-      message: "This app needs an API key. Set it up in Settings.",
-      link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+      message: "This app needs an API key. Set it up in Advanced setup.",
+      link: { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" },
     });
   });
 
@@ -527,9 +531,9 @@ describe("useConnectorInstall", () => {
       phase: "failed",
       step: "plan",
       message:
-        "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in Settings.",
+        "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in Advanced setup.",
       changed: [],
-      link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+      link: { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" },
     });
     expect((latest.state as { message: string }).message).not.toContain("gateway");
     expect(plans.fetchChangePlan).not.toHaveBeenCalled();
@@ -654,9 +658,9 @@ describe("useConnectorInstall", () => {
 
   // I1: a sign-in the Gateway refused before it changed anything says why, and what to do, in plain words.
   describe("when sign-in is refused", () => {
-    // The words that point at Settings link to the page that fixes it (DESIGN.md).
+    // The words that point at another page link to the page that fixes it (DESIGN.md).
     const ALLOWLIST_LINK = { label: "Open in Settings", href: "/settings/first-run" } as const;
-    const MCP_LINK = { label: "Open in Settings", href: "/settings/connections#mcp-servers" } as const;
+    const MCP_LINK = { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" } as const;
     it.each([
       [
         "its sign-in site isn't on the network allowlist",
@@ -676,14 +680,14 @@ describe("useConnectorInstall", () => {
         "its sign-in site can't be read",
         { refused: "sign_in_site" },
         "Couldn't start signing in to Linear. Its sign-in site couldn't be read. Try again in a moment, or set up " +
-          "its sign-in in Settings.",
+          "its sign-in in Advanced setup.",
         { link: MCP_LINK },
       ],
       [
         "the app won't register GoatCitadel",
         { refused: "registration" },
         "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in " +
-          "Settings instead.",
+          "Advanced setup instead.",
         // Signing in again would only be refused the same way, so the flow says so for its controls.
         { link: MCP_LINK, signInBlocked: true },
       ],
@@ -815,8 +819,8 @@ describe("useConnectorInstall", () => {
       [
         "a remote app",
         { transport: "http" },
-        "Couldn't connect Linear. Try again in a moment, or check its setup in Settings.",
-        { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+        "Couldn't connect Linear. Try again in a moment, or check its setup in Advanced setup.",
+        { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" },
       ],
     ] as const)(
       "shows the server's own last error once a failed connect of %s is settled",

@@ -74,7 +74,7 @@ beforeEach(() => {
   window.history.replaceState(
     { retained: true },
     "",
-    "/settings/connections?keep=yes&citadelId=citadel&workspaceId=stale&runId=stale&sessionId=carried&view=run-detail&shell=cockpit&shellScope=visit#delivery",
+    "/capabilities/connectors/advanced?keep=yes&citadelId=citadel&workspaceId=stale&runId=stale&sessionId=carried&view=run-detail&shell=cockpit&shellScope=visit#delivery",
   );
   host = document.createElement("div");
   document.body.append(host);
@@ -113,7 +113,7 @@ it("opens the exact confirmed replay audit in native Work with query/fragment co
 it("keeps the real dirty review for Cancel and rejects its retained decision after workspace ABA", async () => {
   await render("workspace", true);
   await act(async () => link().click());
-  expect(window.location.pathname).toBe("/settings/connections");
+  expect(window.location.pathname).toBe("/capabilities/connectors/advanced");
   await click("Cancel");
   expect(getDirtySectionKeys()).toContain("replay-evidence-draft");
   expect(discard).not.toHaveBeenCalled();
@@ -125,7 +125,7 @@ it("keeps the real dirty review for Cancel and rejects its retained decision aft
   await render("other", true);
   await render("workspace", true);
   await act(async () => stale.click());
-  expect(window.location.pathname).toBe("/settings/connections");
+  expect(window.location.pathname).toBe("/capabilities/connectors/advanced");
   expect(getDirtySectionKeys()).toContain("replay-evidence-draft");
   expect(discard).not.toHaveBeenCalled();
   expect(callbacks.confirmReplayAudit).not.toHaveBeenCalled();

@@ -6,6 +6,7 @@ import {
   type SpecialistEvidence,
 } from "./specialist-approval-evidence";
 import { SpecialistApprovalReview } from "./SpecialistApprovalReview";
+import { connectorSetupHref } from "../../app/routes";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
@@ -316,9 +317,9 @@ function ApprovalDecisionReview({
         <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
         <p className="text-fg-muted">
           This request carries an MCP server question, which can&apos;t be decided here. Pending MCP server requests are
-          listed in Settings.{" "}
+          listed in Capabilities › Connectors › Advanced setup.{" "}
           <NativeOwnerLink
-            href="/settings/mcp"
+            href={connectorSetupHref("mcp")}
             scope={[workspaceId, approval.approvalId]}
             className="font-medium text-accent hover:underline"
           >

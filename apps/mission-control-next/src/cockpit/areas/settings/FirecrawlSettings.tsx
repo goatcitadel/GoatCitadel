@@ -1,3 +1,4 @@
+import { CONNECTOR_SETUP_PATH } from "../../app/routes";
 import { useEffect, useState } from "react";
 import type { UseQueryResult } from "@tanstack/react-query";
 import type {
@@ -72,7 +73,7 @@ export function FirecrawlSettings({ settings }: { settings: UseQueryResult<Runti
     settings,
     draftKey: "web:system:firecrawl",
     draftLabel: "Firecrawl",
-    recovery: { path: "/settings/connections", anchor: WEB_SEARCH_ANCHOR },
+    recovery: { path: CONNECTOR_SETUP_PATH, anchor: WEB_SEARCH_ANCHOR },
     read: readFirecrawlDraft,
     fallback: encodeFirecrawlDraft({
       enabled: false,

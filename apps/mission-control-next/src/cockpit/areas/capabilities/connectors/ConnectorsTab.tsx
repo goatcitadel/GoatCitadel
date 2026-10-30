@@ -5,8 +5,10 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView } from "../../../data/record-view";
 import { connectorListQuery } from "../../../data/capability-connectors-query";
 import { queryKeys } from "../../../data/query-keys";
+import { connectorSetupHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
 import { EmptyState } from "../../../ui/EmptyState";
+import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { Section } from "../../../ui/Section";
 import { CapabilitySearch } from "../CapabilitySearch";
 import { CategoryFilter } from "../CategoryFilter";
@@ -21,7 +23,7 @@ import {
 import { useRecoveredInstalls } from "./use-connector-install";
 import { useConnectorPanel } from "./use-connector-panel";
 
-// The custom server form belongs to Settings and is large; it loads only when someone asks to add their own.
+// The custom server form belongs to Advanced setup and is large; it loads only when someone asks to add their own.
 const McpServerCreate = lazy(async () => ({
   default: (await import("../../settings/McpServerCreate")).McpServerCreate,
 }));
@@ -165,6 +167,13 @@ export function ConnectorsTab() {
           />
         </Suspense>
       ) : null}
+      <p className="text-sm text-fg-secondary">
+        Every MCP server setting, integration connection and web search key is in{" "}
+        <NativeOwnerLink href={connectorSetupHref()} scope={workspaceId}>
+          Advanced setup
+        </NativeOwnerLink>
+        .
+      </p>
     </div>
   );
 }

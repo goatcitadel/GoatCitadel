@@ -43,7 +43,7 @@ export function PublicWebAddressField({
     settings: query,
     draftKey: "channels:system:public-web-address",
     draftLabel: "Public web address",
-    recovery: { path: "/settings/connections", anchor: "channels" },
+    recovery: { path: "/chat/messaging/advanced", anchor: "public-web-address" },
     read: readPublicWebAddress,
     fallback: "",
     patch: (value) => ({ publicWebAddress: value.trim() || null }),

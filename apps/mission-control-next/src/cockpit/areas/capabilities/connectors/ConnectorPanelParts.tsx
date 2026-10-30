@@ -58,13 +58,13 @@ export function ConnectionLines({ item, children }: { item: CapabilityConnectorI
   );
 }
 
-/** Why Chat can't use connectors, with the way to Settings. */
+/** Why Chat can't use connectors, with the way to Advanced setup. */
 export function ChatBlockNote({ item }: { item: CapabilityConnectorItem }) {
   return (
     <p className="text-sm text-fg-secondary">
       {chatBlockLine(item.chat.blockedBy)}{" "}
       <NativeOwnerLink scope={item.id} href={CHAT_CONNECTORS_SETTINGS_HREF}>
-        See Chat access in Settings
+        See Chat access in Advanced setup
       </NativeOwnerLink>
     </p>
   );

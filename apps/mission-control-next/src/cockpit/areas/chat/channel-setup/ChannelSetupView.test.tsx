@@ -68,7 +68,7 @@ describe("ChannelSetupView", () => {
     await mount("telegram");
     expect(container.querySelector("h1")?.textContent).toBe("Set up Telegram");
     expect(container.textContent).toContain("Paste your bot's key");
-    expect(container.textContent).not.toContain("Its steps are in Settings");
+    expect(container.textContent).not.toContain("is set up in Advanced channel setup");
     expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.telegram" });
   });
 
@@ -76,7 +76,7 @@ describe("ChannelSetupView", () => {
     await mount("discord");
     expect(container.querySelector("h1")?.textContent).toBe("Set up Discord");
     expect(container.textContent).toContain("Paste your bot's token");
-    expect(container.textContent).not.toContain("Its steps are in Settings");
+    expect(container.textContent).not.toContain("is set up in Advanced channel setup");
     expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.discord" });
   });
 
@@ -84,14 +84,15 @@ describe("ChannelSetupView", () => {
     await mount("slack");
     expect(container.querySelector("h1")?.textContent).toBe("Set up Slack");
     expect(container.textContent).toContain("Install it and copy two tokens");
-    expect(container.textContent).not.toContain("Its steps are in Settings");
+    expect(container.textContent).not.toContain("is set up in Advanced channel setup");
     expect(api.fetchChannelSetupDrafts).toHaveBeenCalledWith({ catalogId: "channel.slack" });
   });
 
-  it("still sends a channel without a page of its own to Settings", async () => {
+  it("still sends a channel without a page of its own to Advanced channel setup", async () => {
     await mount("mattermost");
     expect(container.querySelector("h1")?.textContent).toBe("Add Mattermost");
-    expect(container.textContent).toContain("Set up Mattermost in Settings");
+    expect(container.textContent).toContain("Mattermost is set up in Advanced channel setup.");
+    expect(container.textContent).toContain("Set up Mattermost in Advanced channel setup");
     expect(api.fetchChannelSetupDrafts).not.toHaveBeenCalled();
   });
 

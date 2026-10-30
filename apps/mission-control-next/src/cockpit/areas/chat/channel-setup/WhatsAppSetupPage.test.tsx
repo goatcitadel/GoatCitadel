@@ -474,7 +474,7 @@ describe("WhatsAppSetupPage, the steps before Meta checks the address", () => {
     expect(status()).toBe("Meta didn't accept the access token.");
   });
 
-  it("says the page needs secure storage, and links WhatsApp's guide in Settings, when there is none", async () => {
+  it("says the page needs secure storage, and links WhatsApp's guide in Advanced channel setup, when there is none", async () => {
     api.submitChannelSetupDraftSecrets.mockRejectedValue(
       httpError(422, { error: "Secure channel credential storage is unavailable." }),
     );
@@ -485,11 +485,11 @@ describe("WhatsAppSetupPage, the steps before Meta checks the address", () => {
     expect(third.textContent).toContain(WHATSAPP_NO_KEY_STORE);
     expect(container.textContent).not.toContain("Secure channel credential storage is unavailable.");
     expect(status()).toBe(WHATSAPP_NO_KEY_STORE);
-    const guide = link("WhatsApp's guide in Settings");
-    expect(guide?.textContent).toBe("WhatsApp's guide in Settings");
+    const guide = link("WhatsApp's guide in Advanced channel setup");
+    expect(guide?.textContent).toBe("WhatsApp's guide in Advanced channel setup");
     expect(third.contains(guide ?? null)).toBe(true);
-    // The same place as the page's own Settings link.
-    expect(guide?.getAttribute("href")).toBe(link("More options in Settings")?.getAttribute("href"));
+    // The same place as the page's own More options link.
+    expect(guide?.getAttribute("href")).toBe(link("More options in Advanced channel setup")?.getAttribute("href"));
     expect(api.checkWhatsAppSetup).not.toHaveBeenCalled();
     expect(liveRegions()).toHaveLength(1);
   });
@@ -885,7 +885,7 @@ describe("WhatsAppSetupPage, turning it on", () => {
     expect(CALLBACK).toContain("/connections/draft-1/");
     expect(button("Start over")).toBeUndefined();
     expect(button("Turn on WhatsApp")).toBeUndefined();
-    expect(link("More options in Settings")).toBeDefined();
+    expect(link("More options in Advanced channel setup")).toBeDefined();
   });
 
   it("asks whether to carry on when the test message could not be removed, in WhatsApp's words", async () => {
@@ -971,7 +971,7 @@ describe("WhatsAppSetupPage, coming back to a setup", () => {
     expect(states()).toEqual(["done", "current", "current", "locked", "locked", "locked"]);
   });
 
-  it("does not go on with a setup made in Settings", async () => {
+  it("does not go on with a setup made in Advanced channel setup", async () => {
     api.fetchChannelSetupDrafts.mockResolvedValue({
       items: [draft({ revision: 5, draft: { ...IDS }, secretState: ALL_SECRETS })],
     });

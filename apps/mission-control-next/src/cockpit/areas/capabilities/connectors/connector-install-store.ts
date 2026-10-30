@@ -33,7 +33,7 @@ export type ConnectorInstallState =
       changed: string[];
       detail?: string;
       link?: ConnectorNextLink;
-      /** Signing in again can't help: the app refused to register GoatCitadel, so its sign-in is set up in Settings. */
+      /** Signing in again can't help: the app refused to register GoatCitadel, so its sign-in is set up in Advanced setup. */
       signInBlocked?: true;
     }
   | { phase: "stopped"; message: string; changed: string[]; link?: ConnectorNextLink };

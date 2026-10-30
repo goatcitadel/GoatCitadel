@@ -91,6 +91,10 @@ describe("shell preference", () => {
     expect(classicFallbackPath("/system/spend")).toBe("/ops/costs");
     expect(classicFallbackPath("/settings/models")).toBe("/settings/onboarding");
     expect(classicFallbackPath("/settings/connections")).toBe("/settings/channels");
+    // The pages that took over Settings › Connections fall back to Classic's own sections.
+    expect(classicFallbackPath("/capabilities/connectors/advanced")).toBe("/settings/mcp");
+    expect(classicFallbackPath("/chat/messaging/advanced")).toBe("/settings/channels");
+    expect(classicFallbackPath("/capabilities/connectors")).toBe("/capabilities/connectors");
     expect(classicFallbackPath("/settings/safety")).toBe("/settings/permissions");
     expect(classicFallbackPath("/settings/citadel")).toBe("/library/citadel-overview");
     expect(classicFallbackPath("/settings/advanced")).toBe("/settings/runtime");
@@ -149,6 +153,21 @@ describe("shell preference", () => {
     expect(resolved.pathname).toBe(native);
     expect(resolved.searchParams.get("workspaceId")).toBe("w");
     expect(resolved.hash).toBe("#keep");
+  });
+
+  // Classic's own sections are what Settings › Connections held; their addresses open the pages that took them over.
+  it.each([
+    ["/capabilities/connectors/advanced", "/capabilities/connectors/advanced", "#mcp-servers"],
+    ["/chat/messaging/advanced", "/chat/messaging/advanced", ""],
+  ])("round-trips %s through Classic's own section", (cockpit, native, hash) => {
+    const classic = new URL(buildShellSwitchUrl(`http://localhost${cockpit}?workspaceId=w`, "classic"));
+    classic.searchParams.delete("shell");
+    const resolution = resolveCockpitCompatibility(classic.pathname + classic.search + classic.hash);
+    expect(resolution.kind).toBe("native");
+    const resolved = new URL((resolution as { href: string }).href, "http://cockpit.invalid");
+    expect(resolved.pathname).toBe(native);
+    expect(resolved.searchParams.get("workspaceId")).toBe("w");
+    expect(resolved.hash).toBe(hash);
   });
 
   it("keeps the selected conversation when returning to the current Chat", () => {

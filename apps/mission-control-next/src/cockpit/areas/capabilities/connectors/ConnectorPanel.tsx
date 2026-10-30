@@ -152,7 +152,7 @@ function ConnectorDetails({
       {savedServer ? <ConnectorServerControls item={item} panelId={panelId} onRemoved={onRemoved} /> : null}
 
       <NativeOwnerLink scope={item.id} href={connectorSettingsHref(item)} className="text-sm">
-        Advanced setup in Settings
+        Advanced setup
       </NativeOwnerLink>
 
       <TechnicalDetails>
