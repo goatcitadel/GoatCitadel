@@ -833,10 +833,14 @@ describe("a skill's panel opened from Discover", () => {
     expect(route.navigate).not.toHaveBeenCalled();
     expect(tab("Discover").getAttribute("aria-selected")).toBe("true");
     expect(searchBox().value).toBe("pull-request");
-    await vi.waitFor(() => expect(discoverCalls().some(([, options]) => options.q === "pull-request")).toBe(true), {
-      timeout: 3_000,
-    });
-    expect(names()).toEqual(["Himalaya"]);
+    // The last list stays on screen while the search loads, so wait for its answer to replace it.
+    await vi.waitFor(
+      () => {
+        expect(discoverCalls().some(([, options]) => options.q === "pull-request")).toBe(true);
+        expect(names()).toEqual(["Himalaya"]);
+      },
+      { timeout: 3_000 },
+    );
     // Installed was not asked for it.
     expect(api.fetchCapabilitySkills).toHaveBeenCalledTimes(1);
   });
