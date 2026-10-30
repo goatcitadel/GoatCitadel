@@ -6,7 +6,15 @@ import type {
   ChatTurnFailureRecord,
 } from "@goatcitadel/contracts";
 import { getChatTurnRecoveryAction, type ChatTurnRecoveryAction } from "@goatcitadel/contracts";
+import { classifyProviderFailure, type ProviderFailureClass } from "../llm-completion-helpers.js";
 import { toPlainRecord } from "./usage-and-attribution.js";
+
+/** Provider refusals that Chat names on their own; the rest fall through to the message checks below. */
+const PROVIDER_FAILURE_CLASSES: Partial<Record<ProviderFailureClass, ChatTurnFailureClass>> = {
+  rate_limited: "provider_rate_limited",
+  context_overflow: "context_too_long",
+  business_denial: "provider_billing",
+};
 
 export function buildChatTurnFailureRecord(
   failureClass: ChatTurnFailureClass,
@@ -20,6 +28,7 @@ export function buildChatTurnFailureRecord(
     message,
     retryable:
       failureClass !== "auth_required" &&
+      failureClass !== "provider_billing" &&
       failureClass !== "skill_security_blocked" &&
       failureClass !== "guidance_security_blocked",
     recommendedAction,
@@ -89,6 +98,12 @@ export function classifyChatTurnFailure(input: {
   const errorFailureClass = (input.error as { failureClass?: unknown } | undefined)?.failureClass;
   if (errorFailureClass === "skill_security_blocked" || errorFailureClass === "guidance_security_blocked") {
     return errorFailureClass;
+  }
+  // The provider's own refusal ended the turn, so it outranks an earlier tool failure the model may have worked past.
+  const providerFailureClass =
+    input.error instanceof Error ? PROVIDER_FAILURE_CLASSES[classifyProviderFailure(input.error)] : undefined;
+  if (providerFailureClass) {
+    return providerFailureClass;
   }
   if (hasToolBlockedFailure(input.toolRuns)) {
     return "tool_blocked";

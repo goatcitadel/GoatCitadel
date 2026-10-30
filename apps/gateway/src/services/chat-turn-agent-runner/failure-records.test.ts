@@ -84,3 +84,38 @@ describe("chat turn skill-security failure records", () => {
     expect(JSON.stringify(record)).not.toContain("ignore all previous");
   });
 });
+
+describe("chat turn provider failure classes", () => {
+  const failedToolRun = { status: "failed" } as never;
+
+  it.each([
+    ["Provider request failed (429): Too Many Requests", "provider_rate_limited", "wait_and_retry", true],
+    [
+      "Provider request failed (400): prompt is too long: 210000 tokens > 200000 maximum",
+      "context_too_long",
+      "shorten_conversation",
+      true,
+    ],
+    ["Provider request failed (402): insufficient credit balance", "provider_billing", "check_provider_plan", false],
+  ] as const)("names %s on its own, ahead of an earlier tool failure", (message, failureClass, action, retryable) => {
+    const classified = classifyChatTurnFailure({ error: new Error(message), toolRuns: [failedToolRun] });
+    expect(classified).toBe(failureClass);
+    expect(buildChatTurnFailureRecord(classified, message)).toMatchObject({
+      failureClass,
+      recommendedAction: action,
+      retryable,
+    });
+  });
+
+  it("keeps sign-in, timeout and tool failures on their existing classes", () => {
+    expect(
+      classifyChatTurnFailure({ error: new Error("Provider request failed (401): invalid api key"), toolRuns: [] }),
+    ).toBe("auth_required");
+    expect(classifyChatTurnFailure({ error: new Error("The request timed out"), toolRuns: [] })).toBe(
+      "provider_timeout",
+    );
+    expect(classifyChatTurnFailure({ error: new Error("something odd"), toolRuns: [failedToolRun] })).toBe(
+      "tool_failed",
+    );
+  });
+});

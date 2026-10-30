@@ -348,6 +348,7 @@ export function ChatAreaView({
               channel={channel}
               receipt={input.changePlanReceipt}
               onReviewPlan={input.onReviewChangePlan}
+              onNewConversation={() => void input.sessionRail.onCreateSession()}
               onInspectTurn={(turnId) => openInspector(turnId, "turn")}
               onInspectRun={(turnId) => openInspector(turnId, "run")}
               onOpenArtifact={(turnId, artifactId) => {

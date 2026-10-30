@@ -571,6 +571,12 @@ export function buildUserSafeFailureMessage(failure: ChatTurnFailureRecord): str
       return "An activated skill failed the runtime security scan before any model call. Disable or re-review the named skill, then retry.";
     case "guidance_security_blocked":
       return "A workspace PRODUCT.md or DESIGN.md failed the runtime security scan before any model call. Edit the named document under Settings › Workspaces › Design context, then send the message again.";
+    case "provider_rate_limited":
+      return "The model provider is limiting how often it takes requests. Wait a minute and retry, or pick another model.";
+    case "context_too_long":
+      return "This conversation is now longer than the model can read at once. Start a new conversation, or pick a model that reads more.";
+    case "provider_billing":
+      return "The model provider turned the request down for account reasons, such as no credit left or a model the plan does not include. Check the account with the provider, or pick another model.";
     default:
       return "This turn failed before completion. Retry once, or narrow the request so the next pass can finish cleanly.";
   }
