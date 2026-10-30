@@ -279,12 +279,40 @@ describe("capability skill check and install routes", () => {
         INSTALLS_URL,
         `${INSTALLS_URL}?workspaceId=default&limit=500`,
         `${INSTALLS_URL}?workspaceId=default&snapshotId=`,
-        `${INSTALLS_URL}?workspaceId=default&snapshotId=${"s".repeat(201)}`,
+        `${INSTALLS_URL}?workspaceId=default&snapshotId=${"s".repeat(257)}`,
       ]) {
         const response = await server.inject({ method: "GET", url });
         expect(response.statusCode, url).toBe(400);
       }
       expect(installs).not.toHaveBeenCalled();
+    });
+
+    it("reads a check id as long as a step may name, the Skill Hub's own bound", async () => {
+      const installs = vi.fn(async () => INSTALLS);
+      const requestStep = vi.fn(async () => ({ status: "waiting", approvalId: "approval-1" }));
+      const { server } = await build({ skills: { installs }, actions: { requestStep } });
+      const longest = "s".repeat(256);
+
+      const read = await server.inject({
+        method: "GET",
+        url: `${INSTALLS_URL}?workspaceId=default&snapshotId=${longest}`,
+      });
+      const step = await server.inject({
+        method: "POST",
+        url: OPERATIONS_URL,
+        payload: { ...OPERATION_BODY, snapshotId: longest },
+      });
+      const tooLong = await server.inject({
+        method: "POST",
+        url: OPERATIONS_URL,
+        payload: { ...OPERATION_BODY, snapshotId: `${longest}s` },
+      });
+
+      expect(read.statusCode).toBe(200);
+      expect(installs).toHaveBeenCalledExactlyOnceWith("default", longest);
+      expect(step.statusCode).toBe(202);
+      expect(tooLong.statusCode).toBe(400);
+      expect(requestStep).toHaveBeenCalledTimes(1);
     });
 
     it("answers 503 when the installs aren't composed", async () => {
@@ -370,6 +398,29 @@ describe("capability skill check and install routes", () => {
       });
       expect(response.body).not.toContain("Skill Hub");
       expect(resolveApproval).not.toHaveBeenCalled();
+    });
+
+    it("answers a refusal without codes with the same plain copy and no blockers", async () => {
+      const actions = realActions({
+        // A broken invariant in the Hub approval owner: its own words name Skill Hub, and it lists no codes.
+        createSkillHubApproval: vi.fn(async (): Promise<never> => {
+          throw new ConflictError({
+            code: "STATE_CONFLICT",
+            message: "Created Skill Hub approval did not preserve the operation intent.",
+          });
+        }),
+      });
+      const { server } = await build({ actions: actions as unknown as Record<string, unknown> });
+
+      const response = await server.inject({ method: "POST", url: OPERATIONS_URL, payload: OPERATION_BODY });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        error: "GoatCitadel's checks don't allow this step right now.",
+        code: "STATE_CONFLICT",
+        details: { reason: "blocked", blockers: [] },
+      });
+      expect(response.body).not.toContain("Skill Hub");
     });
 
     it("answers a check it can't find with a plain 404", async () => {

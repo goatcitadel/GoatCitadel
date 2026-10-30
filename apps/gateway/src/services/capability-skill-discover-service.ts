@@ -1,7 +1,8 @@
-import type {
-  CapabilitySkillDiscoverResponse,
-  CapabilitySkillInstall,
-  SkillSourceListResponse,
+import {
+  ServiceUnavailableError,
+  type CapabilitySkillDiscoverResponse,
+  type CapabilitySkillInstall,
+  type SkillSourceListResponse,
 } from "@goatcitadel/contracts";
 import {
   allProvidersAnswered,
@@ -32,8 +33,8 @@ export interface CapabilitySkillDiscoverSources {
   /** The skills installed at runtime, with where each one's source file says it came from. */
   listInstalledSources(): readonly InstalledSkillSource[];
   /**
-   * The workspace's installs still on their way in, or stopped on the way. A read that fails logs its own error, so
-   * Discover only goes on without the marks.
+   * The workspace's installs still on their way in, or stopped on the way. A read that fails with
+   * `ServiceUnavailableError` has logged its own error; Discover goes on without the marks either way.
    */
   listInstalls(workspaceId: string): Promise<readonly CapabilitySkillInstall[]>;
 }
@@ -41,6 +42,8 @@ export interface CapabilitySkillDiscoverSources {
 export interface CapabilitySkillDiscoverOptions {
   /** The clock the marketplaces' cache counts its 10 minutes on. */
   now?: () => Date;
+  /** Logs an installs read that failed without logging itself (anything but `ServiceUnavailableError`), once. */
+  reportFailure?: (error: unknown) => void;
 }
 
 /**
@@ -62,12 +65,14 @@ class UnkeptCatalog extends Error {
 export class CapabilitySkillDiscoverService {
   private readonly marketplaces: UsageCache<SkillSourceCatalog>;
   private readonly now: () => Date;
+  private readonly reportFailure: ((error: unknown) => void) | undefined;
 
   public constructor(
     private readonly sources: CapabilitySkillDiscoverSources,
     options: CapabilitySkillDiscoverOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
+    this.reportFailure = options.reportFailure;
     this.marketplaces = createUsageCache(
       async () => {
         const catalog = await sources.readSourceCatalog({ network: true });
@@ -101,7 +106,8 @@ export class CapabilitySkillDiscoverService {
       providerLabels: providerLabelsOf(listed.providers),
     };
     return {
-      ...(query ? { query } : {}),
+      // The term as the source owner read it, through the same public projection the skill sources route echoes it with.
+      ...(listed.query ? { query: listed.query } : {}),
       items: [...buildPackItems(context, query), ...buildListingItems(listed.items, context)],
       unavailableProviders: unavailableProviderLabels(listed.providers),
       generatedAt: this.now().toISOString(),
@@ -120,12 +126,14 @@ export class CapabilitySkillDiscoverService {
 
   /**
    * The installs in progress, to mark their sources. Without them an in-progress source reads as available, and
-   * installing it again meets the same guards, so Discover is still answered. The failed read has logged its own error.
+   * installing it again meets the same guards, so Discover is still answered. A failed Skill Hub read has logged its
+   * own error and answers `ServiceUnavailableError`; any other failure (a projection error, say) is logged here, once.
    */
   private async readInstalls(workspaceId: string): Promise<readonly CapabilitySkillInstall[]> {
     try {
       return await this.sources.listInstalls(workspaceId);
-    } catch {
+    } catch (error) {
+      if (!(error instanceof ServiceUnavailableError)) this.reportFailure?.(error);
       return [];
     }
   }

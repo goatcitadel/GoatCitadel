@@ -79,11 +79,15 @@ function useGateway(extraEnv: Record<string, string> = {}) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
     }
-    for (let attempt = 0; attempt < 5; attempt += 1) {
+    // A temp root that can't be removed is reported rather than left behind unseen: only the errors Windows raises while
+    // a file is still closing are tried again, as app.rate-limit.test.ts's removeTempRoot does.
+    for (let attempt = 1; ; attempt += 1) {
       try {
         fs.rmSync(state.root, { recursive: true, force: true });
         break;
-      } catch {
+      } catch (error) {
+        const code = String((error as NodeJS.ErrnoException).code);
+        if (attempt >= 5 || !["EBUSY", "EMFILE", "ENFILE", "ENOTEMPTY", "EPERM"].includes(code)) throw error;
         await new Promise((resolve) => setTimeout(resolve, 200));
       }
     }

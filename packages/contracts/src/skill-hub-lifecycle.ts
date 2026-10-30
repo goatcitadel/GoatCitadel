@@ -32,8 +32,10 @@ export type SkillHubOperationSettlementDisposition = (typeof SKILL_HUB_OPERATION
  * no request attribution (`correlationId`, `traceId`) and no wait-run id (`durableRunId`) merged in. Today that is the
  * Skill Hub lifecycle approval: its operation intent is bound to the approval's exact linkage (`workspaceId`, plus
  * `sessionId`/`turnId` when given), both in TypeScript (the operator's creation check and the operation repository's
- * approval binding) and in the database (the SQLite intent trigger and Postgres `gc_validate_skill_hub_intent_approval`).
- * Its wait run is still reserved, and found through the wait-run mapping instead (Ruling R56).
+ * approval binding) and in the database (the trigger `trg_skill_hub_operation_intents_approval_binding`, in SQLite and in
+ * Postgres, where it runs the function `gc_validate_skill_hub_intent_approval`). Its wait run is still reserved, and found through the
+ * wait-run mapping instead (Ruling R56). Such an approval can't be resolved through a remote action token either, whose
+ * resolve adds the token's ids to the linkage: issuing one is refused (Ruling R61).
  */
 export function hasSealedApprovalLinkage(kind: string): boolean {
   return kind === SKILL_HUB_LIFECYCLE_APPROVAL_KIND;

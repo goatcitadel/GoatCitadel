@@ -179,14 +179,17 @@ export function composeCapabilitySkills({
       },
       reportFailedStep,
     ),
-    discover: new CapabilitySkillDiscoverService({
-      readSourceCatalog: (options) => skillSources.readSourceCatalog(options),
-      presentSourceCatalog: (catalog, query, limit) => skillSources.presentSourceCatalog(catalog, query, limit),
-      listInstalledSources: () => skillSources.listInstalledSources(),
-      // The installs the Skills tab lists, so a source on its way in reads the same in Discover. That read logs its
-      // own failure, so Discover logs none.
-      listInstalls: async (workspaceId) => (await skillsService.installs(workspaceId)).installs,
-    }),
+    discover: new CapabilitySkillDiscoverService(
+      {
+        readSourceCatalog: (options) => skillSources.readSourceCatalog(options),
+        presentSourceCatalog: (catalog, query, limit) => skillSources.presentSourceCatalog(catalog, query, limit),
+        listInstalledSources: () => skillSources.listInstalledSources(),
+        // The installs the Skills tab lists, so a source on its way in reads the same in Discover. That read logs a
+        // failed Skill Hub read itself, so Discover logs only what else it throws.
+        listInstalls: async (workspaceId) => (await skillsService.installs(workspaceId)).installs,
+      },
+      { reportFailure: (error) => reportFailedRead("skill_hub", error) },
+    ),
   };
 }
 

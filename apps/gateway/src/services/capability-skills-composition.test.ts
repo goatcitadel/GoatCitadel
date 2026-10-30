@@ -630,4 +630,30 @@ describe("composeCapabilitySkills discover", () => {
       stderr.mockRestore();
     }
   });
+
+  it("logs once an installs read that failed without logging itself", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const parts = owners({
+        skillHub: {
+          reviewSkillHubSource: vi.fn(),
+          // A check the installs can't be built from: it throws past the Hub read's own error handling.
+          listSkillHub: vi.fn(async () => ({ items: [{ snapshotId: "skill-hub-review-1" } as never] })),
+          createSkillHubApproval: vi.fn(),
+        },
+      });
+
+      const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+      expect(response.items.find((item) => item.id === "pack:himalaya")).toMatchObject({ state: "available" });
+      const logged = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.includes("a Capabilities skills source could not be read"));
+      expect(logged).toHaveLength(1);
+      expect(logged[0]).toContain('"source":"skill_hub"');
+      expect(logged[0]).toContain("TypeError");
+    } finally {
+      stderr.mockRestore();
+    }
+  });
 });

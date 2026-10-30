@@ -2,11 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  CapabilitySkillDiscoverItem,
-  CapabilitySkillInstall,
-  SkillMergedSourceResult,
-  SkillSourceListResponse,
+import {
+  ServiceUnavailableError,
+  type CapabilitySkillDiscoverItem,
+  type CapabilitySkillInstall,
+  type SkillMergedSourceResult,
+  type SkillSourceListResponse,
 } from "@goatcitadel/contracts";
 import {
   CapabilitySkillDiscoverService,
@@ -529,6 +530,40 @@ describe("Capabilities skill discovery", () => {
 
     expect(itemOf(items, "pack:himalaya")).toMatchObject({ state: "available" });
     expect(items.find((item) => item.name === "Trusted")).toMatchObject({ state: "available" });
+  });
+
+  it("reports an installs read that failed without reporting itself, once, and never one that did", async () => {
+    const listInstalls = vi.fn(async (): Promise<CapabilitySkillInstall[]> => {
+      throw new TypeError("Cannot read properties of undefined (reading 'sourceType')");
+    });
+    const reportFailure = vi.fn();
+    const service = new CapabilitySkillDiscoverService(sourcesAnswering([], { listInstalls }), { reportFailure });
+
+    const { items } = await service.list(WORKSPACE);
+
+    expect(itemOf(items, "pack:himalaya")).toMatchObject({ state: "available" });
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith(expect.any(TypeError));
+
+    // A failed Skill Hub read has logged itself and answers a plain 503: Discover adds nothing.
+    reportFailure.mockClear();
+    listInstalls.mockRejectedValueOnce(new ServiceUnavailableError("Skill installs can't be read right now."));
+    await service.list(WORKSPACE);
+    expect(reportFailure).not.toHaveBeenCalled();
+  });
+
+  it("echoes the search term as the source owner read it", async () => {
+    const sources = sourcesAnswering([]);
+    vi.mocked(sources.presentSourceCatalog).mockReturnValue({
+      generatedAt: "2026-10-29T00:00:00.000Z",
+      providers: [],
+      items: [],
+      query: "the owner's mail",
+    });
+
+    const response = await new CapabilitySkillDiscoverService(sources).list(WORKSPACE, { query: "  Mail " });
+
+    expect(sources.presentSourceCatalog).toHaveBeenCalledWith(expect.anything(), "mail", 50);
+    expect(response.query).toBe("the owner's mail");
   });
 
   it("keeps packs and curated entries when a marketplace is down, and names it", async () => {

@@ -394,6 +394,17 @@ describe("SkillImportService source catalog", () => {
       "https://www.skillsmp.com/docs/getting-started",
       "https://agentskill.sh/Learn/intro",
       "https://agentskill.sh/skill/single-form",
+      // Kept: the default port is no port at all.
+      "https://agentskill.sh:443/skills/default-port",
+      // Dropped: on the marketplace's own host, but with credentials or another port.
+      "https://user@agentskill.sh/skills/hostile-own-host-user",
+      "https://user:secret@www.skillsmp.com/skills/hostile-own-host-password",
+      "https://agentskill.sh:8443/skills/hostile-port",
+      "https://skillsmp.com:80/skills/hostile-http-port",
+      // Dropped: a backslash reads as a slash, so the host is the one after it.
+      "https:\\\\evil.example\\agentskill.sh\\skills\\hostile-backslash",
+      "/\\evil.example/skills/hostile-backslash-relative",
+      "\\\\evil.example\\skills\\hostile-backslash-unc",
       // Dropped: the marketplace's name only appears inside the link.
       "javascript:void(agentskill.sh/skills/hostile-script)",
       "data:text/html,agentskill.sh/skills/hostile-data",
@@ -432,6 +443,7 @@ describe("SkillImportService source catalog", () => {
         "https://www.skillsmp.com/docs/getting-started",
         "https://agentskill.sh/Learn/intro",
         "https://agentskill.sh/skill/single-form",
+        "https://agentskill.sh/skills/default-port",
       ]),
     );
     expect(marketplaceUrls.filter((url) => url.includes("hostile") || url.includes("lookalike"))).toEqual([]);

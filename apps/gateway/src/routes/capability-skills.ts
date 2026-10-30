@@ -15,8 +15,10 @@ import { withRouteAccess } from "./route-access.js";
 
 const usageQuerySchema = z.object({ refresh: z.enum(["true", "false"]).optional() }).strict();
 const listQuerySchema = z.object({ workspaceId: z.string().min(1).max(200) }).strict();
+// A check id, as the installs read and the step body both take it: up to the Skill Hub's own bound.
+const snapshotIdSchema = z.string().min(1).max(256);
 const installsQuerySchema = z
-  .object({ workspaceId: z.string().min(1).max(200), snapshotId: z.string().min(1).max(200).optional() })
+  .object({ workspaceId: z.string().min(1).max(200), snapshotId: snapshotIdSchema.optional() })
   .strict();
 // A search term is 2 to 100 characters once trimmed; the Gateway lower-cases it. Without one nothing goes online.
 const discoverQuerySchema = z
@@ -61,7 +63,7 @@ const reviewBodySchema = z
 const operationBodySchema = z
   .object({
     workspaceId: z.string().min(1).max(200),
-    snapshotId: z.string().min(1).max(256),
+    snapshotId: snapshotIdSchema,
     operationKind: z.enum(["install_inactive", "activate"]),
   })
   .strict();
@@ -275,7 +277,7 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
       });
       return reply.code(outcome.status === "approved" || outcome.status === "waiting" ? 202 : 200).send(outcome);
     } catch (error) {
-      return sendRouteError(reply, plainStepRefusal(error), request.log);
+      return sendRouteError(reply, plainStepRefusal(error, request.log), request.log);
     }
   });
 };
@@ -299,14 +301,21 @@ function sendSourceRefusal(reply: FastifyReply, refusal: CapabilitySkillSourceRe
 
 /**
  * Skill Hub's guard refusal and its missing check, in plain copy: the guard's own message names Skill Hub and its codes,
- * so only the codes pass through, as `details.blockers`. Anything else passes through as its owner wrote it.
+ * so only the codes pass through, as `details.blockers`. A conflict that lists no codes (a broken invariant, such as an
+ * approval that didn't keep its intent) answers the same plain copy with no blockers; its own words go to the log only.
+ * Anything else passes through as its owner wrote it.
  */
-function plainStepRefusal(error: unknown): unknown {
-  if (error instanceof ConflictError && Array.isArray(error.details?.blockers)) {
+function plainStepRefusal(error: unknown, log: FastifyBaseLogger): unknown {
+  if (error instanceof ConflictError) {
+    const listed = error.details?.blockers;
+    if (!Array.isArray(listed)) {
+      const cause = { name: error.name, message: error.message };
+      log.warn({ err: redactStructuredSecrets(cause).value }, "a skill install step was refused without blockers");
+    }
     return new ConflictError({
       code: "STATE_CONFLICT",
       message: STEP_BLOCKED_MESSAGE,
-      details: { reason: "blocked", blockers: error.details.blockers },
+      details: { reason: "blocked", blockers: Array.isArray(listed) ? listed : [] },
     });
   }
   if (error instanceof NotFoundError && error.details?.entity === "Skill Hub snapshot") {

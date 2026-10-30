@@ -1301,7 +1301,10 @@ export class ApprovalEffectsService {
     });
   }
 
-  /** The approval's reserved wait run, which wakes and materialization target whatever its linkage says. */
+  /**
+   * The approval's reserved wait run. The wake always targets it, whatever the linkage says; wait-run materialization
+   * prefers the linkage's `durableRunId` and falls back to it only for a sealed linkage, which never carries that id.
+   */
   private async readApprovalWaitRunId(approvalId: string): Promise<string | undefined> {
     return await this.ctx.storage.approvalWaitRuns.getRunId(approvalId);
   }

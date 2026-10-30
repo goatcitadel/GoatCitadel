@@ -3115,10 +3115,12 @@ function toMarketplaceListingUrl(provider: "agentskill" | "skillsmp", href: stri
   } catch {
     return undefined;
   }
+  // A port is not the marketplace's own address either: the parser drops the default one, so any port left is another.
   if (
     url.protocol !== "https:" ||
     url.username ||
     url.password ||
+    url.port ||
     url.hostname.toLowerCase().replace(/^www\./u, "") !== page.host
   ) {
     return undefined;
