@@ -8,7 +8,7 @@ import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js
 export function composeChannelSetupHost(
   gateway: Pick<
     GatewayRouteCompositionPort,
-    "storage" | "recentChannelSetupTests" | "secretStore" | "recordDevDiagnostic"
+    "storage" | "recentChannelSetupTests" | "channelSecretStore" | "recordDevDiagnostic"
   >,
   integrationDiagnostics: IntegrationDiagnosticsService,
   integrationChannel: IntegrationChannelService,
@@ -18,7 +18,9 @@ export function composeChannelSetupHost(
     recentChannelSetupTests: gateway.recentChannelSetupTests,
     commitChannelSetupConnection: (draftId, expectedRevision, input, onCommitted) =>
       integrationChannel.finalizeChannelSetupConnection(draftId, expectedRevision, input, onCommitted),
-    ...(gateway.secretStore ? { channelSecrets: new ChannelSecretCustodyService(gateway.secretStore) } : {}),
+    ...(gateway.channelSecretStore
+      ? { channelSecrets: new ChannelSecretCustodyService(gateway.channelSecretStore) }
+      : {}),
     buildIntegrationConnectionChecks: (connection) =>
       integrationDiagnostics.buildIntegrationConnectionChecks(connection),
     createIntegrationConnection: (input) => integrationChannel.createIntegrationConnection(input),

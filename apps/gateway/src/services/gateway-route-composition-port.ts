@@ -134,6 +134,8 @@ export interface GatewayRouteCompositionPort {
   readonly researchService: ResearchService;
   readonly runtimeLifecycleReadService: RuntimeLifecycleReadService;
   readonly secretStore?: SecretStoreService;
+  /** The key store for channel credential custody only. */
+  readonly channelSecretStore?: SecretStoreService;
   readonly deviceTokenVault: DeviceTokenVault;
   readonly storage: Storage;
   readonly taskLifecycleService: TaskLifecycleService;
@@ -373,6 +375,8 @@ export function createGatewayRouteCompositionPort(
     personalityCatalogService: gateway.personalityCatalogService,
     policyEngine: gateway.policyEngine,
     recentChannelSetupTests: gateway.recentChannelSetupTests,
+    // Channel custody only: the port's generic `secretStore` stays unset, as on main.
+    channelSecretStore: gateway.secretStore,
     deviceTokenVault: gateway.deviceTokenVault,
     steerService: gateway.steerService,
     storage: gateway.storage,

@@ -624,11 +624,11 @@ function createIntegrationChannelPortForGateway(
 ): IntegrationChannelServicePort {
   const storage = gateway.storage;
   const discordRuntimeService = gateway.discordRuntimeService;
-  const secretStore = gateway.secretStore;
+  const channelSecretStore = gateway.channelSecretStore;
   const streams = getChannelStreamRuntime(gateway);
   return {
     storage,
-    ...(secretStore ? { channelSecrets: new ChannelSecretCustodyService(secretStore) } : {}),
+    ...(channelSecretStore ? { channelSecrets: new ChannelSecretCustodyService(channelSecretStore) } : {}),
     publishRealtime: async (eventType, source, payload, options) => {
       await gateway.publishRealtime(eventType, source, payload, options);
     },
