@@ -37,8 +37,8 @@ async function optional<T>(read: Promise<T>): Promise<{ value: T; error?: never 
 }
 const destinations: Record<string, string> = {
   voice: "/settings/advanced#voice-runtime",
-  "browser-control": "/settings/connections#mcp-servers",
-  "extension-sdk": "/settings/connections",
+  "browser-control": "/capabilities/connectors/advanced#mcp-servers",
+  "extension-sdk": "/capabilities/connectors/advanced#integration-connections",
   "packaging-remote": "/system/health",
   "mobile-companion": "/settings/safety#device-access",
   "canvas-a2ui": "/capabilities/skills",

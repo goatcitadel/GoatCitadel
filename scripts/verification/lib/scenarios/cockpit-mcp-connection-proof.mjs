@@ -47,7 +47,7 @@ export async function runCockpitMcpConnectionProof({ context, browser, stack, ci
           if (request.method() === "POST" && [serverRoute + "/connect-reviewed", serverRoute + "/disconnect-reviewed"].includes(route)) writes.push({ route, body: request.postDataJSON() });
           else unexpected.push(`${request.method()} ${route}`);
         });
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
@@ -96,9 +96,9 @@ export async function runCockpitMcpConnectionProof({ context, browser, stack, ci
         assertMcpConnectionAgreement({ before: beforeLost, action: "disconnect", request: writes[3].body, receipt: lostReceipt, owner });
         await page.unroute(`**${serverRoute}/disconnect-reviewed`, lose);
         await inspection.getByRole("button", { name: "Close sheet", exact: true }).click();
-        const nav = page.getByRole("navigation", { name: "Settings pages", exact: true });
-        await nav.getByRole("link", { name: "General", exact: true }).click();
-        await nav.getByRole("link", { name: "Connections", exact: true }).click();
+        // Leave Advanced setup for the Connectors list and come back, so the MCP section mounts again.
+        await page.getByRole("link", { name: "Back to Connectors", exact: true }).click();
+        await page.getByRole("link", { name: "Advanced setup", exact: true }).click();
         await page.getByRole("tab", { name: "MCP servers", exact: true }).click();
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
         assert.equal(await panel.getByRole("button", { name: `Edit ${label}`, exact: true }).isDisabled(), true);

@@ -4,22 +4,25 @@ import type {
   ChannelSetupDraft,
   IntegrationConnection,
 } from "@goatcitadel/contracts";
-import { channelSetupHref } from "../../../app/routes";
+import { channelAdvancedSetupHref, channelSetupHref } from "../../../app/routes";
 import { isChatSetupDraft } from "./setup-draft-session";
 
-/** Channels with a setup page of their own in Chat. The picker opens it; the rest are set up in Settings. */
+/**
+ * Channels with a setup page of their own in Chat. The picker opens it; the rest are set up in Advanced channel setup.
+ */
 export const CONVERTED_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack", "whatsapp"]);
 
 /**
- * Channels Settings hands every new setup to Chat. Discord, Slack and WhatsApp also have a page in Chat, but Settings
- * still starts their other ways (Discord webhook-only, Slack webhook-only and OAuth, WhatsApp's own steps), so only a
- * draft made on the Chat page goes on there.
+ * Channels Advanced channel setup hands every new setup to their own page. Discord, Slack and WhatsApp also have a
+ * page, but Advanced channel setup still starts their other ways (Discord webhook-only, Slack webhook-only and OAuth,
+ * WhatsApp's own steps), so only a draft made on the channel's page goes on there.
  */
 export const CHAT_ONLY_SETUP_CHANNELS: ReadonlySet<string> = new Set(["telegram"]);
 
 /**
- * Channels whose key is changed on its own page in Chat. Settings changes every other channel's key. A page in
- * `ChannelSetupView` backs each one; this list is here so the channel page can link to it without loading the pages.
+ * Channels whose key is changed on its own page in Chat. Advanced channel setup changes every other channel's key. A
+ * page in `ChannelSetupView` backs each one; this list is here so the channel page can link to it without loading the
+ * pages.
  */
 export const KEY_CHANGE_CHANNELS: ReadonlySet<string> = new Set(["telegram", "discord", "slack", "whatsapp"]);
 
@@ -43,8 +46,8 @@ function discordUsesBot(config: Readonly<Record<string, unknown>>): boolean {
  * Whether a WhatsApp connection keeps what the page's check asks Meta with besides the new token: the number's, the
  * account's and the app's IDs, and the app secret (or the variable that holds it). The page replaces the access token
  * alone and reads the rest from the saved connection, as the gateway's check does. A connection saved without them,
- * such as a send-only one made in Settings, cannot be checked there. The public config shows a secret as a marker or
- * a name, never its value, which is all this needs.
+ * such as a send-only one made in Advanced channel setup, cannot be checked there. The public config shows a secret as
+ * a marker or a name, never its value, which is all this needs.
  */
 function whatsAppKeepsCheckDetails(config: Readonly<Record<string, unknown>>): boolean {
   const ids = ["phoneNumberId", "businessAccountId", "appId"].every((key) => textOf(config[key]) !== undefined);
@@ -56,8 +59,8 @@ function whatsAppKeepsCheckDetails(config: Readonly<Record<string, unknown>>): b
  * only where the page fits. Discord's and Slack's pages ask for the tokens of a bot: a Discord webhook-only (bridge)
  * connection has no bot token, and a Slack webhook or OAuth connection has no app-level token (Socket Mode is what
  * uses one). WhatsApp's page asks for the access token alone, so a connection without the saved IDs and app secret it
- * checks the token with does not fit. A connection the page does not fit keeps its change in Settings. The one
- * predicate decides both the channel page's link and the view that opens, so they cannot disagree.
+ * checks the token with does not fit. A connection the page does not fit keeps its change in Advanced channel setup.
+ * The one predicate decides both the channel page's link and the view that opens, so they cannot disagree.
  */
 export function hasChatKeyChangePage(connection: Pick<IntegrationConnection, "key" | "config">): boolean {
   if (!KEY_CHANGE_CHANNELS.has(connection.key)) return false;
@@ -96,18 +99,16 @@ const GROUPS: readonly { id: ChannelPickerGroup; title: string }[] = [
   { id: "phone_apps", title: "Phone apps" },
 ];
 
-/** Where Settings sets up a channel that has no page of its own in Chat. */
-export function settingsChannelSetupHref(catalogId: string): string {
-  return `/settings/connections?channel=${encodeURIComponent(catalogId)}#channels`;
-}
-
 /** The channel's own page in Chat, for the picker's tiles. Undefined for a channel that has none. */
 export function chatPageHref(definition: Pick<ChannelSetupDefinition, "catalog">): string | undefined {
   const { key } = definition.catalog;
   return CONVERTED_SETUP_CHANNELS.has(key) ? channelSetupHref(key) : undefined;
 }
 
-/** Where Settings sends a new setup of a channel it hands to Chat. Settings sets up the rest itself. */
+/**
+ * Where Advanced channel setup sends a new setup of a channel it hands to that channel's own page. It sets up the rest
+ * itself.
+ */
 export function chatSetupHref(definition: Pick<ChannelSetupDefinition, "catalog">): string | undefined {
   const { key } = definition.catalog;
   return CHAT_ONLY_SETUP_CHANNELS.has(key) ? channelSetupHref(key) : undefined;
@@ -115,8 +116,8 @@ export function chatSetupHref(definition: Pick<ChannelSetupDefinition, "catalog"
 
 /**
  * Where an unfinished new setup goes on: its page in Chat, sent to this very draft, when its channel is set up there
- * only (Telegram), or has a page there and this setup was made on it. A change to a saved channel stays in Settings,
- * and so does a draft for a channel the definitions don't know.
+ * only (Telegram), or has a page there and this setup was made on it. A change to a saved channel stays in Advanced
+ * channel setup, and so does a draft for a channel the definitions don't know.
  */
 export function chatSetupHrefForDraft(
   draft: Pick<ChannelSetupDraft, "draftId" | "catalogId" | "lifecycleMode" | "connectionId" | "draft">,
@@ -138,7 +139,7 @@ function tileFor(definition: ChannelSetupDefinition, minutes: number, note: stri
     label,
     minutes,
     ...(note ? { note } : {}),
-    href: chatPageHref(definition) ?? settingsChannelSetupHref(catalogId),
+    href: chatPageHref(definition) ?? channelAdvancedSetupHref(catalogId),
   };
 }
 

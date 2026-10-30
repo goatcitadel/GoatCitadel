@@ -61,7 +61,7 @@ const WHAT_NEXT: Readonly<Record<"cancelled" | "conflict" | "unavailable" | "loc
 };
 /**
  * Sign-in refusals the Gateway names before it changes anything (I1), in place of "Changed elsewhere.", with the link
- * to the Settings page their words send the operator to. A vendor that won't register GoatCitadel refuses every new
+ * to the page their words send the operator to. A vendor that won't register GoatCitadel refuses every new
  * sign-in the same way, so that one blocks signing in again.
  */
 const SIGN_IN_REFUSED: Readonly<
@@ -74,11 +74,11 @@ const SIGN_IN_REFUSED: Readonly<
     link: NETWORK_ALLOWLIST_LINK,
   },
   sign_in_site: {
-    words: () => "Its sign-in site couldn't be read. Try again in a moment, or set up its sign-in in Settings.",
+    words: () => "Its sign-in site couldn't be read. Try again in a moment, or set up its sign-in in Advanced setup.",
     link: MCP_SETTINGS_LINK,
   },
   registration: {
-    words: () => "It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Settings instead.",
+    words: () => "It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Advanced setup instead.",
     link: MCP_SETTINGS_LINK,
     signInBlocked: true,
   },
@@ -87,7 +87,7 @@ const SIGN_IN_REFUSED: Readonly<
 /** After a connect that failed once it was sent: what to check, by where the app runs. */
 const CONNECT_NEXT: Readonly<Record<"device" | "remote", { readonly words: string } & FailureNext>> = {
   device: { words: "Check that it can run on this computer, then try again." },
-  remote: { words: "Try again in a moment, or check its setup in Settings.", link: MCP_SETTINGS_LINK },
+  remote: { words: "Try again in a moment, or check its setup in Advanced setup.", link: MCP_SETTINGS_LINK },
 };
 /** After a settled sign-in step that didn't finish: a new sign-in replaces the old request. */
 const SIGN_IN_AGAIN = "Sign in again.";
@@ -163,7 +163,7 @@ async function refusedStep(
   await after.settled();
 }
 
-/** Starts the reviewed sign-in and waits for the provider's return, which Settings hands on to this tab. */
+/** Starts the reviewed sign-in and waits for the provider's return, which Advanced setup hands on to this tab. */
 export async function startSignIn(id: number, token: number, serverId: string, retried = false): Promise<void> {
   updateInstallFlow(id, { state: WORKING.sign_in });
   const record = await readServer(id, token, serverId, "sign_in");

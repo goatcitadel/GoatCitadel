@@ -74,7 +74,7 @@ describe("Google Workspace sign-in routes", () => {
     expect(callback.statusCode).toBe(303);
     const location = new URL(callback.headers.location as string);
     expect(location.origin).toBe("http://127.0.0.1:5173");
-    expect(location.pathname).toBe("/settings/connections");
+    expect(location.pathname).toBe("/capabilities/connectors/advanced");
     expect(location.search).toBe("");
     expect(location.hash).toBe(`#google-oauth-return&state=${state}&code=4%2F0Adeu`);
     expect(callback.headers["referrer-policy"]).toBe("no-referrer");

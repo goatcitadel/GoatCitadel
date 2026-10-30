@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RAIL_GROUPS, RAIL_ITEMS, getRouteReleaseScope, isPrimaryRailRoute } from "../../../app/route-model";
-import { buildSettingsIndex, searchSettingsPages } from "./settings-index";
-import { buildSettingsDestinations } from "./settings-destinations";
+import { buildConnectorSetupPage, buildSettingsIndex, searchSettingsPages } from "./settings-index";
+import { buildConnectorSetupDestinations, buildSettingsDestinations } from "./settings-destinations";
 
 describe("cockpit settings index", () => {
   it("names Citadel pages plain name first, with unchanged slugs", () => {
@@ -28,31 +28,38 @@ describe("cockpit settings index", () => {
       ).toContain("providers");
     }
   });
-  it("keeps the seven route groups and every grouped setting reachable", () => {
+  it("keeps six pages without Connections, and every setting still in Settings reachable", () => {
     const pages = buildSettingsIndex({ discovery: true });
-    expect(pages.map((page) => page.label)).toEqual([
-      "General",
-      "Models",
-      "Connections",
-      "Safety",
-      "Citadel",
-      "Access",
-      "Advanced",
-    ]);
+    expect(pages.map((page) => page.label)).toEqual(["General", "Models", "Safety", "Citadel", "Access", "Advanced"]);
     expect(pages.every((page) => page.entries.length > 0)).toBe(true);
+    // Every grouped section stays, except the four Connections sections that moved out of Settings.
+    const moved = new Set(["channels", "integrations", "mcp", "web-search"]);
     expect(pages.flatMap((page) => page.entries)).toHaveLength(
       (RAIL_GROUPS.settings ?? []).reduce(
         (total, group) =>
           total +
-          group.sections.filter((section) =>
-            isPrimaryRailRoute(
-              (RAIL_ITEMS.settings.find((item) => item.section === section) ??
-                RAIL_ITEMS.library.find((item) => item.section === section))!,
-            ),
+          group.sections.filter(
+            (section) =>
+              !moved.has(section) &&
+              isPrimaryRailRoute(
+                (RAIL_ITEMS.settings.find((item) => item.section === section) ??
+                  RAIL_ITEMS.library.find((item) => item.section === section))!,
+              ),
           ).length,
         0,
       ),
     );
+    expect(pages.flatMap((page) => page.entries).some((entry) => moved.has(entry.section))).toBe(false);
+    // Add-ons & packs waits on Advanced for the Plugins tab.
+    expect(
+      buildSettingsIndex()
+        .find((page) => page.id === "advanced")
+        ?.entries.map((entry) => [entry.section, entry.href, entry.discoverable]),
+    ).toEqual([
+      ["runtime", "/settings/advanced#managed-runtime", true],
+      // Experimental, so reached by its link only (Trust & policy, first-run, the old address), as before.
+      ["addons", "/settings/advanced#addons", false],
+    ]);
     expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "providers")).toMatchObject({
       href: "/settings/models#providers",
       completeNative: true,
@@ -70,17 +77,6 @@ describe("cockpit settings index", () => {
     expect(
       pages.flatMap((page) => page.entries).some((entry) => entry.href === "/settings/citadel#workspace-directory"),
     ).toBe(true);
-    expect(
-      pages
-        .flatMap((page) => page.entries)
-        .some((entry) => entry.href === "/settings/connections#integration-connections"),
-    ).toBe(true);
-    expect(
-      pages.flatMap((page) => page.entries).some((entry) => entry.href === "/settings/connections#mcp-servers"),
-    ).toBe(true);
-    expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "channels")).toMatchObject({
-      href: "/settings/connections#channels",
-    });
     expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "citadel-blueprint")).toMatchObject({
       href: "/settings/citadel#citadel-blueprint",
       completeNative: true,
@@ -120,7 +116,8 @@ describe("cockpit settings index", () => {
   it.each([
     ["desktop system permission", "General"],
     ["archive restore", "Workspaces"],
-    ["operator actions", "Integrations"],
+    // Integrations moved to Capabilities › Connectors › Advanced setup; Add-ons & packs is still here, on Advanced.
+    ["capability pack import export", "Add-ons & packs"],
     ["select activate chat", "Permissions"],
     ["signing", "Hooks"],
     ["basic password", "Access & devices"],
@@ -152,13 +149,13 @@ describe("cold Settings destination projection", () => {
     expect(destinations.map((page) => page.label)).toEqual([
       "General",
       "Models",
-      "Connections",
       "Safety",
       "Citadel",
       "Access",
       "Advanced",
     ]);
-    expect(destinations.flatMap((page) => page.entries)).toHaveLength(discovery ? 23 : 26);
+    // Four sections moved out with Connections; Add-ons & packs stays, on Advanced.
+    expect(destinations.flatMap((page) => page.entries)).toHaveLength(discovery ? 19 : 22);
     expect(
       fullPages.map((page) => ({
         ...page,
@@ -182,5 +179,20 @@ describe("cold Settings destination projection", () => {
       expect(entry).not.toHaveProperty("searchTerms");
       expect(entry).not.toHaveProperty("releaseNote");
     }
+  });
+});
+
+describe("the retired Connections sections' new homes", () => {
+  it("puts MCP servers, Integrations and Web & Search on Capabilities › Connectors › Advanced setup", () => {
+    expect(buildConnectorSetupDestinations().map((entry) => [entry.section, entry.href, entry.completeNative])).toEqual(
+      [
+        ["mcp", "/capabilities/connectors/advanced#mcp-servers", true],
+        ["integrations", "/capabilities/connectors/advanced#integration-connections", true],
+        ["web-search", "/capabilities/connectors/advanced#web-search", true],
+      ],
+    );
+    const page = buildConnectorSetupPage();
+    expect(page.label).toBe("Advanced setup");
+    expect(page.entries.every((entry) => entry.discoverable && entry.searchTerms.length > 0)).toBe(true);
   });
 });

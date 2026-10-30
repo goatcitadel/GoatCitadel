@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { HOSTS_UNKNOWN, useMissingHosts } from "../../../../features/native-routes/settings/channel-hosts";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
-import { channelPickerHref } from "../../../app/routes";
+import { channelAdvancedSetupHref, channelPickerHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
@@ -121,8 +121,8 @@ const saidHi = (name: string) => `${name} said hi. Only they can message your bo
 /** Where each step is done. */
 const IN_TELEGRAM = "In Telegram";
 const ON_THIS_PAGE = "On this page";
-/** Settings' channel list, where a Telegram channel that is on gets its groups, formatting and voice replies. */
-const SETTINGS_CHANNELS_HREF = "/settings/connections#channels";
+/** Advanced channel setup, where a Telegram channel that is on gets its groups, formatting and voice replies. */
+const ADVANCED_CHANNEL_SETUP_HREF = channelAdvancedSetupHref();
 /** A second channel for one bot would fight the first for its messages, so the setup stops at the key. */
 const ALREADY_CONNECTED = "This bot is already connected to GoatCitadel.";
 
@@ -299,11 +299,11 @@ export function TelegramSetupPage({
         </Callout>
       ) : null}
       <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-line-subtle pt-4">
-        {/* Nothing to start over from once the channel is on: the setup is finished, and what is left is Settings'.
-            Before then Settings has nothing for this setup: it sends a new Telegram setup here. */}
+        {/* Nothing to start over from once the channel is on: the setup is finished, and what is left is Advanced
+            channel setup's. Before then it has nothing for this setup: it sends a new Telegram setup here. */}
         {turnedOn ? (
-          <NativeOwnerLink href={SETTINGS_CHANNELS_HREF} scope={workspaceId} className="text-sm">
-            Add groups, formatting or voice replies in Settings
+          <NativeOwnerLink href={ADVANCED_CHANNEL_SETUP_HREF} scope={workspaceId} className="text-sm">
+            Add groups, formatting or voice replies in Advanced channel setup
           </NativeOwnerLink>
         ) : (
           <Button variant="ghost" disabled={setup.busy || turnOn.state === "working"} onClick={() => void startOver()}>

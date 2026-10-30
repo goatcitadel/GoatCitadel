@@ -7,8 +7,11 @@ import { sendRouteError } from "./_error-handler.js";
 import { allowedRequestOrigin, rejectDisallowedRequestOrigin } from "./allowed-request-origin.js";
 import { createOAuthCallbackHandoff } from "./oauth-callback-handoff.js";
 
-/** Mission Control lands Google's redirect on Integrations; the code travels only in the URL fragment. */
-export const GOOGLE_OAUTH_RETURN_ROUTE = "/settings/connections";
+/**
+ * Mission Control lands Google's redirect on Capabilities › Connectors › Advanced setup, which opens Integrations; the
+ * code travels only in the URL fragment.
+ */
+export const GOOGLE_OAUTH_RETURN_ROUTE = "/capabilities/connectors/advanced";
 export const GOOGLE_OAUTH_RETURN_FRAGMENT = "google-oauth-return";
 
 const handoff = createOAuthCallbackHandoff({

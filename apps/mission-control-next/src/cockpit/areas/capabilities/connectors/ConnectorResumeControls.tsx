@@ -18,7 +18,7 @@ const RESUME: Readonly<Partial<Record<CapabilityConnectorState, { label: string;
 /**
  * After a sign-in that failed, a server whose state offers no button (one its install left switched off) still gets
  * one: the failure says to sign in again (I1). A vendor that refused to register GoatCitadel would refuse that too, so
- * that failure only links to Settings.
+ * that failure only links to Advanced setup.
  */
 const SIGN_IN_AGAIN = { label: "Sign in again", from: "sign_in" } as const;
 const signInFailed = (state: ConnectorInstallState) =>

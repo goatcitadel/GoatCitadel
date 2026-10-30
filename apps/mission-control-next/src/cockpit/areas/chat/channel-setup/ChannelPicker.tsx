@@ -1,3 +1,4 @@
+import { channelAdvancedSetupHref } from "../../../app/routes";
 import { AreaHeader } from "../../../ui/AreaHeader";
 import { AREA_COLUMN } from "../../../ui/area-layout";
 import { Button } from "../../../ui/Button";
@@ -71,6 +72,13 @@ export function ChannelPicker({ workspaceId }: { workspaceId: string }) {
       ) : isPending ? (
         <p className="text-sm text-fg-muted">Loading channels…</p>
       ) : null}
+      <p className="text-sm text-fg-secondary">
+        Every channel's full settings, and the public web address, are in{" "}
+        <NativeOwnerLink href={channelAdvancedSetupHref()} scope={workspaceId}>
+          Advanced channel setup
+        </NativeOwnerLink>
+        .
+      </p>
     </section>
   );
 }

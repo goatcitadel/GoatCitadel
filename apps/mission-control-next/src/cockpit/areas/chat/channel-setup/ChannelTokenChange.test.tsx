@@ -659,16 +659,17 @@ describe("ChannelTokenChange", () => {
     },
   );
 
-  it("sends a channel it has no tokens for to Settings", async () => {
+  it("sends a channel it has no tokens for to Advanced channel setup", async () => {
     await mount({
       ...connection("discord"),
       key: "mattermost",
       catalogId: "channel.mattermost",
     } as IntegrationConnection);
     expect(container.querySelector("h1")?.textContent).toBe("Change this channel's key");
-    expect(new URL(link("Change the key in Settings")!.getAttribute("href")!, "http://cockpit.invalid").pathname).toBe(
-      "/settings/connections",
-    );
+    expect(
+      new URL(link("Change the key in Advanced channel setup")!.getAttribute("href")!, "http://cockpit.invalid")
+        .pathname,
+    ).toBe("/chat/messaging/advanced");
     expect(field("Bot token")).toBeNull();
   });
 });

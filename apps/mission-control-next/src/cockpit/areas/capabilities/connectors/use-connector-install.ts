@@ -62,7 +62,7 @@ const SERVER_REF = "mcp_server:";
 type Refusal = { readonly words: string; readonly link?: ConnectorNextLink };
 /** The install route's 409 refusals, by the field it names (R69); words that send the operator somewhere link there. */
 const REFUSED = new Map<string, Refusal>([
-  ["needsApiKey", { words: "This app needs an API key. Set it up in Settings.", link: MCP_SETTINGS_LINK }],
+  ["needsApiKey", { words: "This app needs an API key. Set it up in Advanced setup.", link: MCP_SETTINGS_LINK }],
   ["needsSignInSetup", { words: "Sign-in isn't set up for this app yet." }],
   ["alreadyInstalled", { words: "This app is already saved. Reload to see it." }],
   ["templateId", { words: "This app can't be installed from here." }],
@@ -71,7 +71,7 @@ const REFUSED = new Map<string, Refusal>([
 const SWITCHED_OFF: Refusal = {
   words:
     "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in " +
-    "Settings.",
+    "Advanced setup.",
   link: MCP_SETTINGS_LINK,
 };
 const DECLINED = "You declined this install in Inbox. Nothing was changed.";

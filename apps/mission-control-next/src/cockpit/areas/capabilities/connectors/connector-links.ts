@@ -1,7 +1,8 @@
 import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
+import { channelAdvancedSetupHref, connectorSetupHref } from "../../../app/routes";
 
-/** Where each kind of connector's detailed setup lives in Settings. */
-const MCP_SERVERS_HREF = "/settings/connections#mcp-servers";
+/** Where each kind of connector's detailed setup lives: Advanced setup, under this tab. */
+const MCP_SERVERS_HREF = connectorSetupHref("mcp");
 
 /**
  * Where an operator turns MCP in Chat on. The cockpit has no switch for that feature of its own; the MCP section is
@@ -23,27 +24,28 @@ export { inboxApprovalHref, inboxApprovalLink } from "../capability-links";
  * its destination's cockpit name.
  */
 export interface ConnectorNextLink {
-  readonly label: "Open in Settings" | "Open in Inbox";
+  readonly label: "Open in Settings" | "Open Advanced setup" | "Open in Inbox";
   readonly href: string;
 }
 
 /** Where an MCP app's setup and its sign-in setup are changed. */
-export const MCP_SETTINGS_LINK: ConnectorNextLink = { label: "Open in Settings", href: MCP_SERVERS_HREF };
+export const MCP_SETTINGS_LINK: ConnectorNextLink = { label: "Open Advanced setup", href: MCP_SERVERS_HREF };
 /** Where the network allowlist is changed: the first-run page in Settings, under Change installation defaults. */
 export const NETWORK_ALLOWLIST_LINK: ConnectorNextLink = { label: "Open in Settings", href: "/settings/first-run" };
 
-/** The Settings section that owns a connector's detailed setup ("Advanced setup in Settings"). */
+/**
+ * The section that owns a connector's detailed setup ("Advanced setup"): Advanced setup under this tab, or for a
+ * channel, Advanced channel setup in Chat › Messaging.
+ */
 export function connectorSettingsHref(item: CapabilityConnectorItem): string {
   switch (item.source) {
     case "mcp_template":
     case "mcp_server":
       return MCP_SERVERS_HREF;
     case "web_search":
-      return "/settings/connections#web-search";
+      return connectorSetupHref("web-search");
     case "integration":
-      return item.kind === "channel"
-        ? "/settings/connections#channels"
-        : "/settings/connections#integration-connections";
+      return item.kind === "channel" ? channelAdvancedSetupHref() : connectorSetupHref("integrations");
   }
 }
 

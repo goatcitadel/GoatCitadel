@@ -200,15 +200,20 @@ describe("cockpit controller route publication", () => {
     await render();
     const lateRequest = controller.request;
     await act(async () => controller.request("chat", { sessionId: "session-b" }));
+    // "Return to Channels" still names Classic's /settings/channels; the Cockpit opens Advanced channel setup with the
+    // plan's return fields.
     const returned =
       "/settings/channels?channelPlan=plan-a&channelDraft=draft-a&channelWorkspace=workspace-a&shell=cockpit";
+    const landed =
+      "/chat/messaging/advanced?channelPlan=plan-a&channelDraft=draft-a&channelWorkspace=workspace-a&shell=cockpit";
     await act(async () => navigateOwner(returned));
-    expect(window.location.pathname + window.location.search).toBe(returned);
+    expect(window.location.pathname + window.location.search).toBe(landed);
     await act(async () => {
       publishSelection({ sessionId: "session-b" });
       lateRequest("chat", { sessionId: "session-c" });
     });
-    expect(window.location.pathname + window.location.search).toBe(returned);
+    // Advanced channel setup is a Messaging view, so a late conversation selection never takes the address over.
+    expect(window.location.pathname + window.location.search).toBe(landed);
     expect(new URLSearchParams(window.location.search).has("channelRevision")).toBe(false);
     expect(new URLSearchParams(window.location.search).has("sessionId")).toBe(false);
   });

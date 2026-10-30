@@ -170,7 +170,7 @@ export async function runChannelGuidedSetupLane(context, deps) {
           if (method === "PUT" && pathname === "/api/v1/notifications/presence") presenceWrites.push({ method, pathname });
           if (isChannelProofMutation(method, pathname)) writes.push({ method, pathname });
         });
-        const settings = buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#channels");
+        const settings = buildVerificationUiUrl(stack.uiUrl, "/chat/messaging/advanced?shell=cockpit");
         await page.goto(settings, { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "Channel setup", exact: true });
@@ -379,7 +379,7 @@ export async function runChannelGuidedSetupLane(context, deps) {
         await capture("channel-exact-plan-reload-390");
         await planDialog.getByRole("button", { name: "Cancel", exact: true }).click();
         await review.getByRole("button", { name: "Return to Channels", exact: true }).click();
-        await page.waitForURL(url => url.pathname.startsWith("/settings/") && url.searchParams.get("channelDraft") === draft.draftId);
+        await page.waitForURL(url => url.pathname === "/chat/messaging/advanced" && url.searchParams.get("channelDraft") === draft.draftId);
         await panel.getByRole("region", { name: "ntfy guided setup", exact: true }).waitFor();
         await capture("channel-plan-return-390");
         const handoffUrl = buildVerificationUiUrl(stack.uiUrl, "/chat?channelPlan=" + plan.planId + "&channelDraft=" + draft.draftId + "&channelRevision=" + plan.revision + "&channelWorkspace=" + workspace.workspaceId + "&shell=cockpit");
@@ -394,7 +394,7 @@ export async function runChannelGuidedSetupLane(context, deps) {
         assert.equal(deleted.status, 404);
         assert.deepEqual((await api("/api/v1/integrations/connections?kind=channel")).items, []);
         await review.getByRole("button", { name: "Return to Channels", exact: true }).click();
-        await page.waitForURL(url => url.pathname.startsWith("/settings/") && url.searchParams.get("channelDraft") === draft.draftId);
+        await page.waitForURL(url => url.pathname === "/chat/messaging/advanced" && url.searchParams.get("channelDraft") === draft.draftId);
         await panel.getByText("The channel setup plan was cancelled. No activation receipt was recorded. The current channels list is being refreshed.", { exact: true }).waitFor();
         await panel.getByRole("region", { name: "Saved channel drafts", exact: true }).waitFor();
         assert.equal(await panel.getByRole("button", { name: "Edit " + draft.label, exact: true }).count(), 0);
@@ -484,7 +484,7 @@ export async function runChannelGuidedSetupLane(context, deps) {
         const returnedDiagnostics = page.waitForResponse(response => response.request().method() === "GET" &&
           new URL(response.url()).pathname === "/api/v1/comms/diagnostics/" + connectionId);
         await review.getByRole("button", { name: "Return to Channels", exact: true }).click();
-        await page.waitForURL(url => url.pathname.startsWith("/settings/") && url.searchParams.get("channelConnection") === connectionId);
+        await page.waitForURL(url => url.pathname === "/chat/messaging/advanced" && url.searchParams.get("channelConnection") === connectionId);
         const selectedConnection = panel.getByRole("region", { name: "Selected channel connection", exact: true });
         await selectedConnection.getByRole("heading", { name: completionDraft.label, exact: true }).waitFor();
         const returnedDiagnosticsHttp = await returnedDiagnostics;

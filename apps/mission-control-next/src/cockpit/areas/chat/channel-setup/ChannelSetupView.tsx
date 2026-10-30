@@ -3,8 +3,8 @@ import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
-import { channelPageHref, channelPickerHref, type MessagingView } from "../../../app/routes";
-import { hasChatKeyChangePage, settingsChannelSetupHref } from "./channel-picker-model";
+import { channelAdvancedSetupHref, channelPageHref, channelPickerHref, type MessagingView } from "../../../app/routes";
+import { hasChatKeyChangePage } from "./channel-picker-model";
 import { useChannelConnection } from "../use-channel-connections";
 import { ChannelTokenChange } from "./ChannelTokenChange";
 import { DiscordSetupPage } from "./DiscordSetupPage";
@@ -33,9 +33,9 @@ interface KeyChangePageProps {
 }
 
 /**
- * The channels with a setup page of their own, by catalog key. A channel not here has none yet: its setup is Settings'
- * (`CONVERTED_SETUP_CHANNELS` lists the ones the picker opens in Chat). A map, not an object, so a name like
- * "constructor" is never taken for a channel.
+ * The channels with a setup page of their own, by catalog key. A channel not here has none yet: Advanced channel setup
+ * sets it up (`CONVERTED_SETUP_CHANNELS` lists the ones the picker opens on their own page). A map, not an object, so
+ * a name like "constructor" is never taken for a channel.
  */
 export const SETUP_PAGES: ReadonlyMap<string, ComponentType<SetupPageProps>> = new Map([
   ["telegram", TelegramSetupPage],
@@ -61,12 +61,13 @@ export const KEY_CHANGE_PAGES: ReadonlyMap<string, ComponentType<KeyChangePagePr
 
 /**
  * Changing a channel's key. A connection the channel's key page fits (`hasChatKeyChangePage`) is changed there. Any other
- * key is Settings' still, so this says so and links there: also while the channel cannot be read, because Settings can
- * still change it.
+ * key is changed in Advanced channel setup, so this says so and links there: also while the channel cannot be read,
+ * because Advanced channel setup can still change it.
  */
 function KeyChange({ connectionId, workspaceId }: { connectionId: string; workspaceId: string }) {
   const { connection, connections } = useChannelConnection(connectionId);
-  // The same test as the channel page's link: a connection the key page does not fit is changed in Settings.
+  // The same test as the channel page's link: a connection the key page does not fit is changed in Advanced channel
+  // setup.
   const Page = connection && hasChatKeyChangePage(connection) ? KEY_CHANGE_PAGES.get(connection.key) : undefined;
   if (connection && Page) return <Page connectionId={connectionId} connection={connection} workspaceId={workspaceId} />;
   const back = { href: channelPageHref(connectionId), label: "Back to channel" };
@@ -80,20 +81,21 @@ function KeyChange({ connectionId, workspaceId }: { connectionId: string; worksp
   return (
     <Frame
       title="Change this channel's key"
-      description="You can't change a key from Chat yet. Settings has it."
+      description="This channel's key is changed in Advanced channel setup."
       back={back}
       workspaceId={workspaceId}
     >
-      <NativeOwnerLink href="/settings/connections#channels" scope={workspaceId} className="text-sm">
-        Change the key in Settings
+      <NativeOwnerLink href={channelAdvancedSetupHref()} scope={workspaceId} className="text-sm">
+        Change the key in Advanced channel setup
       </NativeOwnerLink>
     </Frame>
   );
 }
 
 /**
- * One channel's setup. A channel with a page of its own opens it; a channel without one sends the operator to
- * Settings, which has its steps; a channel the picker does not offer is not available here, whatever the address says.
+ * One channel's setup. A channel with a page of its own opens it; a channel without one sends the operator to Advanced
+ * channel setup, which has its steps; a channel the picker does not offer is not available here, whatever the address
+ * says.
  */
 function ChannelSetup({
   channelKey,
@@ -138,12 +140,12 @@ function ChannelSetup({
   return (
     <Frame
       title={`Add ${tile.label}`}
-      description={`You can't set up ${tile.label} from Chat yet. Its steps are in Settings.`}
+      description={`${tile.label} is set up in Advanced channel setup.`}
       back={back}
       workspaceId={workspaceId}
     >
-      <NativeOwnerLink href={settingsChannelSetupHref(tile.catalogId)} scope={workspaceId} className="text-sm">
-        Set up {tile.label} in Settings
+      <NativeOwnerLink href={channelAdvancedSetupHref(tile.catalogId)} scope={workspaceId} className="text-sm">
+        Set up {tile.label} in Advanced channel setup
       </NativeOwnerLink>
     </Frame>
   );

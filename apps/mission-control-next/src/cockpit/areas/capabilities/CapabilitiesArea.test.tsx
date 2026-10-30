@@ -15,6 +15,9 @@ vi.mock("./connectors/ConnectorsTab", () => ({
     return <div data-testid="connectors-tab" />;
   },
 }));
+vi.mock("./connectors/ConnectorSetupPage", () => ({
+  ConnectorSetupPage: () => <div data-testid="connector-setup" />,
+}));
 vi.mock("./tools/ToolsTab", () => ({ ToolsTab: () => <div data-testid="tools-tab" /> }));
 vi.mock("./skills/SkillsTab", () => ({ SkillsTab: () => <div data-testid="skills-tab" /> }));
 
@@ -201,6 +204,26 @@ describe("readCapabilitiesTab", () => {
     [[""], "connectors"],
   ])("reads %j as %s", (rest, expected) => {
     expect(readCapabilitiesTab(rest)).toBe(expected);
+  });
+
+  it("opens Connectors' Advanced setup under the Connectors tab, in place of the list", async () => {
+    route.rest = ["connectors", "advanced"];
+    route.hash = "#web-search";
+    await render();
+    await vi.waitFor(() => expect(shown("connector-setup")).toBe(true));
+    expect(shown("connectors-tab")).toBe(false);
+    expect(connectorsRendered).not.toHaveBeenCalled();
+    expect(tabLink("Connectors")?.getAttribute("aria-current")).toBe("page");
+    // It names a tab, so it is remembered like one, and the address is left as it is.
+    expect(window.localStorage.getItem(LAST_TAB_KEY)).toBe("connectors");
+    expect(route.navigate).not.toHaveBeenCalled();
+  });
+
+  it("does not open Advanced setup under another tab", async () => {
+    route.rest = ["tools", "advanced"];
+    await render();
+    expect(shown("tools-tab")).toBe(true);
+    expect(shown("connector-setup")).toBe(false);
   });
 
   it("gives every tab an id, a label and an address under /capabilities", () => {

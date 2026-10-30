@@ -210,11 +210,14 @@ const LONGEST_SENTENCE = 300;
 /** GoatCitadel's sentence when it has no secure storage for channel keys, whatever status it comes with. */
 const NO_KEY_STORE_SAID = "Secure channel credential storage is unavailable.";
 
-/** What the page says for it: keys pasted here need secure storage, and Settings' guide takes environment variables. */
+/**
+ * What the page says for it: keys pasted here need secure storage, and the guide in Advanced channel setup takes
+ * environment variables.
+ */
 export const WHATSAPP_NO_KEY_STORE =
-  "This page stores your keys in this computer's secure storage, which isn't available here. Use WhatsApp's guide in Settings with environment variables instead.";
-/** The words of `WHATSAPP_NO_KEY_STORE` that link to WhatsApp's guide in Settings. */
-export const WHATSAPP_NO_KEY_STORE_LINK = "WhatsApp's guide in Settings";
+  "This page stores your keys in this computer's secure storage, which isn't available here. Use WhatsApp's guide in Advanced channel setup with environment variables instead.";
+/** The words of `WHATSAPP_NO_KEY_STORE` that link to WhatsApp's guide in Advanced channel setup. */
+export const WHATSAPP_NO_KEY_STORE_LINK = "WhatsApp's guide in Advanced channel setup";
 
 /** The sentence a GoatCitadel error carries, from its body; empty when it carries none. */
 function saidBy(error: { body?: unknown }): string {

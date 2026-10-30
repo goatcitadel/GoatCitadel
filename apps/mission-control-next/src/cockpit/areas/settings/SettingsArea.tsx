@@ -20,10 +20,7 @@ import {
   DeviceAccessSettings,
   PersonalitySettings,
   WorkspaceSettings,
-  IntegrationConnectionsSettings,
   ManagedRuntimeSettings,
-  McpServersSettings,
-  WebSearchSettings,
   BudgetModeControl,
   ApprovalModeControl,
   SettingsApprovalSkipControl,
@@ -38,8 +35,6 @@ import {
   TrustPolicySettings,
   LocalAiSettings,
   CitadelBlueprintSettings,
-  ChannelsSettings,
-  PublicWebAddressSettings,
   CitadelOverviewSettings,
   CitadelMasonSettings,
   CitadelWardsSettings,
@@ -139,19 +134,8 @@ export function SettingsArea() {
             scopeId={activeWorkspaceId ?? ""}
           />
         );
-      case "integrations":
-        return <IntegrationConnectionsSettings workspaceId={activeWorkspaceId ?? ""} />;
-      case "channels":
-        return (
-          <>
-            <PublicWebAddressSettings />
-            <ChannelsSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />
-          </>
-        );
-      case "mcp":
-        return <McpServersSettings workspaceId={activeWorkspaceId ?? ""} />;
-      case "web-search":
-        return <WebSearchSettings />;
+      // MCP servers, Integrations and Web & Search are on Capabilities › Connectors › Advanced setup, and Channels on
+      // Chat › Messaging › Advanced channel setup. Add-ons & packs waits here, on Advanced, for the Plugins tab.
       case "addons":
         return (
           <>

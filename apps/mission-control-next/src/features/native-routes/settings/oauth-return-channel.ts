@@ -1,4 +1,4 @@
-// A provider's OAuth callback redirects to Settings with the result in the URL fragment. The tab
+// A provider's OAuth callback redirects to Mission Control with the result in the URL fragment. The tab
 // that receives it forwards the result to the tab holding the in-memory sign-in request over a
 // same-origin BroadcastChannel, then clears the fragment. Nothing is stored.
 

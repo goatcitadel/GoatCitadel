@@ -234,9 +234,12 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
               writes.push({ method: request.method(), route, body: request.postDataJSON() });
             else unexpected.push(`${request.method()} ${route}`);
           });
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#mcp-servers"), {
-            waitUntil: "domcontentloaded",
-          });
+          await page.goto(
+            buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"),
+            {
+              waitUntil: "domcontentloaded",
+            },
+          );
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
           const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
           await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);
@@ -389,14 +392,9 @@ export async function runCockpitMcpPolicyRequestsProof({ context, browser, stack
             action: "cancel",
           });
           await page.unroute(`**${responseRoute(unknown)}`, lose);
-          await page
-            .getByRole("navigation", { name: "Settings pages", exact: true })
-            .getByRole("link", { name: "General", exact: true })
-            .click();
-          await page
-            .getByRole("navigation", { name: "Settings pages", exact: true })
-            .getByRole("link", { name: "Connections", exact: true })
-            .click();
+          // Leave Advanced setup for the Connectors list and come back, so the MCP section mounts again.
+          await page.getByRole("link", { name: "Back to Connectors", exact: true }).click();
+          await page.getByRole("link", { name: "Advanced setup", exact: true }).click();
           await page.getByRole("tab", { name: "MCP servers", exact: true }).click();
           await requests.getByRole("button", { name: "Inspect MCP requests", exact: true }).click();
           await requests.getByRole("button", { name: inspectRequestName(unknown), exact: true }).click();

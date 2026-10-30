@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react";
 import { HOSTS_UNKNOWN, useMissingHosts } from "../../../../features/native-routes/settings/channel-hosts";
 import { useCredentialInput } from "../../../../features/native-routes/settings/credential-input-owner";
-import { channelPageHref, channelPickerHref } from "../../../app/routes";
+import { channelAdvancedSetupHref, channelPageHref, channelPickerHref } from "../../../app/routes";
 import { Button } from "../../../ui/Button";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
-import { settingsChannelSetupHref } from "./channel-picker-model";
 import { DiscordInviteStep } from "./DiscordInviteStep";
 import { DiscordPostingStep } from "./DiscordPostingStep";
 import { BotToken, PortalLink } from "./DiscordTokenStep";
@@ -251,9 +250,9 @@ export function DiscordSetupPage({
             Start over
           </Button>
         )}
-        {/* Settings keeps the other ways to connect Discord, such as a webhook with no bot. */}
-        <NativeOwnerLink href={settingsChannelSetupHref(DISCORD_CATALOG_ID)} scope={workspaceId} className="text-sm">
-          More options in Settings
+        {/* Advanced channel setup keeps the other ways to connect Discord, such as a webhook with no bot. */}
+        <NativeOwnerLink href={channelAdvancedSetupHref(DISCORD_CATALOG_ID)} scope={workspaceId} className="text-sm">
+          More options in Advanced channel setup
         </NativeOwnerLink>
       </div>
     </SetupFrame>

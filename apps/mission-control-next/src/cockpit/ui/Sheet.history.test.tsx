@@ -21,7 +21,7 @@ function Harness() {
       </button>
       <Sheet open={open} onOpenChange={setOpen} title="History proof">
         <p>Sheet body</p>
-        <button type="button" onClick={() => route.navigate("/settings/connections#mcp-servers")}>
+        <button type="button" onClick={() => route.navigate("/capabilities/connectors/advanced#mcp-servers")}>
           Navigate from sheet
         </button>
       </Sheet>
@@ -82,7 +82,7 @@ it.each(["Back", "Close", "Escape"])("preserves route, history state and trigger
 it("uses the existing reviewed navigation owner after closing its history entry", async () => {
   await open();
   await act(async () => button("Navigate from sheet").click());
-  await vi.waitFor(() => expect(here()).toBe("/settings/connections?shell=cockpit#mcp-servers"));
+  await vi.waitFor(() => expect(here()).toBe("/capabilities/connectors/advanced?shell=cockpit#mcp-servers"));
   await act(async () => window.history.back());
   expect(here()).toBe(destination);
   await act(async () => window.history.back());

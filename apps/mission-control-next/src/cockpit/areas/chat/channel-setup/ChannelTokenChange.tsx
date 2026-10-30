@@ -3,7 +3,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { ChannelRuntimeStatus, IntegrationConnection } from "@goatcitadel/contracts";
 import { fetchChannelRuntimeStatus } from "@goatcitadel/mission-control-shared/api/client";
 import { HOSTS_UNKNOWN, useMissingHosts } from "../../../../features/native-routes/settings/channel-hosts";
-import { channelPageHref } from "../../../app/routes";
+import { channelAdvancedSetupHref, channelPageHref } from "../../../app/routes";
 import { queryKeys } from "../../../data/query-keys";
 import { Callout } from "../../../ui/Callout";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
@@ -156,7 +156,7 @@ function TokenChangeSteps({
 /**
  * Changing a Discord, Slack or WhatsApp channel's token from its page in Chat: paste the new token (Slack's two), have
  * them checked, then save them. Saving is the same step as turning a channel on (a test message, then the change,
- * approved in place), with the words of changing a key. Any other channel is changed in Settings.
+ * approved in place), with the words of changing a key. Any other channel is changed in Advanced channel setup.
  */
 export function ChannelTokenChange({
   connection,
@@ -170,12 +170,12 @@ export function ChannelTokenChange({
   return (
     <SetupFrame
       title="Change this channel's key"
-      description="You can't change a key from Chat yet. Settings has it."
+      description="This channel's key is changed in Advanced channel setup."
       back={{ href: channelPageHref(connection.connectionId), label: "Back to channel" }}
       workspaceId={workspaceId}
     >
-      <NativeOwnerLink href="/settings/connections#channels" scope={workspaceId} className="text-sm">
-        Change the key in Settings
+      <NativeOwnerLink href={channelAdvancedSetupHref()} scope={workspaceId} className="text-sm">
+        Change the key in Advanced channel setup
       </NativeOwnerLink>
     </SetupFrame>
   );

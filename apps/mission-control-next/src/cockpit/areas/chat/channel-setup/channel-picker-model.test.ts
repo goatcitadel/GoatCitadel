@@ -9,8 +9,8 @@ import {
   CONVERTED_SETUP_CHANNELS,
   hasChatKeyChangePage,
   KEY_CHANGE_CHANNELS,
-  settingsChannelSetupHref,
 } from "./channel-picker-model";
+import { channelAdvancedSetupHref } from "../../../app/routes";
 
 function definition(
   key: string,
@@ -89,9 +89,9 @@ describe("channel picker model", () => {
       label: "ntfy",
       minutes: 5,
       note: "Needs an ntfy topic",
-      href: "/settings/connections?channel=channel.ntfy#channels",
+      href: "/chat/messaging/advanced?channel=channel.ntfy",
     });
-    expect(settingsChannelSetupHref("channel.ntfy")).toBe("/settings/connections?channel=channel.ntfy#channels");
+    expect(channelAdvancedSetupHref("channel.ntfy")).toBe("/chat/messaging/advanced?channel=channel.ntfy");
   });
 
   it("opens Discord's and Slack's own pages from the picker, in about 5 minutes", () => {

@@ -60,7 +60,8 @@ const MCP_CORE_SERVER_TEMPLATES: McpServerTemplateRecord[] = [
     command: "npx",
     // 2.0.1 is the first release that stops writes escaping the allowed folders; every date release through 2026.8.31
     // is affected. It needs Node 24 although this repo's baseline is Node 22: on Node 22 it fails to start rather than
-    // run an affected release. Only Settings offers it; Capabilities leaves it out.
+    // run an affected release. Only the MCP template list in Advanced setup offers it; the Connectors list leaves it
+    // out.
     args: ["-y", "@modelcontextprotocol/server-filesystem@2.0.1", "."],
     authType: "none",
     category: "development",

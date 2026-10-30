@@ -420,9 +420,11 @@ describe("TelegramSetupPage", () => {
     expect(steps()[1]!.contains(callouts[0]!)).toBe(true);
   });
 
-  it("doesn't send a setup in progress to Settings, which would only send it back here", async () => {
+  it("doesn't send a setup in progress to Advanced channel setup, which would only send it back here", async () => {
     await mount();
-    expect([...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Settings"))).toBe(false);
+    expect(
+      [...container.querySelectorAll("a")].some((anchor) => anchor.textContent?.includes("Advanced channel setup")),
+    ).toBe(false);
   });
 
   it("has a way back to the channel list", async () => {
@@ -692,13 +694,13 @@ describe("TelegramSetupPage: say hi, turn on, done", () => {
     expect(status()).toBe(DONE);
     // Nothing to start over from once it is on.
     expect(button("Start over")).toBeUndefined();
-    // Once it is on, Settings is where groups, formatting and voice replies are added.
-    const more = link("Add groups, formatting or voice replies in Settings");
+    // Once it is on, Advanced channel setup is where groups, formatting and voice replies are added.
+    const more = link("Add groups, formatting or voice replies in Advanced channel setup");
     const target = new URL(more!.getAttribute("href")!, "http://cockpit.invalid");
-    expect(target.pathname).toBe("/settings/connections");
-    // Settings' channel list, not its new-setup panel: that would send a Telegram setup back here.
+    expect(target.pathname).toBe("/chat/messaging/advanced");
+    // The channel list, not a new-setup panel: that would send a Telegram setup back here.
     expect(target.searchParams.get("channel")).toBeNull();
-    expect(target.hash).toBe("#channels");
+    expect(target.hash).toBe("");
   });
 
   it("matches a bot name with or without the @, whatever the case", async () => {

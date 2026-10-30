@@ -296,8 +296,8 @@ export type ConnectorActionKind =
 
 /**
  * The one button on a row. Every action opens the row's panel, where the action itself runs. Only an MCP template that
- * isn't installed yet offers Install: one that needs an API key or a sign-in setup is set up in Settings, and other
- * available rows (services, web search keys) have no install of their own.
+ * isn't installed yet offers Install: one that needs an API key or a sign-in setup is set up in Advanced setup, and
+ * other available rows (services, web search keys) have no install of their own.
  */
 export function connectorAction(item: CapabilityConnectorItem): { kind: ConnectorActionKind; label: string } {
   switch (item.state) {

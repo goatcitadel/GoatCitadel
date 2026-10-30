@@ -120,7 +120,7 @@ describe("DISCORD_TURN_ON_WORDING", () => {
 describe("the words of the invite and posting steps", () => {
   it("says what to do when Discord names no maker", () => {
     expect(DISCORD_NO_MAKERS).toBe(
-      "Discord didn't say who made this bot, so GoatCitadel can't tell who to let in. Use More options in Settings instead.",
+      "Discord didn't say who made this bot, so GoatCitadel can't tell who to let in. Use More options in Advanced channel setup instead.",
     );
   });
 

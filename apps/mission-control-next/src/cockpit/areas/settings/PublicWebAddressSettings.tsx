@@ -1,7 +1,10 @@
 import { PublicWebAddressField } from "./PublicWebAddressField";
 import { usePublicWebAddressSettings } from "./public-web-address-state";
 
-/** Settings › Channels: where GoatCitadel tells the channel setup pages it can be reached from the internet. */
+/**
+ * Chat › Messaging › Advanced channel setup: where GoatCitadel tells the channel setup pages it can be reached from the
+ * internet.
+ */
 export function PublicWebAddressSettings() {
   const settings = usePublicWebAddressSettings();
   return (

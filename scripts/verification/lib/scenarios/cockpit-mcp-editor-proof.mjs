@@ -45,7 +45,7 @@ export async function runCockpitMcpEditorProof({ context, browser, stack, citade
           else unexpected.push(`${request.method()} ${pathname}`);
         });
         stage = "open exact saved server editor";
-        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
+        await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const panel = page.getByRole("region", { name: "MCP server configuration", exact: true });
         await panel.getByRole("searchbox", { name: "Search MCP servers", exact: true }).fill(label);

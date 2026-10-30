@@ -45,6 +45,7 @@ describe("Cockpit compatibility coverage", () => {
       "/chat/messaging/add",
       "/chat/messaging/add/telegram?workspaceId=w",
       "/chat/messaging/conn-1/key",
+      "/chat/messaging/advanced?channel=channel.matrix",
     ]) {
       expect(isChannelPageLocation(href), href).toBe(true);
       expect(isCockpitConversationLocation(href), href).toBe(false);
@@ -248,6 +249,62 @@ it.each(["code_mode", "proposal", "candidate_skill", "mesh_tool", "mesh_mcp_serv
     expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
   },
 );
+describe("the retired Settings › Connections addresses", () => {
+  it.each([
+    // The page itself, with no hash or one it never had, opens Advanced setup on its first section.
+    ["/settings/connections", "/capabilities/connectors/advanced"],
+    ["/settings/connections#unknown", "/capabilities/connectors/advanced"],
+    // Each section's anchor, and its section name, open that section's new home.
+    ["/settings/connections#mcp-servers", "/capabilities/connectors/advanced#mcp-servers"],
+    ["/settings/connections#mcp", "/capabilities/connectors/advanced#mcp-servers"],
+    ["/settings/connections#integration-connections", "/capabilities/connectors/advanced#integration-connections"],
+    ["/settings/connections#web-search", "/capabilities/connectors/advanced#web-search"],
+    ["/settings/connections#channels", "/chat/messaging/advanced"],
+    ["/settings/connections#addons", "/settings/advanced#addons"],
+    // The section paths follow their sections; Add-ons & packs is still a Settings section and stays put.
+    ["/settings/mcp", "/capabilities/connectors/advanced#mcp-servers"],
+    ["/settings/integrations", "/capabilities/connectors/advanced#integration-connections"],
+    ["/settings/web-search", "/capabilities/connectors/advanced#web-search"],
+    ["/settings/channels", "/chat/messaging/advanced"],
+    ["/settings/addons", "/settings/addons"],
+    // The new homes are native as they are.
+    ["/capabilities/connectors/advanced#web-search", "/capabilities/connectors/advanced#web-search"],
+    ["/chat/messaging/advanced", "/chat/messaging/advanced"],
+  ])("opens %s at %s", (input, href) => {
+    expect(resolveCockpitCompatibility(input)).toEqual({ kind: "native", href });
+  });
+
+  it("keeps a provider's sign-in return whole, on Advanced setup, which hands it back", () => {
+    for (const fragment of [
+      "mcp-oauth-return&state=s-1&code=abc%2F1",
+      "mcp-oauth-return&state=s-2&error=access_denied",
+      "google-oauth-return&state=s-3&code=4%2F0Ad",
+    ]) {
+      expect(resolveCockpitCompatibility(`/settings/connections?shell=cockpit#${fragment}`)).toEqual({
+        kind: "native",
+        href: `/capabilities/connectors/advanced?shell=cockpit#${fragment}`,
+      });
+    }
+  });
+
+  it("carries the channel to set up and the workspace to Advanced channel setup", () => {
+    expect(
+      resolveCockpitCompatibility("/settings/connections?channel=channel.matrix&workspaceId=w&shell=cockpit#channels"),
+    ).toEqual({ kind: "native", href: "/chat/messaging/advanced?channel=channel.matrix&workspaceId=w&shell=cockpit" });
+  });
+
+  it("leaves an explicit Classic rollback on Classic's own page", () => {
+    expect(resolveCockpitCompatibility("/settings/connections?shell=classic#mcp-servers").kind).toBe("classic");
+  });
+
+  it("does not widen to other Settings or Capabilities paths", () => {
+    expect(resolveCockpitCompatibility("/settings/connections/mcp").kind).toBe("missing");
+    expect(resolveCockpitCompatibility("/capabilities/connectors/advanced/mcp").kind).toBe("missing");
+    expect(resolveCockpitCompatibility("/capabilities/tools/advanced").kind).toBe("missing");
+    expect(resolveCockpitCompatibility("/chat/messaging/advanced/x").kind).toBe("missing");
+  });
+});
+
 describe("the Library skills and tools addresses", () => {
   it.each([
     ["/library/skills", "/capabilities/skills"],

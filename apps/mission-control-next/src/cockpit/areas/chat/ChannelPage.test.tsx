@@ -323,16 +323,19 @@ describe("ChannelPage", () => {
     ["a Discord connection with only a webhook", "discord", { webhookUrl: "[REDACTED]" }],
     ["a Slack webhook connection", "slack", { receiveMode: "webhook", webhookUrl: "[REDACTED]" }],
     ["a Slack OAuth connection", "slack", { authMode: "oauth", receiveMode: "webhook", slackTeamId: "T1" }],
-  ])("keeps the key of %s in Settings: it has no bot token for Chat's page to change", async (_name, key, config) => {
-    load({
-      connection: connection({ catalogId: `channel.${key}`, key, label: key, config }),
-      overview: overviewOf(channel({ channelKey: key, label: key })),
-    });
-    await mount();
-    expect(keyLinks()).toEqual(["/settings/connections#channels"]);
-  });
+  ])(
+    "keeps the key of %s in Advanced channel setup: it has no bot token for Chat's page to change",
+    async (_name, key, config) => {
+      load({
+        connection: connection({ catalogId: `channel.${key}`, key, label: key, config }),
+        overview: overviewOf(channel({ channelKey: key, label: key })),
+      });
+      await mount();
+      expect(keyLinks()).toEqual(["/chat/messaging/advanced"]);
+    },
+  );
 
-  it("keeps the key of a send-only WhatsApp connection in Settings: Chat's page has no saved App ID or secret to check the new token with", async () => {
+  it("keeps the key of a send-only WhatsApp connection in Advanced channel setup: Chat's page has no saved App ID or secret to check the new token with", async () => {
     load({
       connection: connection({
         catalogId: "channel.whatsapp",
@@ -343,16 +346,16 @@ describe("ChannelPage", () => {
       overview: overviewOf(channel({ channelKey: "whatsapp", label: "WhatsApp" })),
     });
     await mount();
-    expect(keyLinks()).toEqual(["/settings/connections#channels"]);
+    expect(keyLinks()).toEqual(["/chat/messaging/advanced"]);
   });
 
-  it("sends a channel without its own key page to Settings to change the key", async () => {
+  it("sends a channel without its own key page to Advanced channel setup to change the key", async () => {
     load({
       connection: connection({ catalogId: "channel.mattermost", key: "mattermost", label: "Mattermost", config: {} }),
       overview: overviewOf(channel({ channelKey: "mattermost", label: "Mattermost" })),
     });
     await mount();
-    expect(keyLinks()).toEqual(["/settings/connections#channels"]);
+    expect(keyLinks()).toEqual(["/chat/messaging/advanced"]);
   });
 
   it("shows no provider id, pairing code or version hash outside Technical details", async () => {

@@ -50,9 +50,9 @@ export function useSignInTimeLeft(startedAt: number | undefined): SignInTimeLeft
 
 /**
  * Signing in, which happens in the browser: the sign-in page (in a new tab), where it signs in and what it asks for.
- * The return reaches this page through Settings, so the page carries on by itself. When it doesn't, the code and state
- * from the sign-in page can be pasted instead, named as Settings names them; a paste that doesn't match keeps what was
- * typed and says so beside the fields. A request close to its 10 minutes (one started in the background while the
+ * The return reaches this page through Advanced setup, so the page carries on by itself. When it doesn't, the code
+ * and state from the sign-in page can be pasted instead, named as Advanced setup names them; a paste that doesn't
+ * match keeps what was typed and says so beside the fields. A request close to its 10 minutes (one started in the background while the
  * operator was in Inbox, say) is offered as a new one instead of a sign-in that would fail, and one past them says it
  * has run out. The flow's live region reads that swap out, and focus that was in this step moves to the new button.
  */

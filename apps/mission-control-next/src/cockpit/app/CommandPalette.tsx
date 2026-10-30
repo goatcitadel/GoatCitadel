@@ -16,7 +16,7 @@ import { SYSTEM_VIEWS } from "../areas/system/system-views";
 import { WORK_VIEWS } from "../areas/work/work-views";
 import { Dialog } from "../ui/Dialog";
 import { Button } from "../ui/Button";
-import { COCKPIT_AREAS } from "./routes";
+import { channelAdvancedSetupHref, COCKPIT_AREAS, connectorSetupHref } from "./routes";
 import { useCockpitRoute } from "./use-cockpit-route";
 import { useInspector } from "./inspector";
 import { useCommandPaletteSearch } from "./use-command-palette-search";
@@ -44,7 +44,25 @@ const TAB_DESTINATIONS = [
     label: `Library › ${label}`,
     path: section === "capabilities" ? "/library" : `/library/${section}`,
   })),
-].map((entry) => ({ ...entry, key: entry.path, terms: "" }));
+]
+  .map((entry) => ({ ...entry, key: entry.path, terms: "" }))
+  .concat([
+    // The two pages that hold what Settings › Connections did, found by the names of the sections they took over.
+    {
+      area: "capabilities",
+      label: "Capabilities › Advanced setup",
+      path: connectorSetupHref(),
+      key: connectorSetupHref(),
+      terms: "settings connections mcp servers integrations web search firecrawl brave parallel api keys",
+    },
+    {
+      area: "chat",
+      label: "Chat › Advanced channel setup",
+      path: channelAdvancedSetupHref(),
+      key: channelAdvancedSetupHref(),
+      terms: "settings connections channels messaging public web address webhook",
+    },
+  ]);
 const DESTINATIONS = [
   ...COCKPIT_AREAS.map((entry) => ({
     ...entry,

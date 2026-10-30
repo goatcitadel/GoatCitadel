@@ -314,17 +314,17 @@ describe("Install panel", () => {
     expect(button("Install")).toBeUndefined();
     expect(button("Sign in and install")).toBeUndefined();
     expect(text()).toContain("Needs an API key");
-    expect(href(link("Set up in Settings")).pathname + href(link("Set up in Settings")).hash).toBe(
-      "/settings/connections#mcp-servers",
+    expect(href(link("Open Advanced setup")).pathname + href(link("Open Advanced setup")).hash).toBe(
+      "/capabilities/connectors/advanced#mcp-servers",
     );
   });
 
-  it("sends an app whose sign-in isn't set up to Settings instead of installing it", async () => {
+  it("sends an app whose sign-in isn't set up to Advanced setup instead of installing it", async () => {
     const unset = item({ auth: "oauth", reason: "missing_sign_in_setup" });
     await renderPanel(unset.id, [unset]);
     expect(button("Sign in and install")).toBeUndefined();
     expect(text()).toContain("Sign-in isn't set up for this app yet.");
-    expect(link("Set up in Settings")).toBeDefined();
+    expect(link("Open Advanced setup")).toBeDefined();
   });
 
   it("pre-ticks Also let Chat use connectors when MCP in Chat is off", async () => {
@@ -348,7 +348,7 @@ describe("Install panel", () => {
     await renderPanel(blocked.id, [blocked]);
     expect(checkbox()).toBeNull();
     expect(text()).toContain("Chat can't use connectors while background runs are off.");
-    expect(href(link("See Chat access in Settings")).hash).toBe("#mcp-servers");
+    expect(href(link("See Chat access in Advanced setup")).hash).toBe("#mcp-servers");
     await act(async () => button("Install")?.click());
     expect(flows.start).toHaveBeenCalledExactlyOnceWith(blocked.id, { enableChatConnectors: false });
   });
@@ -780,17 +780,17 @@ describe("Install progress", () => {
   it("links a failure's next step from the words that point there", async () => {
     await renderPanel(LINEAR.id, [LINEAR]);
     const message =
-      "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in Settings.";
+      "Installing from here is switched off on this install, so nothing was changed. You can add it yourself in Advanced setup.";
     setFlow(LINEAR, {
       phase: "failed",
       step: "plan",
       message,
       changed: [],
-      link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+      link: { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" },
     });
-    const settings = link("Open in Settings");
-    expect(settings?.closest("p")?.textContent).toBe(`${message} Open in Settings`);
-    expect(`${href(settings).pathname}${href(settings).hash}`).toBe("/settings/connections#mcp-servers");
+    const settings = link("Open Advanced setup");
+    expect(settings?.closest("p")?.textContent).toBe(`${message} Open Advanced setup`);
+    expect(`${href(settings).pathname}${href(settings).hash}`).toBe("/capabilities/connectors/advanced#mcp-servers");
 
     setFlow(
       LINEAR,
@@ -798,13 +798,15 @@ describe("Install progress", () => {
         phase: "failed",
         step: "sign_in",
         message:
-          "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Settings instead.",
+          "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in Advanced setup instead.",
         changed: [],
-        link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+        link: { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" },
       },
       "srv-1",
     );
-    expect(link("Open in Settings")?.closest("p")?.textContent).toContain("Set up its sign-in in Settings instead.");
+    expect(link("Open Advanced setup")?.closest("p")?.textContent).toContain(
+      "Set up its sign-in in Advanced setup instead.",
+    );
   });
 
   it("links a stop that leaves the request in Inbox", async () => {
@@ -849,7 +851,7 @@ describe("Saved server sign-in and connect", () => {
     expect(flows.start).not.toHaveBeenCalled();
   });
 
-  it("leaves a service that isn't a saved server to its Settings link", async () => {
+  it("leaves a service that isn't a saved server to its Advanced setup link", async () => {
     const gmail = item({
       id: "integration:conn-gmail",
       name: "Gmail",
@@ -864,7 +866,7 @@ describe("Saved server sign-in and connect", () => {
     });
     await renderPanel(gmail.id, [gmail]);
     expect(button("Connect")).toBeUndefined();
-    expect(link("Advanced setup in Settings")).toBeDefined();
+    expect(link("Advanced setup")).toBeDefined();
   });
 
   it("shows a saved server's progress while it connects", async () => {
@@ -906,7 +908,7 @@ describe("Saved server sign-in and connect", () => {
     expect(flows.resume).toHaveBeenCalledExactlyOnceWith(off.id, "sign_in");
   });
 
-  it("offers no Sign in again once the app refused to register GoatCitadel, only the way to Settings", async () => {
+  it("offers no Sign in again once the app refused to register GoatCitadel, only the way to Advanced setup", async () => {
     const off = { ...SAVED_LINEAR, state: "turned_off", reason: "turned_off" } as const;
     await renderPanel(off.id, [off]);
     setFlow(
@@ -916,15 +918,15 @@ describe("Saved server sign-in and connect", () => {
         step: "sign_in",
         message:
           "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in " +
-          "Settings instead.",
+          "Advanced setup instead.",
         changed: ["Allowed mcp.linear.app. Saved Linear, switched off."],
-        link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+        link: { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" },
         signInBlocked: true,
       },
       "srv-1",
     );
     expect(button("Sign in again")).toBeUndefined();
-    expect(link("Open in Settings")).toBeDefined();
+    expect(link("Open Advanced setup")).toBeDefined();
     expect(button("Dismiss")).toBeDefined();
   });
 
@@ -944,16 +946,16 @@ describe("Saved server sign-in and connect", () => {
           step: "sign_in",
           message:
             "Couldn't start signing in to Linear. It wouldn't register GoatCitadel for sign-in. Set up its sign-in in " +
-            "Settings instead.",
+            "Advanced setup instead.",
           changed: [],
-          link: { label: "Open in Settings", href: "/settings/connections#mcp-servers" },
+          link: { label: "Open Advanced setup", href: "/capabilities/connectors/advanced#mcp-servers" },
           signInBlocked: true,
         },
         "srv-1",
       );
       // Pressing it would only be refused the same way; once dismissed, the button comes back.
       expect(button(label)).toBeUndefined();
-      expect(link("Open in Settings")).toBeDefined();
+      expect(link("Open Advanced setup")).toBeDefined();
       setFlow(row, { phase: "idle" });
       expect(button(label)).toBeDefined();
     },

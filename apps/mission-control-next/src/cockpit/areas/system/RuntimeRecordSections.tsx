@@ -1,6 +1,7 @@
 import type { ReactNode } from "react";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { sourceFailed, type OpsRuntimeData } from "../../../features/native-routes/ops/runtime-overview-model";
+import { connectorSetupHref } from "../../app/routes";
 import { useOperatorInbox } from "../../data/use-operator-inbox";
 import { Section } from "../../ui/Section";
 import { StatusBadge } from "../../ui/StatusBadge";
@@ -108,8 +109,8 @@ function IntegrationsSection({ data, workspaceId }: { data: OpsRuntimeData; work
       ) : (
         <Unavailable>No MCP servers are configured.</Unavailable>
       )}
-      <SystemOwnerLink href="/settings/connections#mcp-servers" scope={[workspaceId, "mcp"]} className={LINK}>
-        Open Settings › Connections
+      <SystemOwnerLink href={connectorSetupHref("mcp")} scope={[workspaceId, "mcp"]} className={LINK}>
+        Open Capabilities › Advanced setup
       </SystemOwnerLink>
     </Section>
   );

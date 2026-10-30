@@ -180,7 +180,7 @@ describe("central cockpit navigation", () => {
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     await click("Cancel");
     await act(async () => {
-      route.navigate("/settings/connections#channels");
+      route.navigate("/capabilities/connectors/advanced#mcp-servers");
     });
     expect(document.querySelector('[role="dialog"]')).not.toBeNull();
     expect(window.location.pathname).toBe("/settings/general");

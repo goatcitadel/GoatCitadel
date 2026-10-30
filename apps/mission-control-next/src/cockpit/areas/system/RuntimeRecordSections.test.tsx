@@ -58,9 +58,10 @@ it("presents a disabled MCP server as Off and links to its settings", () => {
   expect(integrations.id).toBe("runtime-integrations");
   expect(integrations.textContent).toContain("Off");
   const link = [...integrations.querySelectorAll("a")].find(
-    (node) => node.textContent === "Open Settings › Connections",
+    (node) => node.textContent === "Open Capabilities › Advanced setup",
   );
-  expect(new URL(link!.href).pathname).toBe("/settings/connections");
+  expect(new URL(link!.href).pathname).toBe("/capabilities/connectors/advanced");
+  expect(new URL(link!.href).hash).toBe("#mcp-servers");
 });
 
 it("points runtime authority and mesh capabilities at the pages that manage them", () => {

@@ -79,7 +79,10 @@ export async function runCockpitIntegrationMeetProof({ context, browser, stack, 
               writes.push({ method: request.method(), pathname });
           });
           await page.goto(
-            buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#integration-connections"),
+            buildVerificationUiUrl(
+              stack.uiUrl,
+              "/capabilities/connectors/advanced?shell=cockpit#integration-connections",
+            ),
             { waitUntil: "domcontentloaded" },
           );
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });

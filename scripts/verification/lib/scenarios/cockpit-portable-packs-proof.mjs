@@ -243,7 +243,7 @@ export async function runCockpitPortablePacksProof({ context, browser, stack, ci
               writes.push(entry);
             else unrelated.push(`${request.method()} ${pathname}`);
           });
-          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#addons"), {
+          await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/advanced?shell=cockpit#addons"), {
             waitUntil: "domcontentloaded",
           });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
@@ -411,7 +411,7 @@ export async function runCockpitPortablePacksProof({ context, browser, stack, ci
             .click();
           await page
             .getByRole("navigation", { name: "Settings pages", exact: true })
-            .getByRole("link", { name: "Connections", exact: true })
+            .getByRole("link", { name: "Advanced", exact: true })
             .click();
           await page.getByRole("tab", { name: "Add-ons & packs", exact: true }).click();
           await panel.getByText(/^Pack action outcome is unconfirmed\./u).waitFor();

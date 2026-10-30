@@ -148,7 +148,7 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
             if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && route.startsWith("/api/v1/"))
               writes.push({ method: request.method(), route }); // Never collect submitted credentials.
           });
-          const settingsUrl = buildVerificationUiUrl(stack.uiUrl, "/settings/connections?shell=cockpit#channels");
+          const settingsUrl = buildVerificationUiUrl(stack.uiUrl, "/chat/messaging/advanced?shell=cockpit");
           await page.goto(settingsUrl, { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
           const panel = page.getByRole("region", { name: "Channel setup", exact: true });
@@ -328,10 +328,11 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
             );
           };
           await assertPublicReview();
-          const pages = page.getByRole("navigation", { name: "Settings pages", exact: true });
+          // Leaving Advanced channel setup for the channel picker asks about the unsaved draft first.
+          const back = page.getByRole("link", { name: "Back to channels", exact: true });
           const leave = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
           const reviewLeave = async (decision) => {
-            await pages.getByRole("link", { name: "General", exact: true }).click();
+            await back.click();
             await leave.waitFor();
             await leave.getByText(`You have unsaved changes in ${committed.label}.`, { exact: true }).waitFor();
             assert.equal(await leave.count(), 1);
@@ -351,12 +352,9 @@ export async function runCockpitChannelsProof({ context, browser, stack, citadel
           assert.deepEqual(writes, retainedWrites);
           assert.deepEqual(received, retainedMessages);
           await reviewLeave("Keep draft and close");
-          await page.waitForURL(
-            (url) => url.pathname === "/settings/general" && url.search === "?shell=cockpit" && !url.hash,
-          );
-          await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
-          await pages.getByRole("link", { name: "Connections", exact: true }).click();
-          await page.getByRole("tab", { name: "Channels", exact: true }).click();
+          await page.waitForURL((url) => url.pathname === "/chat/messaging/add" && !url.hash);
+          await page.getByRole("heading", { name: "Add a channel", exact: true }).waitFor();
+          await page.getByRole("link", { name: "Advanced channel setup", exact: true }).click();
           await page.waitForURL(sourceUrl);
           assert.equal(
             await page.evaluate(() => window.__channelProofDocument),

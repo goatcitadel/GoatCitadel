@@ -32,11 +32,11 @@ function item(overrides: Partial<CapabilityConnectorItem>): CapabilityConnectorI
 
 describe("connectorSettingsHref", () => {
   it.each<[Partial<CapabilityConnectorItem>, string]>([
-    [{ source: "mcp_template" }, "/settings/connections#mcp-servers"],
-    [{ source: "mcp_server", id: "mcp-server:linear" }, "/settings/connections#mcp-servers"],
-    [{ source: "integration", kind: "channel" }, "/settings/connections#channels"],
-    [{ source: "integration", kind: "built_in" }, "/settings/connections#integration-connections"],
-    [{ source: "web_search", kind: "built_in" }, "/settings/connections#web-search"],
+    [{ source: "mcp_template" }, "/capabilities/connectors/advanced#mcp-servers"],
+    [{ source: "mcp_server", id: "mcp-server:linear" }, "/capabilities/connectors/advanced#mcp-servers"],
+    [{ source: "integration", kind: "channel" }, "/chat/messaging/advanced"],
+    [{ source: "integration", kind: "built_in" }, "/capabilities/connectors/advanced#integration-connections"],
+    [{ source: "web_search", kind: "built_in" }, "/capabilities/connectors/advanced#web-search"],
   ])("sends %j to %s", (overrides, href) => {
     expect(connectorSettingsHref(item(overrides))).toBe(href);
   });
@@ -44,7 +44,7 @@ describe("connectorSettingsHref", () => {
 
 describe("settings links", () => {
   it("points the Chat line at the MCP section, where Chat availability is shown", () => {
-    expect(CHAT_CONNECTORS_SETTINGS_HREF).toBe("/settings/connections#mcp-servers");
+    expect(CHAT_CONNECTORS_SETTINGS_HREF).toBe("/capabilities/connectors/advanced#mcp-servers");
   });
 
   it("points the hidden line at the workspace capabilities", () => {

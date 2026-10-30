@@ -29,8 +29,8 @@ const fieldClass = "mt-1 block min-h-11 w-full rounded-md border border-line-con
 const OWNER_LINKS: Record<string, string> = {
   "Settings / Permissions": "/settings/safety#permission-profile",
   "Settings / Tools": "/settings/safety#approval-mode",
-  "Settings / MCP": "/settings/connections#mcp-servers",
-  "Settings / Add-ons": "/settings/connections#addons",
+  "Settings / MCP": "/capabilities/connectors/advanced#mcp-servers",
+  "Settings / Add-ons": "/settings/advanced#addons",
   "Library / Candidates and mesh": "/library?shell=cockpit",
   "Capabilities / Skills": "/capabilities/skills?shell=cockpit",
   "Ops / Approvals": "/inbox?view=history&shell=cockpit",
