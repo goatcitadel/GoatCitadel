@@ -19,6 +19,14 @@ const MAX_PRESENCE_LEASE_MS = 90_000;
 const MAX_LABEL_LENGTH = 120;
 const MAX_MESSAGE_LENGTH = 4_000;
 const SECRET_REF_PREFIX = "keychain:goatcitadel:";
+// A target may only name notification entries: delivery sends the credential as a bearer token, so any
+// other keychain entry (a provider key, a Vault master key) must never be reachable from a target.
+const NOTIFICATION_SECRET_ACCOUNT_PREFIX = {
+  webhookUrlSecretRef: "notification-webhook:",
+  credentialSecretRef: "notification-token:",
+} as const;
+
+export type NotificationSecretRefField = keyof typeof NOTIFICATION_SECRET_ACCOUNT_PREFIX;
 
 export interface NotificationDeliveryAdapterResult {
   status: "pending" | "delivered" | "failed" | "unknown_after_send";
@@ -360,14 +368,21 @@ export function notificationDestinationFingerprint(value: string): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
-export function accountFromNotificationSecretRef(secretRef: string): string {
+export function accountFromNotificationSecretRef(secretRef: string, field: NotificationSecretRefField): string {
   const normalized = secretRef.trim();
   if (!normalized.startsWith(SECRET_REF_PREFIX)) {
-    throw validationError("Notification secret references must use the GoatCitadel keychain.", "secretRef");
+    throw validationError("Notification secret references must use the GoatCitadel keychain.", field);
   }
   const account = normalized.slice(SECRET_REF_PREFIX.length).trim();
   if (!account || account.includes("..") || /[\s\\/]/u.test(account)) {
-    throw validationError("Notification secret reference is invalid.", "secretRef");
+    throw validationError("Notification secret reference is invalid.", field);
+  }
+  const accountPrefix = NOTIFICATION_SECRET_ACCOUNT_PREFIX[field];
+  if (!account.startsWith(accountPrefix) || account.length === accountPrefix.length) {
+    throw validationError(
+      `${field} must name a notification keychain entry (${SECRET_REF_PREFIX}${accountPrefix}<name>).`,
+      field,
+    );
   }
   return account;
 }
@@ -391,9 +406,9 @@ export function parseAllowedNotificationWebhookUrl(value: string, isAllowlisted:
   return url;
 }
 
-function validateSecretRef(secretRef: string | undefined, field: string): string {
+function validateSecretRef(secretRef: string | undefined, field: NotificationSecretRefField): string {
   if (!secretRef) throw validationError(`${field} is required.`, field);
-  accountFromNotificationSecretRef(secretRef);
+  accountFromNotificationSecretRef(secretRef, field);
   return secretRef.trim();
 }
 

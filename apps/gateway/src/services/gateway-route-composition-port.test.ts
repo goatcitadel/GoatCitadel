@@ -47,10 +47,10 @@ describe("Gateway channel credential custody composition", () => {
     return { keyStore, port, setupHost, channelPort };
   }
 
-  it("gives channel setup and channel connections the key store while the port's generic key store stays unset", () => {
+  it("gives channel setup and channel connections the same key store the port hands its other readers", () => {
     const { keyStore, port, setupHost, channelPort } = compose(true);
-    // The Vault, evidence signing, notifications, replay sealing, the Ward vault and mobile push read this one.
-    expect(port.secretStore).toBeUndefined();
+    // Mobile push and notifications use this one; the Vault, evidence signing, replay sealing and the Ward vault hold.
+    expect(port.secretStore).toBe(keyStore);
     expect(port.channelSecretStore).toBe(keyStore);
     expect(setupHost.channelSecrets).toBeInstanceOf(ChannelSecretCustodyService);
     expect(channelPort.channelSecrets).toBeInstanceOf(ChannelSecretCustodyService);
@@ -91,5 +91,33 @@ describe("Gateway setup route owner composition", () => {
     expect(port).not.toHaveProperty("evolutionControlPlaneService");
     expect(port).not.toHaveProperty("agentSendChatMessage");
     expect(port).not.toHaveProperty("getSettings");
+  });
+});
+
+describe("Gateway route port OS key store", () => {
+  function portOver(secretStore: unknown) {
+    const unused = vi.fn();
+    const readStore = vi.fn(() => secretStore);
+    const gateway = new Proxy(
+      {},
+      { get: (_target, key) => (key === "secretStore" ? readStore() : unused) },
+    ) as GatewayRouteCompositionHost;
+    const privateDependencies = new Proxy({}, { get: () => unused }) as GatewayRouteCompositionPrivateDependencies;
+    return { port: createGatewayRouteCompositionPort(gateway, privateDependencies), readStore };
+  }
+
+  it("hands route readers the gateway's own key store while the OS keychain can be used", () => {
+    const store = { isAvailable: vi.fn(() => true) } as unknown as SecretStoreService;
+    const { port, readStore } = portOver(store);
+
+    expect(readStore).not.toHaveBeenCalled();
+    expect(port.secretStore).toBe(store);
+  });
+
+  it("hands route readers no key store when the OS keychain cannot be used", () => {
+    const store = { isAvailable: vi.fn(() => false) } as unknown as SecretStoreService;
+
+    expect(portOver(store).port.secretStore).toBeUndefined();
+    expect(portOver(undefined).port.secretStore).toBeUndefined();
   });
 });

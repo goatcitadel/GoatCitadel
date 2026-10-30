@@ -452,7 +452,7 @@ export async function deliverNotificationToChannel(
   return { status: "delivered", attemptCount: 1 };
 }
 
-async function deliverNotificationToWebhook(
+export async function deliverNotificationToWebhook(
   gateway: GatewayRouteCompositionPort,
   target: NotificationTarget,
   event: NotificationEventRecord,
@@ -461,14 +461,17 @@ async function deliverNotificationToWebhook(
   const secretStore = gateway.secretStore;
   if (!secretStore?.isAvailable()) return { status: "failed", lastError: "OS keychain is unavailable." };
   if (!target.webhookUrlSecretRef) return { status: "failed", lastError: "Webhook destination is unavailable." };
-  const urlValue = secretStore.getSecret(accountFromNotificationSecretRef(target.webhookUrlSecretRef));
+  // Both references are checked before any keychain read: a target never reaches a non-notification entry.
+  const urlAccount = accountFromNotificationSecretRef(target.webhookUrlSecretRef, "webhookUrlSecretRef");
+  const credentialAccount = target.credentialSecretRef
+    ? accountFromNotificationSecretRef(target.credentialSecretRef, "credentialSecretRef")
+    : undefined;
+  const urlValue = secretStore.getSecret(urlAccount);
   if (!urlValue) return { status: "failed", lastError: "Webhook destination secret is unavailable." };
   const url = parseAllowedNotificationWebhookUrl(urlValue, (candidate) =>
     gateway.isConnectionUrlAllowlisted(candidate),
   );
-  const credential = target.credentialSecretRef
-    ? secretStore.getSecret(accountFromNotificationSecretRef(target.credentialSecretRef))
-    : undefined;
+  const credential = credentialAccount ? secretStore.getSecret(credentialAccount) : undefined;
 
   const maxAttempts = 3;
   let lastRunId: string | undefined;
@@ -728,12 +731,21 @@ function reportGoogleSignInCleanupFailure(
 }
 
 /**
+ * The replay key (shared by integration replay records and the Citadel Ward request vault) stays out
+ * of the OS keychain until the operator approves minting it there. Its sealed-record guard counts
+ * replay records but not sealed Ward approvals, so a lookup miss after a restart could replace the key
+ * and strand pending Ward approvals. Until then nothing is sealed: replays cannot be rebuilt and
+ * Ward-gated actions stay blocked, as before.
+ */
+const HELD_REPLAY_KEY_STORE = undefined;
+
+/**
  * The single construction site for the integration-action host. Used by the route
  * composition above AND by the gateway's approved dry-run commit replay, so the two
  * callers can never drift apart on which gateway capabilities the action runtime sees.
  */
 export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompositionPort): IntegrationActionHost {
-  const { storage, secretStore } = gateway;
+  const { storage } = gateway;
   return {
     storage,
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
@@ -747,7 +759,7 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
     mutationStore: gateway.mutationIdempotencyStore,
     sideEffectRunStore: storage.externalSideEffectRuns,
     replayRecords: createExternalSideEffectReplayRecords({
-      resolveKey: sharedExternalSideEffectReplayKeyResolver(secretStore, storage.externalSideEffectRuns),
+      resolveKey: sharedExternalSideEffectReplayKeyResolver(HELD_REPLAY_KEY_STORE, storage.externalSideEffectRuns),
       runs: storage.externalSideEffectRuns,
     }),
     createApproval: (input) => gateway.createApproval(input),
@@ -763,8 +775,7 @@ export function buildIntegrationActionHostForGateway(gateway: GatewayRouteCompos
  * approved request retries a transient outage instead of failing the approval.
  */
 export function buildCitadelWardRequestVaultForGateway(gateway: GatewayRouteCompositionPort): CitadelWardRequestVault {
-  const { storage, secretStore } = gateway;
   return createCitadelWardRequestVault(
-    sharedExternalSideEffectReplayKeyResolverOrThrow(secretStore, storage.externalSideEffectRuns),
+    sharedExternalSideEffectReplayKeyResolverOrThrow(HELD_REPLAY_KEY_STORE, gateway.storage.externalSideEffectRuns),
   );
 }
