@@ -86,6 +86,8 @@ describe("shipped skill packs", { timeout: 120_000 }, () => {
         trustDisposition: "candidate",
         blockerCodes: [],
       });
+      // The SKILL.md name the operator resolves the approved skill id from; the pack folder's key ends in a hash.
+      expect(reviewed.snapshot.provenance).toMatchObject({ skillName: packId });
       expect(reviewed.snapshot.permissionEnvelope).toMatchObject({
         toolIds: expect.arrayContaining(["tool:shell.exec"]),
         scripts: [],

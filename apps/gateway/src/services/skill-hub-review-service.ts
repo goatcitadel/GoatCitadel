@@ -458,6 +458,10 @@ async function prepareReview(
       sourceType: validation.candidate.sourceType,
       sourceRef: validation.candidate.sourceRef,
       ...(context.resolvedGitCommit ? { resolvedGitCommit: context.resolvedGitCommit } : {}),
+      // The validated SKILL.md name. The operator resolves the approved skill id (`extra:<name>`) from it first, and
+      // applying the step requires exactly that id; a local or Git source's canonical key ends in a hash or the
+      // repository name, which the SKILL.md name need not match.
+      ...(validation.inferredSkillName ? { skillName: validation.inferredSkillName } : {}),
       nonCallableUntilActivated: true,
     },
     audit,
