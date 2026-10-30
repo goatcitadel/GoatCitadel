@@ -277,6 +277,7 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
       "https://clawhub.ai/example/review-skill",
       "https://127.0.0.1/example/review-skill.git",
       "https://attacker-controlled.example/example/review-skill.git",
+      "https://github.com:8443/example/review-skill.git",
     ];
     for (const [index, sourceRef] of refs.entries()) {
       await expect(

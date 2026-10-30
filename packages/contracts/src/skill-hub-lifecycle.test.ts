@@ -8,6 +8,7 @@ import {
   assertSkillHubBoundedMetadata,
   isSkillHubOperationKind,
   isSkillHubOperationSettlementDisposition,
+  isTrustedGitForgeUrl,
   namesGitRepository,
   skillHubArtifactBundleRelPath,
 } from "./skill-hub-lifecycle.js";
@@ -132,6 +133,27 @@ describe("Skill Hub blocker codes", () => {
 
   it("names the four public forges Git review trusts, lower-case and exact", () => {
     expect([...TRUSTED_GIT_FORGE_HOSTS].sort()).toEqual(["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"]);
+  });
+
+  it("trusts a Git address only as https on a trusted forge, on the default port", () => {
+    for (const address of [
+      "https://github.com/owner/repo",
+      "https://GitLab.com/owner/repo",
+      "https://codeberg.org:443/owner/repo",
+    ]) {
+      expect(isTrustedGitForgeUrl(new URL(address)), address).toBe(true);
+    }
+    for (const address of [
+      "https://github.com:8443/owner/repo",
+      "https://bitbucket.org:22/owner/repo",
+      "http://github.com/owner/repo",
+      "ssh://github.com/owner/repo",
+      "https://www.github.com/owner/repo",
+      "https://github.com.example/owner/repo",
+      "https://example.com/owner/repo",
+    ]) {
+      expect(isTrustedGitForgeUrl(new URL(address)), address).toBe(false);
+    }
   });
 
   it("asks a Git address for an owner and a repository, however it is slashed", () => {

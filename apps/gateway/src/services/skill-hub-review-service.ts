@@ -5,12 +5,12 @@ import {
   ConflictError,
   NotFoundError,
   SKILL_PERMISSION_ENVELOPE_VERSION,
-  TRUSTED_GIT_FORGE_HOSTS,
   ValidationError,
   canonicalJsonString,
   diffSkillPermissionEnvelopes,
   findShippedSkillPack,
   isGoatError,
+  isTrustedGitForgeUrl,
   namesGitRepository,
   normalizeSkillPermissionEnvelope,
   type GovernanceJourneyEventRecord,
@@ -53,9 +53,9 @@ const MARKETPLACE_HOSTS = new Set([
 // Hosted bundles flow through fetchAllowlisted, including guarded DNS
 // resolution. Git materialization uses the system Git client and cannot reuse
 // that dispatcher, so production review admits only exact public forge hosts
-// whose DNS is not controlled by the submitted source (shared with Capabilities,
-// which refuses any other Git host before review).
-const TRUSTED_GIT_FORGE_HOST_SET: ReadonlySet<string> = new Set(TRUSTED_GIT_FORGE_HOSTS);
+// on their default port, whose DNS is not controlled by the submitted source
+// (`isTrustedGitForgeUrl`, shared with Capabilities, which refuses any other
+// Git address before review).
 
 type ReviewStorage = Pick<
   Storage,
@@ -829,7 +829,7 @@ function normalizeHttpsSource(
     });
   }
   if (sourceType === "git_url") {
-    if (!TRUSTED_GIT_FORGE_HOST_SET.has(host)) {
+    if (!isTrustedGitForgeUrl(parsed)) {
       throw new ValidationError({
         field: "sourceRef",
         message: "Production Git review supports exact trusted public forge hosts only.",

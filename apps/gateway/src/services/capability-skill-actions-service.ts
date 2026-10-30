@@ -2,8 +2,8 @@ import {
   SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
   SKILL_LIFECYCLE_APPROVAL_KIND,
   ServiceUnavailableError,
-  TRUSTED_GIT_FORGE_HOSTS,
   ValidationError,
+  isTrustedGitForgeUrl,
   type ApprovalRequest,
   type ApprovalResolveInput,
   type CapabilitySkillActionOutcome,
@@ -292,8 +292,8 @@ export class CapabilitySkillActionsService {
 }
 
 /**
- * The address, when it is `https` on one of the forges the review trusts for Git (exact lower-case host, no `www.`).
- * Anything else is refused before the review reads it.
+ * The address, when it is `https` on one of the forges the review trusts for Git (exact lower-case host, no `www.`,
+ * default port). Anything else is refused before the review reads it.
  */
 function trustedGitAddress(sourceRef: string): string {
   let url: URL | undefined;
@@ -302,7 +302,7 @@ function trustedGitAddress(sourceRef: string): string {
   } catch {
     url = undefined;
   }
-  if (url?.protocol !== "https:" || !TRUSTED_GIT_FORGE_HOSTS.includes(url.hostname.toLowerCase())) {
+  if (!url || !isTrustedGitForgeUrl(url)) {
     throw new CapabilitySkillSourceRefusedError("UNTRUSTED_GIT_HOST", UNTRUSTED_GIT_HOST_MESSAGE);
   }
   return sourceRef;

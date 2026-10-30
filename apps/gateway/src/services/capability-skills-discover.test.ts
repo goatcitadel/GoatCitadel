@@ -219,6 +219,7 @@ describe("Capabilities skill discovery", () => {
         installability: "direct",
       }),
       listing("A www host", { sourceUrl: "https://www.github.com/example/www-host", installability: "direct" }),
+      listing("Another port", { sourceUrl: "https://github.com:8443/example/other-port", installability: "direct" }),
       listing("Marketplace", {
         sourceProvider: "skillsmp",
         sourceUrl: "https://skillsmp.com/skills/marketplace",
@@ -255,6 +256,7 @@ describe("Capabilities skill discovery", () => {
       "Plain http",
       "With credentials",
       "A www host",
+      "Another port",
       "Marketplace",
     ]) {
       expect(byName(name), name).toMatchObject({ state: "view_only" });

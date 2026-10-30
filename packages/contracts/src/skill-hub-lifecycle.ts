@@ -49,6 +49,14 @@ export function hasSealedApprovalLinkage(kind: string): boolean {
 export const TRUSTED_GIT_FORGE_HOSTS: readonly string[] = ["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"];
 
 /**
+ * Whether a Git address is `https` on one of `TRUSTED_GIT_FORGE_HOSTS`, on the default port: the forge's own Git
+ * service, not another one on its host. Review and anything that offers or checks a Git install ask the same.
+ */
+export function isTrustedGitForgeUrl(url: URL): boolean {
+  return url.protocol === "https:" && url.port === "" && TRUSTED_GIT_FORGE_HOSTS.includes(url.hostname.toLowerCase());
+}
+
+/**
  * Whether a Git address's path names a repository, as production Git review requires: an owner and a repository, so at
  * least two path segments (`/owner/repo`, `/owner/repo/tree/main/skills/x`; not `/owner`). Review refuses the rest, so
  * anything that offers an install of a Git address asks the same.

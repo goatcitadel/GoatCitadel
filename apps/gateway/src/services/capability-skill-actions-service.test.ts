@@ -393,6 +393,7 @@ describe("CapabilitySkillActionsService.checkSource", () => {
   it.each([
     "https://example.com/team/notes",
     "https://www.github.com/example/notes",
+    "https://github.com:8443/example/notes",
     "http://github.com/example/notes",
     "ssh://git@github.com/example/notes",
     "git@github.com:example/notes.git",

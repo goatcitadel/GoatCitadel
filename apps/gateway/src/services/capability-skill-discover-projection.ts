@@ -1,7 +1,7 @@
 import {
   skillCategoryFor,
   SHIPPED_SKILL_PACKS,
-  TRUSTED_GIT_FORGE_HOSTS,
+  isTrustedGitForgeUrl,
   namesGitRepository,
   type CapabilitySkillDiscoverItem,
   type CapabilitySkillDiscoverState,
@@ -199,19 +199,18 @@ function gitInstallFor(listing: DiscoverListing): CapabilitySkillSource | undefi
 }
 
 /**
- * `https` on an exact trusted forge host, with no credentials, query or fragment, and a path that names a repository
- * (an owner and a repository): the review refuses the rest.
+ * `https` on an exact trusted forge host and its default port, with no credentials, query or fragment, and a path that
+ * names a repository (an owner and a repository): the review refuses the rest.
  */
 function isTrustedGitAddress(value: string): boolean {
   try {
     const url = new URL(value);
     return (
-      url.protocol === "https:" &&
+      isTrustedGitForgeUrl(url) &&
       url.username === "" &&
       url.password === "" &&
       url.search === "" &&
       url.hash === "" &&
-      TRUSTED_GIT_FORGE_HOSTS.includes(url.hostname.toLowerCase()) &&
       namesGitRepository(url.pathname)
     );
   } catch {
