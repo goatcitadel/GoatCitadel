@@ -6,7 +6,10 @@ import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js
 
 /** Bind setup to the same connection, diagnostics and secret custody owners. */
 export function composeChannelSetupHost(
-  gateway: Pick<GatewayRouteCompositionPort, "storage" | "recentChannelSetupTests" | "secretStore" | "recordDevDiagnostic">,
+  gateway: Pick<
+    GatewayRouteCompositionPort,
+    "storage" | "recentChannelSetupTests" | "secretStore" | "recordDevDiagnostic"
+  >,
   integrationDiagnostics: IntegrationDiagnosticsService,
   integrationChannel: IntegrationChannelService,
 ): ChannelSetupHost {
