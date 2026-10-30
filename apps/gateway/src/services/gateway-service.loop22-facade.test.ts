@@ -43,8 +43,6 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
 
 function createRouteDependencyHarness() {
   return createGatewayHarness({
-    addonsService: { name: "addons" },
-    addonSlotService: { name: "addon-slot" },
     approvalRuntime: { name: "approval-runtime" },
     assemblyService: { name: "assembly" },
     backupRetentionService: { name: "backup-retention" },

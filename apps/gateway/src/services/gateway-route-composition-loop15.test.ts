@@ -1,12 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
-  createAddonsRoutePort: vi.fn((deps: any) => ({
-    publish: () => deps.publishRealtime("addon.changed", "addons", undefined),
-    record: () => deps.recordDevDiagnostic({ event: "addon" }),
-    service: deps.addonsService,
-    slotService: deps.slotService,
-  })),
   createCostsRoutePort: vi.fn((deps: any) => ({ storage: deps.storage })),
   getSettings: vi.fn((deps: unknown) => ({ method: "getSettings", deps })),
   getAuthRuntimeSettings: vi.fn((deps: unknown) => ({ method: "getAuthRuntimeSettings", deps })),
@@ -105,7 +99,6 @@ const mocks = vi.hoisted(() => ({
   }),
 }));
 
-vi.mock("./addons-route-service.js", () => ({ createAddonsRoutePort: mocks.createAddonsRoutePort }));
 vi.mock("./costs-route-service.js", () => ({ createCostsRoutePort: mocks.createCostsRoutePort }));
 vi.mock("./settings-auth-service.js", () => ({
   getAuthRuntimeSettings: mocks.getAuthRuntimeSettings,
@@ -165,13 +158,6 @@ function createGateway() {
       },
       db: createDatabaseStub(),
       gatewaySql: { prepare: fn(() => ({ run: fn(() => undefined) })) },
-    },
-    addonsService: { list: fn(() => []) },
-    addonSlotService: {
-      findSlotsForRoute: fn(() => []),
-      listAllRegistrations: fn(() => []),
-      registerDeclarations: fn(() => undefined),
-      unregister: fn(() => undefined),
     },
     approvalRuntime: {
       createToolGrant: fn((input: unknown) => ({ input, grantId: "grant-1" })),
@@ -339,9 +325,6 @@ describe("route composition loop 15 delegates", () => {
     const gateway = createGateway();
     const deps = composeSystemRouteDependencies(gateway as never) as any;
 
-    expect(deps.addons.service).toBe(gateway.addonsService);
-    expect(deps.addons.publish()).toEqual({ eventType: "addon.changed", source: "addons", payload: {} });
-    expect(deps.addons.record()).toEqual({ input: { event: "addon" } });
     expect(deps.assembly.createAssemblyRun({ goal: "ship" })).toEqual({ input: { goal: "ship" }, runId: "assembly-1" });
     expect(deps.assembly.getAssemblyRunDetail("run-1")).toEqual({ runId: "run-1" });
     expect(deps.assembly.listAssemblyReputations(3)).toEqual([{ limit: 3 }]);

@@ -143,12 +143,6 @@ import type {
   DatabaseVerifyResponse,
 } from "@goatcitadel/contracts";
 import type {
-  AddonActionResponse,
-  AddonCatalogEntry,
-  AddonInstalledRecord,
-  AddonInstallRequest,
-  AddonStatusRecord,
-  AddonUninstallResponse,
   BackupCreateResponse,
   BackupManifestFileRecord,
   BackupManifestRecord,
@@ -509,8 +503,6 @@ import {
 } from "./skill-state-service.js";
 import { GATEWAY_OWNED_MCP_SERVER_IDS, McpServerStore } from "./mcp-server-store.js";
 import { SkillMutationService, type SkillMutationSnapshot } from "./skill-mutation-service.js";
-import { AddonsService } from "./addons-service.js";
-import { AddonSlotService } from "./addon-slot-service.js";
 import {
   GatewayDevDiagnosticsService,
   resolveDevDiagnosticsBufferSize,
@@ -1119,8 +1111,6 @@ export class GatewayService {
   private readonly skillMutationService: SkillMutationService;
   public readonly personalityCatalogService: PersonalityCatalogService;
   public readonly cronAutomationService: CronAutomationService;
-  private readonly addonsService: AddonsService;
-  private readonly addonSlotService: AddonSlotService;
   private readonly devDiagnostics: GatewayDevDiagnosticsService;
   private readonly postgresStorageWaitMonitor: PostgresStorageWaitMonitor;
   public readonly discordRuntimeService: DiscordRuntimeService;
@@ -2001,8 +1991,6 @@ export class GatewayService {
       rootDir: config.rootDir,
       skillLifecycle: this.storage.skillLifecycle,
     });
-    this.addonSlotService = new AddonSlotService();
-    this.addonsService = new AddonsService(config.rootDir, { slotService: this.addonSlotService });
     this.discordRuntimeService = new DiscordRuntimeService({
       listConnections: async () => await this.storage.integrationConnections.list(undefined, 1000),
       findApprovedPairing: (connectionId, userId) => this.findApprovedDiscordPairing(connectionId, userId),
@@ -3646,8 +3634,6 @@ export class GatewayService {
   private buildRouteCompositionPort() {
     return createGatewayRouteCompositionPort(this, {
       mcpAdministration: this.mcpAdministration,
-      addonsService: this.addonsService,
-      addonSlotService: this.addonSlotService,
       approvalRuntime: this.approvalRuntime,
       assemblyService: this.assemblyService,
       backupRetentionService: this.backupRetentionService,
