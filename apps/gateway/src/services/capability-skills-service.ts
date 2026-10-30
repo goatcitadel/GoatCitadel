@@ -1,13 +1,20 @@
 import {
   NotFoundError,
+  SHIPPED_SKILL_CATEGORIES,
   ServiceUnavailableError,
   type ApprovalRequest,
   type CapabilityCatalogEntry,
   type CapabilitySkillDetail,
+  type CapabilitySkillInstallsResponse,
   type CapabilitySkillsResponse,
   type DeploymentProfile,
   type SkillListItem,
 } from "@goatcitadel/contracts";
+import {
+  buildCapabilitySkillInstall,
+  isUnfinishedInstall,
+  SKILL_HUB_LIST_LIMIT,
+} from "./capability-skill-install-projection.js";
 import { projectCapabilityPublicValue } from "./capability-public-projection.js";
 import {
   buildCapabilitySkillDetail,
@@ -17,6 +24,7 @@ import {
   type ShippedSkillDirs,
 } from "./capability-skills-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
+import type { SkillHubOperatorItem } from "./skill-hub-operator-service.js";
 
 /** One reader per place the Skills tab is built from, each through its existing owner. None writes anything. */
 export interface CapabilitySkillsSources {
@@ -43,6 +51,10 @@ export interface CapabilitySkillsSources {
   deploymentProfile(): DeploymentProfile;
   /** The operator's "skip approvals" setting (`settingsApprovalSkipEnabled`). */
   readApprovalSkipSetting(): Promise<boolean>;
+  /** Skill Hub's operator list: the workspace's newest checks, each with its approvals, settlements and guards. */
+  listSkillHub(input: { workspaceId: string; limit: number }): Promise<{ items: readonly SkillHubOperatorItem[] }>;
+  /** One Skill Hub check by its id, in any workspace: what source it read. */
+  findSkillHubSnapshot(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined>;
 }
 
 export type CapabilitySkillsSource =
@@ -51,12 +63,15 @@ export type CapabilitySkillsSource =
   | "approvals"
   | "switchable"
   | "turn_skills"
-  | "approval_skip";
+  | "approval_skip"
+  | "skill_hub"
+  | "skill_hub_check";
 
 /** Called with the real error of a failed read, so the response can carry plain wording only. */
 export type CapabilitySkillsFailureReporter = (source: CapabilitySkillsSource, error: unknown) => void;
 
 const UNREADABLE_SKILLS = "Skills can't be read right now.";
+const UNREADABLE_INSTALLS = "Skill installs can't be read right now.";
 const ISSUE_MESSAGES = {
   approvals: "Waiting approvals couldn't be read right now.",
   switchable: "Which skills can be switched couldn't be read right now.",
@@ -64,8 +79,9 @@ const ISSUE_MESSAGES = {
 } as const;
 
 /**
- * The Capabilities Skills tab: the installed list and one skill's details. The skills themselves must be readable; every
- * other source is read on its own and a failed one leaves its part out with a plain issue line, as the app list does.
+ * The Capabilities Skills tab: the installed list, one skill's details, and the installs still on their way in. For the
+ * installed list the skills themselves must be readable; every other source is read on its own and a failed one leaves
+ * its part out with a plain issue line, as the app list does.
  */
 export class CapabilitySkillsService {
   public constructor(
@@ -82,6 +98,7 @@ export class CapabilitySkillsService {
       this.attempt("turn_skills", () => this.sources.listWorkspaceTurnSkills(workspaceId)),
       this.readOperatorApprovalSkip(),
     ]);
+    const packSnapshotIds = await this.readPackSnapshotIds(skills);
 
     // Fixed order, whatever order the reads finish in.
     const issues = [
@@ -100,6 +117,7 @@ export class CapabilitySkillsService {
         // A list that can't be read marks no row, rather than guessing which skills the workspace's turns may load.
         ...(turnSkills.ok ? { turnSkillIds: new Set(turnSkills.value.map((skill) => skill.skillId)) } : {}),
         shippedSkillDirs: this.sources.shippedSkillDirs(),
+        packSnapshotIds,
       }),
       // Absent when the catalog couldn't be read, or when it cut its candidate list off.
       ...(candidatesWaiting === undefined ? {} : { candidatesWaiting }),
@@ -128,6 +146,61 @@ export class CapabilitySkillsService {
       ...(detail.provenance ? { provenance: projectCapabilityPublicValue(detail.provenance) } : {}),
       ...(detail.catalogEntry ? { catalogEntry: projectCapabilityPublicValue(detail.catalogEntry) } : {}),
     };
+  }
+
+  /**
+   * The workspace's installs still on their way in, or stopped on the way, newest first, from the newest checks Skill
+   * Hub lists: an install left between its two steps is found again after a reload. With a `snapshotId`, just that one
+   * check at whatever step it is on, done, passed and blocked included (none when the list doesn't hold it), so an
+   * install flow can tell a finished install from a declined one (Ruling R55). A check whose source can't be named
+   * without a server path (one only the old Skill Hub routes can make) is left out. Without the checks there is nothing
+   * to show, so a failure is a plain 503 rather than an empty list.
+   */
+  public async installs(workspaceId: string, snapshotId?: string): Promise<CapabilitySkillInstallsResponse> {
+    const [hub, operatorApprovalSkip] = await Promise.all([
+      this.attempt("skill_hub", () => this.sources.listSkillHub({ workspaceId, limit: SKILL_HUB_LIST_LIMIT })),
+      this.readOperatorApprovalSkip(),
+    ]);
+    if (!hub.ok) throw new ServiceUnavailableError(UNREADABLE_INSTALLS);
+    return {
+      workspaceId,
+      installs: hub.value.items.flatMap((item) => {
+        if (snapshotId !== undefined && item.snapshotId !== snapshotId) return [];
+        const install = buildCapabilitySkillInstall(item);
+        if (!install) return [];
+        return snapshotId !== undefined || isUnfinishedInstall(install) ? [install] : [];
+      }),
+      operatorApprovalSkip,
+      generatedAt: new Date().toISOString(),
+    };
+  }
+
+  /**
+   * The Skill Hub checks that read one of GoatCitadel's own pack folders on this install, among the checks the shipped
+   * skills in the list were switched on from (Ruling R43). A Hub activation records its check's id as the skill's
+   * source; only that check knows the pack folder it read. At most one read per shipped skill; a check that can't be
+   * read leaves its skill imported.
+   */
+  private async readPackSnapshotIds(skills: readonly SkillListItem[]): Promise<ReadonlySet<string>> {
+    const packs = this.sources.shippedSkillDirs().packs;
+    const snapshotIds = new Set(
+      skills.flatMap((skill) => {
+        const provenance = skill.lifecycle?.provenance;
+        return Object.hasOwn(SHIPPED_SKILL_CATEGORIES, skill.skillId) &&
+          provenance?.source === "extra" &&
+          provenance.sourceRef
+          ? [provenance.sourceRef]
+          : [];
+      }),
+    );
+    const checks = await Promise.all(
+      [...snapshotIds].map(async (snapshotId) => {
+        const read = await this.attempt("skill_hub_check", () => this.sources.findSkillHubSnapshot(snapshotId));
+        const check = read.ok ? read.value : undefined;
+        return check?.sourceType === "local_path" && packs.has(check.sourceRef) ? [snapshotId] : [];
+      }),
+    );
+    return new Set(checks.flat());
   }
 
   /** Without the skills there is no list to show, so a failure is a plain 503 rather than an empty list. */

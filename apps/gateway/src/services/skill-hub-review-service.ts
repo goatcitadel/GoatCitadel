@@ -5,6 +5,7 @@ import {
   ConflictError,
   NotFoundError,
   SKILL_PERMISSION_ENVELOPE_VERSION,
+  TRUSTED_GIT_FORGE_HOSTS,
   ValidationError,
   canonicalJsonString,
   diffSkillPermissionEnvelopes,
@@ -12,6 +13,7 @@ import {
   isGoatError,
   normalizeSkillPermissionEnvelope,
   type GovernanceJourneyEventRecord,
+  type SkillHubBlockerCode,
   type SkillHubSnapshotArtifactRecord,
   type SkillImportValidationResult,
   type SkillPermissionDiffV1,
@@ -50,8 +52,9 @@ const MARKETPLACE_HOSTS = new Set([
 // Hosted bundles flow through fetchAllowlisted, including guarded DNS
 // resolution. Git materialization uses the system Git client and cannot reuse
 // that dispatcher, so production review admits only exact public forge hosts
-// whose DNS is not controlled by the submitted source.
-const TRUSTED_GIT_FORGE_HOSTS = new Set(["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"]);
+// whose DNS is not controlled by the submitted source (shared with Capabilities,
+// which refuses any other Git host before review).
+const TRUSTED_GIT_FORGE_HOST_SET: ReadonlySet<string> = new Set(TRUSTED_GIT_FORGE_HOSTS);
 
 type ReviewStorage = Pick<
   Storage,
@@ -607,16 +610,17 @@ function buildAudit(
   };
 }
 
-function standardizedBlockers(validation: SkillImportValidationResult): string[] {
-  const blockers = [
-    ...(validation.suspiciousSignals.length ? ["SUSPICIOUS_SCRIPT_INDICATOR"] : []),
-    ...(validation.reviewDisposition === "reference_only" ? ["REFERENCE_ONLY_SOURCE"] : []),
-    ...(validation.reviewDisposition === "conditional" ? ["CONDITIONAL_REVIEW_REQUIRED"] : []),
+/** Typed with `SkillHubBlockerCode`, so a new code here fails to compile until the contracts list names it. */
+function standardizedBlockers(validation: SkillImportValidationResult): SkillHubBlockerCode[] {
+  const blockers: SkillHubBlockerCode[] = [
+    ...(validation.suspiciousSignals.length ? ["SUSPICIOUS_SCRIPT_INDICATOR" as const] : []),
+    ...(validation.reviewDisposition === "reference_only" ? ["REFERENCE_ONLY_SOURCE" as const] : []),
+    ...(validation.reviewDisposition === "conditional" ? ["CONDITIONAL_REVIEW_REQUIRED" as const] : []),
     ...(!validation.checks.promptwareSafe || validation.promptwareFindings.length > 0
-      ? ["PROMPT_INJECTION_DETECTED"]
+      ? ["PROMPT_INJECTION_DETECTED" as const]
       : []),
     ...(!validation.checks.promptwareScanComplete || validation.promptwareUnscannedPaths.length > 0
-      ? ["PROMPTWARE_SCAN_INCOMPLETE"]
+      ? ["PROMPTWARE_SCAN_INCOMPLETE" as const]
       : []),
   ];
   return [...new Set(blockers)].sort(compareStrings);
@@ -824,7 +828,7 @@ function normalizeHttpsSource(
     });
   }
   if (sourceType === "git_url") {
-    if (!TRUSTED_GIT_FORGE_HOSTS.has(host)) {
+    if (!TRUSTED_GIT_FORGE_HOST_SET.has(host)) {
       throw new ValidationError({
         field: "sourceRef",
         message: "Production Git review supports exact trusted public forge hosts only.",

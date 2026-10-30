@@ -40,6 +40,43 @@ export function hasSealedApprovalLinkage(kind: string): boolean {
 }
 
 /**
+ * The public forges production Git review admits, as exact lower-case hosts (no `www.`). Hosted bundles go through the
+ * guarded fetch allowlist instead; Git materialization uses the system Git client, which can't reuse that dispatcher,
+ * so only forges whose DNS the submitted source doesn't control are trusted.
+ */
+export const TRUSTED_GIT_FORGE_HOSTS: readonly string[] = ["bitbucket.org", "codeberg.org", "github.com", "gitlab.com"];
+
+/**
+ * The blocker codes an operator can meet on a Skill Hub source: the review's own (`standardizedBlockers`), every
+ * governance code a stored snapshot can carry (`SkillGovernanceBlockerCode`: the sticky audit floor, the permission
+ * diff and version drift), and the install guard's "already there" codes. A snapshot or guard can hold other codes;
+ * those pass through as stored, and this list only names the ones with their own meaning.
+ */
+export const SKILL_HUB_BLOCKER_CODES = [
+  "CONDITIONAL_REVIEW_REQUIRED",
+  "PROMPT_INJECTION_DETECTED",
+  "PROMPTWARE_SCAN_INCOMPLETE",
+  "REFERENCE_ONLY_SOURCE",
+  "SUSPICIOUS_SCRIPT_INDICATOR",
+  "AUDIT_MISSING",
+  "AUDIT_DOWNGRADE",
+  "UPSTREAM_VERSION_BYTE_DRIFT",
+  "PERMISSION_WIDENED",
+  "PERMISSION_UNKNOWN",
+  "FOREIGN_SCOPE",
+  "MALFORMED_SOURCE_REFERENCE",
+  "SECRET_LIKE_CONTENT",
+  "UNTRUSTED_CORRECTION_ORIGIN",
+  "VALIDATION_FAILED",
+  "CONFLICTING_CORRECTION",
+  "SOURCE_ALREADY_INSTALLED",
+  "CANDIDATE_ALREADY_EXISTS",
+  "RUNTIME_ALREADY_EXISTS",
+] as const;
+
+export type SkillHubBlockerCode = (typeof SKILL_HUB_BLOCKER_CODES)[number];
+
+/**
  * Immutable database linkage from an upstream review snapshot to the exact,
  * content-addressed bytes retained by the Gateway artifact store.
  */

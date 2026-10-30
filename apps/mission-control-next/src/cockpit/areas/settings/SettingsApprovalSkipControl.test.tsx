@@ -86,9 +86,15 @@ describe("cockpit Settings approval skip", () => {
       );
       expect(container.textContent).not.toContain("pausing it from Capabilities");
       expect(container.textContent).toContain("a remote-hardened install still asks");
-      expect(container.textContent).toContain("A skill switch keeps its approval, marked as approved by you");
-      // Installs from Capabilities beyond connectors don't exist yet, so the copy doesn't claim them.
-      expect(container.textContent).not.toContain("skills you install");
+      expect(container.textContent).toContain(
+        "A skill switch, and each step of a skill install, keeps its approval, marked as approved by you",
+      );
+      // A skill installed from Capabilities is installed and switched on in two steps, each its own approval: with the
+      // setting on, neither asks; with it off, each does (Ruling R45).
+      expect(container.textContent).toContain(
+        "A skill you install from Capabilities installs and switches on without asking; when this is off, each of those two steps asks.",
+      );
+      expect(container.textContent).toContain("connectors and skills you install from Capabilities");
       expect(container.textContent).not.toContain("Apply my Settings changes without");
       expect(container.textContent).toContain("Change requests a model makes in Chat still need your approval.");
       expect(container.textContent).toContain(

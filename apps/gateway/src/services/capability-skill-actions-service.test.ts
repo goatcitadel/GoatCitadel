@@ -1,17 +1,23 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ConflictError,
+  ValidationError,
   type ApprovalRequest,
+  type CapabilitySkillOperationRequest,
+  type CapabilitySkillReviewRequest,
   type DeploymentProfile,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
 import {
   CapabilitySkillActionsService,
+  CapabilitySkillSourceRefusedError,
   OPERATOR_SKILL_SKIP_NOTES,
   type CapabilitySkillActionSources,
   type OperatorSkillSkipReason,
 } from "./capability-skill-actions-service.js";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
+import { hubApproval, hubItem } from "./capability-skill-install.test-support.js";
+import type { SkillHubOperatorApprovalSummary } from "./skill-hub-operator-service.js";
 import type { SkillLifecyclePendingApproval, SkillStateMutationOutcome } from "./skill-state-service.js";
 
 const ACTOR = "operator-1";
@@ -51,6 +57,9 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
     appendApprovalAudit: vi.fn(async () => undefined),
     deploymentProfile: vi.fn((): DeploymentProfile => "trusted_local"),
     readApprovalSkipSetting: vi.fn(async () => false),
+    reviewSkillHubSource: vi.fn(async () => ({ snapshot: { snapshotId: "skill-hub-review-1" }, replayed: false })),
+    listSkillHub: vi.fn(async () => ({ items: [hubItem()] })),
+    createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }
@@ -320,5 +329,249 @@ describe("CapabilitySkillActionsService", () => {
       expect(parts.readApproval).not.toHaveBeenCalled();
       expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
     });
+  });
+});
+
+const review = (source: CapabilitySkillReviewRequest["source"]) => ({
+  workspaceId: "default",
+  source,
+  idempotencyKey: "check-1",
+  actorId: ACTOR,
+});
+
+describe("CapabilitySkillActionsService.checkSource", () => {
+  it("checks a shipped pack the way the pack review does, and reads where it stands", async () => {
+    const parts = sources();
+
+    const checked = await new CapabilitySkillActionsService(parts).checkSource(
+      review({ kind: "pack", packId: "himalaya" }),
+    );
+
+    expect(parts.reviewSkillHubSource).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      packId: "himalaya",
+      idempotencyKey: "check-1",
+      actorId: ACTOR,
+    });
+    expect(parts.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "default", limit: 100 });
+    expect(checked).toEqual({
+      replayed: false,
+      install: expect.objectContaining({
+        snapshotId: "skill-hub-review-1",
+        step: "check_passed",
+        source: { kind: "pack", packId: "himalaya" },
+      }),
+    });
+    // A check asks for nothing and approves nothing.
+    expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    "https://github.com/example/notes",
+    "https://GitLab.com/example/notes",
+    // An address ending in /skill.md would otherwise be read as a hosted bundle, which skips the trusted-host check.
+    "https://codeberg.org/example/notes/raw/branch/main/skill.md",
+  ])("reviews a Git address as git_url even when it ends in /skill.md: %s", async (sourceRef) => {
+    const parts = sources({
+      listSkillHub: vi.fn(async () => ({
+        items: [hubItem({ snapshot: { sourceType: "git_url", sourceRef } })],
+      })),
+    });
+
+    await new CapabilitySkillActionsService(parts).checkSource(review({ kind: "git", sourceRef }));
+
+    expect(parts.reviewSkillHubSource).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      sourceRef,
+      sourceType: "git_url",
+      idempotencyKey: "check-1",
+      actorId: ACTOR,
+    });
+  });
+
+  it.each([
+    "https://example.com/team/notes",
+    "https://www.github.com/example/notes",
+    "http://github.com/example/notes",
+    "ssh://git@github.com/example/notes",
+    "git@github.com:example/notes.git",
+    "github.com/example/notes",
+  ])("refuses a Git host outside the trusted forges before reviewing: %s", async (sourceRef) => {
+    const parts = sources();
+
+    const refusal = await new CapabilitySkillActionsService(parts)
+      .checkSource(review({ kind: "git", sourceRef }))
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(CapabilitySkillSourceRefusedError);
+    expect(refusal).toMatchObject({
+      reason: "UNTRUSTED_GIT_HOST",
+      message: "GoatCitadel installs skills only from GitHub, GitLab, Bitbucket or Codeberg.",
+    });
+    expect(parts.reviewSkillHubSource).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["UNKNOWN_FRONTMATTER_DIMENSION", "UNKNOWN_FRONTMATTER_DIMENSION"],
+    ["BUNDLE_MANIFEST_INVALID", "BUNDLE_MANIFEST_INVALID"],
+    ["PROMPT_INJECTION_DETECTED", "PROMPT_INJECTION_DETECTED"],
+    // The source itself: unsafe, unreadable or not allowed, all reported on the field they came in.
+    ["sourceRef", "SOURCE_REFUSED"],
+    ["packId", "SOURCE_REFUSED"],
+  ])("keeps the review's reason code on a rejected source (%s)", async (field, reason) => {
+    const rejection = new ValidationError({ field, message: "Skill Hub review refused it." });
+    const parts = sources({
+      reviewSkillHubSource: vi.fn(async (): Promise<never> => {
+        throw rejection;
+      }),
+    });
+
+    const refusal = await new CapabilitySkillActionsService(parts)
+      .checkSource(review({ kind: "pack", packId: "himalaya" }))
+      .catch((error: unknown) => error);
+
+    expect(refusal).toBeInstanceOf(CapabilitySkillSourceRefusedError);
+    expect(refusal).toMatchObject({ reason, cause: rejection });
+    // Plain words only: never the owner's message, which names Skill Hub.
+    expect((refusal as Error).message).not.toContain("Skill Hub");
+    expect(parts.listSkillHub).not.toHaveBeenCalled();
+  });
+
+  it("passes anything else the review throws through unchanged", async () => {
+    const conflict = new ConflictError({ code: "WRITE_CONFLICT", message: "key bound to other material" });
+    const parts = sources({
+      reviewSkillHubSource: vi.fn(async (): Promise<never> => {
+        throw conflict;
+      }),
+    });
+
+    await expect(
+      new CapabilitySkillActionsService(parts).checkSource(review({ kind: "pack", packId: "himalaya" })),
+    ).rejects.toBe(conflict);
+  });
+
+  it("answers plainly when the new check can't be read back", async () => {
+    const parts = sources({ listSkillHub: vi.fn(async () => ({ items: [] })) });
+
+    await expect(
+      new CapabilitySkillActionsService(parts).checkSource(review({ kind: "pack", packId: "himalaya" })),
+    ).rejects.toMatchObject({ httpStatus: 503, message: "This skill's check can't be read right now." });
+  });
+});
+
+const step = (operationKind: CapabilitySkillOperationRequest["operationKind"]) => ({
+  workspaceId: "default",
+  snapshotId: "skill-hub-review-1",
+  operationKind,
+  actorId: ACTOR,
+});
+
+describe("CapabilitySkillActionsService.requestStep", () => {
+  it.each([
+    ["trusted_local", "on", "approved"],
+    ["local_dev", "on", "approved"],
+    ["trusted_local", "off", "waiting"],
+    ["remote_hardened", "on", "waiting"],
+    ["remote_hardened", "off", "waiting"],
+  ] as const)("%s with the setting %s is %s", async (profile, setting, status) => {
+    const parts = sources({
+      deploymentProfile: vi.fn((): DeploymentProfile => profile),
+      readApprovalSkipSetting: vi.fn(async () => setting === "on"),
+    });
+
+    const outcome = await new CapabilitySkillActionsService(parts).requestStep(step("install_inactive"));
+
+    expect(outcome).toEqual({ status, approvalId: "approval-install_inactive" });
+    // The Hub's own approval owner is always asked first, with the operator as the requester.
+    expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      snapshotId: "skill-hub-review-1",
+      operationKind: "install_inactive",
+      actorId: ACTOR,
+    });
+    if (status === "approved") {
+      expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-install_inactive", {
+        decision: "approve",
+        resolvedBy: ACTOR,
+        resolutionNote: OPERATOR_SKILL_SKIP_NOTES.setting,
+      });
+      expect(parts.appendApprovalAudit).toHaveBeenCalledExactlyOnceWith("operator_approval_skipped", {
+        approvalId: "approval-install_inactive",
+        kind: "skill_hub.lifecycle",
+        reason: "setting",
+        actorId: ACTOR,
+      });
+    } else {
+      expect(parts.resolveApproval).not.toHaveBeenCalled();
+      expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+    }
+    // remote_hardened always asks, so its setting is never even read.
+    expect(parts.readApprovalSkipSetting).toHaveBeenCalledTimes(profile === "remote_hardened" ? 0 : 1);
+  });
+
+  it("always asks under remote_hardened, for either step", async () => {
+    for (const operationKind of ["install_inactive", "activate"] as const) {
+      const parts = sources({
+        deploymentProfile: vi.fn((): DeploymentProfile => "remote_hardened"),
+        readApprovalSkipSetting: vi.fn(async () => true),
+        createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval(operationKind, "pending") })),
+      });
+
+      const outcome = await new CapabilitySkillActionsService(parts).requestStep(step(operationKind));
+
+      expect(outcome).toEqual({ status: "waiting", approvalId: `approval-${operationKind}` });
+      expect(parts.resolveApproval).not.toHaveBeenCalled();
+      expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
+    }
+  });
+
+  it("answers approved for an approval the owner already approved, with no second skip", async () => {
+    const parts = sources({
+      readApprovalSkipSetting: vi.fn(async () => true),
+      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("activate", "approved") })),
+    });
+
+    const outcome = await new CapabilitySkillActionsService(parts).requestStep(step("activate"));
+
+    expect(outcome).toEqual({ status: "approved", approvalId: "approval-activate" });
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
+    expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+    expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
+  });
+
+  it("keeps waiting, and logs why, when resolving fails", async () => {
+    const failure = new Error("approval store locked");
+    const reportFailure = vi.fn();
+    const parts = sources({
+      readApprovalSkipSetting: vi.fn(async () => true),
+      resolveApproval: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+
+    const outcome = await new CapabilitySkillActionsService(parts, reportFailure).requestStep(step("install_inactive"));
+
+    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-install_inactive" });
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("resolve", failure);
+    expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+  });
+
+  it("passes the owner's guard refusal through, with its blockers, and resolves nothing", async () => {
+    const refusal = new ConflictError({
+      code: "STATE_CONFLICT",
+      message: "Skill Hub install_inactive is blocked: SOURCE_ALREADY_INSTALLED.",
+      details: { blockers: ["SOURCE_ALREADY_INSTALLED"], snapshotId: "skill-hub-review-1" },
+    });
+    const parts = sources({
+      readApprovalSkipSetting: vi.fn(async () => true),
+      createSkillHubApproval: vi.fn(async (): Promise<{ approval: SkillHubOperatorApprovalSummary }> => {
+        throw refusal;
+      }),
+    });
+
+    await expect(new CapabilitySkillActionsService(parts).requestStep(step("install_inactive"))).rejects.toBe(refusal);
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
+    expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
   });
 });

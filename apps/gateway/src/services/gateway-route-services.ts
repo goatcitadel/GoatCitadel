@@ -309,11 +309,11 @@ export interface GatewayRouteServices {
   capabilityConnectors?: Pick<CapabilityConnectorsService, "list">;
   /** The Capabilities Tools tab's call counts. Composed by the gateway service from the chat tool run history. */
   capabilityToolUsage?: Pick<CapabilityToolUsageService, "read">;
-  /** The Capabilities Skills tab. Composed by the gateway service over the skill, catalog and approval owners. */
+  /** The Capabilities Skills tab. Composed by the gateway service over the skill, catalog, Skill Hub and approval owners. */
   capabilitySkills?: {
     usage: Pick<CapabilitySkillUsageService, "read">;
-    skills: Pick<CapabilitySkillsService, "list" | "detail">;
-    actions: Pick<CapabilitySkillActionsService, "setState">;
+    skills: Pick<CapabilitySkillsService, "list" | "detail" | "installs">;
+    actions: Pick<CapabilitySkillActionsService, "setState" | "checkSource" | "requestStep">;
   };
   /** The Capabilities Tools tab's tool groups. Composed by the gateway service over the policy probe and the switches. */
   capabilityTools?: Pick<CapabilityToolsService, "list">;

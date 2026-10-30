@@ -32,14 +32,21 @@ export interface ShippedSkillDirs {
 
 type OriginFacts = Pick<SkillListItem, "skillId" | "source" | "capabilityCategory" | "dir" | "lifecycle">;
 
+/** No Skill Hub check of GoatCitadel's own packs is known. */
+const NO_PACK_SNAPSHOTS: ReadonlySet<string> = new Set();
+
 /**
  * Where a skill came from. Bundled skills are built in, and so is a shipped skill (pinned in `SHIPPED_SKILL_CATEGORIES`)
  * whose provenance shows it came from GoatCitadel itself. Approved workspace candidates are self-authored; the
  * workspace skills folder is the workspace's. Everything else, including Skill Hub installs, a Git import that shares
  * a shipped skill's name and the `.assistant/skills` folder (nothing in GoatCitadel writes it), is imported.
  */
-export function skillOriginFor(skill: OriginFacts, shipped: ShippedSkillDirs): SkillOrigin {
-  if (skill.source === "bundled" || cameFromGoatCitadel(skill, shipped)) return "built_in";
+export function skillOriginFor(
+  skill: OriginFacts,
+  shipped: ShippedSkillDirs,
+  packSnapshotIds: ReadonlySet<string> = NO_PACK_SNAPSHOTS,
+): SkillOrigin {
+  if (skill.source === "bundled" || cameFromGoatCitadel(skill, shipped, packSnapshotIds)) return "built_in";
   if (skill.capabilityCategory === "self_generated") return "self_authored";
   if (skill.source === "workspace") return "workspace";
   return "imported";
@@ -48,18 +55,22 @@ export function skillOriginFor(skill: OriginFacts, shipped: ShippedSkillDirs): S
 /**
  * A shipped id alone proves nothing: anyone can name a skill `github-cli` (Ruling R13). It counts as GoatCitadel's own
  * only when it loaded from one of GoatCitadel's own folders, or its recorded source is one of GoatCitadel's own pack
- * folders on this install, a local path no Git or remote-bundle source can be. Provenance that can't tell (none
- * recorded, or a pack folder from another install) reads as imported, which errs toward less trust.
+ * folders on this install, a local path no Git or remote-bundle source can be. A pack switched on through Skill Hub
+ * records the Hub check it came from instead (its snapshot id), so it counts when that check read one of those pack
+ * folders (`packSnapshotIds`, Ruling R43). Provenance that can't tell (none recorded, a pack folder from another
+ * install, or a check that can't be read) reads as imported, which errs toward less trust.
  */
-function cameFromGoatCitadel(skill: OriginFacts, shipped: ShippedSkillDirs): boolean {
+function cameFromGoatCitadel(
+  skill: OriginFacts,
+  shipped: ShippedSkillDirs,
+  packSnapshotIds: ReadonlySet<string>,
+): boolean {
   if (!Object.hasOwn(SHIPPED_SKILL_CATEGORIES, skill.skillId)) return false;
   if (shipped.folders.has(skill.dir)) return true;
   const provenance = skill.lifecycle?.provenance;
-  return (
-    provenance?.sourceProvider === "local" &&
-    provenance.sourceRef !== undefined &&
-    shipped.packs.has(provenance.sourceRef)
-  );
+  if (provenance?.sourceRef === undefined) return false;
+  if (provenance.sourceProvider === "local" && shipped.packs.has(provenance.sourceRef)) return true;
+  return provenance.source === "extra" && packSnapshotIds.has(provenance.sourceRef);
 }
 
 /**
@@ -115,6 +126,8 @@ export function buildCapabilitySkillItems(input: {
   /** The ids of the skills the workspace's turns may load. Absent when they couldn't be read. */
   turnSkillIds?: ReadonlySet<string>;
   shippedSkillDirs: ShippedSkillDirs;
+  /** The Skill Hub checks that read one of GoatCitadel's own pack folders on this install. */
+  packSnapshotIds?: ReadonlySet<string>;
 }): CapabilitySkillItem[] {
   return input.skills
     .map((skill): CapabilitySkillItem => {
@@ -124,7 +137,7 @@ export function buildCapabilitySkillItems(input: {
         name: skill.name,
         description: skill.description ?? "",
         category: skillCategoryFor({ skillId: skill.skillId, tags: skill.tags, keywords: skill.keywords }),
-        origin: skillOriginFor(skill, input.shippedSkillDirs),
+        origin: skillOriginFor(skill, input.shippedSkillDirs, input.packSnapshotIds),
         state: STATE_BY_RUNTIME_STATE[skill.state],
         // As the skill list reports it; a missing value never claims the AI can use the skill.
         callable: skill.callable === true,

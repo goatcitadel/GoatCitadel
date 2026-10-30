@@ -1,19 +1,33 @@
 import {
+  SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
   SKILL_LIFECYCLE_APPROVAL_KIND,
+  ServiceUnavailableError,
+  TRUSTED_GIT_FORGE_HOSTS,
+  ValidationError,
   type ApprovalRequest,
   type ApprovalResolveInput,
   type CapabilitySkillActionOutcome,
+  type CapabilitySkillInstall,
+  type CapabilitySkillOperationRequest,
+  type CapabilitySkillReviewRequest,
   type CapabilitySkillStateRequest,
   type DeploymentProfile,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
+import { buildCapabilitySkillInstall, SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
+import type {
+  CreateSkillHubOperatorApprovalInput,
+  SkillHubOperatorApprovalSummary,
+  SkillHubOperatorItem,
+} from "./skill-hub-operator-service.js";
+import type { SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 import type { SkillStateMutationOutcome } from "./skill-state-service.js";
 
 /**
- * Why the operator's own switch applied without waiting for the operator's approval, written as the note on the
- * approval the skip resolves. Only this file may use them (capability-skill-skip-guard.test.ts).
+ * Why the operator's own switch or install step applied without waiting for the operator's approval, written as the
+ * note on the approval the skip resolves. Only this file may use them (capability-skill-skip-guard.test.ts).
  */
 export const OPERATOR_SKILL_SKIP_NOTES = {
   setting: "Applied without asking: your setting to skip approvals for your own changes is on.",
@@ -25,7 +39,31 @@ export type OperatorSkillSkipReason = keyof typeof OPERATOR_SKILL_SKIP_NOTES;
 /** The approvals audit event, the one the Change Plan skip records too. */
 const SKIP_AUDIT_EVENT = "operator_approval_skipped";
 
-/** One reader per owner the switch goes through. None of them applies a change itself. */
+const UNTRUSTED_GIT_HOST_MESSAGE = "GoatCitadel installs skills only from GitHub, GitLab, Bitbucket or Codeberg.";
+const SOURCE_REFUSED_MESSAGE = "GoatCitadel can't check a skill from this source.";
+const CHECK_FAILED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
+const UNREADABLE_CHECK_MESSAGE = "This skill's check can't be read right now.";
+/** The review's own refusal codes are upper snake case; anything else names the request field it came in on. */
+const REVIEW_CODE = /^[A-Z][A-Z0-9_]*$/u;
+/** The request fields a refused source comes in on: the address (unsafe, unreadable, not allowed) or the pack. */
+const SOURCE_FIELDS: ReadonlySet<string> = new Set(["sourceRef", "packId"]);
+
+/**
+ * A source the check refused, with the review's own code as `reason` (or `UNTRUSTED_GIT_HOST`, or `SOURCE_REFUSED` for
+ * the source itself) and a plain message. The owner's own error, which names Skill Hub, stays as `cause` for the log.
+ */
+export class CapabilitySkillSourceRefusedError extends Error {
+  public constructor(
+    public readonly reason: string,
+    message: string,
+    options?: { cause?: unknown },
+  ) {
+    super(message, options);
+    this.name = "CapabilitySkillSourceRefusedError";
+  }
+}
+
+/** One reader per owner the switch and the install steps go through. None of them applies a change itself. */
 export interface CapabilitySkillActionSources {
   /**
    * The skill state owner. It creates the skill's `skill.lifecycle` approval with the operator as requester, or
@@ -46,10 +84,27 @@ export interface CapabilitySkillActionSources {
   readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "preview">>;
   /** One event on the approvals audit stream. */
   appendApprovalAudit(event: string, payload: Record<string, unknown>): Promise<void>;
-  /** The install's deployment profile, read on every switch. */
+  /** The install's deployment profile, read on every switch and step. */
   deploymentProfile(): DeploymentProfile;
   /** The operator's "skip approvals" setting (`settingsApprovalSkipEnabled`). */
   readApprovalSkipSetting(): Promise<boolean>;
+  /**
+   * Skill Hub's source review: it reads the source, checks it and keeps the result, writing nothing a skill runs from.
+   * The same workspace and key hand back the same check (`replayed`).
+   */
+  reviewSkillHubSource(
+    input: SkillHubSourceReviewInput,
+  ): Promise<{ snapshot: { snapshotId: string }; replayed: boolean }>;
+  /** Skill Hub's operator list: the workspace's newest checks, each with its approvals, settlements and guards. */
+  listSkillHub(input: { workspaceId: string; limit: number }): Promise<{ items: readonly SkillHubOperatorItem[] }>;
+  /**
+   * Skill Hub's approval owner. It creates the step's `skill_hub.lifecycle` approval with the operator as requester, or
+   * hands back the same request's pending or approved one, and refuses a step its guard doesn't allow (a 409 whose
+   * `details.blockers` says why). After a decline it makes a fresh one. Only that approval's effect applies the step.
+   */
+  createSkillHubApproval(
+    input: CreateSkillHubOperatorApprovalInput,
+  ): Promise<{ approval: Pick<SkillHubOperatorApprovalSummary, "approvalId" | "status"> }>;
 }
 
 export type CapabilitySkillActionStep = "approval_skip" | "current_state" | "resolve" | "audit";
@@ -58,8 +113,9 @@ export type CapabilitySkillActionStep = "approval_skip" | "current_state" | "res
 export type CapabilitySkillActionFailureReporter = (step: CapabilitySkillActionStep, error: unknown) => void;
 
 /**
- * The Capabilities Skills switch. It never changes a skill itself: it always asks the skill state owner, which creates
- * the usual approval, and when the operator's skip applies it approves that same approval at once, as the operator and
+ * The Capabilities Skills switch, and the check and install steps for a new skill. Neither changes a skill itself: the
+ * switch always asks the skill state owner, and each install step always asks Skill Hub's approval owner, which create
+ * the usual approval; when the operator's skip applies, they approve that same approval at once, as the operator and
  * with the reason as its note, so the approval's own effect applies the change.
  */
 export class CapabilitySkillActionsService {
@@ -97,6 +153,82 @@ export class CapabilitySkillActionsService {
       return { status: "waiting", approvalId };
     }
     await this.recordSkip({ approvalId, kind: SKILL_LIFECYCLE_APPROVAL_KIND, reason, actorId: input.actorId });
+    return { status: "approved", approvalId };
+  }
+
+  /**
+   * Checks a source through Skill Hub's own review, then reads the check back from Skill Hub's list to say where its
+   * install stands. A pack is reviewed exactly as the pack review does. A Git address is refused here unless it is
+   * `https` on a trusted forge, and is always reviewed as `git_url`, so an address ending in `/skill.md` can't become a
+   * hosted bundle and skip the review's own host check. A refusal keeps the review's code; nothing is asked or approved.
+   */
+  public async checkSource(
+    input: CapabilitySkillReviewRequest & { actorId: string },
+  ): Promise<{ install: CapabilitySkillInstall; replayed: boolean }> {
+    const { workspaceId, idempotencyKey, actorId } = input;
+    const review: SkillHubSourceReviewInput =
+      input.source.kind === "pack"
+        ? { workspaceId, packId: input.source.packId, idempotencyKey, actorId }
+        : {
+            workspaceId,
+            sourceRef: trustedGitAddress(input.source.sourceRef),
+            sourceType: "git_url",
+            idempotencyKey,
+            actorId,
+          };
+    let reviewed: Awaited<ReturnType<CapabilitySkillActionSources["reviewSkillHubSource"]>>;
+    try {
+      reviewed = await this.sources.reviewSkillHubSource(review);
+    } catch (error) {
+      throw refusedSource(error) ?? error;
+    }
+    const { items } = await this.sources.listSkillHub({ workspaceId, limit: SKILL_HUB_LIST_LIMIT });
+    const item = items.find((candidate) => candidate.snapshotId === reviewed.snapshot.snapshotId);
+    const install = item ? buildCapabilitySkillInstall(item) : undefined;
+    // The newest check heads the list; only a retried, older one can fall out of it.
+    if (!install) throw new ServiceUnavailableError(UNREADABLE_CHECK_MESSAGE);
+    return { install, replayed: reviewed.replayed };
+  }
+
+  /**
+   * Asks for one install step of a checked skill: Skill Hub's approval owner creates the step's approval, with the
+   * operator as requester. The skip applies only for the operator's setting (never on `remote_hardened`); installing a
+   * skill never only takes power away. It resolves that same approval through the Inbox's own resolve, so the
+   * approval's effect applies the step. Hub approvals never expire, and a declined one is asked for afresh, so this
+   * answers only `approved` or `waiting`. A step the guard refuses passes the owner's 409 through.
+   */
+  public async requestStep(
+    input: CapabilitySkillOperationRequest & { actorId: string },
+  ): Promise<CapabilitySkillActionOutcome> {
+    const { approval } = await this.sources.createSkillHubApproval({
+      workspaceId: input.workspaceId,
+      snapshotId: input.snapshotId,
+      operationKind: input.operationKind,
+      actorId: input.actorId,
+    });
+    const { approvalId } = approval;
+    // The same request hands back the approval it already made; an approved one is never resolved again.
+    if (approval.status === "approved") return { status: "approved", approvalId };
+    if (!(await allowsOperatorApprovalSkip(this.sources.deploymentProfile(), () => this.readSkipSetting()))) {
+      return { status: "waiting", approvalId };
+    }
+    try {
+      await this.sources.resolveApproval(approvalId, {
+        decision: "approve",
+        resolvedBy: input.actorId,
+        resolutionNote: OPERATOR_SKILL_SKIP_NOTES.setting,
+      });
+    } catch (error) {
+      // Nothing was approved, so the step still waits for the operator's approval.
+      this.reportFailure?.("resolve", error);
+      return { status: "waiting", approvalId };
+    }
+    await this.recordSkip({
+      approvalId,
+      kind: SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
+      reason: "setting",
+      actorId: input.actorId,
+    });
     return { status: "approved", approvalId };
   }
 
@@ -147,7 +279,7 @@ export class CapabilitySkillActionsService {
    */
   private async recordSkip(payload: {
     approvalId: string;
-    kind: typeof SKILL_LIFECYCLE_APPROVAL_KIND;
+    kind: typeof SKILL_LIFECYCLE_APPROVAL_KIND | typeof SKILL_HUB_LIFECYCLE_APPROVAL_KIND;
     reason: OperatorSkillSkipReason;
     actorId: string;
   }): Promise<void> {
@@ -157,4 +289,38 @@ export class CapabilitySkillActionsService {
       this.reportFailure?.("audit", error);
     }
   }
+}
+
+/**
+ * The address, when it is `https` on one of the forges the review trusts for Git (exact lower-case host, no `www.`).
+ * Anything else is refused before the review reads it.
+ */
+function trustedGitAddress(sourceRef: string): string {
+  let url: URL | undefined;
+  try {
+    url = new URL(sourceRef);
+  } catch {
+    url = undefined;
+  }
+  if (url?.protocol !== "https:" || !TRUSTED_GIT_FORGE_HOSTS.includes(url.hostname.toLowerCase())) {
+    throw new CapabilitySkillSourceRefusedError("UNTRUSTED_GIT_HOST", UNTRUSTED_GIT_HOST_MESSAGE);
+  }
+  return sourceRef;
+}
+
+/**
+ * The review's refusal of a source (its `ValidationError`, whose field is the review's own code, or the request field
+ * the source came in on) in plain words with that code kept. Anything else, such as a key reused for other material,
+ * isn't a refusal of the source and passes through.
+ */
+function refusedSource(error: unknown): CapabilitySkillSourceRefusedError | undefined {
+  if (!(error instanceof ValidationError)) return undefined;
+  const field = error.details?.field;
+  if (typeof field !== "string") return undefined;
+  if (SOURCE_FIELDS.has(field)) {
+    return new CapabilitySkillSourceRefusedError("SOURCE_REFUSED", SOURCE_REFUSED_MESSAGE, { cause: error });
+  }
+  return REVIEW_CODE.test(field)
+    ? new CapabilitySkillSourceRefusedError(field, CHECK_FAILED_MESSAGE, { cause: error })
+    : undefined;
 }

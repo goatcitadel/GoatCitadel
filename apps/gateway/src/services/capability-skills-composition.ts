@@ -16,6 +16,12 @@ import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from ".
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { ShippedSkillDirs } from "./capability-skills-projection.js";
 import { CapabilitySkillsService, type CapabilitySkillsSource } from "./capability-skills-service.js";
+import type {
+  CreateSkillHubOperatorApprovalInput,
+  CreateSkillHubOperatorApprovalResponse,
+  SkillHubOperatorListResponse,
+} from "./skill-hub-operator-service.js";
+import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 import type { SkillStateMutationAuthorityInput, SkillStateMutationOutcome } from "./skill-state-service.js";
 
 const log = logger.child("capability-skills");
@@ -26,9 +32,10 @@ const PENDING_APPROVAL_PAGE_LIMIT = 200;
 const PENDING_APPROVAL_MAX_PAGES = 25;
 
 /**
- * The existing owner of each source the Capabilities Skills tab reads, and of the approval its switch asks for. The
- * tab writes nothing itself: a switch only asks the skill state owner and, when the operator's skip applies, resolves
- * that owner's approval through the Inbox's own resolve.
+ * The existing owner of each source the Capabilities Skills tab reads, and of the approvals its switch and install
+ * steps ask for. The tab writes nothing itself: a switch only asks the skill state owner, and an install step only asks
+ * Skill Hub's approval owner, and when the operator's skip applies each resolves that owner's approval through the
+ * Inbox's own resolve.
  */
 export interface CapabilitySkillsOwners {
   chatTurnCapabilityProfiles: { countSkillUsesSince(sinceIso: string): Promise<readonly SkillUseCount[]> };
@@ -75,6 +82,17 @@ export interface CapabilitySkillsOwners {
   deploymentProfile(): DeploymentProfile;
   /** The install's root, under whose `skills` folder GoatCitadel's own skill folders and packs live. */
   rootDir: string;
+  /**
+   * Skill Hub's owners, as the old Skill Hub routes reach them: its source review, its operator list, and the approval
+   * owner each install step asks. None of them installs anything; only an approved step's effect does.
+   */
+  skillHub: {
+    reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult>;
+    listSkillHub(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse>;
+    createSkillHubApproval(input: CreateSkillHubOperatorApprovalInput): Promise<CreateSkillHubOperatorApprovalResponse>;
+  };
+  /** Skill Hub's checks, read one at a time to tell GoatCitadel's own pack from an import (Ruling R43). */
+  skillHubSnapshots: { find(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined> };
 }
 
 /**
@@ -102,6 +120,8 @@ export function composeCapabilitySkills({
   features,
   deploymentProfile,
   rootDir,
+  skillHub,
+  skillHubSnapshots,
 }: CapabilitySkillsOwners): CapabilitySkills {
   const readApprovalSkipSetting = () => features.isFeatureEnabled("settingsApprovalSkipEnabled");
   const shipped = shippedSkillDirs(rootDir);
@@ -119,6 +139,8 @@ export function composeCapabilitySkills({
         shippedSkillDirs: () => shipped,
         deploymentProfile,
         readApprovalSkipSetting,
+        listSkillHub: (input) => skillHub.listSkillHub(input),
+        findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
       },
       reportFailedRead,
     ),
@@ -131,6 +153,9 @@ export function composeCapabilitySkills({
         appendApprovalAudit: (event, payload) => audit.append("approvals", { event, ...payload }),
         deploymentProfile,
         readApprovalSkipSetting,
+        reviewSkillHubSource: (input) => skillHub.reviewSkillHubSource(input),
+        listSkillHub: (input) => skillHub.listSkillHub(input),
+        createSkillHubApproval: (input) => skillHub.createSkillHubApproval(input),
       },
       reportFailedStep,
     ),
