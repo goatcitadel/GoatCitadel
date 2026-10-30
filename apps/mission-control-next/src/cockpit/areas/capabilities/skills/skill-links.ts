@@ -1,12 +1,26 @@
 /** The Skills tab, without a panel open. */
 export const SKILLS_HREF = "/capabilities/skills";
 
+/** The two views of the Skills tab. Installed is the default and has no parameter of its own. */
+export type SkillsView = "installed" | "discover";
+
+/** The Skills tab with a view open (Installed is the tab's address itself), without a panel. */
+export function skillsHref(view: SkillsView = "installed"): string {
+  return view === "discover" ? `${SKILLS_HREF}?view=discover` : SKILLS_HREF;
+}
+
+/** The view an address names with `?view=discover`; anything else is Installed. */
+export function skillsViewFromSearch(search: string | undefined): SkillsView {
+  return new URLSearchParams(search ?? "").get("view") === "discover" ? "discover" : "installed";
+}
+
 /** The part of `?item=` that names a skill. A Library skill record's id (`skill:<skillId>`) is already in this form. */
 const ITEM_PREFIX = "skill:";
 
-/** The address that opens one skill's panel. */
-export function skillItemHref(skillId: string): string {
-  return `${SKILLS_HREF}?item=${encodeURIComponent(`${ITEM_PREFIX}${skillId}`)}`;
+/** The address that opens one skill's panel. The view it was opened from is kept, so closing the panel returns to it. */
+export function skillItemHref(skillId: string, view: SkillsView = "installed"): string {
+  const item = `${SKILLS_HREF}?item=${encodeURIComponent(`${ITEM_PREFIX}${skillId}`)}`;
+  return view === "discover" ? `${item}&view=discover` : item;
 }
 
 /**

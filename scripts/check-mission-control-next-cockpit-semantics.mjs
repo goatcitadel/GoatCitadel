@@ -33,7 +33,8 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 903: a skill row announces why a change did not happen. A skill shown twice announces in one place only.
 // 904: a skill panel's switch announces the note under it (what on and paused mean, or that the change waits).
 // 905: a skill panel's switch announces why a change did not happen, under the same one-place rule.
-export const LIVE_REGION_BUDGET = 905;
+// 906: the Skills tab's Discover view announces the one outcome that replaces its list, a read or search that failed.
+export const LIVE_REGION_BUDGET = 906;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

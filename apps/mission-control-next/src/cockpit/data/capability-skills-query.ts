@@ -1,6 +1,8 @@
 import { queryOptions } from "@tanstack/react-query";
 import {
   fetchCapabilitySkillDetail,
+  fetchCapabilitySkillDiscover,
+  fetchCapabilitySkillInstalls,
   fetchCapabilitySkillUsage,
   fetchCapabilitySkills,
 } from "@goatcitadel/mission-control-shared/api/capability-skills";
@@ -38,5 +40,28 @@ export function skillDetailQuery(workspaceId: string, skillId: string) {
   return queryOptions({
     queryKey: queryKeys.capabilitySkillDetail(workspaceId, skillId),
     queryFn: ({ signal }) => fetchCapabilitySkillDetail(workspaceId, skillId, { signal }),
+  });
+}
+
+/**
+ * The skills on offer to install. `q` is the search term the Gateway should search for, or empty for the list it gives
+ * without one (packs and curated listings, nothing online). Only a term of two or more characters may be passed: the
+ * Gateway refuses a shorter one.
+ */
+export function skillDiscoverQuery(workspaceId: string, q: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillDiscover(workspaceId, q),
+    queryFn: ({ signal }) => fetchCapabilitySkillDiscover(workspaceId, { ...(q ? { q } : {}), signal }),
+  });
+}
+
+/**
+ * The installs still on their way in, with whether the operator's skip applies. Every observer of this key must use
+ * these options, for the same reason as the list.
+ */
+export function skillInstallsQuery(workspaceId: string) {
+  return queryOptions({
+    queryKey: queryKeys.capabilitySkillInstalls(workspaceId),
+    queryFn: ({ signal }) => fetchCapabilitySkillInstalls(workspaceId, { signal }),
   });
 }

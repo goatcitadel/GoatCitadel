@@ -9,6 +9,8 @@ import {
   skillIdFromSource,
   skillItemHref,
   skillPanelSource,
+  skillsHref,
+  skillsViewFromSearch,
 } from "./skill-links";
 
 describe("skill addresses", () => {
@@ -78,5 +80,46 @@ describe("the skill panel's inspector source", () => {
     expect(connectorIdFromSource("capabilities-skills:files")).toBeNull();
     expect(toolGroupIdFromSource(skillPanelSource("files"))).toBeUndefined();
     expect(toolGroupIdFromSource("capabilities-skills:files")).toBeUndefined();
+  });
+});
+
+describe("the view in the address", () => {
+  it("reads Discover from ?view=discover and Installed from anything else", () => {
+    expect(skillsViewFromSearch("?view=discover")).toBe("discover");
+    expect(skillsViewFromSearch("?item=skill%3Aa&view=discover&shell=cockpit")).toBe("discover");
+    expect(skillsViewFromSearch("?view=discover&item=skill%3Aa")).toBe("discover");
+    for (const search of [
+      undefined,
+      "",
+      "?",
+      "?view=",
+      "?view=installed",
+      "?view=Discover",
+      "?view=other",
+      "?item=skill%3Aa",
+    ]) {
+      expect(skillsViewFromSearch(search)).toBe("installed");
+    }
+  });
+
+  it("makes Installed the default, and drops the parameter for it", () => {
+    expect(skillsHref("installed")).toBe(SKILLS_HREF);
+    expect(skillsHref()).toBe(SKILLS_HREF);
+    expect(skillsHref("discover")).toBe("/capabilities/skills?view=discover");
+  });
+
+  it("keeps the view in a skill's address, and reads the skill back either way round", () => {
+    expect(skillItemHref("review", "installed")).toBe("/capabilities/skills?item=skill%3Areview");
+    const href = skillItemHref("review", "discover");
+    expect(href).toBe("/capabilities/skills?item=skill%3Areview&view=discover");
+    expect(skillIdFromSearch(href.slice(href.indexOf("?")))).toBe("review");
+    expect(skillIdFromSearch("?view=discover&item=skill%3Areview")).toBe("review");
+    expect(skillsViewFromSearch(href.slice(href.indexOf("?")))).toBe("discover");
+  });
+
+  it("never reads an install's address as a skill's", () => {
+    // `?item=install:<snapshotId>` belongs to the install panel, which keeps the view the same way.
+    expect(skillIdFromSearch("?item=install%3Asnap-1&view=discover")).toBeUndefined();
+    expect(skillIdFromSearch("?item=install:skill:a")).toBeUndefined();
   });
 });

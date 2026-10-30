@@ -37,6 +37,18 @@ export const queryKeys = {
     workspaceId,
     skillId,
   ],
+  /**
+   * The skills on offer to install, for one workspace and one search term (empty without one). Every workspace's and
+   * term's read shares the prefix, so a skill event refreshes whichever is open.
+   */
+  capabilitySkillDiscover: (workspaceId: string, q: string): TopicKey => [
+    "skills",
+    "capability-skill-discover",
+    workspaceId,
+    q,
+  ],
+  /** The installs still on their way in, for one workspace. Skill events and the skip setting refresh it. */
+  capabilitySkillInstalls: (workspaceId: string): TopicKey => ["skills", "capability-skill-installs", workspaceId],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => [
@@ -120,4 +132,6 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["tools", "capability-tools"],
   // The Capabilities skill list carries `operatorApprovalSkip`, which decides whether switching a skill on asks the operator.
   ["skills", "capability-skills"],
+  // The installs list carries `operatorApprovalSkip` too, which decides whether an install step asks the operator.
+  ["skills", "capability-skill-installs"],
 ];

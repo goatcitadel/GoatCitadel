@@ -219,6 +219,25 @@ describe("resolveRealtimeEvent", () => {
     expect(gap.kind === "mapped" ? gap.effect.keys : []).toContainEqual(["skills"]);
   });
 
+  it("refreshes Discover and the installs when a skill change applies, because both sit under the skills topic", () => {
+    const discoverPrefix = ["skills", "capability-skill-discover"];
+    const installsPrefix = ["skills", "capability-skill-installs"];
+    // Each workspace's and each search term's read shares its prefix, so one event refreshes whichever is open.
+    expect(queryKeys.capabilitySkillDiscover("ws-1", "pdf").slice(0, 2)).toEqual(discoverPrefix);
+    expect(queryKeys.capabilitySkillInstalls("ws-1").slice(0, 2)).toEqual(installsPrefix);
+    for (const type of ["skill_mutation_approval_requested", "skill_state_mutation_applied"]) {
+      const result = resolveRealtimeEvent(event(type, "skills"));
+      const keys = result.kind === "mapped" ? result.effect.keys : [];
+      expect(keys).toContainEqual(discoverPrefix);
+      expect(keys).toContainEqual(installsPrefix);
+      // Not the whole topic: the use counts keep their own key.
+      expect(keys).not.toContainEqual(["skills"]);
+    }
+    // A replay gap re-reads the whole `skills` topic, so it reaches both too.
+    const gap = resolveRealtimeEvent(event("replay_gap", "gateway", { payload: { kind: "replay_gap" } }));
+    expect(gap.kind === "mapped" ? gap.effect.keys : []).toContainEqual(["skills"]);
+  });
+
   it("refreshes the Inbox when a skill change asks for approval or applies, because it waits in every workspace's Inbox", () => {
     // A skill approval publishes no `approvals` event when it is made, only the `skills` one.
     for (const type of ["skill_mutation_approval_requested", "skill_state_mutation_applied"]) {
@@ -252,6 +271,23 @@ describe("resolveRealtimeEvent", () => {
     );
     const otherKeys = other.kind === "mapped" ? other.effect.keys : [];
     expect(otherKeys).not.toContainEqual(["skills", "capability-skills"]);
+  });
+
+  it("refreshes the installs list when the skip setting changes", () => {
+    // The installs response carries `operatorApprovalSkip`, which decides whether an install step asks the operator.
+    expect(SETTINGS_READER_KEYS).toContainEqual(["skills", "capability-skill-installs"]);
+    const result = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", {
+        payload: { targetOwnerId: "runtime_settings", planId: "p-1" },
+      }),
+    );
+    const keys = result.kind === "mapped" ? result.effect.keys : [];
+    expect(keys).toContainEqual(["skills", "capability-skill-installs"]);
+    const other = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", { payload: { targetOwnerId: "workspace_config" } }),
+    );
+    const otherKeys = other.kind === "mapped" ? other.effect.keys : [];
+    expect(otherKeys).not.toContainEqual(["skills", "capability-skill-installs"]);
   });
 
   it("refreshes every settings reader when a runtime settings change plan moves", () => {

@@ -184,8 +184,13 @@ export function filterSkills(items: readonly CapabilitySkillItem[], filters: Ski
   );
 }
 
+/** Anything the Gateway sorted into a category: an installed skill, or a skill on offer in Discover. */
+export interface CategorizedSkill {
+  category: SkillCategoryId;
+}
+
 /** The category buttons for the skills loaded: only categories that have a skill, in the contract's order. */
-export function skillCategoryOptions(items: readonly CapabilitySkillItem[]): CategoryOption[] {
+export function skillCategoryOptions(items: readonly CategorizedSkill[]): CategoryOption[] {
   const present = new Set<string>(items.map((item) => item.category));
   return SKILL_CATEGORIES.filter((category) => present.has(category.id)).map(({ id, label }) => ({ id, label }));
 }
@@ -202,7 +207,7 @@ export function skillOriginOptions(items: readonly CapabilitySkillItem[]): Categ
  * What the search box suggests: the label of the most common category, lower-cased. A tie goes to the category that
  * comes first in the contract's order.
  */
-export function skillSearchSuggestion(items: readonly CapabilitySkillItem[]): string {
+export function skillSearchSuggestion(items: readonly CategorizedSkill[]): string {
   let best: { label: string; count: number } | undefined;
   for (const category of SKILL_CATEGORIES) {
     const count = items.filter((item) => item.category === category.id).length;
