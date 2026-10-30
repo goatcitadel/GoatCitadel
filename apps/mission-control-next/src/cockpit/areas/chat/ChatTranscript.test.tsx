@@ -1482,7 +1482,7 @@ it("tells a failure from a warning and a critical notice from a warning without 
   );
   const recovery = container.querySelector('[aria-label="Response recovery"]')!;
   expect(recovery.className).toContain("border-status-failed");
-  expect(recovery.textContent).toContain("Cause: the model provider timed out.");
+  expect(recovery.textContent).toContain("The model took too long to answer");
   expect(recovery.textContent).not.toContain("provider_timeout");
   expect(container.querySelector('[aria-label="Conversation warning"]')?.textContent).toContain("Warning: ");
   expect(container.querySelector('[aria-label="Critical conversation notice"]')?.textContent).toContain(

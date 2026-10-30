@@ -7,6 +7,7 @@ import {
   CHAT_CONTEXT_RELOAD_NOTE,
 } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import type { VirtuosoHandle } from "react-virtuoso";
 import { useDeferredVirtuoso } from "../../ui/DeferredVirtuoso";
 import { Button } from "../../ui/Button";
 import { isBackgroundChatUserInputPrompt, type ChatThreadTurnRecord } from "@goatcitadel/contracts";
@@ -17,6 +18,7 @@ import type {
   MissionThreadedActiveSessionSurfaceProps,
   MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
+import { ChatTranscriptNavigation } from "./ChatTranscriptNavigation";
 import "../../../features/threaded-surface/styles/code-highlight.css";
 import "../../styles/chat-display.css";
 
@@ -34,6 +36,7 @@ export function ChatTranscript({
   onInspectRun,
   onOpenArtifact,
   onReviewPlan,
+  onNewConversation,
 }: {
   props: MissionThreadedActiveSessionSurfaceProps;
   /** Set when the open conversation is held through a channel; callers keep the object stable. */
@@ -44,6 +47,8 @@ export function ChatTranscript({
   onInspectRun?: (turnId: string) => void;
   onOpenArtifact?: (turnId: string, artifactId?: string) => void;
   onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
+  /** Opens a fresh conversation; a failed turn offers it when the conversation is too long for the model. */
+  onNewConversation?: () => void;
 }) {
   const preview = useChatStreamingPreviewSnapshot(props.selectedSessionId);
   const turns = props.thread?.turns;
@@ -234,6 +239,18 @@ export function ChatTranscript({
     },
     [scrollRef, onNativeScroll, onReadingGesture],
   );
+  const virtuoso = useRef<VirtuosoHandle>(null);
+  // A jump to a message is the reader moving, so the transcript stops following new output, as it does for Home.
+  const markReaderJump = useCallback(() => {
+    readingGesture.current = true;
+    gestureUntil.current = performance.now() + READING_GESTURE_TAIL_MS;
+  }, []);
+  const newConversation = useRef(onNewConversation);
+  useEffect(() => {
+    newConversation.current = onNewConversation;
+  }, [onNewConversation]);
+  const startNewConversation = useCallback(() => newConversation.current?.(), []);
+  const offerNewConversation = onNewConversation ? startNewConversation : undefined;
 
   if (props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError)
     return (
@@ -272,6 +289,22 @@ export function ChatTranscript({
       ? visibleTurns.slice(props.followOutput ? -100 : 0, props.followOutput ? undefined : 100)
       : visibleTurns;
   const fallbackOffset = props.followOutput ? visibleTurns.length - fallbackTurns.length : 0;
+  const renderTurn = (turn: ChatThreadTurnRecord, position: number) => (
+    <Turn
+      turn={turn}
+      position={position}
+      isLatest={turn.turnId === latestTurn?.turnId}
+      previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
+      streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
+      actions={props}
+      channel={channel}
+      newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
+      onInspectTurn={onInspectTurn}
+      onOpenArtifact={onOpenArtifact}
+      onReviewPlan={onReviewPlan}
+      onNewConversation={offerNewConversation}
+    />
+  );
   const footerContext: TranscriptFooterContext = {
     ...(virtualized ? {} : { renderedTurns: fallbackTurns }),
     props,
@@ -293,6 +326,13 @@ export function ChatTranscript({
       <span role="status" aria-live="polite" className="sr-only">
         {announcement}
       </span>
+      <ChatTranscriptNavigation
+        scroller={scrollElement}
+        turns={visibleTurns}
+        turnKeys={turnKeys}
+        virtuoso={virtuoso}
+        onReaderJump={markReaderJump}
+      />
       {!props.followOutput ? (
         <button
           type="button"
@@ -323,6 +363,7 @@ export function ChatTranscript({
           {virtualized && Virtuoso && scrollElement ? (
             <Virtuoso<ChatThreadTurnRecord, TranscriptFooterContext>
               key={props.selectedSessionId}
+              ref={virtuoso}
               customScrollParent={scrollElement}
               data={visibleTurns}
               initialTopMostItemIndex={props.followOutput ? visibleTurns.length - 1 : (initialIndex ?? 0)}
@@ -333,54 +374,14 @@ export function ChatTranscript({
               followOutput={false}
               computeItemKey={(_index, turn) => turn.turnId}
               components={TRANSCRIPT_COMPONENTS}
-              context={{
-                props,
-                gatewayUnavailable,
-                receipt,
-                preview,
-                pendingTurnId,
-                hasPreviewTurn,
-                visibleTurns,
-                latestTurn,
-                onInspectTurn,
-                onInspectRun,
-                threadEndRef,
-                jumpToLatest,
-              }}
-              itemContent={(index, turn) => (
-                <Turn
-                  turn={turn}
-                  position={index + 1}
-                  isLatest={turn.turnId === latestTurn?.turnId}
-                  previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
-                  streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
-                  actions={props}
-                  channel={channel}
-                  newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
-                  onInspectTurn={onInspectTurn}
-                  onOpenArtifact={onOpenArtifact}
-                  onReviewPlan={onReviewPlan}
-                />
-              )}
+              // Virtualized, the footer context carries no rendered-turn subset, so it is exactly Virtuoso's context.
+              context={footerContext}
+              itemContent={(index, turn) => renderTurn(turn, index + 1)}
             />
           ) : (
             <>
               {fallbackTurns.map((turn, index) => (
-                <div key={turn.turnId}>
-                  <Turn
-                    turn={turn}
-                    position={fallbackOffset + index + 1}
-                    isLatest={turn.turnId === latestTurn?.turnId}
-                    previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
-                    streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
-                    actions={props}
-                    channel={channel}
-                    newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
-                    onInspectTurn={onInspectTurn}
-                    onOpenArtifact={onOpenArtifact}
-                    onReviewPlan={onReviewPlan}
-                  />
-                </div>
+                <div key={turn.turnId}>{renderTurn(turn, fallbackOffset + index + 1)}</div>
               ))}
               {!visibleTurns.length ? <ChatTranscriptEmpty context={footerContext} /> : null}
             </>

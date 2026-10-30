@@ -1018,6 +1018,9 @@ export type ChatTurnFailureClass =
   | "interrupted_by_restart"
   | "skill_security_blocked"
   | "guidance_security_blocked"
+  | "provider_rate_limited"
+  | "context_too_long"
+  | "provider_billing"
   | "unknown";
 
 export type ChatTurnCompletionStatus = "complete" | "truncated" | "interrupted" | "backgrounded";
@@ -1041,7 +1044,10 @@ export type ChatTurnRecoveryAction =
   | "switch_to_deep_mode"
   | "review_skill_security"
   | "review_workspace_guidance"
-  | "check_gateway_connection";
+  | "check_gateway_connection"
+  | "wait_and_retry"
+  | "shorten_conversation"
+  | "check_provider_plan";
 
 export interface ChatTurnFailureRecord {
   failureClass: ChatTurnFailureClass;
@@ -1190,6 +1196,12 @@ export function getChatTurnRecoveryAction(failureClass: ChatTurnFailureClass): C
       return "review_skill_security";
     case "guidance_security_blocked":
       return "review_workspace_guidance";
+    case "provider_rate_limited":
+      return "wait_and_retry";
+    case "context_too_long":
+      return "shorten_conversation";
+    case "provider_billing":
+      return "check_provider_plan";
     default:
       return "retry";
   }
@@ -1215,6 +1227,12 @@ export function getChatTurnRecoveryActionLabel(action: ChatTurnRecoveryAction): 
       return "Review skill security";
     case "review_workspace_guidance":
       return "Review workspace guidance";
+    case "wait_and_retry":
+      return "Wait a moment, then retry";
+    case "shorten_conversation":
+      return "Start a new conversation";
+    case "check_provider_plan":
+      return "Check the provider account";
   }
 }
 
@@ -1238,6 +1256,12 @@ export function getChatTurnRecoveryActionSummary(action: ChatTurnRecoveryAction)
       return "Disable or re-review the named skill, then retry the turn after it passes the current security scan.";
     case "review_workspace_guidance":
       return "Edit the workspace PRODUCT.md or DESIGN.md named in the error under Settings › Workspaces › Design context, then send the message again.";
+    case "wait_and_retry":
+      return "The provider is limiting how often it takes requests. Wait a minute, then retry, or pick another model.";
+    case "shorten_conversation":
+      return "This conversation is now longer than the model can read at once. Start a new conversation, or pick a model that reads more.";
+    case "check_provider_plan":
+      return "The provider turned the request down for account reasons, such as no credit left or a model the plan does not include. Check the account with the provider, or pick another model.";
   }
 }
 
