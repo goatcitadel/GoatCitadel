@@ -380,9 +380,13 @@ export function adoptSkillInstall(
   schedule(key, install.step);
 }
 
-/** Forgets a panel's flow, so the panel starts again. A check's own install is never forgotten this way. */
+/**
+ * Forgets a panel's flow, so the panel starts again in the workspace active then. A check's own install is never
+ * forgotten this way.
+ */
 export function resetSkillInstall(key: string) {
   bump(key);
+  contexts.delete(key);
   setSkillInstall(key, undefined);
 }
 

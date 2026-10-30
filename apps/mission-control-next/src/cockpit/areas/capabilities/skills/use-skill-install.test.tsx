@@ -10,7 +10,12 @@ import type {
 } from "@goatcitadel/contracts";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { __resetSkillInstallsForTests, useSkillInstall, type SkillInstall } from "./use-skill-install";
+import {
+  __resetSkillInstallsForTests,
+  resetSkillInstall,
+  useSkillInstall,
+  type SkillInstall,
+} from "./use-skill-install";
 
 const api = vi.hoisted(() => ({
   reviewCapabilitySkill: vi.fn(),
@@ -18,8 +23,9 @@ const api = vi.hoisted(() => ({
   fetchCapabilitySkillInstalls: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/capability-skills", () => api);
+const preferences = vi.hoisted(() => ({ activeWorkspaceId: "ws-1" }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
-  useUiPreferences: () => ({ activeWorkspaceId: "ws-1" }),
+  useUiPreferences: () => preferences,
 }));
 
 const CHECK_ID = "snap-1";
@@ -119,6 +125,7 @@ const reads = () => api.fetchCapabilitySkillInstalls.mock.calls.length;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  preferences.activeWorkspaceId = "ws-1";
   calls = [];
   server = checked();
   api.reviewCapabilitySkill.mockReset().mockImplementation(async () => {
@@ -145,6 +152,23 @@ afterEach(() => {
 });
 
 describe("useSkillInstall", () => {
+  it("checks a reset panel in the workspace active now, not the one its last check was made in", async () => {
+    const draft = "draft:git";
+    const git = { kind: "git", sourceRef: "https://github.com/acme/skill" } as const;
+    await render(draft);
+    await act(async () => shown.check(git));
+    await settle();
+    expect(api.reviewCapabilitySkill).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: "ws-1" }));
+
+    preferences.activeWorkspaceId = "ws-2";
+    await act(async () => resetSkillInstall(draft));
+    await render(draft);
+    expect(shown.workspaceId).toBe("ws-2");
+    await act(async () => shown.check(git));
+    await settle();
+    expect(api.reviewCapabilitySkill).toHaveBeenLastCalledWith(expect.objectContaining({ workspaceId: "ws-2" }));
+  });
+
   it("requests install, then switch on, from one confirmation when the setting is on", async () => {
     answerSteps({ install_inactive: "approved", activate: "approved" });
     const refreshed = vi.spyOn(client, "invalidateQueries");
