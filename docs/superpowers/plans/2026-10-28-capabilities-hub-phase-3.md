@@ -895,6 +895,16 @@ A rejected or expired approval doesn't count as pending, so the item reads as th
 - [ ] **Step 4: Run the tests (PASS), plus** `pnpm verify:journey:producers` **and** `pnpm verify:skill-hub:lifecycle` **(PASS, unchanged).**
 - [ ] **Step 5: Commit:** `feat(gateway): check and install skills from Capabilities in one step`.
 
+**As built (PR 3c):** where the text above differs, the rulings win.
+- `blockers` is `string[]`, the codes as stored. `SKILL_HUB_BLOCKER_CODES` is wider than the five listed: the review's five, every governance code and the install guard's three "already there" codes; `SKILL_BLOCKER_COPY` covers each (R39).
+- There is no `findingCount`, and `asksFor.requires` replaces `dependencies`. The step table is total and read from each approval's settlement, in a fixed order; a rejected or edited approval counts as never asked. Hub approvals never expire, so the install steps answer only `approved` or `waiting`, never `declined` (R41).
+- A refused source is a 422 `SKILL_SOURCE_REFUSED` with the review's code as `details.reason`. `TRUSTED_GIT_FORGE_HOSTS` moved to contracts. A Git address outside those hosts is refused first (`UNTRUSTED_GIT_HOST`) and is always reviewed as `git_url` (R40).
+- A pack is `{ kind: "pack", packId }` read from the recorded folder, so no server path leaves the Gateway, and an installed pack reads "Built in" (R42, R43).
+- Hub owners reach the composition as plain readers, with two GatewayService lines. The guard test also covers `createSkillHubApproval`. A reused approved Hub approval answers `approved` without being resolved again. The installs read lists the newest 100 checks (R44).
+- The skip's flag description and `SKIP_FACTS` name the skill install (R45). A Git source's description is whatever its check keeps, or empty (R53).
+- The installs read takes an optional `snapshotId` and then returns that check at any step, and its response carries `operatorApprovalSkip` (R55, R47).
+- Skill Hub approvals keep their linkage exactly as the Hub binds it: the approvals owner adds no request attribution and no wait-run id to them (R56).
+
 ### Task 13: Discover list
 
 **Files:**
@@ -956,6 +966,13 @@ export interface CapabilitySkillDiscoverResponse {
 - [ ] **Step 2: Run them and confirm they fail.** **Step 3: Implement it, rebuild contracts and measure.** **Step 4: Run them and the publish sweep (PASS).**
 - [ ] **Step 5: Commit:** `feat(gateway): serve the Capabilities Discover list`.
 
+**As built (PR 3c):**
+- An item carries an `install` only if it is a pack, or a listing the source owner marks `direct` whose address is `https` on a trusted Git host and names a repository. Every other row is view only. In practice every curated and marketplace entry is review-only or not installable, so only the two packs install from Discover (R46).
+- There is one 10-minute cache for the marketplaces' answer, not one per term. Each term is ranked against it locally, and an answer with a marketplace down is returned but not kept. A read with no term asks the curated list with the network off and keeps all of it (R46).
+- "Installed" matches Git addresses after normalizing (and dropping `www.`), and matches a pack by the folder its installed copy records. A curated listing for a service GoatCitadel integrates natively is left out; today that is the "GoG" listing (R46).
+- The marketplace link filter keeps only `https` links on each marketplace's own host, checked on the parsed address and again where Discover emits `listingUrl` (R58).
+- An item that is installing carries `installSnapshotId`, the check "Continue" opens (R60, added in Task 15's fix round).
+
 ### Task 14: Discover view
 
 **Files:**
@@ -997,6 +1014,11 @@ export interface CapabilitySkillDiscoverResponse {
   - `it("opens the Discover segment from ?view=discover")`.
 - [ ] **Step 2: Run them and confirm they fail.** **Step 3: Implement it.** **Step 4: Run them and the copy guard (PASS).**
 - [ ] **Step 5: Commit:** `feat(cockpit): discover skills from GoatCitadel and skill sites`.
+
+**As built (PR 3c):**
+- Discover renders while the installed list loads or fails; only the Installed segment shows that state. `?view=discover` survives opening and closing a panel (R48).
+- An empty search while any marketplace couldn't be searched reads "`<labels>` couldn't be searched right now." with "Try again", not "No skills match" (R59).
+- Both new query keys sit under the `"skills"` prefix, and the installs key joins `SETTINGS_READER_KEYS`. A skill change refreshes them through the event map, but Skill Hub installs publish no event of their own, so the install flow polls instead (R47).
 
 ### Task 15: Install panel, install flow and Import from Git
 
@@ -1097,6 +1119,15 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - [ ] **Step 2: Run them and confirm they fail.** **Step 3: Implement it.** **Step 4: Run them, the Library tests and the copy guard (PASS).**
 - [ ] **Step 5: Commit:** `feat(cockpit): install skills in one step from Discover or a Git address`.
 
+**As built (PR 3c):** where the text above differs, the rulings win.
+- Approvals open in place. The panel opens `SettingsApprovalDialog` with the active workspace id, titled "Approve installing `<name>`?" or "Approve switching on `<name>`?". It opens by itself once per approval, and the dialog's own "Review the change" button opens it again. The panel never says "Waiting on you in Inbox" and has no "Open in Inbox" (R47).
+- Blocker codes and listing addresses appear only in `TechnicalDetails`. The scripts line reads "Includes scripts. Installing it doesn't run them." (R49).
+- The panel also shows the declared read and write paths and hosts in "What it asks for", though the global constraint keeps paths in `TechnicalDetails` (R54).
+- Deleting `LibrarySkillPacks` removed one live region, so the live-region budget moved by exactly the new regions minus one (R49).
+- The browser still drives `activate` after `install_inactive`. With the tab closed between the two, the install stays at `installed_off`, and Discover and the panel offer "Switch on" (R50).
+- "Continue" opens the install named by the Discover item's `installSnapshotId`; the browser no longer matches a source to an install itself (R60).
+- The flow polls the installs read: every second for the first 30 reads while a step applies and every 3 seconds after, and every 5 to 30 seconds while a step waits, to stay under the route's rate limit.
+
 ### Task 16: Public truth, checks and proof (PR 3c)
 
 - [ ] **Step 1: Update the public claims** that describe installing skills or skill packs (`git grep -n "skill pack\|install.*skill\|Skill Hub" -- README.md docs/1_0_CONTRACT.md docs/CANONICAL_RUNTIME_STATE_MODEL.md docs/CLAW_HUB_NATIVE_CAPABILITY_GUIDANCE.md`). Keep the Skill Hub rules exactly as stated, and add where the operator does it.
@@ -1119,6 +1150,10 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
   - a blocked source's plain explanation, using a fixture snapshot if no live one is at hand
   - phone and desktop widths, light and dark themes
 - [ ] **Step 4: Commit:** `docs: describe installing skills from Capabilities`. Then open PR 3c.
+
+**As built (PR 3c):**
+- Step 1's search misses `docs/EVOLUTION_CONTROL_PLANE.md`, which names the routes that use the skip. The docs commit adds the skill install as its fourth route there, a "Skill installs from Capabilities" section and the sealed-linkage note in `docs/CANONICAL_RUNTIME_STATE_MODEL.md`, and this plan's As built notes (R45, R51, R56, R60).
+- `docs/MCP_VENDOR_CATALOG_PROGRAM.md` was already moved to Capabilities › Skills › Discover in Task 15 (R49).
 
 ---
 
@@ -1151,9 +1186,17 @@ Only an `https` URL is accepted in the browser (a plain message otherwise). The 
 - **Skill details send the loaded `SKILL.md` text as it is.** There is no new file read: it is the loader's copy, the same text `GET /api/v1/skills` already returns for every skill. The loader has no size cap; capping it belongs there, as a follow-up.
 - **Switches are install-wide,** like the skill state they change. Self-authored skills follow the active workspace.
 - **Discover's marketplaces are searched with the existing fetch,** which predates the network allowlist and reaches two fixed sites. Opening Discover doesn't use it.
+- **Only the two shipped packs install from Discover today.** Every curated and marketplace entry is review-only or not installable, so those rows are view only ("See listing"). A skill from a trusted Git repository (GitHub, GitLab, Bitbucket or Codeberg) installs through Import from Git (R46).
+- **The installs list reads the newest 100 checks** (the Skill Hub list's largest page), so a long run of newer checks can push an older unfinished install out of it (R44).
 
 **Found on the way (follow-ups, not in this plan):**
 - `GET /api/v1/skills` drops `workspaceId` in production (`gateway-route-composition-memory.ts:121`), so approved workspace candidate skills never appear there. Task 4's new route doesn't depend on it.
 - Skill Hub activation writes `source.json` without a `canonicalKey`, so the old sources route never marks Hub installs as installed. Task 13 matches on provenance instead.
 - Connectors and Tools still send approvals to Inbox. Moving them into their panels would match the Skills tab and the 2026-10-28 feedback.
 - Removing a skill (Q3), if the operator wants it later.
+- The approvals owner added request attribution and the wait run's id to every approval's linkage, which broke every Skill Hub install in a running Gateway, Library's pack install included. Fixed in this PR: a sealed-linkage approval keeps its linkage exactly as the Hub binds it (R56).
+- The Skill Hub took a pack's skill id from its source key, a hash, so packs could never install. Fixed in this PR: the review now records the `SKILL.md` name.
+- The skill-source scraper kept any link containing a marketplace's address, so `javascript:` and look-alike links reached the sources list and Discover. Fixed in this PR: only `https` links on the marketplace's own host are kept (R58).
+- Resolving a Skill Hub approval through a remote action token would break its binding, because the token's ids are merged into the linkage (R57, follow-up). This PR's flow approves in place and never issues one.
+- A failed switch-on leaves the skill installed and off, with no way to switch it on from the cockpit: a fresh check reads "already installed", and the old check's switch-on approval is reused (follow-up). A `failedStep` field on `CapabilitySkillInstall` would also let the panel offer the right retry after a reload.
+- Sealed-linkage approvals show no run link in the Inbox or the runtime lifecycle read, and carry no request ids (R56, follow-up if it matters).
