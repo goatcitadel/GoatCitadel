@@ -101,8 +101,13 @@ function askedFor(approval: SkillHubOperatorApprovalSummary | undefined): SkillH
   return approval?.status === "pending" || approval?.status === "approved" ? approval : undefined;
 }
 
-/** A pack by its id, never its folder; a Git source by its address, host and pinned commit. */
-function publicSource(snapshot: SkillHubOperatorItem["snapshot"]): CapabilitySkillInstall["source"] | undefined {
+/**
+ * A pack by its id, never its folder; a Git source by its address, host and pinned commit. Discover reads an installed
+ * skill's recorded source through the same rule, so one matcher decides what a pack folder is.
+ */
+export function publicSource(
+  snapshot: Pick<SkillHubOperatorItem["snapshot"], "sourceType" | "sourceRef" | "resolvedVersion">,
+): CapabilitySkillInstall["source"] | undefined {
   if (snapshot.sourceType === "local_path") {
     const packId = PACK_FOLDER.exec(snapshot.sourceRef)?.[1];
     return packId && findShippedSkillPack(packId) ? { kind: "pack", packId } : undefined;

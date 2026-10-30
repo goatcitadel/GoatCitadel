@@ -1,7 +1,12 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import type { ApprovalListResponse, ApprovalRequest, SkillListItem } from "@goatcitadel/contracts";
+import type {
+  ApprovalListResponse,
+  ApprovalRequest,
+  SkillListItem,
+  SkillSourceListResponse,
+} from "@goatcitadel/contracts";
 import type { SkillUseCount } from "@goatcitadel/storage";
 import {
   composeCapabilitySkills,
@@ -96,6 +101,13 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
       createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
     },
     skillHubSnapshots: { find: vi.fn(async () => undefined) },
+    skillSources: {
+      readSourceCatalog: vi.fn(async () => ({ providers: [], items: [] })),
+      presentSourceCatalog: vi.fn(
+        (): SkillSourceListResponse => ({ generatedAt: "2026-10-29T00:00:00.000Z", providers: [], items: [] }),
+      ),
+      listInstalledSources: vi.fn(() => []),
+    },
     ...overrides,
   };
 }
@@ -555,5 +567,64 @@ describe("composeCapabilitySkills install steps", () => {
     expect(parts.skillHub.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", limit: 100 });
     expect(response.installs.map((install) => install.step)).toEqual(["waiting_install"]);
     expect(response.operatorApprovalSkip).toBe(false);
+  });
+});
+
+describe("composeCapabilitySkills discover", () => {
+  it("lists the packs with no network call, through the source owner's offline read", async () => {
+    const parts = owners();
+
+    const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+    expect(parts.skillSources.readSourceCatalog).toHaveBeenCalledExactlyOnceWith({ network: false });
+    expect(parts.skillSources.presentSourceCatalog).toHaveBeenCalledExactlyOnceWith(
+      { providers: [], items: [] },
+      undefined,
+      100,
+    );
+    expect(response.items.map((item) => item.id)).toEqual(["pack:himalaya", "pack:github-cli"]);
+  });
+
+  it("marks a source installing from the same installs the Skills tab lists", async () => {
+    const parts = owners({
+      skillHub: {
+        reviewSkillHubSource: vi.fn(),
+        listSkillHub: vi.fn(async () => ({
+          items: [hubItem({ approvals: { install_inactive: hubApproval("install_inactive", "pending") } })],
+        })),
+        createSkillHubApproval: vi.fn(),
+      },
+    });
+
+    const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+    expect(parts.skillHub.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", limit: 100 });
+    expect(response.items.find((item) => item.id === "pack:himalaya")).toMatchObject({ state: "installing" });
+  });
+
+  it("still lists when the installs can't be read, and writes the failure to the log", async () => {
+    const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
+    try {
+      const parts = owners({
+        skillHub: {
+          reviewSkillHubSource: vi.fn(),
+          listSkillHub: vi.fn(async () => {
+            throw new Error("storage is locked");
+          }),
+          createSkillHubApproval: vi.fn(),
+        },
+      });
+
+      const response = await composeCapabilitySkills(parts).discover.list("workspace-a");
+
+      expect(response.items.find((item) => item.id === "pack:himalaya")).toMatchObject({ state: "available" });
+      expect(JSON.stringify(response)).not.toContain("storage is locked");
+      const logged = stderr.mock.calls
+        .map(([chunk]) => String(chunk))
+        .filter((line) => line.includes('"source":"installs"'));
+      expect(logged).toHaveLength(1);
+    } finally {
+      stderr.mockRestore();
+    }
   });
 });

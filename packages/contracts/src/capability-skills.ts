@@ -1,6 +1,6 @@
 import type { CapabilityCatalogEntry, SkillLifecycleState } from "./capabilities.js";
 import type { SkillCategoryId, SkillOrigin } from "./skill-categories.js";
-import type { SkillRuntimeState } from "./skills.js";
+import type { SkillRuntimeState, SkillSourceProvider } from "./skills.js";
 
 // ---------------------------------------------------------------------------
 // Skill use counts: GET /api/v1/capabilities/skills/usage
@@ -286,4 +286,59 @@ export interface CapabilitySkillOperationRequest {
   workspaceId: string;
   snapshotId: string;
   operationKind: "install_inactive" | "activate";
+}
+
+// ---------------------------------------------------------------------------
+// Finding a skill to install: GET /api/v1/capabilities/skills/discover
+// ---------------------------------------------------------------------------
+
+/**
+ * Where a skill on offer stands. The Gateway reads it; the cockpit never derives it.
+ * - `installed`: a skill from this source is already installed (`installedSkillId` when the install can name it).
+ * - `installing`: an install of it is on its way in or stopped on the way (Capabilities' installs list holds it), so the
+ *   install flow continues it.
+ * - `available`: it can be checked and installed from Capabilities.
+ * - `view_only`: it can only be looked at: a listing GoatCitadel can't install from.
+ *
+ * `available` and `installing` always have an `install` source; `view_only` never does.
+ */
+export type CapabilitySkillDiscoverState = "available" | "installed" | "installing" | "view_only";
+
+/** One skill on offer in Discover: one of GoatCitadel's own packs, or a listing from a curated list or a marketplace. */
+export interface CapabilitySkillDiscoverItem {
+  /** `pack:<packId>` for a pack, `source:<canonical key>` for a listing. */
+  id: string;
+  name: string;
+  description: string;
+  category: SkillCategoryId;
+  provider: "goatcitadel" | SkillSourceProvider;
+  /** `GoatCitadel` for the packs; else the provider's own name, such as `AgentSkill`. */
+  providerLabel: string;
+  state: CapabilitySkillDiscoverState;
+  /**
+   * What an install checks. Only a pack, or an `https` address on one of `TRUSTED_GIT_FORGE_HOSTS` whose entry is
+   * installable, has one; every other item is only a listing and has none.
+   */
+  install?: CapabilitySkillSource;
+  /** The listing's address. Offered only as "See listing" and in Technical details. */
+  listingUrl?: string;
+  /** The installed skill's id, at `installed`, when the install can name it. */
+  installedSkillId?: string;
+}
+
+/**
+ * What Discover offers. With no search term: GoatCitadel's own packs and the curated listings, with no network call.
+ * With `q` (2 to 100 characters): the packs and listings that match it, with the marketplaces' listings ranked in. A
+ * marketplace that couldn't be searched is named in `unavailableProviders` and the rest is still answered.
+ *
+ * `GET /api/v1/capabilities/skills/discover?workspaceId=&q=&refresh=`. The marketplaces' answer is kept for 10 minutes
+ * and ranked for each term; `refresh=true` asks them again.
+ */
+export interface CapabilitySkillDiscoverResponse {
+  /** The search term as the Gateway read it: trimmed and lower-cased. Absent without one. */
+  query?: string;
+  items: CapabilitySkillDiscoverItem[];
+  /** The providers' names that couldn't be searched, once each. */
+  unavailableProviders: string[];
+  generatedAt: string;
 }

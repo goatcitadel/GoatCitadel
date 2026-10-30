@@ -9,10 +9,15 @@ import {
   type DeploymentProfile,
   type SkillListItem,
   type SkillRuntimeState,
+  type SkillSourceListResponse,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
 import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from "./capability-skill-actions-service.js";
+import {
+  CapabilitySkillDiscoverService,
+  type CapabilitySkillDiscoverReadSource,
+} from "./capability-skill-discover-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { ShippedSkillDirs } from "./capability-skills-projection.js";
 import { CapabilitySkillsService, type CapabilitySkillsSource } from "./capability-skills-service.js";
@@ -22,6 +27,7 @@ import type {
   SkillHubOperatorListResponse,
 } from "./skill-hub-operator-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
+import type { InstalledSkillSource, SkillSourceCatalog, SkillSourceReadOptions } from "./skill-import-service.js";
 import type { SkillStateMutationAuthorityInput, SkillStateMutationOutcome } from "./skill-state-service.js";
 
 const log = logger.child("capability-skills");
@@ -93,6 +99,20 @@ export interface CapabilitySkillsOwners {
   };
   /** Skill Hub's checks, read one at a time to tell GoatCitadel's own pack from an import (Ruling R43). */
   skillHubSnapshots: { find(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined> };
+  /**
+   * The skill import owner's source reads, which Discover lists from: the curated entries and the marketplaces' listings
+   * (the marketplaces only when asked), a catalog ranked by a search term, and the skills installed at runtime with the
+   * sources they came from. Reading them installs nothing.
+   */
+  skillSources: {
+    readSourceCatalog(options: SkillSourceReadOptions): Promise<SkillSourceCatalog>;
+    presentSourceCatalog(
+      catalog: SkillSourceCatalog,
+      query: string | undefined,
+      limit: number,
+    ): SkillSourceListResponse;
+    listInstalledSources(): readonly InstalledSkillSource[];
+  };
 }
 
 /**
@@ -106,6 +126,7 @@ export interface CapabilitySkills {
   usage: CapabilitySkillUsageService;
   skills: CapabilitySkillsService;
   actions: CapabilitySkillActionsService;
+  discover: CapabilitySkillDiscoverService;
 }
 
 /** Wires the Skills tab to its owners. */
@@ -122,28 +143,30 @@ export function composeCapabilitySkills({
   rootDir,
   skillHub,
   skillHubSnapshots,
+  skillSources,
 }: CapabilitySkillsOwners): CapabilitySkills {
   const readApprovalSkipSetting = () => features.isFeatureEnabled("settingsApprovalSkipEnabled");
   const shipped = shippedSkillDirs(rootDir);
+  const skillsService = new CapabilitySkillsService(
+    {
+      // Every skill, whatever the workspace's choices, so the operator can see and switch the ones they leave out;
+      // `listWorkspaceTurnSkills` says which of them the workspace's turns may load.
+      listSkills: (workspaceId) => skills.listSkills("ALL", workspaceId),
+      listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
+      listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
+      listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),
+      listWorkspaceTurnSkills,
+      shippedSkillDirs: () => shipped,
+      deploymentProfile,
+      readApprovalSkipSetting,
+      listSkillHub: (input) => skillHub.listSkillHub(input),
+      findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
+    },
+    reportFailedRead,
+  );
   return {
     usage: new CapabilitySkillUsageService((sinceIso) => chatTurnCapabilityProfiles.countSkillUsesSince(sinceIso)),
-    skills: new CapabilitySkillsService(
-      {
-        // Every skill, whatever the workspace's choices, so the operator can see and switch the ones they leave out;
-        // `listWorkspaceTurnSkills` says which of them the workspace's turns may load.
-        listSkills: (workspaceId) => skills.listSkills("ALL", workspaceId),
-        listInspectableCatalog: (workspaceId) => capabilities.listCapabilityCatalog("inspectable", "ALL", workspaceId),
-        listPendingApprovals: () => readAllPendingApprovals((input) => approvals.listApprovalsPage(input)),
-        listSwitchableSkillIds: async () => loadedSkills().map((skill) => skill.skillId),
-        listWorkspaceTurnSkills,
-        shippedSkillDirs: () => shipped,
-        deploymentProfile,
-        readApprovalSkipSetting,
-        listSkillHub: (input) => skillHub.listSkillHub(input),
-        findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
-      },
-      reportFailedRead,
-    ),
+    skills: skillsService,
     actions: new CapabilitySkillActionsService(
       {
         // The switch carries no note; the approval's own preview shows the state change.
@@ -158,6 +181,16 @@ export function composeCapabilitySkills({
         createSkillHubApproval: (input) => skillHub.createSkillHubApproval(input),
       },
       reportFailedStep,
+    ),
+    discover: new CapabilitySkillDiscoverService(
+      {
+        readSourceCatalog: (options) => skillSources.readSourceCatalog(options),
+        presentSourceCatalog: (catalog, query, limit) => skillSources.presentSourceCatalog(catalog, query, limit),
+        listInstalledSources: () => skillSources.listInstalledSources(),
+        // The installs the Skills tab lists, so a source on its way in reads the same in Discover.
+        listInstalls: async (workspaceId) => (await skillsService.installs(workspaceId)).installs,
+      },
+      { reportFailure: reportFailedRead },
     ),
   };
 }
@@ -198,7 +231,7 @@ async function readAllPendingApprovals(
 }
 
 /** The operator sees a plain line; the real error stays in the redacted server log. */
-function reportFailedRead(source: CapabilitySkillsSource, error: unknown): void {
+function reportFailedRead(source: CapabilitySkillsSource | CapabilitySkillDiscoverReadSource, error: unknown): void {
   const diagnostic =
     error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
   log.error("a Capabilities skills source could not be read", {

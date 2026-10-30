@@ -6,6 +6,7 @@ import {
   NotFoundError,
   ServiceUnavailableError,
   ValidationError,
+  type CapabilitySkillDiscoverResponse,
   type CapabilitySkillInstall,
   type CapabilitySkillInstallsResponse,
   type CapabilitySkillsResponse,
@@ -877,5 +878,109 @@ describe("capability skill check and install routes", () => {
       expect(response.statusCode).toBe(503);
       expect(response.body).toContain("Skills can't be installed right now.");
     });
+  });
+});
+
+describe("capability skills discover route", () => {
+  const DISCOVER_URL = "/api/v1/capabilities/skills/discover";
+  const DISCOVER: CapabilitySkillDiscoverResponse = {
+    query: "mail",
+    items: [
+      {
+        id: "pack:himalaya",
+        name: "Email over IMAP/SMTP (Himalaya)",
+        description: "Read, search, organise and send mail for any IMAP/SMTP account.",
+        category: "email",
+        provider: "goatcitadel",
+        providerLabel: "GoatCitadel",
+        state: "available",
+        install: { kind: "pack", packId: "himalaya" },
+      },
+    ],
+    unavailableProviders: ["SkillsMP"],
+    generatedAt: "2026-10-29T00:00:00.000Z",
+  };
+  let app: FastifyInstance | null = null;
+
+  afterEach(async () => {
+    await app?.close();
+    app = null;
+  });
+
+  async function build(discover: Record<string, unknown> | undefined) {
+    app = Fastify();
+    await app.register(rateLimit, { global: false });
+    app.decorate(
+      "services",
+      (discover ? { capabilitySkills: { usage: { read: vi.fn() }, skills: {}, actions: {}, discover } } : {}) as never,
+    );
+    await app.register(capabilitySkillsRoutes);
+    return app;
+  }
+
+  it("returns what is on offer with no-store and the 30 a minute limit", async () => {
+    const list = vi.fn(async () => DISCOVER);
+    const server = await build({ list });
+
+    const response = await server.inject({ method: "GET", url: `${DISCOVER_URL}?workspaceId=default&q=mail` });
+
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toEqual(DISCOVER);
+    expect(response.headers["cache-control"]).toBe("no-store");
+    expect(response.headers["x-ratelimit-limit"]).toBe("30");
+    expect(list).toHaveBeenCalledExactlyOnceWith("default", { query: "mail", refresh: false });
+  });
+
+  it("lists without a search term, and passes refresh on", async () => {
+    const list = vi.fn(async () => DISCOVER);
+    const server = await build({ list });
+
+    await server.inject({ method: "GET", url: `${DISCOVER_URL}?workspaceId=default` });
+    await server.inject({ method: "GET", url: `${DISCOVER_URL}?workspaceId=default&q=%20mail%20&refresh=true` });
+
+    expect(list).toHaveBeenNthCalledWith(1, "default", { refresh: false });
+    // The search term is trimmed before it counts.
+    expect(list).toHaveBeenNthCalledWith(2, "default", { query: "mail", refresh: true });
+  });
+
+  it("rejects a one-character search", async () => {
+    const list = vi.fn(async () => DISCOVER);
+    const server = await build({ list });
+
+    for (const q of ["a", "%20a%20", "%20%20%20", ""]) {
+      const response = await server.inject({ method: "GET", url: `${DISCOVER_URL}?workspaceId=default&q=${q}` });
+      expect(response.statusCode, q).toBe(400);
+    }
+    expect(list).not.toHaveBeenCalled();
+  });
+
+  it("rejects a search longer than 100 characters, a bad refresh and unknown fields", async () => {
+    const list = vi.fn(async () => DISCOVER);
+    const server = await build({ list });
+
+    for (const query of [
+      `workspaceId=default&q=${"x".repeat(101)}`,
+      "workspaceId=default&refresh=yes",
+      "workspaceId=default&limit=10",
+      "q=mail",
+    ]) {
+      const response = await server.inject({ method: "GET", url: `${DISCOVER_URL}?${query}` });
+      expect(response.statusCode, query).toBe(400);
+    }
+    const longest = await server.inject({
+      method: "GET",
+      url: `${DISCOVER_URL}?workspaceId=default&q=${"x".repeat(100)}`,
+    });
+    expect(longest.statusCode).toBe(200);
+    expect(list).toHaveBeenCalledTimes(1);
+  });
+
+  it("answers 503 with plain wording when the listing isn't composed", async () => {
+    const server = await build(undefined);
+
+    const response = await server.inject({ method: "GET", url: `${DISCOVER_URL}?workspaceId=default` });
+
+    expect(response.statusCode).toBe(503);
+    expect(response.body).toContain("Skills to install can't be listed right now.");
   });
 });

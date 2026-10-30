@@ -3968,6 +3968,7 @@ export class GatewayService {
         rootDir: this.config.rootDir,
         skillHub: composed.skills,
         skillHubSnapshots: this.storage.skillHubSnapshots,
+        skillSources: this.skillImportService,
       }),
     };
   }

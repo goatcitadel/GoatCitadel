@@ -18,6 +18,14 @@ const listQuerySchema = z.object({ workspaceId: z.string().min(1).max(200) }).st
 const installsQuerySchema = z
   .object({ workspaceId: z.string().min(1).max(200), snapshotId: z.string().min(1).max(200).optional() })
   .strict();
+// A search term is 2 to 100 characters once trimmed; the Gateway lower-cases it. Without one nothing goes online.
+const discoverQuerySchema = z
+  .object({
+    workspaceId: z.string().min(1).max(200),
+    q: z.string().trim().min(2).max(100).optional(),
+    refresh: z.enum(["true", "false"]).optional(),
+  })
+  .strict();
 const detailQuerySchema = z
   .object({ workspaceId: z.string().min(1).max(200), skillId: z.string().min(1).max(300) })
   .strict();
@@ -65,6 +73,7 @@ const NOT_SWITCHABLE_MESSAGE = "This skill can't be switched from here.";
 const UNAVAILABLE_CHECK_MESSAGE = "Skills can't be checked right now.";
 const UNAVAILABLE_INSTALL_MESSAGE = "Skills can't be installed right now.";
 const UNAVAILABLE_INSTALLS_MESSAGE = "Skill installs can't be read right now.";
+const UNAVAILABLE_DISCOVER_MESSAGE = "Skills to install can't be listed right now.";
 const STEP_BLOCKED_MESSAGE = "GoatCitadel's checks don't allow this step right now.";
 const CHECK_NOT_FOUND_MESSAGE = "This skill's check wasn't found. Check it again.";
 /** The owner's refusals, in plain copy with no skill id, each with its own code (contract: CapabilitySkillStateRefusal). */
@@ -83,6 +92,8 @@ const REVIEW_RATE_LIMIT = { max: 10, timeWindow: "1 minute" } as const;
 const OPERATION_RATE_LIMIT = { max: 20, timeWindow: "1 minute" } as const;
 // The installs read lists the workspace's newest 100 checks with their approvals.
 const INSTALLS_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
+// A search can ask two marketplaces over the network; their answer is kept for 10 minutes.
+const DISCOVER_RATE_LIMIT = { max: 30, timeWindow: "1 minute" } as const;
 // A check or step body is a workspace, a source or a check id, and a key; the bound matches the other operator saves.
 const BODY_LIMIT = 20 * 1_024;
 
@@ -222,6 +233,31 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
   });
 
   /**
+   * The skills on offer to install. With no `q`, GoatCitadel's own packs and the curated listings, and no network call.
+   * With `q` (2 to 100 characters), the packs and listings that match it, with the marketplaces' listings ranked in;
+   * a marketplace that couldn't be searched is named in `unavailableProviders` and the rest is still answered. The
+   * marketplaces' answer is kept for 10 minutes; `refresh=true` asks them again. Each item says whether it is
+   * available, installed, on its way in, or only a listing to look at. It writes nothing and publishes no events.
+   */
+  fastify.get(
+    "/api/v1/capabilities/skills/discover",
+    { config: { rateLimit: DISCOVER_RATE_LIMIT } },
+    async (request, reply) => {
+      const query = discoverQuerySchema.safeParse(request.query);
+      if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
+      try {
+        markNoStore(reply);
+        const { workspaceId, q, refresh } = query.data;
+        return reply.send(
+          await requireDiscover(fastify).list(workspaceId, { ...(q ? { query: q } : {}), refresh: refresh === "true" }),
+        );
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  /**
    * Asks for one install step of a checked skill (`install_inactive`, then `activate`). It always asks Skill Hub's
    * approval owner, which creates the step's usual approval; when the operator's setting to skip approvals applies
    * (never on `remote_hardened`), the step approves that approval at once as the operator, and the approval's own
@@ -296,6 +332,12 @@ async function readUsage(fastify: FastifyInstance, refresh: boolean, log: Fastif
 function requireSkills(fastify: FastifyInstance, unavailableMessage = UNAVAILABLE_LIST_MESSAGE) {
   const owner = fastify.services.capabilitySkills?.skills;
   if (!owner) throw new ServiceUnavailableError(unavailableMessage);
+  return owner;
+}
+
+function requireDiscover(fastify: FastifyInstance) {
+  const owner = fastify.services.capabilitySkills?.discover;
+  if (!owner) throw new ServiceUnavailableError(UNAVAILABLE_DISCOVER_MESSAGE);
   return owner;
 }
 

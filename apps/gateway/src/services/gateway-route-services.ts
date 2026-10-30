@@ -19,6 +19,7 @@ import {
 import { CapabilitiesRouteService, type CapabilitiesRoutePort } from "./capabilities-route-service.js";
 import type { CapabilityConnectorsService } from "./capability-connectors-service.js";
 import type { CapabilitySkillActionsService } from "./capability-skill-actions-service.js";
+import type { CapabilitySkillDiscoverService } from "./capability-skill-discover-service.js";
 import type { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { CapabilitySkillsService } from "./capability-skills-service.js";
 import type { CapabilityToolUsageService } from "./capability-tool-usage-service.js";
@@ -314,6 +315,7 @@ export interface GatewayRouteServices {
     usage: Pick<CapabilitySkillUsageService, "read">;
     skills: Pick<CapabilitySkillsService, "list" | "detail" | "installs">;
     actions: Pick<CapabilitySkillActionsService, "setState" | "checkSource" | "requestStep">;
+    discover: Pick<CapabilitySkillDiscoverService, "list">;
   };
   /** The Capabilities Tools tab's tool groups. Composed by the gateway service over the policy probe and the switches. */
   capabilityTools?: Pick<CapabilityToolsService, "list">;
