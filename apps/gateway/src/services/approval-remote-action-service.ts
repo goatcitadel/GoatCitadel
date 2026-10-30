@@ -10,6 +10,7 @@ import { createHash, randomBytes } from "node:crypto";
 import {
   clampInt,
   ConflictError,
+  hasSealedApprovalLinkage,
   type ApprovalEffectRecord,
   type ApprovalRequest,
   type ApprovalResolveInput,
@@ -277,6 +278,13 @@ function assertApprovalPending(approval: ApprovalRequest): void {
 
 async function assertApprovalIssuable(context: ApprovalRemoteActionContext, approval: ApprovalRequest): Promise<void> {
   assertApprovalPending(approval);
+  // Resolving through a token adds its connector and token ids to the approval's linkage, which a sealed binding (the
+  // Skill Hub's) refuses: the approval would stay approved with an operation that can never settle (Ruling R61).
+  if (hasSealedApprovalLinkage(approval.kind)) {
+    throw new ValidationError({
+      message: `Approval ${approval.approvalId} can only be decided in GoatCitadel and can't issue a remote action token.`,
+    });
+  }
   if (await context.storage.approvals.isExpiredPendingAtDatabaseNow(approval.approvalId)) {
     throw new ValidationError({
       message: `Approval ${approval.approvalId} has expired and can no longer issue a remote action token.`,
