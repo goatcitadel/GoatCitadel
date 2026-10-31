@@ -26,9 +26,20 @@ const NOT_RUN = "Not run";
 type Args = { goal?: unknown; source?: unknown; reads?: unknown };
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
+const REASON_MAX_CHARS = 140;
+
+/**
+ * The reason's first sentence in plain words: a leading machine code ("WRAPPER_EXECUTION_FAILED: ") is dropped, a dot
+ * inside a name such as docs.extract_text does not end the sentence, a chained cause after ": " is left to Details,
+ * and a long reason is cut short.
+ */
 function firstSentence(message: string): string {
-  const match = /^[^.!?\n]*[.!?]?/.exec(message.trim());
-  return match?.[0]?.trim() || NOT_RUN;
+  const plain = message.trim().replace(/^[A-Z][A-Z0-9_]+:\s*/, "");
+  const clause = /^[^\n]*?(?:[.!?](?=\s|$)|(?=:\s))/.exec(plain)?.[0] ?? plain.split("\n")[0] ?? "";
+  const trimmed = clause.trim();
+  const sentence = trimmed && !/[.!?]$/.test(trimmed) ? `${trimmed}.` : trimmed;
+  if (!sentence) return NOT_RUN;
+  return sentence.length > REASON_MAX_CHARS ? `${sentence.slice(0, REASON_MAX_CHARS - 1).trimEnd()}…` : sentence;
 }
 
 /** The newest code_mode.request run in the turn, or undefined. */

@@ -149,7 +149,7 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
       canRun: false,
       reason: "code_mode_off",
     });
-    api.fetchSettings.mockResolvedValue({ revision: 7 });
+    api.fetchSettings.mockResolvedValue({ revision: 7, features: {} });
     const order: string[] = [];
     api.patchSettings.mockImplementation(async () => {
       order.push("patch");
@@ -168,12 +168,12 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(container.textContent).toContain("Code Mode is off");
     await act(async () => button("Turn on Code Mode and run")!.click());
     await waitFor(() => expect(api.resolveApproval).toHaveBeenCalledWith("approval-1", "approve"));
-    expect(api.patchSettings).toHaveBeenCalledWith({
-      expectedRevision: 7,
-      features: { codeModeV1Enabled: true, codeModeHostSandboxEnabled: true },
-    });
+    expect(api.patchSettings.mock.calls).toEqual([
+      [{ expectedRevision: 7, features: { codeModeV1Enabled: true } }],
+      [{ expectedRevision: 7, features: { codeModeHostSandboxEnabled: true } }],
+    ]);
     expect(api.approvePlanInPlace).toHaveBeenCalledWith("plan-1", "default");
-    expect(order).toEqual(["patch", "plan", "approve"]);
+    expect(order).toEqual(["patch", "plan", "patch", "plan", "approve"]);
   });
 
   it("does not approve when turning Code Mode on fails, and shows the error", async () => {
@@ -184,7 +184,7 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
       canRun: false,
       reason: "sandbox_off",
     });
-    api.fetchSettings.mockResolvedValue({ revision: 7 });
+    api.fetchSettings.mockResolvedValue({ revision: 7, features: {} });
     api.patchSettings.mockRejectedValue(new Error("Settings changed elsewhere."));
     await render(turnWith({}));
     await waitForButton("Turn on Code Mode and run");
@@ -251,6 +251,22 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await render(turnWith({ status: "failed", error: "Code Mode is off. Turn it on from the card in Chat." }));
     expect(container.textContent).toContain("Code Mode is off.");
     expect(container.textContent).not.toContain("from the card");
+  });
+
+  it("drops a machine error code and keeps a dotted tool name whole", async () => {
+    await render(
+      turnWith({
+        status: "executed",
+        result: {
+          status: "failed",
+          error:
+            "WRAPPER_EXECUTION_FAILED: Wrapper docs.extract_text did not execute: execution error: Path is outside read allowlist: /tmp/a.pdf",
+        },
+      }),
+    );
+    expect(container.textContent).toContain("Wrapper docs.extract_text did not execute.");
+    expect(container.textContent).not.toContain("WRAPPER_EXECUTION_FAILED");
+    expect(container.textContent).not.toContain("allowlist");
   });
 
   const doneTurn = () =>
