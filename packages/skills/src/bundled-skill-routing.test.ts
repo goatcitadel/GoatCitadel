@@ -37,6 +37,9 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["Poke holes in my migration plan", ["grilling"]],
   ["Is this a shallow module? Should I merge these pass-through layers?", ["codebase-design"]],
   ["Design it twice before we pick the cache interface", ["codebase-design"]],
+  ["The reviewer said to swap this Map for a plain object, address the review", ["receiving-code-review"]],
+  ["Here are the PR comments from the bot, work through them", ["receiving-code-review"]],
+  ["Review my pull request", []],
 ];
 
 let service: SkillsService;

@@ -209,6 +209,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use to run or triage an existing suite."],
     confidenceBoost: 0.1,
   },
+  "receiving-code-review": {
+    phrases: ["address the review", "reviewer said"],
+    keywords: ["review feedback", "pr comments"],
+    surfaces: ["code"],
+    whenToUse: ["Evaluate review feedback before acting on it."],
+    whenNotToUse: ["Do not use to perform a review of someone else's code."],
+    confidenceBoost: 0.1,
+  },
   research: {
     phrases: ["research", "compare", "source analysis", "benchmark review"],
     keywords: ["research", "compare", "source", "benchmark"],

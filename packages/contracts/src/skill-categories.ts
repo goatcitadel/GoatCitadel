@@ -92,6 +92,7 @@ export const SHIPPED_SKILL_CATEGORIES: Readonly<Record<string, SkillCategoryId>>
   "bundled:debugging": "coding",
   "bundled:opencode": "coding",
   "bundled:qa": "coding",
+  "bundled:receiving-code-review": "coding",
   "bundled:tdd": "coding",
   "extra:github-cli": "coding",
   "bundled:documentation": "writing",
