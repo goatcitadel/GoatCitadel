@@ -1,10 +1,10 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { PLUGIN_MANIFEST_FILENAME } from "./plugins.js";
-import { runPluginPreflight } from "./plugin-preflight-cli.js";
+import { isPreflightEntryPoint, runPluginPreflight } from "./plugin-preflight-cli.js";
 
 const REFERENCE_PLUGIN_DIR = fileURLToPath(new URL("../templates/plugins/reference-plugin", import.meta.url));
 
@@ -95,5 +95,40 @@ describe("goatcitadel-plugin-preflight", () => {
     const { exitCode, out } = await preflight(["--help"]);
     expect(exitCode).toBe(0);
     expect(out.join("\n")).toContain("Usage: goatcitadel-plugin-preflight");
+  });
+});
+
+describe("isPreflightEntryPoint", () => {
+  const selfFile = fileURLToPath(new URL("./plugin-preflight-cli.ts", import.meta.url));
+  const selfUrl = pathToFileURL(selfFile).href;
+
+  it("is false when nothing started the process from a file", () => {
+    expect(isPreflightEntryPoint(undefined, selfUrl)).toBe(false);
+    expect(isPreflightEntryPoint("", selfUrl)).toBe(false);
+  });
+
+  it("is true for this file and false for another, comparing real paths", () => {
+    const realpath = (target: string) => (target === "/bin/preflight-link" ? selfFile : target);
+    expect(isPreflightEntryPoint("/bin/preflight-link", selfUrl, realpath)).toBe(true);
+    expect(isPreflightEntryPoint(selfFile, selfUrl, realpath)).toBe(true);
+    expect(isPreflightEntryPoint("/somewhere/else.js", selfUrl, realpath)).toBe(false);
+  });
+
+  it("runs the command when the entry can't be resolved, instead of doing nothing and exiting 0", () => {
+    const unresolvable = () => {
+      throw new Error("ENOENT");
+    };
+    expect(isPreflightEntryPoint("/no/such/file", selfUrl, unresolvable)).toBe(true);
+  });
+
+  it("runs the command when it is started by its own name without the file extension", () => {
+    // `node dist/plugin-preflight-cli` makes Node load the .js file but leaves the extensionless text in argv[1].
+    const extensionless = selfFile.replace(/\.ts$/u, "");
+    expect(fs.existsSync(extensionless)).toBe(false);
+    expect(isPreflightEntryPoint(extensionless, selfUrl)).toBe(true);
+  });
+
+  it("is false for a file that exists and is not this one", () => {
+    expect(isPreflightEntryPoint(fileURLToPath(new URL("./plugins.ts", import.meta.url)), selfUrl)).toBe(false);
   });
 });

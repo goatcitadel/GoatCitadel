@@ -193,9 +193,9 @@ export function parsePluginManifest(raw: string): PluginManifestParse {
     return refuse("MANIFEST_INVALID", "The manifest must be text.");
   }
   // Every UTF-16 unit takes at least one byte, so a longer string is too large without encoding it.
-  if (raw.length > PLUGIN_LIMITS.maxManifestBytes) return tooLarge();
+  if (raw.length > PLUGIN_LIMITS.maxManifestBytes) return pluginManifestTooLarge();
   const bytes = new TextEncoder().encode(raw);
-  if (bytes.byteLength > PLUGIN_LIMITS.maxManifestBytes) return tooLarge();
+  if (bytes.byteLength > PLUGIN_LIMITS.maxManifestBytes) return pluginManifestTooLarge();
 
   let document: unknown;
   try {
@@ -335,7 +335,11 @@ function refuse(code: PluginManifestRefusalCode, message: string, field?: string
   return field === undefined ? { ok: false, code, message } : { ok: false, code, message, field };
 }
 
-function tooLarge(): Refusal {
+/**
+ * The refusal for a manifest over `PLUGIN_LIMITS.maxManifestBytes`. Exported so a reader that measures the file
+ * itself, such as the SDK's folder loader, gives the same words as `parsePluginManifest`.
+ */
+export function pluginManifestTooLarge(): Refusal {
   return refuse(
     "MANIFEST_TOO_LARGE",
     `The manifest is over ${PLUGIN_LIMITS.maxManifestBytes / 1024} KiB, which is the most it can be.`,

@@ -6,6 +6,7 @@ import {
   PLUGIN_LIMITS,
   PLUGIN_MANIFEST_FILENAME,
   parsePluginManifest,
+  pluginManifestTooLarge,
   type PluginManifestRefusalCode,
 } from "./plugins.js";
 
@@ -540,6 +541,15 @@ describe("parsePluginManifest", () => {
   it("refuses a manifest over 64 KiB", () => {
     const padded = `${JSON.stringify(validManifest())}${" ".repeat(PLUGIN_LIMITS.maxManifestBytes)}`;
     expect(parsePluginManifest(padded)).toMatchObject({ ok: false, code: "MANIFEST_TOO_LARGE" });
+  });
+
+  it("gives one too-large refusal, whichever way the size is found", () => {
+    const refusal = pluginManifestTooLarge();
+    expect(refusal).toMatchObject({ ok: false, code: "MANIFEST_TOO_LARGE" });
+    expect(refusal.message).toContain("64 KiB");
+    // Too many characters, and too many bytes with few characters.
+    expect(parsePluginManifest(" ".repeat(PLUGIN_LIMITS.maxManifestBytes + 1))).toEqual(refusal);
+    expect(parsePluginManifest(`"${"é".repeat(33_000)}"`)).toEqual(refusal);
   });
 
   it("measures the manifest in bytes, not characters", () => {

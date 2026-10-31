@@ -477,7 +477,7 @@ Shared packages:
 - [packages/memory-core](./packages/memory-core): context and memory composition utilities
 - [packages/mesh-core](./packages/mesh-core): multi-node mesh runtime primitives (join tokens, mTLS/tailnet posture, leases, owner failover, replication)
 - [packages/skills](./packages/skills): skill loading and activation support
-- [packages/extensions-sdk](./packages/extensions-sdk): author SDK for the effective-tool snapshot helpers
+- [packages/extensions-sdk](./packages/extensions-sdk): author SDK for the effective-tool snapshot helpers and the plugin manifest validator
 - [packages/threaded-surface-core](./packages/threaded-surface-core): shared threaded-surface runtime components behind Chat
 - [packages/mission-control-shared](./packages/mission-control-shared): shared Mission Control API clients, hooks, and UI primitives
 
@@ -538,7 +538,7 @@ Safe public claims today:
 - Backup create/list/verify are shipped, and backup verify reports both archive integrity and `contractVerified` minimum-set truth.
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file.
 - Filesystem-backed restore is offline-only for `1.0`; the live admin restore route returns `offline_restore_required` instead of mutating an active runtime.
-- `@goatcitadel/extensions-sdk` is the author boundary for the effective-tool snapshot helpers. `1.0.0` is the last published version; the workspace's `2.0.0` keeps only those helpers and is not published yet.
+- `@goatcitadel/extensions-sdk` is the author boundary for the effective-tool snapshot helpers and the plugin manifest validator. `1.0.0` is the last published version; the workspace's `2.0.0` keeps the snapshot helpers and adds the plugin manifest validator (`parsePluginManifest` and `loadPluginManifest`) and the `goatcitadel-plugin-preflight` command, and is not published yet. GoatCitadel does not install plugins yet.
 - Docker adds a useful runtime boundary when paired with auth and policy configuration.
 - Multi-user RBAC is not shipped for `1.0`; gateway auth is deployment-level while permission profiles, tool grants, route access classes, Local Operator Override, and deny-wins policy govern actions inside the authenticated runtime.
 

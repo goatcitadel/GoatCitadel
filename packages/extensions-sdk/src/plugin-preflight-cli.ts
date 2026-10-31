@@ -41,18 +41,27 @@ export async function runPluginPreflight(
   return 1;
 }
 
-function isEntryPoint(): boolean {
-  const entry = process.argv[1];
+/**
+ * Whether this module was started as the command, as opposed to imported by something else.
+ *
+ * A package manager can start the command through a link, so real paths are compared. If the entry can't be resolved,
+ * this answers true: the likeliest cause is `node dist/plugin-preflight-cli` without the extension, which Node loads
+ * but leaves unresolvable in argv[1], and answering false there would exit 0 having checked nothing.
+ */
+export function isPreflightEntryPoint(
+  entry: string | undefined,
+  moduleUrl: string,
+  realpath: (target: string) => string = realpathSync,
+): boolean {
   if (!entry) return false;
   try {
-    // A package manager can start the command through a link, so compare real paths.
-    return realpathSync(entry) === realpathSync(fileURLToPath(import.meta.url));
+    return realpath(entry) === realpath(fileURLToPath(moduleUrl));
   } catch {
-    return false;
+    return true;
   }
 }
 
-if (isEntryPoint()) {
+if (isPreflightEntryPoint(process.argv[1], import.meta.url)) {
   try {
     process.exitCode = await runPluginPreflight(process.argv.slice(2), {
       out: (line) => process.stdout.write(`${line}\n`),

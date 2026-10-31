@@ -67,7 +67,6 @@ A reference plugin, with a manifest, one skill and one prompt pack, ships in the
 - the `goatcitadel-extension-preflight` command, which the plugin command above replaces
 - the reference scaffolds and templates that shipped inside the package
 
-
 ## Extension Families
 
 ### 1. Add-ons (removed)
@@ -128,7 +127,7 @@ These are still true after this document lands:
 ## Safe Claims Now
 
 - GoatCitadel publishes `@goatcitadel/extensions-sdk`; `1.0.0` is the last published version.
-- The workspace version, `2.0.0`, keeps only the effective-tool snapshot helpers and is not published yet.
+- The workspace version, `2.0.0`, keeps the effective-tool snapshot helpers and the plugin manifest validator, with `loadPluginManifest` and the `goatcitadel-plugin-preflight` command, and is not published yet.
 - Add-ons and integration plugins are removed. GoatCitadel has no plugin install, trust or marketplace surface today.
 - The SDK can check a plugin manifest. A manifest that passes the check has not been installed, approved or granted anything.
 - Skill bundles keep their review-only manifest contract.
@@ -136,5 +135,5 @@ These are still true after this document lands:
 ## Recommended Next Slice
 
 1. Let the Gateway inspect and install plugins, behind its own checks and approvals.
-2. Publish `@goatcitadel/extensions-sdk@2.0.0`, so the published line moves off the retired helpers.
+2. Publish `@goatcitadel/extensions-sdk@2.0.0`, so the published line moves off the retired helpers. Bump and publish `@goatcitadel/contracts` in step: the packed SDK depends on the published contracts version, and `@goatcitadel/contracts@1.0.0` has no plugin exports.
 3. Keep `@goatcitadel/extensions-sdk` versioned and prepublish-checked as the public author boundary.

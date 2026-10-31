@@ -5,6 +5,7 @@ import {
   PLUGIN_LIMITS,
   PLUGIN_MANIFEST_FILENAME,
   parsePluginManifest,
+  pluginManifestTooLarge,
   type PluginManifestParse,
 } from "@goatcitadel/contracts";
 
@@ -47,7 +48,7 @@ export async function loadPluginManifest(dir: string): Promise<PluginManifestPar
     return invalid(`${PLUGIN_MANIFEST_FILENAME} is a link. It has to be a file in the plugin folder.`);
   }
   if (!info.isFile()) return invalid(`${PLUGIN_MANIFEST_FILENAME} isn't a regular file.`);
-  if (info.size > PLUGIN_LIMITS.maxManifestBytes) return tooLarge();
+  if (info.size > PLUGIN_LIMITS.maxManifestBytes) return pluginManifestTooLarge();
 
   let bytes: Uint8Array;
   try {
@@ -55,7 +56,7 @@ export async function loadPluginManifest(dir: string): Promise<PluginManifestPar
   } catch (error) {
     return unreadable(error);
   }
-  if (bytes.byteLength > PLUGIN_LIMITS.maxManifestBytes) return tooLarge();
+  if (bytes.byteLength > PLUGIN_LIMITS.maxManifestBytes) return pluginManifestTooLarge();
 
   let text: string;
   try {
@@ -106,12 +107,4 @@ function unreadable(error: unknown): Refusal {
 
 function invalid(message: string): Refusal {
   return { ok: false, code: "MANIFEST_INVALID", message };
-}
-
-function tooLarge(): Refusal {
-  return {
-    ok: false,
-    code: "MANIFEST_TOO_LARGE",
-    message: `The manifest is over ${PLUGIN_LIMITS.maxManifestBytes / 1024} KiB, which is the most it can be.`,
-  };
 }

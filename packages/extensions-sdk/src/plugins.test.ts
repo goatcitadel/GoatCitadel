@@ -1,10 +1,19 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
+import { lstat, open } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { pluginManifestTooLarge } from "@goatcitadel/contracts";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_LIMITS, PLUGIN_MANIFEST_FILENAME, loadPluginManifest, parsePluginManifest } from "./plugins.js";
+
+// Every call passes through to the real module. One test replaces one call, once, to play out a file that grows
+// between the size check and the read.
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:fs/promises")>();
+  return { ...actual, lstat: vi.fn(actual.lstat), open: vi.fn(actual.open) };
+});
 
 const REFERENCE_PLUGIN_DIR = fileURLToPath(new URL("../templates/plugins/reference-plugin", import.meta.url));
 
@@ -98,6 +107,57 @@ describe("loadPluginManifest", () => {
   it("answers MANIFEST_TOO_LARGE for a manifest over 64 KiB, however large the file is", async () => {
     writeManifest(Buffer.alloc(3 * 1024 * 1024, 0x20));
     expect(await loadPluginManifest(workDir)).toMatchObject({ ok: false, code: "MANIFEST_TOO_LARGE" });
+  });
+
+  it("gives the same too-large refusal as parsePluginManifest", async () => {
+    writeManifest(Buffer.alloc(PLUGIN_LIMITS.maxManifestBytes + 1, 0x20));
+    const result = await loadPluginManifest(workDir);
+    expect(result).toEqual(pluginManifestTooLarge());
+    expect(parsePluginManifest(" ".repeat(PLUGIN_LIMITS.maxManifestBytes + 1))).toEqual(result);
+  });
+
+  describe("when the file grows after its size was checked", () => {
+    /** 64 KiB of spaces and then a two-byte character, so a cut at the cap lands inside the character. */
+    function writeGrowingManifest(): string {
+      return writeManifest(
+        Buffer.concat([Buffer.alloc(PLUGIN_LIMITS.maxManifestBytes, 0x20), Buffer.from("é", "utf8")]),
+      );
+    }
+
+    /** Make the next `lstat` report a 10-byte file, as it would if the file were small when measured. */
+    async function reportSmallSizeOnce(file: string): Promise<void> {
+      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      const real = await actualFs.lstat(file);
+      vi.mocked(lstat).mockResolvedValueOnce(Object.assign(Object.create(real) as typeof real, { size: 10 }));
+    }
+
+    /** Count the bytes the next opened file hands back. */
+    async function countBytesReadOnce(): Promise<() => number> {
+      const actualFs = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
+      let total = 0;
+      vi.mocked(open).mockImplementationOnce((async (...args: Parameters<typeof actualFs.open>) => {
+        const handle = await actualFs.open(...args);
+        const read = handle.read.bind(handle) as unknown as (...a: unknown[]) => Promise<{ bytesRead: number }>;
+        handle.read = (async (...a: unknown[]) => {
+          const result = await read(...a);
+          total += result.bytesRead;
+          return result;
+        }) as typeof handle.read;
+        return handle;
+      }) as typeof open);
+      return () => total;
+    }
+
+    it("reads no more than 64 KiB plus one byte and answers MANIFEST_TOO_LARGE", async () => {
+      const file = writeGrowingManifest();
+      await reportSmallSizeOnce(file);
+      const bytesRead = await countBytesReadOnce();
+      const result = await loadPluginManifest(workDir);
+      expect(bytesRead()).toBe(PLUGIN_LIMITS.maxManifestBytes + 1);
+      // The cut falls inside the two-byte character. Only the byte count after the read can say "too large" here;
+      // decoding the cut text would say "not UTF-8".
+      expect(result).toEqual(pluginManifestTooLarge());
+    });
   });
 
   it("answers MANIFEST_TOO_LARGE at one byte over the limit, and reads a file of exactly the limit", async () => {

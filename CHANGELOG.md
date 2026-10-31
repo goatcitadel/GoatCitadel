@@ -18,6 +18,7 @@ All notable changes to GoatCitadel are documented in this file.
 - A public web address setting (Settings › Channels › **Public web address**, `publicWebAddress`). It must be a public `https://` address, is saved through a Settings change you approve in place, and is what the WhatsApp page and every channel's webhook address block build their full address from.
 - WhatsApp's access token can be changed from the channel's page in Chat (**Change the key**) for a connection that keeps its Phone number ID, Business Account ID, App ID and App secret.
 - WhatsApp's 24-hour reply window: in a WhatsApp conversation under Messaging, the Chat composer is off, with a reason, and GoatCitadel refuses (409) an operator reply sent 24 hours or more after the person's last message. A local or mission chat bound to WhatsApp is not checked, and neither are answers the agent writes.
+- `@goatcitadel/extensions-sdk` 2.0.0, in the workspace and not published yet, checks plugin manifests (`goatcitadel-plugin.json`) with `parsePluginManifest` and `loadPluginManifest`, and ships the `goatcitadel-plugin-preflight` command and a reference plugin. GoatCitadel does not install plugins yet.
 
 ### Changed
 
@@ -29,7 +30,6 @@ All notable changes to GoatCitadel are documented in this file.
 - A saved connection whose variable name breaks the channel's rule stops sending until you rename it. The setup check says how.
 - The guides' content version changed, so a setup test run before this update runs again.
 - The Citadel and workspace "Plugins" selection is now named "Integrations".
-- `@goatcitadel/extensions-sdk` 2.0.0, in the workspace and not published yet, checks plugin manifests (`goatcitadel-plugin.json`) with `parsePluginManifest` and `loadPluginManifest`, and ships the `goatcitadel-plugin-preflight` command and a reference plugin. GoatCitadel does not install plugins yet.
 - Google Chat and Microsoft Teams connections keep working. They were tagged with a plugin id that nothing reads any more, and the Classic review no longer shows a "Plugin" row.
 
 ### Removed
