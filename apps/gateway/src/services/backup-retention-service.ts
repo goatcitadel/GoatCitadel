@@ -18,7 +18,8 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildBundledDockerContainerName } from "../bundled-postgres-runtime.js";
 import { isWindowsEquivalentBackupPath, verifyBackupAtPath } from "./gateway/backup-verify.js";
 import type { GatewayRuntimeConfig } from "../config.js";
-import { resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
+import { discoverNativePostgresTool } from "../native-postgres-discovery.js";
+import { AUTO_NATIVE_BIN_DIR, resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
 import { resolveBackupDirectory, resolveBackupPathWithinDirectory } from "./backup-paths.js";
 
 const RETENTION_SETTINGS_KEY = "retention_policy";
@@ -861,8 +862,10 @@ function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
     return explicitPath;
   }
 
+  // "auto" is the native-discovery sentinel, not a directory; resolving it as
+  // one looks for <root>/auto/pg_dump and misses the discovered install.
   const configuredBinDir = config.assistant.database.bundledPostgres.binDir?.trim();
-  if (configuredBinDir) {
+  if (configuredBinDir && configuredBinDir !== AUTO_NATIVE_BIN_DIR) {
     const baseDir = path.isAbsolute(configuredBinDir)
       ? configuredBinDir
       : path.resolve(config.rootDir, configuredBinDir);
@@ -877,8 +880,15 @@ function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
     return resolvedOnPath;
   }
 
+  // The same standard install locations the native bundled runtime
+  // auto-discovers (e.g. Program Files\PostgreSQL\16\bin), often not on PATH.
+  const discovered = discoverNativePostgresTool("pg_dump");
+  if (discovered) {
+    return discovered;
+  }
+
   throw new Error(
-    "Postgres backup requested but pg_dump is unavailable. Set GOATCITADEL_PG_DUMP_PATH or assistant.database.bundledPostgres.binDir.",
+    "Postgres backup requested but pg_dump is unavailable: it is not on PATH or in a standard PostgreSQL install location. Set GOATCITADEL_PG_DUMP_PATH or assistant.database.bundledPostgres.binDir.",
   );
 }
 

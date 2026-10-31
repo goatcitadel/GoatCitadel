@@ -84,6 +84,37 @@ export function highestVersionedNativePostgresCommands(
   return candidates[0]?.commands;
 }
 
+/**
+ * Locate a single client tool (e.g. pg_dump) in the standard per-platform
+ * install roots, preferring the highest major version. Unlike the server-tool
+ * lookup this accepts client-only installs, since backups only need the client.
+ */
+export function discoverNativePostgresTool(
+  tool: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const fileName = platform === "win32" ? `${tool}.exe` : tool;
+  const candidates: Array<{ major: number; command: string }> = [];
+  for (const root of nativePostgresInstallRoots(platform, env)) {
+    let entries: string[];
+    try {
+      entries = fsSync.readdirSync(root);
+    } catch {
+      // Root absent or unreadable — normal on most machines.
+      continue;
+    }
+    for (const entry of entries) {
+      const command = path.join(root, entry, "bin", fileName);
+      if (fsSync.existsSync(command)) {
+        candidates.push({ major: parseNativePostgresMajor(entry), command });
+      }
+    }
+  }
+  candidates.sort((left, right) => right.major - left.major);
+  return candidates[0]?.command;
+}
+
 export function nativePostgresCommandsFromPathEnv(
   platform: NodeJS.Platform,
   env: NodeJS.ProcessEnv,
