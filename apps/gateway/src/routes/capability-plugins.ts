@@ -2,12 +2,14 @@ import type { FastifyBaseLogger, FastifyInstance, FastifyPluginAsync, FastifyRep
 import { z } from "zod";
 import {
   CAPABILITY_PLUGIN_REFUSED_CODE,
-  ConflictError,
-  NotFoundError,
+  PLUGIN_LIMITS,
+  PLUGIN_PIECE_ID_PATTERN,
   ServiceUnavailableError,
+  isGoatError,
   pluginManifestSchema,
   redactStructuredSecrets,
   type CapabilityPluginRefusal,
+  type PluginActionOutcome,
 } from "@goatcitadel/contracts";
 import { CapabilityPluginManifestRefusedError } from "../services/capability-plugin-inspection-service.js";
 import { PluginSourceError } from "../services/plugin-source-service.js";
@@ -34,6 +36,18 @@ const sourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("folder"), path: z.string().min(1).max(4_096) }).strict(),
 ]);
 const inspectionBodySchema = z.object({ workspaceId: workspaceIdSchema, source: sourceSchema }).strict();
+// A kept check and one signing secret per hook piece, by piece id; the service checks which pieces are hooks and each
+// secret's exact shape. Only values come in here: the key store's references are minted by the service.
+const installBodySchema = z
+  .object({
+    workspaceId: workspaceIdSchema,
+    inspectionId: z.uuid(),
+    hookSecrets: z
+      .record(z.string().regex(PLUGIN_PIECE_ID_PATTERN), z.string().max(1_024))
+      .refine((secrets) => Object.keys(secrets).length <= PLUGIN_LIMITS.maxPieces, "too many secrets")
+      .optional(),
+  })
+  .strict();
 // A key names one attempt, so the same key from the same operator gets the same answer: up to 256 plain characters, the
 // bound the Gateway's own attempt read takes.
 const idempotencyKeySchema = z
@@ -51,6 +65,14 @@ const INSPECTION_RATE_LIMIT = { max: 10, timeWindow: "1 minute" } as const;
 const READ_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
 // The body is a workspace and a source; the bound matches the other operator saves.
 const BODY_LIMIT = 20 * 1_024;
+// An install makes one Change Plan, as the connector install does.
+const INSTALL_RATE_LIMIT = { max: 10, timeWindow: "1 minute" } as const;
+// A workspace, a check and up to 32 secrets of up to 1,024 characters each.
+const INSTALL_BODY_LIMIT = 64 * 1_024;
+// The plain refusals an owner writes for the operator, answered with their own status: anything else is a fault.
+const ANSWERED_STATUSES: ReadonlySet<number> = new Set([403, 404, 409, 422]);
+// The 503s an install answers in its own plain words: Change Plans are off, or the key store can't be used.
+const ANSWERED_UNAVAILABLE_REASONS: ReadonlySet<unknown> = new Set(["change_plans_off", "key_store_unavailable"]);
 
 /**
  * Capabilities › Plugins: the installed and built-in plugins, inspecting a plugin source, and reading an inspection
@@ -63,6 +85,10 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
     config: { rateLimit: INSPECTION_RATE_LIMIT },
   });
   const operatorRead = withRouteAccess(fastify, "operator", { config: { rateLimit: READ_RATE_LIMIT } });
+  const operatorInstall = withRouteAccess(fastify, "operator", {
+    bodyLimit: INSTALL_BODY_LIMIT,
+    config: { rateLimit: INSTALL_RATE_LIMIT },
+  });
 
   /**
    * The installed plugins, install-wide, and the ones that ship with GoatCitadel and aren't installed. A plugin reads
@@ -119,6 +145,40 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
     }
   });
 
+  /**
+   * Installs a kept inspection's pieces through one Change Plan, confirmed by this request as the operator's own
+   * action: 202 with `PluginActionOutcome`, `applied` when the operator's approval skip applies, `waiting` with the
+   * Inbox approval's id otherwise, `failed` when the plan stopped (its summary says what was added). Each hook needs a
+   * signing secret, kept in the key store; the plan holds only its reference. Every refusal comes before any secret or
+   * plan, with its own status and plain words: 404 for a check that ran out of time or a workspace that isn't there,
+   * 409 for a plugin already installed, a check that changed, or an id a shipped plugin uses, and 400 for the secrets.
+   * The `Idempotency-Key` names the attempt: sent again, it gets the first plan's answer and no secret is stored again.
+   */
+  fastify.post("/api/v1/capabilities/plugins/install", operatorInstall, async (request, reply) => {
+    const body = installBodySchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
+    const key = idempotencyKeySchema.safeParse(request.headers["idempotency-key"]);
+    if (!key.success) return reply.code(400).send({ error: KEY_MESSAGE });
+    try {
+      markNoStore(reply);
+      const outcome: PluginActionOutcome = await requirePlugins(fastify).install({
+        workspaceId: body.data.workspaceId,
+        inspectionId: body.data.inspectionId,
+        ...(body.data.hookSecrets ? { hookSecrets: body.data.hookSecrets } : {}),
+        actorId: actorIdFor(request),
+        idempotencyKey: key.data,
+        requestId: request.id,
+        // The Gateway's attempt record says this key was answered: only the first plan's answer may be sent again.
+        replayOnly: request.mutationIdempotencyOutcome === "committed",
+      });
+      return reply.code(202).send(outcome);
+    } catch (error) {
+      // The input refusals are the service's own plain words, so they answer 400 here.
+      if (isGoatError(error) && error.httpStatus === 400) return sendRouteError(reply, error, request.log);
+      return sendPluginError(reply, error, request.log);
+    }
+  });
+
   /** One kept inspection, refused ones included. 404 for one that isn't kept or ran out of time (24 hours). */
   fastify.get("/api/v1/capabilities/plugins/inspections/:inspectionId", operatorRead, async (request, reply) => {
     const params = inspectionParamsSchema.safeParse(request.params);
@@ -152,8 +212,10 @@ function idempotencyScopeFor(request: { authActorId?: string }): string {
 }
 
 /**
- * A refused source or manifest in plain words with its code, a 409 or 404 written by the plugin owners, and anything
- * else as a plain 503. A fault's own message can carry a temp path or another owner's words, so it stays in the log.
+ * A refused source or manifest in plain words with its code; a 403, 404, 409 or 422 written by an owner (a plugin's
+ * own piece, an id a shipped plugin uses, a check that changed) with its own status and words; "Change Plans are off"
+ * and "the key store can't be used" as they say; and anything else as a plain 503. A fault's own message can carry a
+ * temp path or another owner's words, so it stays in the log.
  */
 function sendPluginError(reply: FastifyReply, error: unknown, log: FastifyBaseLogger) {
   if (error instanceof PluginSourceError) {
@@ -170,7 +232,10 @@ function sendPluginError(reply: FastifyReply, error: unknown, log: FastifyBaseLo
       }),
     );
   }
-  if (error instanceof ConflictError || error instanceof NotFoundError) return sendRouteError(reply, error, log);
+  if (isGoatError(error) && ANSWERED_STATUSES.has(error.httpStatus)) return sendRouteError(reply, error, log);
+  if (error instanceof ServiceUnavailableError && ANSWERED_UNAVAILABLE_REASONS.has(error.details?.reason)) {
+    return sendRouteError(reply, error, log);
+  }
   log.error({ err: diagnosticOf(error) }, "plugins could not be read");
   return sendRouteError(reply, new ServiceUnavailableError(UNAVAILABLE_MESSAGE), log);
 }

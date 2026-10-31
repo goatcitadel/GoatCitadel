@@ -6,11 +6,17 @@ import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest }
 import rateLimit from "@fastify/rate-limit";
 import {
   ConflictError,
+  NotFoundError,
   PLUGIN_LIMITS,
+  PolicyViolationError,
+  SemanticValidationError,
+  ServiceUnavailableError,
   ValidationError,
   type CapabilityPluginInspection,
   type CapabilityPluginListResponse,
 } from "@goatcitadel/contracts";
+import { PluginIdReservedError } from "../services/capability-plugin-actions-service.js";
+import { PluginOwnedError } from "../services/plugin-owned-refusal.js";
 import { createDatabase, MutationIdempotencyRepository } from "@goatcitadel/storage";
 import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
 import {
@@ -79,6 +85,8 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
     listSkillHubChecks: vi.fn(async () => []),
     inspect: vi.fn(async () => INSPECTION),
     readInspection: vi.fn(async () => INSPECTION),
+    install: vi.fn(async () => ({ planId: "plan-install-1", outcome: "applied" as const, summary: "Installed it." })),
+    loadToolGroupHolds: vi.fn(async () => undefined),
     reportFailure: vi.fn(),
     ...overrides,
   };
@@ -713,5 +721,192 @@ describe("capability plugin routes", () => {
 
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ error: "Plugins can't be read right now.", code: "EXTERNAL_SERVICE_FAILED" });
+  });
+
+  describe("POST /api/v1/capabilities/plugins/install", () => {
+    const INSTALL_URL = "/api/v1/capabilities/plugins/install";
+    const databases: Array<ReturnType<typeof createDatabase>> = [];
+    afterEach(() => {
+      for (const database of databases.splice(0)) database.close();
+    });
+    const INSTALL_BODY = {
+      workspaceId: "default",
+      inspectionId: INSPECTION_ID,
+      hookSecrets: { "tool-watch": "s3cret" },
+    };
+
+    it("installs from the inspection as the operator, and answers 202 with the outcome", async () => {
+      const outcome = {
+        planId: "plan-1",
+        outcome: "waiting" as const,
+        approvalId: "approval-1",
+        summary: "Install it.",
+      };
+      const { service, sources } = routeService({ install: vi.fn(async () => outcome) });
+      const { server, requireOperatorAuth } = await build(service);
+
+      const response = await server.inject({
+        method: "POST",
+        url: INSTALL_URL,
+        payload: INSTALL_BODY,
+        headers: { "idempotency-key": "install-7f0c" },
+      });
+
+      expect(response.statusCode, response.body).toBe(202);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.json()).toEqual(outcome);
+      expect(requireOperatorAuth).toHaveBeenCalled();
+      expect(sources.install).toHaveBeenCalledExactlyOnceWith({
+        workspaceId: "default",
+        inspectionId: INSPECTION_ID,
+        hookSecrets: { "tool-watch": "s3cret" },
+        actorId: "operator-1",
+        idempotencyKey: "install-7f0c",
+        requestId: expect.any(String),
+        replayOnly: false,
+      });
+    });
+
+    it("refuses a caller without operator sign-in", async () => {
+      const { service, sources } = routeService();
+      const { server } = await build(service, { operator: false });
+
+      const response = await server.inject({
+        method: "POST",
+        url: INSTALL_URL,
+        payload: INSTALL_BODY,
+        headers: { "idempotency-key": "install-7f0c" },
+      });
+
+      expect(response.statusCode).toBe(403);
+      expect(sources.install).not.toHaveBeenCalled();
+    });
+
+    it("rejects a body that isn't exactly a workspace, a check and hook secrets", async () => {
+      const { service, sources } = routeService();
+      const { server } = await build(service);
+      const key = { "idempotency-key": "install-7f0c" };
+
+      for (const [payload, headers] of [
+        [{ ...INSTALL_BODY, installNow: true }, key],
+        [{ ...INSTALL_BODY, inspectionId: "not-a-check" }, key],
+        [{ ...INSTALL_BODY, workspaceId: " default" }, key],
+        [{ ...INSTALL_BODY, hookSecrets: { Tool_Watch: "s3cret" } }, key],
+        [{ ...INSTALL_BODY, hookSecrets: { "tool-watch": 7 } }, key],
+        [{ ...INSTALL_BODY, hookSecretRefs: { "tool-watch": "keychain:goatcitadel:hook:x" } }, key],
+        [{ inspectionId: INSPECTION_ID }, key],
+        [INSTALL_BODY, { "idempotency-key": "has spaces" }],
+        [INSTALL_BODY, {}],
+      ] as const) {
+        const response = await server.inject({ method: "POST", url: INSTALL_URL, payload, headers });
+        expect(response.statusCode, `${JSON.stringify(payload)} ${response.body}`).toBe(400);
+        // A refused body never echoes a secret back.
+        expect(response.body).not.toContain("s3cret");
+      }
+      expect(sources.install).not.toHaveBeenCalled();
+    });
+
+    it("answers an owner's refusal with its own status and plain words, and anything else as a plain 503", async () => {
+      const refusals: Array<[unknown, number]> = [
+        [new PolicyViolationError({ message: "Plugins are installed from Capabilities." }), 403],
+        [new NotFoundError("That plugin check wasn't found, or it ran out of time. Check the plugin again."), 404],
+        [new ConflictError({ code: "ALREADY_EXISTS", message: "Meeting tools is already installed." }), 409],
+        [new SemanticValidationError("Every hook needs one signing secret."), 422],
+        [new ValidationError({ field: "hookSecrets", message: "Every hook needs its own signing secret." }), 400],
+        [new PluginOwnedError({ pluginId: "meeting-tools", name: "Meeting tools" }), 409],
+        [new PluginIdReservedError(), 409],
+      ];
+      for (const [error, status] of refusals) {
+        const { service } = routeService({
+          install: vi.fn(async () => {
+            throw error;
+          }),
+        });
+        const { server } = await build(service);
+        const response = await server.inject({
+          method: "POST",
+          url: INSTALL_URL,
+          payload: INSTALL_BODY,
+          headers: { "idempotency-key": "install-7f0c" },
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(response.json().error).toBe((error as Error).message);
+        await app?.close();
+        app = null;
+      }
+
+      const { service } = routeService({
+        install: vi.fn(async () => {
+          throw new Error("EPERM: C:\\goat\\data\\plugins\\snapshots\\aaaa");
+        }),
+      });
+      const { server } = await build(service);
+      const fault = await server.inject({
+        method: "POST",
+        url: INSTALL_URL,
+        payload: INSTALL_BODY,
+        headers: { "idempotency-key": "install-7f0c" },
+      });
+      expect(fault.statusCode).toBe(503);
+      expect(fault.json()).toEqual({ error: "Plugins can't be read right now.", code: "EXTERNAL_SERVICE_FAILED" });
+    });
+
+    it.each([
+      ["change_plans_off", "Installing plugins needs Change Plans, which are off on this install."],
+      [
+        "key_store_unavailable",
+        "This computer's key store can't be used right now, so a hook's signing secret can't be kept. Nothing was installed.",
+      ],
+    ])("says %s in plain words", async (reason, message) => {
+      const { service } = routeService({
+        install: vi.fn(async () => {
+          throw new ServiceUnavailableError(message, { reason });
+        }),
+      });
+      const { server } = await build(service);
+
+      const response = await server.inject({
+        method: "POST",
+        url: INSTALL_URL,
+        payload: INSTALL_BODY,
+        headers: { "idempotency-key": "install-7f0c" },
+      });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ error: message, details: { reason } });
+    });
+
+    it("hands a retry of an answered key to the service as a replay, so it answers from the first plan", async () => {
+      const install = vi.fn(async () => ({ planId: "plan-1", outcome: "applied" as const, summary: "Installed it." }));
+      const { service } = routeService({ install });
+      const database = createDatabase({ dbPath: ":memory:" });
+      databases.push(database);
+      const attempts = new MutationIdempotencyRepository(database);
+      const { server } = await build(service, {
+        mutationStore: {
+          claim: async (input) => attempts.claim(input),
+          markCompleted: async (input) => attempts.markCompleted(input),
+          markFailed: async (input) => attempts.markFailed(input),
+        },
+      });
+      const post = (hookSecrets: Record<string, string>) =>
+        server.inject({
+          method: "POST",
+          url: INSTALL_URL,
+          payload: { ...INSTALL_BODY, hookSecrets },
+          headers: { "idempotency-key": "install-retried" },
+        });
+
+      const first = await post({ "tool-watch": "s3cret" });
+      // A retry can't be told from the first by its secret: the attempt record never holds one.
+      const retried = await post({ "tool-watch": "another" });
+
+      expect([first.statusCode, retried.statusCode], retried.body).toEqual([202, 202]);
+      expect(install.mock.calls.map(([input]) => (input as { replayOnly: boolean }).replayOnly)).toEqual([false, true]);
+      const stored = JSON.stringify(database.prepare("SELECT * FROM mutation_idempotency").all());
+      expect(stored).toContain("install-retried");
+      expect(stored).not.toContain("s3cret");
+      expect(stored).not.toContain("another");
+    });
   });
 });

@@ -800,25 +800,30 @@ describe("EvolutionControlPlaneService", () => {
       expect(allowsOperatorApprovalSkip).not.toHaveBeenCalled();
     });
 
-    // R95: the only Capabilities action the skip covers is a connector install (the real install is proven end to end
-    // in connector-install-change-plan-adapter.test.ts and gateway-service.operator-approval-skip.test.ts).
-    it("skips approval for a Capabilities connector install, and for no other Capabilities plan", async () => {
+    // R95: the Capabilities actions the skip covers are a connector install and a plugin install or uninstall (the real
+    // installs are proven end to end in connector-install-change-plan-adapter.test.ts,
+    // plugin-install-change-plan-adapter.test.ts and gateway-service.operator-approval-skip.test.ts).
+    it("skips approval for a Capabilities connector or plugin install, and for no other Capabilities plan", async () => {
       const deps = { allowsOperatorApprovalSkip: vi.fn(async () => true) };
       const planOf = (kind: ChangePlanRecord["kind"], surface: ChangePlanRecord["origin"]["surface"]) =>
         ({ planId: "plan-1", kind, risk: "danger", origin: { surface, workspaceId: "default" } }) as ChangePlanRecord;
 
-      expect(await operatorApprovalSkipEventFor(planOf("connector_install", "capabilities"), SAVE, deps)).toEqual({
-        eventType: "operator_approval_skipped",
-        eventPayload: { risk: "danger", reason: "settings_approval_skip_enabled" },
-      });
+      for (const kind of ["connector_install", "plugin_install", "plugin_uninstall"] as const) {
+        expect(await operatorApprovalSkipEventFor(planOf(kind, "capabilities"), SAVE, deps), kind).toEqual({
+          eventType: "operator_approval_skipped",
+          eventPayload: { risk: "danger", reason: "settings_approval_skip_enabled" },
+        });
+      }
       expect(await operatorApprovalSkipEventFor(planOf("runtime_configuration", "capabilities"), SAVE, deps)).toBe(
         undefined,
       );
+      // A plugin plan from anywhere but Capabilities never asks for the skip.
+      expect(await operatorApprovalSkipEventFor(planOf("plugin_install", "chat"), SAVE, deps)).toBe(undefined);
       // Settings keeps every kind it saves today.
       expect(await operatorApprovalSkipEventFor(planOf("runtime_configuration", "settings"), SAVE, deps)).toEqual(
         expect.objectContaining({ eventType: "operator_approval_skipped" }),
       );
-      expect(deps.allowsOperatorApprovalSkip).toHaveBeenCalledTimes(2);
+      expect(deps.allowsOperatorApprovalSkip).toHaveBeenCalledTimes(4);
     });
 
     it("keeps the Inbox approval for a Capabilities plan that isn't a connector install", async () => {

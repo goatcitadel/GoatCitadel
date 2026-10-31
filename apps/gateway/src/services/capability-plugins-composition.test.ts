@@ -97,17 +97,21 @@ describe("feedPluginToolGroupHolds", () => {
     };
   }
 
-  /** The feed over a real store, wired as the composition wires it. */
-  function feed(store: CapabilityPluginStore) {
+  /** The feed over a real store, wired as the composition wires it, with the waits between first reads skipped. */
+  function feed(store: CapabilityPluginStore, readPlugins: () => Promise<StoredPlugin[]> = () => store.list()) {
     const setHolds = vi.fn();
     const report = vi.fn();
-    const fed = feedPluginToolGroupHolds({
-      readPlugins: () => store.list(),
+    const reportFirstReadFailure = vi.fn();
+    const wait = vi.fn(async (_ms: number) => undefined);
+    const holds = feedPluginToolGroupHolds({
+      readPlugins,
       onStoreChange: (listener) => store.onChange(listener),
       setHolds,
       report,
+      reportFirstReadFailure,
+      wait,
     });
-    return { fed, setHolds, report };
+    return { holds, fed: holds.load(), setHolds, report, reportFirstReadFailure, wait };
   }
 
   it("loads the holds at startup and reads them again after every write to the store", async () => {
@@ -132,26 +136,76 @@ describe("feedPluginToolGroupHolds", () => {
     await store.update("meeting-tools", () => undefined);
     await vi.waitFor(() => expect(policy.setHolds).toHaveBeenLastCalledWith([]));
     expect(policy.report).not.toHaveBeenCalled();
+    // The first read happens once, however often startup asks for it.
+    await policy.holds.load();
+    expect(policy.wait).not.toHaveBeenCalled();
   });
 
   it("keeps the last holds it read, and reports the failure, when the store can't be read", async () => {
-    const rows = settingRows();
-    const store = new CapabilityPluginStore(rows);
+    const store = new CapabilityPluginStore(settingRows());
     await store.update("meeting-tools", () => holding(["git"]));
-    const policy = feed(store);
+    let readable = true;
+    const policy = feed(store, async () => {
+      if (!readable) throw new Error("The saved plugin records can't be read.");
+      return await store.list();
+    });
     await policy.fed;
     expect(policy.setHolds).toHaveBeenCalledTimes(1);
 
-    // Another reader of the same unreadable row: its first read fails, and nothing is lifted.
-    rows.record = { key: rows.record!.key, value: { version: 2 }, updatedAt: "unreadable" };
-    const later = feed(store);
-    await later.fed;
+    readable = false;
+    await store.update("meeting-tools", () => holding([]));
+    await vi.waitFor(() =>
+      expect(policy.report).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "The saved plugin records can't be read." }),
+      ),
+    );
+    // Nothing is lifted because a read failed.
+    expect(policy.setHolds).toHaveBeenCalledTimes(1);
+    expect(policy.reportFirstReadFailure).not.toHaveBeenCalled();
+  });
 
-    expect(later.setHolds).not.toHaveBeenCalled();
-    expect(later.report).toHaveBeenCalledWith(
+  it("reads again when the first read fails, so the holds are set before startup goes on", async () => {
+    const store = new CapabilityPluginStore(settingRows());
+    await store.update("meeting-tools", () => holding(["git"]));
+    let calls = 0;
+    const policy = feed(store, async () => {
+      calls += 1;
+      if (calls < 3) throw new Error("The database isn't ready yet.");
+      return await store.list();
+    });
+
+    await policy.fed;
+
+    expect(calls).toBe(3);
+    expect(policy.wait.mock.calls.map(([ms]) => ms)).toEqual([250, 1000]);
+    expect(policy.setHolds).toHaveBeenCalledExactlyOnceWith([
+      { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" },
+    ]);
+    expect(policy.reportFirstReadFailure).not.toHaveBeenCalled();
+  });
+
+  it("reports a first read that keeps failing, and sets the holds once a later write can be read", async () => {
+    const store = new CapabilityPluginStore(settingRows());
+    let readable = false;
+    const policy = feed(store, async () => {
+      if (!readable) throw new Error("The saved plugin records can't be read.");
+      return await store.list();
+    });
+
+    await policy.fed;
+
+    expect(policy.reportFirstReadFailure).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ message: "The saved plugin records can't be read." }),
     );
-    expect(policy.setHolds).toHaveBeenCalledTimes(1);
+    expect(policy.setHolds).not.toHaveBeenCalled();
+
+    readable = true;
+    await store.update("meeting-tools", () => holding(["browser"]));
+    await vi.waitFor(() =>
+      expect(policy.setHolds).toHaveBeenCalledWith([
+        { groupId: "browser", pluginId: "meeting-tools", pluginName: "Meeting tools" },
+      ]),
+    );
   });
 });
 

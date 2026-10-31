@@ -49,9 +49,11 @@ import {
   getSettings,
   updateAuthSettings,
   updateSettings,
+  type PluginInstallSettingsUpdate,
   type SettingsAuthRuntimeDependencies,
   type SettingsRuntimeDependencies,
 } from "./settings-auth-service.js";
+import { updateSettingsSchema } from "../routes/dashboard.js";
 import {
   acquireGatewayLivePostgresTestLease,
   type GatewayLivePostgresTestLease,
@@ -772,6 +774,22 @@ describe("settings-auth-service durable settings", () => {
     expect(host.persistAssistantConfig).not.toHaveBeenCalled();
     expect(host.persistToolPolicyConfig).not.toHaveBeenCalled();
     expect(host.persistBudgetsConfig).not.toHaveBeenCalled();
+  });
+
+  it("writes the hooks allowlist only from a plugin install's own update, and leaves the tool list alone", async () => {
+    const host = buildHost();
+    host.config.toolPolicy.sandbox.networkAllowlist = ["api.openai.com"];
+    const update: PluginInstallSettingsUpdate = { hookNetworkAllowlist: [" alerts.example.org ", "", "1.1.1.1"] };
+
+    await updateSettings(host, update);
+
+    expect(host.config.toolPolicy.hooks).toEqual({ networkAllowlist: ["alerts.example.org", "1.1.1.1"] });
+    // The tools' own list is a separate trust decision, never widened by a hook's host.
+    expect(host.config.toolPolicy.sandbox.networkAllowlist).toEqual(["api.openai.com"]);
+    expect(host.llmService.updateNetworkAllowlist).not.toHaveBeenCalled();
+    // The settings route's schema doesn't carry it: a body naming it is read without it.
+    const parsed = updateSettingsSchema.parse({ expectedRevision: 1, hookNetworkAllowlist: ["evil.example"] });
+    expect(parsed).not.toHaveProperty("hookNetworkAllowlist");
   });
 
   it("rejects unsafe Firecrawl API key env-name settings", async () => {

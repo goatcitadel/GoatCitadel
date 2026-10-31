@@ -1,11 +1,22 @@
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 
+/**
+ * The Capabilities plans an operator save route may ask the skip for: the operator's own connector install and plugin
+ * install and uninstall. Each was added here on purpose (R95, #572).
+ */
+export const OPERATOR_CAPABILITIES_PLAN_KINDS: ReadonlySet<ChangePlanRecord["kind"]> = new Set([
+  "connector_install",
+  "plugin_install",
+  "plugin_uninstall",
+]);
+
 /** The approval-skip part of `EvolutionControlPlaneServiceDependencies`. */
 export interface Dependencies {
   /**
    * Whether the operator has chosen to apply their own Settings saves and Capabilities installs without a separate
    * approval (the runtime flag and the deployment profile). Consulted only for a caution or danger plan from Settings,
-   * or a connector install from Capabilities, confirmed by that surface's own server-owned save route.
+   * or a connector or plugin install (or a plugin uninstall) from Capabilities, confirmed by that surface's own
+   * server-owned route.
    */
   readonly allowsOperatorApprovalSkip?: (plan: ChangePlanRecord) => boolean | Promise<boolean>;
 }
@@ -38,12 +49,12 @@ export interface ApplyStartEvent {
 
 /**
  * Whether the plan is one an operator save route may ask the skip for. Settings keeps every kind it saves. On
- * Capabilities only a connector install may (R95), so a future Capabilities action has to be added here on purpose.
- * Chat and system plans never may.
+ * Capabilities only a connector install and a plugin install or uninstall may (R95), so a future Capabilities action
+ * has to be added to `OPERATOR_CAPABILITIES_PLAN_KINDS` on purpose. Chat and system plans never may.
  */
 function isOperatorSavePlan(plan: ChangePlanRecord): boolean {
   if (plan.origin.surface === "settings") return true;
-  return plan.origin.surface === "capabilities" && plan.kind === "connector_install";
+  return plan.origin.surface === "capabilities" && OPERATOR_CAPABILITIES_PLAN_KINDS.has(plan.kind);
 }
 
 /**

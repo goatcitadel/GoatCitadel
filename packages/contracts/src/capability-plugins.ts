@@ -89,6 +89,29 @@ export interface CapabilityPluginInspectionRequest {
   source: PluginSource;
 }
 
+/**
+ * `POST /api/v1/capabilities/plugins/install`: install the pieces an inspection checked, from one confirmation.
+ * `hookSecrets` holds one signing secret per hook piece, by piece id, and nothing else: GoatCitadel keeps each one in
+ * the key store and the install plan holds only a reference to it.
+ */
+export interface CapabilityPluginInstallRequest {
+  workspaceId: string;
+  inspectionId: string;
+  hookSecrets?: Record<string, string>;
+}
+
+/**
+ * The answer to a plugin install or uninstall (202). `applied`: the plan finished. `waiting`: it waits, for its approval
+ * in the Inbox (`approvalId`) or for a step still under way. `failed`: it stopped, and `summary` says what was added
+ * and what to do next. `summary` is the plan's plain summary.
+ */
+export interface PluginActionOutcome {
+  planId: string;
+  outcome: "applied" | "waiting" | "failed";
+  approvalId?: string;
+  summary: string;
+}
+
 export const CAPABILITY_PLUGIN_REFUSED_CODE = "PLUGIN_REFUSED" as const;
 
 /**

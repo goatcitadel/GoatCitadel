@@ -1,30 +1,33 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import {
   NotFoundError,
   redactStructuredSecrets,
   type DeploymentProfile,
-  type McpServerRecord,
   type ToolGroupId,
   type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { PluginToolGroupHold } from "@goatcitadel/policy-engine";
-import { CapabilityPluginInspectionService } from "./capability-plugin-inspection-service.js";
+import { CapabilityPluginActionsService } from "./capability-plugin-actions-service.js";
 import {
-  CapabilityPluginStore,
-  pluginToolGroupHolds,
-  type CapabilityPluginSettingRows,
-  type StoredPlugin,
-} from "./capability-plugin-store.js";
+  pluginActionSources,
+  pluginInstallSources,
+  type CapabilityPluginInstallOwners,
+  type PluginInstallShared,
+} from "./capability-plugin-install-composition.js";
+import { CapabilityPluginInspectionService } from "./capability-plugin-inspection-service.js";
+import { CapabilityPluginStore, pluginToolGroupHolds, type StoredPlugin } from "./capability-plugin-store.js";
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
 import { SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
-import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { lookUpHostAddresses } from "./hardened-git.js";
+import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
-import { listBuiltInPluginManifests } from "./plugin-manifest-file.js";
-import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
+import { PluginInstallChangePlanAdapter } from "./plugin-install-change-plan-adapter.js";
+import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-manifest-file.js";
+import { PluginSnapshotChangedError, PluginSnapshotPathError, PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { fetchPluginSource } from "./plugin-source-service.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
 import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.js";
@@ -34,11 +37,14 @@ const log = logger.child("capability-plugins");
 /** What a version may hold to name a review key: the review's own key characters, kept short. */
 const GATEWAY_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/u;
 
+/** The first reads of the holds at startup, and the waits between them: about a second in all before it is reported. */
+const FIRST_HOLDS_READ_WAITS_MS = [250, 1000] as const;
+
 /** The install's folders and profile, and the operator's own tool switches, read from its live config. */
 export interface CapabilityPluginsConfig {
   rootDir: string;
   assistant: { dataDir: string; deploymentProfile: DeploymentProfile };
-  toolPolicy: Pick<ToolPolicyConfig, "tools">;
+  toolPolicy: Pick<ToolPolicyConfig, "tools" | "hooks">;
 }
 
 /** Where the groups plugins hold off take effect: the policy engine, which denies them in every chat. */
@@ -47,27 +53,18 @@ export interface PluginToolGroupHoldsTarget {
 }
 
 /**
- * The existing owner of each source the Plugins tab and its inspections read. Inspecting writes only through the
- * snapshot store, the Skill Hub's own review and the plugin store; every other owner is only read.
+ * The existing owner of each source the Plugins tab and its inspections read, and of each piece an install adds.
+ * Inspecting writes only through the snapshot store, the Skill Hub's own review and the plugin store; installing writes
+ * only through a Change Plan, whose adapter this composition adds to the Change Plan adapters.
  */
-export interface CapabilityPluginsOwners {
+export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
   /** `<rootDir>/plugins` holds the plugins that ship; `<data>/plugins` holds the snapshots and their temp copies. */
   config: CapabilityPluginsConfig;
-  /** The saved connectors. */
-  mcp: { listMcpServers(): Promise<readonly Pick<McpServerRecord, "label">[]> };
-  /** The network allowlist and the feature flags. */
-  settings: {
-    getSettings(): Promise<Pick<RuntimeSettings, "networkAllowlist" | "features">>;
-  };
   /** Skill Hub's source review and its operator list, as the Skills tab reaches them. */
   skillHub: {
     reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult>;
     listSkillHub(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse>;
   };
-  /** The `system_settings` rows; the plugin store keeps `capability_plugins_v1` there. */
-  systemSettings: CapabilityPluginSettingRows;
-  /** The saved prompt packs, by id. */
-  promptPacks: { getPack(packId: string): Promise<unknown> };
   /** Takes the groups plugins hold off, loaded at startup and again after every write to the plugin store. */
   policy: PluginToolGroupHoldsTarget;
 }
@@ -94,25 +91,45 @@ export function pluginSnapshotResolver(
   return (treeSha256, relativePath) => snapshots.resolve(treeSha256, relativePath);
 }
 
-/** Wires the Plugins tab to its owners. */
-export function composeCapabilityPlugins({
-  config,
-  mcp,
-  settings,
-  skillHub,
-  systemSettings,
-  promptPacks,
-  policy,
-}: CapabilityPluginsOwners): CapabilityPluginsRouteService {
+/**
+ * Wires the Plugins tab and the plugin install plan to their owners. Both share one plugin store, so every write the
+ * install makes reaches the tool-group holds as an inspection's does.
+ */
+export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): CapabilityPluginsRouteService {
+  const { config, mcp, settings, skillHub, records, policy, keychain, changePlanAdapters } = owners;
   const paths = pluginDataPaths(config);
   const snapshots = new PluginSnapshotStore(paths.snapshots);
-  const store = new CapabilityPluginStore(systemSettings);
-  void feedPluginToolGroupHolds({
+  const store = new CapabilityPluginStore(records.systemSettings);
+  const holds = feedPluginToolGroupHolds({
     readPlugins: () => store.list(),
     onStoreChange: (listener) => store.onChange(listener),
-    setHolds: (holds) => policy.setPluginToolGroupHolds(holds),
+    setHolds: (held) => policy.setPluginToolGroupHolds(held),
     report: reportHoldsReadFailure,
+    reportFirstReadFailure: reportFirstHoldsReadFailure,
+    wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
+  const custody = new HookSecretCustodyService(keychain);
+  const shared: PluginInstallShared = {
+    readInspection: (inspectionId) => store.getInspection(inspectionId),
+    readPlugin: (pluginId) => store.get(pluginId),
+    updatePlugin: (pluginId, change) => store.update(pluginId, change),
+    verifySnapshot: (treeSha256) => snapshots.verify(treeSha256),
+    readManifest: (treeSha256) => readPluginManifestFile(resolveCheckedSnapshot(snapshots, treeSha256)),
+    readSnapshotText: (treeSha256, relativePath) =>
+      readSnapshotText(resolveCheckedSnapshot(snapshots, treeSha256, relativePath)),
+    listBuiltInPluginIds: async () => (await listBuiltInPluginManifests(paths.builtIn)).map((item) => item.pluginId),
+    storeHookSecret: (value) => custody.storeSecret(value),
+    deleteHookSecret: (secretRef) => {
+      try {
+        custody.deleteSecret(secretRef);
+      } catch (error) {
+        // Never in the way of the plan's own end; the reference (never the secret) is logged so it can be found.
+        reportFailedSecretDelete(secretRef, error);
+      }
+    },
+  };
+  changePlanAdapters.register(new PluginInstallChangePlanAdapter(pluginInstallSources(shared, owners)));
+  const actions = new CapabilityPluginActionsService(pluginActionSources(shared, owners));
   const inspection = new CapabilityPluginInspectionService({
     fetchSource: (source) =>
       fetchPluginSource(source, {
@@ -136,7 +153,7 @@ export function composeCapabilityPlugins({
     },
     promptPackExists: async (packId) => {
       try {
-        await promptPacks.getPack(packId);
+        await records.promptPacks.getPack(packId);
         return true;
       } catch (error) {
         if (error instanceof NotFoundError) return false;
@@ -159,8 +176,39 @@ export function composeCapabilityPlugins({
       (await skillHub.listSkillHub({ workspaceId, limit: SKILL_HUB_LIST_LIMIT })).items,
     inspect: (input) => inspection.inspect(input),
     readInspection: async (inspectionId) => (await store.getInspection(inspectionId))?.inspection,
+    install: (input) => actions.install(input),
+    loadToolGroupHolds: () => holds.load(),
     reportFailure: reportFailedRead,
   });
+}
+
+/**
+ * A snapshot's folder, or a path inside it, for a read the install makes after the snapshot was checked: a copy that
+ * is gone, or a path it can't hold, is the same plain refusal as a copy whose bytes changed.
+ */
+function resolveCheckedSnapshot(
+  snapshots: { resolve(treeSha256: string, relativePath?: string): string },
+  treeSha256: string,
+  relativePath?: string,
+): string {
+  try {
+    return snapshots.resolve(treeSha256, relativePath);
+  } catch (error) {
+    if (error instanceof PluginSnapshotPathError) throw new PluginSnapshotChangedError();
+    throw error;
+  }
+}
+
+/** A snapshot file as UTF-8 text. The snapshot holds only plain files within the plugin limits, so one read is bounded. */
+async function readSnapshotText(file: string): Promise<string> {
+  try {
+    return new TextDecoder("utf-8", { fatal: true }).decode(await fs.readFile(file));
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    // The file was read and decoded when it was checked; missing or not text now, the copy changed.
+    if (error instanceof TypeError || code === "ENOENT" || code === "ENOTDIR") throw new PluginSnapshotChangedError();
+    throw error;
+  }
 }
 
 /** The plain readers the holds feed works through: the plugin store's records and its change hook, and the engine. */
@@ -168,31 +216,49 @@ export interface PluginToolGroupHoldsSources {
   readPlugins(): Promise<readonly StoredPlugin[]>;
   onStoreChange(listener: () => void): void;
   setHolds(holds: readonly PluginToolGroupHold[]): void;
+  /** A later read that failed: the holds last read stay in force. */
   report(error: unknown): void;
+  /** The first read failed every time it was tried: no group is held until a later read lands. */
+  reportFirstReadFailure(error: unknown): void;
+  wait(ms: number): Promise<void>;
+}
+
+/** The holds feed: `load` is the first read, which startup awaits before any chat runs. */
+export interface PluginToolGroupHoldsFeed {
+  load(): Promise<void>;
 }
 
 /**
- * Feeds the groups plugins hold off to the policy engine: now, and again after every write to the plugin store. Each
- * read replaces the holds whole; a read that started earlier never replaces a later one. A store that can't be read
- * keeps the holds last read and reports the failure, so a hold never lifts because a read failed. Answers when the
- * first read settles.
+ * Feeds the groups plugins hold off to the policy engine: once at startup (`load`), and again after every write to the
+ * plugin store. Each read replaces the holds whole; a read that started earlier never replaces a later one. A store
+ * that can't be read keeps the holds last read and reports the failure, so a hold never lifts because a read failed.
+ * The first read is tried again, twice, before its failure is reported; `load` settles then either way, and the next
+ * write that can be read sets the holds.
  */
-export async function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): Promise<void> {
+export function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): PluginToolGroupHoldsFeed {
   let started = 0;
   let applied = 0;
-  const refresh = async () => {
-    const read = (started += 1);
-    try {
-      const holds = pluginToolGroupHolds(await sources.readPlugins());
-      if (read < applied) return;
-      applied = read;
-      sources.setHolds(holds);
-    } catch (error) {
-      sources.report(error);
+  const read = async (): Promise<void> => {
+    const attempt = (started += 1);
+    const holds = pluginToolGroupHolds(await sources.readPlugins());
+    if (attempt < applied) return;
+    applied = attempt;
+    sources.setHolds(holds);
+  };
+  sources.onStoreChange(() => void read().catch((error: unknown) => sources.report(error)));
+  let first: Promise<void> | undefined;
+  const firstRead = async (): Promise<void> => {
+    for (let attempt = 0; ; attempt += 1) {
+      try {
+        return await read();
+      } catch (error) {
+        const wait = FIRST_HOLDS_READ_WAITS_MS[attempt];
+        if (wait === undefined) return sources.reportFirstReadFailure(error);
+        await sources.wait(wait);
+      }
     }
   };
-  sources.onStoreChange(() => void refresh());
-  await refresh();
+  return { load: () => (first ??= firstRead()) };
 }
 
 /** The groups the operator switched off themselves, from the live tool policy. A plugin's hold is never among them. */
@@ -237,6 +303,24 @@ export function readGatewayVersion(load: (specifier: string) => unknown = create
 function reportHoldsReadFailure(error: unknown): void {
   const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
   log.error("the tool groups plugins hold off couldn't be read; the last ones read stay in force", {
+    err: redactStructuredSecrets(diagnostic).value,
+  });
+}
+
+/** The first read failed each time: nothing a plugin holds off is held until a later write is read. */
+function reportFirstHoldsReadFailure(error: unknown): void {
+  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+  log.error(
+    "the tool groups plugins hold off couldn't be read at startup; none is held off until the plugin records can be read",
+    { err: redactStructuredSecrets(diagnostic).value },
+  );
+}
+
+/** A signing secret that couldn't be deleted is logged by its reference, so it can be found and removed. */
+function reportFailedSecretDelete(secretRef: string, error: unknown): void {
+  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+  log.error("a plugin hook's stored signing secret couldn't be deleted", {
+    secretRef,
     err: redactStructuredSecrets(diagnostic).value,
   });
 }

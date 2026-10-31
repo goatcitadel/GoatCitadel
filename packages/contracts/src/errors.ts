@@ -30,7 +30,8 @@ export type GoatErrorCode =
   | "CONFIG_INVALID"
   | "SECRET_STORE_UNAVAILABLE"
   | "TURN_CANCELLED"
-  | "PLUGIN_OWNED";
+  | "PLUGIN_OWNED"
+  | "PLUGIN_ID_RESERVED";
 
 // ---------------------------------------------------------------------------
 // Base class

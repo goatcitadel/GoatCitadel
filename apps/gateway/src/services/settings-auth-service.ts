@@ -412,6 +412,13 @@ export interface UpdateSettingsInput {
   features?: Partial<RuntimeSettings["features"]>;
 }
 
+/**
+ * A plugin install's own settings write: the hooks allowlist (`toolPolicy.hooks.networkAllowlist`) replaced whole,
+ * beside any settings fields, under the same revision fence, and kept with the tool policy as the sandbox list is. It
+ * is internal only: no route's schema and no `UpdateSettingsInput` field carries it.
+ */
+export type PluginInstallSettingsUpdate = UpdateSettingsInput & { readonly hookNetworkAllowlist?: readonly string[] };
+
 export interface SettingsConfigCandidate {
   config: GatewayRuntimeConfig;
   features: RuntimeSettings["features"];
@@ -558,13 +565,20 @@ export async function updateSettings(
     deps.config.toolPolicy.sandbox.readAccessMode = input.readAccessMode;
   }
 
-  if (input.networkAllowlist) {
-    deps.config.toolPolicy.sandbox.networkAllowlist = input.networkAllowlist
-      .map((host_) => host_.trim())
-      .filter(Boolean);
-    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
-      enforce: true,
-    });
+  // The hooks allowlist is a plugin install's own internal write (`PluginInstallSettingsUpdate`), never a route's.
+  const hookNetworkAllowlist = (input as PluginInstallSettingsUpdate).hookNetworkAllowlist;
+  if (input.networkAllowlist || hookNetworkAllowlist) {
+    const toolPolicy = deps.config.toolPolicy;
+    if (input.networkAllowlist) {
+      toolPolicy.sandbox.networkAllowlist = input.networkAllowlist.map((host_) => host_.trim()).filter(Boolean);
+      deps.llmService.updateNetworkAllowlist(toolPolicy.sandbox.networkAllowlist, { enforce: true });
+    }
+    if (hookNetworkAllowlist) {
+      toolPolicy.hooks = {
+        ...toolPolicy.hooks,
+        networkAllowlist: hookNetworkAllowlist.map((host_) => host_.trim()).filter(Boolean),
+      };
+    }
   }
 
   if (

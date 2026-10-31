@@ -17,6 +17,7 @@ vi.mock("./gateway-route-service-composition.js", () => ({
 }));
 
 import type { ApprovalRequest, OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
+import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-adapter.js";
 import { GatewayService } from "./gateway-service.js";
 import { MEMORY_CONSOLIDATION_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 import * as routeComposition from "./gateway-route-service-composition.js";
@@ -221,8 +222,11 @@ describe("GatewayService loop 22 route facade composition", () => {
     expect((GatewayService.prototype as any).getRouteCompositionPort.call(gateway)).toEqual({ kind: "cached-port" });
 
     gateway.routeCompositionPort = undefined;
-    const routeServices = (GatewayService.prototype as any).buildRouteServices.call(gateway);
+    const changePlanAdapters = new EvolutionControlPlaneAdapterRegistry();
+    const routeServices = (GatewayService.prototype as any).buildRouteServices.call(gateway, changePlanAdapters);
     expect(routeServices).toMatchObject({ composed: true });
+    // The plugin install plan joins the Change Plan adapters through the plugins composition.
+    expect(changePlanAdapters.list()).toEqual([{ adapterId: "plugin-install", version: 1, kinds: ["plugin_install"] }]);
     expect(routeComposition.composeGatewayRouteServices).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "route-port", gateway }),
     );

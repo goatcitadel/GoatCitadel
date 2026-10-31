@@ -5,9 +5,11 @@ import {
   type CapabilityPluginListResponse,
   type CapabilityPluginState,
   type CapabilitySkillInstallStep,
+  type PluginActionOutcome,
   type PluginManifest,
   type PluginPieceKind,
 } from "@goatcitadel/contracts";
+import type { CapabilityPluginInstallInput } from "./capability-plugin-actions-service.js";
 import type { CapabilityPluginInspectInput } from "./capability-plugin-inspection-service.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import { skillHubInstallStep } from "./capability-skill-install-projection.js";
@@ -35,6 +37,10 @@ export interface CapabilityPluginsRouteSources {
   inspect(input: CapabilityPluginInspectInput): Promise<CapabilityPluginInspection>;
   /** A kept inspection that hasn't run out of time. */
   readInspection(inspectionId: string): Promise<CapabilityPluginInspection | undefined>;
+  /** Installs an inspection's pieces through one Change Plan the operator confirms with this click. */
+  install(input: CapabilityPluginInstallInput): Promise<PluginActionOutcome>;
+  /** The first read of the tool groups plugins hold off, which startup awaits before any chat runs. */
+  loadToolGroupHolds(): Promise<void>;
   /** Called with the real error of a part that couldn't be read, so the answer carries none of it. */
   reportFailure(source: CapabilityPluginsSource, error: unknown): void;
 }
@@ -91,6 +97,19 @@ export class CapabilityPluginsRouteService {
 
   public inspect(input: CapabilityPluginInspectInput): Promise<CapabilityPluginInspection> {
     return this.sources.inspect(input);
+  }
+
+  /**
+   * Installs a kept inspection's pieces through one Change Plan: applied at once when the operator's skip applies,
+   * otherwise waiting for its approval in the Inbox. Every refusal comes before any secret is stored or plan is made.
+   */
+  public install(input: CapabilityPluginInstallInput): Promise<PluginActionOutcome> {
+    return this.sources.install(input);
+  }
+
+  /** Settles once the tool groups plugins hold off were first read, or that read's failure was reported. */
+  public loadToolGroupHolds(): Promise<void> {
+    return this.sources.loadToolGroupHolds();
   }
 
   /**

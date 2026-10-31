@@ -3625,7 +3625,7 @@ export class GatewayService {
       controlPlane: this.evolutionControlPlaneService,
       resolveActor: (sessionId, actorId) => this.resolveEvolutionChatActor(sessionId, actorId),
     });
-    this.routeServices = this.buildRouteServices();
+    this.routeServices = this.buildRouteServices(evolutionAdapters);
   }
 
   private buildRouteCompositionPort() {
@@ -3852,7 +3852,7 @@ export class GatewayService {
     return this.routeCompositionPort ?? this.buildRouteCompositionPort();
   }
 
-  private buildRouteServices(): GatewayRouteServices {
+  private buildRouteServices(changePlanAdapters: EvolutionControlPlaneAdapterRegistry): GatewayRouteServices {
     const composed = composeGatewayRouteServices(this.getRouteCompositionPort());
     return {
       ...composed,
@@ -3958,9 +3958,14 @@ export class GatewayService {
         mcp: this,
         settings: this,
         skillHub: composed.skills,
-        systemSettings: this.storage.systemSettings,
-        promptPacks: this.storage.promptPacks,
+        records: this.storage,
         policy: this.policyEngine,
+        plans: this.evolutionControlPlaneService,
+        hooks: this.hooksService,
+        keychain: this.secretStore,
+        mcpAdministration: this.mcpAdministration,
+        promptPackImports: this.promptPackService,
+        changePlanAdapters,
       }),
     };
   }
@@ -4268,6 +4273,7 @@ export class GatewayService {
       return;
     }
     await traceInitStep("storage.waitUntilReady", async () => await this.storage.waitUntilReady());
+    await traceInitStep("pluginToolGroupHolds", () => this.routeServices.capabilityPlugins?.loadToolGroupHolds());
     if (this.configGenerationBootstrapHydrationPending) {
       await traceInitStep("hydrateConfigGenerationBootstrap", async () => {
         this.configGenerationService.hydrateUnpublishedBootstrapPayload(

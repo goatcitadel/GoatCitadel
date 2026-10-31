@@ -1531,6 +1531,7 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
       skillsService: { reload: vi.fn(async () => [{ skillId: "skill-1" }]) },
       skillStateService: { ensureSkillStates: vi.fn() },
       startDeferredInit: vi.fn(async () => undefined),
+      routeServices: { capabilityPlugins: { loadToolGroupHolds: vi.fn(async () => undefined) } },
       storage: {
         ...createGatewayHarness().gateway.storage,
         agentProfiles: { seedBuiltins: vi.fn() },
@@ -1555,6 +1556,8 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
     await GatewayService.prototype.initCritical.call(gateway);
     expect(gateway.loadOnboardingMarker).toHaveBeenCalled();
     expect(gateway.storage.agentProfiles.seedBuiltins).toHaveBeenCalled();
+    // The tool groups plugins hold off are read before startup goes on to anything that runs a chat.
+    expect(gateway.routeServices.capabilityPlugins.loadToolGroupHolds).toHaveBeenCalledOnce();
     expect(gateway.criticalInitComplete).toBe(true);
     await GatewayService.prototype.initCritical.call(gateway);
     expect(gateway.skillsService.reload).toHaveBeenCalledTimes(1);

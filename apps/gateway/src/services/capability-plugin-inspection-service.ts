@@ -25,6 +25,11 @@ import { HostLookupError, HostNotPublicError, assertHostResolvesPublic } from ".
 import { parseHookWebhookUrl } from "./hooks-service.js";
 import { mcpServerLabelKey } from "./mcp-money-moving.js";
 import { readPluginManifestFile } from "./plugin-manifest-file.js";
+import {
+  distinctPluginPromptPackNames,
+  pluginPromptPackId,
+  pluginPromptPackSourceLabel,
+} from "./plugin-prompt-packs.js";
 import { PluginSnapshotPathError } from "./plugin-snapshot-store.js";
 import type { FetchedPluginSource } from "./plugin-source-service.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
@@ -253,9 +258,10 @@ export class CapabilityPluginInspectionService {
       ),
       settings: once(() => this.sources.readSettings()),
     };
-    const pieces: CapabilityPluginPieceView[] = [];
+    const checked: CapabilityPluginPieceView[] = [];
     // One at a time, in manifest order: a skill's review writes its own record, and the answer keeps that order.
-    for (const piece of manifest.pieces) pieces.push(await this.checkPiece(piece, context));
+    for (const piece of manifest.pieces) checked.push(await this.checkPiece(piece, context));
+    const pieces = withDistinctPromptPackNames(checked);
 
     const inspection: CapabilityPluginInspection = {
       ...frame,
@@ -392,11 +398,15 @@ export class CapabilityPluginInspectionService {
     const content = await readSnapshotText(file);
     if (typeof content !== "string") return unread(content);
 
-    const packId = `plugin-${context.manifest.pluginId}-${piece.id}`;
+    const packId = pluginPromptPackId(context.manifest.pluginId, piece.id);
     let prepared: ReturnType<typeof preparePromptPackImport>;
     try {
       // The label an install saves it under, so the name shown here is the name it gets.
-      prepared = preparePromptPackImport({ content, packId, sourceLabel: `Plugin ${context.manifest.name}` });
+      prepared = preparePromptPackImport({
+        content,
+        packId,
+        sourceLabel: pluginPromptPackSourceLabel(context.manifest.name),
+      });
     } catch (error) {
       // The parser's own words quote the file; the operator gets a plain line, and the detail stays in the log.
       warn(context.input.log, piece.id, error, "a plugin's prompt pack couldn't be read");
@@ -511,6 +521,19 @@ function isKeyBoundToOtherMaterial(error: unknown): boolean {
 function refuseOtherBuiltInId(parsed: PluginManifestParse, source: PluginSource): PluginManifestParse {
   if (!parsed.ok || source.kind !== "built_in" || parsed.manifest.pluginId === source.pluginId) return parsed;
   return { ok: false, code: "MANIFEST_INVALID", message: BUILT_IN_ID_MISMATCH_MESSAGE, field: "pluginId" };
+}
+
+/**
+ * The pieces with each prompt pack labelled by the name an install saves it under: two of the plugin's packs that would
+ * share a name get one each (`distinctPluginPromptPackNames`, the install's own rule).
+ */
+function withDistinctPromptPackNames(pieces: readonly CapabilityPluginPieceView[]): CapabilityPluginPieceView[] {
+  const names = distinctPluginPromptPackNames(
+    pieces.filter((item) => item.kind === "prompt_pack").map((item) => ({ pieceId: item.pieceId, name: item.label })),
+  );
+  return pieces.map((item) =>
+    item.kind === "prompt_pack" ? { ...item, label: names.get(item.pieceId) ?? item.label } : item,
+  );
 }
 
 /** The kept answer again: the inspection, or its manifest refusal. */

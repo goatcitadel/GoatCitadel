@@ -548,6 +548,24 @@ describe("CapabilityPluginInspectionService", () => {
     expect(piece(inspection, "one").label).toBe("Plugin Meeting tools");
   });
 
+  it("gives two prompt packs that would share a name a name each, the one an install saves", async () => {
+    const pieces: Pieces = [
+      { kind: "prompt_pack", id: "checks", path: "prompt-packs/checks.md" },
+      { kind: "prompt_pack", id: "more-checks", path: "prompt-packs/more.md" },
+      { kind: "prompt_pack", id: "one", path: "prompt-packs/one.md" },
+    ];
+    const { inspect } = await harness({ pieces, files: { "prompt-packs/more.md": PROMPT_PACK_MD } });
+
+    const inspection = await inspect();
+
+    expect(inspection.pieces.map((item) => [item.pieceId, item.label])).toEqual([
+      ["checks", "Meeting checks · checks"],
+      ["more-checks", "Meeting checks · more-checks"],
+      ["one", "Plugin Meeting tools"],
+    ]);
+    expect(inspection.installable).toBe(true);
+  });
+
   it("keeps a refused manifest's inspection and refuses it with its own code", async () => {
     const { inspect, saved, reviewSkill } = await harness({
       manifest: JSON.stringify({

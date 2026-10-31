@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { PLUGIN_LIMITS } from "@goatcitadel/contracts";
+import { ConflictError, PLUGIN_LIMITS } from "@goatcitadel/contracts";
 import { TEMP_REMOVAL_OPTIONS, createTreePathTracker, isPortableTreePath, treeEntryLimit } from "./hardened-git.js";
 
 // Plugin snapshots: an immutable, content-addressed copy of a plugin folder.
@@ -44,6 +44,20 @@ export class PluginSnapshotPathError extends Error {
   public constructor(message: string) {
     super(message);
     this.name = "PluginSnapshotPathError";
+  }
+}
+
+/**
+ * 409: a snapshot's files no longer hash to its name, or it is gone. Something on this computer changed the copy that
+ * was checked, so nothing is installed from it.
+ */
+export class PluginSnapshotChangedError extends ConflictError {
+  public constructor() {
+    super({
+      message: "This plugin's files changed on this computer since it was checked. Check it again.",
+      details: { reason: "PLUGIN_SNAPSHOT_CHANGED" },
+    });
+    this.name = "PluginSnapshotChangedError";
   }
 }
 
@@ -187,13 +201,7 @@ export class PluginSnapshotStore {
    * deletes its copy and answers the snapshot that won.
    */
   public async importDirectory(sourceDir: string): Promise<PluginSnapshot> {
-    const files = await listPluginTree(sourceDir);
-    const lines: string[] = [];
-    for (const file of files) {
-      const content = await readPluginFileBounded(file);
-      lines.push(`${file.relativePath}\u0000${sha256Hex(content)}\n`);
-    }
-    const treeSha256 = sha256Hex(lines.join(""));
+    const treeSha256 = await pluginTreeSha256(await listPluginTree(sourceDir));
     const snapshot: PluginSnapshot = { treeSha256, dir: path.join(this.root, treeSha256) };
 
     await fs.mkdir(this.root, { recursive: true });
@@ -210,6 +218,24 @@ export class PluginSnapshotStore {
       await fs.rm(sourceDir, TEMP_REMOVAL_OPTIONS);
     }
     return snapshot;
+  }
+
+  /**
+   * Checks a snapshot's files on disk still hash to its name, by the same listing and formula an import uses. Throws
+   * `PluginSnapshotChangedError` when they don't, when the folder now holds something a plugin can't (a link, a second
+   * hard link, a name that can't be used), or when the snapshot is gone; any other I/O error is thrown as it is.
+   */
+  public async verify(treeSha256: string): Promise<void> {
+    let actual: string;
+    try {
+      actual = await pluginTreeSha256(await listPluginTree(this.resolve(treeSha256)));
+    } catch (error) {
+      if (error instanceof PluginSnapshotPathError || error instanceof PluginTreeRefusedError) {
+        throw new PluginSnapshotChangedError();
+      }
+      throw error;
+    }
+    if (actual !== treeSha256) throw new PluginSnapshotChangedError();
   }
 
   /**
@@ -233,6 +259,19 @@ export class PluginSnapshotStore {
     }
     return resolved;
   }
+}
+
+/**
+ * A listed tree's hash: the SHA-256 of one `<relative path>\0<SHA-256 of its bytes>\n` line per file, in the listing's
+ * code-unit order. Every file is read through `readPluginFileBounded`, so one swapped or resized since is refused.
+ */
+async function pluginTreeSha256(files: readonly PluginTreeFile[]): Promise<string> {
+  const lines: string[] = [];
+  for (const file of files) {
+    const content = await readPluginFileBounded(file);
+    lines.push(`${file.relativePath}\u0000${sha256Hex(content)}\n`);
+  }
+  return sha256Hex(lines.join(""));
 }
 
 function sha256Hex(value: string | Buffer): string {
