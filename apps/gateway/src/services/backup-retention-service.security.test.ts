@@ -3,7 +3,11 @@ import os from "node:os";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { BackupRetentionService, restoreBackupOffline } from "./backup-retention-service.js";
+import {
+  __backupRetentionInternals,
+  BackupRetentionService,
+  restoreBackupOffline,
+} from "./backup-retention-service.js";
 import type { GatewayRuntimeConfig } from "../config.js";
 
 // Regression coverage for SECURITY_AUDIT_2026-05-15 — S8 (restored credential
@@ -90,6 +94,30 @@ function createStorageMock(databasePath: string) {
     }),
   } as never;
 }
+
+describe("pg_dump failure redaction", () => {
+  const connectionString = "postgresql://goat:fixture-pw@127.0.0.1:45432/goatcitadel";
+
+  it("strips the credentialed connection string from execFileSync's argv echo", () => {
+    const error = new Error(`Command failed: pg_dump --format=custom --file out.dump ${connectionString}`);
+
+    const redacted = __backupRetentionInternals.redactPgDumpFailure(error, connectionString);
+
+    expect(redacted).not.toContain("fixture-pw");
+    expect(redacted).toContain("[redacted connection string]");
+  });
+
+  it("prefers stderr and still masks credentials in any other postgres URL", () => {
+    const error = Object.assign(new Error("Command failed"), {
+      stderr: "pg_dump: error: connection to postgres://other:fixture-pw-two@db/x failed\n",
+    });
+
+    const redacted = __backupRetentionInternals.redactPgDumpFailure(error, connectionString);
+
+    expect(redacted).not.toContain("fixture-pw-two");
+    expect(redacted).toContain("postgres://[redacted]@db/x");
+  });
+});
 
 describe("restoreBackupOffline — credential perms (S8)", () => {
   it("locks restored config/*.json files to 0600 on POSIX even when the archive contained 0644", async () => {

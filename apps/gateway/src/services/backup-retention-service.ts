@@ -18,7 +18,8 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import { buildBundledDockerContainerName } from "../bundled-postgres-runtime.js";
 import { isWindowsEquivalentBackupPath, verifyBackupAtPath } from "./gateway/backup-verify.js";
 import type { GatewayRuntimeConfig } from "../config.js";
-import { resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
+import { discoverNativePostgresTool } from "../native-postgres-discovery.js";
+import { AUTO_NATIVE_BIN_DIR, resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
 import { resolveBackupDirectory, resolveBackupPathWithinDirectory } from "./backup-paths.js";
 
 const RETENTION_SETTINGS_KEY = "retention_policy";
@@ -415,10 +416,17 @@ export class BackupRetentionService {
       }
     }
     const pgDumpCommand = resolvePgDumpCommand(this.config);
-    execFileSync(pgDumpCommand, ["--format=custom", "--file", dumpPath, connectionString], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    try {
+      execFileSync(pgDumpCommand, ["--format=custom", "--file", dumpPath, connectionString], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      // execFileSync echoes the full argv (including the credentialed
+      // connection string) in its message, and that message reaches the UI.
+      // eslint-disable-next-line preserve-caught-error -- The raw cause carries the credentialed argv; only the redacted detail may surface.
+      throw new Error(`pg_dump failed: ${redactPgDumpFailure(error, connectionString)}`);
+    }
   }
 }
 
@@ -861,8 +869,10 @@ function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
     return explicitPath;
   }
 
+  // "auto" is the native-discovery sentinel, not a directory; resolving it as
+  // one looks for <root>/auto/pg_dump and misses the discovered install.
   const configuredBinDir = config.assistant.database.bundledPostgres.binDir?.trim();
-  if (configuredBinDir) {
+  if (configuredBinDir && configuredBinDir !== AUTO_NATIVE_BIN_DIR) {
     const baseDir = path.isAbsolute(configuredBinDir)
       ? configuredBinDir
       : path.resolve(config.rootDir, configuredBinDir);
@@ -877,9 +887,30 @@ function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
     return resolvedOnPath;
   }
 
+  // The same standard install locations the native bundled runtime
+  // auto-discovers (e.g. Program Files\PostgreSQL\16\bin), often not on PATH.
+  const discovered = discoverNativePostgresTool("pg_dump");
+  if (discovered) {
+    return discovered;
+  }
+
   throw new Error(
-    "Postgres backup requested but pg_dump is unavailable. Set GOATCITADEL_PG_DUMP_PATH or assistant.database.bundledPostgres.binDir.",
+    "Postgres backup requested but pg_dump is unavailable: it is not on PATH or in a standard PostgreSQL install location. Set GOATCITADEL_PG_DUMP_PATH or assistant.database.bundledPostgres.binDir.",
   );
+}
+
+function redactPgDumpFailure(error: unknown, connectionString: string): string {
+  const stderr = (error as { stderr?: unknown } | null)?.stderr;
+  const detail =
+    typeof stderr === "string" && stderr.trim()
+      ? stderr.trim()
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return detail
+    .split(connectionString)
+    .join("[redacted connection string]")
+    .replace(/(postgres(?:ql)?:\/\/)[^@\s/]*@/gi, "$1[redacted]@");
 }
 
 function resolveCommandOnPath(command: string): string | undefined {
@@ -958,3 +989,7 @@ function isDockerContainerRunning(containerName: string): boolean {
     return false;
   }
 }
+
+export const __backupRetentionInternals = {
+  redactPgDumpFailure,
+};

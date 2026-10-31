@@ -34,6 +34,7 @@ export function nativePostgresCommandsInBinDir(
  *   RHEL         /usr/pgsql-16/bin              (root /usr, entry pgsql-16)
  *   Homebrew     /opt/homebrew/opt/postgresql@16/bin
  *   Postgres.app /Applications/Postgres.app/Contents/Versions/16/bin
+ *   EDB macOS    /Library/PostgreSQL/16/bin
  */
 export function nativePostgresInstallRoots(platform: NodeJS.Platform, env: NodeJS.ProcessEnv): string[] {
   if (platform === "win32") {
@@ -50,7 +51,12 @@ export function nativePostgresInstallRoots(platform: NodeJS.Platform, env: NodeJ
     return [...roots];
   }
   if (platform === "darwin") {
-    return ["/opt/homebrew/opt", "/usr/local/opt", "/Applications/Postgres.app/Contents/Versions"];
+    return [
+      "/opt/homebrew/opt",
+      "/usr/local/opt",
+      "/Applications/Postgres.app/Contents/Versions",
+      "/Library/PostgreSQL",
+    ];
   }
   return ["/usr/lib/postgresql", "/usr", "/usr/local", "/opt/homebrew/opt"];
 }
@@ -82,6 +88,56 @@ export function highestVersionedNativePostgresCommands(
   }
   candidates.sort((left, right) => right.major - left.major);
   return candidates[0]?.commands;
+}
+
+/**
+ * Locate a single client tool (e.g. pg_dump) in the standard per-platform
+ * install roots, preferring the highest major version. Unlike the server-tool
+ * lookup this accepts client-only installs, since backups only need the client.
+ */
+export function discoverNativePostgresTool(
+  tool: string,
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): string | undefined {
+  const fileName = platform === "win32" ? `${tool}.exe` : tool;
+  const candidates: Array<{ major: number; command: string }> = [];
+  for (const root of nativePostgresInstallRoots(platform, env)) {
+    let entries: string[];
+    try {
+      entries = fsSync.readdirSync(root);
+    } catch {
+      // Root absent or unreadable — normal on most machines.
+      continue;
+    }
+    for (const entry of entries) {
+      const command = path.join(root, entry, "bin", fileName);
+      if (fsSync.existsSync(command)) {
+        candidates.push({ major: nativePostgresToolMajor(root, entry), command });
+      }
+    }
+  }
+  candidates.sort((left, right) => right.major - left.major);
+  return candidates[0]?.command;
+}
+
+/**
+ * Unversioned entries such as Homebrew's `libpq` symlink into a versioned
+ * keg (`Cellar/libpq/18.0`), so read the major from the resolved path when the
+ * entry name carries none; otherwise a newer libpq would lose to postgresql@16.
+ */
+function nativePostgresToolMajor(root: string, entry: string): number {
+  const named = parseNativePostgresMajor(entry);
+  if (named > 0) {
+    return named;
+  }
+  try {
+    const resolved = path.basename(fsSync.realpathSync(path.join(root, entry)));
+    const match = /^(\d+)/.exec(resolved);
+    return match ? Number.parseInt(match[1] ?? "", 10) || 0 : 0;
+  } catch {
+    return 0;
+  }
 }
 
 export function nativePostgresCommandsFromPathEnv(
