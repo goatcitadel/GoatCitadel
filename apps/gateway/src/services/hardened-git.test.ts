@@ -3,17 +3,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   COMMIT_FETCH_REFUSED_MESSAGE,
   GitCommitFetchRefusedError,
+  GitFetchInputError,
+  GitHostRefusedError,
   GitTreeLimitError,
+  GitTreeRefusedError,
   __fetchGitTreeForTests,
   __gitTreeFetchArgsForTests,
   buildSanitizedGitEnvironment,
   createTreePathTracker,
   fetchGitTree,
   hardenedGitConfigArgs,
+  isGitProcessFailure,
   isPortableTreePath,
   parseBoundedGitTree,
   type BoundedGitTreeOptions,
@@ -183,6 +187,65 @@ describe("fetchGitTree (through a local bare repository)", () => {
   });
 });
 
+describe("what counts as a Git failure", () => {
+  it("is a failed command, not one of GoatCitadel's own errors", () => {
+    const filesystem = Object.assign(new Error("EPERM: operation not permitted, mkdir"), {
+      code: "EPERM",
+      errno: -4048,
+      syscall: "mkdir",
+    });
+    expect(isGitProcessFailure(filesystem)).toBe(false);
+    expect(isGitProcessFailure(new Error("The fetched Git revision is not the exact commit that was asked for."))).toBe(
+      false,
+    );
+    expect(isGitProcessFailure(null)).toBe(false);
+    expect(isGitProcessFailure("fatal: nope")).toBe(false);
+
+    expect(isGitProcessFailure(Object.assign(new Error("Command failed"), { code: 128, stderr: "fatal: x" }))).toBe(
+      true,
+    );
+    expect(isGitProcessFailure(Object.assign(new Error("Command failed"), { code: 1 }))).toBe(true);
+    expect(isGitProcessFailure(Object.assign(new Error("Command failed"), { stderr: Buffer.from("fatal: x") }))).toBe(
+      true,
+    );
+    expect(isGitProcessFailure(Object.assign(new Error("timed out"), { killed: true, signal: "SIGTERM" }))).toBe(true);
+    expect(isGitProcessFailure(Object.assign(new Error("aborted"), { name: "AbortError" }))).toBe(true);
+  });
+
+  it("passes a file system failure through fetchGitTree unchanged", async () => {
+    const failure = Object.assign(new Error(`EPERM: operation not permitted, mkdir '${scratchRoot}'`), {
+      code: "EPERM",
+      syscall: "mkdir",
+    });
+    const mkdir = vi.spyOn(fs.promises, "mkdir").mockRejectedValueOnce(failure);
+    try {
+      const thrown = await __fetchGitTreeForTests({ url: bareUrl, destDir: freshDest(), limits: LIMITS }).catch(
+        (error: unknown) => error,
+      );
+      expect(mkdir).toHaveBeenCalled();
+      expect(thrown).toBe(failure);
+      expect(isGitProcessFailure(thrown)).toBe(false);
+    } finally {
+      mkdir.mockRestore();
+    }
+  });
+});
+
+describe("the scratch repository", () => {
+  it("is removed only when this call made it", async () => {
+    const destDir = freshDest();
+    const scratch = `${destDir}.git-scratch`;
+    fs.mkdirSync(scratch, { recursive: true });
+    fs.writeFileSync(path.join(scratch, "keep.txt"), "not ours");
+
+    await expect(__fetchGitTreeForTests({ url: bareUrl, destDir, limits: LIMITS })).rejects.toMatchObject({
+      code: "EEXIST",
+    });
+
+    expect(fs.readFileSync(path.join(scratch, "keep.txt"), "utf8")).toBe("not ours");
+  });
+});
+
 describe("fetchGitTree in production", () => {
   it("keeps protocol.allow=never and no file allowance in every command it builds", () => {
     const url = "https://github.com/example/plugin";
@@ -242,17 +305,21 @@ describe("fetchGitTree in production", () => {
   });
 
   it("refuses an address that isn't a plain https address before it touches the disk", async () => {
-    for (const url of [
-      "http://github.com/o/r",
-      "git@github.com:o/r.git",
-      "file:///etc/passwd",
-      "ssh://github.com/o/r",
-      "https://user:token@github.com/o/r",
-      "-oProxyCommand=whoami",
-      "https://127.0.0.1/o/r.git",
-    ]) {
+    const notHttps = [GitFetchInputError, "Git source must be an https URL."] as const;
+    const refusals = [
+      ["http://github.com/o/r", ...notHttps],
+      ["git@github.com:o/r.git", ...notHttps],
+      ["file:///etc/passwd", ...notHttps],
+      ["ssh://github.com/o/r", ...notHttps],
+      ["https://user:token@github.com/o/r", GitFetchInputError, "Git source must not carry a user name or token."],
+      ["-oProxyCommand=whoami", GitFetchInputError, "Git source address must not begin with '-'"],
+      ["https://127.0.0.1/o/r.git", GitHostRefusedError, "That address isn't a public host."],
+    ] as const;
+    for (const [url, errorClass, message] of refusals) {
       const destDir = freshDest();
-      await expect(fetchGitTree({ url, destDir, limits: LIMITS }), url).rejects.toThrow();
+      const failure = await fetchGitTree({ url, destDir, limits: LIMITS }).catch((error: unknown) => error);
+      expect(failure, url).toBeInstanceOf(errorClass);
+      expect((failure as Error).message, url).toContain(message);
       expect(fs.existsSync(destDir), url).toBe(false);
     }
   });
@@ -260,17 +327,23 @@ describe("fetchGitTree in production", () => {
   it("refuses a ref that could be read as an option or climbs out", async () => {
     for (const ref of ["--upload-pack=whoami", "-x", "a..b", "has space", "semi;colon", "x".repeat(201)]) {
       const destDir = freshDest();
-      await expect(fetchGitTree({ url: "https://github.com/o/r", ref, destDir, limits: LIMITS }), ref).rejects.toThrow(
-        /Git ref/u,
+      const failure = await fetchGitTree({ url: "https://github.com/o/r", ref, destDir, limits: LIMITS }).catch(
+        (error: unknown) => error,
       );
+      expect(failure, ref).toBeInstanceOf(GitFetchInputError);
+      expect((failure as Error).message, ref).toMatch(/Git ref/u);
       expect(fs.existsSync(destDir), ref).toBe(false);
     }
   });
 
   it("refuses limits that aren't positive whole numbers", async () => {
-    await expect(
-      fetchGitTree({ url: "https://github.com/o/r", destDir: freshDest(), limits: { ...LIMITS, maxFiles: 0 } }),
-    ).rejects.toThrow(/limits/u);
+    const failure = await fetchGitTree({
+      url: "https://github.com/o/r",
+      destDir: freshDest(),
+      limits: { ...LIMITS, maxFiles: 0 },
+    }).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitFetchInputError);
+    expect((failure as Error).message).toBe("Git tree limits must be positive whole numbers.");
   });
 });
 
@@ -289,7 +362,7 @@ describe("the tree rules the Git readers share", () => {
     expect(() => parseBoundedGitTree(`120000 blob ${oid}\tlink\0`, pluginOptions)).toThrow(
       "Git plugin tree contains a symlink, submodule, or unsupported object at link.",
     );
-    expect(() => parseBoundedGitTree(`100755 blob ${oid}\trun.sh\0`, pluginOptions)).toThrow(/unsupported object/u);
+    expect(() => parseBoundedGitTree(`100755 blob ${oid}\trun.sh\0`, pluginOptions)).toThrow(GitTreeRefusedError);
     expect(() => parseBoundedGitTree(`100644 blob ${oid}\t.git/config\0`, pluginOptions)).toThrow(
       "Git plugin tree contains a non-portable path: .git/config.",
     );
@@ -307,14 +380,39 @@ describe("the tree rules the Git readers share", () => {
 
     const fileThenFolder = createTreePathTracker("A tree", 10, GitTreeLimitError);
     fileThenFolder("docs/readme");
-    expect(() => fileThenFolder("DOCS/Readme/inner.md")).toThrow(
-      "A tree contains a file-directory collision: DOCS/Readme/inner.md.",
+    expect(() => fileThenFolder("docs/Readme/inner.md")).toThrow(
+      "A tree contains a file-directory collision: docs/Readme/inner.md.",
     );
+
+    // Two folders, not two files: the second spelling of a folder is refused, whatever it holds.
+    const folderTwin = createTreePathTracker("A tree", 10, GitTreeLimitError);
+    folderTwin("Skills/a.md");
+    expect(() => folderTwin("skills/b.md")).toThrow(
+      new GitTreeRefusedError("A tree contains a case-colliding path: skills/b.md."),
+    );
+    // The same spelling again is the same folder.
+    folderTwin("Skills/c.md");
+    const nested = createTreePathTracker("A tree", 10, GitTreeLimitError);
+    nested("docs/Guide/one.md");
+    expect(() => nested("docs/guide/two.md")).toThrow(GitTreeRefusedError);
 
     const small = createTreePathTracker("A tree", 3, GitTreeLimitError);
     small("a"); // one entry
     small("b/c.md"); // a file and its folder: three entries
     expect(() => small("d")).toThrow(new GitTreeLimitError("A tree exceeds 3 filesystem entries."));
+  });
+
+  it("refuses a Git tree with two folders that differ only in case", () => {
+    const twinFolders = `100644 blob ${oid}\tSkills/a.md\u0000100644 blob ${oid}\tskills/b.md\u0000`;
+    const failure = (() => {
+      try {
+        return parseBoundedGitTree(twinFolders, pluginOptions);
+      } catch (error) {
+        return error;
+      }
+    })();
+    expect(failure).toBeInstanceOf(GitTreeRefusedError);
+    expect((failure as Error).message).toBe("Git plugin tree contains a case-colliding path: skills/b.md.");
   });
 
   it("holds a path to what every disk can write the same", () => {

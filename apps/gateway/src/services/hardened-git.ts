@@ -26,7 +26,13 @@ const GIT_COMMAND_TIMEOUT_MS = 15_000;
 export const GIT_TREE_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
 const GIT_METADATA_MAX_BYTES = 16 * 1024 * 1024;
 const GIT_METADATA_MAX_ENTRIES = 2_048;
-const SCRATCH_CLEANUP_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
+/** How a temp folder is removed: with a few retries, since Windows briefly holds files that were just closed. */
+export const TEMP_REMOVAL_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
+
+/** Files and the folders around them: a tree may hold twice as many entries as files. The one place that ratio lives. */
+export function treeEntryLimit(maxFiles: number): number {
+  return maxFiles * 2;
+}
 
 const GIT_COMMIT_PATTERN = /^[a-f0-9]{40}$/iu;
 const GIT_REF_PATTERN = /^[A-Za-z0-9._/-]{1,200}$/u;
@@ -84,6 +90,42 @@ export class GitCommitFetchRefusedError extends Error {
     super(COMMIT_FETCH_REFUSED_MESSAGE, options);
     this.name = "GitCommitFetchRefusedError";
   }
+}
+
+/** The address doesn't lead to a public host: it is private, reserved, or didn't resolve. The cause keeps the detail. */
+export class GitHostRefusedError extends Error {
+  public constructor(options?: { cause?: unknown }) {
+    super("That address isn't a public host.", options);
+    this.name = "GitHostRefusedError";
+  }
+}
+
+/**
+ * The fetched tree holds something a plugin or skill can't: a link, a submodule, an executable file, a path that isn't
+ * portable, or two paths a case-insensitive disk would merge. The message names the path inside the tree, never a path
+ * on this computer.
+ */
+export class GitTreeRefusedError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "GitTreeRefusedError";
+  }
+}
+
+/**
+ * Whether an error came from running `git` rather than from GoatCitadel's own code: a non-zero exit (a numeric `code`),
+ * output on `stderr` (every `execFile` failure carries it, as text or as a Buffer), a timeout or an abort. A file
+ * system error (a string `code` such as `EPERM`, and no `stderr`) is not one.
+ */
+export function isGitProcessFailure(error: unknown): boolean {
+  if (typeof error !== "object" || error === null) return false;
+  const failure = error as { code?: unknown; killed?: unknown; name?: unknown; stderr?: unknown };
+  return (
+    typeof failure.code === "number" ||
+    failure.stderr !== undefined ||
+    failure.killed === true ||
+    failure.name === "AbortError"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -318,7 +360,9 @@ export function parseBoundedGitTree(output: string, options: BoundedGitTreeOptio
     const relativePath = record.slice(separator + 1);
     const [mode, objectType, objectId] = metadata;
     if (mode !== "100644" || objectType !== "blob" || !/^[a-f0-9]{40}$/u.test(objectId ?? "")) {
-      throw new Error(`Git ${label} tree contains a symlink, submodule, or unsupported object at ${relativePath}.`);
+      throw new GitTreeRefusedError(
+        `Git ${label} tree contains a symlink, submodule, or unsupported object at ${relativePath}.`,
+      );
     }
     assertPortableGitTreePath(relativePath, label);
     admitPath(relativePath);
@@ -328,8 +372,9 @@ export function parseBoundedGitTree(output: string, options: BoundedGitTreeOptio
 }
 
 /**
- * Remembers every path a tree has held and refuses the second of two that a case-insensitive disk would merge, a file
- * that is also a folder, and a tree with more files and folders than `maxEntries`. `treeName` opens each message.
+ * Remembers every path a tree has held and refuses the second of two that a case-insensitive disk would merge (two
+ * files, two folders, or a file and a folder), a file that is also a folder, and a tree with more files and folders
+ * than `maxEntries`. `treeName` opens each message.
  */
 export function createTreePathTracker(
   treeName: string,
@@ -337,20 +382,26 @@ export function createTreePathTracker(
   limitError: GitLimitErrorClass,
 ): (relativePath: string) => void {
   const portablePaths = new Set<string>();
-  const directories = new Set<string>();
+  /** Each folder's lower-cased path, with the spelling it was first seen in. */
+  const directories = new Map<string, string>();
   return (relativePath) => {
     const collisionKey = relativePath.toLowerCase();
     if (portablePaths.has(collisionKey) || directories.has(collisionKey)) {
-      throw new Error(`${treeName} contains a case-colliding path: ${relativePath}.`);
+      throw new GitTreeRefusedError(`${treeName} contains a case-colliding path: ${relativePath}.`);
     }
     portablePaths.add(collisionKey);
     const segments = relativePath.split("/");
     for (let index = 1; index < segments.length; index += 1) {
-      const directory = segments.slice(0, index).join("/").toLowerCase();
+      const spelling = segments.slice(0, index).join("/");
+      const directory = spelling.toLowerCase();
       if (portablePaths.has(directory)) {
-        throw new Error(`${treeName} contains a file-directory collision: ${relativePath}.`);
+        throw new GitTreeRefusedError(`${treeName} contains a file-directory collision: ${relativePath}.`);
       }
-      directories.add(directory);
+      const firstSpelling = directories.get(directory);
+      if (firstSpelling !== undefined && firstSpelling !== spelling) {
+        throw new GitTreeRefusedError(`${treeName} contains a case-colliding path: ${relativePath}.`);
+      }
+      directories.set(directory, firstSpelling ?? spelling);
     }
     if (directories.size + portablePaths.size > maxEntries) {
       throw new limitError(`${treeName} exceeds ${maxEntries} filesystem entries.`);
@@ -360,7 +411,7 @@ export function createTreePathTracker(
 
 export function assertPortableGitTreePath(relativePath: string, label: string): void {
   if (!isPortableTreePath(relativePath)) {
-    throw new Error(`Git ${label} tree contains a non-portable path: ${relativePath}.`);
+    throw new GitTreeRefusedError(`Git ${label} tree contains a non-portable path: ${relativePath}.`);
   }
 }
 
@@ -472,7 +523,11 @@ const PRODUCTION_POLICY: GitTreeFetchPolicy = {
     if (parsed.username || parsed.password) {
       throw new GitFetchInputError("Git source must not carry a user name or token.");
     }
-    await assertGitSourceHostIsPublic(parsed.href);
+    try {
+      await assertGitSourceHostIsPublic(parsed.href);
+    } catch (error) {
+      throw new GitHostRefusedError({ cause: error });
+    }
     // Git gets the address as parsed here, not the text it came in as, so both read it the same way.
     return parsed.href;
   },
@@ -518,9 +573,13 @@ async function fetchGitTreeUnder(input: FetchGitTreeInput, policy: GitTreeFetchP
   const repoDir = `${destDir}.git-scratch`;
   const options: BoundedGitTreeOptions = { limits, label: "plugin", limitError: GitTreeLimitError };
   const deadline = startGitDeadline("Git plugin fetch timed out.");
+  // The scratch repository is removed only if this call made it: a folder that was already there is not ours.
+  let scratchCreated = false;
   try {
     await fs.mkdir(destDir, { recursive: true });
-    if (target.kind === "commit") await fs.mkdir(repoDir);
+    // Not recursive, so it fails when the folder is already there. A clone is happy to fill a new, empty one.
+    await fs.mkdir(repoDir);
+    scratchCreated = true;
     for (const step of planGitTreeFetch(url, target, repoDir, limits.maxFileBytes, policy.extraConfig)) {
       await runFetchStep(step, deadline.signal, target);
     }
@@ -534,7 +593,8 @@ async function fetchGitTreeUnder(input: FetchGitTreeInput, policy: GitTreeFetchP
     return { commit: commit! };
   } finally {
     deadline.stop();
-    await fs.rm(repoDir, SCRATCH_CLEANUP_OPTIONS).catch(() => undefined);
+    // Best effort: the scratch repository is only scratch, and a failed removal mustn't hide the real result.
+    if (scratchCreated) await fs.rm(repoDir, TEMP_REMOVAL_OPTIONS).catch(() => undefined);
   }
 }
 
@@ -632,6 +692,5 @@ function parseFetchLimits(limits: FetchGitTreeInput["limits"]): BoundedGitLimits
       throw new GitFetchInputError("Git tree limits must be positive whole numbers.");
     }
   }
-  // A tree is held to its files plus the folders around them; twice the file limit leaves room for the folders.
-  return { ...limits, maxEntries: limits.maxFiles * 2 };
+  return { ...limits, maxEntries: treeEntryLimit(limits.maxFiles) };
 }

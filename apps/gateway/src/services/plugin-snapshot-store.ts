@@ -1,9 +1,9 @@
 import { createHash } from "node:crypto";
-import fsSync from "node:fs";
+import fsSync, { type BigIntStats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { PLUGIN_LIMITS } from "@goatcitadel/contracts";
-import { createTreePathTracker, isPortableTreePath } from "./hardened-git.js";
+import { TEMP_REMOVAL_OPTIONS, createTreePathTracker, isPortableTreePath, treeEntryLimit } from "./hardened-git.js";
 
 // Plugin snapshots: an immutable, content-addressed copy of a plugin folder.
 //
@@ -12,9 +12,8 @@ import { createTreePathTracker, isPortableTreePath } from "./hardened-git.js";
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
 const READ_CHUNK_BYTES = 64 * 1024;
-/** Files and the folders around them: twice the file limit leaves room for the folders. */
-const MAX_TREE_ENTRIES = PLUGIN_LIMITS.maxFiles * 2;
-const DISCARD_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
+const MAX_TREE_ENTRIES = treeEntryLimit(PLUGIN_LIMITS.maxFiles);
+const FOLDER_CHANGED_MESSAGE = "The folder changed while it was being copied.";
 
 export interface PluginSnapshot {
   treeSha256: string;
@@ -53,6 +52,9 @@ export interface PluginTreeFile {
   relativePath: string;
   fullPath: string;
   bytes: number;
+  /** The device and file id the listing saw (0 where the platform gives none), so a read can tell the file was swapped. */
+  dev: bigint;
+  ino: bigint;
 }
 
 /**
@@ -85,18 +87,23 @@ export async function listPluginTree(
   let totalBytes = 0;
 
   for (let next = pending.pop(); next; next = pending.pop()) {
-    for (const name of (await fs.readdir(next.dir)).sort()) {
-      if (options.skipVcsMetadata && name.toLowerCase() === ".git") continue;
+    const names: string[] = [];
+    // One entry at a time, counted as it is read: a huge folder is refused at the limit, never read in full.
+    for await (const entry of await fs.opendir(next.dir)) {
+      if (options.skipVcsMetadata && entry.name.toLowerCase() === ".git") continue;
       entries += 1;
       if (entries > MAX_TREE_ENTRIES) {
         throw new PluginTreeLimitError(`A plugin can hold at most ${MAX_TREE_ENTRIES} files and folders.`);
       }
+      names.push(entry.name);
+    }
+    for (const name of names.sort()) {
       const relativePath = next.prefix ? `${next.prefix}/${name}` : name;
       if (!isPortableTreePath(relativePath)) {
         throw unsafe(`${relativePath} has a name that can't be used in a plugin.`);
       }
       const fullPath = path.join(next.dir, name);
-      const info = await fs.lstat(fullPath);
+      const info = await fs.lstat(fullPath, { bigint: true });
       if (info.isSymbolicLink()) {
         throw unsafe(`${relativePath} is a link. A plugin can hold only plain files and folders.`);
       }
@@ -105,17 +112,18 @@ export async function listPluginTree(
         continue;
       }
       if (!info.isFile()) throw unsafe(`${relativePath} isn't a plain file or folder.`);
-      if (info.nlink > 1)
+      if (info.nlink > 1n)
         throw unsafe(`${relativePath} is linked to another file. A plugin can hold only plain files.`);
       if (files.length + 1 > PLUGIN_LIMITS.maxFiles) {
         throw new PluginTreeLimitError(`A plugin can hold at most ${PLUGIN_LIMITS.maxFiles} files.`);
       }
-      if (info.size > PLUGIN_LIMITS.maxFileBytes) {
+      const bytes = Number(info.size);
+      if (bytes > PLUGIN_LIMITS.maxFileBytes) {
         throw new PluginTreeLimitError(
           `${relativePath} is over ${formatMebibytes(PLUGIN_LIMITS.maxFileBytes)}, which is the most one file can be.`,
         );
       }
-      totalBytes += info.size;
+      totalBytes += bytes;
       if (totalBytes > PLUGIN_LIMITS.maxTotalBytes) {
         throw new PluginTreeLimitError(
           `A plugin can hold at most ${formatMebibytes(PLUGIN_LIMITS.maxTotalBytes)} in all.`,
@@ -126,20 +134,22 @@ export async function listPluginTree(
       } catch (error) {
         throw error instanceof PluginTreeRefusedError ? error : unsafe((error as Error).message);
       }
-      files.push({ relativePath, fullPath, bytes: info.size });
+      files.push({ relativePath, fullPath, bytes, dev: info.dev, ino: info.ino });
     }
   }
   return files.sort((a, b) => compareCodeUnits(a.relativePath, b.relativePath));
 }
 
 /**
- * Reads one file from a listed tree. `bytes` is the size `listPluginTree` saw; a file that has since grown or shrunk is
- * refused, and the read never goes past `PLUGIN_LIMITS.maxFileBytes`.
+ * Reads one file from a listed tree. The open file must be the one the listing saw: a plain file with one link, the
+ * same size, and (where the platform reports them) the same device and file id. A file swapped, linked or resized since
+ * is refused, and the read never goes past `PLUGIN_LIMITS.maxFileBytes`.
  */
 export async function readPluginFileBounded(file: PluginTreeFile): Promise<Buffer> {
   // O_NOFOLLOW (where the platform has it) keeps a file swapped for a link after the listing from being followed.
   const handle = await fs.open(file.fullPath, fsSync.constants.O_RDONLY | (fsSync.constants.O_NOFOLLOW ?? 0));
   try {
+    if (!matchesListing(await handle.stat({ bigint: true }), file)) throw unsafe(FOLDER_CHANGED_MESSAGE);
     const chunks: Buffer[] = [];
     let total = 0;
     for (;;) {
@@ -150,7 +160,7 @@ export async function readPluginFileBounded(file: PluginTreeFile): Promise<Buffe
       chunks.push(chunk.subarray(0, bytesRead));
       total += bytesRead;
     }
-    if (total !== file.bytes) throw unsafe(`${file.relativePath} changed while it was being read.`);
+    if (total !== file.bytes) throw unsafe(FOLDER_CHANGED_MESSAGE);
     return Buffer.concat(chunks, total);
   } finally {
     await handle.close();
@@ -170,6 +180,9 @@ export class PluginSnapshotStore {
    * deleted when that content is already there, so it must be a temp copy the caller made and no longer needs. It
    * should sit on the same volume as the store, since a rename can't cross one.
    *
+   * When it throws (the folder is refused, can't be read, or can't be renamed) the folder is left where it is for the
+   * caller to remove, and no partial snapshot is left in the store: only the rename adds one, so it is whole or absent.
+   *
    * Two writers that race on the same content both succeed: the one whose rename finds the snapshot already there
    * deletes its copy and answers the snapshot that won.
    */
@@ -185,7 +198,7 @@ export class PluginSnapshotStore {
 
     await fs.mkdir(this.root, { recursive: true });
     if (isPlainDirectory(snapshot.dir)) {
-      await fs.rm(sourceDir, DISCARD_OPTIONS);
+      await fs.rm(sourceDir, TEMP_REMOVAL_OPTIONS);
       return snapshot;
     }
     try {
@@ -194,7 +207,7 @@ export class PluginSnapshotStore {
       // A rename onto a folder that is already there fails (EPERM on Windows, ENOTEMPTY or EEXIST elsewhere): another
       // writer got there first, and that is the answer.
       if (!isPlainDirectory(snapshot.dir)) throw error;
-      await fs.rm(sourceDir, DISCARD_OPTIONS);
+      await fs.rm(sourceDir, TEMP_REMOVAL_OPTIONS);
     }
     return snapshot;
   }
@@ -225,13 +238,24 @@ function sha256Hex(value: string | Buffer): string {
   return createHash("sha256").update(value).digest("hex");
 }
 
+/** Whether `target` is a real folder. Only "not there" (ENOENT, ENOTDIR) answers no; any other failure is thrown. */
 function isPlainDirectory(target: string): boolean {
   try {
     const info = fsSync.lstatSync(target);
     return info.isDirectory() && !info.isSymbolicLink();
-  } catch {
-    return false;
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw error;
   }
+}
+
+/** Whether an open file is the one the listing saw. A device or file id of 0 means the platform gave none. */
+function matchesListing(opened: BigIntStats, file: PluginTreeFile): boolean {
+  if (!opened.isFile() || opened.nlink !== 1n || Number(opened.size) !== file.bytes) return false;
+  if (file.dev !== 0n && opened.dev !== 0n && opened.dev !== file.dev) return false;
+  if (file.ino !== 0n && opened.ino !== 0n && opened.ino !== file.ino) return false;
+  return true;
 }
 
 function unsafe(message: string): PluginTreeRefusedError {

@@ -10,7 +10,16 @@ import {
   type PluginSource,
   type PluginTrust,
 } from "@goatcitadel/contracts";
-import { GitCommitFetchRefusedError, GitFetchInputError, GitTreeLimitError, fetchGitTree } from "./hardened-git.js";
+import {
+  GitCommitFetchRefusedError,
+  GitFetchInputError,
+  GitHostRefusedError,
+  GitTreeLimitError,
+  GitTreeRefusedError,
+  TEMP_REMOVAL_OPTIONS,
+  fetchGitTree,
+  isGitProcessFailure,
+} from "./hardened-git.js";
 import {
   PluginTreeRefusedError,
   listPluginTree,
@@ -50,6 +59,7 @@ export type PluginSourceRefusalReason =
   | "UNTRUSTED_GIT_HOST"
   | "COMMIT_NOT_FETCHABLE"
   | "GIT_FETCH_FAILED"
+  | "HOST_NOT_PUBLIC"
   | "FOLDER_INSTALL_NOT_ALLOWED"
   | "INVALID_FOLDER"
   | "FOLDER_NOT_FOUND"
@@ -74,13 +84,6 @@ export class PluginSourceError extends Error {
 const BUILT_IN_DISPLAY = "Ships with GoatCitadel";
 const UNTRUSTED_GIT_HOST_MESSAGE = "GoatCitadel installs plugins only from GitHub, GitLab, Bitbucket or Codeberg.";
 const FOLDER_REFUSED_MESSAGE = "Folder installs work only when GoatCitadel runs on this computer.";
-const WORK_DIR_REMOVAL = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
-
-/** Where a copy is made and how it becomes a snapshot: what every source needs once it has files to keep. */
-interface SnapshotTarget {
-  importSnapshot: (dir: string) => Promise<PluginSnapshot>;
-  tempRoot: string;
-}
 
 /**
  * Fetches a plugin source into a snapshot. Throws `PluginSourceError` for anything the source did wrong or the host
@@ -90,15 +93,14 @@ export async function fetchPluginSource(
   source: PluginSource,
   { importSnapshot, builtInRoot, deploymentProfile, tempRoot }: PluginSourceInputs,
 ): Promise<FetchedPluginSource> {
-  const target: SnapshotTarget = { importSnapshot, tempRoot };
   try {
     switch (source.kind) {
       case "git":
-        return await fetchGitSource(source, target);
+        return await fetchGitSource(source, importSnapshot, tempRoot);
       case "folder":
-        return await fetchFolderSource(source, deploymentProfile, target);
+        return await fetchFolderSource(source, deploymentProfile, importSnapshot, tempRoot);
       case "built_in":
-        return await fetchBuiltInSource(source, builtInRoot, target);
+        return await fetchBuiltInSource(source, builtInRoot, importSnapshot, tempRoot);
       default:
         throw new PluginSourceError(400, "INVALID_SOURCE", "That isn't a kind of plugin source GoatCitadel knows.");
     }
@@ -113,10 +115,11 @@ export async function fetchPluginSource(
 
 async function fetchGitSource(
   source: Extract<PluginSource, { kind: "git" }>,
-  target: SnapshotTarget,
+  importSnapshot: PluginSourceInputs["importSnapshot"],
+  tempRoot: string,
 ): Promise<FetchedPluginSource> {
   const url = admitGitUrl(source.url);
-  return withWorkDir(target, "git-", async (workDir) => {
+  return withWorkDir(tempRoot, "git-", async (workDir) => {
     const treeDir = path.join(workDir, "tree");
     let commit: string;
     try {
@@ -133,7 +136,7 @@ async function fetchGitSource(
     } catch (error) {
       throw asGitFailure(error);
     }
-    const snapshot = await target.importSnapshot(treeDir);
+    const snapshot = await importSnapshot(treeDir);
     return { snapshot, pin: { kind: "commit", commit }, trust: "unverified", sourceDisplay: describeGitSource(url) };
   });
 }
@@ -173,41 +176,61 @@ function describeGitSource(url: URL): string {
   return [url.hostname, ...named].join("/");
 }
 
-function asGitFailure(error: unknown): Error {
-  if (error instanceof PluginSourceError) return error;
+/**
+ * Turns an error from `fetchGitTree` into a `PluginSourceError` when it is one of Git's or hardened-git's own typed
+ * refusals, or a Git subprocess failure. Anything else is GoatCitadel's own error (a disk that can't be written, say)
+ * and is returned as it is, so it is never labelled a Git failure and its detail stays out of the operator's message.
+ */
+function asGitFailure(error: unknown): unknown {
   if (error instanceof GitCommitFetchRefusedError) {
     return new PluginSourceError(422, "COMMIT_NOT_FETCHABLE", error.message, { cause: error });
   }
   if (error instanceof GitTreeLimitError) {
     return new PluginSourceError(413, "TREE_OVER_LIMITS", error.message, { cause: error });
   }
+  if (error instanceof GitTreeRefusedError) {
+    return new PluginSourceError(422, "UNSAFE_TREE", error.message, { cause: error });
+  }
   if (error instanceof GitFetchInputError) {
     return new PluginSourceError(400, "INVALID_GIT_SOURCE", error.message, { cause: error });
   }
-  return new PluginSourceError(
-    502,
-    "GIT_FETCH_FAILED",
-    `GoatCitadel couldn't fetch that Git repository. ${describeGitFailure(error)}`,
-    { cause: error },
-  );
+  if (error instanceof GitHostRefusedError) {
+    return new PluginSourceError(422, "HOST_NOT_PUBLIC", error.message, { cause: error });
+  }
+  if (isGitProcessFailure(error)) {
+    return new PluginSourceError(
+      502,
+      "GIT_FETCH_FAILED",
+      `GoatCitadel couldn't fetch that Git repository. ${describeGitFailure(error)}`,
+      { cause: error },
+    );
+  }
+  return error;
 }
 
+/** Text that names a place on this computer (a drive or absolute path) or shows how Git was run. */
+const LOCAL_DETAIL = /(?:^|[^A-Za-z0-9])[A-Za-z]:[\\/]|\\\\|(?:^|[\s'"(=])\/[^\s/]|\bgit\s+-c\b/u;
+
 /**
- * A sentence for why a fetch failed: Git's own last `fatal:` or `error:` line when it has one. The command line and
- * temp paths that Node puts in the error message are left out; the full error stays as the `cause` for the log.
+ * A sentence for why a fetch failed: Git's own last `fatal:` or `error:` line, read from `stderr` (text or a Buffer).
+ * It never uses the error's message, which holds the whole command line, and it drops a line that names a path on this
+ * computer. The full error stays as the `cause` for the log.
  */
 function describeGitFailure(error: unknown): string {
-  const failure = error as { name?: string; killed?: boolean; stderr?: unknown; message?: unknown };
+  const failure = error as { name?: string; killed?: boolean; stderr?: unknown };
   if (failure.name === "AbortError" || failure.killed) return "It took too long.";
-  if (typeof failure.stderr === "string") {
-    const line = failure.stderr
-      .split(/\r?\n/u)
-      .map((candidate) => candidate.trim())
-      .filter((candidate) => /^(?:fatal|error):/iu.test(candidate))
-      .at(-1);
-    return line ? `Git said: ${line.replace(/^(?:fatal|error):\s*/iu, "").slice(0, 200)}` : "Git didn't finish.";
-  }
-  return typeof failure.message === "string" && failure.message ? failure.message.slice(0, 200) : "Git didn't finish.";
+  const stderr = Buffer.isBuffer(failure.stderr)
+    ? failure.stderr.toString("utf8")
+    : typeof failure.stderr === "string"
+      ? failure.stderr
+      : "";
+  const line = stderr
+    .split(/\r?\n/u)
+    .map((candidate) => candidate.trim())
+    .filter((candidate) => /^(?:fatal|error):/iu.test(candidate))
+    .at(-1);
+  const detail = line?.replace(/^(?:fatal|error):\s*/iu, "").slice(0, 200);
+  return detail && !LOCAL_DETAIL.test(detail) ? `Git said: ${detail}` : "Git didn't finish.";
 }
 
 // ---------------------------------------------------------------------------
@@ -217,13 +240,14 @@ function describeGitFailure(error: unknown): string {
 async function fetchFolderSource(
   source: Extract<PluginSource, { kind: "folder" }>,
   deploymentProfile: DeploymentProfile,
-  target: SnapshotTarget,
+  importSnapshot: PluginSourceInputs["importSnapshot"],
+  tempRoot: string,
 ): Promise<FetchedPluginSource> {
   if (deploymentProfile === "remote_hardened") {
     throw new PluginSourceError(403, "FOLDER_INSTALL_NOT_ALLOWED", FOLDER_REFUSED_MESSAGE);
   }
   const folder = await requireAbsoluteFolder(source.path);
-  const snapshot = await copyIntoSnapshot(folder, target);
+  const snapshot = await copyIntoSnapshot(folder, importSnapshot, tempRoot);
   return {
     snapshot,
     pin: { kind: "content", treeSha256: snapshot.treeSha256 },
@@ -250,6 +274,10 @@ async function requireAbsoluteFolder(raw: unknown): Promise<string> {
     throw new PluginSourceError(400, "INVALID_FOLDER", "Give the full path of a folder on this computer.");
   }
   const folder = path.resolve(raw);
+  // A folder source is the plugin's own folder; its `.git` folder is version-control metadata, never a plugin.
+  if (path.basename(folder).toLowerCase() === ".git") {
+    throw new PluginSourceError(400, "INVALID_FOLDER", "Choose the plugin's folder, not its .git folder.");
+  }
   let info;
   try {
     info = await fs.lstat(folder);
@@ -273,7 +301,8 @@ async function requireAbsoluteFolder(raw: unknown): Promise<string> {
 async function fetchBuiltInSource(
   source: Extract<PluginSource, { kind: "built_in" }>,
   builtInRoot: string,
-  target: SnapshotTarget,
+  importSnapshot: PluginSourceInputs["importSnapshot"],
+  tempRoot: string,
 ): Promise<FetchedPluginSource> {
   // The id is checked before any path is built, so no caller text ever reaches the file system.
   if (!isPluginId(source.pluginId)) {
@@ -292,7 +321,7 @@ async function fetchBuiltInSource(
     throw error;
   }
   if (!info.isDirectory() && !info.isSymbolicLink()) throw notShipped();
-  const snapshot = await copyIntoSnapshot(folder, target);
+  const snapshot = await copyIntoSnapshot(folder, importSnapshot, tempRoot);
   return {
     snapshot,
     pin: { kind: "content", treeSha256: snapshot.treeSha256 },
@@ -320,8 +349,12 @@ function isPluginId(value: unknown): value is string {
  * is left out without being opened, so a snapshot never holds version-control metadata, and a plugin folder that is a
  * checkout gets the same snapshot as the same files without it.
  */
-function copyIntoSnapshot(sourceRoot: string, target: SnapshotTarget): Promise<PluginSnapshot> {
-  return withWorkDir(target, "copy-", async (workDir) => {
+function copyIntoSnapshot(
+  sourceRoot: string,
+  importSnapshot: PluginSourceInputs["importSnapshot"],
+  tempRoot: string,
+): Promise<PluginSnapshot> {
+  return withWorkDir(tempRoot, "copy-", async (workDir) => {
     const copyDir = path.join(workDir, "tree");
     const files = await listPluginTree(sourceRoot, { skipVcsMetadata: true });
     await fs.mkdir(copyDir);
@@ -331,22 +364,19 @@ function copyIntoSnapshot(sourceRoot: string, target: SnapshotTarget): Promise<P
       await fs.mkdir(path.dirname(destination), { recursive: true });
       await fs.writeFile(destination, content, { flag: "wx" });
     }
-    return target.importSnapshot(copyDir);
+    return importSnapshot(copyDir);
   });
 }
 
 /** Runs `work` in a new folder under `tempRoot` and removes the folder afterwards, whatever happened. */
-async function withWorkDir<T>(
-  target: SnapshotTarget,
-  prefix: string,
-  work: (workDir: string) => Promise<T>,
-): Promise<T> {
-  await fs.mkdir(target.tempRoot, { recursive: true });
-  const workDir = await fs.mkdtemp(path.join(path.resolve(target.tempRoot), prefix));
+async function withWorkDir<T>(tempRoot: string, prefix: string, work: (workDir: string) => Promise<T>): Promise<T> {
+  await fs.mkdir(tempRoot, { recursive: true });
+  const workDir = await fs.mkdtemp(path.join(path.resolve(tempRoot), prefix));
   try {
     return await work(workDir);
   } finally {
-    await fs.rm(workDir, WORK_DIR_REMOVAL).catch(() => undefined);
+    // Best effort: the work folder is only scratch, and a failed removal mustn't hide the real result or error.
+    await fs.rm(workDir, TEMP_REMOVAL_OPTIONS).catch(() => undefined);
   }
 }
 

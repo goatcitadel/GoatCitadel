@@ -9,7 +9,14 @@ vi.mock("./hardened-git.js", async (importOriginal) => ({
   fetchGitTree: vi.fn(),
 }));
 
-import { GitCommitFetchRefusedError, GitFetchInputError, GitTreeLimitError, fetchGitTree } from "./hardened-git.js";
+import {
+  GitCommitFetchRefusedError,
+  GitFetchInputError,
+  GitHostRefusedError,
+  GitTreeLimitError,
+  GitTreeRefusedError,
+  fetchGitTree,
+} from "./hardened-git.js";
 import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { PluginSourceError, fetchPluginSource } from "./plugin-source-service.js";
 
@@ -243,6 +250,126 @@ describe("fetchPluginSource: Git", () => {
     expect(tempLeftovers()).toEqual([]);
   });
 
+  describe("keeps the operator's words plain", () => {
+    /** Nothing an operator reads may carry a temp path, the work folder's name or how Git was run. */
+    function expectPlain(failure: Error): void {
+      for (const leak of [scratchRoot, os.tmpdir(), "git -c", "Command failed", "protocol.allow", ".git-scratch"]) {
+        expect(failure.message, leak).not.toContain(leak);
+      }
+    }
+
+    it("reads Git's words from a stderr Buffer, never from the command line", async () => {
+      fetchGitTreeMock.mockRejectedValueOnce(
+        Object.assign(
+          new Error(
+            `Command failed: git -c protocol.allow=never -c protocol.https.allow=always clone -- https://github.com/o/r ${scratchRoot}\n`,
+          ),
+          { code: 128, stderr: Buffer.from("Cloning...\r\nfatal: repository 'https://github.com/o/r/' not found\r\n") },
+        ),
+      );
+
+      const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
+
+      expect(failure).toMatchObject({
+        statusCode: 502,
+        reason: "GIT_FETCH_FAILED",
+        message:
+          "GoatCitadel couldn't fetch that Git repository. Git said: repository 'https://github.com/o/r/' not found",
+      });
+      expectPlain(failure);
+    });
+
+    it("drops a line of Git's that names a place on this computer", async () => {
+      const lines = [
+        `fatal: could not create work tree dir '${path.join(scratchRoot, "tmp", "git-1", "tree.git-scratch")}': Permission denied`,
+        "fatal: could not create work tree dir 'C:\\Users\\someone\\AppData\\Local\\Temp\\tree.git-scratch': denied",
+        "fatal: could not create work tree dir '/tmp/goat/git-1/tree.git-scratch': Permission denied",
+        "fatal: unable to access '\\\\server\\share\\repo': denied",
+      ];
+      for (const line of lines) {
+        fetchGitTreeMock.mockRejectedValueOnce(
+          Object.assign(new Error(`Command failed: git -c protocol.allow=never clone ${scratchRoot}`), {
+            code: 128,
+            stderr: Buffer.from(`${line}\n`),
+          }),
+        );
+        const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
+        expect(failure, line).toMatchObject({
+          statusCode: 502,
+          reason: "GIT_FETCH_FAILED",
+          message: "GoatCitadel couldn't fetch that Git repository. Git didn't finish.",
+        });
+        expectPlain(failure);
+      }
+    });
+
+    it("says only that Git didn't finish when it left nothing to read", async () => {
+      fetchGitTreeMock.mockRejectedValueOnce(
+        Object.assign(new Error(`Command failed: git -c protocol.allow=never fetch ${scratchRoot}`), { code: 1 }),
+      );
+      const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
+      expect(failure.message).toBe("GoatCitadel couldn't fetch that Git repository. Git didn't finish.");
+      expectPlain(failure);
+    });
+
+    it("lets a file system failure through unchanged, not labelled a Git failure", async () => {
+      const failure = Object.assign(
+        new Error(
+          `EPERM: operation not permitted, mkdir '${path.join(scratchRoot, "tmp", "git-1", "tree", "skills")}'`,
+        ),
+        { code: "EPERM", syscall: "mkdir", errno: -4048 },
+      );
+      fetchGitTreeMock.mockRejectedValueOnce(failure);
+
+      const thrown = await fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()).catch(
+        (error: unknown) => error,
+      );
+
+      expect(thrown).toBe(failure);
+      expect(thrown).not.toBeInstanceOf(PluginSourceError);
+      expect(tempLeftovers()).toEqual([]);
+    });
+
+    it("lets any other error of GoatCitadel's own through unchanged", async () => {
+      const failure = new Error("The fetched Git revision is not the exact commit that was asked for.");
+      fetchGitTreeMock.mockRejectedValueOnce(failure);
+      const thrown = await fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()).catch(
+        (error: unknown) => error,
+      );
+      expect(thrown).toBe(failure);
+    });
+
+    it("refuses an address that isn't a public host with a plain 422", async () => {
+      fetchGitTreeMock.mockRejectedValueOnce(
+        new GitHostRefusedError({
+          cause: new Error(`Private or reserved host blocked: 10.0.0.5 (resolved by github.example, ${scratchRoot})`),
+        }),
+      );
+
+      const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
+
+      expect(failure).toMatchObject({
+        statusCode: 422,
+        reason: "HOST_NOT_PUBLIC",
+        message: "That address isn't a public host.",
+      });
+      expectPlain(failure);
+      expect(failure.message).not.toContain("10.0.0.5");
+    });
+
+    it("refuses a tree the Git reader found unsafe, in the tree's own words", async () => {
+      fetchGitTreeMock.mockRejectedValueOnce(
+        new GitTreeRefusedError("Git plugin tree contains a symlink, submodule, or unsupported object at skills/link."),
+      );
+      const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
+      expect(failure).toMatchObject({
+        statusCode: 422,
+        reason: "UNSAFE_TREE",
+        message: "Git plugin tree contains a symlink, submodule, or unsupported object at skills/link.",
+      });
+    });
+  });
+
   it("refuses a fetched tree that holds a link, and cleans up", async () => {
     const outside = makeFolder({ "secret.txt": "x" });
     fetchGitTreeMock.mockImplementation(async (input) => {
@@ -382,6 +509,19 @@ describe("fetchPluginSource: folder", () => {
     expect(namesBelow(withLink.snapshot.dir)).not.toContain("secret.txt");
   });
 
+  it("refuses a folder that is itself a .git folder", async () => {
+    const gitFolder = makeFolder({ HEAD: "ref: refs/heads/main", "objects/ab/cdef": "object" }, scratchRoot, ".git");
+    for (const folderPath of [gitFolder, `${gitFolder}${path.sep}`, path.join(path.dirname(gitFolder), ".GIT")]) {
+      const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folderPath }, inputs()));
+      expect(failure, folderPath).toMatchObject({
+        statusCode: 400,
+        reason: "INVALID_FOLDER",
+        message: "Choose the plugin's folder, not its .git folder.",
+      });
+    }
+    expect(tempLeftovers()).toEqual([]);
+  });
+
   it("still refuses a link that isn't named .git", async () => {
     const outside = makeFolder({ "secret.txt": "do not read" });
     const folder = makeFolder(PLUGIN_FILES);
@@ -415,6 +555,10 @@ describe("fetchPluginSource: folder", () => {
         });
       }
       for (const spy of fileSystemCalls) expect(spy).not.toHaveBeenCalled();
+
+      // The same spies see an ordinary folder, so "not called" above means something.
+      await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, inputs());
+      expect(fileSystemCalls[0]).toHaveBeenCalled();
     } finally {
       for (const spy of fileSystemCalls) spy.mockRestore();
     }

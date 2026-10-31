@@ -2,9 +2,14 @@ import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_LIMITS } from "@goatcitadel/contracts";
-import { PluginSnapshotStore, listPluginTree } from "./plugin-snapshot-store.js";
+import {
+  PluginSnapshotPathError,
+  PluginSnapshotStore,
+  listPluginTree,
+  readPluginFileBounded,
+} from "./plugin-snapshot-store.js";
 
 let scratchRoot: string;
 let store: PluginSnapshotStore;
@@ -205,7 +210,71 @@ describe("PluginSnapshotStore.importDirectory", () => {
   });
 
   it("rejects a folder that isn't there", async () => {
-    await expect(store.importDirectory(path.join(scratchRoot, "missing"))).rejects.toThrow();
+    await expect(store.importDirectory(path.join(scratchRoot, "missing"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("stops reading a folder as soon as it holds too many entries", async () => {
+    let yielded = 0;
+    const hugeFolder = {
+      async *[Symbol.asyncIterator]() {
+        for (let index = 0; index < 1_000_000; index += 1) {
+          yielded += 1;
+          yield { name: `f${index}.md` };
+        }
+      },
+    };
+    const opendir = vi.spyOn(fs.promises, "opendir").mockResolvedValue(hugeFolder as never);
+    try {
+      await expect(listPluginTree(makeFolder({ "a.md": "a" }))).rejects.toMatchObject({
+        reason: "TREE_OVER_LIMITS",
+        message: `A plugin can hold at most ${PLUGIN_LIMITS.maxFiles * 2} files and folders.`,
+      });
+    } finally {
+      opendir.mockRestore();
+    }
+    // The first entry past the limit ended the read; the other 999,000-odd were never asked for.
+    expect(yielded).toBe(PLUGIN_LIMITS.maxFiles * 2 + 1);
+  });
+
+  it("refuses two folders that differ only in case", async () => {
+    // A real disk can't hold both spellings on Windows or macOS, so the folder listing is faked: two folders, one
+    // spelled `Skills` and one `skills`, each with a file.
+    const root = makeFolder({ "readme.md": "r" });
+    const listing = new Map<string, string[]>([
+      [root, ["Skills", "skills"]],
+      [path.join(root, "Skills"), ["a.md"]],
+      [path.join(root, "skills"), ["b.md"]],
+    ]);
+    const realLstat = fs.promises.lstat.bind(fs.promises);
+    let fileId = 0n;
+    const opendir = vi.spyOn(fs.promises, "opendir").mockImplementation((async (folder: string) => ({
+      async *[Symbol.asyncIterator]() {
+        for (const name of listing.get(String(folder)) ?? []) yield { name };
+      },
+    })) as never);
+    const lstat = vi.spyOn(fs.promises, "lstat").mockImplementation((async (target: string, options?: object) => {
+      if (target === root) return realLstat(target, options as never);
+      const isFolder = listing.has(String(target));
+      fileId += 1n;
+      return {
+        isSymbolicLink: () => false,
+        isDirectory: () => isFolder,
+        isFile: () => !isFolder,
+        nlink: 1n,
+        size: 1n,
+        dev: 1n,
+        ino: fileId,
+      };
+    }) as never);
+    try {
+      await expect(listPluginTree(root)).rejects.toMatchObject({
+        reason: "UNSAFE_TREE",
+        message: expect.stringMatching(/^The plugin folder contains a case-colliding path: [Ss]kills\/[ab]\.md\.$/u),
+      });
+    } finally {
+      opendir.mockRestore();
+      lstat.mockRestore();
+    }
   });
 
   it("is a plain list of files for the callers that only need to look", async () => {
@@ -260,7 +329,7 @@ describe("PluginSnapshotStore.resolve", () => {
       "skills/\u0000/one",
       ".git/config",
     ]) {
-      expect(() => store.resolve(hash, relativePath), JSON.stringify(relativePath)).toThrow();
+      expect(() => store.resolve(hash, relativePath), JSON.stringify(relativePath)).toThrow(PluginSnapshotPathError);
     }
   });
 
@@ -278,12 +347,65 @@ describe("PluginSnapshotStore.resolve", () => {
       `${snapshot.treeSha256}\u0000`,
       "g".repeat(64),
     ]) {
-      expect(() => store.resolve(id), JSON.stringify(id)).toThrow();
+      expect(() => store.resolve(id), JSON.stringify(id)).toThrow(PluginSnapshotPathError);
     }
   });
 
   it("refuses a snapshot that isn't there", () => {
     expect(() => store.resolve("a".repeat(64))).toThrow(/isn't on this computer/u);
     expect(() => store.resolve("a".repeat(64), "skills/one")).toThrow(/isn't on this computer/u);
+  });
+
+  it("says a snapshot is missing only when it is, not when the disk can't be read", () => {
+    const hash = "b".repeat(64);
+    const wanted = path.join(storeRoot, hash);
+    const realLstatSync = fs.lstatSync.bind(fs);
+    const denied = Object.assign(new Error(`EACCES: permission denied, lstat '${wanted}'`), { code: "EACCES" });
+    const lstatSync = vi.spyOn(fs, "lstatSync").mockImplementation(((target: string, ...rest: unknown[]) => {
+      if (target === wanted) throw denied;
+      return realLstatSync(target, ...(rest as []));
+    }) as never);
+    try {
+      expect(() => store.resolve(hash)).toThrow(denied);
+    } finally {
+      lstatSync.mockRestore();
+    }
+    // The same snapshot, truly absent, is the ordinary refusal.
+    expect(() => store.resolve(hash)).toThrow(PluginSnapshotPathError);
+  });
+});
+
+describe("readPluginFileBounded", () => {
+  const swapped = "The folder changed while it was being copied.";
+
+  it("reads the file the listing saw", async () => {
+    const [file] = await listPluginTree(makeFolder({ "a.md": "hello" }));
+    expect((await readPluginFileBounded(file!)).toString("utf8")).toBe("hello");
+  });
+
+  it("refuses a file that was swapped for another after the listing", async () => {
+    const source = makeFolder({ "a.md": "aaaa" });
+    const [file] = await listPluginTree(source);
+    // Same name, same size, different file: a new one renamed over the listed one.
+    fs.writeFileSync(path.join(source, "impostor.tmp"), "zzzz");
+    fs.renameSync(path.join(source, "impostor.tmp"), path.join(source, "a.md"));
+
+    await expect(readPluginFileBounded(file!)).rejects.toMatchObject({ reason: "UNSAFE_TREE", message: swapped });
+  });
+
+  it("refuses a file that changed size after the listing", async () => {
+    const source = makeFolder({ "a.md": "aaaa" });
+    const [file] = await listPluginTree(source);
+    fs.appendFileSync(path.join(source, "a.md"), "more");
+
+    await expect(readPluginFileBounded(file!)).rejects.toMatchObject({ reason: "UNSAFE_TREE", message: swapped });
+  });
+
+  it("refuses a file that gained a second link after the listing", async () => {
+    const source = makeFolder({ "a.md": "aaaa" });
+    const [file] = await listPluginTree(source);
+    fs.linkSync(path.join(source, "a.md"), path.join(scratchRoot, "twin.md"));
+
+    await expect(readPluginFileBounded(file!)).rejects.toMatchObject({ reason: "UNSAFE_TREE", message: swapped });
   });
 });
