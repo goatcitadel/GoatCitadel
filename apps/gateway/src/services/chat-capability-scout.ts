@@ -463,8 +463,16 @@ export function collectGapEvidence(input: CapabilityScoutInput): GapEvidence | u
     const ext = fileExtension(attachment.fileName);
     if (ext) return { kind: "unreadable_attachment", ext };
   }
-  const failed = toolRuns.find((run) => run.status === "failed" && CODE_MODE_REPLACEABLE_TOOL_NAMES.has(run.toolName));
+  const failed = toolRuns.find((run) => run.status === "failed" && isCodeModeReplaceableRun(run));
   return failed ? { kind: "tool_failed", toolName: failed.toolName } : undefined;
+}
+
+/** docs.ingest reads a local file only with sourceType "file"; it has no default, and a URL or text ingest is not one. */
+function isCodeModeReplaceableRun(run: { toolName: string; args?: Record<string, unknown> }): boolean {
+  return (
+    CODE_MODE_REPLACEABLE_TOOL_NAMES.has(run.toolName) &&
+    (run.toolName !== "docs.ingest" || run.args?.sourceType === "file")
+  );
 }
 
 /**

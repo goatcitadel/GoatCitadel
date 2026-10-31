@@ -396,6 +396,7 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
             sessionId: "session-1",
             // Reading the lesson notes failed: a gap a local Code Mode script can close.
             toolName: "docs.ingest",
+            args: { sourceType: "file", source: "lesson-notes.docx", namespace: "lessons" },
             status: "failed" as const,
             startedAt: new Date().toISOString(),
           },
@@ -778,6 +779,15 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
       // A failed file read is.
       expect(await titles([{ toolName: "fs.read", status: "failed" }])).toEqual([
         "Build a tool for what fs read couldn't do",
+      ]);
+      // docs.ingest reads a local file only with sourceType "file" (it has no default), so a failed URL ingest is not.
+      const ingest = (args?: Record<string, unknown>) => [{ toolName: "docs.ingest", status: "failed" as const, args }];
+      expect(await titles(ingest({ sourceType: "url", source: "https://example.com/notes", namespace: "n" }))).toEqual(
+        [],
+      );
+      expect(await titles(ingest())).toEqual([]);
+      expect(await titles(ingest({ sourceType: "file", source: "notes.docx", namespace: "n" }))).toEqual([
+        "Build a tool for what docs ingest couldn't do",
       ]);
     });
 
