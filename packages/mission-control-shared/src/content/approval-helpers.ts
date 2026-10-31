@@ -418,7 +418,7 @@ export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): Appr
   const input = codeModeRequestInput(payload?.input);
   const entries: ApprovalTargetEntry[] = [
     { label: "Goal", value: goal },
-    // The Gateway refuses every helper call in the run that names anything else, so a request that lists none reads
+    // The Gateway refuses every helper call in the run that names anything else, so with none listed its helpers read
     // no files.
     { label: "Reads", value: reads.length ? reads.join(", ") : "No files" },
     ...(input ? [{ label: "Input", value: input }] : []),
@@ -429,9 +429,13 @@ export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): Appr
     commands: [],
     changes: [{ label: "Code to run", content: source }],
     supporting: [],
+    // The limit is the Gateway's check on every helper call, not the sandbox (the code is trusted, never claimed to be
+    // contained as hostile code), so the line says GoatCitadel holds the reads to the list.
     consequence:
       "Approving runs this exact code once, on this computer in a restricted sandbox. " +
-      (reads.length ? "It can read only what is listed under Reads. " : "It can't read any files. ") +
+      (reads.length
+        ? "GoatCitadel lets it read only what is listed under Reads. "
+        : "GoatCitadel lets it read no files. ") +
       "Denying keeps it from running.",
   };
 }

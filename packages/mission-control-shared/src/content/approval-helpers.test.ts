@@ -367,10 +367,11 @@ it("shows what a Chat Code Mode request reads and the input its code gets, so th
     'Input: {"path":".env"}',
   ]);
   expect(model?.changes).toEqual([{ label: "Code to run", content: source }]);
-  // The Gateway refuses every helper call that names anything outside Reads, so the consequence can say so.
+  // The Gateway refuses every helper call that names anything outside Reads, so the consequence says GoatCitadel holds
+  // the reads to that list; it never says the sandbox does, which would claim hostile-code sandboxing.
   expect(model?.consequence).toBe(
-    "Approving runs this exact code once, on this computer in a restricted sandbox. It can read only what is " +
-      "listed under Reads. Denying keeps it from running.",
+    "Approving runs this exact code once, on this computer in a restricted sandbox. GoatCitadel lets it read only " +
+      "what is listed under Reads. Denying keeps it from running.",
   );
   // A request without reads reads no files, and one without input gets none.
   const readsNothing = request({ goal, source });
@@ -379,7 +380,7 @@ it("shows what a Chat Code Mode request reads and the input its code gets, so th
     { label: "Reads", value: "No files" },
   ]);
   expect(readsNothing?.consequence).toBe(
-    "Approving runs this exact code once, on this computer in a restricted sandbox. It can't read any files. " +
-      "Denying keeps it from running.",
+    "Approving runs this exact code once, on this computer in a restricted sandbox. GoatCitadel lets it read no " +
+      "files. Denying keeps it from running.",
   );
 });
