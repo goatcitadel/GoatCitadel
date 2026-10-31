@@ -235,8 +235,7 @@ describe("tool executor loop 20 branch tails", () => {
     const exactContent = Buffer.alloc(FILESYSTEM_READ_MAX_BYTES, 0x20);
     exactContent.write("plain text\n", 0, "utf8");
     await fs.writeFile(exactPath, exactContent);
-    await fs.writeFile(oversizedPath, "", "utf8");
-    await fs.truncate(oversizedPath, FILESYSTEM_READ_MAX_BYTES + 1);
+    await fs.writeFile(oversizedPath, Buffer.alloc(FILESYSTEM_READ_MAX_BYTES + 1, 0x20));
 
     const exact = await executeTool(request("fs.read", { path: exactPath }), config, storageStub());
     expect(exact.bytes).toBe(FILESYSTEM_READ_MAX_BYTES);
@@ -245,6 +244,14 @@ describe("tool executor loop 20 branch tails", () => {
     await expect(executeTool(request("fs.read", { path: oversizedPath }), config, storageStub())).rejects.toThrow(
       `${FILESYSTEM_READ_MAX_BYTES} byte limit`,
     );
+
+    // An oversized binary file returns the binary hint with no content, so the limit is never bypassed.
+    const oversizedBinaryPath = path.join(tempRoot, "fs-read-oversized.bin");
+    await fs.writeFile(oversizedBinaryPath, "", "utf8");
+    await fs.truncate(oversizedBinaryPath, FILESYSTEM_READ_MAX_BYTES + 1);
+    await expect(
+      executeTool(request("fs.read", { path: oversizedBinaryPath }), config, storageStub()),
+    ).resolves.toMatchObject({ binary: true, content: "", bytes: FILESYSTEM_READ_MAX_BYTES + 1 });
   }, 20_000);
 
   it("allows file.read_range at the byte limit and rejects an oversized file", async () => {
