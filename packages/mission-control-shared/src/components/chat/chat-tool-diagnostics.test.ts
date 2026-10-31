@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
-import { getChatToolRunDiagnostics } from "./chat-tool-diagnostics";
+import { getChatToolRunDiagnostics, isFailedCodeModeRequest } from "./chat-tool-diagnostics";
 
 function run(result: Record<string, unknown>): ChatToolRunRecord {
   return {
@@ -54,5 +54,26 @@ describe("getChatToolRunDiagnostics design-instruction posture", () => {
       ).summary,
     ).toBeUndefined();
     expect(getChatToolRunDiagnostics(run({ message: "done" })).summary).toBe("done");
+  });
+});
+
+describe("getChatToolRunDiagnostics for a Chat Code Mode request", () => {
+  const request = (result: Record<string, unknown>): ChatToolRunRecord => ({
+    ...run(result),
+    toolName: "code_mode.request",
+  });
+
+  it("treats a request whose code failed as a failure, with its error as the summary", () => {
+    // The tool call settles as executed so the turn can resume; the outcome is in its result.
+    const failed = request({ runId: "r1", status: "failed", error: "Code Mode is off.", durationMs: 0 });
+    expect(isFailedCodeModeRequest(failed)).toBe(true);
+    expect(getChatToolRunDiagnostics(failed)).toMatchObject({ hasFailureSignal: true, summary: "Code Mode is off." });
+  });
+
+  it("keeps a completed request, and another tool's failed status, as they were", () => {
+    const completed = request({ runId: "r1", status: "completed", durationMs: 1200 });
+    expect(isFailedCodeModeRequest(completed)).toBe(false);
+    expect(getChatToolRunDiagnostics(completed).hasFailureSignal).toBe(false);
+    expect(isFailedCodeModeRequest(run({ status: "failed" }))).toBe(false);
   });
 });

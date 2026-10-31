@@ -41,6 +41,8 @@ type TurnActions = Pick<
   | "onOpenGeneratedArtifact"
 >;
 
+const isCodeModeRequest = (tool: ChatToolRunRecord): boolean => tool.toolName === "code_mode.request";
+
 function activityLabel(tool: ChatToolRunRecord): string {
   return presentToolRunStatus(tool).label;
 }
@@ -60,8 +62,9 @@ function readDesignAdvisories(tool: ChatToolRunRecord): DesignAdvisory[] {
 
 function toolRunSummaryText(tool: ChatToolRunRecord): string {
   return (
-    tool.failureGuidance ??
-    getChatToolRunDiagnostics(tool).summary ??
+    // An approved call that settled records empty guidance, which is no guidance.
+    tool.failureGuidance ||
+    getChatToolRunDiagnostics(tool).summary ||
     (tool.error ? presentErrorText(tool.error).summary : "")
   );
 }
@@ -163,10 +166,21 @@ export function ChatTurnDetails({
   // the turn without a browser stream, and the turn is still working.
   const turnLive = streaming || !isChatTurnTerminalStatus(turn.trace.status);
   // CH-39: opens while the turn is live or when a tool needs attention, and stays open once the operator opened it.
-  // A list that only opened for a live turn folds shut when the turn settles cleanly.
+  // A list that only opened for a live turn folds shut when the turn settles cleanly. A Code Mode request is the
+  // Code Mode card's: the card asks for it and states its outcome, so neither the request nor a turn parked on it
+  // opens the list. Its row stays here for an operator who opens it.
+  const parkedOnCodeModeCard =
+    !streaming &&
+    turn.trace.status === "waiting_for_approval" &&
+    turn.toolRuns.some(
+      (tool) => isCodeModeRequest(tool) && (tool.status === "approval_required" || tool.status === "started"),
+    );
   const toolDisclosure = useAutoOpenDisclosure(
-    turnLive ||
-      turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+    (turnLive && !parkedOnCodeModeCard) ||
+      turn.toolRuns.some(
+        (tool) =>
+          !isCodeModeRequest(tool) && (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+      ),
     { closeWhenSettled: true },
   );
   const counts = new Map<string, number>();
