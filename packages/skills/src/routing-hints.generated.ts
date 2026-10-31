@@ -225,6 +225,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use to run or triage an existing suite."],
     confidenceBoost: 0.1,
   },
+  // Explicit-only: no phrases or keywords, so it loads only for `use ponytail`, `@skill ponytail`, or `$bundled:ponytail`.
+  ponytail: {
+    phrases: [],
+    keywords: [],
+    surfaces: ["code"],
+    whenToUse: ["Make the smallest complete change when the operator names ponytail."],
+    whenNotToUse: ["Never selected automatically."],
+  },
   "receiving-code-review": {
     phrases: ["address the review", "reviewer said"],
     keywords: ["review feedback", "pr comments"],

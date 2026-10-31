@@ -45,6 +45,15 @@ GoatCitadel is licensed under the Apache License 2.0 (see `LICENSE`). This file 
 - Vendored path: `skills/bundled/secure-coding/` (from `security-and-hardening`) and `skills/bundled/source-driven-development/` (from `source-driven-development`); each SKILL.md rewritten for GoatCitadel, no hooks, commands, agents, or evals
 - Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
 
+## ponytail
+
+- Repository: https://github.com/DietrichGebert/ponytail
+- License: MIT, Copyright (c) 2026 DietrichGebert
+- Adapted at commit: `96608e078b2d5ea607c5c3b8b5a54d1c1fba6846`
+- Vendored path: `skills/bundled/ponytail/` (SKILL.md rewritten for GoatCitadel from `ponytail` and `ponytail-review`; no hooks, plugins, benchmarks, or other skills)
+- Modifications: listed in the skill's `UPSTREAM.md`; the skill carries the upstream `LICENSE`.
+- Ships explicit-only: it loads only when the operator names it.
+
 ## Hermes Agent MCP catalog (optional-mcps)
 
 - Repository: https://github.com/nousresearch/hermes-agent

@@ -123,6 +123,14 @@
       "catalogExposure": "suggestable"
     },
     {
+      "skillId": "bundled:ponytail",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "bundled:receiving-code-review",
       "owner": "code",
       "source": "bundled",

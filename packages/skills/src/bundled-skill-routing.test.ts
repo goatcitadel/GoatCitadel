@@ -44,6 +44,9 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["Is this query open to SQL injection?", ["secure-coding"]],
   ["Check the official docs and write the Next.js streaming route handler", ["source-driven-development"]],
   ["Is this API deprecated in the version we use? Follow the migration guide", ["source-driven-development"]],
+  ["use ponytail and add CSV export to the report page", ["ponytail"]],
+  ["$bundled:ponytail add CSV export to the report page", ["ponytail"]],
+  ["Keep this change small and minimal", []],
 ];
 
 let service: SkillsService;

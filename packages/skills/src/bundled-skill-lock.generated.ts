@@ -103,6 +103,13 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
     totalBytes: 566,
   },
   {
+    skillId: "bundled:ponytail",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "31a95cba0608e7e974beb3071f624cd4e27037ee61888d61915219cde6b34906",
+    fileCount: 3,
+    totalBytes: 5675,
+  },
+  {
     skillId: "bundled:qa",
     manifestVersion: "goatcitadel.skill-tree.v1",
     treeSha256: "77f4a0b28c37095e6f699cc610816f098e28a7acc8a780994861ee845f207dbc",
