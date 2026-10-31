@@ -565,9 +565,21 @@ export class CapabilitySystemService {
    * host sandbox from Chat or Settings without a restart.
    */
   private async readEffectiveSandboxConfig(): Promise<CapabilityRuntimeConfig["codeModeSandbox"]> {
+    return (await this.readCodeModeSwitches()).config;
+  }
+
+  /** The live feature flags and the sandbox config they put in force, from one flag read. */
+  private async readCodeModeSwitches(): Promise<{
+    flags: Awaited<ReturnType<CapabilitySystemServiceOptions["readFeatureFlags"]>>;
+    config: CapabilityRuntimeConfig["codeModeSandbox"];
+  }> {
     const configured = this.options.runtimeConfig.codeModeSandbox;
-    const stored = (await this.options.readFeatureFlags()).codeModeHostSandboxEnabled;
-    return typeof stored === "boolean" ? { ...configured, bestEffortHostEnabled: stored } : configured;
+    const flags = await this.options.readFeatureFlags();
+    const stored = flags.codeModeHostSandboxEnabled;
+    return {
+      flags,
+      config: typeof stored === "boolean" ? { ...configured, bestEffortHostEnabled: stored } : configured,
+    };
   }
 
   private async resolveCurrentSandboxMetadata(): Promise<CodeModeSandboxMetadata> {
@@ -575,9 +587,8 @@ export class CapabilitySystemService {
   }
 
   public async getCodeModeReadiness(): Promise<CodeModeReadiness> {
-    const flags = await this.options.readFeatureFlags();
+    const { flags, config } = await this.readCodeModeSwitches();
     const enabled = flags.codeModeV1Enabled === true;
-    const config = await this.readEffectiveSandboxConfig();
     const sandboxEnabled = config.bestEffortHostEnabled === true;
     // Probe with the host sandbox forced on so support reflects the machine, not the switch.
     const probe = this.resolveSandboxMetadata({ ...config, bestEffortHostEnabled: true });
@@ -2384,7 +2395,8 @@ export class CapabilitySystemService {
     sessionId: string | undefined,
     turnId: string | undefined,
   ): Promise<Awaited<ReturnType<Storage["chatSessionMeta"]["get"]>>> {
-    const chatSessionMeta = sessionId ? await this.options.storage.chatSessionMeta.get(sessionId) : undefined;
+    const storage = this.options.storage;
+    const chatSessionMeta = sessionId ? await storage.chatSessionMeta.get(sessionId) : undefined;
     if (sessionId && !chatSessionMeta) {
       throw new ValidationError({ message: `Code Mode session ${sessionId} was not found.` });
     }
@@ -2394,7 +2406,7 @@ export class CapabilitySystemService {
       }
       let turnTrace: ChatTurnTraceRecord;
       try {
-        turnTrace = await this.options.storage.chatTurnTraces.get(turnId);
+        turnTrace = await storage.chatTurnTraces.get(turnId);
       } catch {
         throw new ValidationError({ message: `Code Mode turn ${turnId} was not found.` });
       }
@@ -2625,10 +2637,17 @@ export class CapabilitySystemService {
       });
     }
     validateGuestSource(request.source);
-    const approval = await this.requireApprovedCodeModeRequestApproval(request);
-    await this.requireSourceMatchesApprovedCodeModeRequest(approval, request);
-    const runId = codeModeRequestRunId(approval.approvalId);
     const storage = this.options.storage;
+    const approval = this.requireApprovedCodeModeRequestApproval(
+      request,
+      await storage.approvals.get(request.approvalId).catch(() => undefined),
+    );
+    this.requireSourceMatchesApprovedCodeModeRequest(
+      approval,
+      request,
+      await storage.pendingApprovalActions.find(approval.approvalId),
+    );
+    const runId = codeModeRequestRunId(approval.approvalId);
     let existing =
       (await storage.codeModeRuns.find(runId)) ?? (await this.registerApprovedCodeModeRequestRun(runId, request));
     if (existing.codeHash !== request.approvedSourceSha256 || existing.approvalId !== approval.approvalId) {
@@ -2749,11 +2768,11 @@ export class CapabilitySystemService {
     }
   }
 
-  private async requireApprovedCodeModeRequestApproval(request: ApprovedCodeModeRequest): Promise<ApprovalRequest> {
-    let approval: ApprovalRequest;
-    try {
-      approval = await this.options.storage.approvals.get(request.approvalId);
-    } catch {
+  private requireApprovedCodeModeRequestApproval(
+    request: ApprovedCodeModeRequest,
+    approval: ApprovalRequest | undefined,
+  ): ApprovalRequest {
+    if (!approval) {
       throw new NotFoundError({ entity: "approval", id: request.approvalId });
     }
     if (approval.kind !== CODE_MODE_REQUEST_APPROVAL_KIND) {
@@ -2782,10 +2801,11 @@ export class CapabilitySystemService {
    * when the policy engine registered one, the tool.invoke pending action each hold the approved `source`. Both must
    * hash to `approvedSourceSha256`, which the caller already proved equals sha256(request.source).
    */
-  private async requireSourceMatchesApprovedCodeModeRequest(
+  private requireSourceMatchesApprovedCodeModeRequest(
     approval: ApprovalRequest,
     request: ApprovedCodeModeRequest,
-  ): Promise<void> {
+    pending: PendingApprovalAction | undefined,
+  ): void {
     const mismatch = (): ConflictError =>
       new ConflictError({
         message: "The code to run does not match the approved code. Ask for approval again.",
@@ -2794,7 +2814,6 @@ export class CapabilitySystemService {
     if (typeof approvedSource !== "string" || sha256Text(approvedSource) !== request.approvedSourceSha256) {
       throw mismatch();
     }
-    const pending = await this.options.storage.pendingApprovalActions.find(approval.approvalId);
     if (!pending) {
       return;
     }
@@ -2825,9 +2844,10 @@ export class CapabilitySystemService {
     const sandbox = await this.resolveCurrentSandboxMetadata();
     let executionBackend: CodeModeRunExecutionBackendRef;
     try {
+      const { codeModeDockerBackend, codeModeAiderAdapter } = this.options.runtimeConfig;
       executionBackend = buildCodeModeRunExecutionBackendRef(sandbox, {
-        dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
-        aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
+        dockerBackend: codeModeDockerBackend,
+        aiderAdapter: codeModeAiderAdapter,
       });
     } catch (error) {
       throw new ValidationError({ message: error instanceof Error ? error.message : String(error) });
@@ -2911,11 +2931,10 @@ export class CapabilitySystemService {
       verification: { status: "not_applicable", updatedAt: createdAt },
       createdAt,
     };
+    const storage = this.options.storage;
     // Insert only when absent: a concurrent delivery of the same approval keeps the first record.
-    const stored = await this.options.storage.runImmediateTransaction(
-      async () =>
-        (await this.options.storage.codeModeRuns.find(runId)) ??
-        (await this.options.storage.codeModeRuns.upsert(record)),
+    const stored = await storage.runImmediateTransaction(
+      async () => (await storage.codeModeRuns.find(runId)) ?? (await storage.codeModeRuns.upsert(record)),
     );
     this.recordCodeModeCapabilityProfileDecision({ run: stored, snapshot, sandbox, executionBackend, createdAt });
     await this.options.publishRealtime("code_mode_run_created", "capabilities", {
@@ -3387,6 +3406,7 @@ export class CapabilitySystemService {
     signal?: AbortSignal;
   }): Promise<CodeModeRunExecutionOutcome> {
     const { runId, approvalId, existing, pendingRequest, signal } = input;
+    const storage = this.options.storage;
     let sandbox = await this.resolveCurrentSandboxMetadata();
     let finalRun = existing;
     let claimStartedAt: string | undefined;
@@ -3410,14 +3430,14 @@ export class CapabilitySystemService {
       }
       assertCodeModeSandboxAvailable(sandbox);
       claimStartedAt = new Date().toISOString();
-      const claimedRun = await this.options.storage.codeModeRuns.claimForExecution({
+      const claimedRun = await storage.codeModeRuns.claimForExecution({
         runId,
         approvalId,
         sandbox,
         startedAt: claimStartedAt,
       });
       if (!claimedRun) {
-        const currentRun = await this.options.storage.codeModeRuns.find(runId);
+        const currentRun = await storage.codeModeRuns.find(runId);
         await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
           runId,
           approvalId,
@@ -3483,7 +3503,7 @@ export class CapabilitySystemService {
       const beforeExecutionDispatch = async () => {
         throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
         const boundaryCrossedAt = new Date().toISOString();
-        const boundaryRun = await this.options.storage.codeModeRuns.markExecutionBoundaryCrossed({
+        const boundaryRun = await storage.codeModeRuns.markExecutionBoundaryCrossed({
           runId,
           approvalId,
           startedAt: activeClaimStartedAt,
@@ -3503,7 +3523,7 @@ export class CapabilitySystemService {
         });
       };
       const onExecutionDispatchFailed = async () => {
-        const resetRun = await this.options.storage.codeModeRuns.resetExecutionBoundaryBeforeDispatch({
+        const resetRun = await storage.codeModeRuns.resetExecutionBoundaryBeforeDispatch({
           runId,
           approvalId,
           startedAt: activeClaimStartedAt,
@@ -3583,7 +3603,7 @@ export class CapabilitySystemService {
         stderr: stderrArtifact ? { artifact: stderrArtifact, content: execution.stderr.text } : undefined,
       });
       const executionResult = attachTrustedCodeWriteVerification(execution.result, trustedCodeWriteVerification);
-      const outputRun = await this.options.storage.codeModeRuns.recordExecutionOutput({
+      const outputRun = await storage.codeModeRuns.recordExecutionOutput({
         ...finalRun,
         sandbox,
         stdoutArtifact,
@@ -3628,7 +3648,7 @@ export class CapabilitySystemService {
             : `Code mode run ${runId} was interrupted after execution started.`
         : execution.manualReconciliationReason;
       const terminalRun = interruptionReason
-        ? await this.options.storage.codeModeRuns.markExecutionInterrupted({
+        ? await storage.codeModeRuns.markExecutionInterrupted({
             runId,
             approvalId,
             startedAt: claimStartedAt,
@@ -3642,7 +3662,7 @@ export class CapabilitySystemService {
               ...(execution.errorDetails ? { childErrorDetails: execution.errorDetails } : {}),
             },
           })
-        : await this.options.storage.codeModeRuns.finishExecutionClaim({
+        : await storage.codeModeRuns.finishExecutionClaim({
             ...finalRun,
             status: execution.failed ? "failed" : "completed",
             verification: execution.failed
@@ -3703,7 +3723,7 @@ export class CapabilitySystemService {
         if (claimStartedAt && claimGeneration !== undefined) {
           if (finalRun.executionRecovery.phase === "claimed") {
             finalRun =
-              (await this.options.storage.codeModeRuns.releaseExecutionClaim({
+              (await storage.codeModeRuns.releaseExecutionClaim({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -3714,7 +3734,7 @@ export class CapabilitySystemService {
               })) ?? finalRun;
           } else {
             finalRun =
-              (await this.options.storage.codeModeRuns.markExecutionInterrupted({
+              (await storage.codeModeRuns.markExecutionInterrupted({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -3751,7 +3771,7 @@ export class CapabilitySystemService {
       if (claimStartedAt && claimGeneration !== undefined) {
         const terminalRun =
           finalRun.executionRecovery.phase === "claimed"
-            ? await this.options.storage.codeModeRuns.failExecutionClaimBeforeDispatch({
+            ? await storage.codeModeRuns.failExecutionClaimBeforeDispatch({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -3761,7 +3781,7 @@ export class CapabilitySystemService {
                 errorCode: normalizedError.code,
                 errorDetails: normalizedError.details,
               })
-            : await this.options.storage.codeModeRuns.markExecutionInterrupted({
+            : await storage.codeModeRuns.markExecutionInterrupted({
                 runId,
                 approvalId,
                 startedAt: claimStartedAt,
@@ -3787,7 +3807,7 @@ export class CapabilitySystemService {
         }
         finalRun = terminalRun;
       } else {
-        finalRun = await this.options.storage.codeModeRuns.upsert({
+        finalRun = await storage.codeModeRuns.upsert({
           ...finalRun,
           status: "failed",
           sandbox,
