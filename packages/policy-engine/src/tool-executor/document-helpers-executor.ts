@@ -11,6 +11,11 @@ import { parseNativeFileDocument } from "../native-document-parser.js";
 // payloads: 64 KiB of raw bytes is about 87 KB of base64.
 export const DOCS_READ_BYTES_MAX = 65_536;
 export const DOCS_EXTRACT_TEXT_MAX_CHARS = 60_000;
+/**
+ * Byte budget for one extract_text page, counted as JSON-encoded UTF-8. 60 000 characters of CJK, emoji or
+ * escape-heavy text can pass the IPC bound, so a page also stops here and the guest pages on with nextOffset.
+ */
+export const DOCS_EXTRACT_TEXT_MAX_BYTES = 96 * 1024;
 export const DOCS_DECOMPRESS_MAX_OUTPUT = 65_536;
 /** Memory guard for text extraction, which needs the whole file to parse it. */
 const DOCS_EXTRACT_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
@@ -155,7 +160,7 @@ async function extractText(
   }
   const parsed = await parseNativeFileDocument(source.name, source.bytes);
   const text = parsed.normalizedText;
-  const end = Math.min(text.length, offset + maxChars);
+  const end = pageEnd(text, offset, maxChars, DOCS_EXTRACT_TEXT_MAX_BYTES);
   const format = parsed.parser.format === "pdf" || parsed.parser.format === "docx" ? parsed.parser.format : "text";
   return {
     name: source.name,
@@ -166,6 +171,45 @@ async function extractText(
     text: text.slice(offset, end),
     ...(end < text.length ? { nextOffset: end } : {}),
   };
+}
+
+const JSON_SHORT_ESCAPES = new Set([0x22, 0x5c, 0x08, 0x09, 0x0a, 0x0c, 0x0d]);
+
+/** UTF-16 code units consumed at index and the UTF-8 bytes they cost inside a JSON string, escapes included. */
+function jsonByteCost(text: string, index: number): { units: number; bytes: number } {
+  const code = text.charCodeAt(index);
+  if (code >= 0xd800 && code <= 0xdbff && index + 1 < text.length) {
+    const low = text.charCodeAt(index + 1);
+    if (low >= 0xdc00 && low <= 0xdfff) {
+      return { units: 2, bytes: 4 };
+    }
+  }
+  if (JSON_SHORT_ESCAPES.has(code)) {
+    return { units: 1, bytes: 2 };
+  }
+  if (code < 0x20 || (code >= 0xd800 && code <= 0xdfff)) {
+    return { units: 1, bytes: 6 };
+  }
+  if (code < 0x80) {
+    return { units: 1, bytes: 1 };
+  }
+  return { units: 1, bytes: code < 0x800 ? 2 : 3 };
+}
+
+/** Page end from offset: at most maxChars code units and maxBytes JSON-encoded bytes, never splitting a surrogate pair. */
+function pageEnd(text: string, offset: number, maxChars: number, maxBytes: number): number {
+  const limit = Math.min(text.length, offset + maxChars);
+  let index = Math.min(offset, text.length);
+  let bytes = 0;
+  while (index < limit) {
+    const cost = jsonByteCost(text, index);
+    if (index + cost.units > limit || bytes + cost.bytes > maxBytes) {
+      break;
+    }
+    bytes += cost.bytes;
+    index += cost.units;
+  }
+  return index;
 }
 
 function decompress(request: ToolInvokeRequest) {

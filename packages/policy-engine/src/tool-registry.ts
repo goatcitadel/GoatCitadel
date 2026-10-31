@@ -1947,7 +1947,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description:
-      "Extract plain text from a PDF, DOCX or text file or chat attachment for Code Mode runs, up to 60000 characters per call. Page with offset (characters); nextOffset is set while text remains. Provide exactly one of path or attachmentId.",
+      "Extract plain text from a PDF, DOCX or text file or chat attachment for Code Mode runs, up to 60000 characters (and 96 KiB) per call. Page with offset (characters); nextOffset is set while text remains. Provide exactly one of path or attachmentId.",
     pack: "knowledge",
     argSchema: {
       type: "object",

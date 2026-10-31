@@ -9,6 +9,7 @@ import { createPlainDocumentPdf } from "./document-pdf.js";
 import { executeTool } from "./tool-executor.js";
 import {
   DOCS_DECOMPRESS_MAX_OUTPUT,
+  DOCS_EXTRACT_TEXT_MAX_BYTES,
   DOCS_EXTRACT_TEXT_MAX_CHARS,
   DOCS_READ_BYTES_MAX,
 } from "./tool-executor/document-helpers-executor.js";
@@ -97,6 +98,42 @@ describe("document helper tools", () => {
     );
     expect(String(clamped.text)).toHaveLength(DOCS_EXTRACT_TEXT_MAX_CHARS);
   });
+
+  it.each([
+    ["CJK", "文書のテキスト"],
+    ["emoji", "\u{1F600}\u{1F680}a"],
+    ["JSON-escaped", '"\\'],
+  ])(
+    "keeps each docs.extract_text page of %s text inside the IPC byte bound",
+    async (_label, unit) => {
+      const root = createRoot();
+      const file = path.join(root, "wide.txt");
+      fs.writeFileSync(file, unit.repeat(Math.ceil(120_000 / unit.length)));
+      const config = createConfig(root);
+
+      const pages: string[] = [];
+      let total = 0;
+      let next: number | undefined = 0;
+      while (next !== undefined) {
+        const page = await executeTool(request("docs.extract_text", { path: file, offset: next }), config, storage);
+        const pageText = String(page.text);
+        total = Number(page.totalChars);
+        expect(pageText.length).toBeGreaterThan(0);
+        expect(Buffer.byteLength(JSON.stringify(pageText), "utf8")).toBeLessThanOrEqual(
+          DOCS_EXTRACT_TEXT_MAX_BYTES + 2,
+        );
+        expect(Buffer.byteLength(JSON.stringify(page), "utf8")).toBeLessThan(128 * 1024);
+        const last = pageText.charCodeAt(pageText.length - 1);
+        expect(last >= 0xd800 && last <= 0xdbff).toBe(false);
+        pages.push(pageText);
+        next = page.nextOffset as number | undefined;
+      }
+      expect(pages.length).toBeGreaterThan(1);
+      expect(pages[0]!.length).toBeLessThan(DOCS_EXTRACT_TEXT_MAX_CHARS);
+      expect(pages.join("")).toHaveLength(total);
+    },
+    30_000,
+  );
 
   it("rejects a path outside read roots", async () => {
     const root = createRoot();
