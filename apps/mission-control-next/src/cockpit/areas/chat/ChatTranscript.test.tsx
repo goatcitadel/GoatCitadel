@@ -13,6 +13,7 @@ import { InspectorPanel, InspectorProvider } from "../../app/inspector";
 import { ChatTranscript } from "./ChatTranscript";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { refuseNetwork } from "../../../test/refuse-network";
 
 const viewport = vi.hoisted(() => ({
   preview: null as { turnId: string; visibleText: string } | null,
@@ -86,6 +87,12 @@ vi.mock("./NativeMessageRenderer", () => ({
 vi.mock("@goatcitadel/mission-control-shared/state/chat-streaming-preview-store", () => ({
   useChatStreamingPreviewSnapshot: () => viewport.preview,
 }));
+// Approval reviews name workspaces from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/workspaces")>()),
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
+refuseNetwork();
 
 function turn(turnId: string, selected: boolean, status: "completed" | "failed" = "completed"): ChatThreadTurnRecord {
   return {

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, expect, it, vi } from "vitest";
 import { LinkedApprovalDetail as LinkedApproval } from "./LinkedApproval";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
+import { refuseNetwork } from "../../../test/refuse-network";
 const api = vi.hoisted(() => ({ read: vi.fn(), replay: vi.fn(), run: vi.fn(), lifecycle: vi.fn(), resolve: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: api.read,
@@ -21,6 +22,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "active" }),
 }));
+// The linked approval names workspaces from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
+refuseNetwork();
 let root: Root, host: HTMLDivElement, client: QueryClient;
 afterEach(async () => {
   await act(async () => root?.unmount());

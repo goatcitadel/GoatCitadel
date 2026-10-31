@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ChatThreadTurnRecord, ChatUserInputPromptRecord } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { refuseNetwork } from "../../../test/refuse-network";
 let InspectorProvider: typeof import("../../app/inspector").InspectorProvider;
 
 const loader = vi.hoisted(() => ({
@@ -40,6 +41,12 @@ vi.mock("./NativeMessageRenderer", () => ({
 vi.mock("@goatcitadel/mission-control-shared/state/chat-streaming-preview-store", () => ({
   useChatStreamingPreviewSnapshot: () => preview.value,
 }));
+// Approval reviews name workspaces from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (original) => ({
+  ...(await original<typeof import("@goatcitadel/mission-control-shared/api/workspaces")>()),
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
+refuseNetwork();
 
 let Transcript: typeof import("./ChatTranscript").ChatTranscript;
 let root: Root, host: HTMLDivElement, client: QueryClient;
