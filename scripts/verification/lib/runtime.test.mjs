@@ -8,6 +8,7 @@ import {
   buildVerificationUiCommand,
   buildVerificationWorkspaceRefreshCommands,
   stopVerificationStack,
+  withVerificationUiOrigin,
 } from "./runtime.mjs";
 
 test("verification process environments remove inherited secrets while allowing explicit fixtures", () => {
@@ -52,6 +53,35 @@ test("verification startup force-refreshes the threaded Chat surface before Chro
     "tsconfig.json",
     "--force",
   ]);
+});
+
+test("verification stacks name their UI origin for a Gateway that does not trust arbitrary loopback ports", () => {
+  const uiOrigin = "http://127.0.0.1:37407";
+  // Auth "none" no longer trusts any loopback port, so the UI's own origin joins the Gateway's defaults.
+  assert.deepEqual(withVerificationUiOrigin({ GOATCITADEL_AUTH_MODE: "none" }, uiOrigin, {}), {
+    GOATCITADEL_AUTH_MODE: "none",
+    GOATCITADEL_ALLOWED_ORIGINS: [
+      "http://localhost:5173",
+      "http://127.0.0.1:5173",
+      "http://localhost:4173",
+      "http://127.0.0.1:4173",
+      "http://127.0.0.1:8787",
+      uiOrigin,
+    ].join(","),
+  });
+  // A lane's own list, or the inherited one, is kept rather than replaced by the defaults.
+  assert.equal(
+    withVerificationUiOrigin({ GOATCITADEL_ALLOWED_ORIGINS: " https://ops.example.com , " }, uiOrigin, {})
+      .GOATCITADEL_ALLOWED_ORIGINS,
+    `https://ops.example.com,${uiOrigin}`,
+  );
+  assert.equal(
+    withVerificationUiOrigin({}, uiOrigin, { GOATCITADEL_ALLOWED_ORIGINS: uiOrigin }).GOATCITADEL_ALLOWED_ORIGINS,
+    uiOrigin,
+  );
+  // A Gateway-only stack changes nothing.
+  const gatewayOnly = { GOATCITADEL_AUTH_MODE: "none" };
+  assert.equal(withVerificationUiOrigin(gatewayOnly, undefined, {}), gatewayOnly);
 });
 
 test("verification Gateway launch directly owns the runtime process", () => {
