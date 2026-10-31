@@ -175,9 +175,13 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await act(async () => button("Run it")!.click());
     await waitFor(() => expect(container.textContent).toContain("This request was updated. Choose again."));
     expect(api.resolveApproval).not.toHaveBeenCalled();
-    // The first read, the click's check, then the row's re-read of the updated record.
-    await waitFor(() => expect(api.fetchApproval).toHaveBeenCalledTimes(3));
-    await act(async () => undefined);
+    // The row re-reads the updated record; the buttons then remount for it.
+    await waitFor(() =>
+      expect(client.getQueryData(["approvals", "record", "default", "approval-1"])).toMatchObject({
+        explanationStatus: "completed",
+      }),
+    );
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
     await act(async () => button("Run it")!.click());
     await waitFor(() => expect(api.resolveApproval).toHaveBeenCalledWith("approval-1", "approve"));
     await waitFor(() => expect(container.textContent).not.toContain("Choose again"));
