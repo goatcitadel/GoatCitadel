@@ -118,6 +118,21 @@ describe("native integration management", () => {
     expect(text(view.root)).toContain("Configured status: Connected");
     expect(text(view.root)).toContain("Connectivity unverified");
   });
+  it("offers no plugin trust view", async () => {
+    await act(async () => {
+      view = create(<IntegrationManagementSettings workspaceId="default" />);
+    });
+    const views = view.root
+      .findAllByType("div")
+      .find((node) => node.props.role === "group" && node.props["aria-label"] === "Management views")!;
+    expect(views.findAllByType("button").map((node) => text(node))).toEqual([
+      "Imported connectors",
+      "Delivery records",
+      "Google Meet preparation",
+    ]);
+    expect(text(view.root)).not.toContain("Plugin trust");
+    expect(vi.mocked(fetch).mock.calls.some(([input]) => String(input).includes("plugins"))).toBe(false);
+  });
   it("cancels deletion without calling the owner", async () => {
     api.fetchIntegrationConnections.mockResolvedValue({ items: [saved] });
     await act(async () => {

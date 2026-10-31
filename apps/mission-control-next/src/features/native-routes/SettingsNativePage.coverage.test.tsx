@@ -204,7 +204,6 @@ const settingsMocks = vi.hoisted(() => {
     fetchIntegrationConnections: vi.fn(),
     fetchIntegrationConnection: vi.fn(),
     fetchIntegrationFormSchema: fn(),
-    fetchIntegrationPlugins: fn(),
     fetchNotificationDeliveries: fn({ items: [] }),
     fetchNotificationRules: fn({ items: [] }),
     fetchNotificationTargets: fn({ items: [] }),
@@ -469,7 +468,6 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchIntegrationConnections: settingsMocks.fetchIntegrationConnections,
   fetchIntegrationConnection: settingsMocks.fetchIntegrationConnection,
   fetchIntegrationFormSchema: settingsMocks.fetchIntegrationFormSchema,
-  fetchIntegrationPlugins: settingsMocks.fetchIntegrationPlugins,
   fetchNotificationDeliveries: settingsMocks.fetchNotificationDeliveries,
   fetchNotificationRules: settingsMocks.fetchNotificationRules,
   fetchNotificationTargets: settingsMocks.fetchNotificationTargets,
@@ -867,7 +865,6 @@ function setupResponses() {
     recommendedNextAction: "Keep monitoring.",
   });
   settingsMocks.invokeIntegrationConnectionAction.mockResolvedValue({ message: "Synced issues." });
-  settingsMocks.fetchIntegrationPlugins.mockResolvedValue({ items: [] });
   settingsMocks.fetchExternalConnectorServices.mockResolvedValue({ items: [] });
   settingsMocks.createExternalSideEffectReplayAuditRun.mockResolvedValue({ runId: "external-run-1" });
   settingsMocks.stageExternalConnectorAction.mockResolvedValue({ status: "staged", approvalRequired: true });
@@ -4726,7 +4723,6 @@ describe("SettingsNativePage partial gateway responses", () => {
   it("renders the integrations section with inert fallbacks when every integration payload is empty", async () => {
     settingsMocks.fetchIntegrationCatalog.mockResolvedValue({});
     settingsMocks.fetchIntegrationConnections.mockResolvedValue({});
-    settingsMocks.fetchIntegrationPlugins.mockResolvedValue({});
     settingsMocks.fetchGoogleMeetPrerequisiteStatus.mockResolvedValue({});
     settingsMocks.fetchGoogleMeetSessions.mockResolvedValue({});
     settingsMocks.fetchExternalSideEffectRuns.mockResolvedValue({});
@@ -4737,8 +4733,6 @@ describe("SettingsNativePage partial gateway responses", () => {
     const text = collectText(integrations.root);
     expect(text).toContain("Connected integrations");
     expect(text).toContain("No integration connections yet.");
-    await click(findButton(integrations.root, "Plugin trust"));
-    expect(collectText(integrations.root)).toContain("No integration plugins installed.");
     await click(findButton(integrations.root, "Google Meet"));
     expect(collectText(integrations.root)).toContain("Google Meet voice");
     expect(collectText(integrations.root)).toContain("No Google Meet sessions recorded.");

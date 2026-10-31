@@ -34,9 +34,9 @@ export function useIntegrationSettingsState(activeWorkspaceId: string) {
     save: async (): Promise<boolean> => false,
   });
   const [panel, setPanel] = useState<
-    "create" | "edit" | "details" | "plugins" | "connectors" | "history" | "routing" | "meet" | null
+    "create" | "edit" | "details" | "connectors" | "history" | "routing" | "meet" | null
   >(null);
-  const [requested, setRequested] = useState({ plugins: false, connectors: false, history: false, meet: false });
+  const [requested, setRequested] = useState({ connectors: false, history: false, meet: false });
   const leave = useDraftLeave();
   const panelRef = useRef(panel);
   panelRef.current = panel;
@@ -100,7 +100,10 @@ export function useIntegrationSettingsState(activeWorkspaceId: string) {
     (IntegrationActionInvokeResult & { actionLabel: string }) | null
   >(null);
   const createableCatalog = useMemo(
-    () => data?.catalog.filter((item) => item.kind !== "external_connector" && item.kind !== "channel" && item.kind !== "model_provider") ?? [],
+    () =>
+      data?.catalog.filter(
+        (item) => item.kind !== "external_connector" && item.kind !== "channel" && item.kind !== "model_provider",
+      ) ?? [],
     [data?.catalog],
   );
   const selectedConnection = data?.connections.find((item) => item.connectionId === selectedConnectionId) ?? null;
@@ -201,7 +204,7 @@ export function useIntegrationSettingsState(activeWorkspaceId: string) {
   const openPanel = (next: typeof panel) =>
     leave.request(() => {
       setPanel(next);
-      if (next === "plugins" || next === "connectors" || next === "history" || next === "meet")
+      if (next === "connectors" || next === "history" || next === "meet")
         setRequested((current) => ({ ...current, [next]: true }));
     });
   const closePanel = () => openPanel(null);

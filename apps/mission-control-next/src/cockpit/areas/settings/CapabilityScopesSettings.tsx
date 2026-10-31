@@ -6,7 +6,7 @@ import { Dialog } from "../../ui/Dialog";
 
 const labels: Record<CapabilityResourceType, string> = {
   skill: "Skills",
-  integration: "Plugins",
+  integration: "Integrations",
   mcp_server: "MCP servers",
 };
 export function CapabilityScopesSettings({ scopeKind, scopeId }: { scopeKind: CapabilityScopeKind; scopeId: string }) {

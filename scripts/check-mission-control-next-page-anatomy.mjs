@@ -53,7 +53,7 @@ export const ANATOMY_RULES = [
   },
   {
     id: "padded-panel",
-    budget: 55,
+    budget: 54,
     help: "list rows are hairline-separated (divide-y divide-line-subtle); a bordered padded box is a nested card",
     // A container element in a page area whose class has rounded-md, a full border and padding. Form controls and
     // buttons also use rounded-md border, so only container tags count; rounded-lg/xl is the card-surface rule.

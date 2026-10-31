@@ -43,7 +43,7 @@ function Harness({
     selectedConnectionId: "connection",
     lastReplayAuditRunId: runId,
     loading: false,
-    data: { issues: [], externalConnectorServices: [], sideEffectRuns: [], plugins: [] },
+    data: { issues: [], externalConnectorServices: [], sideEffectRuns: [] },
     externalMutation: { phase: "idle", locked: false },
     replayMutation: { phase: "idle", locked: false },
     externalReview: null,

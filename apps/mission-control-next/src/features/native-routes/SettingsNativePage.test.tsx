@@ -623,32 +623,6 @@ const mocks = vi.hoisted(() => ({
     scopes: ["chat:write"],
   })),
   discoverTelegramTargets: vi.fn(async () => ({ items: [] })),
-  fetchIntegrationPlugins: vi.fn(async () => ({
-    items: [
-      {
-        pluginId: "dash-plugin",
-        label: "Dashboard Plugin",
-        version: "1.0.0",
-        enabled: true,
-        installedAt: "2026-04-24T12:00:00.000Z",
-        updatedAt: "2026-04-24T12:00:00.000Z",
-        capabilities: ["dashboard"],
-        sourceMetadata: {
-          type: "npm",
-          display: "@goat/plugin-dashboard",
-          packageName: "@goat/plugin-dashboard",
-          packageVersion: "1.0.0",
-          integrityStatus: "verified",
-        },
-        integrityStatus: "verified",
-        trustWarnings: [],
-        theme: {
-          dashboardVariant: "compact",
-          accentColor: "#14b8a6",
-        },
-      },
-    ],
-  })),
   fetchGoogleMeetPrerequisiteStatus: vi.fn(async () => ({
     ready: false,
     state: "blocked",
@@ -1349,7 +1323,6 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", async () => {
     fetchSlackOAuthStatus: mocks.fetchSlackOAuthStatus,
     startSlackOAuth: mocks.startSlackOAuth,
     discoverTelegramTargets: mocks.discoverTelegramTargets,
-    fetchIntegrationPlugins: mocks.fetchIntegrationPlugins,
     fetchGoogleMeetPrerequisiteStatus: mocks.fetchGoogleMeetPrerequisiteStatus,
     fetchGoogleMeetSessions: mocks.fetchGoogleMeetSessions,
     fetchMcpServers: async () => {
@@ -5437,21 +5410,16 @@ describe("SettingsNativePage integrations", () => {
     expect(collectText(renderer!.root)).toContain("Choose an integration catalog entry first.");
   });
 
-  it("renders plugin trust metadata and blocked Google Meet prerequisites", async () => {
+  it("offers no plugin trust panel and renders blocked Google Meet prerequisites", async () => {
     let renderer: ReactTestRenderer | null = null;
     await act(async () => {
       renderer = renderPage("integrations");
     });
     await flushAsyncUpdates();
-    expect(mocks.fetchIntegrationPlugins).not.toHaveBeenCalled();
     expect(mocks.fetchGoogleMeetPrerequisiteStatus).not.toHaveBeenCalled();
     expect(mocks.fetchExternalSideEffectRuns).not.toHaveBeenCalled();
-    await openIntegrationPanel(renderer!.root, "Plugin trust");
-    const pluginText = collectText(renderer!.root);
-    expect(mocks.fetchIntegrationPlugins).toHaveBeenCalledTimes(1);
-    expect(pluginText).toContain("Dashboard Plugin");
-    expect(pluginText).toContain("Integrity: verified");
-    expect(pluginText).toContain("Theme: compact");
+    expect(collectText(renderer!.root)).not.toContain("Plugin");
+    expect(renderer!.root.findAllByType("button").some((button) => collectText(button) === "Plugin trust")).toBe(false);
     await openIntegrationPanel(renderer!.root, "Google Meet");
     const meetText = collectText(renderer!.root);
     expect(mocks.fetchGoogleMeetPrerequisiteStatus).toHaveBeenCalledTimes(1);

@@ -90,10 +90,23 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           reasons: [],
         },
       ],
+      // A Gateway that has not been updated yet can still send the retired plugin list. The panel ignores it.
       plugins: [
         {
-          runtimeId: "plugin-good",
-          label: "Plugin OK",
+          runtimeId: "stale-plugin",
+          label: "Stale plugin",
+          status: "callable",
+          callableExposure: "callable",
+          integrityStatus: "verified",
+          healthMessage: "Ready",
+          permissions: [],
+          secretsRequired: [],
+        },
+      ],
+      providers: [
+        {
+          runtimeId: "provider-good",
+          label: "Provider OK",
           status: "callable",
           callableExposure: "callable",
           integrityStatus: "verified",
@@ -103,8 +116,8 @@ describe("AgenticRuntimeVisibilityPanel", () => {
           rollbackRef: "v1",
         },
         {
-          runtimeId: "plugin-bad",
-          label: "Plugin Bad",
+          runtimeId: "provider-bad",
+          label: "Provider Bad",
           status: "callable",
           callableExposure: "blocked",
           integrityStatus: "corrupt",
@@ -117,8 +130,6 @@ describe("AgenticRuntimeVisibilityPanel", () => {
             missing: ["TOKEN"],
           },
         },
-      ],
-      providers: [
         {
           runtimeId: "provider-1",
           label: "Provider",
@@ -230,12 +241,28 @@ describe("AgenticRuntimeVisibilityPanel", () => {
     expect(rendered).toContain("waiting for approval");
   });
 
+  it("shows no Plugins group, even when the Gateway still sends a plugin list", async () => {
+    renderer = create(<AgenticRuntimeVisibilityPanel surface="code" />);
+    await flush();
+    const rendered = textOf(renderer.toJSON());
+    expect(rendered).toContain("Providers");
+    expect(rendered).toContain("Provider OK");
+    expect(rendered).not.toContain("Plugins");
+    expect(rendered).not.toContain("Stale plugin");
+  });
+
+  it("shows no Plugins group while the availability answer is loading", () => {
+    renderer = create(<AgenticRuntimeVisibilityPanel surface="code" />);
+    const rendered = textOf(renderer.toJSON());
+    expect(rendered).toContain("Providers");
+    expect(rendered).not.toContain("Plugins");
+  });
+
   it("renders empty loading groups and surfaces load failures", async () => {
     apiMocks.fetchAgenticRuntimeAvailability.mockResolvedValueOnce({
       generatedAt: "2026-01-01T00:00:00.000Z",
       scalability: [],
       harnesses: [],
-      plugins: [],
       providers: [],
       channels: [],
     });
