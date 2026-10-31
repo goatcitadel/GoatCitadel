@@ -4634,22 +4634,19 @@ export class GatewayService {
   }
 
   private async prewarmLlmModelCatalogs(): Promise<void> {
-    const config = this.llmService.getRuntimeConfig({ useCache: true });
-    const providersToWarm = config.providers.filter((p) => p.hasApiKey);
-    if (providersToWarm.length === 0) {
+    const { activeProviderId, providerIds } = await this.llmService.resolveCatalogPrewarmTargets();
+    if (providerIds.length === 0) {
       return;
     }
-    log.info("pre-warming LLM model catalogs in background", {
-      providerIds: providersToWarm.map((p) => p.providerId),
-    });
+    log.info("pre-warming LLM model catalogs in background", { activeProviderId, providerIds });
     await Promise.allSettled(
-      providersToWarm.map(async (p) => {
+      providerIds.map(async (providerId) => {
         try {
-          await this.llmService.listModels(p.providerId);
-          log.debug("pre-warmed LLM model catalog", { providerId: p.providerId });
+          await this.llmService.listModels(providerId);
+          log.debug("pre-warmed LLM model catalog", { providerId });
         } catch (error) {
           log.debug("failed to pre-warm LLM model catalog", {
-            providerId: p.providerId,
+            providerId,
             error: error instanceof Error ? error.message : String(error),
           });
         }
