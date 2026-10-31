@@ -161,6 +161,7 @@ import { CodeModeVerificationService } from "./code-mode-verification-service.js
 import {
   buildApprovedCodeModeRequestFromTool,
   codeModeRequestToolFailure,
+  isCodeModeRequestHelper,
   readCodeModeRequestToolIds,
   unapprovedCodeModeReadError,
 } from "./code-mode-request-tool.js";
@@ -248,7 +249,7 @@ export interface CapabilitySystemServiceOptions {
   resolveApproval: (approvalId: string, input: ApprovalResolveInput) => Promise<ApprovalResolveResult>;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<void>;
   readPolicySnapshot: () => Promise<Record<string, unknown>>;
-  /** The session path resolution chat tool calls get; a Chat request run's docs.* reads are matched after it. */
+  /** The session path resolution chat tool calls get; a Chat request run's helper reads are matched after it. */
   resolveToolRequestPaths?: (request: ToolInvokeRequest) => Promise<ToolInvokeRequest>;
   resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
   resolvePolicyContext?: (input: {
@@ -314,7 +315,7 @@ export interface ApprovedCodeModeRequest {
   language: CodeModeLanguage;
   source: string;
   input?: Record<string, unknown>;
-  /** The paths and attachment IDs the operator approved; docs.* calls in the run may read only these. */
+  /** The paths and attachment IDs the operator approved; the run's helpers may read only these. */
   reads?: string[];
   sessionId: string;
   turnId: string;
@@ -2730,8 +2731,9 @@ export class CapabilitySystemService {
   }
 
   /**
-   * What the operator approved is what the run can touch: a docs.* call in a Chat request run must read a path or
-   * attachment from the approved `reads`. Paths are compared after the session path resolution chat tools get.
+   * What the operator approved is what the run can touch: every helper call in a Chat request run must name a path
+   * (or, for docs.*, an attachment) from the approved `reads`, and helpers that search across the read roots are
+   * refused. Paths are compared after the session path resolution chat tools get.
    */
   private async assertCodeModeReadApproved(
     request: ToolInvokeRequest,
@@ -2868,7 +2870,12 @@ export class CapabilitySystemService {
     };
     const snapshot = await this.freezeCatalogSnapshot();
     const createdAt = new Date().toISOString();
-    const wrapperManifest = this.buildWrapperManifest(snapshot, createdAt);
+    const catalogManifest = this.buildWrapperManifest(snapshot, createdAt);
+    // The script sees only the helpers a request run can call, and the hash binds that narrower manifest.
+    const wrapperManifest: CodeModeWrapperManifest = {
+      ...catalogManifest,
+      wrappers: catalogManifest.wrappers.filter((wrapper) => isCodeModeRequestHelper(wrapper.name)),
+    };
     const runInput = request.input ?? {};
     const runInputHash = hashCodeModeInputBinding(runInput, undefined, undefined, undefined);
     const approvalSource = { kind: CODE_MODE_REQUEST_APPROVAL_KIND, approvalId: request.approvalId } as const;
@@ -4634,7 +4641,7 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
-    /** A Chat request run's approved reads; docs.* calls may read only these. Unset for other runs. */
+    /** A Chat request run's approved reads; every helper call must name one of these. Unset for other runs. */
     approvedReads?: readonly string[];
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
@@ -4774,7 +4781,7 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
-    /** A Chat request run's approved reads; docs.* calls may read only these. Unset for other runs. */
+    /** A Chat request run's approved reads; every helper call must name one of these. Unset for other runs. */
     approvedReads?: readonly string[];
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
@@ -5036,7 +5043,7 @@ export class CapabilitySystemService {
             },
             policyContext: input.policyContext,
           };
-          if (input.approvedReads && wrapperName.startsWith("docs.")) {
+          if (input.approvedReads) {
             await this.assertCodeModeReadApproved(wrapperRequest, input.approvedReads);
           }
           await this.options.publishRealtime("code_mode_wrapper_call_started", "capabilities", {
@@ -6682,7 +6689,7 @@ function readFrozenCodeModeInputBinding(
 
 /**
  * A Chat request run's approved reads from its hashed policy snapshot; a request run without them reads nothing.
- * Undefined for every other run, whose docs.* reads stay governed by the read roots alone.
+ * Undefined for every other run, whose helpers stay governed by the read roots alone.
  */
 function readFrozenCodeModeRequestReads(policySnapshot: Record<string, unknown>): string[] | undefined {
   if (!isRecord(policySnapshot.codeModeApprovalSource)) {

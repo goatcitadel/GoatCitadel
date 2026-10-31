@@ -13,7 +13,7 @@ import type {
   ToolInvokeResult,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { executeTool } from "@goatcitadel/policy-engine";
+import { createDefaultToolRegistry, executeTool } from "@goatcitadel/policy-engine";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   CODE_MODE_REQUEST_RESULT_MAX_BYTES,
@@ -26,6 +26,18 @@ import { CODE_MODE_OFF_TOOL_ERROR, CODE_MODE_UNSUPPORTED_TOOL_ERROR } from "./co
 // Each case spawns a real Code Mode child process; a contended Windows host needs headroom.
 const RUN_TIMEOUT_MS = 60_000;
 const READY: CodeModeReadiness = { enabled: true, sandboxEnabled: true, sandboxSupported: true, canRun: true };
+/** The registry's file helpers a Code Mode script can be offered, including those that search across the read roots. */
+const CODE_MODE_FILE_HELPER_TOOLS = createDefaultToolRegistry()
+  .toCatalog()
+  .filter((tool) =>
+    ["fs.read", "file.read_range", "fs.stat", "fs.list", "file.find", "code.search", "code.search_files"].includes(
+      tool.toolName,
+    ),
+  );
+/** Guest code: runs one helper call and reports "ran", or the message it was refused with. */
+const ATTEMPT_HELPER =
+  "const attempt = async (call) => { try { await call(); return 'ran'; } " +
+  "catch (error) { return String(error && error.message ? error.message : error); } };";
 
 const roots: string[] = [];
 let fixtureCount = 0;
@@ -345,6 +357,125 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     ) as Record<string, unknown>;
     expect(snapshot.codeModeReads).toEqual(["notes.txt"]);
     expect(sha256(JSON.stringify(snapshot))).toBe(stored.policySnapshotHash);
+  });
+
+  it("runs fs.read, file.read_range and fs.stat only on a path in the approved reads", async () => {
+    const fx = createFixture();
+    fs.writeFileSync(path.join(fx.root, "approved.txt"), "line one\nline two");
+    fs.writeFileSync(path.join(fx.root, "other.txt"), "SECRET=1");
+    const source = [
+      ATTEMPT_HELPER,
+      "const tryAll = async (target) => ({",
+      "  read: await attempt(() => capabilities.fs.read({ path: target })),",
+      "  range: await attempt(() => capabilities.file.read_range({ path: target, startLine: 1, endLine: 1 })),",
+      "  stat: await attempt(() => capabilities.fs.stat({ path: target })),",
+      "});",
+      "return { approved: await tryAll(input.approved), other: await tryAll(input.other) };",
+    ].join("\n");
+
+    const result = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(source, {
+        input: { approved: path.join(fx.root, "approved.txt"), other: "other.txt" },
+        reads: ["approved.txt"],
+      }),
+    );
+
+    expect(result.status).toBe("completed");
+    expect(result.result).toEqual({
+      approved: { read: "ran", range: "ran", stat: "ran" },
+      other: {
+        read: expect.stringMatching(/"other\.txt" is not in the files approved for this run, so fs\.read cannot/),
+        range: expect.stringMatching(/"other\.txt" is not in the files approved .* file\.read_range cannot/),
+        stat: expect.stringMatching(/"other\.txt" is not in the files approved .* fs\.stat cannot/),
+      },
+    });
+    expect(fx.invokeTool.mock.calls.map(([call]) => [call.toolName, call.args.path])).toEqual([
+      ["fs.read", path.join(fx.root, "approved.txt")],
+      ["file.read_range", path.join(fx.root, "approved.txt")],
+      ["fs.stat", path.join(fx.root, "approved.txt")],
+    ]);
+  });
+
+  it("lists only a folder that is itself in the approved reads with fs.list", async () => {
+    const fx = createFixture();
+    fs.mkdirSync(path.join(fx.root, "approved-dir"));
+    fs.writeFileSync(path.join(fx.root, "approved-dir", "a.txt"), "a");
+    fs.mkdirSync(path.join(fx.root, "other-dir"));
+    const source = [
+      ATTEMPT_HELPER,
+      "return {",
+      "  approved: await attempt(() => capabilities.fs.list({ path: input.approved })),",
+      "  other: await attempt(() => capabilities.fs.list({ path: input.other })),",
+      "  file: await attempt(() => capabilities.fs.list({ path: input.file })),",
+      // Without a path fs.list would list the workspace folder, which nobody approved.
+      "  unnamed: await attempt(() => capabilities.fs.list({})),",
+      "};",
+    ].join("\n");
+
+    const result = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(source, {
+        input: { approved: path.join(fx.root, "approved-dir"), other: "other-dir", file: "approved-dir/a.txt" },
+        reads: ["approved-dir"],
+      }),
+    );
+
+    expect(result.result).toEqual({
+      approved: "ran",
+      other: expect.stringMatching(/"other-dir" is not in the files approved for this run, so fs\.list cannot/),
+      file: expect.stringMatching(/"approved-dir\/a\.txt" is not in the files approved .* fs\.list cannot/),
+      unnamed: expect.stringMatching(/fs\.list must name a file or folder approved for this run/),
+    });
+    expect(fx.invokeTool).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses the helpers that search across the read roots, and leaves them out of the run's manifest", async () => {
+    const fx = createFixture();
+    const source =
+      "return { code: typeof capabilities.code, find: typeof capabilities.file.find, " +
+      "range: typeof capabilities.file.read_range, list: typeof capabilities.fs.list };";
+
+    const result = await fx.service.runApprovedCodeModeRequest(fx.approvedRequest(source));
+
+    // The script never sees them...
+    expect(result.result).toEqual({ code: "undefined", find: "undefined", range: "function", list: "function" });
+    const stored = await fx.asyncStorage.codeModeRuns.get(result.runId);
+    const manifest = JSON.parse(
+      fs.readFileSync(path.resolve(fx.root, stored.wrapperManifestArtifact.relPath), "utf8"),
+    ) as { wrappers: Array<{ name: string }> };
+    expect(manifest.wrappers.map((wrapper) => wrapper.name).sort()).toEqual([
+      "docs.extract_text",
+      "file.read_range",
+      "fs.list",
+      "fs.read",
+      "fs.stat",
+    ]);
+    expect(sha256(JSON.stringify(manifest))).toBe(stored.wrapperManifestHash);
+    // ...and a call that reaches the gateway anyway is refused by name, even when it names an approved folder.
+    const internals = fx.service as unknown as {
+      assertCodeModeReadApproved(request: ToolInvokeRequest, approvedReads: readonly string[]): Promise<void>;
+    };
+    for (const toolName of ["code.search", "session.search", "file.find", "code.search_files"]) {
+      await expect(
+        internals.assertCodeModeReadApproved(
+          { toolName, args: { path: fx.root, query: "SECRET" }, agentId: "code-mode", sessionId: "session-1" },
+          [fx.root],
+        ),
+      ).rejects.toThrow(`${toolName} is not available in this run, which can read only the files approved for it.`);
+    }
+    expect(fx.invokeTool).not.toHaveBeenCalled();
+  });
+
+  it("refuses fs.read when the approved reads are empty", async () => {
+    const fx = createFixture();
+    fs.writeFileSync(path.join(fx.root, "notes.txt"), "notes");
+    const source = `${ATTEMPT_HELPER}\nreturn { read: await attempt(() => capabilities.fs.read({ path: input.path })) };`;
+
+    const result = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(source, { input: { path: path.join(fx.root, "notes.txt") }, reads: [] }),
+    );
+
+    expect((result.result as { read: string }).read).toMatch(/not in the files approved for this run, so fs\.read/);
+    expect(fx.invokeTool).not.toHaveBeenCalled();
   });
 
   it("caps a huge return value", async () => {
@@ -684,7 +815,7 @@ function createFixture() {
     },
     storage: asyncStorage,
     readFeatureFlags: async () => ({ codeModeV1Enabled: true }),
-    listToolCatalog: () => [docsExtractTextTool()],
+    listToolCatalog: () => [docsExtractTextTool(), ...CODE_MODE_FILE_HELPER_TOOLS],
     listLoadedSkills: () => [],
     readSkillStates: async () => new Map(),
     invokeTool,
@@ -705,7 +836,7 @@ function createFixture() {
     source: string,
     options: {
       input?: Record<string, unknown>;
-      /** The approved `reads`: the only files and attachments a docs.* call may read. */
+      /** The approved `reads`: the only files, folders and attachments the run's helpers may read. */
       reads?: string[];
       resolve?: boolean;
       /** Register the policy engine's tool.invoke pending action (default true). */
