@@ -140,6 +140,8 @@ export function parkClaudeCliStep(input: ClaudeCliParkInput): boolean {
   if (!isToolCallsStep(input.mapper.toolStep())) return false;
   const emitted = input.mapper.emittedAssistant();
   if (!emitted || emitted.calls.length === 0) return false;
+  // A call outside the manifest was answered by the CLI itself, which then moved on without the stub.
+  if (!input.mapper.everyCallOffered()) return false;
   // keepFirstToolCall: the runner never sees the dropped calls, so the CLI's history would disagree.
   if (request.parallel_tool_calls === false && emitted.calls.length > 1) return false;
   const pendingIds = emitted.calls.map((call) => call.id);

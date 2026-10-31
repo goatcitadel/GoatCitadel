@@ -556,6 +556,77 @@ describe("ChatTurnAgentRunner tool-call message protocol", () => {
     expect(String(correction?.content)).toContain("docs.search");
   });
 
+  it("P0-C: answers a lone call to a tool the turn does not offer and lets the model reply (deny-wins)", async () => {
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [
+          {
+            index: 0,
+            message: {
+              role: "assistant",
+              content: "Running it again.",
+              tool_calls: [
+                {
+                  // Offered on an earlier turn, not on this one.
+                  id: "call-not-offered",
+                  type: "function",
+                  function: { name: "code_mode_request", arguments: JSON.stringify({ task: "rerun" }) },
+                },
+              ],
+            },
+          },
+        ],
+      })
+      .mockResolvedValueOnce({
+        model: "glm-5",
+        choices: [{ index: 0, message: { role: "assistant", content: "Code Mode is not available here." } }],
+      });
+    const invokeTool = vi.fn<(request: ToolInvokeRequest) => Promise<ToolInvokeResult>>();
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["docs.search"]),
+      createChatCompletion,
+      invokeTool,
+    });
+
+    const result = await orchestrator.run({
+      sessionId: "sess-tool-protocol-not-offered-1",
+      turnId: randomUUID(),
+      userMessageId: "msg-tool-protocol-not-offered-1",
+      content: "Run that Code Mode task again.",
+      mode: "chat",
+      providerId: "glm",
+      model: "glm-5",
+      webMode: "off",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content: "Run that Code Mode task again." }],
+    });
+
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.failure).toBeUndefined();
+    expect(result.assistantContent).toContain("Code Mode is not available here.");
+    const secondRequestMessages = requestMessages(createChatCompletion.mock.calls[1]?.[0]);
+    const attempted = findAssistantToolCallMessages(secondRequestMessages).flatMap(
+      (message) => message.tool_calls ?? [],
+    );
+    expect(attempted).toEqual([
+      expect.objectContaining({ id: "call-not-offered", function: { name: "code_mode_request", arguments: "{}" } }),
+    ]);
+    const correction = findToolResultMessages(secondRequestMessages).find(
+      (message) => message.tool_call_id === "call-not-offered",
+    );
+    expect(JSON.parse(String(correction?.content))).toMatchObject({
+      error: "unsupported_tool",
+      requested: "code_mode_request",
+    });
+    expect(String(correction?.content)).toContain("Valid tools for this turn: docs.search.");
+  });
+
   it("answers every tool call id before the budget-synthesis completion when the model over-requests tools", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",

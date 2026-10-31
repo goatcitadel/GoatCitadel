@@ -356,20 +356,166 @@ describe("init tripwire", () => {
   });
 });
 
-describe("bridged governance faults", () => {
-  it("an unknown tool name throws claude_cli_tool_use_blocked", () => {
-    const atStart = bridged();
-    pushAll(atStart, [init(), messageStart]);
-    expectReason(
-      () => atStart.push(toolStart(0, "toolu_01", "mcp__goatcitadel__shell_exec")),
-      "claude_cli_tool_use_blocked",
-    );
+describe("tool names the step does not offer", () => {
+  const GONE = "mcp__goatcitadel__code_mode_request";
+  /** The CLI's own answer to a tool it does not have, as Claude Code prints it. */
+  const selfAnswer = (id: string, name: string, isError = true) =>
+    line({
+      type: "user",
+      message: {
+        role: "user",
+        content: [
+          {
+            type: "tool_result",
+            tool_use_id: id,
+            content: `<tool_use_error>Error: No such tool available: ${name}</tool_use_error>`,
+            is_error: isError,
+          },
+        ],
+      },
+      parent_tool_use_id: null,
+    });
 
-    const atAssistant = bridged();
-    pushAll(atAssistant, [init(), messageStart, toolStart(0, "toolu_01", ECHO)]);
-    expectReason(() => atAssistant.push(assistantTool("toolu_01", "Bash", {})), "claude_cli_tool_use_blocked");
+  it("an unknown tool name becomes a tool call under its bare name for the runner to answer", () => {
+    const mapper = bridged();
+    pushAll(mapper, [
+      init(),
+      messageStart,
+      ...toolCallLines(0, "toolu_01Shell", "mcp__goatcitadel__shell_exec", { command: "ls" }),
+      blockStop(0),
+      messageDelta("tool_use"),
+      messageStop,
+    ]);
+    expect(toolCallsOf(mapper.toolStep()?.chunks ?? [])).toEqual([
+      {
+        index: 0,
+        id: "toolu_01Shell",
+        type: "function",
+        function: { name: "shell_exec", arguments: '{"command":"ls"}' },
+      },
+    ]);
+    expect(mapper.everyCallOffered()).toBe(false);
+
+    // A name without the bridge prefix passes through as written.
+    const bare = bridged();
+    pushAll(bare, [init(), messageStart, ...toolCallLines(0, "toolu_01Bash", "Bash", {}), messageDelta("tool_use")]);
+    bare.push(messageStop);
+    expect(toolCallsOf(bare.toolStep()?.chunks ?? [])).toEqual([
+      expect.objectContaining({ function: { name: "Bash", arguments: "{}" } }),
+    ]);
   });
 
+  it("a tool offered before a Gateway restart but not by this step is answered by the runner, not failed", () => {
+    // The history shows an earlier code_mode_request call; this step's manifest no longer offers it.
+    const mapper = bridged();
+    expect(manifest().cliNameToModelName.has(GONE)).toBe(false);
+    const streamed = pushAll(mapper, [
+      init(),
+      messageStart,
+      textStart(0),
+      textDelta(0, "Running it again."),
+      assistant([{ type: "text", text: "Running it again." }]),
+      blockStop(0),
+      ...toolCallLines(1, "toolu_02Gone", GONE, { task: "rerun" }),
+      // The CLI has no such tool, so it answers the call itself, before message_stop.
+      selfAnswer("toolu_02Gone", GONE),
+      blockStop(1),
+      messageDelta("tool_use"),
+      messageStop,
+    ]);
+    expect(streamed).toEqual([
+      expect.objectContaining({ choices: [{ index: 0, delta: { content: "Running it again." } }] }),
+    ]);
+    expect(toolCallsOf(mapper.toolStep()?.chunks ?? [])).toEqual([
+      expect.objectContaining({
+        id: "toolu_02Gone",
+        function: { name: "code_mode_request", arguments: '{"task":"rerun"}' },
+      }),
+    ]);
+    expect(mapper.emittedAssistant()).toEqual({
+      text: "Running it again.",
+      calls: [{ id: "toolu_02Gone", name: "code_mode_request", arguments: '{"task":"rerun"}' }],
+    });
+    expect(mapper.everyCallOffered()).toBe(false);
+    // The CLI then moves on to its next model call; the adapter is killing the tree, so it is ignored.
+    expect(mapper.push(messageStart)).toEqual([]);
+  });
+
+  it("an offered call beside an unknown one keeps both, in order, and the step is not offered-only", () => {
+    const mapper = bridged();
+    pushAll(mapper, [
+      init(),
+      messageStart,
+      ...toolCallLines(0, "toolu_01Echo", ECHO, { text: "hi" }),
+      blockStop(0),
+      ...toolCallLines(1, "toolu_02Gone", GONE, {}),
+      selfAnswer("toolu_02Gone", GONE),
+      blockStop(1),
+      messageDelta("tool_use"),
+      messageStop,
+    ]);
+    expect(toolCallsOf(mapper.toolStep()?.chunks ?? [])).toEqual([
+      expect.objectContaining({
+        index: 0,
+        id: "toolu_01Echo",
+        function: expect.objectContaining({ name: "notes_echo" }),
+      }),
+      expect.objectContaining({
+        index: 1,
+        id: "toolu_02Gone",
+        function: expect.objectContaining({ name: "code_mode_request" }),
+      }),
+    ]);
+    expect(mapper.everyCallOffered()).toBe(false);
+  });
+
+  it("a step of offered calls only is offered-only", () => {
+    const mapper = bridged();
+    pushAll(mapper, [init(), messageStart, ...toolCallLines(0, "toolu_01Echo", ECHO, {}), messageDelta("tool_use")]);
+    mapper.push(messageStop);
+    expect(mapper.everyCallOffered()).toBe(true);
+  });
+
+  it.each([
+    ["a non-error answer", [selfAnswer("toolu_02Gone", GONE, false)]],
+    ["a second answer", [selfAnswer("toolu_02Gone", GONE), selfAnswer("toolu_02Gone", GONE)]],
+  ])("%s to an unknown call throws claude_cli_bridge_mismatch", (_label, answers) => {
+    const mapper = bridged();
+    pushAll(mapper, [init(), messageStart, ...toolCallLines(0, "toolu_02Gone", GONE, {})]);
+    expectReason(() => pushAll(mapper, answers), "claude_cli_bridge_mismatch");
+  });
+
+  it("the CLI answering an offered call itself still throws claude_cli_bridge_mismatch", () => {
+    const mapper = bridged();
+    pushAll(mapper, [
+      init(),
+      messageStart,
+      ...toolCallLines(0, "toolu_01Echo", ECHO, {}),
+      ...toolCallLines(1, "toolu_02Gone", GONE, {}),
+      selfAnswer("toolu_02Gone", GONE),
+    ]);
+    expectReason(() => mapper.push(selfAnswer("toolu_01Echo", ECHO)), "claude_cli_bridge_mismatch");
+  });
+
+  it("a call whose name changes between its start and its assistant line throws claude_cli_bridge_mismatch", () => {
+    const mapper = bridged();
+    pushAll(mapper, [init(), messageStart, toolStart(0, "toolu_01", ECHO)]);
+    expectReason(() => mapper.push(assistantTool("toolu_01", "Bash", {})), "claude_cli_bridge_mismatch");
+
+    // The same model-facing name, offered at the start but outside the manifest on the assistant line.
+    const sameName = bridged();
+    pushAll(sameName, [init(), messageStart, toolStart(0, "toolu_01", ECHO)]);
+    expectReason(() => sameName.push(assistantTool("toolu_01", "notes_echo", {})), "claude_cli_bridge_mismatch");
+  });
+
+  it("a tool_use block without a name still throws claude_cli_tool_use_blocked", () => {
+    const mapper = bridged();
+    pushAll(mapper, [init(), messageStart]);
+    expectReason(() => mapper.push(toolStart(0, "toolu_01", "")), "claude_cli_tool_use_blocked");
+  });
+});
+
+describe("bridged governance faults", () => {
   it("server_tool_use throws claude_cli_tool_use_blocked", () => {
     const atStart = bridged();
     pushAll(atStart, [init(), messageStart]);

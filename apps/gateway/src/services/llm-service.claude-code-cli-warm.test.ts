@@ -527,6 +527,23 @@ describe("claude-code-cli warm continuation through LlmService", () => {
     expect(readdirSync(scratchRoot)).toEqual([]);
   });
 
+  it("a step that calls a tool its manifest does not offer is not parked", async () => {
+    // As after a Gateway restart: the history's earlier call names a tool this step no longer offers.
+    const goneCall: FakeCall = { id: "toolu_gone", name: "code_mode_request", input: { task: "rerun" } };
+    const harness = createHarness([toolStepScript(toolNames, [goneCall])]);
+    const { service } = createService(harness);
+
+    const chunks = await collect(service, { messages: firstMessages, tools });
+
+    expect(toolCallIds(chunks)).toEqual(["toolu_gone"]);
+    expect(chunks.flatMap((chunk) => (readDelta(chunk)?.tool_calls as unknown[]) ?? [])).toEqual([
+      expect.objectContaining({ function: { name: "code_mode_request", arguments: '{"task":"rerun"}' } }),
+    ]);
+    // The CLI answers such a call itself and moves on, so its tree is killed at the stop.
+    expect(harness.killTree).toHaveBeenCalledTimes(1);
+    expect(readdirSync(scratchRoot)).toEqual([]);
+  });
+
   it("a step without session and turn attribution is not parked", async () => {
     const harness = createHarness([toolStepScript(toolNames, [readCall])]);
     const { service } = createService(harness);

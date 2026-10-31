@@ -4828,6 +4828,18 @@ export class ChatTurnAgentRunner {
               markCompletionRepair("tool_call_repair", "orchestrator", preRepairContent, preRepairContent);
               // Fall through to the normal tool-execution branch using the
               // repaired calls. Any unrepaired calls ride along as feedback.
+            } else if (
+              repair &&
+              repair.feedback.length > 0 &&
+              toolSchema.modelToCanonical.size > 0 &&
+              repair.unresolved.every((issue) => issue.kind === "unsupported_name")
+            ) {
+              // Every call names a tool this turn does not offer, often one the
+              // history shows from an earlier turn. Nothing executes: each call is
+              // answered below with the valid tools, so the model can recover on
+              // the next loop instead of the turn failing. A turn that offers no
+              // tools at all (e.g. draft-only skill capture) still fails closed.
+              toolCallRepairFeedback = repair.feedback;
             } else {
               const repairableIncompleteToolCall =
                 completionOutcome.status !== "complete" &&
@@ -4879,7 +4891,7 @@ export class ChatTurnAgentRunner {
             );
             break;
           }
-          if (toolCalls.length === 0 || input.toolAutonomy === "manual") {
+          if ((toolCalls.length === 0 && toolCallRepairFeedback.length === 0) || input.toolAutonomy === "manual") {
             // A reply received during the final provider request gets a further
             // bounded model boundary when the normal turn budget permits one.
             if (
@@ -5145,6 +5157,10 @@ export class ChatTurnAgentRunner {
               tool_call_id: entry.toolCallId,
               content: entry.content,
             } as ChatCompletionMessage);
+          }
+          // Only corrections, nothing to execute: the model reads them on the next loop.
+          if (toolCalls.length === 0) {
+            continue;
           }
           // Round-3 R3-1: when every call in this batch is a registry-declared
           // read-only builtin, pre-execute the batch concurrently and let the

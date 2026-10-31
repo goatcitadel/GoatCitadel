@@ -158,7 +158,8 @@ The residual exposure is the CLI's built-in plugins and agent definitions. They 
 |---|---|
 | `system/init` | Requires `mcp_servers` to be exactly `[{name:"goatcitadel", status:"connected"}]` and the `tools` set to equal the manifest set. Otherwise the step fails: `claude_cli_bridge_unavailable` if the server isn't connected, `claude_cli_bridge_mismatch` for anything extra or missing. |
 | `content_block_start` of type `tool_use` with a manifest name | Starts collecting that call. |
-| `tool_use` with any other name, or `server_tool_use` / `mcp_tool_use` | `claude_cli_tool_use_blocked` (as today) |
+| `tool_use` with a name outside the manifest | Collected like a manifest call under its own name, without the `mcp__goatcitadel__` prefix (often a tool the history shows from an earlier turn). The runner's tool-call repair answers it with the turn's valid tools, so the model can recover; nothing runs it, because the init tripwire proved the CLI has only the stub's tools. The CLI's own error `tool_result` for that id (`No such tool available`) is accepted once, and the step is never parked, since the CLI answers the call itself instead of waiting on the stub. |
+| `server_tool_use` / `mcp_tool_use` | `claude_cli_tool_use_blocked` (as today) |
 | `input_json_delta` | Ignored. The complete `input` comes from the block's `assistant` line. |
 | `assistant` line with a `tool_use` block | Records `{id, name, input}`. |
 | text and thinking deltas | Forwarded as today. Text before a tool call is normal assistant content. |
@@ -224,9 +225,9 @@ Malformed `input` (not an object) is passed through as the arguments string. The
 
 A fault always kills the tree and fails the step:
 
-- a `tool_use` of any name outside this step's manifest, or any `server_tool_use` / `mcp_tool_use` block (`claude_cli_tool_use_blocked`);
+- any `server_tool_use` / `mcp_tool_use` block, or a `tool_use` with no name (`claude_cli_tool_use_blocked`); a `tool_use` named outside the manifest is answered by the runner instead (see Stream handling);
 - an init line reporting extra tools, extra MCP servers, or a missing manifest tool (`claude_cli_bridge_mismatch`);
-- any permission denial or tool result inside the CLI (`claude_cli_bridge_mismatch`);
+- any permission denial or tool result inside the CLI (`claude_cli_bridge_mismatch`), except the CLI's one error answer to a call named outside the manifest;
 - a second model message in one step (`claude_cli_bridge_mismatch`);
 - any hook event (`claude_cli_hook_blocked`);
 - on an unbridged step, any `tool_use` at all, as today.

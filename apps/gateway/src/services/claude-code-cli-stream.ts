@@ -44,6 +44,11 @@ export interface ClaudeCliStreamMapper {
   emittedAssistant(): ClaudeCliEmittedAssistant | undefined;
   /** Continuation only: true while a delivered tool result has not been echoed back yet. */
   awaitingEchoes(): boolean;
+  /**
+   * Bridged steps only: false once a tool call names a tool the step's manifest does not offer. The CLI
+   * answers such a call itself and moves on instead of waiting on the stub, so the process is never parked.
+   */
+  everyCallOffered(): boolean;
 }
 
 export interface ClaudeCliStreamMapperOptions {
@@ -194,6 +199,10 @@ export function createClaudeCliStreamMapper(
 
     awaitingEchoes() {
       return collector?.awaitingEchoes() ?? false;
+    },
+
+    everyCallOffered() {
+      return collector?.everyCallOffered() ?? true;
     },
   };
 }
