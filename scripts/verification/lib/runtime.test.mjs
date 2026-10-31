@@ -79,6 +79,14 @@ test("verification stacks name their UI origin for a Gateway that does not trust
     withVerificationUiOrigin({}, uiOrigin, { GOATCITADEL_ALLOWED_ORIGINS: uiOrigin }).GOATCITADEL_ALLOWED_ORIGINS,
     uiOrigin,
   );
+  // An inherited list the lane omits (the test bench scrubs every GOATCITADEL_* variable) is not brought back.
+  const scrubbed = buildVerificationProcessEnv({ GOATCITADEL_ALLOWED_ORIGINS: "https://citadel.example.com" }, {}, [
+    "GOATCITADEL_ALLOWED_ORIGINS",
+  ]);
+  assert.doesNotMatch(
+    withVerificationUiOrigin({}, uiOrigin, scrubbed).GOATCITADEL_ALLOWED_ORIGINS,
+    /citadel\.example\.com/u,
+  );
   // A Gateway-only stack changes nothing.
   const gatewayOnly = { GOATCITADEL_AUTH_MODE: "none" };
   assert.equal(withVerificationUiOrigin(gatewayOnly, undefined, {}), gatewayOnly);

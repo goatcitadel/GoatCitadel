@@ -55,6 +55,8 @@ export async function startVerificationStack(context, options = {}) {
       ...options.gatewayEnv,
     },
     uiUrl,
+    // Only what the Gateway would inherit: a lane that omits the shell's origin list must not get it back here.
+    buildVerificationProcessEnv(process.env, {}, options.gatewayEnvOmit),
   );
 
   const gateway =
