@@ -7546,10 +7546,7 @@ function stripTrustedCodeWriteVerification(
 }
 
 /** The guest return value, or a preview of its JSON when it is larger than the turn should carry. */
-function capCodeModeRequestResult(result: Record<string, unknown> | undefined): unknown {
-  if (result === undefined) {
-    return undefined;
-  }
+function capCodeModeRequestResult(result: Record<string, unknown>): unknown {
   const serialized = JSON.stringify(result);
   if (Buffer.byteLength(serialized, "utf8") <= CODE_MODE_REQUEST_RESULT_MAX_BYTES) {
     return result;
