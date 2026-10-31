@@ -101,6 +101,12 @@ describe("CapabilitySystemService.keepCodeModeRunAsCandidate", { timeout: RUN_TI
   it("refuses a run without a chat approval source", async () => {
     const fx = createFixture();
     const run = await fx.service.createCodeModeRun({ language: "javascript", source: "return { ok: true };" });
+    // Finish the code_mode.run first, so only the missing Chat approval source can refuse it.
+    fx.storage.approvals.resolve(run.approvalId!, { decision: "approve", resolvedBy: "operator-1" });
+    await fx.service.executeApprovedCodeModeRun(run.approvalId!);
+    const completed = await fx.service.getCodeModeRun(run.runId);
+    expect(completed.status).toBe("completed");
+    expect(completed).not.toHaveProperty("approvalSource");
     await expect(fx.service.keepCodeModeRunAsCandidate(run.runId, { name: "x", summary: "y" })).rejects.toThrow(
       "Only a finished Code Mode run from Chat can be kept.",
     );
