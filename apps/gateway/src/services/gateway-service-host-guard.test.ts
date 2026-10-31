@@ -469,9 +469,6 @@ describe("gateway service host guard", () => {
     expect(routeServiceLines).toEqual(domainComposerNames.map((composerName) => `...${composerName}(gateway),`));
     expect(entrypoint).not.toMatch(/create[A-Z]\w+RoutePort\(/);
     expect(entrypoint).not.toMatch(/new\s+[A-Z]\w+Service\(/);
-    expect(source).not.toContain("const INTEGRATION_PLUGINS_SETTING_KEY");
-    expect(source).not.toMatch(/function readIntegrationPlugins|function writeIntegrationPlugins/);
-    expect(source).toContain('from "./integration-plugin-store.js"');
     const gatewayService = files.find(({ relativePath }) => relativePath === "gateway-service.ts")?.source ?? "";
     expect(gatewayService).not.toMatch(/\bclass\s+GatewayService\s+implements\s+GatewayRouteCompositionPort\b/);
     expect(gatewayService).not.toMatch(/new\s+ChatTurnRuntimeService\(\s*createChatTurnRuntimeHost\(\s*this\s*\)\s*\)/);

@@ -5,12 +5,12 @@ import {
   runtimeStatusToCapabilityAvailability,
 } from "./plugin-provider-governance-service.js";
 
-describe("plugin/provider governance", () => {
-  it("keeps corrupt plugin manifests unavailable and non-callable", () => {
+describe("provider runtime governance", () => {
+  it("keeps corrupt provider manifests unavailable and non-callable", () => {
     const status = normalizePluginProviderRuntimeStatus({
-      runtimeId: "plugin-corrupt",
-      kind: "plugin",
-      label: "Corrupt Plugin",
+      runtimeId: "provider-corrupt-manifest",
+      kind: "provider",
+      label: "Corrupt Provider Manifest",
       integrityStatus: "corrupt",
       runtimeAvailable: true,
       approvedForCallableUse: true,
@@ -44,7 +44,7 @@ describe("plugin/provider governance", () => {
     });
   });
 
-  it("keeps missing plugin/provider runtime inspectable but not configured", () => {
+  it("keeps a missing provider runtime inspectable but not configured", () => {
     const status = normalizePluginProviderRuntimeStatus({
       runtimeId: "provider-missing-secret",
       kind: "provider",
@@ -83,9 +83,9 @@ describe("plugin/provider governance", () => {
 
   it("blocks otherwise healthy runtimes when required SecretRefs are missing", () => {
     const status = normalizePluginProviderRuntimeStatus({
-      runtimeId: "plugin-missing-secret",
-      kind: "plugin",
-      label: "Plugin Missing Secret",
+      runtimeId: "provider-missing-secret-refs",
+      kind: "provider",
+      label: "Provider Missing Secret Refs",
       integrityStatus: "verified",
       runtimeAvailable: true,
       approvedForCallableUse: true,
@@ -142,7 +142,7 @@ describe("plugin/provider governance", () => {
     const proof = assertNoCallableExposureForUnsafeRuntimes([
       {
         runtimeId: "bad",
-        kind: "plugin",
+        kind: "provider",
         label: "Bad",
         status: "unavailable",
         integrityStatus: "quarantined",

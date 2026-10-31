@@ -6,7 +6,8 @@ import { registerIntegrationControlRoutes } from "../routes/integrations-control
 import { requireChannelSetupDefinition } from "./channel-setup-definitions.js";
 import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
 
-it("projects installed manifest guidance through actual catalog and canonical channel setup read owners without changing the wizard", async () => {
+it("serves channel setup definitions without author guidance", async () => {
+  // A record left behind by a build that still had integration plugins must not feed the setup guides.
   const configurationForm = {
     version: "goatcitadel.extension-configuration.v1",
     fields: [{ key: "webhookUrl", label: "Author endpoint guidance", kind: "url" }],
@@ -31,18 +32,32 @@ it("projects installed manifest guidance through actual catalog and canonical ch
       url: `/api/v1/channels/catalog/${catalogId}/setup-definition`,
     });
     expect(definition.statusCode, definition.body).toBe(200);
-    expect(definition.json()).toMatchObject({
-      configurationGuidance: { pluginId: "googlechat", form: configurationForm },
-    });
+    expect(definition.json()).not.toHaveProperty("configurationGuidance");
     expect(definition.json().wizard).toEqual(requireChannelSetupDefinition(catalogId).definition.wizard);
+
     const list = await app.inject({ method: "GET", url: "/api/v1/channels/setup-definitions" });
-    expect(
-      list.json().items.find((entry: { catalog: { catalogId: string } }) => entry.catalog.catalogId === catalogId),
-    ).toMatchObject({ configurationGuidance: { form: configurationForm } });
+    expect(list.statusCode, list.body).toBe(200);
+    const items = list.json().items as Array<{ catalog: { catalogId: string } }>;
+    expect(items.find((entry) => entry.catalog.catalogId === catalogId)).toBeDefined();
+    for (const item of items) {
+      expect(item).not.toHaveProperty("configurationGuidance");
+    }
+
     const fields = await app.inject({ method: "GET", url: `/api/v1/integrations/catalog/${catalogId}/form-schema` });
-    expect(fields.json()).toMatchObject({ configurationGuidance: { form: configurationForm } });
-    const plugins = await app.inject({ method: "GET", url: "/api/v1/integrations/plugins" });
-    expect(plugins.json()).toMatchObject({ items: [{ pluginId: "googlechat", configurationForm }] });
+    expect(fields.statusCode, fields.body).toBe(200);
+    expect(fields.json()).not.toHaveProperty("configurationGuidance");
+
+    const catalog = await app.inject({ method: "GET", url: "/api/v1/integrations/catalog?kind=channel" });
+    expect(catalog.statusCode, catalog.body).toBe(200);
+    const googleChat = (catalog.json().items as Array<{ catalogId: string }>).find(
+      (entry) => entry.catalogId === catalogId,
+    );
+    expect(googleChat).toBeDefined();
+    expect(googleChat).not.toHaveProperty("pluginId");
+    expect(googleChat).not.toHaveProperty("formSchema.configurationGuidance");
+
+    expect((await app.inject({ method: "GET", url: "/api/v1/integrations/plugins" })).statusCode).toBe(404);
+    expect(read).not.toHaveBeenCalled();
   } finally {
     await app.close();
   }

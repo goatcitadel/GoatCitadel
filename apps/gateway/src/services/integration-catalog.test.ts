@@ -53,22 +53,16 @@ describe("integration-catalog", () => {
     }
   });
 
-  it("does not promote planned catalog entries through plugin presence", () => {
-    const plannedPluginChannel: IntegrationCatalogEntry = {
+  it("keeps a planned catalog entry disabled and blocked", () => {
+    const planned: IntegrationCatalogEntry = {
       ...requireCatalogEntry("channel.discord"),
       key: "custom-bridge",
       catalogId: "channel.custom-bridge",
       maturity: "planned",
-      pluginId: "custombridge",
     };
 
-    expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set())).toBe("disabled");
-    expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set())).toBe("blocked");
-    expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["slack"]))).toBe("disabled");
-    expect(resolveIntegrationCatalogMaturity(plannedPluginChannel, new Set(["custombridge"]))).toBe("disabled");
-    expect(resolveIntegrationCatalogRuntimeAvailability(plannedPluginChannel, new Set(["custombridge"]))).toBe(
-      "blocked",
-    );
+    expect(resolveIntegrationCatalogMaturity(planned)).toBe("disabled");
+    expect(resolveIntegrationCatalogRuntimeAvailability(planned)).toBe("blocked");
   });
 
   it("exposes an explicit local-bridge action route instead of probing after side effects", () => {
@@ -147,27 +141,26 @@ describe("integration-catalog", () => {
     });
   });
 
-  it("keeps planned aliases disabled until they are explicitly modeled as plugin entries", () => {
+  it("keeps planned aliases disabled until they are explicitly modeled as catalog entries", () => {
     const whatsapp = requireCatalogEntry("channel.whatsapp");
     const plannedAliasEntry: IntegrationCatalogEntry = {
       ...requireCatalogEntry("channel.line"),
       key: "line-custom",
       catalogId: "channel.line-custom",
       maturity: "planned",
-      pluginId: "googlechat",
     };
 
-    expect(resolveIntegrationCatalogMaturity(plannedAliasEntry, new Set(["googlechat"]))).toBe("disabled");
-    expect(resolveIntegrationCatalogRuntimeAvailability(plannedAliasEntry, new Set(["googlechat"]))).toBe("blocked");
-    expect(resolveIntegrationCatalogMaturity(whatsapp, new Set())).toBe("beta");
-    expect(resolveIntegrationCatalogRuntimeAvailability(whatsapp, new Set())).toBe("runnable");
+    expect(resolveIntegrationCatalogMaturity(plannedAliasEntry)).toBe("disabled");
+    expect(resolveIntegrationCatalogRuntimeAvailability(plannedAliasEntry)).toBe("blocked");
+    expect(resolveIntegrationCatalogMaturity(whatsapp)).toBe("beta");
+    expect(resolveIntegrationCatalogRuntimeAvailability(whatsapp)).toBe("runnable");
   });
 
   it("promotes Matrix to a beta runnable channel with an opt-in forced-allowlist inbound form", () => {
     const entry = requireCatalogEntry("channel.matrix");
     expect(entry.maturity).toBe("beta");
-    expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
-    expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+    expect(resolveIntegrationCatalogMaturity(entry)).toBe("beta");
+    expect(resolveIntegrationCatalogRuntimeAvailability(entry)).toBe("runnable");
     expect(entry.capabilities).toEqual(["chat", "rooms", "reactions", "unsend", "typing", "inbound"]);
     const fields = getIntegrationFormSchema("channel.matrix")?.fields ?? [];
     expect(fields.find((field) => field.key === "inboundStreamEnabled")).toBeDefined();
@@ -179,8 +172,8 @@ describe("integration-catalog", () => {
     for (const catalogId of ["channel.qqbot", "channel.wecom"]) {
       const entry = requireCatalogEntry(catalogId);
       expect(entry.maturity).toBe("beta");
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
-      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+      expect(resolveIntegrationCatalogMaturity(entry)).toBe("beta");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry)).toBe("runnable");
       expect(entry.capabilities).toContain("inbound");
       expect(entry.description).not.toMatch(/catalog|probes are not wired/i);
       const schema = getIntegrationFormSchema(catalogId);
@@ -201,12 +194,12 @@ describe("integration-catalog", () => {
     expect(wecom.find((field) => field.key === "agentId")?.required).toBe(true);
   });
 
-  it("only treats explicitly beta, native, or plugin entries as runnable", () => {
+  it("only treats explicitly beta or native entries as runnable", () => {
     for (const entry of INTEGRATION_CATALOG) {
-      const resolvedMaturity = resolveIntegrationCatalogMaturity(entry, new Set());
-      const runtimeAvailability = resolveIntegrationCatalogRuntimeAvailability(entry, new Set());
+      const resolvedMaturity = resolveIntegrationCatalogMaturity(entry);
+      const runtimeAvailability = resolveIntegrationCatalogRuntimeAvailability(entry);
       if (runtimeAvailability === "runnable") {
-        expect(["beta", "native", "plugin"]).toContain(resolvedMaturity);
+        expect(["beta", "native"]).toContain(resolvedMaturity);
       } else {
         expect(resolvedMaturity).toBe("disabled");
       }
@@ -254,13 +247,13 @@ describe("integration-catalog", () => {
 
     for (const catalogId of betaBuiltInChannels) {
       const entry = requireCatalogEntry(catalogId);
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
-      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+      expect(resolveIntegrationCatalogMaturity(entry)).toBe("beta");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry)).toBe("runnable");
     }
 
     const nextcloudTalk = requireCatalogEntry("channel.nextcloud-talk");
-    expect(resolveIntegrationCatalogMaturity(nextcloudTalk, new Set())).toBe("native");
-    expect(resolveIntegrationCatalogRuntimeAvailability(nextcloudTalk, new Set())).toBe("runnable");
+    expect(resolveIntegrationCatalogMaturity(nextcloudTalk)).toBe("native");
+    expect(resolveIntegrationCatalogRuntimeAvailability(nextcloudTalk)).toBe("runnable");
 
     const slack = requireCatalogEntry("channel.slack");
     expect(slack.capabilities).toEqual(expect.arrayContaining(["attachments", "reactions", "unsend"]));
@@ -296,7 +289,7 @@ describe("integration-catalog", () => {
     const voice = requireCatalogEntry("automation.voice-wake-talk");
 
     expect(voice.maturity).toBe("beta");
-    expect(resolveIntegrationCatalogMaturity(voice, new Set())).toBe("beta");
+    expect(resolveIntegrationCatalogMaturity(voice)).toBe("beta");
     expect(voice.capabilities).toEqual(expect.arrayContaining(["voice"]));
   });
 
@@ -313,8 +306,8 @@ describe("integration-catalog", () => {
     for (const catalogId of providerCatalogIds) {
       const entry = requireCatalogEntry(catalogId);
       expect(entry.maturity).toBe("beta");
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
-      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+      expect(resolveIntegrationCatalogMaturity(entry)).toBe("beta");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry)).toBe("runnable");
     }
   });
 
@@ -339,8 +332,8 @@ describe("integration-catalog", () => {
     for (const catalogId of catalogIds) {
       const entry = requireCatalogEntry(catalogId);
       expect(entry.maturity).toBe("beta");
-      expect(resolveIntegrationCatalogMaturity(entry, new Set())).toBe("beta");
-      expect(resolveIntegrationCatalogRuntimeAvailability(entry, new Set())).toBe("runnable");
+      expect(resolveIntegrationCatalogMaturity(entry)).toBe("beta");
+      expect(resolveIntegrationCatalogRuntimeAvailability(entry)).toBe("runnable");
       expect(getIntegrationFormSchema(catalogId)?.fields.length).toBeGreaterThan(0);
       expect(entry.operatorActions?.length ?? 0).toBeGreaterThan(0);
       expect(entry.capabilities).toEqual(

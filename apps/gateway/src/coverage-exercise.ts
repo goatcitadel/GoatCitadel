@@ -812,7 +812,6 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     limit: 5,
   });
 
-  await requestNotServerError(app, "GET", "/api/v1/integrations/plugins");
   await requestNotServerError(app, "GET", "/api/v1/integrations/obsidian/status");
   await requestNotServerError(app, "PATCH", "/api/v1/integrations/obsidian/config", {
     enabled: false,
@@ -831,12 +830,6 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
     content: "coverage inbox",
     source: "coverage",
   });
-  await requestNotServerError(app, "POST", "/api/v1/integrations/plugins/install", {
-    pluginId: "coverage-plugin",
-    source: "https://example.com/plugin.git",
-  });
-  await requestNotServerError(app, "POST", "/api/v1/integrations/plugins/coverage-plugin/enable", {});
-  await requestNotServerError(app, "POST", "/api/v1/integrations/plugins/coverage-plugin/disable", {});
 
   await requestNotServerError(app, "POST", "/api/v1/mesh/join", {
     inviteCode: "coverage-invite",

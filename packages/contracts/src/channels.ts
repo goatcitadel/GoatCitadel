@@ -1,34 +1,6 @@
 import type { ChannelActivityEffectResult, ChannelActivityPhase } from "./comms.js";
 
-export type IntegrationPluginInstallSourceType = "local" | "npm" | "git" | "url" | "manual" | "unknown";
-export type IntegrationPluginIntegrityStatus =
-  | "verified"
-  | "missing"
-  | "mismatch"
-  | "unknown"
-  | "not_applicable"
-  | "quarantined";
 export type IntegrationPluginTrustWarningSeverity = "info" | "warning" | "critical";
-
-export interface IntegrationPluginSourceMetadata {
-  type: IntegrationPluginInstallSourceType;
-  display: string;
-  packageName?: string;
-  packageVersion?: string;
-  integrityStatus: IntegrationPluginIntegrityStatus;
-  expectedIntegrity?: string;
-  actualIntegrity?: string;
-  verifiedAt?: string;
-  integritySource?: "operator" | "registry" | "manifest";
-  /** Stored package artifact path, relative to the Gateway data directory. */
-  artifactPath?: string;
-}
-
-export interface IntegrationPluginTrustWarning {
-  code: string;
-  severity: IntegrationPluginTrustWarningSeverity;
-  message: string;
-}
 
 export interface IntegrationPluginThemeMetadata {
   accentColor?: string;
@@ -57,55 +29,11 @@ export interface ExtensionConfigurationForm {
   sampleTask?: { prompt: string; expectedOutcome: string };
 }
 
-export type PluginDescriptorHealthStatus = "healthy" | "warning" | "quarantined";
-
 export interface PluginDescriptorHealthIssue {
   code: string;
   severity: IntegrationPluginTrustWarningSeverity;
   message: string;
   action?: string;
-}
-
-export interface PluginDescriptorHealth {
-  status: PluginDescriptorHealthStatus;
-  checkedAt: string;
-  source: string;
-  manifestPath?: string;
-  summary: string;
-  issues: PluginDescriptorHealthIssue[];
-  evidence: {
-    owner: "gateway";
-    source: "integration_plugin_descriptor";
-    timestamp: string;
-    status: PluginDescriptorHealthStatus;
-    descriptorHash?: string;
-  };
-}
-
-export interface IntegrationPluginRecord {
-  pluginId: string;
-  label: string;
-  version: string;
-  description?: string;
-  source?: string;
-  sourceMetadata?: IntegrationPluginSourceMetadata;
-  integrityStatus?: IntegrationPluginIntegrityStatus;
-  trustWarnings?: IntegrationPluginTrustWarning[];
-  descriptorHealth?: PluginDescriptorHealth;
-  theme?: IntegrationPluginThemeMetadata;
-  configurationForm?: ExtensionConfigurationForm;
-  enabled: boolean;
-  installedAt: string;
-  updatedAt: string;
-  capabilities: string[];
-  toolOverrides?: IntegrationPluginToolOverride[];
-}
-
-export interface IntegrationPluginInstallInput {
-  source: string;
-  pluginId?: string;
-  sourceType?: IntegrationPluginInstallSourceType;
-  expectedIntegrity?: string;
 }
 
 export interface IntegrationPluginAuthorManifest {

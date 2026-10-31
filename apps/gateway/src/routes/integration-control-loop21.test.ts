@@ -52,9 +52,6 @@ describe("Loop 21 route facade coverage", () => {
         revoked: true,
       })),
       reconnectDiscordRuntime: vi.fn(async (id: string) => ({ connectionId: id, status: "connected" })),
-      listIntegrationPlugins: vi.fn(() => [{ pluginId: "plugin-1" }]),
-      installIntegrationPlugin: vi.fn((input) => ({ pluginId: input.pluginId ?? "installed", ...input })),
-      setIntegrationPluginEnabled: vi.fn((pluginId: string, enabled: boolean) => ({ pluginId, enabled })),
       runIntegrationConnectionDiagnostics: vi.fn(async (id: string) => ({ connectionId: id, ok: true })),
     };
     app = Fastify();
@@ -251,51 +248,6 @@ describe("Loop 21 route facade coverage", () => {
     await expect(
       app.inject({ method: "POST", url: `/api/v1/integrations/connections/${connectionId}/discord/reconnect` }),
     ).resolves.toMatchObject({ statusCode: 409 });
-
-    expect((await app.inject({ method: "GET", url: "/api/v1/integrations/plugins" })).json()).toEqual({
-      items: [{ pluginId: "plugin-1" }],
-    });
-    expect(
-      (
-        await app.inject({
-          method: "POST",
-          url: "/api/v1/integrations/plugins/install",
-          payload: { source: "npm:@goatcitadel/plugin", sourceType: "npm", pluginId: "plugin-2" },
-        })
-      ).statusCode,
-    ).toBe(201);
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/integrations/plugins/install", payload: {} }),
-    ).resolves.toMatchObject({
-      statusCode: 400,
-    });
-    integrations.installIntegrationPlugin.mockImplementationOnce(() => {
-      throw new Error("install failed");
-    });
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/integrations/plugins/install", payload: { source: "local" } }),
-    ).resolves.toMatchObject({ statusCode: 400 });
-
-    await app.inject({ method: "POST", url: "/api/v1/integrations/plugins/plugin-1/enable" });
-    await app.inject({ method: "POST", url: "/api/v1/integrations/plugins/plugin-1/disable" });
-    expect(integrations.setIntegrationPluginEnabled).toHaveBeenCalledWith("plugin-1", true);
-    expect(integrations.setIntegrationPluginEnabled).toHaveBeenCalledWith("plugin-1", false);
-    integrations.setIntegrationPluginEnabled.mockImplementationOnce(() => {
-      throw new Error("missing plugin");
-    });
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/integrations/plugins/plugin-1/enable" }),
-    ).resolves.toMatchObject({
-      statusCode: 404,
-    });
-    integrations.setIntegrationPluginEnabled.mockImplementationOnce(() => {
-      throw new Error("missing plugin");
-    });
-    await expect(
-      app.inject({ method: "POST", url: "/api/v1/integrations/plugins/plugin-1/disable" }),
-    ).resolves.toMatchObject({
-      statusCode: 404,
-    });
 
     await app.inject({ method: "GET", url: `/api/v1/integrations/connections/${connectionId}/diagnostics` });
     expect(integrations.runIntegrationConnectionDiagnostics).toHaveBeenCalledWith(connectionId);

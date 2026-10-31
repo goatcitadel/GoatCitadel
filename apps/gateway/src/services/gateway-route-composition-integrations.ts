@@ -1,8 +1,3 @@
-import path from "node:path";
-import {
-  createChannelSetupGuidancePort,
-  createIntegrationFormGuidancePort,
-} from "./integration-setup-guidance-port.js";
 import { createChannelOAuthStagingService } from "./channel-oauth-staging-service.js";
 import type {
   ExternalSideEffectRunListQuery,
@@ -31,6 +26,7 @@ import {
 } from "./comms-service.js";
 import {
   INTEGRATION_CATALOG,
+  getIntegrationFormSchema,
   resolveIntegrationCatalogMaturity,
   resolveIntegrationCatalogRuntimeAvailability,
 } from "./integration-catalog.js";
@@ -38,11 +34,6 @@ import {
   invokeIntegrationConnectionAction as invokeIntegrationConnectionActionImpl,
   type IntegrationActionHost,
 } from "./integration-action-service.js";
-import { readIntegrationPlugins, writeIntegrationPlugins } from "./integration-plugin-store.js";
-import {
-  projectIntegrationConfigurationGuidance,
-  projectIntegrationPluginConfiguration,
-} from "./integration-configuration-guidance.js";
 import {
   IntegrationChannelService,
   type IntegrationChannelPort as IntegrationChannelServicePort,
@@ -74,7 +65,6 @@ import { createCitadelWardRequestVault, type CitadelWardRequestVault } from "./c
 import type { GatewayRouteCompositionPort, RouteDependencyDomain } from "./gateway-route-composition-port.js";
 import { readChatAttachmentContentForGateway } from "./gateway-route-composition-shared.js";
 import { getChannelStreamRuntime, provideChannelUpdateDeps } from "./channel-stream-runtime-registry.js";
-import { verifyIntegrationPluginPackage } from "./integration-plugin-package-integrity.js";
 
 export function composeIntegrationChannelRouteDependencies(
   gateway: GatewayRouteCompositionPort,
@@ -122,7 +112,9 @@ export function composeIntegrationChannelRouteDependencies(
       }
       return result;
     },
-    ...createChannelSetupGuidancePort(integrationChannel, channelSetupDeps),
+    getChannelSetupDefinition: (catalogId) =>
+      channelSetupService.getChannelSetupDefinition(channelSetupDeps, catalogId),
+    listChannelSetupDefinitions: () => channelSetupService.listChannelSetupDefinitions(channelSetupDeps),
     listChannelSetupDrafts: (options) => channelSetupService.listChannelSetupDrafts(channelSetupDeps, options),
     getChannelSetupDraft: (draftId) => channelSetupService.getChannelSetupDraft(channelSetupDeps, draftId),
     getChannelSetupDraftEvidence: (draftId, expectedRevision) =>
@@ -178,16 +170,11 @@ export function composeIntegrationChannelRouteDependencies(
       integrationChannel.runIntegrationConnectionDiagnostics(connectionId),
   });
   const listIntegrationCatalog = async (kind?: IntegrationKind): Promise<IntegrationCatalogEntry[]> => {
-    const plugins = await integrationChannel.listIntegrationPlugins();
-    const pluginIds = new Set(
-      plugins.map((item) => item.pluginId.trim().toLowerCase()).filter((item) => item.length > 0),
-    );
     const mapped: IntegrationCatalogEntry[] = [
       ...INTEGRATION_CATALOG.map((entry) => ({
         ...entry,
-        formSchema: entry.formSchema && projectIntegrationConfigurationGuidance(entry.formSchema, entry, plugins),
-        maturity: resolveIntegrationCatalogMaturity(entry, pluginIds),
-        runtimeAvailability: resolveIntegrationCatalogRuntimeAvailability(entry, pluginIds),
+        maturity: resolveIntegrationCatalogMaturity(entry),
+        runtimeAvailability: resolveIntegrationCatalogRuntimeAvailability(entry),
       })),
       ...externalConnectorCatalog.listIntegrationCatalogEntries(),
     ];
@@ -212,12 +199,11 @@ export function composeIntegrationChannelRouteDependencies(
     startGoogleWorkspaceOAuth: (connectionId, input) => googleSignIn.start(connectionId, input),
     completeGoogleWorkspaceOAuth: (connectionId, input) => googleSignIn.complete(connectionId, input),
     disconnectGoogleWorkspaceOAuth: (connectionId) => googleSignIn.disconnect(connectionId),
-    ...createIntegrationFormGuidancePort(integrationChannel),
+    getIntegrationFormSchema: async (catalogId) => readIntegrationFormSchema(catalogId),
     getExternalConnectorAction: (sourceId, serviceId, actionId, workspaceId) =>
       externalConnectorCatalog.getAction(sourceId, serviceId, actionId, workspaceId),
     getExternalConnectorService: (sourceId, serviceId, workspaceId) =>
       externalConnectorCatalog.getService(sourceId, serviceId, workspaceId),
-    installIntegrationPlugin: (input) => integrationChannel.installIntegrationPlugin(input),
     invokeIntegrationConnectionAction: (connectionId, actionId, input = {}) =>
       invokeIntegrationConnectionActionImpl(
         buildIntegrationActionHostForGateway(gateway),
@@ -237,8 +223,6 @@ export function composeIntegrationChannelRouteDependencies(
     listExternalConnectorSources: () => externalConnectorCatalog.listSources(),
     listIntegrationCatalog,
     listIntegrationConnections: (kind, limit) => integrationChannel.listIntegrationConnections(kind, limit),
-    listIntegrationPlugins: async () =>
-      (await integrationChannel.listIntegrationPlugins()).map(projectIntegrationPluginConfiguration),
     listNotificationDeliveries: async (workspaceId, limit) => {
       await requireNotificationRouting();
       return notificationRouting.listDeliveries(workspaceId, limit);
@@ -290,8 +274,6 @@ export function composeIntegrationChannelRouteDependencies(
     stageExternalConnectorAction: (sourceId, serviceId, actionId, input) =>
       externalConnectorCatalog.stageAction({ sourceId, serviceId, actionId }, input),
     updateExternalConnectorReviewState: (lookup, patch) => externalConnectorCatalog.updateReviewState(lookup, patch),
-    setIntegrationPluginEnabled: (pluginId, enabled) =>
-      integrationChannel.setIntegrationPluginEnabled(pluginId, enabled),
     updateIntegrationConnection: (connectionId, input, onCommitted) =>
       integrationChannel.updateIntegrationConnection(connectionId, input, onCommitted),
   });
@@ -677,17 +659,7 @@ function createIntegrationChannelPortForGateway(
     readConnectionConfigValue: (config, key) => gateway.readConnectionConfigValue(config, key),
     isConnectionUrlAllowlisted: (urlValue) => gateway.isConnectionUrlAllowlisted(urlValue),
     fetchWithDiagnosticsTimeout: (url, init) => gateway.fetchWithDiagnosticsTimeout(url, init),
-    readIntegrationPlugins: async () => await readIntegrationPlugins(storage),
-    writeIntegrationPlugins: async (plugins) => {
-      await writeIntegrationPlugins(storage, plugins);
-    },
     recordDevDiagnostic: (entry) => gateway.recordDevDiagnostic(entry),
-    verifyIntegrationPluginPackage: async (input) =>
-      await verifyIntegrationPluginPackage({
-        ...input,
-        networkAllowlist: gateway.config.toolPolicy.sandbox.networkAllowlist,
-        pluginStoreRoot: path.resolve(gateway.config.rootDir, gateway.config.assistant.dataDir, "integration-plugins"),
-      }),
   };
 }
 
@@ -707,6 +679,19 @@ export function createCommsHostForGateway(
     mutationStore: gateway.mutationIdempotencyStore,
     sideEffectRunStore: gateway.storage.externalSideEffectRuns,
   };
+}
+
+function readIntegrationFormSchema(catalogId: string) {
+  if (catalogId.startsWith("external_connector.")) {
+    throw new Error(
+      `External connector catalog entries are review-only and do not expose connection forms: ${catalogId}`,
+    );
+  }
+  const schema = getIntegrationFormSchema(catalogId);
+  if (!schema) {
+    throw new Error(`Unknown integration catalog id: ${catalogId}`);
+  }
+  return schema;
 }
 
 function assertDiscordConnection(connection: IntegrationConnection): void {

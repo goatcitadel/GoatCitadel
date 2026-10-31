@@ -151,7 +151,7 @@ describe("normalizeAgenticCapabilityAvailabilitySet", () => {
 });
 
 describe("buildAgenticRuntimeAvailability", () => {
-  it("normalizes harnesses, providers, plugins, and channels into one non-callable-safe surface", () => {
+  it("normalizes harnesses, providers, and channels into one non-callable-safe surface", () => {
     const response = buildAgenticRuntimeAvailability({
       generatedAt: "2026-05-05T00:00:00.000Z",
       harnesses: [
@@ -175,18 +175,6 @@ describe("buildAgenticRuntimeAvailability", () => {
           apiKeySource: "none",
         },
       ],
-      plugins: [
-        {
-          pluginId: "broken",
-          label: "Broken",
-          version: "1.0.0",
-          enabled: true,
-          installedAt: "2026-05-05T00:00:00.000Z",
-          updatedAt: "2026-05-05T00:00:00.000Z",
-          capabilities: ["channel.send"],
-          integrityStatus: "mismatch",
-        },
-      ],
       channelCatalog: [
         {
           catalogId: "channel.telegram",
@@ -203,11 +191,11 @@ describe("buildAgenticRuntimeAvailability", () => {
       channelConnections: [],
     });
 
+    expect(response).not.toHaveProperty("plugins");
     expect(response.items.map((item) => [item.capabilityId, item.status, item.callable])).toEqual(
       expect.arrayContaining([
         ["harness:codex_cli", "unavailable", false],
         ["provider:openai", "not_configured", false],
-        ["plugin:broken", "unavailable", false],
         ["channel:telegram", "not_configured", false],
         ["scalability:openai_agents_sdk", "blocked", false],
         ["scalability:claude_agent_sdk", "unavailable", false],
@@ -233,35 +221,7 @@ describe("buildAgenticRuntimeAvailability", () => {
     );
   });
 
-  it("maps integrity statuses: missing is unverified, quarantined is never runtime-available", () => {
-    const base = {
-      label: "Plugin",
-      version: "1.0.0",
-      enabled: true,
-      installedAt: "2026-05-05T00:00:00.000Z",
-      updatedAt: "2026-05-05T00:00:00.000Z",
-      capabilities: ["channel.send"],
-      source: "manual",
-    };
-    const response = buildAgenticRuntimeAvailability({
-      generatedAt: "2026-05-05T00:00:00.000Z",
-      providers: [],
-      plugins: [
-        { ...base, pluginId: "pinned-url", integrityStatus: "missing" },
-        { ...base, pluginId: "bad-bytes", integrityStatus: "quarantined" },
-      ],
-      channelCatalog: [],
-      channelConnections: [],
-    });
-    const byId = new Map(response.items.map((item) => [item.capabilityId, item]));
-    expect(byId.get("plugin:pinned-url")?.reasons).toContain("Integrity: unverified");
-    const quarantined = byId.get("plugin:bad-bytes");
-    expect(quarantined?.callable).toBe(false);
-    expect(quarantined?.reasons).toContain("Integrity: quarantined");
-    expect(quarantined?.status).toBe("unavailable");
-  });
-
-  it("preserves callable OAuth providers, plugin trust posture, and blocked channel reasons", () => {
+  it("preserves callable OAuth providers and blocked channel reasons", () => {
     const response = buildAgenticRuntimeAvailability({
       generatedAt: "2026-05-05T00:00:00.000Z",
       providers: [
@@ -274,52 +234,6 @@ describe("buildAgenticRuntimeAvailability", () => {
           hasApiKey: false,
           apiKeySource: "none",
           oauthStatus: { connected: true },
-        },
-      ],
-      plugins: [
-        {
-          pluginId: "local",
-          label: "Local Plugin",
-          version: "1.0.0",
-          enabled: true,
-          installedAt: "2026-05-05T00:00:00.000Z",
-          updatedAt: "2026-05-05T00:00:00.000Z",
-          capabilities: ["channel.send"],
-          source: "plugins/local",
-          sourceMetadata: {
-            type: "local",
-            display: "Local: plugin",
-            integrityStatus: "not_applicable",
-          },
-        },
-        {
-          pluginId: "unknown",
-          label: "Unknown Plugin",
-          version: "1.0.0",
-          enabled: true,
-          installedAt: "2026-05-05T00:00:00.000Z",
-          updatedAt: "2026-05-05T00:00:00.000Z",
-          capabilities: ["channel.send"],
-          source: "manual",
-          integrityStatus: "unknown",
-        },
-        {
-          pluginId: "critical",
-          label: "Critical Plugin",
-          version: "1.0.0",
-          enabled: true,
-          installedAt: "2026-05-05T00:00:00.000Z",
-          updatedAt: "2026-05-05T00:00:00.000Z",
-          capabilities: ["channel.send"],
-          source: "manual",
-          integrityStatus: "verified",
-          trustWarnings: [
-            {
-              code: "critical_warning",
-              message: "Critical trust failure.",
-              severity: "critical",
-            },
-          ],
         },
       ],
       channelCatalog: [
@@ -392,27 +306,6 @@ describe("buildAgenticRuntimeAvailability", () => {
     expect(response.items.map((item) => [item.capabilityId, item.status, item.callable, item.reasons])).toEqual(
       expect.arrayContaining([
         ["provider:codex", "callable", true, []],
-        [
-          "plugin:local",
-          "blocked",
-          false,
-          ["Integrity: unverified", "Runtime status: blocked", "Runtime health probe has not passed."],
-        ],
-        [
-          "plugin:unknown",
-          "blocked",
-          false,
-          ["Integrity: unverified", "Runtime status: blocked", "Runtime health probe has not passed."],
-        ],
-        [
-          "plugin:critical",
-          "not_configured",
-          false,
-          [
-            "Runtime status: not_configured",
-            "Plugin has a critical trust warning and is excluded from callable runtime.",
-          ],
-        ],
         ["channel:slack", "blocked", false, ["Channel connection is disabled."]],
         ["channel:discord", "blocked", false, ["Token rejected."]],
         [

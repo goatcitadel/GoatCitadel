@@ -258,7 +258,6 @@ import type {
   ImageGenerationResponse,
   GatewayEventInput,
   GatewayEventResult,
-  IntegrationPluginRecord,
   IntegrationConnection,
   IntegrationConnectionCreateInput,
   IntegrationConnectionUpdateInput,

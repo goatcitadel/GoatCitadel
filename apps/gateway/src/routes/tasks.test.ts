@@ -122,13 +122,6 @@ describe("tasks routes", () => {
           manifestSource: "https://api.openai.com/access-token/[REDACTED]?token=[REDACTED]",
         }),
       ],
-      plugins: [
-        expect.objectContaining({
-          runtimeId: "plugin-corrupt",
-          status: "unavailable",
-          manifestSource: "URL: https://plugins.example.test/api-key/[REDACTED]?token=[REDACTED]",
-        }),
-      ],
       channels: [expect.objectContaining({ capabilityId: "channel:telegram", status: "callable", callable: true })],
       scalability: expect.arrayContaining([
         expect.objectContaining({
@@ -152,7 +145,6 @@ describe("tasks routes", () => {
           status: "not_configured",
           callable: false,
         }),
-        expect.objectContaining({ capabilityId: "plugin:plugin-corrupt", status: "unavailable", callable: false }),
         expect.objectContaining({
           capabilityId: "scalability:a2a_protocol",
           family: "agent_protocol",
@@ -162,6 +154,21 @@ describe("tasks routes", () => {
       ]),
     );
   }, 15_000);
+
+  it("lists no plugins in agentic availability", async () => {
+    app = buildApp({});
+    await app.register(tasksRoutes);
+
+    const response = await app.inject({ method: "GET", url: "/api/v1/agentic/availability" });
+
+    expect(response.statusCode).toBe(200);
+    const body = response.json() as { items: Array<{ capabilityId: string; family: string }> };
+    expect(body).not.toHaveProperty("plugins");
+    expect(body.items.filter((item) => item.family === "plugin" || item.capabilityId.startsWith("plugin:"))).toEqual(
+      [],
+    );
+    expect(body).toMatchObject({ providers: [expect.objectContaining({ runtimeId: "provider-openai" })] });
+  });
 
   it("exposes governed A2A agent-card and task-export preview routes without external sends", async () => {
     app = buildApp({});
@@ -1271,24 +1278,6 @@ function buildApp(
       ]),
     },
     integrations: {
-      listIntegrationPlugins: vi.fn(async () => [
-        {
-          pluginId: "plugin-corrupt",
-          label: "Corrupt Plugin",
-          version: "1.0.0",
-          enabled: true,
-          installedAt: "2026-05-05T00:00:00.000Z",
-          updatedAt: "2026-05-05T00:00:00.000Z",
-          capabilities: ["channel.send"],
-          integrityStatus: "mismatch",
-          sourceMetadata: {
-            type: "url",
-            display:
-              "URL: https://plugins.example.test/api-key/plugin-availability-path?token=plugin-availability-query",
-            integrityStatus: "mismatch",
-          },
-        },
-      ]),
       listIntegrationCatalog: vi.fn(() => [
         {
           catalogId: "channel.telegram",

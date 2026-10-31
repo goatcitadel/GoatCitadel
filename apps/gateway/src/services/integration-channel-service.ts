@@ -1,6 +1,4 @@
-import path from "node:path";
 import { publishIntegrationConnectionCommit } from "./integration-connection-commit-service.js";
-import { randomUUID } from "node:crypto";
 import { describeChannelCapabilities } from "@goatcitadel/gateway-core";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type {
@@ -17,8 +15,6 @@ import type {
   IntegrationConnectionCreateInput,
   IntegrationConnectionUpdateInput,
   IntegrationKind,
-  IntegrationPluginInstallInput,
-  IntegrationPluginRecord,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -26,15 +22,6 @@ import type { AsyncStorage } from "@goatcitadel/storage";
 import { INTEGRATION_CATALOG } from "./integration-catalog.js";
 import { emitProviderTypingWithDeps } from "./channel-typing-adapters.js";
 import type { ChannelStreamRuntimeStatus } from "./channel-stream-runtime-service.js";
-import {
-  buildInstalledIntegrationPluginRecord,
-  isIntegrityUnrunnablePlugin,
-  resolveIntegrationPluginInstallMetadata,
-} from "./integration-plugin-author-contract.js";
-import type {
-  PluginPackageIntegrityResult,
-  VerifyIntegrationPluginPackageInput,
-} from "./integration-plugin-package-integrity.js";
 import { parseChannelSecretRef, type ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
@@ -53,7 +40,6 @@ export interface IntegrationChannelPort {
           kind: IntegrationKind;
           key: string;
           label: string;
-          pluginId?: string;
         },
       ): Promise<IntegrationConnection>;
       update(connectionId: string, input: IntegrationConnectionUpdateInput): Promise<IntegrationConnection>;
@@ -105,8 +91,6 @@ export interface IntegrationChannelPort {
   readConnectionConfigValue(config: Record<string, unknown>, key: string): string | undefined;
   isConnectionUrlAllowlisted(urlValue: string): boolean;
   fetchWithDiagnosticsTimeout(url: string, init?: RequestInit): Promise<Response>;
-  readIntegrationPlugins(): Promise<IntegrationPluginRecord[]>;
-  writeIntegrationPlugins(plugins: IntegrationPluginRecord[]): Promise<void>;
   recordDevDiagnostic?(entry: {
     level: "warn";
     category: string;
@@ -114,22 +98,6 @@ export interface IntegrationChannelPort {
     message: string;
     context: Record<string, unknown>;
   }): void;
-  verifyIntegrationPluginPackage(
-    input: Omit<VerifyIntegrationPluginPackageInput, "networkAllowlist" | "pluginStoreRoot">,
-  ): Promise<PluginPackageIntegrityResult>;
-}
-
-function sanitizePluginId(value: string): string {
-  const sanitized = value
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9._-]+/g, "-")
-    .replace(/-+/g, "-")
-    .replace(/^-|-$/g, "");
-  if (!sanitized) {
-    return `plugin-${randomUUID().slice(0, 8)}`;
-  }
-  return sanitized.slice(0, 80);
 }
 
 export class IntegrationChannelService {
@@ -253,18 +221,6 @@ export class IntegrationChannelService {
     },
   ): Promise<ChannelActivityEffectResult[]> {
     return emitChannelActivityImpl(this.deps, connection, input, options);
-  }
-
-  public listIntegrationPlugins(): Promise<IntegrationPluginRecord[]> {
-    return listIntegrationPlugins(this.deps);
-  }
-
-  public installIntegrationPlugin(input: IntegrationPluginInstallInput): Promise<IntegrationPluginRecord> {
-    return installIntegrationPlugin(this.deps, input);
-  }
-
-  public setIntegrationPluginEnabled(pluginId: string, enabled: boolean): Promise<IntegrationPluginRecord> {
-    return setIntegrationPluginEnabled(this.deps, pluginId, enabled);
   }
 }
 
@@ -467,7 +423,6 @@ export async function createIntegrationConnection(
     kind: catalog.kind,
     key: catalog.key,
     label: input.label?.trim() || catalog.label,
-    pluginId: input.pluginId ?? catalog.pluginId,
   });
 
   await publishIntegrationConnectionCommit(
@@ -865,163 +820,4 @@ export async function emitTelegramTypingImpl(
       reason: error instanceof Error ? error.message : String(error),
     };
   }
-}
-
-export async function listIntegrationPlugins(deps: IntegrationChannelPort): Promise<IntegrationPluginRecord[]> {
-  return await deps.readIntegrationPlugins();
-}
-
-/** Thrown when the verified package could not be written to the plugin store (maps to 503). */
-export class PluginPackageStorageError extends Error {
-  constructor(options?: { cause?: unknown }) {
-    super(
-      "Plugin package could not be stored, so the install was not recorded. Check the plugin store directory and retry.",
-      options,
-    );
-    this.name = "PluginPackageStorageError";
-  }
-}
-
-const UNVERIFIED_ENABLE_MESSAGE =
-  "Plugin package integrity could not be verified; reinstall once the registry is reachable or the local path exists.";
-
-async function publishAfterCommit(deps: IntegrationChannelPort, payload: Record<string, unknown>): Promise<void> {
-  try {
-    await deps.publishRealtime("system", "integrations", payload);
-  } catch (error) {
-    deps.recordDevDiagnostic?.({
-      level: "warn",
-      category: "integrations",
-      event: "integration.plugin.realtime_publish_failed",
-      message: "Integration plugin change was saved but its realtime event could not be published.",
-      context: { type: String(payload.type), pluginId: String(payload.pluginId), error: (error as Error).message },
-    });
-  }
-}
-
-const QUARANTINE_ENABLE_MESSAGE =
-  "Plugin is quarantined after an integrity failure. Reinstall it; the new install's integrity result replaces the quarantine.";
-
-// Plugin-list read-modify-writes are serialized per port so a slow install cannot overwrite a concurrent change.
-const pluginListLocks = new WeakMap<object, Promise<unknown>>();
-
-async function withPluginListLock<T>(deps: IntegrationChannelPort, task: () => Promise<T>): Promise<T> {
-  const previous = pluginListLocks.get(deps) ?? Promise.resolve();
-  const run = previous.then(task, task);
-  pluginListLocks.set(
-    deps,
-    run.catch(() => undefined),
-  );
-  return await run;
-}
-
-export async function installIntegrationPlugin(
-  deps: IntegrationChannelPort,
-  input: IntegrationPluginInstallInput,
-): Promise<IntegrationPluginRecord> {
-  const first = resolveIntegrationPluginInstallMetadata(input.source, {
-    sourceType: input.sourceType,
-    expectedIntegrity: input.expectedIntegrity,
-  });
-  const nextId = sanitizePluginId(input.pluginId ?? first.manifest?.pluginId ?? input.source);
-  // An update that supplies no pin keeps the previous operator pin (advisory read; the write re-reads under the lock).
-  const prior = (await deps.readIntegrationPlugins()).find((item) => item.pluginId === nextId);
-  const inheritedPin =
-    input.expectedIntegrity === undefined &&
-    prior?.sourceMetadata?.integritySource === "operator" &&
-    prior.sourceMetadata.type === first.sourceMetadata.type &&
-    // A changed source (e.g. a version bump or moved folder) needs its own pin; the old digest cannot match.
-    prior.source === first.source
-      ? prior.sourceMetadata.expectedIntegrity
-      : undefined;
-  const expectedIntegrity = input.expectedIntegrity ?? inheritedPin;
-  const installMetadata =
-    expectedIntegrity === input.expectedIntegrity
-      ? first
-      : resolveIntegrationPluginInstallMetadata(input.source, { sourceType: input.sourceType, expectedIntegrity });
-  // Network/disk work runs before taking the lock so it cannot block (or be overwritten by) other list changes.
-  const integrity = await verifyPluginPackageForInstall(deps, {
-    pluginId: nextId,
-    // Existing local folders resolve to an absolute path; a descriptor file path hashes its folder.
-    source:
-      installMetadata.sourceMetadata.type === "local" &&
-      installMetadata.manifestPath &&
-      installMetadata.manifestPath === installMetadata.source
-        ? path.dirname(installMetadata.source)
-        : installMetadata.source,
-    sourceType: installMetadata.sourceMetadata.type,
-    expectedIntegrity: installMetadata.sourceMetadata.expectedIntegrity,
-  });
-  return await withPluginListLock(deps, async () => {
-    const now = new Date().toISOString();
-    const plugins = await deps.readIntegrationPlugins();
-    const existing = plugins.find((item) => item.pluginId === nextId);
-    const record = buildInstalledIntegrationPluginRecord({
-      now,
-      pluginId: nextId,
-      source: input.source,
-      sourceType: input.sourceType,
-      expectedIntegrity,
-      integrity,
-      existing,
-    });
-    await deps.writeIntegrationPlugins(
-      existing ? plugins.map((item) => (item.pluginId === nextId ? record : item)) : [record, ...plugins],
-    );
-    // The list write has committed: a failing realtime publish must not turn it into a failed request.
-    await publishAfterCommit(deps, {
-      type: existing ? "integration_plugin_updated" : "integration_plugin_installed",
-      pluginId: record.pluginId,
-      source: input.source,
-      integrityStatus: record.integrityStatus,
-    });
-    return record;
-  });
-}
-
-async function verifyPluginPackageForInstall(
-  deps: IntegrationChannelPort,
-  input: Parameters<IntegrationChannelPort["verifyIntegrationPluginPackage"]>[0],
-): Promise<PluginPackageIntegrityResult> {
-  try {
-    return await deps.verifyIntegrationPluginPackage(input);
-  } catch (error) {
-    if (error instanceof ValidationError) {
-      throw error;
-    }
-    // Storage failures (disk, permissions) must not leave a half-recorded plugin.
-    throw new PluginPackageStorageError({ cause: error });
-  }
-}
-
-export async function setIntegrationPluginEnabled(
-  deps: IntegrationChannelPort,
-  pluginId: string,
-  enabled: boolean,
-): Promise<IntegrationPluginRecord> {
-  return await withPluginListLock(deps, async () => {
-    const now = new Date().toISOString();
-    const plugins = await deps.readIntegrationPlugins();
-    const current = plugins.find((item) => item.pluginId === pluginId);
-    if (!current) {
-      throw new Error(`Unknown integration plugin: ${pluginId}`);
-    }
-    if (enabled && (current.integrityStatus === "quarantined" || current.integrityStatus === "mismatch")) {
-      throw new ValidationError({ field: "pluginId", message: QUARANTINE_ENABLE_MESSAGE });
-    }
-    if (enabled && isIntegrityUnrunnablePlugin(current)) {
-      throw new ValidationError({ field: "pluginId", message: UNVERIFIED_ENABLE_MESSAGE });
-    }
-    const updated: IntegrationPluginRecord = {
-      ...current,
-      enabled,
-      updatedAt: now,
-    };
-    await deps.writeIntegrationPlugins(plugins.map((item) => (item.pluginId === pluginId ? updated : item)));
-    await publishAfterCommit(deps, {
-      type: enabled ? "integration_plugin_enabled" : "integration_plugin_disabled",
-      pluginId,
-    });
-    return updated;
-  });
 }
