@@ -124,8 +124,8 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
           try {
             await browserContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"));
             page = await browserContext.newPage();
-            // Diagnostic only (operator-proof flake, "Setup changed" after Keep current rule): keep every
-            // onboarding-state body the page received so a failure can name the field that moved.
+            // Diagnostic only: keep every onboarding-state body the page received so a failure can name the
+            // field that moved.
             page.on("response", (response) => {
               const pathname = new URL(response.url()).pathname;
               if (response.request().method() !== "GET" || response.status() !== 200) return;
@@ -199,11 +199,15 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
             assert.deepEqual(writes, [], "Leaving or cancelling review wrote settings.");
             await approval.selectOption("approve_all");
             await area.getByRole("button", { name: "Keep current rule", exact: true }).click();
+            // Keep current rule re-reads the owner before it confirms the review. Arm the stale fixture only
+            // after that read, or it answers Keep instead of the Finish preflight and Finish stays disabled.
+            await area.getByRole("status").filter({ hasText: "Current approval rule reviewed." }).waitFor();
             const finish = area.getByRole("button", { name: "Finish setup and open Chat", exact: true });
             await finish.waitFor();
             staleRead = true;
             await finish.click();
-            await area.getByRole("status").filter({ hasText: "Setup changed." }).waitFor();
+            // The Finish preflight's own refusal, not Keep current rule's "Setup changed. Review …".
+            await area.getByRole("status").filter({ hasText: "Setup changed. Refresh the checks" }).waitFor();
             assert.equal(staleReads, 1);
             assert.deepEqual(writes, [], "A contradictory preflight dispatched completion.");
             await finish.click();
