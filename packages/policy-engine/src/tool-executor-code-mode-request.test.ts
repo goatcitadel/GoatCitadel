@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { executeTool } from "./tool-executor.js";
-import { CODE_MODE_REQUEST_TOOL_NAME } from "./tool-registry.js";
+import { CODE_MODE_REQUEST_TOOL_NAME, createDefaultToolRegistry } from "./tool-registry.js";
 
 const storage = {} as AsyncStorage;
 const config: ToolPolicyConfig = {
@@ -69,6 +69,14 @@ describe("code_mode.request executor", () => {
       ).rejects.toThrow(message);
     }
     expect(runCodeModeRequest).not.toHaveBeenCalled();
+  });
+
+  it("tells the model to list every file the script reads in reads, because nothing else can be read", () => {
+    const definition = createDefaultToolRegistry().get(CODE_MODE_REQUEST_TOOL_NAME);
+    const reads = (definition?.argSchema?.properties as Record<string, { description?: string }>).reads;
+    expect(reads?.description).toMatch(/every file path and attachment ID/i);
+    expect(reads?.description).toMatch(/can read only these/);
+    expect(definition?.usageHints?.join(" ")).toMatch(/`reads`/);
   });
 
   it("fails plainly when the runtime has no Code Mode hook", async () => {

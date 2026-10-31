@@ -55,11 +55,36 @@ export function buildApprovedCodeModeRequestFromTool(
     language: args.language,
     source: args.source,
     ...(args.input ? { input: args.input } : {}),
+    ...(args.reads ? { reads: args.reads } : {}),
     sessionId,
     turnId,
     ...(request.workspaceId ? { workspaceId: request.workspaceId } : {}),
     policyContext: request.policyContext ?? {},
   };
+}
+
+/**
+ * The refusal for a docs.* helper call in a Chat request run that reads outside the approved `reads`, or undefined
+ * when it may run. `resolvedPath` is the call's `path` and `approvedPaths` the `reads` entries, each after the same
+ * session path resolution; an `attachmentId` must equal an entry. A run without `reads` reads nothing.
+ */
+export function unapprovedCodeModeReadError(input: {
+  wrapperName: string;
+  args: Record<string, unknown>;
+  approvedReads: readonly string[];
+  resolvedPath?: string;
+  approvedPaths: ReadonlySet<string>;
+}): string | undefined {
+  const { wrapperName, args } = input;
+  const attachmentId = typeof args.attachmentId === "string" ? args.attachmentId.trim() : "";
+  if (attachmentId && !input.approvedReads.some((entry) => entry.trim() === attachmentId)) {
+    return `Attachment "${attachmentId}" is not in the files approved for this run, so ${wrapperName} cannot read it.`;
+  }
+  const rawPath = typeof args.path === "string" ? args.path.trim() : "";
+  if (rawPath && !(input.resolvedPath && input.approvedPaths.has(input.resolvedPath))) {
+    return `"${rawPath}" is not in the files approved for this run, so ${wrapperName} cannot read it.`;
+  }
+  return undefined;
 }
 
 /**

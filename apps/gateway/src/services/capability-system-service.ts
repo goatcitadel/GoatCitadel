@@ -162,6 +162,7 @@ import {
   buildApprovedCodeModeRequestFromTool,
   codeModeRequestToolFailure,
   readCodeModeRequestToolIds,
+  unapprovedCodeModeReadError,
 } from "./code-mode-request-tool.js";
 import {
   CandidateSkillQuarantine,
@@ -247,6 +248,8 @@ export interface CapabilitySystemServiceOptions {
   resolveApproval: (approvalId: string, input: ApprovalResolveInput) => Promise<ApprovalResolveResult>;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<void>;
   readPolicySnapshot: () => Promise<Record<string, unknown>>;
+  /** The session path resolution chat tool calls get; a Chat request run's docs.* reads are matched after it. */
+  resolveToolRequestPaths?: (request: ToolInvokeRequest) => Promise<ToolInvokeRequest>;
   resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
   resolvePolicyContext?: (input: {
     operatorId?: string;
@@ -311,6 +314,8 @@ export interface ApprovedCodeModeRequest {
   language: CodeModeLanguage;
   source: string;
   input?: Record<string, unknown>;
+  /** The paths and attachment IDs the operator approved; docs.* calls in the run may read only these. */
+  reads?: string[];
   sessionId: string;
   turnId: string;
   workspaceId?: string;
@@ -2694,6 +2699,45 @@ export class CapabilitySystemService {
     throw new ConflictError({ message, details: { reason: readiness.reason } });
   }
 
+  /**
+   * What the operator approved is what the run can touch: a docs.* call in a Chat request run must read a path or
+   * attachment from the approved `reads`. Paths are compared after the session path resolution chat tools get.
+   */
+  private async assertCodeModeReadApproved(
+    request: ToolInvokeRequest,
+    approvedReads: readonly string[],
+  ): Promise<void> {
+    const resolveRequest = this.options.resolveToolRequestPaths ?? (async (unresolved) => unresolved);
+    const resolvePath = async (value: unknown): Promise<string | undefined> => {
+      if (typeof value !== "string" || !value.trim()) {
+        return undefined;
+      }
+      try {
+        const resolved = (await resolveRequest({ ...request, args: { path: value } })).args.path;
+        return typeof resolved === "string" ? path.resolve(resolved) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const approvedPaths = new Set<string>();
+    for (const entry of approvedReads) {
+      const resolved = await resolvePath(entry);
+      if (resolved) {
+        approvedPaths.add(resolved);
+      }
+    }
+    const refusal = unapprovedCodeModeReadError({
+      wrapperName: request.toolName,
+      args: request.args,
+      approvedReads,
+      resolvedPath: await resolvePath(request.args.path),
+      approvedPaths,
+    });
+    if (refusal) {
+      throw new PolicyViolationError({ message: refusal });
+    }
+  }
+
   private async requireApprovedCodeModeRequestApproval(request: ApprovedCodeModeRequest): Promise<ApprovalRequest> {
     let approval: ApprovalRequest;
     try {
@@ -2803,6 +2847,7 @@ export class CapabilitySystemService {
       codeModeInput: runInput,
       codeModeInputHash: runInputHash,
       codeModeApprovalSource: { ...approvalSource, approvedSourceSha256: request.approvedSourceSha256 },
+      codeModeReads: request.reads ?? [],
     };
     const extension = request.language === "typescript" ? "ts" : "js";
     const codeArtifact = await this.persistManagedTextArtifact(
@@ -3484,6 +3529,7 @@ export class CapabilitySystemService {
               policyContext: wrapperPolicyContext,
               workspaceId: finalRun.workspaceId,
               parentSessionId: finalRun.sessionId,
+              approvedReads: readFrozenCodeModeRequestReads(policySnapshot),
               beforeExecutionDispatch,
               onExecutionDispatchFailed,
               signal,
@@ -4516,6 +4562,8 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
+    /** A Chat request run's approved reads; docs.* calls may read only these. Unset for other runs. */
+    approvedReads?: readonly string[];
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -4654,6 +4702,8 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
+    /** A Chat request run's approved reads; docs.* calls may read only these. Unset for other runs. */
+    approvedReads?: readonly string[];
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -4899,12 +4949,7 @@ export class CapabilitySystemService {
           if (deadlineAt && Date.now() > deadlineAt) {
             throw new ConflictError({ message: `Wrapper ${wrapperName} missed its execution deadline.` });
           }
-          await this.options.publishRealtime("code_mode_wrapper_call_started", "capabilities", {
-            runId: input.runId,
-            wrapperName,
-            requestId: message.id,
-          });
-          const invocationResult = await this.options.invokeTool({
+          const wrapperRequest: ToolInvokeRequest = {
             toolName: wrapperName,
             args: isRecord(params.args) ? params.args : {},
             agentId: `code-mode:${input.runId}`,
@@ -4918,7 +4963,16 @@ export class CapabilitySystemService {
               reason: `code-mode:${input.runId}`,
             },
             policyContext: input.policyContext,
+          };
+          if (input.approvedReads && wrapperName.startsWith("docs.")) {
+            await this.assertCodeModeReadApproved(wrapperRequest, input.approvedReads);
+          }
+          await this.options.publishRealtime("code_mode_wrapper_call_started", "capabilities", {
+            runId: input.runId,
+            wrapperName,
+            requestId: message.id,
           });
+          const invocationResult = await this.options.invokeTool(wrapperRequest);
           if (invocationResult.outcome !== "executed") {
             throw new ConflictError({
               message: `Wrapper ${wrapperName} did not execute: ${invocationResult.policyReason}`,
@@ -6552,6 +6606,18 @@ function readFrozenCodeModeInputBinding(
     throw new ConflictError({ message: "Code Mode stored input hash mismatch; refusing to execute run." });
   }
   return { input: runInput, aiderRequest, aiderExecution, ...(aiderWorkspacePin ? { aiderWorkspacePin } : {}) };
+}
+
+/**
+ * A Chat request run's approved reads from its hashed policy snapshot; a request run without them reads nothing.
+ * Undefined for every other run, whose docs.* reads stay governed by the read roots alone.
+ */
+function readFrozenCodeModeRequestReads(policySnapshot: Record<string, unknown>): string[] | undefined {
+  if (!isRecord(policySnapshot.codeModeApprovalSource)) {
+    return undefined;
+  }
+  const reads = policySnapshot.codeModeReads;
+  return Array.isArray(reads) ? reads.filter((entry): entry is string => typeof entry === "string") : [];
 }
 
 function readFrozenCodeModeAiderWorkspacePin(value: unknown): CodeModeAiderWorkspacePin {

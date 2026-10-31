@@ -191,7 +191,7 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
 
 /** Offered only when the turn's toolset has `code_mode.request`, so it lives in the volatile tail. */
 export const CODE_MODE_REQUEST_PROMPT_LINE =
-  "- When no available tool can do a needed step, call code_mode.request with a short goal and script instead of saying you can't. The operator approves it with one click and you continue with the result.";
+  "- When no available tool can do a needed step, call code_mode.request with a short goal and script instead of saying you can't. List every file or attachment the script reads in `reads`; it can read nothing else. The operator approves it with one click and you continue with the result.";
 const CODE_MODE_REQUEST_PROMPT_SECTION = `## Running code\n${CODE_MODE_REQUEST_PROMPT_LINE}`;
 
 /** The label the operator sees on the tool group switch, so the prompt names the control that exists. */

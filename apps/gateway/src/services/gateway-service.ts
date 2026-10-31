@@ -1642,6 +1642,7 @@ export class GatewayService {
         features: await this.readFeatureFlags(),
         runtimeExposure: this.buildRuntimeExposureSnapshot(),
       }),
+      resolveToolRequestPaths: (request) => this.resolveToolInvokeRequestPaths(request),
       resolvePolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       getChatSessionWorkbench: async (sessionId) => this.routeServices.chatSessions.getChatSessionWorkbench(sessionId),
       applyChatSessionWorkbenchPatch: (sessionId, input) =>

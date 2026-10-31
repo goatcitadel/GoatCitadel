@@ -659,7 +659,8 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
           type: "array",
           maxItems: 10,
           items: { type: "string", minLength: 1, maxLength: 1_024 },
-          description: "Paths and attachment IDs the script reads, shown in the details.",
+          description:
+            "Every file path and attachment ID the script reads. The operator sees this list, and the docs.* helpers can read only these.",
         },
       },
       required: ["goal", "source"],
@@ -669,7 +670,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     recommendedContexts: ["chat"],
     codeModeAllowed: false,
     usageHints: [
-      "Use only when no available tool can do a step, such as reading a binary file. Put paths and values in `input`, return the answer, and keep the script short.",
+      "Use only when no available tool can do a step, such as reading a binary file. Put paths and values in `input`, list every file or attachment the script reads in `reads`, return the answer, and keep the script short.",
       "Inside the script call helpers as `await capabilities.docs.extract_text({ path: input.path })` (docs.extract_text, docs.read_bytes, docs.decompress, fs.read, fs.list).",
     ],
   },

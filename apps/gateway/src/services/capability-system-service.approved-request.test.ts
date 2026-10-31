@@ -276,7 +276,7 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
       "return { bracket, format: extracted.format, text: extracted.text };";
 
     const result = await fx.service.runApprovedCodeModeRequest(
-      fx.approvedRequest(source, { input: { path: pdfPath } }),
+      fx.approvedRequest(source, { input: { path: pdfPath }, reads: [pdfPath] }),
     );
 
     expect(result.status).toBe("completed");
@@ -287,6 +287,63 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     expect(fx.invokeTool).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "docs.extract_text", args: { path: pdfPath } }),
     );
+  });
+
+  it("lets a docs.* call read only a path or attachment in the approved reads", async () => {
+    const fx = createFixture();
+    fs.writeFileSync(path.join(fx.root, "approved.txt"), "approved text");
+    fs.writeFileSync(path.join(fx.root, ".env"), "SECRET=1");
+    const read = (args: string) =>
+      `try { const page = await capabilities.docs.extract_text(${args}); return { text: page.text }; } ` +
+      "catch (error) { return { refused: String(error && error.message ? error.message : error) }; }";
+
+    // A relative entry matches the absolute path the code passes once both go through path resolution.
+    const approved = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(read("{ path: input.path }"), {
+        input: { path: path.join(fx.root, "approved.txt") },
+        reads: ["approved.txt"],
+      }),
+    );
+    expect(approved.result).toEqual({ text: "approved text" });
+
+    // The goal and reads say approved.txt; the hidden input points elsewhere. The call is refused before it runs.
+    const swapped = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(read("{ path: input.path }"), { input: { path: ".env" }, reads: ["approved.txt"] }),
+    );
+    expect((swapped.result as { refused: string }).refused).toMatch(/\.env.*not in the files approved for this run/);
+
+    const attachment = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(read('{ attachmentId: "att-other" }'), { reads: ["att-approved"] }),
+    );
+    expect((attachment.result as { refused: string }).refused).toMatch(/att-other.*not in the files approved/);
+
+    expect(fx.invokeTool).toHaveBeenCalledTimes(1);
+    expect(fx.invokeTool).toHaveBeenCalledWith(
+      expect.objectContaining({ toolName: "docs.extract_text", args: { path: path.join(fx.root, "approved.txt") } }),
+    );
+  });
+
+  it("lets a run without approved reads read no files, and binds reads in the hashed policy snapshot", async () => {
+    const fx = createFixture();
+    fs.writeFileSync(path.join(fx.root, "notes.txt"), "notes");
+    const source =
+      "try { await capabilities.docs.extract_text({ path: input.path }); return { read: true }; } " +
+      "catch (error) { return { refused: String(error && error.message ? error.message : error) }; }";
+
+    const result = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(source, { input: { path: path.join(fx.root, "notes.txt") } }),
+    );
+
+    expect((result.result as { refused: string }).refused).toMatch(/not in the files approved for this run/);
+    expect(fx.invokeTool).not.toHaveBeenCalled();
+    const withReads = fx.approvedRequest("return { ok: true };", { reads: ["notes.txt"] });
+    const { runId } = await fx.service.runApprovedCodeModeRequest(withReads);
+    const stored = await fx.asyncStorage.codeModeRuns.get(runId);
+    const snapshot = JSON.parse(
+      fs.readFileSync(path.resolve(fx.root, stored.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    expect(snapshot.codeModeReads).toEqual(["notes.txt"]);
+    expect(sha256(JSON.stringify(snapshot))).toBe(stored.policySnapshotHash);
   });
 
   it("caps a huge return value", async () => {
@@ -332,7 +389,7 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     ].join("\n");
 
     const result = await fx.service.runApprovedCodeModeRequest(
-      fx.approvedRequest(source, { input: { path: textPath } }),
+      fx.approvedRequest(source, { input: { path: textPath }, reads: [textPath] }),
     );
 
     expect(result.status).toBe("completed");
@@ -381,11 +438,17 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
 describe("CapabilitySystemService.runCodeModeRequestTool", { timeout: RUN_TIMEOUT_MS }, () => {
   it("runs the approved tool call bound to its pending action's source", async () => {
     const fx = createFixture();
-    const approved = fx.approvedRequest("return { pages: 3 };");
+    const approved = fx.approvedRequest("return { pages: 3 };", { reads: ["plan.pdf"] });
 
     const result = await fx.service.runCodeModeRequestTool(toolRequest(approved));
 
     expect(result).toMatchObject({ status: "completed", result: { pages: 3 } });
+    // The approved reads travel from the tool call into the run's hashed policy snapshot.
+    const stored = await fx.asyncStorage.codeModeRuns.get(result.runId as string);
+    const snapshot = JSON.parse(
+      fs.readFileSync(path.resolve(fx.root, stored.policySnapshotArtifact.relPath), "utf8"),
+    ) as Record<string, unknown>;
+    expect(snapshot.codeModeReads).toEqual(["plan.pdf"]);
   });
 
   it("refuses a call without an approval or outside a Chat turn", async () => {
@@ -455,7 +518,12 @@ describe("CapabilitySystemService.runCodeModeRequestTool", { timeout: RUN_TIMEOU
 function toolRequest(approved: ApprovedCodeModeRequest): ToolInvokeRequest {
   return {
     toolName: "code_mode.request",
-    args: { goal: approved.goal, source: approved.source, ...(approved.input ? { input: approved.input } : {}) },
+    args: {
+      goal: approved.goal,
+      source: approved.source,
+      ...(approved.input ? { input: approved.input } : {}),
+      ...(approved.reads ? { reads: approved.reads } : {}),
+    },
     agentId: "assistant",
     sessionId: approved.sessionId,
     turnId: approved.turnId,
@@ -525,6 +593,11 @@ function createFixture() {
     resolveApproval: vi.fn(),
     publishRealtime: vi.fn(async () => undefined),
     readPolicySnapshot: async () => ({ mode: "test" }),
+    // Stands in for the session path resolution chat tools get: relative paths resolve against the fixture root.
+    resolveToolRequestPaths: async (request) =>
+      typeof request.args.path === "string"
+        ? { ...request, args: { ...request.args, path: path.resolve(root, request.args.path) } }
+        : request,
     spawnCodeModeChild,
   });
   const readiness = vi.spyOn(service, "getCodeModeReadiness").mockResolvedValue(READY);
@@ -533,6 +606,8 @@ function createFixture() {
     source: string,
     options: {
       input?: Record<string, unknown>;
+      /** The approved `reads`: the only files and attachments a docs.* call may read. */
+      reads?: string[];
       resolve?: boolean;
       /** Register the policy engine's tool.invoke pending action (default true). */
       pendingAction?: boolean;
@@ -556,7 +631,7 @@ function createFixture() {
     const approval = storage.approvals.create({
       kind: "code_mode.request",
       riskLevel: "danger",
-      payload: { goal, source },
+      payload: { goal, source, ...(options.reads ? { reads: options.reads } : {}) },
       preview: { goal },
       linkage: { sessionId, turnId },
     });
@@ -566,7 +641,12 @@ function createFixture() {
         actionType: "tool.invoke",
         request: {
           toolName: options.pendingToolName ?? "code_mode.request",
-          args: { goal, source: options.pendingSource ?? source },
+          args: {
+            goal,
+            source: options.pendingSource ?? source,
+            ...(options.input ? { input: options.input } : {}),
+            ...(options.reads ? { reads: options.reads } : {}),
+          },
           sessionId,
         },
       });
@@ -581,6 +661,7 @@ function createFixture() {
       language: "javascript",
       source,
       ...(options.input ? { input: options.input } : {}),
+      ...(options.reads ? { reads: options.reads } : {}),
       sessionId,
       turnId,
       policyContext: { operatorId: "operator-1", sessionId, surface: "chat" },

@@ -264,6 +264,8 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(toolsOff.volatileTail).not.toContain(CODE_MODE_REQUEST_PROMPT_LINE);
     expect(withTool.stablePrefix).not.toContain("code_mode.request");
     expect(withTool.stablePrefix).toBe(without.stablePrefix);
+    // The run can read only the files and attachments the model lists, so the prompt says to list them all.
+    expect(CODE_MODE_REQUEST_PROMPT_LINE).toMatch(/every file or attachment the script reads in `reads`/);
   });
 
   it("points at Capabilities › Tools when Files is switched off", () => {
