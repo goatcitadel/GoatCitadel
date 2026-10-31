@@ -211,6 +211,11 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
       status: "completed",
       result: { runId, outcome: "woke", operatorStatus: "woke" },
     });
+  }
+
+  /** An approved request also executed its pending action before the turn resumed. */
+  async function expectApprovedTurnResumed(live: GatewayService, approvalId: string, turnId: string, runId: string) {
+    await expectTurnResumed(live, approvalId, turnId, runId);
     const effects = await live.storage.approvalEffects.listByApproval(approvalId);
     expect(effects.find((effect) => effect.effectKind === "pending_action_execute")).toMatchObject({
       status: "completed",
@@ -252,7 +257,7 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     const resolved = await live.storage.approvals.get(turn.approvalId);
     expect(resolved).toMatchObject({ kind: "code_mode.request", status: "approved", resolvedBy: "operator" });
     expect(await wakeEffect(live, turn.approvalId, turn.turnId)).toMatchObject({ targetKind: "chat_turn" });
-    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
+    await expectApprovedTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 
   it("Code Mode off when approved from Inbox", async () => {
@@ -267,7 +272,7 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     const toolRun = await settledToolRun(live, turn.turnId, turn.toolRunId);
     expect(toolRun.status).toBe("executed");
     expect(toolRun.result).toMatchObject({ status: "failed", error: CODE_MODE_OFF_TOOL_ERROR });
-    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
+    await expectApprovedTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 
   it("a guest error resumes the turn", async () => {
@@ -287,7 +292,7 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     const toolRun = await settledToolRun(live, turn.turnId, turn.toolRunId);
     expect(toolRun.status).toBe("executed");
     expect(toolRun.result).toMatchObject({ status: "failed", error: "TypeError: input.path is undefined" });
-    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
+    await expectApprovedTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 
   it("deny resumes the turn", async () => {
@@ -302,7 +307,7 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     expect(toolRun.result).toMatchObject({ approvalOutcome: "denied" });
     expect(toolRun.failureGuidance).toContain("did not execute");
     expect(runSpy).not.toHaveBeenCalled();
-    expect(await wakeEffect(live, turn.approvalId, turn.turnId)).toMatchObject({ targetKind: "chat_turn" });
+    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 
   it("expiry resumes the turn", async () => {
@@ -317,7 +322,9 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     expect(toolRun.status).toBe("blocked");
     expect(toolRun.result).toMatchObject({ approvalOutcome: "expired" });
     expect(runSpy).not.toHaveBeenCalled();
-    expect(await wakeEffect(live, turn.approvalId, turn.turnId)).toMatchObject({ targetKind: "chat_turn" });
+    // Expiry only queues the wake; the effects worker's poll loop (not started for this fixture) drains it.
+    await live.approvalEffectsService.awaitResolutionEffects(turn.approvalId);
+    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 });
 
