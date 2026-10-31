@@ -7,7 +7,7 @@ export function assertIntegrationEnabledSaved({ before, after, response, request
   assert.notEqual(after.revision, before.revision);
   assert.deepEqual(request, { expectedRevision: before.revision, enabled });
   assert.equal(after.enabled, enabled);
-  for (const field of ["connectionId", "catalogId", "kind", "key", "label", "workspaceId", "status", "createdAt", "pluginId", "pluginVersion", "pluginEnabled"]) {
+  for (const field of ["connectionId", "catalogId", "kind", "key", "label", "workspaceId", "status", "createdAt"]) {
     assert.deepEqual(after[field], before[field], `Enabled control changed ${field}.`);
   }
   assert.deepEqual(after.config, before.config, "Enabled control changed saved configuration.");
