@@ -47,6 +47,9 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["use ponytail and add CSV export to the report page", ["ponytail"]],
   ["$bundled:ponytail add CSV export to the report page", ["ponytail"]],
   ["Keep this change small and minimal", []],
+  ["@skill spec-driven-development for team invites", ["spec-driven-development"]],
+  ["use spec-driven-development to plan the export feature", ["spec-driven-development"]],
+  ["Write a spec for this feature", []],
 ];
 
 let service: SkillsService;

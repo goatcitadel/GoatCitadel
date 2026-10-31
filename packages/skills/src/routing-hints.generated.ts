@@ -217,6 +217,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use for general web research (research)."],
     confidenceBoost: 0.1,
   },
+  // Explicit-only: loads only for `use spec-driven-development` or `@skill spec-driven-development`.
+  "spec-driven-development": {
+    phrases: [],
+    keywords: [],
+    surfaces: ["cowork", "code"],
+    whenToUse: ["Agree a written spec before code when the operator names this skill."],
+    whenNotToUse: ["Never selected automatically."],
+  },
   tdd: {
     phrases: ["write the test first", "red green refactor"],
     keywords: ["tdd", "test-driven"],

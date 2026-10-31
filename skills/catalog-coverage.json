@@ -171,6 +171,14 @@
       "catalogExposure": "suggestable"
     },
     {
+      "skillId": "bundled:spec-driven-development",
+      "owner": "cowork",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "bundled:tdd",
       "owner": "code",
       "source": "bundled",
