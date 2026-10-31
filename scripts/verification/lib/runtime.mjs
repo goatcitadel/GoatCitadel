@@ -37,19 +37,16 @@ export async function startVerificationStack(context, options = {}) {
   const runtimeRoot = options.runtimeRoot ?? (await prepareVerificationRuntime(context.runId));
   const gatewayPort = await resolveAvailablePort(Number(options.gatewayPort ?? 0));
   const gatewayUrl = `http://127.0.0.1:${gatewayPort}`;
-  const gatewayEnv = {
-    GOATCITADEL_ROOT_DIR: runtimeRoot,
-    GATEWAY_HOST: "127.0.0.1",
-    GATEWAY_PORT: String(gatewayPort),
-    GOATCITADEL_AUTH_MODE: "none",
-    GOATCITADEL_DATABASE_DRIVER: "sqlite",
-    GOATCITADEL_DISABLE_SECRET_STORE: "true",
-    GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
-    GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
-    // The Gateway otherwise reads, and copies to verify, the operator's real ~/.GoatCitadel/backups.
-    GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
-    ...options.gatewayEnv,
-  };
+  // Chosen before the Gateway starts so its origin policy can name the UI (see withVerificationUiOrigin).
+  const uiPort = options.includeUi !== false ? await resolveUiPort(options.uiPort, gatewayPort) : undefined;
+  const uiUrl = uiPort ? `http://127.0.0.1:${uiPort}` : undefined;
+  const gatewayEnv = buildVerificationGatewayEnv({
+    runtimeRoot,
+    gatewayPort,
+    uiUrl,
+    gatewayEnv: options.gatewayEnv,
+    gatewayEnvOmit: options.gatewayEnvOmit,
+  });
 
   const gateway =
     options.gatewayMode === "built"
@@ -74,13 +71,9 @@ export async function startVerificationStack(context, options = {}) {
           },
         );
   let ui;
-  let uiPort;
-  let uiUrl;
   try {
     await waitForHttp(`${gatewayUrl}/health`, "Gateway health", 180000, gateway);
-    if (options.includeUi !== false) {
-      uiPort = await resolveAvailablePort(Number(options.uiPort ?? 0));
-      uiUrl = `http://127.0.0.1:${uiPort}`;
+    if (uiUrl) {
       const uiEnv = {
         VITE_GATEWAY_URL: gatewayUrl,
         VITE_GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
@@ -230,6 +223,31 @@ export async function startProcess(context, name, commandArgs, extraEnv, options
     child.once("error", flush);
   });
   return handle;
+}
+
+/** The verification stack's own Gateway variables; startProcess merges them over the inherited env. */
+export function buildVerificationGatewayEnv(
+  { runtimeRoot, gatewayPort, uiUrl, gatewayEnv, gatewayEnvOmit },
+  baseEnv = process.env,
+) {
+  return withVerificationUiOrigin(
+    {
+      GOATCITADEL_ROOT_DIR: runtimeRoot,
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: String(gatewayPort),
+      GOATCITADEL_AUTH_MODE: "none",
+      GOATCITADEL_DATABASE_DRIVER: "sqlite",
+      GOATCITADEL_DISABLE_SECRET_STORE: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
+      // The Gateway otherwise reads, and copies to verify, the operator's real ~/.GoatCitadel/backups.
+      GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
+      ...gatewayEnv,
+    },
+    uiUrl,
+    // Only what the Gateway would inherit: a lane that omits the shell's origin list must not get it back here.
+    buildVerificationProcessEnv(baseEnv, {}, gatewayEnvOmit),
+  );
 }
 
 export function buildVerificationProcessEnv(baseEnv, extraEnv = {}, omitEnv = []) {
@@ -553,6 +571,39 @@ async function runPnpmSyncWithEnv(args, extraEnv, omitEnv = []) {
     env,
     encoding: "utf8",
   });
+}
+
+// The Gateway's built-in explicit origins (apps/gateway/src/cors-origin-guard.ts). Setting
+// GOATCITADEL_ALLOWED_ORIGINS replaces them, so they are kept next to the UI origin.
+const GATEWAY_DEFAULT_ALLOWED_ORIGINS = [
+  "http://localhost:5173",
+  "http://127.0.0.1:5173",
+  "http://localhost:4173",
+  "http://127.0.0.1:4173",
+  "http://127.0.0.1:8787",
+];
+
+/**
+ * Names the stack's UI origin in the Gateway's explicit allowed origins. The Gateway trusts a loopback
+ * origin on an arbitrary port only when auth is on, so with the stack's default auth mode "none" the UI's
+ * own port must be listed, as an operator serving the UI on a custom port would list it.
+ */
+export function withVerificationUiOrigin(gatewayEnv, uiOrigin, baseEnv = process.env) {
+  if (!uiOrigin) return gatewayEnv;
+  const configured = gatewayEnv.GOATCITADEL_ALLOWED_ORIGINS ?? baseEnv.GOATCITADEL_ALLOWED_ORIGINS ?? "";
+  const listed = configured
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+  const origins = new Set([...(listed.length > 0 ? listed : GATEWAY_DEFAULT_ALLOWED_ORIGINS), uiOrigin]);
+  return { ...gatewayEnv, GOATCITADEL_ALLOWED_ORIGINS: [...origins].join(",") };
+}
+
+async function resolveUiPort(preferredPort, gatewayPort) {
+  let port = await resolveAvailablePort(Number(preferredPort ?? 0));
+  // Neither port is bound yet, so an ephemeral pick can repeat the Gateway's.
+  while (port === gatewayPort) port = await resolveAvailablePort(0);
+  return port;
 }
 
 export async function resolveAvailablePort(preferredPort) {
