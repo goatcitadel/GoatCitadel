@@ -91,6 +91,28 @@ describe("ChatCapabilitySuggestionLine", () => {
     await act(async () => button("Dismiss suggestion: Read PDFs")!.click());
     expect(onDismiss).toHaveBeenCalledWith(first);
   });
+
+  it("is a named group for assistive technology", async () => {
+    await render([first]);
+    expect(container.querySelector('[role="group"][aria-label="Suggested capabilities"]')).not.toBeNull();
+  });
+
+  it("moves focus to the next suggestion when one is dismissed", async () => {
+    await render([first, second, third]);
+    await act(async () => button("+2 more")!.click());
+    act(() => button("Dismiss suggestion: Read PDFs")!.focus());
+    await act(async () => button("Dismiss suggestion: Read PDFs")!.click());
+    // The parent drops the dismissed suggestion.
+    await render([second, third]);
+    expect(document.activeElement).toBe(button("Check spelling"));
+  });
+
+  it("moves focus to the first suggestion it shows when +N more expands", async () => {
+    await render([first, second, third]);
+    act(() => button("+2 more")!.focus());
+    await act(async () => button("+2 more")!.click());
+    expect(document.activeElement).toBe(button("Check spelling"));
+  });
 });
 
 describe("selectTurnCapabilitySuggestions", () => {
