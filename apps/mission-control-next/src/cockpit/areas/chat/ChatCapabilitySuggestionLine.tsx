@@ -49,7 +49,7 @@ function SuggestionRow({
       <button
         type="button"
         aria-label={`Dismiss suggestion: ${suggestion.title}`}
-        className="rounded p-0.5 hover:text-fg-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
+        className="rounded-sm p-0.5 hover:text-fg-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent"
         onClick={onDismiss}
       >
         <X aria-hidden="true" className="size-3" />

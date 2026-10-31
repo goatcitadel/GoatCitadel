@@ -242,7 +242,7 @@ type ReadinessState = "checking" | "failed" | "ready" | "off" | "unsupported";
  * and spend the approval), and a host that can't run the sandbox is never offered the switch.
  */
 function readinessState(query: UseQueryResult<CodeModeReadiness>): ReadinessState {
-  if (query.isError) return query.isFetching ? "checking" : "failed";
+  if (query.isError) return query.isFetching ? "checking" : "failed"; // refetch-guard: allow a failed read has no record to keep
   if (!query.isFetchedAfterMount || !query.data) return "checking";
   const { reason, sandboxSupported } = query.data;
   if (reason === "sandbox_unsupported" || sandboxSupported === false) return "unsupported";
@@ -270,12 +270,11 @@ function PendingRow(props: {
   return (
     <div className="space-y-2">
       {props.reads ? <p className="text-fg-muted wrap-anywhere">Reads {props.reads}</p> : null}
+      {/* Loading lines are not announced; the row's status line and the outcomes below are. */}
       {!record || readiness === "checking" ? (
-        <p role="status" className="text-fg-muted">
-          Checking the request…
-        </p>
+        <p className="text-fg-muted">Checking the request…</p>
       ) : (
-        <Suspense fallback={<p role="status">Loading approval controls…</p>}>
+        <Suspense fallback={<p className="text-fg-muted">Loading approval controls…</p>}>
           {readiness === "failed" ? (
             <p role="status" className="text-fg-muted">
               Couldn&apos;t check Code Mode.{" "}
