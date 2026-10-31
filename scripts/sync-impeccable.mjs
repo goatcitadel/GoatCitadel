@@ -175,6 +175,14 @@ const REFERENCE_PARAGRAPH_DROPS = {
     "- Dual-agent: `Method: dual-agent",
     "Do this first because the alternative is the most common way",
     "Persistence is not the end of the run.",
+    // Desktop-app assessment drives a running app over a CDP port; GoatCitadel critiques attached renders.
+    "- Desktop apps (see **Desktop apps** under Assessment B)",
+    "**Desktop apps** (Electron, NW.js, CEF, WebView2)",
+    "1. Launch the app with a local DevTools port",
+    "2. Seed the state under review",
+    "4. Take screenshots through the harness's CDP tooling",
+    "The app has one window, so the assessments take turns",
+    "- Native: `Method: design review only",
   ],
 };
 
@@ -183,8 +191,10 @@ const REFERENCE_TAG_DROPS = {
   critique: ["codex"],
 };
 
-/** Upstream description claims that this build cannot honour (live browser mode). */
-const DESCRIPTION_REPLACEMENTS = [{ find: ", live browser iteration on UI elements,", replace: "," }];
+/** Upstream description claims that this build cannot honour (native iOS and Android references). */
+const DESCRIPTION_REPLACEMENTS = [
+  { find: "onboarding, empty states, and native iOS or Android screens.", replace: "onboarding, and empty states." },
+];
 
 /** Exact-anchor rewrites per file. Every entry is required; a missing anchor means upstream drifted and the transform must be revisited. */
 const SKILL_REPLACEMENTS = [
@@ -327,11 +337,11 @@ const REFERENCE_REPLACEMENTS = {
         "Resolve one stable target, run two independent assessments, synthesize a design critique, and ask the user what to improve next. The chat response is the deliverable.",
     },
     {
-      find: "- Assessment A (design review) and Assessment B (detector/browser evidence) are both required.",
+      find: "- Assessment A (design review) and Assessment B (detector/browser evidence) are both required, except on a native platform (see Assessment Orchestration).",
       replace: "- Assessment A (design review) and Assessment B (render evidence) are both required.",
     },
     {
-      find: '- Assessment A and B MUST run as two isolated sub-agents whenever a sub-agent/Task tool is exposed. Running them inline in this context is "possible" but is NOT permitted; it is a degraded run. Inline is allowed ONLY when no sub-agent tool exists (or the user declined, on harnesses that ask).',
+      find: '- Assessment A and B MUST run as two isolated sub-agents whenever a sub-agent/Task tool is exposed. Running them inline in this context is "possible" but is NOT permitted; it is a degraded run. Inline is allowed ONLY when no sub-agent tool exists (or the user declined, on harnesses that ask). Native platforms run A alone (see Assessment Orchestration).',
       replace:
         "- The GoatCitadel critique turn carries routed context, which pins the provider and model and disables delegation, so Assessment A and Assessment B run sequentially in this context: finish and record Assessment A before reading the render evidence and advisories for Assessment B.",
     },
@@ -369,7 +379,7 @@ const REFERENCE_REPLACEMENTS = {
         "noting where the design review and the render evidence or advisories agree, where the advisories caught issues the review missed, and where advisories are false positives.",
     },
     {
-      find: "Run the bundled detector and browser visualization evidence. Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
+      find: "Run the bundled detector and browser visualization evidence. On web, Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
       replace:
         "Review the render evidence GoatCitadel attached to this critique: offline PNG snapshots of the artifact at desktop (1440×900) and phone (390×844) viewports when the provider can inspect images, plus the runtime design advisories recorded on the artifact. Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
     },
@@ -424,6 +434,14 @@ const REFERENCE_REPLACEMENTS = {
       replace:
         "If the workspace PRODUCT.md or DESIGN.md names the audience or brand, derive 1–2 additional personas from that information:",
     },
+    { find: " On a native platform, write `not applicable (native platform)` instead.", replace: "" },
+  ],
+  // The runtime design advisories have no line-break rules, so upstream detector rule names would point at nothing.
+  typeset: [
+    {
+      find: " The detector's `straggler` and `unbalanced-heading` findings are advisory for this reason; say which breaks are intended.",
+      replace: " Say which breaks are intended.",
+    },
   ],
 };
 
@@ -436,7 +454,7 @@ const REFERENCE_SECTION_DROPS = {
 const SKILL_PARAGRAPH_DROPS = ["**Never repair drift", "- **Workflow or command-selection question:**"];
 
 export const TRANSFORMS_APPLIED = Object.freeze([
-  "SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims live browser iteration.",
+  "SKILL.md frontmatter keeps name and description; argument-hint, user-invocable, allowed-tools, and license are dropped; metadata (version, tags, keywords) is added; the description no longer claims native iOS or Android screens.",
   "new-work (the upstream visual-world workshop) is not vendored: SKILL.md, init.md, document.md, shape.md, and bolder.md sentences that routed through it now ask the operator (user_input.request) to choose and commit the visual world in DESIGN.md; remaining links to it are marked as not vendored.",
   "document.md: sentences that pointed at the removed design.json sidecar now point at DESIGN.md prose and the schemaVersion paragraph is removed; any other surviving sidecar mention fails the guard so a re-sync must add a rewrite rather than ship it.",
   "An Apache License 2.0 section 4(b) modification notice follows the SKILL.md frontmatter.",

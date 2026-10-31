@@ -56,8 +56,8 @@ const CRITIQUE_FIXTURE = [
   "",
   "### Hard Invariants",
   "",
-  "- Assessment A (design review) and Assessment B (detector/browser evidence) are both required.",
-  '- Assessment A and B MUST run as two isolated sub-agents whenever a sub-agent/Task tool is exposed. Running them inline in this context is "possible" but is NOT permitted; it is a degraded run. Inline is allowed ONLY when no sub-agent tool exists (or the user declined, on harnesses that ask).',
+  "- Assessment A (design review) and Assessment B (detector/browser evidence) are both required, except on a native platform (see Assessment Orchestration).",
+  '- Assessment A and B MUST run as two isolated sub-agents whenever a sub-agent/Task tool is exposed. Running them inline in this context is "possible" but is NOT permitted; it is a degraded run. Inline is allowed ONLY when no sub-agent tool exists (or the user declined, on harnesses that ask). Native platforms run A alone (see Assessment Orchestration).',
   "- If you degrade for any reason, the report's first line MUST be a banner: `⚠️ DEGRADED: single-context (<reason>)`. A silent degraded critique is a failed critique.",
   "- Assessment A must finish before detector findings enter the parent synthesis context. Detector output is deterministic, but it still anchors judgment.",
   "- A skipped detector is a failed critique run unless `impeccable detect` is missing or crashes after a real attempt.",
@@ -82,6 +82,7 @@ const CRITIQUE_FIXTURE = [
   "",
   "Sub-agent gate (all harnesses):",
   "- Unless a harness-specific gate below overrides this, spawn A and B as two isolated, parallel sub-agents whenever a sub-agent/Task tool is exposed.",
+  "- Desktop apps (see **Desktop apps** under Assessment B) are the one exception to parallel: both sub-agents would drive the app's single window at once.",
   '- "Unavailable" means exactly one thing: no sub-agent/Task tool is exposed in this session.',
   "- If and only if sub-agents are unavailable, fall back sequentially.",
   "- Whichever path you take, declare it in the report header (see Report header provenance).",
@@ -103,7 +104,7 @@ const CRITIQUE_FIXTURE = [
   "",
   "### Assessment B: Detector + Browser Evidence",
   "",
-  "Run the bundled detector and browser visualization evidence. Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
+  "Run the bundled detector and browser visualization evidence. On web, Assessment B is mandatory and must remain isolated from Assessment A until both are complete.",
   "",
   "CLI scan:",
   "```bash",
@@ -124,6 +125,14 @@ const CRITIQUE_FIXTURE = [
   "4. If mutation is available, start `{{scripts_path}}/impeccable live-server --background`, then stop the live server.",
   "5. For multi-view targets, inject on 3-5 representative pages.",
   "",
+  "**Desktop apps** (Electron, NW.js, CEF, WebView2): there is no URL to open, so Assessment B attaches to the running app instead.",
+  "",
+  "1. Launch the app with a local DevTools port: `--remote-debugging-port=9222` (Electron, NW.js, CEF).",
+  "2. Seed the state under review (route, open panel, theme, data). The scan reads the window as it stands.",
+  "4. Take screenshots through the harness's CDP tooling (`Page.captureScreenshot` on the same target).",
+  "",
+  "The app has one window, so the assessments take turns in it instead of opening tabs (A, then B; see the sub-agent gate). Tauri on macOS (WKWebView) exposes no CDP.",
+  "",
   "Return: CLI findings JSON/counts, browser console findings if applicable, false positives, and skipped/failed browser steps with concrete reasons.",
   "",
   "After Assessment B returns usable CLI findings, reuse them. Do not rerun `impeccable detect` in the parent.",
@@ -139,6 +148,7 @@ const CRITIQUE_FIXTURE = [
   "The report's first line MUST declare how the assessments were run, so a degraded run is never silent:",
   "- Dual-agent: `Method: dual-agent (A: <agent-id> · B: <agent-id>)`",
   "- Degraded: `⚠️ DEGRADED: single-context (<reason, e.g. no sub-agent tool exposed>)`",
+  "- Native: `Method: design review only (detector not applicable, native platform)`",
   "",
   "#### Design Health Score",
   "",
@@ -146,7 +156,7 @@ const CRITIQUE_FIXTURE = [
   "",
   "#### Design Specificity Verdict",
   "",
-  "**Deterministic scan**: Summarize what the automated detector found, with counts and file locations. Note any additional issues the detector caught that you missed, and flag any false positives.",
+  "**Deterministic scan**: Summarize what the automated detector found, with counts and file locations. Note any additional issues the detector caught that you missed, and flag any false positives. On a native platform, write `not applicable (native platform)` instead.",
   "",
   "**Visual overlays** (if injection succeeded): Tell the user that overlays are now visible in the **[Human]** tab in their browser, highlighting the detected issues. Summarize what the console output reported. If browser visualization was attempted but injection failed, say that no reliable user-visible overlay is available and report the fallback signal instead.",
   "",
@@ -210,7 +220,7 @@ const CRITIQUE_FIXTURE = [
 const SKILL_SRC = [
   "---",
   "name: impeccable",
-  'description: "Use when the user wants to design, redesign, shape, critique, audit, polish, clarify, distill, harden, optimize, adapt, animate, colorize, extract, or otherwise improve a frontend interface. Also use for bland designs that need to become bolder or more delightful, loud designs that should become quieter, live browser iteration on UI elements, or ambitious visual effects that should feel technically extraordinary. Not for backend-only or non-UI tasks."',
+  'description: "Use when the user wants to design, redesign, shape, critique, audit, polish, simplify, harden, animate, or otherwise improve a frontend interface: websites, landing pages, dashboards, product UI, components, forms, settings, onboarding, empty states, and native iOS or Android screens. Also for making bland UI bolder, loud UI quieter, or ambitious visual effects. Not for backend-only or non-UI tasks."',
   'argument-hint: "[{{command_hint}}] [target]"',
   "user-invocable: true",
   "allowed-tools:",
@@ -361,6 +371,10 @@ const REFERENCES = {
     "```",
     "",
     "Then fix.",
+    "",
+    "## Line breaks",
+    "",
+    "- An uneven break can carry meaning. Make it deliberate and keep it rare. The detector's `straggler` and `unbalanced-heading` findings are advisory for this reason; say which breaks are intended.",
     "",
     "## Live-mode signature params",
     "",
@@ -719,12 +733,14 @@ test("drops live-mode sections, native lines, unavailable-command bullets, launc
   assert.ok(!part3.includes("generate the sidecar"));
 });
 
-test("rewrites sidecar and new-work routing into operator-facing instructions and drops the live-browser claim", () => {
+test("rewrites sidecar and new-work routing into operator-facing instructions and drops the native-platform claim", () => {
   const outDir = makeOut();
   runSync(makeUpstream(), outDir);
   const skill = read(outDir, "SKILL.md");
   const description = skill.split("\n").find((line) => line.startsWith("description: "));
   assert.ok(!description.includes("live browser"));
+  assert.ok(!/\biOS\b|\bAndroid\b/u.test(description));
+  assert.ok(description.includes("forms, settings, onboarding, and empty states."));
   assert.ok(description.includes("design, redesign, shape, critique, audit, polish,"));
   assert.ok(skill.includes("choose a replacement world with the operator and replace DESIGN.md"));
   assert.ok(skill.includes("the evidence decides whether to preserve, expand, or replace the incumbent world"));
@@ -824,9 +840,17 @@ test("vendors a trimmed critique reference built on render evidence instead of t
     ".impeccable/",
     "{{",
     "detector",
+    "Desktop apps",
+    "Electron",
+    "CDP",
+    "native platform",
+    "The app has one window",
   ]) {
     assert.ok(!critique.includes(gone), `critique still contains: ${gone}`);
   }
+  const typeset = read(outDir, "reference/typeset.md");
+  assert.ok(!typeset.includes("straggler"), "typeset still names an upstream detector rule");
+  assert.ok(typeset.includes("Make it deliberate and keep it rare. Say which breaks are intended."));
   const upstreamDoc = read(outDir, "UPSTREAM.md");
   assert.ok(upstreamDoc.includes("| reference/critique.md | skill/reference/critique.md |"));
   assert.ok(!upstreamDoc.includes("- skill/reference/critique.md:"));
