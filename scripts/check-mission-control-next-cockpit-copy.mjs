@@ -14,11 +14,20 @@ import ts from "typescript";
 const repoRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "cockpit");
 
-/** Every tree that renders operator copy in the cockpit: its own areas, the native routes and shared components. */
+/**
+ * Every tree that renders operator copy in the cockpit: its own areas, the native routes and shared components. A root
+ * with `files` reads just those files (relative to `dir`): copy written outside the cockpit that the cockpit shows as
+ * written, such as the hook trigger labels and the plugin checks' lines.
+ */
 export const COPY_ROOTS = [
   { id: "cockpit", dir: cockpitRoot },
   { id: "native-routes", dir: path.join(repoRoot, "apps", "mission-control-next", "src", "features", "native-routes") },
   { id: "shared-components", dir: path.join(repoRoot, "packages", "mission-control-shared", "src", "components") },
+  {
+    id: "shown-as-written",
+    dir: repoRoot,
+    files: ["packages/contracts/src/hooks.ts", "apps/gateway/src/services/capability-plugin-inspection-service.ts"],
+  },
 ];
 
 const BANNED = [
@@ -286,7 +295,8 @@ export async function walk(dir) {
 }
 
 async function scanRoot(root) {
-  const files = await walk(root.dir);
+  // A listed file that is missing fails the read below, as an unreadable root does.
+  const files = root.files ? root.files.map((file) => path.join(root.dir, ...file.split("/"))) : await walk(root.dir);
   const findings = [];
   const totals = {};
   const byFile = {};

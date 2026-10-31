@@ -48,7 +48,8 @@ export interface CapabilityPluginInspection {
   pieces: CapabilityPluginPieceView[];
   /** Parts of a foreign plugin format that were left out. Always empty for a GoatCitadel manifest. */
   ignored: { path: string; reason: string }[];
-  refusal?: { code: PluginManifestRefusalCode | string; message: string };
+  /** Why the manifest was refused; `field` names where, such as `pieces[2].mode`. */
+  refusal?: { code: PluginManifestRefusalCode | string; message: string; field?: string };
   /** No refusal, and every piece is ready or already there. */
   installable: boolean;
   inspectedAt: string;

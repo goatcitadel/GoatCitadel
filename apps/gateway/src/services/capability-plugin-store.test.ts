@@ -201,6 +201,30 @@ describe("CapabilityPluginStore", () => {
     );
     expect(rows.writes).toBe(0);
   });
+
+  it("finds an inspection by the operator and key that asked for it, until it runs out of time", async () => {
+    const rows = new SettingRows();
+    let now = NOW;
+    const store = new CapabilityPluginStore(rows, () => new Date(now));
+    const request = { actorId: "operator-1", idempotencyKey: "inspect-1", payloadSha256: "f".repeat(64) };
+    await store.saveInspection(inspection(1), "1".padStart(64, "0"), request);
+    await store.saveInspection(inspection(2), "2".padStart(64, "0"));
+
+    await expect(store.findInspectionByRequest("operator-1", "inspect-1")).resolves.toEqual({
+      inspection: inspection(1),
+      payloadSha256: "f".repeat(64),
+    });
+    await expect(store.findInspectionByRequest("operator-2", "inspect-1")).resolves.toBeUndefined();
+    await expect(store.findInspectionByRequest("operator-1", "inspect-2")).resolves.toBeUndefined();
+    // The request rides with the inspection it made, and nothing else changes about the kept inspection.
+    await expect(store.getInspection("inspection-001")).resolves.toEqual({
+      inspection: inspection(1),
+      snapshotTreeSha256: "1".padStart(64, "0"),
+    });
+
+    now = Date.parse(inspection(1).expiresAt);
+    await expect(store.findInspectionByRequest("operator-1", "inspect-1")).resolves.toBeUndefined();
+  });
 });
 
 describe("findPluginOwning", () => {

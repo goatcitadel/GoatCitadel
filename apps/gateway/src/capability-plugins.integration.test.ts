@@ -140,9 +140,13 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
       inject("GET", `/api/v1/workspaces/${WORKSPACE_ID}/hooks`),
       inject("GET", "/api/v1/prompt-packs"),
       inject("GET", `/api/v1/capabilities/tools?workspaceId=${WORKSPACE_ID}`),
+      inject("GET", "/api/v1/settings"),
+      inject("GET", "/api/v1/approvals"),
     ]);
     for (const response of reads) expect(response.statusCode, response.body).toBe(200);
-    const [servers, hooks, promptPacks, tools] = reads.map((response) => response.json());
+    const [servers, hooks, promptPacks, tools, settings, approvals] = reads.map((response) => response.json());
+    // The hooks allowlist lives in the tool policy file, which installing a hook would add its host to.
+    const toolPolicy = JSON.parse(fs.readFileSync(path.join(root, "config", "tool-policy.json"), "utf8"));
     const items = (value: unknown) => (value as { items: Array<Record<string, unknown>> }).items;
     return {
       servers: items(servers).map((server) => [server.serverId, server.label]),
@@ -152,6 +156,9 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
         group.groupId,
         group.state,
       ]),
+      networkAllowlist: (settings as { networkAllowlist: string[] }).networkAllowlist,
+      hooksAllowlist: toolPolicy.hooks?.networkAllowlist ?? null,
+      approvals: items(approvals).map((approval) => [approval.approvalId, approval.status]),
     };
   }
 
@@ -244,6 +251,43 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
     expect(skills.json<CapabilitySkillsResponse>().items.some((item) => item.skillId.includes("meeting-notes"))).toBe(
       false,
     );
+  });
+
+  it("checks the same copy again without a second Skill Hub check, and answers a retried key with the first answer", async () => {
+    const body = { workspaceId: WORKSPACE_ID, source: { kind: "built_in", pluginId: PLUGIN_ID } };
+    const first = await inject("POST", INSPECTIONS_URL, body);
+    const second = await inject("POST", INSPECTIONS_URL, body);
+    expect([first.statusCode, second.statusCode], second.body).toEqual([201, 201]);
+    const [one, two] = [first.json<CapabilityPluginInspection>(), second.json<CapabilityPluginInspection>()];
+    expect(two.inspectionId).not.toBe(one.inspectionId);
+    expect(two.pieces[0]?.skillSnapshotId).toBe(one.pieces[0]?.skillSnapshotId);
+
+    // The Skill Hub holds one check of this plugin's skill, however many times the same copy is inspected.
+    const hub = await inject("GET", `/api/v1/skills/hub?workspaceId=${WORKSPACE_ID}&limit=100`);
+    expect(hub.statusCode, hub.body).toBe(200);
+    const checks = (
+      hub.json() as { items: Array<{ snapshotId: string; snapshot: { canonicalSourceKey: string } }> }
+    ).items
+      .filter((item) => item.snapshot.canonicalSourceKey === `plugin:${PLUGIN_ID}/meeting-notes`)
+      .map((item) => item.snapshotId);
+    expect(checks).toEqual([one.pieces[0]?.skillSnapshotId]);
+
+    // The same Idempotency-Key again gets the first answer, through the Gateway's own attempt record.
+    const key = "capability-plugins-retried";
+    const sent = await app!.inject({
+      method: "POST",
+      url: INSPECTIONS_URL,
+      headers: { authorization: `Bearer ${TOKEN}`, "idempotency-key": key },
+      payload: body,
+    });
+    const resent = await app!.inject({
+      method: "POST",
+      url: INSPECTIONS_URL,
+      headers: { authorization: `Bearer ${TOKEN}`, "idempotency-key": key },
+      payload: body,
+    });
+    expect([sent.statusCode, resent.statusCode], resent.body).toEqual([201, 201]);
+    expect(resent.json()).toEqual(sent.json());
   });
 
   it("refuses a built-in plugin that isn't shipped, with its code and nothing kept", async () => {

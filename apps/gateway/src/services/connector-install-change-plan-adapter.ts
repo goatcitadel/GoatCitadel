@@ -326,14 +326,13 @@ function refusal(field: string, message: string): ConflictError {
   return new ConflictError({ message, details: { field } });
 }
 
-/** The template's hosts the list doesn't cover yet, lower-cased, matched the way the network policy matches them. */
-function missingHosts(template: McpServerTemplateRecord, allowlist: readonly string[]): string[] {
-  return connectorTemplateHosts(template).filter((host) => !isHostAllowlistedInList(host, [...allowlist]));
-}
-
-/** The hosts a template needs allowed, lower-cased and without repeats. */
-export function connectorTemplateHosts(template: Pick<McpServerTemplateRecord, "networkHosts">): string[] {
-  return [...new Set((template.networkHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean))];
+/**
+ * The template's hosts the list doesn't cover yet, lower-cased, matched the way the network policy matches them: the
+ * hosts an install adds.
+ */
+export function missingHosts(template: McpServerTemplateRecord, allowlist: readonly string[]): string[] {
+  const hosts = [...new Set((template.networkHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean))];
+  return hosts.filter((host) => !isHostAllowlistedInList(host, [...allowlist]));
 }
 
 /**

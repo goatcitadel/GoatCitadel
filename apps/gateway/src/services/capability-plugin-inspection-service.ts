@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import {
   ConflictError,
@@ -5,6 +6,7 @@ import {
   HOOK_TRIGGER_VALUES,
   TOOL_GROUPS,
   ValidationError,
+  canonicalJsonString,
   redactStructuredSecrets,
   type CapabilityPluginInspection,
   type CapabilityPluginPieceCheck,
@@ -16,9 +18,9 @@ import {
   type PluginSource,
   type PluginTrust,
 } from "@goatcitadel/contracts";
-import type { StoredPlugin } from "./capability-plugin-store.js";
-import { connectorTemplateHosts, findInstallableConnectorTemplate } from "./connector-install-change-plan-adapter.js";
-import { HostLookupError, assertHostResolvesPublic } from "./hardened-git.js";
+import type { CapabilityPluginInspectionRequestKey, StoredPlugin } from "./capability-plugin-store.js";
+import { findInstallableConnectorTemplate, missingHosts } from "./connector-install-change-plan-adapter.js";
+import { HostLookupError, HostNotPublicError, assertHostResolvesPublic } from "./hardened-git.js";
 import { parseHookWebhookUrl } from "./hooks-service.js";
 import { mcpServerLabelKey } from "./mcp-money-moving.js";
 import { readPluginManifestFile } from "./plugin-manifest-file.js";
@@ -50,9 +52,14 @@ export const ASKS_FIRST = {
 
 const SKILL_BLOCKED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
-const CHECK_KEY_REUSED_MESSAGE = "This check's key was already used for something else. Check the plugin again.";
+const SKILL_CHECK_CHANGED_MESSAGE =
+  "This copy of the skill was checked before with a different result, so it can't be checked again.";
+const KEY_REUSED_MESSAGE = "This request's key was already used for a different plugin check. Check it with a new key.";
+const ANSWER_GONE_MESSAGE =
+  "This plugin check is no longer kept, so its answer can't be sent again. Check the plugin again.";
 const GROUP_NOT_SWITCHABLE_MESSAGE = "That group can't be switched off.";
 const UNKNOWN_GROUP_MESSAGE = "GoatCitadel has no tool group with that id.";
+const HOOK_URL_INVALID_MESSAGE = "That hook's address isn't a valid https address.";
 const HOST_NOT_PUBLIC_MESSAGE = "That address isn't a public host.";
 const HOST_NOT_FOUND_MESSAGE = "That address's host can't be found.";
 const UNKNOWN_TRIGGER_MESSAGE = "GoatCitadel has no hook event with that name.";
@@ -60,6 +67,10 @@ const PROMPT_PACK_MISSING_MESSAGE = "The plugin doesn't have that prompt pack fi
 const PROMPT_PACK_NOT_TEXT_MESSAGE = "The prompt pack file isn't UTF-8 text.";
 const PROMPT_PACK_INVALID_MESSAGE = "The prompt pack file isn't a prompt pack GoatCitadel can read.";
 const PROMPT_PACK_TAKEN_MESSAGE = "Another prompt pack already uses the id this one needs.";
+const PROMPT_PACK_VARIABLES_OFF_MESSAGE =
+  "This prompt pack declares run variables, and typed run variables are switched off. A plugin can't switch them on.";
+/** The Skill Hub review's refusal of a key bound to other material (`assertSourceReplay`), pinned by its own test. */
+const REVIEW_KEY_BOUND_MESSAGE = "Skill Hub review idempotency key is already bound to different source material.";
 /** The review's own refusal codes are upper snake case, as the Skills tab's check reads them. */
 const REVIEW_CODE = /^[A-Z][A-Z0-9_]*$/u;
 /** Groups a plugin can never hold off. `mcp.invoke` is Core's own connector tool, named here so it can't slip past. */
@@ -67,7 +78,7 @@ const NEVER_SWITCHED_OFF: ReadonlySet<string> = new Set(["core", "mcp.invoke"]);
 const READY: CapabilityPluginPieceCheck = { status: "ready" };
 const ALREADY_THERE: CapabilityPluginPieceCheck = { status: "already_there" };
 
-/** The request's logger. A refusal's cause goes here, and never into the answer. */
+/** The request's logger. A refusal's cause, or a fault's detail, goes here and never into the answer. */
 export interface CapabilityPluginInspectionLog {
   warn(details: Record<string, unknown>, message: string): void;
 }
@@ -76,9 +87,21 @@ export interface CapabilityPluginInspectInput {
   workspaceId: string;
   source: PluginSource;
   actorId: string;
-  /** The request's own key. Each skill's review is keyed `<key>:skill:<pieceId>`. */
+  /** The request's own key: the same key from the same operator gets the same answer while the inspection is kept. */
   idempotencyKey: string;
   log: CapabilityPluginInspectionLog;
+  /** The request is a retry of one already answered: answer it again from the kept inspection, or refuse. */
+  replayOnly?: boolean;
+}
+
+/** The settings an inspection reads, once. */
+export interface CapabilityPluginInspectionSettings {
+  /** The tool groups the operator has switched off. */
+  switchedOffToolGroups: readonly string[];
+  /** The hosts the network allowlist covers today. */
+  networkAllowlist: readonly string[];
+  /** Typed run variables (`typedRunVariablesV1Enabled`), which a prompt pack that declares run variables needs. */
+  typedRunVariablesEnabled: boolean;
 }
 
 /** One reader per owner an inspection asks, each through its existing owner. None of them installs anything. */
@@ -93,16 +116,25 @@ export interface CapabilityPluginInspectionSources {
   connectorTemplates(): readonly McpServerTemplateRecord[];
   /** The labels of the connectors already saved. */
   listSavedConnectorLabels(): Promise<readonly string[]>;
-  /** The tool groups the operator has switched off. */
-  listSwitchedOffToolGroups(): Promise<readonly string[]>;
+  /** The tool switches, the network allowlist and the typed run variables flag. */
+  readSettings(): Promise<CapabilityPluginInspectionSettings>;
   /** Whether a prompt pack with this id is saved. */
   promptPackExists(packId: string): Promise<boolean>;
   /** Every address a host name resolves to. */
   lookupHost(hostname: string): Promise<Array<{ address: string }>>;
   /** The plugin store's record of an installed plugin. */
   findInstalled(pluginId: string): Promise<StoredPlugin | undefined>;
-  /** Keeps the inspection with the snapshot it read. */
-  saveInspection(inspection: CapabilityPluginInspection, snapshotTreeSha256: string): Promise<void>;
+  /** The kept inspection that answered this operator's key, with its request's fingerprint. */
+  findKeptInspection(
+    actorId: string,
+    idempotencyKey: string,
+  ): Promise<{ inspection: CapabilityPluginInspection; payloadSha256: string } | undefined>;
+  /** Keeps the inspection with the snapshot it read and the request it answered. */
+  saveInspection(
+    inspection: CapabilityPluginInspection,
+    snapshotTreeSha256: string,
+    request: CapabilityPluginInspectionRequestKey,
+  ): Promise<void>;
   now(): Date;
   newInspectionId(): string;
 }
@@ -119,7 +151,7 @@ export class CapabilityPluginManifestRefusedError extends Error {
   }
 }
 
-/** What every piece check of one inspection shares. The saved connectors and switches are read once, when first asked. */
+/** What every piece check of one inspection shares. The saved connectors and the settings are read once, when asked. */
 interface InspectionContext {
   readonly input: CapabilityPluginInspectInput;
   readonly manifest: PluginManifest;
@@ -127,18 +159,34 @@ interface InspectionContext {
   readonly trust: PluginTrust;
   readonly pin: PluginPin;
   readonly savedConnectorLabels: () => Promise<ReadonlySet<string>>;
-  readonly switchedOffGroups: () => Promise<ReadonlySet<string>>;
+  readonly settings: () => Promise<CapabilityPluginInspectionSettings>;
 }
 
 export class CapabilityPluginInspectionService {
   public constructor(private readonly sources: CapabilityPluginInspectionSources) {}
 
   /**
-   * Inspects a plugin source. Throws the source's own `PluginSourceError` when it can't be fetched, a
-   * `CapabilityPluginManifestRefusedError` (with its inspection kept) when its manifest is refused, and a 409 when the
-   * plugin is already installed. Otherwise every piece is checked in manifest order and the inspection is kept.
+   * Inspects a plugin source. A key this operator already used answers that inspection again while it is kept: the same
+   * inspection, or the same manifest refusal; the key with another request is a 409. Otherwise it throws the source's
+   * own `PluginSourceError` when the source can't be fetched, a `CapabilityPluginManifestRefusedError` (with its
+   * inspection kept) when the manifest is refused, and a 409 when the plugin is already installed; then every piece is
+   * checked in manifest order and the inspection is kept.
    */
   public async inspect(input: CapabilityPluginInspectInput): Promise<CapabilityPluginInspection> {
+    const request: CapabilityPluginInspectionRequestKey = {
+      actorId: input.actorId,
+      idempotencyKey: input.idempotencyKey,
+      payloadSha256: requestFingerprint(input),
+    };
+    const kept = await this.sources.findKeptInspection(request.actorId, request.idempotencyKey);
+    if (kept) {
+      if (kept.payloadSha256 !== request.payloadSha256) {
+        throw new ConflictError({ code: "STATE_CONFLICT", message: KEY_REUSED_MESSAGE });
+      }
+      return answerAgain(kept.inspection);
+    }
+    if (input.replayOnly) throw new ConflictError({ code: "STATE_CONFLICT", message: ANSWER_GONE_MESSAGE });
+
     const fetched = await this.sources.fetchSource(input.source);
     const parsed = await readPluginManifestFile(fetched.snapshot.dir);
     const inspectedAt = this.sources.now();
@@ -162,11 +210,11 @@ export class CapabilityPluginInspectionService {
         version: "",
         manifestSha256: "",
         pieces: [],
-        refusal: { code: parsed.code, message: parsed.message },
+        refusal: { code: parsed.code, message: parsed.message, ...(parsed.field ? { field: parsed.field } : {}) },
         installable: false,
       };
-      await this.sources.saveInspection(refused, fetched.snapshot.treeSha256);
-      throw new CapabilityPluginManifestRefusedError(refused, parsed.field);
+      await this.sources.saveInspection(refused, fetched.snapshot.treeSha256, request);
+      return answerAgain(refused);
     }
     const { manifest, manifestSha256 } = parsed;
     const installed = await this.sources.findInstalled(manifest.pluginId);
@@ -187,7 +235,7 @@ export class CapabilityPluginInspectionService {
       savedConnectorLabels: once(
         async () => new Set((await this.sources.listSavedConnectorLabels()).map((label) => mcpServerLabelKey(label))),
       ),
-      switchedOffGroups: once(async () => new Set(await this.sources.listSwitchedOffToolGroups())),
+      settings: once(() => this.sources.readSettings()),
     };
     const pieces: CapabilityPluginPieceView[] = [];
     // One at a time, in manifest order: a skill's review writes its own record, and the answer keeps that order.
@@ -204,7 +252,7 @@ export class CapabilityPluginInspectionService {
       pieces,
       installable: pieces.every((item) => item.check.status !== "blocked"),
     };
-    await this.sources.saveInspection(inspection, fetched.snapshot.treeSha256);
+    await this.sources.saveInspection(inspection, fetched.snapshot.treeSha256, request);
     return inspection;
   }
 
@@ -217,18 +265,29 @@ export class CapabilityPluginInspectionService {
       case "tool_group_off":
         return checkToolGroup(piece, context);
       case "hook":
-        return this.checkHook(piece);
+        return checkHookPiece(piece, (hostname) => this.sources.lookupHost(hostname));
       case "prompt_pack":
         return this.checkPromptPack(piece, context);
     }
   }
 
-  /** The Skill Hub's own review of the skill's folder in the snapshot: ready, or blocked with its first code. */
+  /**
+   * The Skill Hub's own review of the skill's folder in the snapshot: ready, or blocked with its first code. The review
+   * is keyed by the snapshot and the piece, so checking the same copy again replays the same check.
+   */
   private async checkSkill(
     piece: Extract<PluginPiece, { kind: "skill" }>,
     context: InspectionContext,
   ): Promise<CapabilityPluginPieceView> {
     const { input } = context;
+    const view = { pieceId: piece.id, kind: "skill" as const, asksFirst: ASKS_FIRST.skill };
+    // The folder the review will read, as the snapshot store answers it: a path it refuses is a blocked piece.
+    try {
+      this.sources.resolveSnapshotPath(context.treeSha256, piece.path);
+    } catch (error) {
+      if (!(error instanceof PluginSnapshotPathError)) throw error;
+      return { ...view, label: piece.id, check: blocked("PIECE_PATH_INVALID", error.message) };
+    }
     const pluginSkill: SkillHubPluginSkillInput = {
       snapshotTreeSha256: context.treeSha256,
       path: piece.path,
@@ -237,13 +296,12 @@ export class CapabilityPluginInspectionService {
       trust: context.trust,
       pinLabel: context.pin.kind === "commit" ? `commit:${context.pin.commit}` : `content:${context.pin.treeSha256}`,
     };
-    const view = { pieceId: piece.id, kind: "skill" as const, asksFirst: ASKS_FIRST.skill };
     let reviewed: SkillHubReviewResult;
     try {
       reviewed = await this.sources.reviewSkill({
         workspaceId: input.workspaceId,
         pluginSkill,
-        idempotencyKey: `${input.idempotencyKey}:skill:${piece.id}`,
+        idempotencyKey: `plugin:${context.treeSha256}:${piece.id}`,
         actorId: input.actorId,
       });
     } catch (error) {
@@ -259,7 +317,10 @@ export class CapabilityPluginInspectionService {
     };
   }
 
-  /** The connector install's own template rule; a connector already saved under the template's label is kept. */
+  /**
+   * The connector install's own template rule; a connector already saved under the template's label is kept. `hosts`
+   * are the ones installing would add: the template's hosts the network allowlist doesn't cover yet.
+   */
   private async checkConnector(
     piece: Extract<PluginPiece, { kind: "connector" }>,
     context: InspectionContext,
@@ -279,52 +340,14 @@ export class CapabilityPluginInspectionService {
     if ((await context.savedConnectorLabels()).has(mcpServerLabelKey(template.label))) {
       return { ...view, label: template.label, check: ALREADY_THERE };
     }
-    const hosts = connectorTemplateHosts(template);
+    const hosts = missingHosts(template, (await context.settings()).networkAllowlist);
     return { ...view, label: template.label, check: READY, ...(hosts.length > 0 ? { hosts } : {}) };
   }
 
   /**
-   * The hooks owner's address rule (a valid https address) and a public host: the literal, and every address a name
-   * resolves to. Installing adds the host to the hooks allowlist, so that list isn't read here.
+   * The prompt-pack parser on the file, as a dry run, and a free `plugin-<pluginId>-<pieceId>` id. A pack that declares
+   * run variables needs typed run variables on, which a plugin can't switch on.
    */
-  private async checkHook(piece: Extract<PluginPiece, { kind: "hook" }>): Promise<CapabilityPluginPieceView> {
-    const triggerLabel = HOOK_TRIGGER_LABELS[piece.trigger] ?? piece.trigger;
-    let url: URL;
-    try {
-      url = parseHookWebhookUrl(piece.url);
-    } catch (error) {
-      if (!(error instanceof ValidationError)) throw error;
-      return {
-        pieceId: piece.id,
-        kind: "hook",
-        label: triggerLabel,
-        asksFirst: ASKS_FIRST.hook("its address", triggerLabel),
-        check: blocked("HOOK_URL_INVALID", error.message),
-        needsSecret: true,
-      };
-    }
-    const view = {
-      pieceId: piece.id,
-      kind: "hook" as const,
-      label: triggerLabel,
-      asksFirst: ASKS_FIRST.hook(url.host, triggerLabel),
-      hosts: [url.hostname],
-      needsSecret: true,
-    };
-    if (!HOOK_TRIGGER_VALUES.includes(piece.trigger)) {
-      return { ...view, check: blocked("UNKNOWN_HOOK_TRIGGER", UNKNOWN_TRIGGER_MESSAGE) };
-    }
-    try {
-      await assertHostResolvesPublic(url, (hostname) => this.sources.lookupHost(hostname));
-    } catch (error) {
-      return error instanceof HostLookupError
-        ? { ...view, check: blocked("HOST_NOT_FOUND", HOST_NOT_FOUND_MESSAGE) }
-        : { ...view, check: blocked("HOST_NOT_PUBLIC", HOST_NOT_PUBLIC_MESSAGE) };
-    }
-    return { ...view, check: READY };
-  }
-
-  /** The prompt-pack parser on the file, as a dry run, and a free `plugin-<pluginId>-<pieceId>` id. */
   private async checkPromptPack(
     piece: Extract<PluginPiece, { kind: "prompt_pack" }>,
     context: InspectionContext,
@@ -352,18 +375,62 @@ export class CapabilityPluginInspectionService {
       // The label an install saves it under, so the name shown here is the name it gets.
       prepared = preparePromptPackImport({ content, packId, sourceLabel: `Plugin ${context.manifest.name}` });
     } catch (error) {
-      const message = error instanceof Error && error.message ? error.message : PROMPT_PACK_INVALID_MESSAGE;
-      return unread(blocked("PROMPT_PACK_INVALID", message));
+      // The parser's own words quote the file; the operator gets a plain line, and the detail stays in the log.
+      warn(context.input.log, piece.id, error, "a plugin's prompt pack couldn't be read");
+      return unread(blocked("PROMPT_PACK_INVALID", PROMPT_PACK_INVALID_MESSAGE));
     }
-    const tests = prepared.write.tests.length;
-    const taken = await this.sources.promptPackExists(packId);
-    return {
+    const ready = {
       ...view,
       label: prepared.write.name,
-      asksFirst: ASKS_FIRST.promptPack(tests),
-      check: taken ? blocked("PROMPT_PACK_ID_TAKEN", PROMPT_PACK_TAKEN_MESSAGE) : READY,
+      asksFirst: ASKS_FIRST.promptPack(prepared.write.tests.length),
+    };
+    if (prepared.hasDeclaredSchema && !(await context.settings()).typedRunVariablesEnabled) {
+      return { ...ready, check: blocked("PROMPT_PACK_RUN_VARIABLES_OFF", PROMPT_PACK_VARIABLES_OFF_MESSAGE) };
+    }
+    const taken = await this.sources.promptPackExists(packId);
+    return { ...ready, check: taken ? blocked("PROMPT_PACK_ID_TAKEN", PROMPT_PACK_TAKEN_MESSAGE) : READY };
+  }
+}
+
+/**
+ * A hook piece: the hooks owner's address rule (`parseHookWebhookUrl`, a valid https address), a trigger GoatCitadel
+ * has, and a public host, the literal and every address a name resolves to. Installing adds the host to the hooks
+ * allowlist, so that list isn't read here. Only a passing hook names its host in `hosts`. A failure of the check itself
+ * (not a refusal) is a fault, as for every other piece.
+ */
+export async function checkHookPiece(
+  piece: Extract<PluginPiece, { kind: "hook" }>,
+  lookupHost: (hostname: string) => Promise<Array<{ address: string }>>,
+): Promise<CapabilityPluginPieceView> {
+  const triggerLabel = HOOK_TRIGGER_LABELS[piece.trigger] ?? piece.trigger;
+  const view = { pieceId: piece.id, kind: "hook" as const, label: triggerLabel, needsSecret: true };
+  let url: URL;
+  try {
+    url = parseHookWebhookUrl(piece.url);
+  } catch (error) {
+    if (!(error instanceof ValidationError)) throw error;
+    return {
+      ...view,
+      asksFirst: ASKS_FIRST.hook("its address", triggerLabel),
+      check: blocked("HOOK_URL_INVALID", HOOK_URL_INVALID_MESSAGE),
     };
   }
+  const asksFirst = ASKS_FIRST.hook(url.hostname, triggerLabel);
+  if (!HOOK_TRIGGER_VALUES.includes(piece.trigger)) {
+    return { ...view, asksFirst, check: blocked("UNKNOWN_HOOK_TRIGGER", UNKNOWN_TRIGGER_MESSAGE) };
+  }
+  try {
+    await assertHostResolvesPublic(url, lookupHost);
+  } catch (error) {
+    if (error instanceof HostNotPublicError) {
+      return { ...view, asksFirst, check: blocked("HOST_NOT_PUBLIC", HOST_NOT_PUBLIC_MESSAGE) };
+    }
+    if (error instanceof HostLookupError) {
+      return { ...view, asksFirst, check: blocked("HOST_NOT_FOUND", HOST_NOT_FOUND_MESSAGE) };
+    }
+    throw error;
+  }
+  return { ...view, asksFirst, check: READY, hosts: [url.hostname] };
 }
 
 /** A switchable group from the Tools tab's own list; Core and `mcp.invoke` never. One already off is kept off. */
@@ -378,14 +445,16 @@ async function checkToolGroup(
     return { ...view, check: blocked("GROUP_NOT_SWITCHABLE", GROUP_NOT_SWITCHABLE_MESSAGE) };
   }
   if (!group) return { ...view, check: blocked("UNKNOWN_TOOL_GROUP", UNKNOWN_GROUP_MESSAGE) };
-  return { ...view, check: (await context.switchedOffGroups()).has(group.id) ? ALREADY_THERE : READY };
+  const switchedOff = (await context.settings()).switchedOffToolGroups.includes(group.id);
+  return { ...view, check: switchedOff ? ALREADY_THERE : READY };
 }
 
 /**
  * The review's refusal of a plugin's skill, as a blocked piece. Its code is kept when it is one of the review's own
  * codes; the review's words, which name the Skill Hub, are not. A refusal on `pluginSkill` is already plain and passes
- * through, and its cause (which can name folders) goes only to the server log. A reused key is a plain 409. Anything
- * else is a fault and passes through.
+ * through, and its cause (which can name folders) goes only to the server log. A review whose key is bound to other
+ * material (this copy's earlier check came out differently) is a plain 409. Any other conflict is a broken invariant
+ * of the review, and like anything else it is a fault: logged, and answered as a plain 503 by the route.
  */
 function skillRefusal(error: unknown, pieceId: string, log: CapabilityPluginInspectionLog): CapabilityPluginPieceCheck {
   if (error instanceof ValidationError) {
@@ -397,17 +466,40 @@ function skillRefusal(error: unknown, pieceId: string, log: CapabilityPluginInsp
     if (field === "sourceRef") return blocked("SOURCE_REFUSED", SKILL_UNREADABLE_MESSAGE);
     if (typeof field === "string" && REVIEW_CODE.test(field)) return blocked(field, SKILL_BLOCKED_MESSAGE);
   }
-  if (error instanceof ConflictError)
-    throw new ConflictError({ code: "STATE_CONFLICT", message: CHECK_KEY_REUSED_MESSAGE });
+  if (error instanceof ConflictError) {
+    if (error.code === "WRITE_CONFLICT" && error.message === REVIEW_KEY_BOUND_MESSAGE) {
+      throw new ConflictError({ code: "STATE_CONFLICT", message: SKILL_CHECK_CHANGED_MESSAGE, details: { pieceId } });
+    }
+    warn(log, pieceId, error, "a plugin's skill check broke");
+    throw new Error("A plugin's skill check broke.", { cause: error });
+  }
   throw error;
+}
+
+/** The kept answer again: the inspection, or its manifest refusal. */
+function answerAgain(inspection: CapabilityPluginInspection): CapabilityPluginInspection {
+  if (inspection.refusal) throw new CapabilityPluginManifestRefusedError(inspection, inspection.refusal.field);
+  return inspection;
+}
+
+/** The SHA-256 of what a request asks for, so the same key can be told from a reused one. */
+function requestFingerprint(input: Pick<CapabilityPluginInspectInput, "workspaceId" | "source">): string {
+  return createHash("sha256")
+    .update(canonicalJsonString({ workspaceId: input.workspaceId, source: input.source }))
+    .digest("hex");
 }
 
 function logCause(error: Error, pieceId: string, log: CapabilityPluginInspectionLog): void {
   const cause = (error as { cause?: unknown }).cause;
   if (cause === undefined) return;
+  warn(log, pieceId, cause, "a plugin's skill couldn't be reviewed");
+}
+
+/** An owner's own error, redacted, in the server log only. */
+function warn(log: CapabilityPluginInspectionLog, pieceId: string, error: unknown, message: string): void {
   const diagnostic =
-    cause instanceof Error ? { name: cause.name, message: cause.message, stack: cause.stack } : { value: cause };
-  log.warn({ pieceId, err: redactStructuredSecrets(diagnostic).value }, "a plugin's skill couldn't be reviewed");
+    error instanceof Error ? { name: error.name, message: error.message, stack: error.stack } : { value: error };
+  log.warn({ pieceId, err: redactStructuredSecrets(diagnostic).value }, message);
 }
 
 /** A file in the snapshot as text, or the blocked check that says why it can't be read. */

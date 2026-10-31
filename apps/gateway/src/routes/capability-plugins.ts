@@ -28,16 +28,16 @@ const sourceSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("folder"), path: z.string().min(1).max(4_096) }).strict(),
 ]);
 const inspectionBodySchema = z.object({ workspaceId: workspaceIdSchema, source: sourceSchema }).strict();
-// The Skill Hub review's own bounds, less the `:skill:<pieceId>` each skill's review key adds, so a key it would refuse
-// is refused here as a plain 400.
+// A key names one attempt, so the same key from the same operator gets the same answer: up to 256 plain characters, the
+// bound the Gateway's own attempt read takes.
 const idempotencyKeySchema = z
   .string()
   .min(1)
-  .max(200)
+  .max(256)
   .regex(/^[\p{L}\p{N}._:@/+*-]+$/u);
 
 const UNAVAILABLE_MESSAGE = "Plugins can't be read right now.";
-const KEY_MESSAGE = "Send an Idempotency-Key header of up to 200 letters, digits or . _ : @ / + * - characters.";
+const KEY_MESSAGE = "Send an Idempotency-Key header of up to 256 letters, digits or . _ : @ / + * - characters.";
 // The list reads the plugin store, the shipped manifests and, for installed plugins with skills, Skill Hub's checks.
 const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
 // An inspection fetches a whole source (a Git clone, say) and runs every piece's check.
@@ -82,7 +82,10 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
    * `remote_hardened` for a folder, 400 for a bad address or path, 404 for a missing one, 422 for a refused or private
    * one, 502 when Git fails) and a refused manifest a 422, each with plain words and `details.code`
    * (`CapabilityPluginRefusal`); a refused manifest's inspection is kept and named by `details.inspectionId`. A plugin
-   * that is already installed is a 409. No server path is ever sent.
+   * that is already installed is a 409. No server path is ever sent. The `Idempotency-Key` names the attempt: sent again
+   * by the same operator for the same request while the inspection is kept (24 hours, the newest 50), it gets the
+   * first answer again, the same 201 or the same refused-manifest 422, without fetching or checking anything; with a
+   * different request it is a 409. A source refusal keeps nothing, so its key can be tried again.
    */
   fastify.post("/api/v1/capabilities/plugins/inspections", operatorInspect, async (request, reply) => {
     const body = inspectionBodySchema.safeParse(request.body);
@@ -97,9 +100,13 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
         actorId: actorIdFor(request),
         idempotencyKey: key.data,
         log: request.log,
+        // The Gateway's attempt record says this key was answered: only the kept answer may be sent again.
+        replayOnly: request.mutationIdempotencyOutcome === "committed",
       });
       return reply.code(201).send(inspection);
     } catch (error) {
+      // A refused manifest's inspection is kept, so its key is answered (and a retry gets the same answer).
+      if (error instanceof CapabilityPluginManifestRefusedError) request.mutationCommitted = true;
       return sendPluginError(reply, error, request.log);
     }
   });

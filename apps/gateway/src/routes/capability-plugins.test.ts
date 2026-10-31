@@ -11,9 +11,18 @@ import {
   type CapabilityPluginInspection,
   type CapabilityPluginListResponse,
 } from "@goatcitadel/contracts";
+import { createDatabase, MutationIdempotencyRepository } from "@goatcitadel/storage";
 import { idempotencyHeaderPlugin } from "../plugins/idempotency.js";
-import { CapabilityPluginManifestRefusedError } from "../services/capability-plugin-inspection-service.js";
-import type { StoredPlugin } from "../services/capability-plugin-store.js";
+import {
+  CapabilityPluginInspectionService,
+  CapabilityPluginManifestRefusedError,
+} from "../services/capability-plugin-inspection-service.js";
+import {
+  CapabilityPluginStore,
+  type CapabilityPluginSettingRecord,
+  type StoredPlugin,
+} from "../services/capability-plugin-store.js";
+import type { MutationIdempotencyStore } from "../services/mutation-idempotency-store.js";
 import {
   CapabilityPluginsRouteService,
   type CapabilityPluginsRouteSources,
@@ -110,14 +119,17 @@ describe("capability plugin routes", () => {
   });
 
   /** `operator: false` makes the operator check refuse, as it does for a caller without operator sign-in. */
-  async function build(service: CapabilityPluginsRouteService | undefined, options: { operator?: boolean } = {}) {
+  async function build(
+    service: CapabilityPluginsRouteService | undefined,
+    options: { operator?: boolean; mutationStore?: MutationIdempotencyStore } = {},
+  ) {
     const requireOperatorAuth = vi.fn(async (_request: FastifyRequest, reply: FastifyReply) => {
       if (options.operator === false) return reply.code(403).send({ error: "Operator authentication is required." });
     });
     app = Fastify();
     await app.register(rateLimit, { global: false });
     // The Gateway's Idempotency-Key plugin, as the real app registers it: a mutation without the header never runs.
-    await app.register(idempotencyHeaderPlugin, {});
+    await app.register(idempotencyHeaderPlugin, options.mutationStore ? { mutationStore: options.mutationStore } : {});
     app.decorateRequest("authActorId", "");
     app.addHook("onRequest", async (request) => {
       request.authActorId = "operator-1";
@@ -157,7 +169,7 @@ describe("capability plugin routes", () => {
       },
       { method: "POST", url: INSPECTIONS_URL, payload: { source: BODY.source }, headers: KEY },
       { method: "POST", url: INSPECTIONS_URL, payload: BODY, headers: { "idempotency-key": "has spaces" } },
-      { method: "POST", url: INSPECTIONS_URL, payload: BODY, headers: { "idempotency-key": "k".repeat(201) } },
+      { method: "POST", url: INSPECTIONS_URL, payload: BODY, headers: { "idempotency-key": "k".repeat(257) } },
       { method: "POST", url: INSPECTIONS_URL, payload: BODY },
       { method: "GET", url: `${INSPECTION_URL}?workspaceId=default` },
       { method: "GET", url: `${INSPECTIONS_URL}/not-a-check` },
@@ -194,6 +206,7 @@ describe("capability plugin routes", () => {
       actorId: "operator-1",
       idempotencyKey: "inspect-7f0c",
       log: expect.objectContaining({ warn: expect.any(Function) }),
+      replayOnly: false,
     });
     expect(sources.readInspection).toHaveBeenCalledExactlyOnceWith(INSPECTION_ID);
   });
@@ -245,13 +258,13 @@ describe("capability plugin routes", () => {
       if (content !== undefined) await fs.writeFile(path.join(builtInRoot, folder, "goatcitadel-plugin.json"), content);
     }
     await fs.writeFile(path.join(builtInRoot, "README.md"), "# Plugins\n");
-    const fetchSource = vi.fn();
-    const reviewSkill = vi.fn();
+    const inspect = vi.fn();
+    const readInspection = vi.fn();
     const { service, sources } = routeService({
       listInstalled: vi.fn(async () => [stored("browser-checks", { name: "Browser checks" })]),
       listBuiltIn: () => listBuiltInPluginManifests(builtInRoot),
-      inspect: fetchSource,
-      readInspection: reviewSkill,
+      inspect,
+      readInspection,
     });
     const { server } = await build(service);
 
@@ -285,8 +298,8 @@ describe("capability plugin routes", () => {
       ],
     });
     // Listing reads manifests only: nothing is fetched, checked or kept, and no Skill Hub check is read.
-    expect(fetchSource).not.toHaveBeenCalled();
-    expect(reviewSkill).not.toHaveBeenCalled();
+    expect(inspect).not.toHaveBeenCalled();
+    expect(readInspection).not.toHaveBeenCalled();
     expect(sources.listSkillHubChecks).not.toHaveBeenCalled();
     expect(sources.reportFailure).not.toHaveBeenCalled();
   });
@@ -472,6 +485,161 @@ describe("capability plugin routes", () => {
     expect(read.json()).toEqual({
       error: "That plugin check wasn't found, or it ran out of time. Check the plugin again.",
       code: "ENTITY_NOT_FOUND",
+    });
+  });
+
+  it("lists the first 64 built-in plugins by name, whatever order the folder lists them in", async () => {
+    const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-plugin-cap-"));
+    roots.push(root);
+    const ids = Array.from({ length: 66 }, (_unused, index) => `plugin-${String(index).padStart(2, "0")}`);
+    // Written newest first, so a listing that kept the folder's own order would differ on a disk that keeps it.
+    for (const pluginId of [...ids].reverse()) {
+      await fs.mkdir(path.join(root, pluginId), { recursive: true });
+      await fs.writeFile(
+        path.join(root, pluginId, "goatcitadel-plugin.json"),
+        JSON.stringify({
+          schemaVersion: 1,
+          pluginId,
+          name: pluginId,
+          description: "A plugin.",
+          version: "1.0.0",
+          pieces: [{ kind: "tool_group_off", id: "no-browser", groupId: "browser" }],
+        }),
+      );
+    }
+
+    const listed = await listBuiltInPluginManifests(root);
+
+    expect(listed.map((manifest) => manifest.pluginId)).toEqual(ids.slice(0, 64));
+  });
+
+  describe("a retried inspection", () => {
+    const databases: Array<ReturnType<typeof createDatabase>> = [];
+
+    afterEach(() => {
+      for (const database of databases.splice(0)) database.close();
+    });
+
+    /** The plugin store's row, with the system settings repository's own compare-and-set rule. */
+    function settingRows() {
+      let record: CapabilityPluginSettingRecord | undefined;
+      let clock = 0;
+      return {
+        get: async () => (record ? structuredClone(record) : undefined),
+        compareAndSet: async (key: string, expected: CapabilityPluginSettingRecord | undefined, value: unknown) => {
+          const unchanged = expected
+            ? record?.updatedAt === expected.updatedAt &&
+              JSON.stringify(record.value) === JSON.stringify(expected.value)
+            : record === undefined;
+          if (!unchanged) return undefined;
+          record = {
+            key,
+            value: structuredClone(value),
+            updatedAt: new Date(Date.UTC(2026, 9, 31, 0, 0, ++clock)).toISOString(),
+          };
+          return structuredClone(record);
+        },
+      };
+    }
+
+    it("gets the first answer again, the same 201 or the same 422, from the Gateway's own attempt record", async () => {
+      const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-plugin-replay-"));
+      roots.push(root);
+      const manifests: Record<string, Record<string, unknown>> = {
+        "good-plugin": { pieces: [{ kind: "tool_group_off", id: "no-browser", groupId: "browser" }] },
+        "refused-plugin": {
+          featureFlags: { durableKernelV1Enabled: false },
+          pieces: [{ kind: "tool_group_off", id: "no-browser", groupId: "browser" }],
+        },
+      };
+      for (const [pluginId, extra] of Object.entries(manifests)) {
+        await fs.mkdir(path.join(root, pluginId), { recursive: true });
+        await fs.writeFile(
+          path.join(root, pluginId, "goatcitadel-plugin.json"),
+          JSON.stringify({
+            schemaVersion: 1,
+            pluginId,
+            name: pluginId,
+            description: "A plugin.",
+            version: "1.0.0",
+            ...extra,
+          }),
+        );
+      }
+      // Each built-in plugin's folder stands in for its snapshot; the inspection, the store and the replay are real.
+      const fetchSource = vi.fn(async (source: { kind: string; pluginId?: string }) => {
+        const treeSha256 = (source.pluginId === "good-plugin" ? "a" : "b").repeat(64);
+        return {
+          snapshot: { treeSha256, dir: path.join(root, source.pluginId ?? "") },
+          pin: { kind: "content" as const, treeSha256 },
+          trust: "built_in" as const,
+          sourceDisplay: "Ships with GoatCitadel",
+        };
+      });
+      const store = new CapabilityPluginStore(settingRows());
+      let sequence = 0;
+      const inspection = new CapabilityPluginInspectionService({
+        fetchSource,
+        resolveSnapshotPath: () => {
+          throw new Error("no piece reads a file here");
+        },
+        reviewSkill: vi.fn(),
+        connectorTemplates: () => [],
+        listSavedConnectorLabels: async () => [],
+        readSettings: async () => ({
+          switchedOffToolGroups: [],
+          networkAllowlist: [],
+          typedRunVariablesEnabled: false,
+        }),
+        promptPackExists: async () => false,
+        lookupHost: async () => [],
+        findInstalled: (pluginId) => store.get(pluginId),
+        findKeptInspection: (actorId, key) => store.findInspectionByRequest(actorId, key),
+        saveInspection: (kept, treeSha256, request) => store.saveInspection(kept, treeSha256, request),
+        now: () => new Date(),
+        newInspectionId: () => `4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e${String(++sequence).padStart(2, "0")}`,
+      });
+      const { service } = routeService({ inspect: (input) => inspection.inspect(input) });
+      const database = createDatabase({ dbPath: ":memory:" });
+      databases.push(database);
+      const attempts = new MutationIdempotencyRepository(database);
+      const { server } = await build(service, {
+        mutationStore: {
+          claim: async (input) => attempts.claim(input),
+          markCompleted: async (input) => attempts.markCompleted(input),
+          markFailed: async (input) => attempts.markFailed(input),
+        },
+      });
+      const post = (pluginId: string, key: string) =>
+        server.inject({
+          method: "POST",
+          url: INSPECTIONS_URL,
+          headers: { "idempotency-key": key },
+          payload: { workspaceId: "default", source: { kind: "built_in", pluginId } },
+        });
+
+      const first = await post("good-plugin", "attempt-good");
+      const retried = await post("good-plugin", "attempt-good");
+      const refused = await post("refused-plugin", "attempt-refused");
+      const refusedAgain = await post("refused-plugin", "attempt-refused");
+      const changed = await post("refused-plugin", "attempt-good");
+
+      expect([first.statusCode, retried.statusCode]).toEqual([201, 201]);
+      expect(retried.json()).toEqual(first.json());
+      expect([refused.statusCode, refusedAgain.statusCode]).toEqual([422, 422]);
+      expect(refused.json()).toMatchObject({ details: { code: "FEATURE_FLAGS_NOT_ALLOWED", field: "featureFlags" } });
+      expect(refusedAgain.json()).toEqual(refused.json());
+      // Each answered attempt is recorded as done, so the retries were the Gateway's canonical replays, not new checks.
+      for (const key of ["attempt-good", "attempt-refused"]) {
+        expect(
+          attempts.get({ method: "POST", routePath: INSPECTIONS_URL, idempotencyKey: key, actorScope: "operator-1" })
+            ?.status,
+        ).toBe("completed");
+      }
+      expect(fetchSource).toHaveBeenCalledTimes(2);
+      // A key reused for another request is still refused by the attempt record.
+      expect(changed.statusCode).toBe(409);
+      expect(changed.json()).toEqual({ error: "Idempotency-Key was reused with a different payload" });
     });
   });
 

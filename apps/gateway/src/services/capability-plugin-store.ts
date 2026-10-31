@@ -64,9 +64,18 @@ export interface CapabilityPluginSettingRows {
   ): Promise<CapabilityPluginSettingRecord | undefined>;
 }
 
+/** The request an inspection answered, so the same key from the same operator gets the same answer again. */
+export interface CapabilityPluginInspectionRequestKey {
+  actorId: string;
+  idempotencyKey: string;
+  /** The SHA-256 of the request's workspace and source, so a key reused for another check is told apart. */
+  payloadSha256: string;
+}
+
 interface KeptInspection {
   inspection: CapabilityPluginInspection;
   snapshotTreeSha256: string;
+  request?: CapabilityPluginInspectionRequestKey;
 }
 
 interface PluginStoreValue {
@@ -111,14 +120,21 @@ export class CapabilityPluginStore {
     });
   }
 
-  /** Keeps an inspection with the snapshot it read, with the newest 50 that haven't run out of time. */
-  public async saveInspection(inspection: CapabilityPluginInspection, snapshotTreeSha256: string): Promise<void> {
+  /**
+   * Keeps an inspection with the snapshot it read, and the request it answered, with the newest 50 that haven't run
+   * out of time.
+   */
+  public async saveInspection(
+    inspection: CapabilityPluginInspection,
+    snapshotTreeSha256: string,
+    request?: CapabilityPluginInspectionRequestKey,
+  ): Promise<void> {
     await this.write((value) => {
       const nowMs = this.now().getTime();
       const others = value.inspections.filter(
         (kept) => kept.inspection.inspectionId !== inspection.inspectionId && !hasExpired(kept, nowMs),
       );
-      const inspections = [{ inspection, snapshotTreeSha256 }, ...others]
+      const inspections = [{ inspection, snapshotTreeSha256, ...(request ? { request } : {}) }, ...others]
         .sort((left, right) => Date.parse(right.inspection.inspectedAt) - Date.parse(left.inspection.inspectedAt))
         .slice(0, MAX_KEPT_INSPECTIONS);
       return { ...value, inspections };
@@ -130,6 +146,19 @@ export class CapabilityPluginStore {
     const kept = (await this.read()).value.inspections.find((item) => item.inspection.inspectionId === inspectionId);
     if (!kept || hasExpired(kept, this.now().getTime())) return undefined;
     return { inspection: kept.inspection, snapshotTreeSha256: kept.snapshotTreeSha256 };
+  }
+
+  /** The kept inspection that answered this operator's key, unless it has run out of time or been dropped. */
+  public async findInspectionByRequest(
+    actorId: string,
+    idempotencyKey: string,
+  ): Promise<{ inspection: CapabilityPluginInspection; payloadSha256: string } | undefined> {
+    const nowMs = this.now().getTime();
+    const kept = (await this.read()).value.inspections.find(
+      (item) =>
+        item.request?.actorId === actorId && item.request.idempotencyKey === idempotencyKey && !hasExpired(item, nowMs),
+    );
+    return kept?.request ? { inspection: kept.inspection, payloadSha256: kept.request.payloadSha256 } : undefined;
   }
 
   private async read(): Promise<{ record: CapabilityPluginSettingRecord | undefined; value: PluginStoreValue }> {

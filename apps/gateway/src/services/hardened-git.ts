@@ -266,16 +266,25 @@ export class HostLookupError extends Error {
   }
 }
 
+/** The host is private, loopback, link-local, metadata or reserved. `cause` is the network guard's own refusal. */
+export class HostNotPublicError extends Error {
+  public constructor(options: { cause: unknown }) {
+    super("The host isn't a public host.", options);
+    this.name = "HostNotPublicError";
+  }
+}
+
 /**
  * Refuses a host that is private, loopback, link-local, metadata or reserved: the literal in `url`, and, for a name,
- * every address it resolves to. A name that doesn't resolve, or resolves to nothing, is a `HostLookupError`; a refused
- * host throws the network guard's own error. The URL's scheme is the caller's to check.
+ * every address it resolves to. A refused host is a `HostNotPublicError` (with the network guard's error as its cause);
+ * a name that doesn't resolve, or resolves to nothing, is a `HostLookupError`. The URL's scheme is the caller's to
+ * check.
  */
 export async function assertHostResolvesPublic(
   url: URL,
   lookup: HostAddressLookup = lookUpHostAddresses,
 ): Promise<void> {
-  assertHostAllowed(url.toString(), ["*"]);
+  refuseUnlessPublic(() => assertHostAllowed(url.toString(), ["*"]));
   // URL keeps IPv6 literals bracketed ("[2606:4700::1]"); strip them so the literal is checked, not resolved.
   const hostname = url.hostname.replace(/^\[|\]$/gu, "");
   if (isIP(hostname)) {
@@ -292,7 +301,16 @@ export async function assertHostResolvesPublic(
   }
   for (const entry of addresses) {
     const literal = entry.address.includes(":") ? `[${entry.address}]` : entry.address;
-    assertNotPrivateOrReservedHost(`https://${literal}/`);
+    refuseUnlessPublic(() => assertNotPrivateOrReservedHost(`https://${literal}/`));
+  }
+}
+
+/** Runs one of the network guard's checks, turning its refusal into a `HostNotPublicError`. */
+function refuseUnlessPublic(check: () => void): void {
+  try {
+    check();
+  } catch (error) {
+    throw new HostNotPublicError({ cause: error });
   }
 }
 
@@ -322,8 +340,12 @@ export async function assertGitSourceHostIsPublic(
   }
 }
 
-/** A failed host lookup in the Git source's own words, with the resolver's error as the cause; anything else as it is. */
+/**
+ * What the Git check always answered: a refused host as the network guard's own error, and a failed lookup in the Git
+ * source's own words with the resolver's error as the cause. Anything else passes as it is.
+ */
 function inGitWords(error: unknown): unknown {
+  if (error instanceof HostNotPublicError) return error.cause;
   if (!(error instanceof HostLookupError)) return error;
   if (error.kind === "no_address") return new Error("Git source host did not resolve to any address.");
   return new Error(`Git source host could not be resolved: ${(error.cause as Error).message}`, { cause: error.cause });

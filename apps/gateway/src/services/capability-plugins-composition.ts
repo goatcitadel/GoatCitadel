@@ -37,8 +37,10 @@ export interface CapabilityPluginsOwners {
   config: CapabilityPluginsConfig;
   /** The saved connectors. */
   mcp: { listMcpServers(): Promise<readonly Pick<McpServerRecord, "label">[]> };
-  /** The operator's tool switches. */
-  settings: { getSettings(): Promise<Pick<RuntimeSettings, "switchedOffToolGroups">> };
+  /** The operator's tool switches, the network allowlist and the feature flags. */
+  settings: {
+    getSettings(): Promise<Pick<RuntimeSettings, "switchedOffToolGroups" | "networkAllowlist" | "features">>;
+  };
   /** Skill Hub's source review and its operator list, as the Skills tab reaches them. */
   skillHub: {
     reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult>;
@@ -96,7 +98,14 @@ export function composeCapabilityPlugins({
     reviewSkill: (input) => skillHub.reviewSkillHubSource(input),
     connectorTemplates: () => MCP_SERVER_TEMPLATES,
     listSavedConnectorLabels: async () => (await mcp.listMcpServers()).map((server) => server.label),
-    listSwitchedOffToolGroups: async () => (await settings.getSettings()).switchedOffToolGroups,
+    readSettings: async () => {
+      const current = await settings.getSettings();
+      return {
+        switchedOffToolGroups: current.switchedOffToolGroups,
+        networkAllowlist: current.networkAllowlist,
+        typedRunVariablesEnabled: current.features.typedRunVariablesV1Enabled === true,
+      };
+    },
     promptPackExists: async (packId) => {
       try {
         await promptPacks.getPack(packId);
@@ -108,7 +117,8 @@ export function composeCapabilityPlugins({
     },
     lookupHost: (hostname) => lookUpHostAddresses(hostname),
     findInstalled: (pluginId) => store.get(pluginId),
-    saveInspection: (kept, snapshotTreeSha256) => store.saveInspection(kept, snapshotTreeSha256),
+    findKeptInspection: (actorId, idempotencyKey) => store.findInspectionByRequest(actorId, idempotencyKey),
+    saveInspection: (kept, snapshotTreeSha256, request) => store.saveInspection(kept, snapshotTreeSha256, request),
     now: () => new Date(),
     newInspectionId: () => randomUUID(),
   });

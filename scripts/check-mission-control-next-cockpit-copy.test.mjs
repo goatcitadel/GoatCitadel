@@ -211,4 +211,19 @@ describe("glossary and plurals (GL-R02)", () => {
     assert.ok(roots.some((dir) => dir.endsWith("packages/mission-control-shared/src/components")));
     for (const root of COPY_ROOTS) await fs.access(root.dir);
   });
+
+  it("reads the copy written outside the cockpit that the cockpit shows as written", async () => {
+    const shown = COPY_ROOTS.find((root) => root.id === "shown-as-written");
+    assert.deepEqual(shown?.files, [
+      "packages/contracts/src/hooks.ts",
+      "apps/gateway/src/services/capability-plugin-inspection-service.ts",
+    ]);
+    for (const file of shown.files) {
+      const contents = await fs.readFile(path.join(shown.dir, ...file.split("/")), "utf8");
+      // The guard really reads these files' copy: a glossary word in one of their lines would count.
+      assert.deepEqual(countCopyRatchets(file, `${contents}\nconst line = "Read the Gateway snapshot.";\n`), {
+        "glossary-terms": 2,
+      });
+    }
+  });
 });
