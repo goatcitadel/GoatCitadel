@@ -155,11 +155,10 @@ Current shell posture for this map:
 
 ### Extensions
 
-- The published author boundary is the `@goatcitadel/extensions-sdk` package under [packages/extensions-sdk](../packages/extensions-sdk).
-- Package-level evidence for manifest and file-loading helpers lives in [packages/extensions-sdk/src/addons.test.ts](../packages/extensions-sdk/src/addons.test.ts) and [packages/extensions-sdk/src/integration-plugins.test.ts](../packages/extensions-sdk/src/integration-plugins.test.ts).
-- Package artifact evidence for the reference integration-plugin manifest lives in `pnpm verify:extensions:package` and [scripts/verify-extension-package-artifacts.mjs](../scripts/verify-extension-package-artifacts.mjs); the lane builds `@goatcitadel/extensions-sdk`, packs it, extracts the tarball, and validates the packaged manifest against the repo reference scaffold.
-- Gateway-side author-contract evidence lives in [apps/gateway/src/services/integration-plugin-author-contract.test.ts](../apps/gateway/src/services/integration-plugin-author-contract.test.ts).
-- The current `1.0` claim is the published package contract plus tested reference scaffolds, not a broader live install/enable/disable smoke guarantee for every extension shape.
+- The author boundary is the `@goatcitadel/extensions-sdk` package under [packages/extensions-sdk](../packages/extensions-sdk). `1.0.0` is the last published version; the workspace's `2.0.0` keeps only the effective-tool snapshot helpers and is not published yet.
+- Package-level evidence for the snapshot helpers lives in [packages/extensions-sdk/src/effective-tools.test.ts](../packages/extensions-sdk/src/effective-tools.test.ts) and [packages/extensions-sdk/src/index.test.ts](../packages/extensions-sdk/src/index.test.ts), which pins the exports.
+- Package artifact evidence lives in `pnpm verify:extensions:package` and [scripts/verify-extension-package-artifacts.mjs](../scripts/verify-extension-package-artifacts.mjs); the lane builds `@goatcitadel/extensions-sdk`, packs it, extracts the tarball, checks that the export map resolves and that the packed barrel exports only the snapshot helpers, and checks that a portable skill-bundle fixture survives extraction intact.
+- The current `1.0` claim is the package contract for the snapshot helpers, not a plugin install, enable or disable guarantee.
 
 ## Release Metadata and Governance Evidence
 

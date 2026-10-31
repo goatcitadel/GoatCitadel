@@ -18,7 +18,6 @@ export interface IntegrationManagementSelection {
 /** ST-21: the management views, shown as one segmented control whose pressed state names the open view. */
 const MANAGEMENT_VIEWS = [
   { panel: "connectors", label: "Imported connectors" },
-  { panel: "plugins", label: "Plugin trust" },
   { panel: "history", label: "Delivery records" },
   { panel: "meet", label: "Google Meet preparation" },
 ] as const;
@@ -106,7 +105,7 @@ export function IntegrationManagementSettings({
             <IntegrationConnectionEditor key={`${s.panel}:${s.selectedConnectionId}`} owner={s} />
           ) : s.panel === "details" ? (
             <IntegrationConnectionDetails owner={s} />
-          ) : ["connectors", "plugins", "history"].includes(s.panel ?? "") ? (
+          ) : ["connectors", "history"].includes(s.panel ?? "") ? (
             <IntegrationCatalogEvidence owner={s} />
           ) : null}
         </>

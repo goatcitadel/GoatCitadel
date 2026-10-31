@@ -190,17 +190,6 @@ export const channelDraftSecureFieldsSchema = channelDraftActionSchema
   })
   .strict();
 
-export const pluginInstallSchema = z.object({
-  source: z.string().min(1),
-  pluginId: z.string().optional(),
-  sourceType: z.enum(["local", "npm", "git", "url", "manual", "unknown"]).optional(),
-  expectedIntegrity: z.string().min(1).optional(),
-});
-
-export const pluginParamsSchema = z.object({
-  pluginId: z.string().min(1),
-});
-
 export const obsidianPatchSchema = z.object({
   enabled: z.boolean().optional(),
   vaultPath: z.string().optional(),

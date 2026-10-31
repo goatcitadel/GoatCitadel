@@ -27,7 +27,6 @@ import {
   ExternalSideEffectLedgerPanel,
   GoogleMeetStatusPanel,
   OperatorActionResultPanel,
-  PluginTrustPanel,
 } from "./IntegrationsSectionPanels";
 import { NativeCard, NativeDisclosureCard } from "../../NativeRoutePageLayout";
 import { NativeButton, NativeMetricGrid, NativeSelectableList } from "../../primitives";
@@ -44,7 +43,6 @@ import "./integration-confirmation.css";
 export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSectionProps) {
   const {
     panel,
-    requested,
     leave,
     saving,
     loading,
@@ -109,15 +107,24 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
     cancelOperatorAction,
     diagnosticsPending,
     handleStartReplayAudit,
-    replayReview, replayMutation, confirmReplayAudit, cancelReplayAudit,
-    externalReview, externalMutation, confirmExternalReview, cancelExternalReview,
+    replayReview,
+    replayMutation,
+    confirmReplayAudit,
+    cancelReplayAudit,
+    externalReview,
+    externalMutation,
+    confirmExternalReview,
+    cancelExternalReview,
     handleReviewExternalConnectorService,
     handleReviewExternalConnectorAction,
     handleStageExternalConnectorAction,
     handleStartGoogleMeetRealtime,
     handleStopGoogleMeetSession,
     handleConsultGoogleMeetSession,
-    meetReview, meetMutation, confirmMeetReview, cancelMeetReview,
+    meetReview,
+    meetMutation,
+    confirmMeetReview,
+    cancelMeetReview,
   } = useIntegrationSettings(activeWorkspaceId);
   return (
     <SettingsSectionShell loading={loading && !data} error={data ? null : error} onRetry={reload}>
@@ -363,16 +370,6 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                       ? "Unavailable"
                       : String(data.catalog.length),
                   },
-                  {
-                    label: "Plugins",
-                    value: !requested.plugins
-                      ? "Not loaded"
-                      : data.issues.some((issue) => issue.label === "Integration plugins")
-                        ? "Unavailable"
-                        : Array.isArray(data.plugins)
-                          ? String(data.plugins.length)
-                          : "Unavailable",
-                  },
                 ]}
               >
                 <NativeSelectableList
@@ -407,9 +404,6 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                   </NativeButton>
                   <NativeButton variant="secondary" onClick={() => openPanel("connectors")}>
                     Review external connectors
-                  </NativeButton>
-                  <NativeButton variant="secondary" onClick={() => openPanel("plugins")}>
-                    Plugin trust
                   </NativeButton>
                 </SettingsButtonRow>
               </NativeDisclosureCard>
@@ -476,7 +470,13 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
 
                     <NativeButton
                       variant="destructive"
-                      disabled={review.required || connectionMutation.locked || saving || deletePending || !selectedConnection.revision}
+                      disabled={
+                        review.required ||
+                        connectionMutation.locked ||
+                        saving ||
+                        deletePending ||
+                        !selectedConnection.revision
+                      }
                       onClick={() =>
                         setPendingDeleteConnection({
                           connectionId: selectedConnection.connectionId,
@@ -539,7 +539,11 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
                               <SettingsButtonRow>
                                 <NativeButton
                                   variant="default"
-                                  disabled={connectionMutation.locked || review.required || operatorBusyId === selectedConnection.connectionId + ":" + action.actionId}
+                                  disabled={
+                                    connectionMutation.locked ||
+                                    review.required ||
+                                    operatorBusyId === selectedConnection.connectionId + ":" + action.actionId
+                                  }
                                   onClick={() => void handleOperatorAction(action)}
                                 >
                                   <Play size={16} />
@@ -572,29 +576,19 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
             </SettingsStack>
           </DetailInspector>
           <DetailInspector
-            open={
-              panel === "plugins" ||
-              panel === "connectors" ||
-              panel === "history" ||
-              panel === "routing" ||
-              panel === "meet"
-            }
+            open={panel === "connectors" || panel === "history" || panel === "routing" || panel === "meet"}
             title={
-              panel === "plugins"
-                ? "Plugin trust"
-                : panel === "connectors"
-                  ? "External connectors"
-                  : panel === "history"
-                    ? "Delivery history"
-                    : panel === "routing"
-                      ? "Notification routing"
-                      : "Google Meet"
+              panel === "connectors"
+                ? "External connectors"
+                : panel === "history"
+                  ? "Delivery history"
+                  : panel === "routing"
+                    ? "Notification routing"
+                    : "Google Meet"
             }
             onClose={closePanel}
           >
-            {panel === "plugins" ? (
-              <PluginTrustPanel plugins={data.plugins ?? []} />
-            ) : panel === "connectors" ? (
+            {panel === "connectors" ? (
               <DormantExternalConnectorsPanel
                 services={data.externalConnectorServices ?? []}
                 busyId={externalConnectorBusyId}
@@ -630,18 +624,37 @@ export function IntegrationsSection({ activeWorkspaceId, navigate }: SettingsSec
         </SettingsStack>
       ) : null}
       {leave.dialog}
-      <ConfirmModal open={Boolean(meetReview)} title={meetReview?.title ?? "Review meeting action"}
-        message={meetReview?.description ?? ""} danger confirmLabel="Apply reviewed meeting action"
-        pending={meetMutation.pending} confirmDisabled={meetMutation.phase === "uncertain"}
-        onCancel={cancelMeetReview} onConfirm={() => void confirmMeetReview()} />
-      <ConfirmModal open={Boolean(externalReview)} title="Confirm external connector review"
+      <ConfirmModal
+        open={Boolean(meetReview)}
+        title={meetReview?.title ?? "Review meeting action"}
+        message={meetReview?.description ?? ""}
+        danger
+        confirmLabel="Apply reviewed meeting action"
+        pending={meetMutation.pending}
+        confirmDisabled={meetMutation.phase === "uncertain"}
+        onCancel={cancelMeetReview}
+        onConfirm={() => void confirmMeetReview()}
+      />
+      <ConfirmModal
+        open={Boolean(externalReview)}
+        title="Confirm external connector review"
         message={`${externalReview?.action?.label ?? externalReview?.service.label ?? "Connector"}: mark ${externalReview?.status ?? "reviewed"} in workspace ${activeWorkspaceId}. This changes review metadata or creates a non-callable capability proposal. It never activates the connector. This owner has no atomic revision precondition; current catalog evidence is re-read before dispatch.`}
-        confirmLabel="Confirm catalog review" pending={externalMutation.pending} confirmDisabled={externalMutation.phase === "uncertain"}
-        onCancel={cancelExternalReview} onConfirm={() => void confirmExternalReview()} />
-      <ConfirmModal open={Boolean(replayReview)} title="Create replay eligibility audit?"
+        confirmLabel="Confirm catalog review"
+        pending={externalMutation.pending}
+        confirmDisabled={externalMutation.phase === "uncertain"}
+        onCancel={cancelExternalReview}
+        onConfirm={() => void confirmExternalReview()}
+      />
+      <ConfirmModal
+        open={Boolean(replayReview)}
+        title="Create replay eligibility audit?"
         message={`Inspect side-effect run ${replayReview?.run.runId ?? ""} in workspace ${activeWorkspaceId}. This creates a durable eligibility audit only. Unknown external outcomes still require manual reconciliation. The side-effect snapshot is re-read, but this creation API has no atomic revision precondition.`}
-        confirmLabel="Create reviewed replay audit" pending={replayMutation.pending} confirmDisabled={replayMutation.phase === "uncertain"}
-        onCancel={cancelReplayAudit} onConfirm={() => void confirmReplayAudit()} />
+        confirmLabel="Create reviewed replay audit"
+        pending={replayMutation.pending}
+        confirmDisabled={replayMutation.phase === "uncertain"}
+        onCancel={cancelReplayAudit}
+        onConfirm={() => void confirmReplayAudit()}
+      />
       <ConfirmModal
         open={operatorReview !== null}
         title="Run reviewed integration action?"

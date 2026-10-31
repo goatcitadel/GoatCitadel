@@ -9,7 +9,10 @@ import {
 } from "./gateway/external-runtime-approval-adapter.js";
 import type { ToolInvocationCoordinatorService } from "./tool-invocation-coordinator-service.js";
 import type { RemoteWorkerApprovedActionInput } from "./remote-worker-effect-runtime.js";
-import { resolveRemoteWorkerNativeBinding, resolveRemoteWorkerMeshBinding } from "./remote-worker-external-tool-binding.js";
+import {
+  resolveRemoteWorkerNativeBinding,
+  resolveRemoteWorkerMeshBinding,
+} from "./remote-worker-external-tool-binding.js";
 
 export interface RemoteWorkerApprovedActionDependencies {
   restoreRequesterAdmissionSchemas?: Parameters<typeof resolveNativeMcpChatToolBinding>[3];
@@ -117,7 +120,7 @@ export async function executeApprovedRemoteWorkerAction(
             await input.checkExecution();
             await markStarted?.();
           },
-          { ...options, runtimeOwner: input.runtimeOwner },
+          options,
         );
       },
     },

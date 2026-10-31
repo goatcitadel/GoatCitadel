@@ -258,7 +258,6 @@ import type {
   ImageGenerationResponse,
   GatewayEventInput,
   GatewayEventResult,
-  IntegrationPluginRecord,
   IntegrationConnection,
   IntegrationConnectionCreateInput,
   IntegrationConnectionUpdateInput,
@@ -768,7 +767,6 @@ import {
 import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
 import { ChatWorkspaceSnapshotService } from "./chat-workspace-snapshot-service.js";
 import { buildDelegatedFilesystemScopeControl, DelegatedWorkResultService } from "./delegated-work-result-service.js";
-import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -785,6 +783,7 @@ import {
 } from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
 import { resolveToolRequestPathsForSessionScope } from "./tool-path-session-scope.js";
+import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
 import { isOutsideRootWriteEligible } from "./outside-root-write-eligibility.js";
 import {
   buildUpdatedFeatureFlags,
@@ -1132,7 +1131,6 @@ export class GatewayService {
   /** Chat-native durable aggregate behind the default-disabled fan-out rollout. */
   public readonly durableFanout: ChatDurableFanoutService;
   public readonly steerService: ChatSteerService;
-  public readonly pluginToolOverrideService: PluginToolOverrideService;
   /**
    * HX-415 composed requester-scoped MCP runtime (one per process). Public and
    * readonly so tests can drive the REAL composed hook/dispatch; the runtime
@@ -1330,10 +1328,6 @@ export class GatewayService {
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       registerBackgroundTask: (task) => this.registerBackgroundTask(task),
     });
-    this.pluginToolOverrideService = new PluginToolOverrideService({
-      getOwnerId: () => `gateway:${this.config.assistant.mesh.nodeId}`,
-    });
-
     this.backupRetentionService = new BackupRetentionService({
       storage: this.storage,
       config,
@@ -2873,7 +2867,6 @@ export class GatewayService {
         }
       },
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
-      pluginToolOverrideService: this.pluginToolOverrideService,
     });
     this.runtimeLifecycleReadService = new RuntimeLifecycleReadService({
       getApproval: async (approvalId) => await this.storage.approvals.get(approvalId),
@@ -7677,8 +7670,6 @@ export class GatewayService {
           this.turnRuntime.resolveCapabilityToolSchema(runnerInput, nativeTools, meshTools),
         resolveMeshToolSchemas: (hookInput) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), hookInput),
         resolveToolPolicyContext: async (policyInput) => await this.resolveToolPolicyContext(policyInput),
-        resolveToolRuntimeOwnerBinding: (toolName) =>
-          this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
         discoverMcpRequesterCatalogs: (hookInput) =>
           this.mcpRequesterScopedRuntime.discoverMcpRequesterCatalogs(hookInput),
         discoverStaticMcpCatalogs: (hookInput) => this.mcpStaticChat.discover(hookInput),
@@ -7891,7 +7882,7 @@ export class GatewayService {
         listCallable: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
         resolveMeshToolSchemas: (request) => resolveMeshChatToolSchemas(this.meshChatBindingDeps(), request),
         getToolCallBeforeInterposition: (workspaceId) => this.hooksService.getToolCallBeforeInterposition(workspaceId),
-        resolveRuntimeOwnerBinding: (toolName) => this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
+        resolveRuntimeOwnerBinding: () => buildToolRuntimeOwnerBinding("builtin"),
       },
       input,
     );
@@ -9301,8 +9292,7 @@ export class GatewayService {
               this.hooksService.getToolCallBeforeInterposition(workspaceId),
             listToolCatalog: () => this.listToolCatalog(),
             listCallable: (workspaceId) => this.workspaceTurnSkills.listCatalog("callable", workspaceId),
-            resolveRuntimeOwnerBinding: (toolName) =>
-              this.pluginToolOverrideService.resolveRuntimeOwnerBinding(toolName),
+            resolveRuntimeOwnerBinding: () => buildToolRuntimeOwnerBinding("builtin"),
             inspectToolAccess: (request, options) => this.inspectToolAccess(request, options),
           }),
           input,

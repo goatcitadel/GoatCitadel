@@ -3,7 +3,6 @@ import { describe, expect, it } from "vitest";
 const moduleLoaders = {
   a2ui: () => import("./a2ui.js"),
   activation: () => import("./activation.js"),
-  addons: () => import("./addons.js"),
   assembly: () => import("./assembly.js"),
   admin: () => import("./admin.js"),
   agents: () => import("./agents.js"),

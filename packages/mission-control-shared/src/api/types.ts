@@ -660,13 +660,12 @@ export interface IntegrationCatalogEntry {
   key: string;
   label: string;
   description: string;
-  maturity: "native" | "plugin" | "disabled" | "beta" | "planned";
+  maturity: "native" | "disabled" | "beta" | "planned";
   runtimeAvailability?: "runnable" | "blocked";
   authMethods: string[];
   capabilities: string[];
   docsUrl?: string;
   formSchema?: IntegrationFormSchema;
-  pluginId?: string;
   operatorActions?: IntegrationOperatorAction[];
   externalConnector?: {
     sourceId: string;

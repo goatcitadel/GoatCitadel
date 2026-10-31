@@ -9,7 +9,6 @@ import type {
   GoogleMeetPrerequisiteStatusResponse,
   GoogleMeetSessionRecord,
   IntegrationActionInvokeResult,
-  IntegrationPluginRecord,
 } from "@goatcitadel/contracts";
 import {
   SettingsActionList,
@@ -82,47 +81,6 @@ export function OperatorActionResultPanel({
         ]}
       />
     </div>
-  );
-}
-
-export function PluginTrustPanel({ plugins }: { plugins: IntegrationPluginRecord[] }) {
-  const warningCount = plugins.reduce((count, plugin) => count + (plugin.trustWarnings?.length ?? 0), 0);
-  return (
-    <NativeCard
-      density="compact"
-      className="mc-next-settings-panel"
-      title="Plugin trust"
-      subtitle="Installed plugin source, integrity, readiness, and dashboard theme truth."
-      stats={[
-        { label: "Installed", value: String(plugins.length) },
-        { label: "Warnings", value: String(warningCount) },
-      ]}
-    >
-      <SettingsActionList
-        ariaLabel="Installed integration plugins"
-        items={plugins.map((plugin) => {
-          const source = plugin.sourceMetadata;
-          const warnings = plugin.trustWarnings ?? [];
-          return {
-            id: plugin.pluginId,
-            label: plugin.label,
-            description: [
-              `${source?.display ?? plugin.source ?? "Unknown source"} · ${source?.type ?? "unknown"}`,
-              `Integrity: ${plugin.integrityStatus ?? source?.integrityStatus ?? "unknown"}`,
-              `State: ${plugin.enabled ? "enabled" : "disabled"}`,
-              plugin.theme
-                ? `Theme: ${plugin.theme.dashboardVariant ?? "default"}${plugin.theme.accentColor ? `, ${plugin.theme.accentColor}` : ""}`
-                : "Theme: default",
-            ].join(" | "),
-            meta: warnings.length
-              ? warnings.map((warning) => `${warning.severity}: ${warning.message}`).join(" | ")
-              : "Setup readiness: no trust warnings",
-            actionLabel: plugin.enabled ? "Enabled" : "Disabled",
-          };
-        })}
-        emptyLabel="No integration plugins installed."
-      />
-    </NativeCard>
   );
 }
 

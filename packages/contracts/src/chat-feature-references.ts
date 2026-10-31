@@ -225,6 +225,7 @@ export const chatRemotePlacementSchema = z
             modelName: z.string().min(1).max(64),
             definitionHash: digest,
             providerDefinition: z.record(z.string(), z.unknown()),
+            // "plugin": old records only; nothing produces it since Phase 4.
             runtimeOwner: z.object({ kind: z.enum(["builtin", "plugin"]), bindingHash: digest }).strict(),
             effectPotential: z
               .object({

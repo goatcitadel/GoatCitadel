@@ -19,7 +19,6 @@ import {
   runAgenticHarnessAvailabilityLane,
   runAgenticHarnessesLane,
   runAgenticMcpOAuthLane,
-  runAgenticPluginsMarketplaceLane,
   runAgenticSelfImprovementTrustLane,
   runAgenticWorkbenchLoopLane,
   runAccessibilitySmokeLane,
@@ -141,7 +140,6 @@ const VALID_LANES = new Set([
   "agentic-workbench-loop",
   "agentic-channels-runtime",
   "agentic-harness-availability",
-  "agentic-plugins-marketplace",
   "agentic-self-improvement-trust",
   "agentic-proof",
   "agentic-parity",
@@ -222,7 +220,6 @@ const REVIEW_LANES = new Set([
   "agentic-workbench-loop",
   "agentic-channels-runtime",
   "agentic-harness-availability",
-  "agentic-plugins-marketplace",
   "agentic-self-improvement-trust",
   "agentic-proof",
   "agentic-parity",
@@ -456,8 +453,6 @@ async function runLockedVerification(lane, options) {
       await runAgenticChannelsRuntimeLane(context);
     } else if (lane === "agentic-harness-availability") {
       await runAgenticHarnessAvailabilityLane(context);
-    } else if (lane === "agentic-plugins-marketplace") {
-      await runAgenticPluginsMarketplaceLane(context);
     } else if (lane === "agentic-self-improvement-trust") {
       await runAgenticSelfImprovementTrustLane(context);
     } else if (lane === "agentic-proof" || lane === "agentic-parity") {
@@ -586,6 +581,5 @@ async function runAgenticProofSuite(context) {
   await runAgenticWorkbenchLoopLane(context);
   await runAgenticChannelsRuntimeLane(context);
   await runAgenticHarnessAvailabilityLane(context);
-  await runAgenticPluginsMarketplaceLane(context);
   await runAgenticSelfImprovementTrustLane(context);
 }

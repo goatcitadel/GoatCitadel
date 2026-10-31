@@ -83,57 +83,6 @@ const definitionWith = (fields: ChannelSetupFieldDefinition[], overrides = {}): 
 });
 
 describe("semantic channel step completion", () => {
-  it("shows optional author guidance in both editors without changing saved inputs or adding configuration fields", async () => {
-    const definition: ChannelSetupDefinition = {
-      ...definitions[0]!,
-      configurationGuidance: {
-        pluginId: "fixture",
-        pluginVersion: "1.0.0",
-        supportedFieldKeys: [],
-        form: {
-          version: "goatcitadel.extension-configuration.v1",
-          prerequisites: ["Review this account first"],
-          fields: [
-            { key: "unsupportedKey", kind: "text", label: "Author suggestion", defaultValue: "not-a-saved-value" },
-          ],
-          sampleTask: { prompt: "Propose a read-only check", expectedOutcome: "A reviewed check" },
-        },
-      },
-    };
-    for (const Component of [ChannelSetupWizard, ChannelDraftEditor]) {
-      const onValuesChange = vi.fn(),
-        onSave = vi.fn(async () => true);
-      const props = {
-        definition,
-        draft: makeDraft(definition),
-        values: {},
-        label: "Saved label",
-        enabled: true,
-        dirty: false,
-        onValuesChange,
-        onLabelChange: vi.fn(),
-        onEnabledChange: vi.fn(),
-        onDirty: vi.fn(),
-        onSave,
-        onValidate: vi.fn(async () => undefined),
-        onTest: vi.fn(async () => undefined),
-        onFinalize: vi.fn(async () => undefined),
-      };
-      const r = await render(<Component {...props} />);
-      const guidance = r.root
-        .findAllByType("details")
-        .find((item) => text(item).includes("Extension setup guidance · fixture"))!;
-      expect(guidance).toBeDefined();
-      expect(text(guidance)).toContain("Review this account first");
-      expect(text(guidance)).toContain("Propose a read-only check");
-      expect(text(guidance)).not.toContain("not-a-saved-value");
-      expect(guidance.findAll((item) => ["input", "select", "textarea"].includes(String(item.type)))).toHaveLength(0);
-      expect(r.root.findAllByType("input").some((item) => item.props.value === "Saved label")).toBe(true);
-      expect(onValuesChange).not.toHaveBeenCalled();
-      expect(onSave).not.toHaveBeenCalled();
-      await act(async () => r.unmount());
-    }
-  });
   it("requires true confirmations, meaningful values, and both a checklist and fields", () => {
     const definition = definitionWith(
       [

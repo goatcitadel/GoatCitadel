@@ -1,7 +1,6 @@
 import { useEffect, useId, useRef, useState } from "react";
 import type { IntegrationFieldSchema, IntegrationFormSchema } from "@goatcitadel/contracts";
 import { Button } from "../../ui/Button";
-import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
 export const integrationInputClass =
   "mt-1 block min-h-10 w-full rounded-md border border-line bg-canvas px-3 py-2 text-sm text-fg";
 const text = (value: unknown) =>
@@ -28,7 +27,6 @@ export function IntegrationFormFields({
   return (
     <section aria-label={`${schema.title} configuration`} className="space-y-3">
       {schema.description ? <p className="text-sm text-fg-secondary">{schema.description}</p> : null}
-      <ExtensionConfigurationGuidance guidance={schema.configurationGuidance} />
       {schema.fields.some((field) => field.advanced) ? (
         <Button disabled={disabled} onClick={() => setAdvanced(!advanced)}>
           {advanced ? "Hide advanced fields" : "Show advanced fields"}

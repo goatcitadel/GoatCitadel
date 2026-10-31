@@ -23,7 +23,6 @@ import {
 import { applyMcpRedaction } from "./mcp-server-policy.js";
 import { createMcpRequesterScopedTurnContext } from "./mcp-requester-resolution-service.js";
 import { MCP_APPROVAL_INBOX_LIST_TOOL_NAME, MCP_APPROVAL_INBOX_URL } from "./mcp-approval-inbox.js";
-import { PluginToolOverrideService } from "./plugin-tool-override-service.js";
 import {
   buildToolCallBeforeHookInterpositionBinding,
   buildToolRuntimeOwnerBinding,
@@ -279,28 +278,13 @@ describe("mesh tools in the canonical invocation coordinator", () => {
     expect(f.dispatch).not.toHaveBeenCalled();
   });
 
-  it("rejects hook target rewrites and plugin replacement of an admitted mesh tool", async () => {
+  it("rejects hook target rewrites of an admitted mesh tool", async () => {
     const f = await createMeshCoordinatorFixture();
     vi.mocked(f.host.hooksService.runInlineHooks).mockResolvedValue({ runs: [], patch: { toolName: "shell.exec" } });
     expect(await f.coordinator.invokeTool(f.request)).toMatchObject({
       outcome: "blocked",
       policyReason: expect.stringContaining("cannot rewrite"),
     });
-    expect(f.dispatch).not.toHaveBeenCalled();
-    vi.mocked(f.host.hooksService.runInlineHooks).mockResolvedValue({ runs: [] });
-    const overrides = new PluginToolOverrideService({ getOwnerId: () => "owner" });
-    const handler = vi.fn();
-    overrides.registerHandler({ pluginId: "replacement", toolName: f.request.toolName, handler });
-    overrides.registerOverrideClaim({
-      pluginId: "replacement",
-      toolName: f.request.toolName,
-      override: true,
-      claimedAt: new Date().toISOString(),
-    });
-    overrides.approveClaim({ pluginId: "replacement", toolName: f.request.toolName, approvedBy: "owner" });
-    f.host.pluginToolOverrideService = overrides;
-    expect(await f.coordinator.invokeTool(f.request)).toMatchObject({ outcome: "blocked" });
-    expect(handler).not.toHaveBeenCalled();
     expect(f.dispatch).not.toHaveBeenCalled();
   });
 
@@ -333,45 +317,68 @@ describe("mesh tools in the canonical invocation coordinator", () => {
 });
 
 describe("ToolInvocationCoordinatorService", () => {
-  it.each(["before-prepare", "before-execute"])("rejects an approved tool owner replaced %s", async (phase) => {
-    const overrides = new PluginToolOverrideService({ getOwnerId: () => "owner" });
-    const runtimeOwner = overrides.resolveRuntimeOwnerBinding("session.status")!;
-    const handler = vi.fn(
+  it("binds every tool call to the built-in runtime owner", async () => {
+    // A host that still carries a retired override registry must change neither the owner nor the executor.
+    const retiredHandler = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
         outcome: "executed",
-        policyReason: "replaced",
-        auditEventId: "changed",
+        policyReason: "retired override",
+        auditEventId: "retired",
       }),
     );
-    const replace = () => {
-      overrides.registerHandler({ pluginId: "replacement", toolName: "session.status", handler });
-      overrides.registerOverrideClaim({
-        pluginId: "replacement",
-        toolName: "session.status",
-        override: true,
-        claimedAt: new Date().toISOString(),
-      });
-      overrides.approveClaim({ pluginId: "replacement", toolName: "session.status", approvedBy: "owner" });
-    };
-    const host = createHost({ pluginToolOverrideService: overrides });
+    const retiredRegistryHost = {
+      pluginToolOverrideService: {
+        resolveActiveHandler: vi.fn(() => retiredHandler),
+        resolveRuntimeOwnerBinding: vi.fn(() => STABLE_PLUGIN_RUNTIME_OWNER),
+      },
+    } as unknown as Partial<ToolInvocationCoordinatorHost>;
+    const host = createHost(retiredRegistryHost);
     const coordinator = new ToolInvocationCoordinatorService(host);
     const request = createToolRequest({ toolName: "session.status", args: {} });
-    if (phase === "before-prepare") {
-      replace();
-      await expect(
-        coordinator.prepareApprovedBuiltinBeforeExecute(request, { invocationId: "resume", runtimeOwner }),
-      ).rejects.toThrow("runtime owner changed");
-    } else {
-      const check = (await coordinator.prepareApprovedBuiltinBeforeExecute(request, {
+    const builtinOwner = buildToolRuntimeOwnerBinding("builtin");
+
+    // An unfrozen call and a call frozen to the built-in owner both run on the policy engine.
+    await expect(coordinator.invokeTool(request)).resolves.toMatchObject({ outcome: "executed" });
+    await expect(
+      coordinator.invokeTool(request, {
+        executionFence: vi.fn(),
+        auxiliaryEffectFence: vi.fn(),
+        effectPotential: UNKNOWN_PLUGIN_EFFECT,
+        toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+        toolRuntimeOwner: builtinOwner,
+      }),
+    ).resolves.toMatchObject({ outcome: "executed" });
+    expect(host.policyEngine.invoke).toHaveBeenCalledTimes(2);
+    expect(retiredHandler).not.toHaveBeenCalled();
+
+    // A plugin owner frozen into an older record never matches, so the call fails closed before policy.
+    await expect(
+      coordinator.invokeTool(request, {
+        executionFence: vi.fn(),
+        auxiliaryEffectFence: vi.fn(),
+        effectPotential: UNKNOWN_PLUGIN_EFFECT,
+        toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
+        toolRuntimeOwner: STABLE_PLUGIN_RUNTIME_OWNER,
+      }),
+    ).resolves.toMatchObject({
+      outcome: "blocked",
+      policyReason: expect.stringContaining("runtime owner binding drifted"),
+    });
+    expect(host.policyEngine.invoke).toHaveBeenCalledTimes(2);
+
+    // The approval worker's resume check accepts the built-in owner and rejects a stored plugin owner.
+    const check = (await coordinator.prepareApprovedBuiltinBeforeExecute(request, {
+      invocationId: "resume",
+      runtimeOwner: builtinOwner,
+    }))!;
+    await expect(check()).resolves.toBeUndefined();
+    await expect(
+      coordinator.prepareApprovedBuiltinBeforeExecute(request, {
         invocationId: "resume",
-        runtimeOwner,
-      }))!;
-      await expect(check()).resolves.toBeUndefined();
-      replace();
-      await expect(check()).rejects.toThrow("runtime owner changed");
-    }
-    expect(handler).not.toHaveBeenCalled();
-    expect(host.policyEngine.invoke).not.toHaveBeenCalled();
+        runtimeOwner: STABLE_PLUGIN_RUNTIME_OWNER,
+      }),
+    ).rejects.toThrow("runtime owner changed");
+    expect(retiredHandler).not.toHaveBeenCalled();
   });
 
   it("reports a disconnected channel failure before the concrete external boundary", async () => {
@@ -680,44 +687,6 @@ describe("ToolInvocationCoordinatorService", () => {
         beforeExternalDispatch: expect.any(Function),
       }),
     );
-  });
-
-  it("checks durable ownership after plugin policy preflight and before the override handler", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "plugin executed",
-        auditEventId: "audit-plugin-executed",
-      }),
-    );
-    const leaseError = new Error("durable lease lost before plugin override");
-    leaseError.name = "DurableWorkerInterruptionError";
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        pluginToolOverrideService: {
-          resolveActiveHandler: vi.fn(() => pluginHandler),
-          resolveRuntimeOwnerBinding: vi.fn(() => STABLE_PLUGIN_RUNTIME_OWNER),
-        },
-      }),
-    );
-
-    await expect(
-      coordinator.invokeTool(
-        {
-          toolName: "plugin.mutate",
-          args: { value: "change" },
-          agentId: "assistant",
-          sessionId: "session-plugin-fence",
-        },
-        {
-          executionFence: () => {
-            throw leaseError;
-          },
-        },
-      ),
-    ).rejects.toBe(leaseError);
-
-    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
   it("checks durable ownership before an MCP runtime call starts", async () => {
@@ -1836,7 +1805,7 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(executionFence).not.toHaveBeenCalled();
   });
 
-  it.each(["first-use", "blocked", "mode-drift", "target-drift", "plugin-drift"] as const)(
+  it.each(["first-use", "blocked", "mode-drift", "target-drift"] as const)(
     "keeps approved native MCP replay inside its reviewed owner (%s)",
     async (scenario) => {
       const server = createMcpServer({
@@ -1857,19 +1826,6 @@ describe("ToolInvocationCoordinatorService", () => {
         requireMcpServer: vi.fn(async () => server),
         isMcpToolApproved: vi.fn(async () => false),
         requesterScopedMcpDispatch: { invoke: transport },
-        ...(scenario === "plugin-drift"
-          ? {
-              pluginToolOverrideService: {
-                resolveActiveHandler: vi.fn(() =>
-                  vi.fn(async () => ({
-                    outcome: "executed" as const,
-                    policyReason: "unexpected plugin",
-                    auditEventId: "plugin",
-                  })),
-                ),
-              },
-            }
-          : {}),
       });
       const markStarted = vi.fn();
       const call = new ToolInvocationCoordinatorService(host).invokeApprovedMcpRuntime(
@@ -3024,433 +2980,8 @@ describe("ToolInvocationCoordinatorService", () => {
     );
   });
 
-  it("routes execution to plugin override handler when an active override exists", async () => {
-    const pluginHandler = vi.fn(
-      async (args: Record<string, unknown>): Promise<ToolInvokeResult> => ({
-        outcome: "executed" as const,
-        result: { source: "plugin", echoed: args },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-
-    const policyInvoke = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "allowed; external runtime",
-        auditEventId: "evt-policy-external",
-        result: {
-          externalRuntime: true,
-          toolName: "web_search",
-          policyContext: {
-            matchedGrantId: "grant-1",
-            matchedGrantAllowedHosts: ["approved.example"],
-          },
-        },
-      }),
-    );
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: policyInvoke,
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: { q: "foo" } }));
-
-    expect(result.outcome).toBe("executed");
-    expect(result.result).toEqual({ source: "plugin", echoed: { q: "foo" } });
-    expect(pluginHandler).toHaveBeenCalledWith(
-      { q: "foo" },
-      expect.objectContaining({
-        policyContext: expect.objectContaining({ matchedGrantAllowedHosts: ["approved.example"] }),
-      }),
-    );
-    expect(policyInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({
-        toolName: "web_search",
-        args: { q: "foo" },
-        externalRuntime: true,
-      }),
-    );
-  });
-
-  it.each([
-    ["invoke", "complete"],
-    ["invoke", "fail"],
-    ["approved", "complete"],
-    ["approved", "fail"],
-  ] as const)("awaits durable plugin boundary recording (%s, %s)", async (route, mode) => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "plugin override",
-        auditEventId: "evt-plugin",
-        result: { source: "plugin" },
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: vi.fn(
-            async (): Promise<ToolInvokeResult> => ({
-              outcome: "executed",
-              policyReason: "allowed; external runtime",
-              auditEventId: "evt-policy-external",
-              result: { externalRuntime: true, toolName: "web_search" },
-            }),
-          ),
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-    let entered!: () => void;
-    let release!: () => void;
-    const markerEntered = new Promise<void>((resolve) => {
-      entered = resolve;
-    });
-    const markerGate = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    const failure = new Error("durable boundary unavailable");
-    const markStarted = async (): Promise<void> => {
-      entered();
-      await markerGate;
-      if (mode === "fail") throw failure;
-    };
-    const request = createToolRequest({ toolName: "web_search", args: { q: "fixture" } });
-    const invocation =
-      route === "approved"
-        ? coordinator.invokeApprovedExternalRuntimeTool(request, markStarted)
-        : coordinator.invokeTool(request, { externalSideEffect: { markStarted, markNotRequired: () => undefined } });
-    const observed = invocation.then(
-      (result) => ({ result }),
-      (error: unknown) => ({ error }),
-    );
-    try {
-      await markerEntered;
-      expect(pluginHandler).not.toHaveBeenCalled();
-      release();
-      const outcome = await observed;
-      if (mode === "complete") {
-        expect(outcome).toMatchObject({ result: { outcome: "executed" } });
-        expect(pluginHandler).toHaveBeenCalledOnce();
-      } else {
-        expect(outcome).toEqual({ error: failure });
-        expect(pluginHandler).not.toHaveBeenCalled();
-      }
-    } finally {
-      release();
-      await observed;
-    }
-  });
-
-  it("executes only the exact admitted plugin runtime owner generation", async () => {
-    const events: string[] = [];
-    const pluginHandler = vi.fn(async (): Promise<ToolInvokeResult> => {
-      events.push("handler");
-      return {
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin-owner",
-        policyReason: "plugin override",
-      };
-    });
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-07-13T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({ pluginToolOverrideService: overrideService }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
-      executionFence: () => events.push("main-fence"),
-      auxiliaryEffectFence: () => events.push("aux-fence"),
-      effectPotential: UNKNOWN_PLUGIN_EFFECT,
-      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
-      toolRuntimeOwner: admittedOwner,
-    });
-
-    expect(result.outcome).toBe("executed");
-    expect(events.indexOf("main-fence")).toBeGreaterThanOrEqual(0);
-    expect(events.indexOf("handler")).toBeGreaterThan(events.indexOf("main-fence"));
-    expect(pluginHandler).toHaveBeenCalledTimes(1);
-  });
-
-  it("blocks a plugin handler swapped during awaited policy preflight before the executor fence", async () => {
-    const originalHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        auditEventId: "evt-original-race",
-        policyReason: "original handler",
-      }),
-    );
-    const replacementHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        auditEventId: "evt-replacement-race",
-        policyReason: "replacement handler",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-07-13T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
-    const executionFence = vi.fn();
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        pluginToolOverrideService: overrideService,
-        policyEngine: {
-          invoke: vi.fn(async () => {
-            overrideService.registerHandler({
-              pluginId: "p",
-              toolName: "web_search",
-              handler: replacementHandler,
-            });
-            return {
-              outcome: "executed",
-              auditEventId: "evt-policy-race",
-              policyReason: "allowed external runtime",
-              result: { externalRuntime: true },
-            };
-          }),
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-      }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
-      executionFence,
-      auxiliaryEffectFence: vi.fn(),
-      effectPotential: UNKNOWN_PLUGIN_EFFECT,
-      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
-      toolRuntimeOwner: admittedOwner,
-    });
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      policyReason: expect.stringContaining("runtime owner binding drifted"),
-    });
-    expect(executionFence).not.toHaveBeenCalled();
-    expect(originalHandler).not.toHaveBeenCalled();
-    expect(replacementHandler).not.toHaveBeenCalled();
-  });
-
-  it.each(["added", "removed", "replaced"] as const)(
-    "blocks a plugin runtime owner that is %s after profile seal",
-    async (driftKind) => {
-      const originalHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          auditEventId: "evt-original-handler",
-          policyReason: "original handler",
-        }),
-      );
-      const replacementHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          auditEventId: "evt-replacement-handler",
-          policyReason: "replacement handler",
-        }),
-      );
-      const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-      let admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
-
-      if (driftKind !== "added") {
-        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
-        overrideService.registerOverrideClaim({
-          pluginId: "p",
-          toolName: "web_search",
-          override: true,
-          claimedAt: "2026-07-13T00:00:00.000Z",
-        });
-        overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-        admittedOwner = overrideService.resolveRuntimeOwnerBinding("web_search");
-      }
-
-      if (driftKind === "added") {
-        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: originalHandler });
-        overrideService.registerOverrideClaim({
-          pluginId: "p",
-          toolName: "web_search",
-          override: true,
-          claimedAt: "2026-07-13T00:00:00.000Z",
-        });
-        overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-      } else if (driftKind === "removed") {
-        overrideService.unregisterHandler({ pluginId: "p", toolName: "web_search" });
-      } else {
-        overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: replacementHandler });
-      }
-
-      const policyInvoke = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          auditEventId: "evt-policy-should-not-run",
-          policyReason: "allowed",
-        }),
-      );
-      const coordinator = new ToolInvocationCoordinatorService(
-        createHost({
-          pluginToolOverrideService: overrideService,
-          policyEngine: {
-            invoke: policyInvoke,
-            evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-          },
-        }),
-      );
-
-      const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
-        executionFence: vi.fn(),
-        auxiliaryEffectFence: vi.fn(),
-        effectPotential: UNKNOWN_PLUGIN_EFFECT,
-        toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
-        toolRuntimeOwner: admittedOwner,
-      });
-
-      expect(result).toMatchObject({
-        outcome: "blocked",
-        policyReason: expect.stringContaining("runtime owner binding drifted"),
-      });
-      expect(policyInvoke).not.toHaveBeenCalled();
-      expect(originalHandler).not.toHaveBeenCalled();
-      expect(replacementHandler).not.toHaveBeenCalled();
-    },
-  );
-
-  it("fails closed for a legacy active plugin host with no frozen owner binding", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        auditEventId: "evt-legacy-plugin",
-        policyReason: "legacy plugin",
-      }),
-    );
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        pluginToolOverrideService: {
-          resolveActiveHandler: vi.fn(() => pluginHandler),
-        },
-      }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search" }), {
-      executionFence: vi.fn(),
-      auxiliaryEffectFence: vi.fn(),
-      effectPotential: UNKNOWN_PLUGIN_EFFECT,
-      toolCallBeforeHookInterposition: EMPTY_HOOK_BINDING,
-    });
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      policyReason: expect.stringContaining("runtime owner binding drifted"),
-    });
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it("enforces a redact Citadel Ward on plugin-override output the plugin cannot know about", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed" as const,
-        // The plugin handler knows nothing about wards; it returns a live secret.
-        result: { source: "plugin", note: "Authorization: Bearer plugin-token-supersecret" },
-        auditEventId: "evt-plugin-redact",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-
-    // The pre-execution policy check carries the redact ward decision.
-    const policyInvoke = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "allowed; external runtime; redact ward",
-        auditEventId: "evt-policy-external",
-        wardEffect: "redact",
-        result: { externalRuntime: true, toolName: "web_search" },
-      }),
-    );
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: policyInvoke,
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: { q: "foo" } }));
-
-    expect(result.outcome).toBe("executed");
-    expect(pluginHandler).toHaveBeenCalledTimes(1);
-    // The ward scrubs the plugin's output before it leaves the coordinator.
-    expect(JSON.stringify(result.result)).not.toContain("plugin-token-supersecret");
-    expect((result.result as { note: string }).note).toContain("[REDACTED]");
-  });
-
-  it("keeps protected approval action delivery on the native policy executor despite an active channel override", async () => {
+  it("keeps protected approval action delivery on the native policy executor", async () => {
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_native_only";
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "channel.send", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "channel.send",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "channel.send", approvedBy: "owner-1" });
     const policyInvoke = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
         outcome: "executed",
@@ -3465,7 +2996,6 @@ describe("ToolInvocationCoordinatorService", () => {
           invoke: policyInvoke,
           evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
         },
-        pluginToolOverrideService: overrideService,
       }),
     );
     const request = createToolRequest({
@@ -3491,7 +3021,6 @@ describe("ToolInvocationCoordinatorService", () => {
     const result = await coordinator.invokeTool(request);
 
     expect(result.result).toEqual({ source: "native" });
-    expect(pluginHandler).not.toHaveBeenCalled();
     expect(policyInvoke).toHaveBeenCalledTimes(1);
     expect(policyInvoke).toHaveBeenCalledWith(
       expect.objectContaining({ toolName: "channel.send" }),
@@ -3500,320 +3029,8 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(policyInvoke.mock.calls[0]?.[0]).not.toHaveProperty("externalRuntime");
   });
 
-  it("fails closed when generic invocation tries to replay an approved external plugin action", async () => {
-    const pluginHandler = vi.fn(
-      async (args: Record<string, unknown>): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin", echoed: args },
-        auditEventId: "evt-approved-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: vi.fn(
-            async (): Promise<ToolInvokeResult> => ({
-              outcome: "executed",
-              policyReason: "allowed_via_approval:approval-runtime-1",
-              auditEventId: "evt-policy-external",
-              result: {
-                externalRuntime: true,
-                toolName: "web_search",
-              },
-              audit: {
-                auditEventId: "evt-policy-external",
-                toolName: "web_search",
-                agentId: "agent-1",
-                sessionId: "session-1",
-                trustLevel: "trusted_operator",
-                outcome: "executed",
-                policyReason: "allowed_via_approval:approval-runtime-1",
-                startedAt: "2026-05-15T00:00:00.000Z",
-                completedAt: "2026-05-15T00:00:01.000Z",
-                approvalId: "approval-runtime-1",
-              },
-            }),
-          ),
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeTool(
-      createToolRequest({
-        toolName: "web_search",
-        args: { q: "approved" },
-        consentContext: {
-          source: "ui",
-          reason: "approval:approval-runtime-1",
-        },
-      }),
-    );
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      result: {
-        approvalId: "approval-runtime-1",
-        executionOwner: "approval_effect",
-      },
-    });
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it("cannot race the canonical approval worker into a second external plugin call", async () => {
-    let releasePlugin!: () => void;
-    const pluginGate = new Promise<void>((resolve) => {
-      releasePlugin = resolve;
-    });
-    const pluginHandler = vi.fn(async (): Promise<ToolInvokeResult> => {
-      await pluginGate;
-      return {
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-approved-plugin",
-        policyReason: "plugin override",
-      };
-    });
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: vi.fn(
-            async (): Promise<ToolInvokeResult> => ({
-              outcome: "executed",
-              policyReason: "allowed_via_approval:approval-runtime-1",
-              auditEventId: "evt-policy-external",
-              result: { externalRuntime: true, toolName: "web_search" },
-              audit: {
-                auditEventId: "evt-policy-external",
-                toolName: "web_search",
-                agentId: "agent-1",
-                sessionId: "session-1",
-                trustLevel: "trusted_operator",
-                outcome: "executed",
-                policyReason: "allowed_via_approval:approval-runtime-1",
-                startedAt: "2026-05-15T00:00:00.000Z",
-                completedAt: "2026-05-15T00:00:01.000Z",
-                approvalId: "approval-runtime-1",
-              },
-            }),
-          ),
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-    const canonical = coordinator.invokeApprovedExternalRuntimeTool(
-      createToolRequest({ toolName: "web_search", args: { q: "approved" } }),
-    );
-    await vi.waitFor(() => expect(pluginHandler).toHaveBeenCalledTimes(1));
-
-    const generic = await coordinator.invokeTool(
-      createToolRequest({
-        toolName: "web_search",
-        args: { q: "approved" },
-        consentContext: { source: "ui", reason: "approval:approval-runtime-1" },
-      }),
-    );
-    expect(generic.outcome).toBe("blocked");
-    expect(pluginHandler).toHaveBeenCalledTimes(1);
-
-    releasePlugin();
-    await expect(canonical).resolves.toMatchObject({ outcome: "executed" });
-    expect(pluginHandler).toHaveBeenCalledTimes(1);
-  });
-
-  it("does not settle plugin override approval text unless policy replay verified the same approval", async () => {
-    const pluginHandler = vi.fn(
-      async (args: Record<string, unknown>): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin", echoed: args },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: vi.fn(
-            async (): Promise<ToolInvokeResult> => ({
-              outcome: "executed",
-              policyReason: "allowed; external runtime",
-              auditEventId: "evt-policy-external",
-              result: {
-                externalRuntime: true,
-                toolName: "web_search",
-              },
-            }),
-          ),
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeTool(
-      createToolRequest({
-        toolName: "web_search",
-        args: { q: "stale" },
-        consentContext: {
-          source: "ui",
-          reason: "approval:approval-runtime-1",
-        },
-      }),
-    );
-
-    expect(result.outcome).toBe("executed");
-    expect(pluginHandler).toHaveBeenCalledWith({ q: "stale" }, expect.any(Object));
-  });
-
-  it("runs approved plugin override replay through a final policy check before the plugin handler", async () => {
-    const markExternalCallStarted = vi.fn();
-    const pluginHandler = vi.fn(async (args: Record<string, unknown>): Promise<ToolInvokeResult> => {
-      expect(markExternalCallStarted).toHaveBeenCalledTimes(1);
-      return {
-        outcome: "executed",
-        result: { source: "plugin", echoed: args },
-        auditEventId: "evt-approved-plugin",
-        policyReason: "plugin override",
-      };
-    });
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const policyInvoke = vi.fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { policy: { requiresApproval: false } },
-        auditEventId: "evt-policy-pass",
-        policyReason: "allowed by runtime policy",
-      }),
-    );
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: policyInvoke,
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeApprovedExternalRuntimeTool(
-      createToolRequest({ toolName: "web_search", args: { q: "approved" } }),
-      markExternalCallStarted,
-    );
-
-    expect(result.outcome).toBe("executed");
-    expect(result.result).toEqual({ source: "plugin", echoed: { q: "approved" } });
-    expect(pluginHandler).toHaveBeenCalledWith({ q: "approved" }, expect.any(Object));
-    expect(policyInvoke).toHaveBeenCalledWith(
-      expect.objectContaining({ toolName: "web_search", args: { q: "approved" }, externalRuntime: true }),
-    );
-  });
-
-  it("enforces a redact Citadel Ward on approved plugin-override replay output", async () => {
-    const markExternalCallStarted = vi.fn();
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin", note: "Authorization: Bearer replay-token-supersecret" },
-        auditEventId: "evt-approved-plugin-redact",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const policyInvoke = vi.fn<ToolInvocationCoordinatorHost["policyEngine"]["invoke"]>(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { policy: { requiresApproval: false } },
-        auditEventId: "evt-policy-pass",
-        wardEffect: "redact",
-        policyReason: "allowed by runtime policy; redact ward",
-      }),
-    );
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: policyInvoke,
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeApprovedExternalRuntimeTool(
-      createToolRequest({ toolName: "web_search", args: { q: "approved" } }),
-      markExternalCallStarted,
-    );
-
-    expect(result.outcome).toBe("executed");
-    expect(pluginHandler).toHaveBeenCalledTimes(1);
-    expect(JSON.stringify(result.result)).not.toContain("replay-token-supersecret");
-    expect((result.result as { note: string }).note).toContain("[REDACTED]");
-  });
-
   it("fails closed instead of replaying protected approval action delivery through an external runtime", async () => {
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_external_replay";
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "channel.send", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "channel.send",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "channel.send", approvedBy: "owner-1" });
     const policyInvoke = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
         outcome: "executed",
@@ -3828,7 +3045,6 @@ describe("ToolInvocationCoordinatorService", () => {
           invoke: policyInvoke,
           evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
         },
-        pluginToolOverrideService: overrideService,
       }),
     );
 
@@ -3862,28 +3078,10 @@ describe("ToolInvocationCoordinatorService", () => {
       policyReason: "blocked: protected approval action delivery cannot execute through an external runtime",
     });
     expect(policyInvoke).not.toHaveBeenCalled();
-    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
   it("blocks case-varied raw approval bearers before approved external runtime replay", async () => {
     const rawToken = `grat_${"v".repeat(43)}`;
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "channel.send", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "channel.send",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "channel.send", approvedBy: "owner-1" });
     const policyInvoke = vi.fn(
       async (): Promise<ToolInvokeResult> => ({
         outcome: "executed",
@@ -3898,7 +3096,6 @@ describe("ToolInvocationCoordinatorService", () => {
           invoke: policyInvoke,
           evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
         },
-        pluginToolOverrideService: overrideService,
       }),
     );
 
@@ -3917,75 +3114,27 @@ describe("ToolInvocationCoordinatorService", () => {
       policyReason: "blocked: raw approval action bearers cannot enter an external runtime",
     });
     expect(policyInvoke).not.toHaveBeenCalled();
-    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
-  it("blocks approved plugin override replay when the final policy check denies it", async () => {
+  it("blocks an approved external runtime action because no runtime handler is left to run it", async () => {
     const markExternalCallStarted = vi.fn();
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-approved-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const policyInvoke = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "blocked",
-        policyReason: "blocked by runtime policy",
-        auditEventId: "evt-policy-block",
-      }),
-    );
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: policyInvoke,
-          evaluateAccess: vi.fn(() => ({ allowed: false, requiresApproval: false, reasonCodes: ["blocked"] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
+    const host = createHost();
+    const coordinator = new ToolInvocationCoordinatorService(host);
 
     const result = await coordinator.invokeApprovedExternalRuntimeTool(
-      createToolRequest({ toolName: "web_search", args: { q: "blocked" } }),
+      createToolRequest({ toolName: "web_search", args: { q: "approved" } }),
       markExternalCallStarted,
     );
 
-    expect(result.outcome).toBe("blocked");
-    expect(result.policyReason).toBe("blocked by runtime policy");
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      policyReason: "blocked: approved external runtime handler is unavailable for web_search",
+    });
+    expect(host.policyEngine.invoke).not.toHaveBeenCalled();
     expect(markExternalCallStarted).not.toHaveBeenCalled();
-    expect(pluginHandler).not.toHaveBeenCalled();
   });
 
-  it("keeps Code Mode wrapper invocations on the approved tool path without hooks or plugin overrides", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed" as const,
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-
+  it("keeps Code Mode wrapper invocations on the approved tool path without hooks", async () => {
     const runInlineHooks = vi.fn(async () => ({
       runs: [],
       patch: { toolName: "shell.exec", args: { command: "echo widened" } },
@@ -4008,7 +3157,6 @@ describe("ToolInvocationCoordinatorService", () => {
           invoke: policyInvoke,
           evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
         },
-        pluginToolOverrideService: overrideService,
       }),
     );
 
@@ -4022,7 +3170,6 @@ describe("ToolInvocationCoordinatorService", () => {
 
     expect(result.result).toEqual({ source: "policy" });
     expect(runInlineHooks).not.toHaveBeenCalled();
-    expect(pluginHandler).not.toHaveBeenCalled();
     expect(policyInvoke).toHaveBeenCalledTimes(1);
     expect(policyInvoke).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -4035,133 +3182,18 @@ describe("ToolInvocationCoordinatorService", () => {
     expect(policyInvoke.mock.calls[0]?.[0]).not.toHaveProperty("dryRun");
   });
 
-  it("blocks plugin overrides when the final post-hook policy check blocks", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: vi.fn(
-            async (): Promise<ToolInvokeResult> => ({
-              outcome: "blocked",
-              policyReason: "blocked: network egress denied",
-              auditEventId: "evt-policy-blocked",
-            }),
-          ),
-          evaluateAccess: vi.fn(() => ({ allowed: false, requiresApproval: false, reasonCodes: ["network"] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: { q: "foo" } }));
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      policyReason: "blocked: network egress denied",
-    });
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it("blocks plugin overrides when final policy would require approval", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: vi.fn(
-            async (): Promise<ToolInvokeResult> => ({
-              outcome: "executed",
-              policyReason: "allowed; dry-run",
-              auditEventId: "evt-policy-approval",
-              result: {
-                dryRun: true,
-                policy: { allowed: true, requiresApproval: true, reasonCodes: ["approval_required"] },
-              },
-            }),
-          ),
-          evaluateAccess: vi.fn(() => ({
-            allowed: true,
-            requiresApproval: true,
-            reasonCodes: ["approval_required"],
-          })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: { q: "foo" } }));
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      policyReason: expect.stringContaining("plugin override requires policy approval"),
-    });
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it("re-runs deployment guard after before-hook patches and before plugin overrides", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "plugin" },
-        auditEventId: "evt-plugin",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
+  it("re-runs deployment guard after before-hook patches and before policy execution", async () => {
     const evaluateToolDeploymentGuard = vi.fn((request: ToolInvokeRequest) =>
       request.toolName === "web_search" ? { reason: "remote deployment disallows web search" } : undefined,
     );
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        hooksService: {
-          runInlineHooks: vi.fn(async () => ({ runs: [], patch: { toolName: "web_search", args: { q: "foo" } } })),
-          enqueueAfterHooks: vi.fn(),
-        },
-        evaluateToolDeploymentGuard,
-        pluginToolOverrideService: overrideService,
-      }),
-    );
+    const host = createHost({
+      hooksService: {
+        runInlineHooks: vi.fn(async () => ({ runs: [], patch: { toolName: "web_search", args: { q: "foo" } } })),
+        enqueueAfterHooks: vi.fn(),
+      },
+      evaluateToolDeploymentGuard,
+    });
+    const coordinator = new ToolInvocationCoordinatorService(host);
 
     const result = await coordinator.invokeTool(createToolRequest({ toolName: "shell.exec" }));
 
@@ -4171,106 +3203,7 @@ describe("ToolInvocationCoordinatorService", () => {
     });
     expect(evaluateToolDeploymentGuard).toHaveBeenCalledWith(expect.objectContaining({ toolName: "shell.exec" }));
     expect(evaluateToolDeploymentGuard).toHaveBeenCalledWith(expect.objectContaining({ toolName: "web_search" }));
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it("falls through to policy engine when no override is registered", async () => {
-    const policyInvoke = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: { source: "native" },
-        auditEventId: "evt-native",
-        policyReason: "native dispatch",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        policyEngine: {
-          invoke: policyInvoke,
-          evaluateAccess: vi.fn(() => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    const result = await coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: {} }));
-
-    expect(result.result).toEqual({ source: "native" });
-    expect(policyInvoke).toHaveBeenCalled();
-  });
-
-  it("after-hooks still fire when the override handler runs", async () => {
-    const enqueueAfterHooks = vi.fn();
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        result: {},
-        auditEventId: "evt",
-        policyReason: "plugin override",
-      }),
-    );
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        hooksService: {
-          runInlineHooks: vi.fn(async () => ({ runs: [] })),
-          enqueueAfterHooks,
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    await coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: {} }));
-
-    expect(enqueueAfterHooks).toHaveBeenCalledWith(expect.objectContaining({ trigger: "tool.call.after" }));
-  });
-
-  it("rethrows and enqueues tool.call.error hooks when the plugin override handler throws", async () => {
-    const enqueueAfterHooks = vi.fn();
-    const pluginHandler = vi.fn(async () => {
-      throw new Error("plugin boom");
-    });
-    const overrideService = new PluginToolOverrideService({ getOwnerId: () => "owner-1" });
-    overrideService.registerHandler({ pluginId: "p", toolName: "web_search", handler: pluginHandler });
-    overrideService.registerOverrideClaim({
-      pluginId: "p",
-      toolName: "web_search",
-      override: true,
-      claimedAt: "2026-05-15T00:00:00.000Z",
-    });
-    overrideService.approveClaim({ pluginId: "p", toolName: "web_search", approvedBy: "owner-1" });
-    const coordinator = new ToolInvocationCoordinatorService(
-      createHost({
-        hooksService: {
-          runInlineHooks: vi.fn(async () => ({ runs: [] })),
-          enqueueAfterHooks,
-        },
-        pluginToolOverrideService: overrideService,
-      }),
-    );
-
-    await expect(coordinator.invokeTool(createToolRequest({ toolName: "web_search", args: {} }))).rejects.toThrow(
-      "plugin boom",
-    );
-
-    expect(enqueueAfterHooks).toHaveBeenCalledWith(
-      expect.objectContaining({
-        trigger: "tool.call.error",
-        payload: expect.objectContaining({
-          toolName: "web_search",
-          error: "plugin boom",
-        }),
-      }),
-    );
+    expect(host.policyEngine.invoke).not.toHaveBeenCalled();
   });
 
   describe("redact Citadel Ward effect", () => {

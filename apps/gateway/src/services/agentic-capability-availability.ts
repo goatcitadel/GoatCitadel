@@ -8,7 +8,6 @@ import type {
 } from "@goatcitadel/contracts";
 import type { IntegrationCatalogEntry, IntegrationConnection } from "@goatcitadel/contracts";
 import type { LlmProviderSummary } from "@goatcitadel/contracts";
-import type { IntegrationPluginRecord } from "@goatcitadel/contracts";
 import {
   normalizePluginProviderRuntimeStatus,
   runtimeStatusToCapabilityAvailability,
@@ -36,7 +35,6 @@ export interface AgenticRuntimeAvailabilityBuildInput {
   generatedAt?: string;
   harnesses?: AgenticHarnessAvailabilityRecord[];
   providers?: LlmProviderSummary[];
-  plugins?: IntegrationPluginRecord[];
   channelCatalog?: IntegrationCatalogEntry[];
   channelConnections?: IntegrationConnection[];
   a2a?: A2ABridgeStatusResponse;
@@ -93,13 +91,11 @@ export function buildAgenticRuntimeAvailability(
   const providerSummaries = input.providers ?? [];
   const harnesses = input.harnesses ?? [];
   const providers = providerSummaries.map((provider) => providerSummaryToRuntimeStatus(provider, generatedAt));
-  const plugins = (input.plugins ?? []).map((plugin) => integrationPluginToRuntimeStatus(plugin, generatedAt));
   const channels = buildChannelAvailability(input.channelCatalog ?? [], input.channelConnections ?? [], generatedAt);
   const scalability = buildAgentScalabilityTracks(providerSummaries, generatedAt, input.a2a);
   const items = [
     ...harnesses.map(harnessAvailabilityToCapabilityAvailability),
     ...providers.map(runtimeStatusToCapabilityAvailability),
-    ...plugins.map(runtimeStatusToCapabilityAvailability),
     ...channels,
     ...scalability.map(scalabilityTrackToCapabilityAvailability),
   ];
@@ -108,7 +104,6 @@ export function buildAgenticRuntimeAvailability(
     generatedAt,
     items,
     harnesses,
-    plugins,
     providers,
     channels,
     scalability,
@@ -184,51 +179,6 @@ function providerSummaryToRuntimeStatus(
     checkedAt,
     healthMessage: configured ? undefined : "Provider is inspectable but no usable credential is configured.",
   });
-}
-
-function integrationPluginToRuntimeStatus(
-  plugin: IntegrationPluginRecord,
-  checkedAt: string,
-): AgenticPluginProviderRuntimeStatus {
-  const integrityStatus = mapPluginIntegrityStatus(plugin);
-  const hasCriticalWarning = (plugin.trustWarnings ?? []).some((warning) => warning.severity === "critical");
-  return normalizePluginProviderRuntimeStatus({
-    runtimeId: plugin.pluginId,
-    kind: "plugin",
-    label: plugin.label,
-    manifestSource: plugin.sourceMetadata?.display ?? plugin.source,
-    integrityStatus,
-    runtimeAvailable:
-      plugin.enabled && integrityStatus !== "corrupt" && integrityStatus !== "quarantined" && !hasCriticalWarning,
-    approvedForCallableUse: plugin.enabled && !hasCriticalWarning,
-    healthOk: plugin.enabled && integrityStatus === "verified" && !hasCriticalWarning,
-    permissions: plugin.capabilities,
-    rollbackRef: plugin.version,
-    checkedAt,
-    healthMessage: hasCriticalWarning
-      ? "Plugin has a critical trust warning and is excluded from callable runtime."
-      : undefined,
-  });
-}
-
-function mapPluginIntegrityStatus(
-  plugin: IntegrationPluginRecord,
-): AgenticPluginProviderRuntimeStatus["integrityStatus"] {
-  switch (plugin.integrityStatus ?? plugin.sourceMetadata?.integrityStatus ?? "unknown") {
-    case "verified":
-      return "verified";
-    case "not_applicable":
-    case "missing":
-      // `missing` = a value was given but this source cannot be verified; it is not corrupt bytes.
-      return "unverified";
-    case "mismatch":
-      return "corrupt";
-    case "quarantined":
-      return "quarantined";
-    case "unknown":
-    default:
-      return "unverified";
-  }
 }
 
 function buildChannelAvailability(

@@ -93,7 +93,6 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
         const nonOperatorReady = targetedEntries.filter(
           (item) => item.maturity !== "beta" && item.maturity !== "native",
         );
-        const pluginVisible = targetedEntries.filter((item) => item.maturity === "plugin");
         const blockedWithoutSchema = targetedEntries.filter(
           (item) => !item.formSchema || !Array.isArray(item.formSchema.fields) || item.formSchema.fields.length === 0,
         );
@@ -110,11 +109,6 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
         if (nonOperatorReady.length > 0) {
           throw new Error(
             `catalog parity found non-operator-ready entries: ${nonOperatorReady.map((item) => `${item.catalogId}:${item.maturity}`).join(", ")}`,
-          );
-        }
-        if (pluginVisible.length > 0) {
-          throw new Error(
-            `catalog parity found visible plugin-backed entries: ${pluginVisible.map((item) => item.catalogId).join(", ")}`,
           );
         }
         if (targetedEntries.some((item) => item.runtimeAvailability !== "runnable")) {

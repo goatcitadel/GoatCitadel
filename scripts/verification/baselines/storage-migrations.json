@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 272,
+      "expectedCount": 273,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 272,
+      "expectedLastVersion": 273,
       "migrations": [
         {
           "version": 1,
@@ -1912,15 +1912,22 @@
           "groupName": "canonical",
           "definitionSha256": "ab213d2d624e3891ef83b3e20a7ffd8312f7db5c4e1fb64182738fbf91a97c7e",
           "implementationSha256": "b702b13a6661ef3cdaa8f8173506b6fdda573ed39b9b1ae9360461f611891959"
+        },
+        {
+          "version": 273,
+          "name": "purge_integration_plugin_records",
+          "groupName": "canonical",
+          "definitionSha256": "9054833d8bba90d6cc5f971f0f6013325d35891b180dfd9c8dfae60ba90680f4",
+          "implementationSha256": "a09c5b10a785b1f58da9d40472617b62608db7e8d7cc24df54389b3999fadadc"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 221,
+      "expectedCount": 222,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 221,
+      "expectedLastVersion": 222,
       "migrations": [
         {
           "version": 1,
@@ -3255,6 +3262,13 @@
           "definitionSha256": "9560e62ee425d0f4750f552990357fd5bd6711862af16d18cf34c3f583823851",
           "sqlPayloadSha256": "7a5eb6e7d0f5e6cb96e9d31285522feb30c68b6639e6ccd3e3b497ae5ef5a662",
           "runtimeIntegritySha256": "def735ddf240477f99514b1cb7832104fc39be55ce831a8b96cd0331253ab47f"
+        },
+        {
+          "version": 222,
+          "name": "purge_integration_plugin_records",
+          "definitionSha256": "97b1aae1b6082e75b5adcb298bafb8a3e17fce35ef720bb26395b62ffff6018b",
+          "sqlPayloadSha256": "e9338897a4a5942647b9e24013d0e71597b7ae7131a501aa817b7b2afe36941b",
+          "runtimeIntegritySha256": "e501080db7b5b71c6942cc47d41f02e0cde4364dcf7a804fd4b4edc0784f6ec9"
         }
       ]
     }

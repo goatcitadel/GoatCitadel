@@ -153,7 +153,6 @@ function buildRuntimePostureGroups(availability: AgenticRuntimeAvailabilityRespo
     return [
       { title: "Scalability", items: [] },
       { title: "Harnesses", items: [] },
-      { title: "Plugins", items: [] },
       { title: "Providers", items: [] },
       { title: "Channels", items: [] },
     ];
@@ -176,7 +175,6 @@ function buildRuntimePostureGroups(availability: AgenticRuntimeAvailabilityRespo
               : undefined,
       })),
     },
-    { title: "Plugins", items: availability.plugins.map(pluginProviderToPostureItem) },
     { title: "Providers", items: availability.providers.map(pluginProviderToPostureItem) },
     { title: "Channels", items: availability.channels.map(capabilityToPostureItem) },
   ];

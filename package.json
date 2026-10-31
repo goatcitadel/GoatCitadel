@@ -187,7 +187,6 @@
     "verify:agentic:proof": "node scripts/verification/run.mjs agentic-proof",
     "verify:agentic:parity": "node scripts/verification/run.mjs agentic-parity",
     "verify:harness:availability": "node scripts/verification/run.mjs agentic-harness-availability",
-    "verify:plugins:marketplace": "node scripts/verification/run.mjs agentic-plugins-marketplace",
     "verify:self-improvement:trust": "node scripts/verification/run.mjs agentic-self-improvement-trust",
     "verify:channels:runtime": "node scripts/verification/run.mjs agentic-channels-runtime",
     "verify:channels:parity": "node scripts/verification/channel-parity-proof.mjs",

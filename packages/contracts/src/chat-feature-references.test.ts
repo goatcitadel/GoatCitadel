@@ -98,4 +98,46 @@ describe("Chat feature reference decoding", () => {
       readChatTurnFeatureReferences({ ...base, workPassport: { ...workPassport, operatorCorrectionAllowed: false } }),
     ).toThrow();
   });
+
+  it("parses a stored chat feature reference whose runtime owner is a plugin", () => {
+    const digest = "b".repeat(64);
+    const remotePlacement = {
+      version: "chat.remote-placement.admission.v1",
+      scope: {
+        admissionId: "admission-1",
+        sessionIncarnationId: "incarnation-1",
+        workspaceId: "workspace-1",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        aggregateRevision: 1,
+        controllerGeneration: 1,
+        materialSha256: digest,
+        actorId: "operator-1",
+        actorSource: "token",
+      },
+      citadelId: "citadel-1",
+      contentSha256: digest,
+      memoryMode: "off",
+      runtimeInterposition: { hash: digest, count: 0 },
+      permission: { profileId: "profile-1", approvalMode: "approve_risky", profileHash: digest },
+      selectedTools: [
+        {
+          canonicalName: "fs.read",
+          modelName: "fs_read",
+          definitionHash: digest,
+          providerDefinition: { name: "fs_read" },
+          runtimeOwner: { kind: "plugin", bindingHash: digest },
+          effectPotential: {
+            version: "goatcitadel.tool-effect.v1",
+            potential: "unknown",
+            sourceKind: "plugin",
+            reason: "plugin_runtime_untrusted",
+          },
+        },
+      ],
+    };
+    // Old records only: nothing produces a plugin runtime owner since Phase 4, but stored turns still carry one.
+    const parsed = readChatTurnFeatureReferences({ ...base, remotePlacement });
+    expect(parsed.remotePlacement).toEqual(remotePlacement);
+  });
 });

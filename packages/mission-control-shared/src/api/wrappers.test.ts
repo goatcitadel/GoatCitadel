@@ -236,28 +236,6 @@ describe("shared API wrappers", () => {
       "/api/v1/integrations/connections/conn%2F1/discord/reconnect",
       { method: "POST" },
     );
-    await expectCall(integrations.fetchIntegrationPlugins(), "/api/v1/integrations/plugins");
-    await expectCall(
-      integrations.installIntegrationPlugin({ source: "npm:pkg" }),
-      "/api/v1/integrations/plugins/install",
-      {
-        method: "POST",
-      },
-    );
-    await expectCall(
-      integrations.enableIntegrationPlugin("plugin/1"),
-      "/api/v1/integrations/plugins/plugin%2F1/enable",
-      {
-        method: "POST",
-      },
-    );
-    await expectCall(
-      integrations.disableIntegrationPlugin("plugin/1"),
-      "/api/v1/integrations/plugins/plugin%2F1/disable",
-      {
-        method: "POST",
-      },
-    );
     await expectCall(integrations.fetchObsidianIntegrationStatus(), "/api/v1/integrations/obsidian/status");
     await expectCall(
       integrations.patchObsidianIntegrationConfig({ vaultPath: "/vault" }),

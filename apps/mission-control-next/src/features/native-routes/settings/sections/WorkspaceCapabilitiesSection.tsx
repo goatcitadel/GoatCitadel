@@ -17,7 +17,7 @@ export function WorkspaceCapabilitiesSection({ activeWorkspaceId, route, navigat
           scopeKind="workspace"
           scopeId={activeWorkspaceId}
           resourceType="integration"
-          title="Plugins"
+          title="Integrations"
           fetchScope={fetchWorkspaceCapabilities}
         />
         <CapabilityScopePanel

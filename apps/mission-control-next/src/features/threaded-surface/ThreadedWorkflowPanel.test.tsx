@@ -1,5 +1,6 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { AgenticRuntimeAvailabilityResponse } from "@goatcitadel/contracts";
 import type { MissionThreadedWorkflowPanel } from "@goatcitadel/threaded-surface-core";
 import {
   fetchAgenticChannelDeliveries,
@@ -253,7 +254,7 @@ function buildCodePanel(
 
 describe("ThreadedWorkflowPanel", () => {
   beforeEach(() => {
-    mockedFetchAgenticRuntimeAvailability.mockResolvedValue({
+    const availability: AgenticRuntimeAvailabilityResponse = {
       generatedAt: "2026-05-05T12:00:00.000Z",
       items: [],
       scalability: [],
@@ -269,11 +270,11 @@ describe("ThreadedWorkflowPanel", () => {
           sandboxSatisfied: false,
         },
       ],
-      plugins: [
+      providers: [
         {
-          runtimeId: "bad-plugin",
-          kind: "plugin",
-          label: "Broken plugin",
+          runtimeId: "bad-provider",
+          kind: "provider",
+          label: "Broken provider",
           status: "blocked",
           integrityStatus: "quarantined",
           permissions: ["filesystem"],
@@ -281,8 +282,6 @@ describe("ThreadedWorkflowPanel", () => {
           callableExposure: "blocked",
           healthMessage: "Manifest parse failed.",
         },
-      ],
-      providers: [
         {
           runtimeId: "openai",
           kind: "provider",
@@ -306,7 +305,8 @@ describe("ThreadedWorkflowPanel", () => {
           checkedAt: "2026-05-05T12:00:00.000Z",
         },
       ],
-    });
+    };
+    mockedFetchAgenticRuntimeAvailability.mockResolvedValue(availability);
     mockedFetchAgenticChannelDeliveries.mockResolvedValue({
       count: 1,
       deliveries: [
@@ -604,7 +604,7 @@ describe("ThreadedWorkflowPanel", () => {
     const rendered = JSON.stringify(renderer!.toJSON());
     expect(rendered).toContain("Codex CLI");
     expect(rendered).toContain("Executable was not found.");
-    expect(rendered).toContain("Broken plugin");
+    expect(rendered).toContain("Broken provider");
     expect(rendered).toContain("quarantined");
     expect(rendered).toContain("Telegram");
     expect(rendered).toContain("No target is configured.");
@@ -770,7 +770,13 @@ describe("ThreadedWorkflowPanel", () => {
 
   it("routes file-tree actions through the governed workbench operation callback", async () => {
     const onFileOperation = vi.fn().mockResolvedValue(true);
-    const onFileOperationPreview = vi.fn(async (input) => ({ input, revision: "a".repeat(64), sourceKind: "absent" as const, affectedPaths: [], totalBytes: 0 }));
+    const onFileOperationPreview = vi.fn(async (input) => ({
+      input,
+      revision: "a".repeat(64),
+      sourceKind: "absent" as const,
+      affectedPaths: [],
+      totalBytes: 0,
+    }));
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = create(
@@ -812,10 +818,17 @@ describe("ThreadedWorkflowPanel", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      renderer!.root.findAllByType("button").find((button) => instanceText(button.children) === "Apply reviewed action")!.props.onClick();
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => instanceText(button.children) === "Apply reviewed action")!
+        .props.onClick();
       await Promise.resolve();
     });
-    expect(onFileOperation).toHaveBeenCalledWith({ operation: "create_file", path: "src/new.ts", expectedRevision: "a".repeat(64) });
+    expect(onFileOperation).toHaveBeenCalledWith({
+      operation: "create_file",
+      path: "src/new.ts",
+      expectedRevision: "a".repeat(64),
+    });
 
     const actionSelect = renderer!.root.findAllByType("select").find((select) => select.props.value === "create_file");
     await act(async () => {
@@ -836,7 +849,10 @@ describe("ThreadedWorkflowPanel", () => {
       await Promise.resolve();
     });
     await act(async () => {
-      renderer!.root.findAllByType("button").find((button) => instanceText(button.children) === "Apply reviewed action")!.props.onClick();
+      renderer!.root
+        .findAllByType("button")
+        .find((button) => instanceText(button.children) === "Apply reviewed action")!
+        .props.onClick();
       await Promise.resolve();
     });
     expect(onFileOperation).toHaveBeenLastCalledWith({
@@ -1359,9 +1375,7 @@ describe("ThreadedWorkflowPanel", () => {
       );
       await Promise.resolve();
     });
-    expect(JSON.stringify(renderer!.toJSON())).toContain(
-      "GoatCitadel · Create a worktree to begin editing.",
-    );
+    expect(JSON.stringify(renderer!.toJSON())).toContain("GoatCitadel · Create a worktree to begin editing.");
 
     const nullRenderer = create(<ThreadedWorkflowPanel panel={null as any} />);
     expect(nullRenderer.toJSON()).toBeNull();
@@ -1729,7 +1743,9 @@ describe("ThreadedWorkflowPanel", () => {
       });
 
       expect(JSON.stringify(renderer!.toJSON())).not.toContain("Session inspector");
-      await act(async () => { findButton(renderer!, "Inspector")?.props.onClick(); });
+      await act(async () => {
+        findButton(renderer!, "Inspector")?.props.onClick();
+      });
       const rendered = JSON.stringify(renderer!.toJSON());
       expect(rendered).toContain("Session inspector");
       expect(rendered).toContain("Progress");
@@ -1743,7 +1759,13 @@ describe("ThreadedWorkflowPanel", () => {
       expect(rendered).toContain("Not wired in Build workbench v1");
       expect(rendered).toContain("backend unavailable");
 
-      const progressSection = renderer!.root.findAllByType("details").find((node) => node.findAllByType("summary").some((summary) => summary.findAllByType("span").some((span) => span.children.includes("Progress"))));
+      const progressSection = renderer!.root
+        .findAllByType("details")
+        .find((node) =>
+          node
+            .findAllByType("summary")
+            .some((summary) => summary.findAllByType("span").some((span) => span.children.includes("Progress"))),
+        );
       await act(async () => {
         progressSection?.props.onToggle({ currentTarget: { open: true } });
         await Promise.resolve();

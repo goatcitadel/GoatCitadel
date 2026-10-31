@@ -55,7 +55,7 @@ export type IntegrationKind =
   | "platform"
   | "external_connector";
 
-export type IntegrationMaturity = "native" | "plugin" | "disabled" | "beta" | "planned";
+export type IntegrationMaturity = "native" | "disabled" | "beta" | "planned";
 export type IntegrationRuntimeAvailability = "runnable" | "blocked";
 export type IntegrationConnectionStatus = "connected" | "disconnected" | "error" | "paused";
 
@@ -71,7 +71,6 @@ export interface IntegrationCatalogEntry {
   capabilities: string[];
   docsUrl?: string;
   formSchema?: IntegrationFormSchema;
-  pluginId?: string;
   operatorActions?: IntegrationOperatorAction[];
   externalConnector?: {
     sourceId: string;
@@ -109,8 +108,11 @@ export interface IntegrationConnection {
    */
   workspaceId?: string;
   config: Record<string, unknown>;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginId?: string;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginVersion?: string;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginEnabled?: boolean;
   createdAt: string;
   updatedAt: string;
@@ -125,8 +127,11 @@ export interface IntegrationConnectionCreateInput {
   status?: IntegrationConnectionStatus;
   workspaceId?: string;
   config?: Record<string, unknown>;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginId?: string;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginVersion?: string;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginEnabled?: boolean;
 }
 
@@ -139,8 +144,11 @@ export interface IntegrationConnectionUpdateInput {
   /** `null` clears an existing workspace binding. */
   workspaceId?: string | null;
   config?: Record<string, unknown>;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginId?: string;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginVersion?: string;
+  /** @deprecated Read from rows written before Phase 4; never written. */
   pluginEnabled?: boolean;
   lastSyncAt?: string;
   lastError?: string | null;

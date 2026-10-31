@@ -1,7 +1,13 @@
 // @vitest-environment happy-dom
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import { SettingsActionList, SettingsField, SettingsLoadWarnings, SettingsSectionShell } from "./SettingsShared";
+import {
+  SettingsActionList,
+  SettingsField,
+  SettingsLoadWarnings,
+  SettingsPosturePanel,
+  SettingsSectionShell,
+} from "./SettingsShared";
 
 describe("SettingsSectionShell error branch (F-M12)", () => {
   it("renders the ErrorState primitive with role=alert and a wired retry", () => {
@@ -101,6 +107,35 @@ describe("SettingsLoadWarnings degraded semantics", () => {
     expect(markup).toContain('aria-live="polite"');
     expect(markup).toContain("Deterministic outage");
     expect(markup).toContain("Retry");
+  });
+});
+
+describe("SettingsPosturePanel integration rows", () => {
+  const renderIntegrations = (
+    integrations: Array<{ connectionId?: string; enabled?: boolean; status?: string; label?: string }>,
+  ) =>
+    renderToStaticMarkup(
+      <SettingsPosturePanel
+        settings={null}
+        mcpServers={[]}
+        integrations={integrations}
+        workspaces={[]}
+        onNavigate={() => undefined}
+      />,
+    );
+
+  it("names a labelled connection by its label", () => {
+    const markup = renderIntegrations([
+      { connectionId: "conn-12345678-abcd", label: "Telegram ops", enabled: true, status: "connected" },
+    ]);
+    expect(markup).toContain("Integrations: Telegram ops is configured");
+    expect(markup).not.toContain("Integration conn-123");
+  });
+
+  it("falls back to a short id, then a plain name, when there is no label", () => {
+    const markup = renderIntegrations([{ connectionId: "conn-12345678-abcd", enabled: false }, { enabled: true }]);
+    expect(markup).toContain("Integrations: Integration conn-123 is disabled");
+    expect(markup).toContain("Integrations: Integration is configured");
   });
 });
 

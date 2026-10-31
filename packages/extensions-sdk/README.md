@@ -1,54 +1,43 @@
-# GoatCitadel Extension SDK
+# GoatCitadel Extensions SDK
 
-Local workspace SDK package for GoatCitadel add-on and integration-plugin authors.
+Workspace SDK package for people who build against GoatCitadel's tool catalog.
 
 ## Current Scope
 
-- add-on manifest schemas and validation helpers
-- integration-plugin manifest schemas and validation helpers
-- compact effective-tool snapshot helpers that consume Gateway-owned callable catalogs and schema refs
-- manifest filename constants
-- file-loading and source-resolution helpers for repo-native author flows
-- optional versioned configuration-form metadata and static author preflight
+Version 2.0.0 keeps one thing: the compact effective-tool snapshot helpers. They
+consume the callable catalogs and schema refs that the GoatCitadel Gateway
+owns.
 
-## Author preflight and configuration metadata
+- `validateCompactToolDirectorySnapshot` checks that a snapshot has the expected
+  shape
+- `listEffectiveCallableTools`, `findEffectiveToolByName` and
+  `buildToolSchemaRefIndex` read a snapshot
+- `dereferenceEffectiveToolSchema` fetches one tool's schema through a function
+  you supply
 
-`IntegrationPluginAuthorManifest.configurationForm` is optional; older manifests
-remain valid. Version `goatcitadel.extension-configuration.v1` supports bounded
-text, URL, number, boolean, choice and secret-reference fields, prerequisites and
-a sample-task description. Secret-reference fields have no value, default or
-example slot. Use the Gateway credential owner for actual credentials. URL
-defaults cannot embed credentials or query parameters. This is metadata for
-review, not an install script, tool grant or callable runtime contract.
+These helpers read data. They grant nothing, activate nothing and run nothing.
 
-The exported `preflightIntegrationPluginAuthorManifest(manifest, configuredKeys)`
-uses the same validation and descriptor hash as installation. It reports missing
-required key names; it never receives their values. `declared_configured` is an
-author declaration, and `default_available` is only a proposed default. Neither
-establishes a working connection. The reference scaffold is included in starter
-pack exports and the package templates.
+## What 2.0.0 removed
 
-From the repository root:
+Integration plugins and add-ons are retired, and their helpers left the SDK with
+them: the add-on and integration-plugin manifest validators, the
+configuration-form helpers, the static author preflight and the
+`goatcitadel-extension-preflight` command. A plugin manifest validator arrives
+in a later release.
 
-```text
-pnpm --filter @goatcitadel/extensions-sdk build
-node packages/extensions-sdk/dist/author-preflight-cli.js templates/integration-plugins/reference-integration-plugin
-```
-
-The next package build also exposes `goatcitadel-extension-preflight LOCAL_SOURCE`
-with optional `--configured-key=NAME` arguments. Do not pass configuration or
-secret values on the command line. Successful preflight proves descriptor shape
-only; installation, enable/disable, live connection and actual task results need
-their own governed lifecycle evidence. No package publication is implied.
+`@goatcitadel/extensions-sdk@1.0.0` is the last published version, and it still
+carries those helpers. Version 2.0.0 is not published yet.
 
 ## Current Boundary
 
-- this package exists in the workspace and is also published to GitHub Packages as `@goatcitadel/extensions-sdk@1.0.0` on the `latest` tag
-- broader runtime contracts still live in the main GoatCitadel repo contracts and gateway surfaces
+- this package lives in the GoatCitadel workspace and is published to GitHub
+  Packages as `@goatcitadel/extensions-sdk`
+- broader runtime contracts still live in the main GoatCitadel repo contracts and
+  Gateway surfaces
 
 ## Release Workflow
 
-For the next release, once GitHub Packages auth exists on the operator machine:
+Once GitHub Packages auth exists on the operator machine:
 
 1. Log in once:
    ```bash

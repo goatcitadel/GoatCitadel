@@ -120,7 +120,7 @@ export async function runCockpitSettingsTabsProof({ context, browser, stack, cit
         assert.equal(await last.getAttribute("aria-selected"), "true");
         const capabilities = page.getByRole("region", { name: "Citadel capability selections", exact: true });
         await capabilities.waitFor();
-        for (const label of ["Skills", "Plugins", "MCP servers"]) {
+        for (const label of ["Skills", "Integrations", "MCP servers"]) {
           const selection = capabilities.getByRole("region", { name: `${label} selection`, exact: true });
           await selection.waitFor();
           await selection.getByRole("heading", { name: label, exact: true }).waitFor();

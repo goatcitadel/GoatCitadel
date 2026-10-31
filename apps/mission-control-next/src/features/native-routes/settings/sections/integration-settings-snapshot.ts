@@ -5,23 +5,17 @@ import {
   fetchGoogleMeetSessions,
   fetchIntegrationCatalog,
   fetchIntegrationConnections,
-  fetchIntegrationPlugins,
   fetchSettings,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { nativeLoad, nativeLoadIssues } from "../SettingsShared";
 export async function readIntegrationSettingsSnapshot(
   activeWorkspaceId: string,
-  requested: { plugins: boolean; connectors: boolean; history: boolean; meet: boolean },
+  requested: { connectors: boolean; history: boolean; meet: boolean },
 ) {
-  const [catalog, connections, plugins, meetStatus, meetSessions, sideEffectRuns, externalConnectors, runtimeSettings] =
+  const [catalog, connections, meetStatus, meetSessions, sideEffectRuns, externalConnectors, runtimeSettings] =
     await Promise.all([
       nativeLoad("Integration catalog", fetchIntegrationCatalog(), { items: [] }),
       nativeLoad("Integration connections", fetchIntegrationConnections(), { items: [] }),
-      nativeLoad(
-        "Integration plugins",
-        requested.plugins ? fetchIntegrationPlugins() : Promise.resolve({ items: [] }),
-        { items: [] },
-      ),
       nativeLoad(
         "Google Meet prerequisites",
         requested.meet ? fetchGoogleMeetPrerequisiteStatus() : Promise.resolve(null),
@@ -50,7 +44,6 @@ export async function readIntegrationSettingsSnapshot(
     issues: nativeLoadIssues([
       catalog,
       connections,
-      plugins,
       meetStatus,
       meetSessions,
       sideEffectRuns,
@@ -60,7 +53,6 @@ export async function readIntegrationSettingsSnapshot(
     catalog: (catalog.data.items ?? []).filter((item) => item.kind !== "channel"),
     connections: (connections.data.items ?? []).filter((item) => item.kind !== "channel"),
     channelConnections: (connections.data.items ?? []).filter((item) => item.kind === "channel"),
-    plugins: plugins.data.items,
     meetStatus: meetStatus.data,
     meetSessions: Array.isArray(meetSessions.data) ? meetSessions.data : [],
     sideEffectRuns: sideEffectRuns.data.items,

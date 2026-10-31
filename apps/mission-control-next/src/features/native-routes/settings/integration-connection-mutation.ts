@@ -19,9 +19,6 @@ export const INTEGRATION_ROUTE_PATTERNS = [
   "/api/v1/integrations/connections/:connectionId/discord/reconnect",
   "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/actions/:actionId/stage",
   "/api/v1/integrations/external-connectors/services/:sourceId/:serviceId/actions/:actionId/review",
-  "/api/v1/integrations/plugins/install",
-  "/api/v1/integrations/plugins/:pluginId/enable",
-  "/api/v1/integrations/plugins/:pluginId/disable",
   "/api/v1/notifications/rules",
   "/api/v1/notifications/rules/:ruleId",
   "/api/v1/notifications/targets",
@@ -110,10 +107,7 @@ function sameIdentity(a: IntegrationConnection, b: IntegrationConnection) {
     a.kind === b.kind &&
     a.key === b.key &&
     a.workspaceId === b.workspaceId &&
-    a.createdAt === b.createdAt &&
-    a.pluginId === b.pluginId &&
-    a.pluginVersion === b.pluginVersion &&
-    a.pluginEnabled === b.pluginEnabled
+    a.createdAt === b.createdAt
   );
 }
 export function integrationConnectionReviewMatches(a: IntegrationConnection, b: IntegrationConnection) {

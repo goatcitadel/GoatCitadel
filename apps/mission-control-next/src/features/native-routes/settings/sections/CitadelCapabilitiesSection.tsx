@@ -18,7 +18,7 @@ export function CitadelCapabilitiesSection({ activeCitadelId }: SettingsSectionP
         scopeKind="citadel"
         scopeId={citadelId}
         resourceType="integration"
-        title="Plugins"
+        title="Integrations"
         fetchScope={fetchCitadelCapabilities}
       />
       <CapabilityScopePanel

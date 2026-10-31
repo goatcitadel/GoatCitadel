@@ -72,8 +72,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
           enabling or disabling it.
         </p>
         <p className="mt-1 text-xs text-fg-muted">
-          Enabled state controls runtime availability. Connection health, tool policy, approvals, and plugin
-          availability still apply.
+          Enabled state controls runtime availability. Connection health, tool policy, and approvals still apply.
         </p>
       </header>
       {googleReturn ? <Callout announce={false}>{googleReturn}</Callout> : null}

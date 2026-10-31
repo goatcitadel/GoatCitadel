@@ -38,7 +38,6 @@ import type {
   IntegrationActionInvokeInput,
   IntegrationActionInvokeResult,
   IntegrationFormSchema,
-  IntegrationPluginRecord,
   ObsidianIntegrationConfig,
   ObsidianIntegrationStatus,
   NotificationDeliveryRecord,
@@ -617,36 +616,6 @@ export async function reconnectDiscordRuntime(connectionId: string): Promise<Dis
       body: JSON.stringify({}),
     },
   );
-}
-
-export async function fetchIntegrationPlugins(): Promise<{ items: IntegrationPluginRecord[] }> {
-  return request<{ items: IntegrationPluginRecord[] }>("/api/v1/integrations/plugins");
-}
-
-export async function installIntegrationPlugin(input: {
-  source: string;
-  pluginId?: string;
-  sourceType?: "local" | "npm" | "git" | "url" | "manual" | "unknown";
-  expectedIntegrity?: string;
-}): Promise<IntegrationPluginRecord> {
-  return request<IntegrationPluginRecord>("/api/v1/integrations/plugins/install", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function enableIntegrationPlugin(pluginId: string): Promise<IntegrationPluginRecord> {
-  return request<IntegrationPluginRecord>(`/api/v1/integrations/plugins/${encodeURIComponent(pluginId)}/enable`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
-}
-
-export async function disableIntegrationPlugin(pluginId: string): Promise<IntegrationPluginRecord> {
-  return request<IntegrationPluginRecord>(`/api/v1/integrations/plugins/${encodeURIComponent(pluginId)}/disable`, {
-    method: "POST",
-    body: JSON.stringify({}),
-  });
 }
 
 export async function fetchObsidianIntegrationStatus(): Promise<ObsidianIntegrationStatus> {

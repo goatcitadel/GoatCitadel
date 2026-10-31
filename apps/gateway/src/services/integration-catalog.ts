@@ -998,7 +998,6 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "beta",
     ["webhook", "service-account"],
     ["chat", "spaces", "threads", "attachments"],
-    { pluginId: "googlechat" },
   ),
   entry(
     "channel",
@@ -1017,7 +1016,6 @@ export const INTEGRATION_CATALOG: IntegrationCatalogEntry[] = [
     "beta",
     ["webhook"],
     ["chat", "attachments"],
-    { pluginId: "msteams" },
   ),
   entry(
     "channel",
@@ -1358,20 +1356,13 @@ export function getIntegrationFormSchema(catalogId: string): IntegrationFormSche
   return INTEGRATION_CATALOG.find((entry) => entry.catalogId === catalogId)?.formSchema;
 }
 
-export function resolveIntegrationCatalogMaturity(
-  entry: IntegrationCatalogEntry,
-  _pluginIds: ReadonlySet<string>,
-): IntegrationCatalogEntry["maturity"] {
-  void _pluginIds;
+export function resolveIntegrationCatalogMaturity(entry: IntegrationCatalogEntry): IntegrationCatalogEntry["maturity"] {
   return entry.maturity === "planned" ? "disabled" : entry.maturity;
 }
 
-export function resolveIntegrationCatalogRuntimeAvailability(
-  entry: IntegrationCatalogEntry,
-  pluginIds: ReadonlySet<string>,
-): "runnable" | "blocked" {
-  const resolvedMaturity = resolveIntegrationCatalogMaturity(entry, pluginIds);
-  if (resolvedMaturity === "native" || resolvedMaturity === "beta" || resolvedMaturity === "plugin") {
+export function resolveIntegrationCatalogRuntimeAvailability(entry: IntegrationCatalogEntry): "runnable" | "blocked" {
+  const resolvedMaturity = resolveIntegrationCatalogMaturity(entry);
+  if (resolvedMaturity === "native" || resolvedMaturity === "beta") {
     return "runnable";
   }
   return "blocked";
@@ -1385,9 +1376,6 @@ function entry(
   maturity: IntegrationCatalogEntry["maturity"],
   authMethods: string[],
   capabilities: string[],
-  options: {
-    pluginId?: string;
-  } = {},
 ): IntegrationCatalogEntry {
   const catalogId = `${kind}.${key}`;
   return entryWithOperatorActions({
@@ -1399,7 +1387,6 @@ function entry(
     maturity,
     authMethods,
     capabilities,
-    pluginId: options.pluginId,
     formSchema: FORM_SCHEMA_OVERRIDES[catalogId] ?? buildDefaultFormSchema(catalogId, label, kind, key),
   });
 }

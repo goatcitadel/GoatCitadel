@@ -656,14 +656,14 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     {
       id: "settings-workspace-capabilities",
       label: "Workspace capabilities",
-      description: "Choose which skills, plugins, and MCP servers this workspace uses.",
+      description: "Choose which skills, integrations, and MCP servers this workspace uses.",
       area: "settings",
       section: "workspace-capabilities",
     },
     {
       id: "settings-citadel-capabilities",
       label: "Citadel capabilities",
-      description: "Govern which skills, plugins, and MCP servers exist in this Citadel.",
+      description: "Govern which skills, integrations, and MCP servers exist in this Citadel.",
       area: "settings",
       section: "citadel-capabilities",
     },
