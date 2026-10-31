@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { sendRouteError } from "./_error-handler.js";
+import { sendPluginOwnedRefusal } from "./_plugin-owned-refusal.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 
 const promptPackImportSchema = z.object({
@@ -213,7 +214,11 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       return reply.send(await promptPacks.importPromptPack(body.data));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      // A `plugin-` pack is its plugin's: 409, named after the plugin when it's installed.
+      return (
+        (await sendPluginOwnedRefusal(fastify, reply, error, request.log)) ??
+        reply.code(400).send({ error: (error as Error).message })
+      );
     }
   });
 
@@ -737,7 +742,10 @@ export const promptPackRoutes: FastifyPluginAsync = async (fastify) => {
         }),
       );
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      return (
+        (await sendPluginOwnedRefusal(fastify, reply, error, request.log)) ??
+        reply.code(400).send({ error: (error as Error).message })
+      );
     }
   });
 };

@@ -179,6 +179,52 @@ describe("guarded built-in prompt-pack import owner", () => {
     expect(fixture.create).not.toHaveBeenCalled();
   });
 
+  it("refuses importing over a plugin's prompt pack", async () => {
+    const fixture = setup();
+    const pluginPackId = "plugin-meeting-tools-checks";
+    const source = { content: markdown, packId: pluginPackId, sourceLabel: "Plugin Meeting tools" };
+    const expectedDefinitionRevision = builtinDefinitionRevision(pluginPackId, preparePromptPackImport(source).write);
+    const refusal = {
+      name: "PluginOwnedError",
+      code: "PLUGIN_OWNED",
+      httpStatus: 409,
+      message: "This prompt pack came with a plugin that isn't installed.",
+    };
+
+    // The plugin service's create-if-absent, keyed by the pack's own id, is the only way in.
+    const created = await fixture.service.importPromptPack(source, {
+      packKey: pluginPackId,
+      expectedDefinitionRevision,
+    });
+    expect(created.pack.packId).toBe(pluginPackId);
+    fixture.create.mockClear();
+
+    for (const attempt of [
+      () => fixture.service.importPromptPack({ content: `${markdown}\nOverwritten.\n`, packId: pluginPackId }),
+      () => fixture.service.importPromptPack({ content: markdown, packId: "plugin-anything" }),
+      // A create-only key that isn't the pack's own id is no pass.
+      () =>
+        fixture.service.importPromptPack(
+          { content: markdown, packId: pluginPackId },
+          { packKey: "security-red-team-v6", expectedDefinitionRevision },
+        ),
+      () => fixture.service.resetPromptPackRunsAndScores(pluginPackId),
+      () => fixture.service.resetPromptPackRunsAndScores(pluginPackId, { clearRuns: false, clearScores: true }),
+    ]) {
+      await expect(attempt()).rejects.toMatchObject(refusal);
+    }
+    expect(fixture.replace).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.repository.getPack(pluginPackId)).toEqual(created.pack);
+    expect(fixture.requireFeatureEnabled).not.toHaveBeenCalled();
+
+    // An import with no pack id still gets its own new id, and any other id imports as before.
+    const fresh = await fixture.service.importPromptPack({ content: markdown });
+    expect(fresh.pack.packId).toMatch(/^pack-/u);
+    const named = await fixture.service.importPromptPack({ content: markdown, packId: "my-plugin-checks" });
+    expect(named.pack.packId).toBe("my-plugin-checks");
+  });
+
   it("does not turn an unreadable occupancy owner into an absent-key advertisement", async () => {
     const fixture = setup();
     vi.spyOn(fixture.repository, "getPack").mockImplementation(() => {

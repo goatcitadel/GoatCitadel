@@ -320,6 +320,11 @@ export interface McpServerRecord {
     phase: "apply" | "compensate";
     created: boolean;
   };
+  /**
+   * The plugin that added this server. Only the plugin's install sets it, and ordinary edits never clear it, because
+   * they are refused: the server can be switched, connected and signed in, but only the plugin changes or removes it.
+   */
+  pluginOwner?: { pluginId: string; name: string; installPlanId: string };
   requesterResolution?: McpRequesterResolutionConfig;
   command?: string;
   args?: string[];

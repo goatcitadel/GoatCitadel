@@ -13,6 +13,13 @@ import type {
   ToolGroupId,
 } from "@goatcitadel/contracts";
 
+/** A switchable group an installed plugin keeps off, named so the operator can see which plugin to uninstall. */
+export interface PluginToolGroupHoldSummary {
+  groupId: ToolGroupId;
+  pluginId: string;
+  pluginName: string;
+}
+
 export interface RuntimeSettings {
   chatFeatureAvailability?: import("../chat-feature-availability.js").ChatFeatureAvailability;
   /** Monotonic optimistic-concurrency token. Clients must treat it as opaque. */
@@ -30,8 +37,13 @@ export interface RuntimeSettings {
   operatorWriteRoots: OperatorWriteRootSummary[];
   /** The global tool allow and deny lists (agent and permission-profile lists are separate). */
   globalToolAccess: GlobalToolAccessSummary;
-  /** Built-in tool groups the operator switched off, in the group map's order. Core is never listed. */
+  /**
+   * Built-in tool groups that are off, in the group map's order: the ones the operator switched off and the ones a
+   * plugin holds off. Core is never listed.
+   */
   switchedOffToolGroups: readonly ToolGroupId[];
+  /** Each plugin that holds a group off, in the group map's order. A hold never writes the operator's own switch. */
+  pluginToolGroupHolds: readonly PluginToolGroupHoldSummary[];
   readAccessMode: FilesystemReadAccessMode;
   /** Whether writes outside every write root may raise an approval ("deny" by default). */
   outsideRootWriteMode?: OutsideRootWriteMode;

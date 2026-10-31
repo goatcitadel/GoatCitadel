@@ -63,7 +63,7 @@ import {
   type IngestionBackendName,
   type IngestionSourceType,
 } from "./ingestion-source-type.js";
-import { resolveEffectivePolicy } from "./policy-resolver.js";
+import { resolveEffectivePolicy, withHeldToolGroups } from "./policy-resolver.js";
 import { parseBrowserInteractionSteps } from "./browser-tools.js";
 import { pinFirecrawlEndpoint, type FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
 import {
@@ -372,6 +372,17 @@ export interface ToolPolicyInvokeOptions extends ToolPolicyEvaluateOptions {
   };
 }
 
+/**
+ * A switchable tool group an installed plugin keeps off. It is a hold of its own, apart from the operator's switch:
+ * it denies the group's tools in every chat like that switch does, and releasing it never switches on a group the
+ * operator switched off.
+ */
+export interface PluginToolGroupHold {
+  readonly groupId: string;
+  readonly pluginId: string;
+  readonly pluginName: string;
+}
+
 /** Explicit fail-closed result from a process-local execution precondition. */
 export class ToolExecutionPreconditionError extends Error {
   public constructor(
@@ -388,6 +399,7 @@ const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 export class ToolPolicyEngine {
   private readonly approvals: ApprovalGate;
   private readonly registry: ToolRegistry;
+  private pluginToolGroupHolds: readonly PluginToolGroupHold[] = [];
 
   public constructor(
     private readonly config: ToolPolicyConfig,
@@ -404,11 +416,32 @@ export class ToolPolicyEngine {
   }
 
   /**
-   * Names of built-in tools in a group the operator switched off. Read from the live config on every
-   * call, so a Settings save shows on the next call. Never lists Core, MCP or mesh tools.
+   * Names of built-in tools in a group the operator switched off or a plugin holds off. Read from the live config on
+   * every call, so a Settings save shows on the next call. Never lists Core, MCP or mesh tools.
    */
   public listSwitchedOffToolNames(): ReadonlySet<string> {
-    return new Set(toolNamesSwitchedOff(this.config.tools.disabledGroups).keys());
+    return new Set(toolNamesSwitchedOff(this.policyConfig().tools.disabledGroups).keys());
+  }
+
+  /**
+   * Replaces the groups installed plugins hold off, as the plugin store lists them now. The operator's own
+   * `tools.disabledGroups` and its file are never written; Core and unknown ids are ignored.
+   */
+  public setPluginToolGroupHolds(holds: readonly PluginToolGroupHold[]): void {
+    this.pluginToolGroupHolds = Object.freeze(holds.map((hold) => Object.freeze({ ...hold })));
+  }
+
+  /** The holds last set, so a reader can say which plugin keeps a group off. */
+  public listPluginToolGroupHolds(): readonly PluginToolGroupHold[] {
+    return this.pluginToolGroupHolds;
+  }
+
+  /** The live config with every held group added to the operator's switch, as the policy resolver reads it. */
+  private policyConfig(): ToolPolicyConfig {
+    return withHeldToolGroups(
+      this.config,
+      this.pluginToolGroupHolds.map((hold) => hold.groupId),
+    );
   }
 
   public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
@@ -1250,7 +1283,7 @@ export class ToolPolicyEngine {
     const shellRisk = this.evaluateShellRisk(request);
     const argumentRisk = this.evaluateArgumentRisk(request);
     const policy = resolveEffectivePolicy(
-      this.config,
+      this.policyConfig(),
       request.agentId,
       request.policyContext?.permissionProfile,
       request.policyContext?.localOperatorOverride,
@@ -1274,11 +1307,15 @@ export class ToolPolicyEngine {
     for (const name of isOwnDeliveryMarker(options.ownDelivery) ? [] : toolNames) {
       if (policy.switchedOffTools?.has(name)) {
         const label = toolGroupForTool(name)?.label;
+        // A group only a plugin holds off says so, so the operator isn't told it was their own switch.
+        const switchedBy = toolNamesSwitchedOff(this.config.tools.disabledGroups).has(name)
+          ? "the operator"
+          : "a plugin";
         return withPolicy(
           deny(
             riskLevel,
             "tool_group_off",
-            `tool ${request.toolName} is in a tool group switched off by the operator${label ? ` (${label})` : ""}`,
+            `tool ${request.toolName} is in a tool group switched off by ${switchedBy}${label ? ` (${label})` : ""}`,
           ),
         );
       }
@@ -1957,7 +1994,7 @@ export class ToolPolicyEngine {
     try {
       const readPathError = await this.validateReadPaths(
         request,
-        policy ?? resolveEffectivePolicy(this.config, request.agentId),
+        policy ?? resolveEffectivePolicy(this.policyConfig(), request.agentId),
         allowGrants,
       );
       if (readPathError) {

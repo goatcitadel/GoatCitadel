@@ -12,7 +12,7 @@ import { Storage, createSqliteAsyncStorage, type AsyncStorage } from "@goatcitad
 import { ToolPolicyEngine } from "./engine.js";
 import { createMcpToolPolicyBinding } from "./mcp-tool-policy-binding.js";
 import { createMeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
-import { isToolAllowed, resolveEffectivePolicy } from "./policy-resolver.js";
+import { isToolAllowed, resolveEffectivePolicy, withHeldToolGroups } from "./policy-resolver.js";
 
 const SWITCHED_OFF_PHRASE = "tool group switched off";
 
@@ -259,6 +259,79 @@ describe("switched-off tool groups in the policy engine", () => {
     expect(blocked?.outcome).toBe("blocked");
     expect(blocked?.policyReason).toContain(SWITCHED_OFF_PHRASE);
     await expect(fs.stat(blockedFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  describe("plugin holds", () => {
+    const meetingTools = { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" };
+
+    it("denies a held group in every chat even when the operator's switch is on", async () => {
+      const policy = config();
+      policy.tools.allow = [...ALLOWED_TOOLS, "git.*"];
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+
+      engine.setPluginToolGroupHolds([meetingTools]);
+
+      for (const sessionId of ["chat-one", "chat-two"]) {
+        const held = await engine.inspectAccess({ ...request("git.status"), sessionId });
+        expect(held.allowed).toBe(false);
+        expect(held.reasonCodes).toEqual(["tool_group_off"]);
+        const blocked = await engine.invoke({ ...request("git.status"), sessionId });
+        expect(blocked.outcome).toBe("blocked");
+        expect(blocked.policyReason).toContain("tool group switched off by a plugin (Git)");
+      }
+      // A local operator override can't lift a hold either.
+      const overridden = await engine.inspectAccess({
+        ...request("git.status"),
+        policyContext: { localOperatorOverride: activeOverride() },
+      });
+      expect(overridden.reasonCodes).toEqual(["tool_group_off"]);
+      expect(engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
+      expect(engine.listPluginToolGroupHolds()).toEqual([meetingTools]);
+      // The resolver reads the same union, so isToolAllowed agrees with the engine.
+      const effective = resolveEffectivePolicy(withHeldToolGroups(policy, ["git"]), "assistant");
+      expect(isToolAllowed(effective, "git.status")).toBe(false);
+      expect(isToolAllowed(effective, "session.status")).toBe(true);
+      // The operator's own switch is never written by a hold.
+      expect(policy.tools.disabledGroups).toBeUndefined();
+      // Other groups and Core stay on.
+      expect((await engine.inspectAccess(request("session.status"))).allowed).toBe(true);
+    });
+
+    it("keeps a group off after a hold is released if the operator switched it off", async () => {
+      const policy = config();
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      engine.setPluginToolGroupHolds([meetingTools]);
+      policy.tools.disabledGroups = ["git"];
+
+      engine.setPluginToolGroupHolds([]);
+
+      expect((await engine.inspectAccess(request("git.status"))).reasonCodes).toEqual(["tool_group_off"]);
+      expect(engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
+      expect(engine.listPluginToolGroupHolds()).toEqual([]);
+      expect(policy.tools.disabledGroups).toEqual(["git"]);
+
+      // Without the operator's switch, the released group is back on.
+      policy.tools.disabledGroups = [];
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+    });
+
+    it("ignores a hold on Core or an unknown group, and a hand-edited switch beside a hold", async () => {
+      const policy = config();
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      engine.setPluginToolGroupHolds([
+        { ...meetingTools, groupId: "core" },
+        { ...meetingTools, groupId: "nope" },
+      ]);
+      expect((await engine.inspectAccess(request("session.status"))).allowed).toBe(true);
+      expect(engine.listSwitchedOffToolNames().size).toBe(0);
+
+      policy.tools.disabledGroups = "git" as never;
+      engine.setPluginToolGroupHolds([{ ...meetingTools, groupId: "files" }]);
+      expect(engine.listSwitchedOffToolNames().has("fs.write")).toBe(true);
+      expect(engine.listSwitchedOffToolNames().has("git.status")).toBe(false);
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+    });
   });
 
   describe("policy resolver", () => {

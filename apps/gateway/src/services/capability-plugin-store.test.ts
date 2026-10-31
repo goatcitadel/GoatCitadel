@@ -4,6 +4,8 @@ import {
   CAPABILITY_PLUGINS_SETTING_KEY,
   CapabilityPluginStore,
   findPluginOwning,
+  pluginToolGroupHolds,
+  readPluginPieceOwner,
   type CapabilityPluginSettingRecord,
   type CapabilityPluginSettingRows,
   type StoredPlugin,
@@ -248,5 +250,82 @@ describe("findPluginOwning", () => {
     expect(findPluginOwning([keeping, adding], "connector", "server-1")).toBe(adding);
     expect(findPluginOwning([keeping, adding], "connector", "server-2")).toBeUndefined();
     expect(findPluginOwning([keeping, adding], "hook", "server-1")).toBeUndefined();
+  });
+});
+
+describe("store changes", () => {
+  it("tells each listener after a write lands, never after one that fails", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    const heard: string[] = [];
+    const stop = store.onChange(() => heard.push("first"));
+    store.onChange(() => {
+      heard.push("second");
+      throw new Error("a listener's own failure");
+    });
+
+    await store.update("meeting-tools", () => plugin("meeting-tools"));
+    await store.saveInspection(inspection(1), "1".padStart(64, "0"));
+    expect(heard).toEqual(["first", "second", "first", "second"]);
+
+    stop();
+    await store.update("meeting-tools", () => undefined);
+    expect(heard).toEqual(["first", "second", "first", "second", "second"]);
+
+    rows.compareAndSet = async () => undefined;
+    await expect(store.update("meeting-tools", () => plugin("meeting-tools"))).rejects.toMatchObject({
+      code: "WRITE_CONFLICT",
+    });
+    expect(heard).toHaveLength(5);
+  });
+});
+
+describe("readPluginPieceOwner", () => {
+  it("names the plugin that added a piece from the saved records", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows);
+    await store.update("meeting-tools", () =>
+      plugin("meeting-tools", {
+        name: "Meeting tools",
+        pieces: [
+          { pieceId: "tool-watch", kind: "hook", owned: true, ref: "hook-1" },
+          { pieceId: "kept", kind: "hook", owned: false, ref: "hook-2" },
+        ],
+      }),
+    );
+
+    await expect(readPluginPieceOwner(rows, "hook", "hook-1")).resolves.toEqual({
+      pluginId: "meeting-tools",
+      name: "Meeting tools",
+      installPlanId: "plan-meeting-tools",
+    });
+    await expect(readPluginPieceOwner(rows, "hook", "hook-2")).resolves.toBeUndefined();
+    await expect(readPluginPieceOwner(new SettingRows(), "hook", "hook-1")).resolves.toBeUndefined();
+  });
+});
+
+describe("pluginToolGroupHolds", () => {
+  it("holds each group a plugin switched off itself, in any state, and never one it only kept", () => {
+    const holding = plugin("holding", {
+      name: "Holding",
+      state: "uninstalling",
+      pieces: [
+        { pieceId: "no-git", kind: "tool_group_off", owned: true, ref: "git" },
+        { pieceId: "no-browser", kind: "tool_group_off", owned: false, ref: "browser" },
+        { pieceId: "pending", kind: "tool_group_off", owned: true },
+        { pieceId: "server", kind: "connector", owned: true, ref: "files" },
+      ],
+    });
+    const installing = plugin("installing", {
+      name: "Installing",
+      state: "installing",
+      pieces: [{ pieceId: "no-files", kind: "tool_group_off", owned: true, ref: "files" }],
+    });
+
+    expect(pluginToolGroupHolds([holding, installing])).toEqual([
+      { groupId: "git", pluginId: "holding", pluginName: "Holding" },
+      { groupId: "files", pluginId: "installing", pluginName: "Installing" },
+    ]);
+    expect(pluginToolGroupHolds([])).toEqual([]);
   });
 });

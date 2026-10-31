@@ -1,11 +1,13 @@
 import {
   ConflictError,
+  redactStructuredSecrets,
   type CapabilityPluginInspection,
   type PluginPieceKind,
   type PluginPin,
   type PluginSource,
   type PluginTrust,
 } from "@goatcitadel/contracts";
+import { logger } from "@goatcitadel/gateway-core";
 
 // The plugin store: one `system_settings` row (`capability_plugins_v1`) holding a record for every installed plugin and
 // the newest inspections. The Gateway alone reads and writes it, always whole and always by compare-and-set, so two
@@ -18,6 +20,7 @@ export const MAX_KEPT_INSPECTIONS = 50;
 const MAX_WRITE_ATTEMPTS = 8;
 const CHANGED_WHILE_SAVING_MESSAGE = "Plugins changed while this was being saved. Try again.";
 const UNREADABLE_MESSAGE = "The saved plugin records can't be read.";
+const log = logger.child("capability-plugin-store");
 
 export interface StoredPluginPiece {
   pieceId: string;
@@ -86,10 +89,21 @@ interface PluginStoreValue {
 }
 
 export class CapabilityPluginStore {
+  private readonly changeListeners = new Set<() => void>();
+
   public constructor(
     private readonly rows: CapabilityPluginSettingRows,
     private readonly now: () => Date = () => new Date(),
   ) {}
+
+  /**
+   * Calls `listener` after every write through this store lands, so a reader that keeps what the records say (the
+   * tool-group holds) reads them again. A listener's own failure never fails the write. Answers a function that stops it.
+   */
+  public onChange(listener: () => void): () => void {
+    this.changeListeners.add(listener);
+    return () => this.changeListeners.delete(listener);
+  }
 
   public async list(): Promise<StoredPlugin[]> {
     return (await this.read()).value.plugins;
@@ -173,9 +187,24 @@ export class CapabilityPluginStore {
     for (let attempt = 0; attempt < MAX_WRITE_ATTEMPTS; attempt += 1) {
       const { record, value } = await this.read();
       const saved = await this.rows.compareAndSet(CAPABILITY_PLUGINS_SETTING_KEY, record, transform(value));
-      if (saved) return;
+      if (saved) {
+        this.announceChange();
+        return;
+      }
     }
     throw new ConflictError({ code: "WRITE_CONFLICT", message: CHANGED_WHILE_SAVING_MESSAGE });
+  }
+
+  private announceChange(): void {
+    for (const listener of this.changeListeners) {
+      try {
+        listener();
+      } catch (error) {
+        // The write has landed, so a listener's failure is logged and never fails it.
+        const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+        log.error("a plugin store change listener failed", { err: redactStructuredSecrets(diagnostic).value });
+      }
+    }
   }
 }
 
@@ -187,6 +216,31 @@ export function findPluginOwning(
 ): StoredPlugin | undefined {
   return plugins.find((plugin) =>
     plugin.pieces.some((piece) => piece.kind === kind && piece.owned && piece.ref === ref),
+  );
+}
+
+/** The plugin whose own piece of this kind became `ref`, read from the saved records: what a refusal names. */
+export async function readPluginPieceOwner(
+  rows: CapabilityPluginSettingRows,
+  kind: PluginPieceKind,
+  ref: string,
+): Promise<{ pluginId: string; name: string; installPlanId: string } | undefined> {
+  const plugin = findPluginOwning(await new CapabilityPluginStore(rows).list(), kind, ref);
+  return plugin ? { pluginId: plugin.pluginId, name: plugin.name, installPlanId: plugin.installPlanId } : undefined;
+}
+
+/**
+ * The tool groups plugins hold off: every owned `tool_group_off` piece that names its group, of a plugin in any state.
+ * A record leaves only when its plugin is gone, so a hold lasts through an install and an uninstall until then. A group
+ * a plugin only kept off is the operator's switch, not a hold.
+ */
+export function pluginToolGroupHolds(
+  plugins: readonly StoredPlugin[],
+): Array<{ groupId: string; pluginId: string; pluginName: string }> {
+  return plugins.flatMap((plugin) =>
+    plugin.pieces
+      .filter((piece) => piece.kind === "tool_group_off" && piece.owned && piece.ref !== undefined)
+      .map((piece) => ({ groupId: piece.ref!, pluginId: plugin.pluginId, pluginName: plugin.name })),
   );
 }
 

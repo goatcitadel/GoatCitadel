@@ -61,16 +61,19 @@ export function createSettingsRuntimeDependenciesForGateway(
     updateFeatureFlags: (patch) => gateway.updateFeatureFlags(patch),
     assertDeploymentProfileUpdate: (input) => gateway.assertDeploymentProfileUpdate(input),
     assertFirecrawlRuntimeUpdate: (input) => gateway.assertFirecrawlRuntimeUpdate(input),
+    // A partial port (a test's) without the engine holds nothing.
+    readPluginToolGroupHolds: () => gateway.policyEngine?.listPluginToolGroupHolds() ?? [],
   };
 }
 
 export function createSettingsAuthRuntimeDependenciesForGateway(
   gateway: GatewayRouteCompositionPort,
 ): settingsAuthService.SettingsAuthRuntimeDependencies {
+  const storage = gateway.storage;
   return {
     config: gateway.config,
-    gatewaySql: gateway.storage.gatewaySql,
-    storage: gateway.storage,
+    gatewaySql: storage.gatewaySql,
+    storage,
     deviceTokenVault: gateway.deviceTokenVault,
     createApproval: (input, onCreated) => gateway.createApproval(input, onCreated),
     resolveApproval: (approvalId, input) => gateway.resolveApproval(approvalId, input),

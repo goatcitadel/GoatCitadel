@@ -22,6 +22,7 @@ import {
   resolveWriteRootPreset,
   type WriteRootSafetyContext,
 } from "@goatcitadel/policy-engine";
+import type { PluginToolGroupHoldSummary } from "./gateway/runtime-settings.js";
 
 /**
  * Settings-owner rules for operator write roots, the global posture of the
@@ -49,9 +50,32 @@ export function projectGlobalToolAccess(toolPolicy: ToolPolicyConfig): GlobalToo
  * The switchable groups that are off, once each, in the group map's order. `disabledGroups` can be hand-edited,
  * so a value that is not a list reads as nothing switched off, and Core, unknown ids and non-strings are dropped.
  */
-export function projectSwitchedOffToolGroups(toolPolicy: ToolPolicyConfig): ToolGroupId[] {
+export function projectSwitchedOffToolGroups(toolPolicy: Pick<ToolPolicyConfig, "tools">): ToolGroupId[] {
   const disabled: unknown = toolPolicy.tools.disabledGroups;
   return Array.isArray(disabled) ? SWITCHABLE_TOOL_GROUP_IDS.filter((groupId) => disabled.includes(groupId)) : [];
+}
+
+/**
+ * The holds plugins keep on switchable groups, in the group map's order and then the order given. Core and unknown ids
+ * are never held, as the policy engine ignores them too.
+ */
+export function projectPluginToolGroupHolds(
+  holds: readonly { groupId: string; pluginId: string; pluginName: string }[],
+): PluginToolGroupHoldSummary[] {
+  return SWITCHABLE_TOOL_GROUP_IDS.flatMap((groupId) =>
+    holds
+      .filter((hold) => hold.groupId === groupId)
+      .map((hold) => ({ groupId, pluginId: hold.pluginId, pluginName: hold.pluginName })),
+  );
+}
+
+/** What reads off: the operator's own switch and every held group, once each, in the group map's order. */
+export function unionSwitchedOffToolGroups(
+  switchedOff: readonly ToolGroupId[],
+  holds: readonly PluginToolGroupHoldSummary[],
+): ToolGroupId[] {
+  const off = new Set<ToolGroupId>([...switchedOff, ...holds.map((hold) => hold.groupId)]);
+  return SWITCHABLE_TOOL_GROUP_IDS.filter((groupId) => off.has(groupId));
 }
 
 export function applyOperatorWriteRootChange(

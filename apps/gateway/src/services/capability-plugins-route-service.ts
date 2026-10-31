@@ -11,13 +11,17 @@ import {
 import type { CapabilityPluginInspectInput } from "./capability-plugin-inspection-service.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import { skillHubInstallStep } from "./capability-skill-install-projection.js";
+import { namePluginOwnedError, type PluginOwnedError } from "./plugin-owned-refusal.js";
 import type { SkillHubOperatorItem } from "./skill-hub-operator-service.js";
 
 const BUILT_IN_DISPLAY = "Ships with GoatCitadel";
 const INSPECTION_NOT_FOUND_MESSAGE = "That plugin check wasn't found, or it ran out of time. Check the plugin again.";
 
-/** A source the list reads that can fail on its own, leaving its part out rather than the whole list. */
-export type CapabilityPluginsSource = "built_in" | "skill_hub";
+/**
+ * A source that can fail on its own, leaving its part out rather than the whole answer: the list's built-in plugins and
+ * Skill Hub checks, and the plugin store a refusal reads its plugin's name from.
+ */
+export type CapabilityPluginsSource = "built_in" | "skill_hub" | "plugin_store";
 
 /** One reader per place the Plugins tab is built from, each through its existing owner. Only `inspect` keeps anything. */
 export interface CapabilityPluginsRouteSources {
@@ -87,6 +91,21 @@ export class CapabilityPluginsRouteService {
 
   public inspect(input: CapabilityPluginInspectInput): Promise<CapabilityPluginInspection> {
     return this.sources.inspect(input);
+  }
+
+  /**
+   * The refusal for a piece a plugin added, named after its plugin when that plugin's record is saved: what an owner's
+   * route answers when the owner couldn't name it from its own record. A store that can't be read leaves the refusal as
+   * it came, with the failure logged, so the lookup never turns a refusal into another error.
+   */
+  public async namePluginOwnedError(error: PluginOwnedError): Promise<PluginOwnedError> {
+    if (!error.unnamedPiece) return error;
+    try {
+      return namePluginOwnedError(error, await this.sources.listInstalled());
+    } catch (cause) {
+      this.sources.reportFailure("plugin_store", cause);
+      return error;
+    }
   }
 
   /** A kept inspection, or a plain 404 for one that isn't kept or has run out of time. */

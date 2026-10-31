@@ -6,10 +6,18 @@ import {
   redactStructuredSecrets,
   type DeploymentProfile,
   type McpServerRecord,
+  type ToolGroupId,
+  type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
+import type { PluginToolGroupHold } from "@goatcitadel/policy-engine";
 import { CapabilityPluginInspectionService } from "./capability-plugin-inspection-service.js";
-import { CapabilityPluginStore, type CapabilityPluginSettingRows } from "./capability-plugin-store.js";
+import {
+  CapabilityPluginStore,
+  pluginToolGroupHolds,
+  type CapabilityPluginSettingRows,
+  type StoredPlugin,
+} from "./capability-plugin-store.js";
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
 import { SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
@@ -18,6 +26,7 @@ import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { listBuiltInPluginManifests } from "./plugin-manifest-file.js";
 import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { fetchPluginSource } from "./plugin-source-service.js";
+import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
 import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 
@@ -25,10 +34,16 @@ const log = logger.child("capability-plugins");
 /** What a version may hold to name a review key: the review's own key characters, kept short. */
 const GATEWAY_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/u;
 
-/** The install's folders and profile, read from its config. */
+/** The install's folders and profile, and the operator's own tool switches, read from its live config. */
 export interface CapabilityPluginsConfig {
   rootDir: string;
   assistant: { dataDir: string; deploymentProfile: DeploymentProfile };
+  toolPolicy: Pick<ToolPolicyConfig, "tools">;
+}
+
+/** Where the groups plugins hold off take effect: the policy engine, which denies them in every chat. */
+export interface PluginToolGroupHoldsTarget {
+  setPluginToolGroupHolds(holds: readonly PluginToolGroupHold[]): void;
 }
 
 /**
@@ -40,9 +55,9 @@ export interface CapabilityPluginsOwners {
   config: CapabilityPluginsConfig;
   /** The saved connectors. */
   mcp: { listMcpServers(): Promise<readonly Pick<McpServerRecord, "label">[]> };
-  /** The operator's tool switches, the network allowlist and the feature flags. */
+  /** The network allowlist and the feature flags. */
   settings: {
-    getSettings(): Promise<Pick<RuntimeSettings, "switchedOffToolGroups" | "networkAllowlist" | "features">>;
+    getSettings(): Promise<Pick<RuntimeSettings, "networkAllowlist" | "features">>;
   };
   /** Skill Hub's source review and its operator list, as the Skills tab reaches them. */
   skillHub: {
@@ -53,6 +68,8 @@ export interface CapabilityPluginsOwners {
   systemSettings: CapabilityPluginSettingRows;
   /** The saved prompt packs, by id. */
   promptPacks: { getPack(packId: string): Promise<unknown> };
+  /** Takes the groups plugins hold off, loaded at startup and again after every write to the plugin store. */
+  policy: PluginToolGroupHoldsTarget;
 }
 
 /** Where plugins live on this install. Snapshots and their temp copies share a volume, since a snapshot is renamed in. */
@@ -85,10 +102,17 @@ export function composeCapabilityPlugins({
   skillHub,
   systemSettings,
   promptPacks,
+  policy,
 }: CapabilityPluginsOwners): CapabilityPluginsRouteService {
   const paths = pluginDataPaths(config);
   const snapshots = new PluginSnapshotStore(paths.snapshots);
   const store = new CapabilityPluginStore(systemSettings);
+  void feedPluginToolGroupHolds({
+    readPlugins: () => store.list(),
+    onStoreChange: (listener) => store.onChange(listener),
+    setHolds: (holds) => policy.setPluginToolGroupHolds(holds),
+    report: reportHoldsReadFailure,
+  });
   const inspection = new CapabilityPluginInspectionService({
     fetchSource: (source) =>
       fetchPluginSource(source, {
@@ -104,7 +128,8 @@ export function composeCapabilityPlugins({
     readSettings: async () => {
       const current = await settings.getSettings();
       return {
-        switchedOffToolGroups: current.switchedOffToolGroups,
+        // The operator's own switch, never the union with holds: another plugin's hold isn't this plugin's to keep.
+        switchedOffToolGroups: operatorSwitchedOffToolGroups(config),
         networkAllowlist: current.networkAllowlist,
         typedRunVariablesEnabled: current.features.typedRunVariablesV1Enabled === true,
       };
@@ -138,6 +163,43 @@ export function composeCapabilityPlugins({
   });
 }
 
+/** The plain readers the holds feed works through: the plugin store's records and its change hook, and the engine. */
+export interface PluginToolGroupHoldsSources {
+  readPlugins(): Promise<readonly StoredPlugin[]>;
+  onStoreChange(listener: () => void): void;
+  setHolds(holds: readonly PluginToolGroupHold[]): void;
+  report(error: unknown): void;
+}
+
+/**
+ * Feeds the groups plugins hold off to the policy engine: now, and again after every write to the plugin store. Each
+ * read replaces the holds whole; a read that started earlier never replaces a later one. A store that can't be read
+ * keeps the holds last read and reports the failure, so a hold never lifts because a read failed. Answers when the
+ * first read settles.
+ */
+export async function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): Promise<void> {
+  let started = 0;
+  let applied = 0;
+  const refresh = async () => {
+    const read = (started += 1);
+    try {
+      const holds = pluginToolGroupHolds(await sources.readPlugins());
+      if (read < applied) return;
+      applied = read;
+      sources.setHolds(holds);
+    } catch (error) {
+      sources.report(error);
+    }
+  };
+  sources.onStoreChange(() => void refresh());
+  await refresh();
+}
+
+/** The groups the operator switched off themselves, from the live tool policy. A plugin's hold is never among them. */
+export function operatorSwitchedOffToolGroups(config: Pick<CapabilityPluginsConfig, "toolPolicy">): ToolGroupId[] {
+  return projectSwitchedOffToolGroups(config.toolPolicy);
+}
+
 /** The label a plugin skill's review key uses when the Gateway package's version can't be read. */
 export const UNVERSIONED_REVIEW_KEY_LABEL = "unversioned";
 
@@ -169,6 +231,14 @@ export function readGatewayVersion(load: (specifier: string) => unknown = create
     throw new Error("The Gateway package's version can't name a plugin skill's review key.");
   }
   return version;
+}
+
+/** A hold that can't be read is logged; the holds last read stay in force. */
+function reportHoldsReadFailure(error: unknown): void {
+  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+  log.error("the tool groups plugins hold off couldn't be read; the last ones read stay in force", {
+    err: redactStructuredSecrets(diagnostic).value,
+  });
 }
 
 /** The operator sees a plain line or a part left out; the real error stays in the redacted server log. */

@@ -481,6 +481,7 @@ import { composeCapabilityConnectors } from "./capability-connectors-composition
 import { composeCapabilityTools, composeCapabilityToolUsage } from "./capability-tools-composition.js";
 import { composeCapabilitySkills } from "./capability-skills-composition.js";
 import { composeCapabilityPlugins, pluginSnapshotResolver } from "./capability-plugins-composition.js";
+import { readPluginPieceOwner } from "./capability-plugin-store.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
@@ -2259,6 +2260,7 @@ export class GatewayService {
       storeWebhookSecret: (value) => hookSecretCustody.storeSecret(value),
       resolveWebhookSecret: (secretRef) => hookSecretCustody.resolveSecret(secretRef),
       deleteWebhookSecret: (secretRef) => hookSecretCustody.deleteSecret(secretRef),
+      findPluginOwningHook: (hookId) => readPluginPieceOwner(this.storage.systemSettings, "hook", hookId),
     });
     this.approvalWaitRunService = new ApprovalWaitRunService(serviceCtx, {
       createDurableRun: (input) => this.createDurableRun(input),
@@ -3958,6 +3960,7 @@ export class GatewayService {
         skillHub: composed.skills,
         systemSettings: this.storage.systemSettings,
         promptPacks: this.storage.promptPacks,
+        policy: this.policyEngine,
       }),
     };
   }

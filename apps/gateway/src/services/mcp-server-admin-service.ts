@@ -30,6 +30,7 @@ import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ToolPolicyActorContext } from "@goatcitadel/contracts";
 import { inferMcpCategory, normalizeMcpPolicy } from "./mcp-server-policy.js";
 import { isMoneyMovingCatalogServer } from "./mcp-money-moving.js";
+import { assertMcpServerEditAllowed, assertMcpServerRemovalAllowed, type PluginPass } from "./plugin-owned-refusal.js";
 import { discoverMcpTools } from "./mcp-runtime.js";
 import {
   mcpOAuthPkceStore,
@@ -138,12 +139,17 @@ export interface McpServerEditReview {
   actorId?: string;
 }
 
+/**
+ * `pluginOwner` is set only by the plugin service's install, which is its only caller with it: a plain create never
+ * marks a server. A marked server is read-only to every other editor (`assertMcpServerEditAllowed`).
+ */
 export async function createMcpServer(
   host: McpServerAdminHost,
   input: McpServerCreateInput,
   ownerServerId?: string,
   ownerPlanId?: string,
   onCommitted?: () => void | Promise<void>,
+  pluginOwner?: McpServerRecord["pluginOwner"],
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
@@ -166,6 +172,7 @@ export async function createMcpServer(
           packChange: { planId: ownerPlanId, revision: 1, phase: "apply" as const, created: true },
         }
       : {}),
+    ...(pluginOwner ? { pluginOwner: { ...pluginOwner } } : {}),
     label: input.label.trim(),
     transport: input.transport,
     command: input.command?.trim() || undefined,
@@ -198,12 +205,17 @@ export async function createMcpServer(
   return acknowledgement;
 }
 
+/**
+ * A server a plugin added only switches on or off here, unless the plugin service passes its own `pluginPass`. Every
+ * other edit, its approval setting included, is refused with `PluginOwnedError`, decided from the record it loads.
+ */
 export async function updateMcpServer(
   host: McpServerAdminHost,
   serverId: string,
   input: McpServerUpdateInput,
   packOwner?: { planId: string; phase: "apply" | "compensate" },
   review?: McpServerEditReview,
+  pluginPass?: PluginPass,
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
@@ -213,6 +225,7 @@ export async function updateMcpServer(
   const previous = await host.readMcpServers();
   const original = previous.find((server) => server.serverId === serverId);
   if (!original) throw new NotFoundError(`Unknown MCP server: ${serverId}`);
+  assertMcpServerEditAllowed(original, input, pluginPass);
   if (review) assertMcpServerReview(original, review.expectedRevision);
   const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
   const servers = previous.map((item) => {
@@ -275,8 +288,9 @@ export async function updateMcpServerPolicy(
   serverId: string,
   policy: Partial<McpServerPolicy>,
   review?: McpServerEditReview,
+  pluginPass?: PluginPass,
 ): Promise<McpServerRecord> {
-  return await updateMcpServer(host, serverId, { policy }, undefined, review);
+  return await updateMcpServer(host, serverId, { policy }, undefined, review, pluginPass);
 }
 
 export async function connectMcpServer(
@@ -471,14 +485,17 @@ export async function completeMcpOAuth(
   return await connectMcpServer(host, serverId);
 }
 
+/** A server a plugin added is removed only with the plugin service's own `pluginPass`. */
 export async function deleteMcpServer(
   host: McpServerAdminHost,
   serverId: string,
   review?: { expectedRevision: string; onCommitted?: () => void | Promise<void> },
+  pluginPass?: PluginPass,
 ): Promise<{ deleted: boolean }> {
   const previous = await host.readMcpServers();
   const original = previous.find((server) => server.serverId === serverId);
   if (review && !original) throw new NotFoundError(`Unknown MCP server: ${serverId}`);
+  assertMcpServerRemovalAllowed(original, pluginPass);
   if (original && review) assertMcpServerReview(original, review.expectedRevision);
   const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
   const next = previous.filter((item) => item.serverId !== serverId);

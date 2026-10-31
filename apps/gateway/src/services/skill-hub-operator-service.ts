@@ -22,6 +22,7 @@ import type {
   AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { buildSkillHubLifecycleApprovalInput } from "./skill-hub-lifecycle-service.js";
+import { assertSkillHubSnapshotNotFromPlugin } from "./plugin-owned-refusal.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
 export const SKILL_HUB_OPERATOR_MAX_ITEMS = 100 as const;
@@ -272,8 +273,14 @@ export class SkillHubOperatorService {
     };
   }
 
+  /**
+   * Every step on a check that came with a plugin is refused (`PluginOwnedError`) unless `options.pluginPass` names that
+   * plugin: only the Capabilities skill actions pass it, once they have checked the plugin's record. The pass is a
+   * separate argument, so no request body can carry it.
+   */
   public async createApproval(
     input: CreateSkillHubOperatorApprovalInput,
+    options: { pluginPass?: { pluginId: string } } = {},
   ): Promise<CreateSkillHubOperatorApprovalResponse> {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
     const snapshotId = normalizeRequired(input.snapshotId, "snapshot ID", 256);
@@ -282,6 +289,7 @@ export class SkillHubOperatorService {
     if (!snapshot || snapshot.workspaceId !== workspaceId) {
       throw new NotFoundError({ entity: "Skill Hub snapshot", id: snapshotId });
     }
+    assertSkillHubSnapshotNotFromPlugin(snapshot, options.pluginPass);
     const context = await this.contextFor(snapshot, await this.loadInventory(workspaceId));
     const plan = this.plan(input.operationKind, context);
     if (!plan.guard.allowed || !context.skillId || !plan.targetCandidateId || !plan.targetVersionId) {

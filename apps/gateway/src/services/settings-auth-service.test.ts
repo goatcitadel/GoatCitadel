@@ -1749,6 +1749,41 @@ describe("settings-auth-service operator write access", () => {
     expect(host.config.toolPolicy.tools.disabledGroups).toEqual(["git"]);
   });
 
+  it("lists who holds a group off", async () => {
+    const { host } = buildWriteAccessHost();
+    let holds = [
+      { groupId: "browser", pluginId: "web-guard", pluginName: "Web guard" },
+      { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" },
+      { groupId: "core", pluginId: "meeting-tools", pluginName: "Meeting tools" },
+      { groupId: "nope", pluginId: "meeting-tools", pluginName: "Meeting tools" },
+      { groupId: "git", pluginId: "repo-rules", pluginName: "Repo rules" },
+    ];
+    const deps = { ...host, readPluginToolGroupHolds: () => holds };
+
+    const held = await getSettings(deps);
+    // A held group reads off; Core and unknown ids are never held. Both follow the group map's order.
+    expect(held.switchedOffToolGroups).toEqual(["git", "browser"]);
+    expect(held.pluginToolGroupHolds).toEqual([
+      { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" },
+      { groupId: "git", pluginId: "repo-rules", pluginName: "Repo rules" },
+      { groupId: "browser", pluginId: "web-guard", pluginName: "Web guard" },
+    ]);
+    // A hold never writes the operator's own switch.
+    expect(host.config.toolPolicy.tools.disabledGroups).toBeUndefined();
+
+    // The operator switches a held group off too; releasing the holds then leaves only the operator's switch.
+    const switched = await updateSettings(deps, { toolGroupChange: { groupId: "git", enabled: false } });
+    expect(switched.switchedOffToolGroups).toEqual(["git", "browser"]);
+    expect(host.config.toolPolicy.tools.disabledGroups).toEqual(["git"]);
+    holds = [];
+    const released = await getSettings(deps);
+    expect(released.switchedOffToolGroups).toEqual(["git"]);
+    expect(released.pluginToolGroupHolds).toEqual([]);
+
+    // Without a reader there are no holds.
+    expect((await getSettings(host)).pluginToolGroupHolds).toEqual([]);
+  });
+
   it("reports switched-off groups in the settings response", async () => {
     const { host } = buildWriteAccessHost();
     expect((await getSettings(host)).switchedOffToolGroups).toEqual([]);

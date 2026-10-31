@@ -317,7 +317,7 @@ export interface GatewayRouteServices {
     discover: Pick<CapabilitySkillDiscoverService, "list">;
   };
   /** The Capabilities Plugins tab. Composed by the gateway service over the plugin store and each piece's owner. */
-  capabilityPlugins?: Pick<CapabilityPluginsRouteService, "list" | "inspect" | "inspection">;
+  capabilityPlugins?: Pick<CapabilityPluginsRouteService, "list" | "inspect" | "inspection" | "namePluginOwnedError">;
   /** The Capabilities Tools tab's tool groups. Composed by the gateway service over the policy probe and the switches. */
   capabilityTools?: Pick<CapabilityToolsService, "list">;
   citadels: CitadelsRouteService;

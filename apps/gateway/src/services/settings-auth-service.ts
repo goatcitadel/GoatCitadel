@@ -127,7 +127,9 @@ import {
   applyToolGroupChange,
   projectGlobalToolAccess,
   projectOperatorWriteRoots,
+  projectPluginToolGroupHolds,
   projectSwitchedOffToolGroups,
+  unionSwitchedOffToolGroups,
 } from "./settings-operator-write-access.js";
 import {
   deriveApprovalResolutionEffectsResult,
@@ -164,6 +166,8 @@ export interface SettingsRuntimeDependencies {
   updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): Promise<RuntimeSettings["features"]>;
   assertDeploymentProfileUpdate(input: UpdateSettingsInput): void;
   assertFirecrawlRuntimeUpdate(input: UpdateSettingsInput): void;
+  /** The groups installed plugins hold off, as the policy engine holds them. Absent means none are held. */
+  readPluginToolGroupHolds?(): readonly { groupId: string; pluginId: string; pluginName: string }[];
 }
 
 export interface SettingsAuthRuntimeDependencies {
@@ -204,8 +208,10 @@ export interface SettingsAuthRuntimeDependencies {
 
 export async function getSettings(deps: SettingsRuntimeDependencies): Promise<RuntimeSettings> {
   const features = await deps.readFeatureFlags();
-  const toolPolicy = deps.config.toolPolicy;
-  const assistant = deps.config.assistant;
+  const config = deps.config;
+  const toolPolicy = config.toolPolicy;
+  const assistant = config.assistant;
+  const pluginToolGroupHolds = projectPluginToolGroupHolds(deps.readPluginToolGroupHolds?.() ?? []);
   return {
     chatFeatureAvailability: projectChatFeatureAvailability(
       assistant.durable ?? { enabled: false, executionEnabled: false },
@@ -215,14 +221,15 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     environment: assistant.environment,
     deploymentProfile: assistant.deploymentProfile,
     toolApprovalMode: toolPolicy.tools.approvalMode ?? assistant.toolApprovalMode ?? "approve_risky",
-    budgetMode: deps.config.budgets.mode,
+    budgetMode: config.budgets.mode,
     workspaceDir: assistant.workspaceDir,
     ...(assistant.publicWebAddress ? { publicWebAddress: assistant.publicWebAddress } : {}),
     writeJailRoots: toolPolicy.sandbox.writeJailRoots,
     readOnlyRoots: toolPolicy.sandbox.readOnlyRoots,
     operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
     globalToolAccess: projectGlobalToolAccess(toolPolicy),
-    switchedOffToolGroups: projectSwitchedOffToolGroups(toolPolicy),
+    switchedOffToolGroups: unionSwitchedOffToolGroups(projectSwitchedOffToolGroups(toolPolicy), pluginToolGroupHolds),
+    pluginToolGroupHolds,
     readAccessMode: toolPolicy.sandbox.readAccessMode ?? "roots_only",
     outsideRootWriteMode: toolPolicy.sandbox.outsideRootWriteMode ?? "deny",
     networkAllowlist: toolPolicy.sandbox.networkAllowlist,
@@ -488,6 +495,8 @@ export async function buildSettingsCandidate(
     },
     assertDeploymentProfileUpdate: (input) => deps.assertDeploymentProfileUpdate(input),
     assertFirecrawlRuntimeUpdate: (input) => deps.assertFirecrawlRuntimeUpdate(input),
+    // A candidate reads the live holds; a settings change never writes them.
+    readPluginToolGroupHolds: () => deps.readPluginToolGroupHolds?.() ?? [],
   };
 
   let settings: RuntimeSettings;

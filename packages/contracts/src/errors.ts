@@ -29,7 +29,8 @@ export type GoatErrorCode =
   | "PAYLOAD_TOO_LARGE"
   | "CONFIG_INVALID"
   | "SECRET_STORE_UNAVAILABLE"
-  | "TURN_CANCELLED";
+  | "TURN_CANCELLED"
+  | "PLUGIN_OWNED";
 
 // ---------------------------------------------------------------------------
 // Base class

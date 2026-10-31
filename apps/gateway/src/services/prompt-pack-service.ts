@@ -214,6 +214,7 @@ import {
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 import { builtinDefinitionRevision, readBuiltinPromptPackSource } from "./prompt-pack/builtin-definition.js";
 import { BuiltinPromptPackPostCommitError } from "./prompt-pack/builtin-import-errors.js";
+import { assertPromptPackIdNotFromPlugin } from "./plugin-owned-refusal.js";
 
 const log = logger.child("prompt-pack-service");
 const DEFAULT_WORKSPACE_ID = "default";
@@ -496,6 +497,10 @@ export class PromptPackService {
 
   // ── public API ─────────────────────────────────────────────────────
 
+  /**
+   * A `plugin-` pack id is a plugin's pack: only the plugin's install creates it, through the guarded create-if-absent
+   * keyed by that same id, and nothing imports over it (`PluginOwnedError`).
+   */
   async importPromptPack(
     input: { content: string; name?: string; sourceLabel?: string; packId?: string },
     guarded?: PromptPackBuiltinImportInput & { packKey: string },
@@ -504,6 +509,7 @@ export class PromptPackService {
     tests: PromptPackTestRecord[];
     importReceipt?: PromptPackBuiltinImportReceipt;
   }> {
+    assertPromptPackIdNotFromPlugin(input.packId, guarded?.packKey);
     const prepared = preparePromptPackImport(input);
     let importReceipt: PromptPackBuiltinImportReceipt | undefined;
     if (guarded) {
@@ -2044,6 +2050,7 @@ export class PromptPackService {
     return await this.refreshPromptPackExportFile(packId, { createSnapshot: normalized.createSnapshot ?? true });
   }
 
+  /** A plugin's pack (a `plugin-` id) keeps its runs and scores until the plugin is uninstalled. */
   async resetPromptPackRunsAndScores(
     packId: string,
     options: {
@@ -2056,6 +2063,7 @@ export class PromptPackService {
     deletedScores: number;
     export: PromptPackExportRecord;
   }> {
+    assertPromptPackIdNotFromPlugin(packId);
     const pack = await this.ctx.storage.promptPacks.getPack(packId);
     const clearRuns = options.clearRuns ?? true;
     const clearScores = options.clearScores ?? true;

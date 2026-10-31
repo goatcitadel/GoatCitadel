@@ -249,6 +249,90 @@ describe("SkillHubOperatorService", () => {
     ).rejects.toThrow(/RUNTIME_LINEAGE_MISSING/u);
   });
 
+  it("refuses staging an update for a plugin's skill", async () => {
+    const fromPlugin = {
+      sourceProvider: "goatcitadel_plugin",
+      sourceType: "local_path",
+      sourceRef: "plugin:meeting-tools/meeting-notes@content:" + "a".repeat(64),
+      canonicalSourceKey: "plugin:meeting-tools/meeting-notes",
+    };
+    const v1Snapshot = snapshot({ ...fromPlugin, snapshotId: "snapshot-v1", createdAt: "2026-07-14T00:01:00.000Z" });
+    const v2Snapshot = snapshot({
+      ...fromPlugin,
+      snapshotId: "snapshot-v2",
+      contentTreeSha256: "2".repeat(64),
+      declaredVersion: "2.0.0",
+      priorSnapshotId: "snapshot-v1",
+      operation: "update_stage",
+      createdAt: "2026-07-14T00:02:00.000Z",
+    });
+    const rollbackSnapshot = snapshot({
+      ...fromPlugin,
+      snapshotId: "snapshot-rollback",
+      priorSnapshotId: "snapshot-v2",
+      operation: "rollback_check",
+      createdAt: "2026-07-14T00:03:00.000Z",
+    });
+    const v1 = candidateVersion({
+      versionId: "version-v1",
+      upstreamSnapshotId: "snapshot-v1",
+      sourceFingerprint: v1Snapshot.contentTreeSha256,
+    });
+    const harness = createHarness({
+      snapshots: [rollbackSnapshot, v2Snapshot, v1Snapshot],
+      candidates: [v1],
+      lifecycle: activeLifecycle(v1Snapshot),
+    });
+    const request = (snapshotId: string, operationKind: SkillHubOperationIntentTemplate["operationKind"]) => ({
+      workspaceId: "workspace-1",
+      snapshotId,
+      operationKind,
+      actorId: "operator-1",
+    });
+    const refusal = {
+      name: "PluginOwnedError",
+      code: "PLUGIN_OWNED",
+      httpStatus: 409,
+      message: "This skill came with a plugin that isn't installed.",
+      details: { pluginId: "meeting-tools" },
+    };
+
+    for (const [snapshotId, operationKind] of [
+      ["snapshot-v2", "stage_update_candidate"],
+      ["snapshot-rollback", "stage_rollback_candidate"],
+      ["snapshot-v1", "install_inactive"],
+      ["snapshot-v1", "activate"],
+      ["snapshot-v1", "revoke"],
+    ] as const) {
+      await expect(harness.service.createApproval(request(snapshotId, operationKind))).rejects.toMatchObject(refusal);
+      // Another plugin's pass is no pass.
+      await expect(
+        harness.service.createApproval(request(snapshotId, operationKind), {
+          pluginPass: { pluginId: "other-plugin" },
+        }),
+      ).rejects.toMatchObject(refusal);
+    }
+    expect(harness.createApproval).not.toHaveBeenCalled();
+
+    // The list still reads each check's own guards; the refusal is the approval's alone. The plugin's own pass asks
+    // for the approval as before.
+    const passing = createHarness({
+      snapshots: [v2Snapshot, v1Snapshot],
+      candidates: [v1],
+      lifecycle: activeLifecycle(v1Snapshot),
+    });
+    const listed = await passing.service.list({ workspaceId: "workspace-1" });
+    expect(listed.items.find((item) => item.snapshotId === "snapshot-v2")?.actions.stage_update_candidate).toEqual({
+      allowed: true,
+      blockers: [],
+    });
+    const created = await passing.service.createApproval(request("snapshot-v2", "stage_update_candidate"), {
+      pluginPass: { pluginId: "meeting-tools" },
+    });
+    expect(created.reused).toBe(false);
+    expect(passing.createApproval).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects turn lineage without a parent session before creating an approval", async () => {
     const current = snapshot({ snapshotId: "snapshot-install" });
     const harness = createHarness({ snapshots: [current] });
