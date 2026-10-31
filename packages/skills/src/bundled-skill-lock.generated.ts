@@ -7,9 +7,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:agentic-skill-architect",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "31b22bc8503f456b04016369093754fbe277a366053f23374254481679e59f57",
-    fileCount: 1,
-    totalBytes: 7496,
+    treeSha256: "04fa7a30e4d83dc9e2f9f7fb661c1be5337ef2392ec7308fd398e8f7a9054c56",
+    fileCount: 3,
+    totalBytes: 12996,
   },
   {
     skillId: "bundled:codebase-design",

@@ -129,7 +129,7 @@ describe("agentic-skill-architect bundled skill", () => {
     const parsed = parseSkillMarkdown(raw);
 
     expect(parsed.frontmatter.name).toBe("agentic-skill-architect");
-    expect(parsed.frontmatter.metadata?.version).toBe("0.1.0");
+    expect(parsed.frontmatter.metadata?.version).toBe("0.2.0");
     expect(parsed.frontmatter.metadata?.tags).toContain("agentic");
     expect(parsed.frontmatter.metadata?.tools).toEqual(["fs.read", "memory.read"]);
     expect(parsed.frontmatter.metadata?.keywords).toContain("design an agentic skill");
