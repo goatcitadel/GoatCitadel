@@ -331,7 +331,7 @@ export interface ApprovedCodeModeResult {
   stdoutPreview?: string;
   stderrPreview?: string;
   error?: string;
-  /** Set when the run crossed its dispatch boundary and was then lost, so the approval keeps its reconciliation gate. */
+  /** Set when the run was interrupted after its dispatch boundary, so the approval keeps its reconciliation gate. */
   manualReconciliationRequired?: true;
   durationMs: number;
 }
@@ -2662,9 +2662,9 @@ export class CapabilitySystemService {
       throw new ConflictError({ message: `Code Mode run ${runId} is bound to different approved code.` });
     }
     if (existing.status === "running") {
-      // A stale claim means the gateway lost this run's owner: one that never dispatched is released and runs now; one
-      // that crossed the dispatch boundary is marked interrupted (failed) and needs manual reconciliation, so the turn
-      // does not resume on it. A claim that is not stale yet is still running and is refused below.
+      // A stale claim means the gateway lost this run's owner: one that never dispatched is released and runs now if
+      // Code Mode can run; one that crossed the dispatch boundary is marked interrupted (failed) and needs manual
+      // reconciliation, so the turn does not resume on it. A claim that is not stale yet is refused below.
       existing =
         (await recoverStaleCodeModeExecutionClaim(
           storage.codeModeRuns,
