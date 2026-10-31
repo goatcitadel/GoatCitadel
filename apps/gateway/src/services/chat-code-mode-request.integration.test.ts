@@ -4,7 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import type { ChatToolRunRecord, DurableRunRecord } from "@goatcitadel/contracts";
 import { loadGatewayConfig } from "../config.js";
 import type { ApprovedCodeModeRequest, CapabilitySystemService } from "./capability-system-service.js";
 import {
@@ -12,8 +12,12 @@ import {
   withChatTurnRuntimeAuthority,
   withChatTurnRuntimeAuthorityCheckpoint,
 } from "./chat-durable-runtime-authority.js";
-import { markGeneralChatPostCommitPending } from "./chat-durable-run-service.js";
 import { CODE_MODE_OFF_TOOL_ERROR } from "./code-mode-request-tool.js";
+import {
+  GENERAL_CHAT_POST_COMMIT_EFFECTS,
+  markGeneralChatPostCommitPending,
+  type GeneralChatPostCommitProgress,
+} from "./chat-durable-run-service.js";
 import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
@@ -36,6 +40,7 @@ const originalEnv = new Map<string, string | undefined>(ENV_KEYS.map((key) => [k
 const tempRoots: string[] = [];
 let gateway: GatewayService | undefined;
 
+const FIXTURE_RUN_PREFIX = "durable-code-mode-";
 const SOURCE = "return { pages: 3, path: input.path };";
 const ARGS = { goal: "count the pages of saturday-plan.pdf", source: SOURCE, input: { path: "saturday-plan.pdf" } };
 
@@ -62,7 +67,32 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     process.env.GOATCITADEL_ROOT_DIR = root;
     gateway = new GatewayService(await loadGatewayConfig(root));
     await gateway.initCritical();
+    settleFixtureWaits(gateway);
     return gateway;
+  }
+
+  /**
+   * The runtime settles a parked turn's post-commit work (memory, commitments) moments after it parks. These fixture
+   * turns have no real transcript for that work, so their waits are reported settled; the wake then re-enters the run.
+   */
+  function settleFixtureWaits(live: GatewayService): void {
+    const deps = (
+      live as unknown as {
+        durableRunService: {
+          deps: {
+            onGeneralChatPostCommit(run: DurableRunRecord, progress: GeneralChatPostCommitProgress): unknown;
+          };
+        };
+      }
+    ).durableRunService.deps;
+    const original = deps.onGeneralChatPostCommit;
+    deps.onGeneralChatPostCommit = async (run, progress) => {
+      if (!run.runId.startsWith(FIXTURE_RUN_PREFIX)) return await original(run, progress);
+      for (const effect of GENERAL_CHAT_POST_COMMIT_EFFECTS) {
+        if (!progress.completedEffects.includes(effect)) await progress.runEffect(effect, () => undefined);
+      }
+      return {};
+    };
   }
 
   /** A chat turn parked on its `code_mode.request` approval, as the runner leaves it. */
@@ -70,12 +100,34 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     const sessionId = `session-code-mode-${label}`;
     const turnId = `turn-code-mode-${label}`;
     const toolRunId = `tool-run-code-mode-${label}`;
-    const runId = `durable-code-mode-${label}`;
+    const runId = `${FIXTURE_RUN_PREFIX}${label}`;
     const now = new Date().toISOString();
     const userMessageId = `${turnId}-user`;
     const assistantMessageId = `${turnId}-assistant`;
     await live.storage.chatSessionMeta.ensure(sessionId, now, "default");
-    await createWaitingChatTurnRun(live, { runId, sessionId, turnId, userMessageId, assistantMessageId, now });
+    const requested = await live.invokeTool({
+      toolName: "code_mode.request",
+      args: ARGS,
+      agentId: "assistant",
+      sessionId,
+      turnId,
+      toolRunId,
+      workspaceId: "default",
+      surface: "chat",
+      policyContext: { authActorSource: "loopback", operatorId: "operator", surface: "chat" },
+    });
+    expect(requested.outcome).toBe("approval_required");
+    const approvalId = requested.approvalId!;
+    // The turn parks on this approval, so its durable wait correlates with the approval id (as the runtime writes it).
+    await createWaitingChatTurnRun(live, {
+      runId,
+      sessionId,
+      turnId,
+      userMessageId,
+      assistantMessageId,
+      now,
+      approvalId,
+    });
     await live.storage.chatTurnTraces.create({
       turnId,
       sessionId,
@@ -90,19 +142,6 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
       durable: { runId, status: "waiting" },
       startedAt: now,
     });
-    const requested = await live.invokeTool({
-      toolName: "code_mode.request",
-      args: ARGS,
-      agentId: "assistant",
-      sessionId,
-      turnId,
-      toolRunId,
-      workspaceId: "default",
-      surface: "chat",
-      policyContext: { authActorSource: "loopback", operatorId: "operator", surface: "chat" },
-    });
-    expect(requested.outcome).toBe("approval_required");
-    const approvalId = requested.approvalId!;
     await live.storage.chatToolRuns.create({
       toolRunId,
       sessionId,
@@ -161,6 +200,24 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     );
   }
 
+  /** The wake really re-entered the parked durable run: the effect settled as `woke`, not skipped on a terminal run. */
+  async function expectTurnResumed(live: GatewayService, approvalId: string, turnId: string, runId: string) {
+    const settled = await pollFor(
+      async () => await wakeEffect(live, approvalId, turnId),
+      (effect) => Boolean(effect && effect.status !== "pending" && effect.status !== "running"),
+      "the linked chat turn wake to settle",
+    );
+    expect(settled, JSON.stringify(settled?.result).slice(0, 2_000)).toMatchObject({
+      status: "completed",
+      result: { runId, outcome: "woke", operatorStatus: "woke" },
+    });
+    const effects = await live.storage.approvalEffects.listByApproval(approvalId);
+    expect(effects.find((effect) => effect.effectKind === "pending_action_execute")).toMatchObject({
+      status: "completed",
+    });
+    expect((await live.storage.pendingApprovalActions.find(approvalId))?.resolutionStatus).toBe("executed");
+  }
+
   it("executes approved request", async () => {
     const live = await startGateway();
     const runSpy = vi
@@ -195,6 +252,7 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     const resolved = await live.storage.approvals.get(turn.approvalId);
     expect(resolved).toMatchObject({ kind: "code_mode.request", status: "approved", resolvedBy: "operator" });
     expect(await wakeEffect(live, turn.approvalId, turn.turnId)).toMatchObject({ targetKind: "chat_turn" });
+    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 
   it("Code Mode off when approved from Inbox", async () => {
@@ -205,12 +263,31 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
 
     await live.resolveApproval(turn.approvalId, { decision: "approve", resolvedBy: "operator" });
 
+    // Executed-with-error: the turn resumes with the error in the tool result, so the model can explain it.
     const toolRun = await settledToolRun(live, turn.turnId, turn.toolRunId);
-    expect(toolRun.status).toBe("failed");
-    expect(toolRun.error).toBe(CODE_MODE_OFF_TOOL_ERROR);
-    expect(await wakeEffect(live, turn.approvalId, turn.turnId)).toMatchObject({ targetKind: "chat_turn" });
-    const trace = await live.storage.chatTurnTraces.get(turn.turnId);
-    expect(trace.status).not.toBe("waiting_for_approval");
+    expect(toolRun.status).toBe("executed");
+    expect(toolRun.result).toMatchObject({ status: "failed", error: CODE_MODE_OFF_TOOL_ERROR });
+    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
+  });
+
+  it("a guest error resumes the turn", async () => {
+    const live = await startGateway();
+    vi.spyOn(capabilitySystem(live), "runApprovedCodeModeRequest").mockImplementation(
+      async (request: ApprovedCodeModeRequest) => ({
+        runId: `code-run-request-${request.approvalId}`,
+        status: "failed",
+        error: "TypeError: input.path is undefined",
+        durationMs: 4,
+      }),
+    );
+    const turn = await requestInWaitingTurn(live, "guest-error");
+
+    await live.resolveApproval(turn.approvalId, { decision: "approve", resolvedBy: "operator" });
+
+    const toolRun = await settledToolRun(live, turn.turnId, turn.toolRunId);
+    expect(toolRun.status).toBe("executed");
+    expect(toolRun.result).toMatchObject({ status: "failed", error: "TypeError: input.path is undefined" });
+    await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
 
   it("deny resumes the turn", async () => {
@@ -261,6 +338,7 @@ async function createWaitingChatTurnRun(
     userMessageId: string;
     assistantMessageId: string;
     now: string;
+    approvalId: string;
   },
 ): Promise<void> {
   const storage = live.storage;
@@ -292,7 +370,7 @@ async function createWaitingChatTurnRun(
     correlationId: `admission:${input.runId}`,
   });
   const generationId = `waiting-generation:${input.runId}`;
-  const waitForEvent = { eventKey: "approval.resolved", correlationId: `approval:${input.turnId}` };
+  const waitForEvent = { eventKey: "approval.resolved", correlationId: input.approvalId };
   const authority = buildChatTurnRuntimeAuthoritySeal({
     runId: input.runId,
     turnId: input.turnId,

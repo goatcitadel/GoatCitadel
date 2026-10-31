@@ -8,7 +8,11 @@ import {
   type ApprovedCodeModeResult,
 } from "./capability-system-service.js";
 
-/** What the turn sees when the operator approved a run while Code Mode (or its sandbox) is switched off. */
+/**
+ * What the turn sees when the operator approved a run while Code Mode (or its sandbox) is switched off. The approval
+ * effects treat this `{ status: "failed", error }` result as executed-with-error (`code-mode-request-resume.ts`), so
+ * the waiting turn resumes and the model can explain it.
+ */
 export const CODE_MODE_OFF_TOOL_ERROR =
   "Code Mode is off. Turn it on from the card in Chat or in Settings, then ask again.";
 
