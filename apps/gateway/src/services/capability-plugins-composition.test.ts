@@ -1,6 +1,10 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { readGatewayVersion } from "./capability-plugins-composition.js";
+import {
+  gatewayVersionForReviewKeys,
+  readGatewayVersion,
+  UNVERSIONED_REVIEW_KEY_LABEL,
+} from "./capability-plugins-composition.js";
 
 describe("readGatewayVersion", () => {
   it("reads the Gateway package's own version", () => {
@@ -28,5 +32,19 @@ describe("readGatewayVersion", () => {
         "The Gateway package's version can't name a plugin skill's review key.",
       );
     }
+  });
+});
+
+describe("gatewayVersionForReviewKeys", () => {
+  it("uses the Gateway package's version when it can be read", () => {
+    expect(gatewayVersionForReviewKeys(() => "2.3.0")).toBe("2.3.0");
+  });
+
+  it("falls back to a fixed label instead of stopping the Gateway when the version can't be read", () => {
+    const label = gatewayVersionForReviewKeys(() => {
+      throw new Error("The Gateway package's version can't name a plugin skill's review key.");
+    });
+    expect(label).toBe(UNVERSIONED_REVIEW_KEY_LABEL);
+    expect(readGatewayVersion(() => ({ version: label }))).toBe(label);
   });
 });

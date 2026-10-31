@@ -311,13 +311,13 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
   });
 });
 
-/** Every file and folder under `dir`, relative and with `/`, skipping SQLite's own side files. */
 /** `<data>/plugins/tmp` holds nothing after an inspection, or isn't there at all. */
 function expectNoTempCopies(root: string): void {
   const tempRoot = path.join(root, "data", "plugins", "tmp");
   expect(fs.existsSync(tempRoot) ? fs.readdirSync(tempRoot) : []).toEqual([]);
 }
 
+/** Every file and folder under `dir`, relative and with `/`, skipping SQLite's own side files. */
 function listPaths(dir: string): string[] {
   const found: string[] = [];
   const walk = (current: string) => {

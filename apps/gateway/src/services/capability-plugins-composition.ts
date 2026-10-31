@@ -124,7 +124,7 @@ export function composeCapabilityPlugins({
     saveInspection: (kept, snapshotTreeSha256, request) => store.saveInspection(kept, snapshotTreeSha256, request),
     now: () => new Date(),
     newInspectionId: () => randomUUID(),
-    gatewayVersion: readGatewayVersion(),
+    gatewayVersion: gatewayVersionForReviewKeys(),
   });
   return new CapabilityPluginsRouteService({
     listInstalled: () => store.list(),
@@ -138,10 +138,30 @@ export function composeCapabilityPlugins({
   });
 }
 
+/** The label a plugin skill's review key uses when the Gateway package's version can't be read. */
+export const UNVERSIONED_REVIEW_KEY_LABEL = "unversioned";
+
+/**
+ * The version a plugin skill's review key names, read once when plugins are wired. A version that can't be read is
+ * logged and replaced by a fixed label, so plugins and every other route still start; a review-rule change under that
+ * label is still caught by the inspection's fresh-key retry.
+ */
+export function gatewayVersionForReviewKeys(read: () => string = () => readGatewayVersion()): string {
+  try {
+    return read();
+  } catch (error) {
+    const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+    log.warn("the Gateway package's version couldn't be read; plugin skill checks use a fixed label", {
+      label: UNVERSIONED_REVIEW_KEY_LABEL,
+      err: redactStructuredSecrets(diagnostic).value,
+    });
+    return UNVERSIONED_REVIEW_KEY_LABEL;
+  }
+}
+
 /**
  * The Gateway package's own version (`apps/gateway/package.json`, two folders up from this file in `src` and in
- * `dist` alike), read once when plugins are wired. A plugin skill's review key names it. A version that can't be read,
- * or doesn't fit a review key, stops plugins being wired rather than keying every check to a made-up release.
+ * `dist` alike). It throws when the version can't be read or doesn't fit a review key, rather than making one up.
  */
 export function readGatewayVersion(load: (specifier: string) => unknown = createRequire(import.meta.url)): string {
   const version = (load("../../package.json") as { version?: unknown } | undefined)?.version;
