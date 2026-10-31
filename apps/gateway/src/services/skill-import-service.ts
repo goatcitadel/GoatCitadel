@@ -2769,6 +2769,8 @@ function getProviderLabel(provider: SkillSourceProvider): string {
       return "GitHub";
     case "external":
       return "External";
+    case "goatcitadel_plugin":
+      return "Plugin";
     case "local":
     default:
       return "Local";

@@ -34,6 +34,13 @@ import {
   PROMPTWARE_SCANNER_VERSION,
 } from "./assembled-prompt-injection-guard.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import {
+  assertPluginSkillFolder,
+  recordedSource,
+  resolvePluginSkillSource,
+  type PluginSkillRecord,
+  type SkillHubPluginSkillInput,
+} from "./skill-hub-plugin-skill-source.js";
 import type { MaterializedSkillReviewContext, SkillImportService } from "./skill-import-service.js";
 
 export const SKILL_HUB_REVIEW_SCHEMA_VERSION = "goatcitadel.skill-hub-review.v1" as const;
@@ -66,11 +73,13 @@ type ReviewedSourceType = "git_url" | "remote_bundle" | "local_path";
 
 export interface SkillHubSourceReviewInput {
   workspaceId: string;
-  /** An HTTPS source, or omitted when `packId` names a shipped skill pack. */
+  /** An HTTPS source, or omitted when `packId` or `pluginSkill` names the source. */
   sourceRef?: string;
   sourceType?: "git_url" | "remote_bundle";
   /** A skill pack shipped under `skills/import-packs`; the Gateway resolves its directory. */
   packId?: string;
+  /** A skill in a plugin's stored copy. Exclusive with `packId` and `sourceRef`. */
+  pluginSkill?: SkillHubPluginSkillInput;
   idempotencyKey: string;
   actorId: string;
 }
@@ -96,6 +105,8 @@ export interface SkillHubReviewServiceOptions {
   skillImport: Pick<SkillImportService, "withMaterializedValidation">;
   /** Directory holding shipped skill packs; pack review is unavailable without it. */
   shippedSkillPackRoot?: string;
+  /** `PluginSnapshotStore.resolve`; a plugin's skill can't be reviewed without it. */
+  resolvePluginSkillDir?: (treeSha256: string, path: string) => string;
   now?: () => string;
   /** Test-only transaction rollback seam after snapshot/artifact writes. */
   beforeJourneyPersistence?: (snapshotId: string) => void;
@@ -118,6 +129,13 @@ interface PreparedReview {
   blockerCodes: string[];
 }
 
+/** What the import service reads, and for a plugin's skill what the record says in place of that folder. */
+interface ReviewSource {
+  sourceRef: string;
+  sourceType: ReviewedSourceType;
+  plugin?: PluginSkillRecord;
+}
+
 interface PersistIdentity {
   snapshotId: string;
   artifactId: string;
@@ -128,20 +146,27 @@ interface PersistIdentity {
 export class SkillHubReviewService {
   private readonly now: () => string;
   private readonly shippedSkillPackRoot: string | undefined;
+  private readonly resolvePluginSkillDir: SkillHubReviewServiceOptions["resolvePluginSkillDir"];
+  private readonly beforeJourneyPersistence: SkillHubReviewServiceOptions["beforeJourneyPersistence"];
 
   public constructor(private readonly options: SkillHubReviewServiceOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
     this.shippedSkillPackRoot = options.shippedSkillPackRoot;
+    this.resolvePluginSkillDir = options.resolvePluginSkillDir;
+    // Read once here, so the two persistence paths share one read of the test seam instead of one each.
+    this.beforeJourneyPersistence = options.beforeJourneyPersistence;
   }
 
   public async reviewSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> {
     const workspaceId = normalizeIdentity(input.workspaceId, "workspace ID", 256);
     const actorId = normalizeIdentity(input.actorId, "actor ID", 256);
     const idempotencyKey = normalizeIdempotencyKey(input.idempotencyKey);
-    const source =
-      input.packId !== undefined
-        ? resolveShippedSkillPackSource(input.packId, input.sourceRef, this.shippedSkillPackRoot)
-        : normalizeHttpsSource(input.sourceRef ?? "", input.sourceType);
+    const source: ReviewSource =
+      input.pluginSkill !== undefined
+        ? resolvePluginSkillSource(input.pluginSkill, input, this.resolvePluginSkillDir)
+        : input.packId !== undefined
+          ? resolveShippedSkillPackSource(input.packId, input.sourceRef, this.shippedSkillPackRoot)
+          : normalizeHttpsSource(input.sourceRef ?? "", input.sourceType);
     const identity = persistIdentity("source-review", workspaceId, idempotencyKey);
     let enteredValidatedCallback = false;
     try {
@@ -149,6 +174,7 @@ export class SkillHubReviewService {
         { sourceRef: source.sourceRef, sourceType: source.sourceType },
         async (context) => {
           enteredValidatedCallback = true;
+          if (source.plugin) assertPluginSkillFolder(source, context.skillDir);
           assertCompleteValidation(context.validation);
           const validatedTree = context.validation.provenance?.contentIntegrity?.treeSha256;
           if (!validatedTree) {
@@ -253,7 +279,7 @@ export class SkillHubReviewService {
         snapshotId: snapshot.snapshotId,
         createdAt,
       });
-      this.options.beforeJourneyPersistence?.(snapshot.snapshotId);
+      this.beforeJourneyPersistence?.(snapshot.snapshotId);
       const journeyEvent = await this.createJourney({
         identity,
         snapshot,
@@ -321,7 +347,7 @@ export class SkillHubReviewService {
       totalBytes: input.artifact.manifest.totalBytes,
       createdAt,
     });
-    this.options.beforeJourneyPersistence?.(snapshot.snapshotId);
+    this.beforeJourneyPersistence?.(snapshot.snapshotId);
     const journeyEvent = await this.createJourney({
       identity: input.identity,
       snapshot,
@@ -425,10 +451,7 @@ export class SkillHubReviewService {
   }
 }
 
-async function prepareReview(
-  context: MaterializedSkillReviewContext,
-  source: { sourceRef: string; sourceType: ReviewedSourceType },
-): Promise<PreparedReview> {
+async function prepareReview(context: MaterializedSkillReviewContext, source: ReviewSource): Promise<PreparedReview> {
   const validation = context.validation;
   assertCompleteValidation(validation);
   const integrity = validation.provenance?.contentIntegrity;
@@ -448,19 +471,24 @@ async function prepareReview(
     callability: validation.compatibility?.callability ?? "review_only",
     compatibilitySources: [...(validation.compatibility?.sources ?? [])].sort(compareStrings),
   };
+  // A plugin's skill is read from a folder on this computer, which the record must not keep: it names the plugin, the
+  // piece and the pin instead. The source type stays `local_path`; only the shipped-pack readers look at it, and they
+  // match a pack's own folder, so this never reads as a pack.
+  const recorded = recordedSource(source.plugin, validation.candidate);
   return {
-    sourceProvider: validation.candidate.sourceProvider,
+    sourceProvider: recorded.sourceProvider,
     sourceType: validation.candidate.sourceType,
-    sourceRef: validation.candidate.sourceRef,
-    canonicalSourceKey: validation.candidate.canonicalKey,
+    sourceRef: recorded.sourceRef,
+    canonicalSourceKey: recorded.canonicalSourceKey,
     declaredVersion,
     resolvedVersion,
     contentTreeSha256: integrity.treeSha256,
     provenance: {
       reviewSchemaVersion: SKILL_HUB_REVIEW_SCHEMA_VERSION,
-      sourceProvider: validation.candidate.sourceProvider,
+      sourceProvider: recorded.sourceProvider,
       sourceType: validation.candidate.sourceType,
-      sourceRef: validation.candidate.sourceRef,
+      sourceRef: recorded.sourceRef,
+      ...(source.plugin ? { pluginTrust: source.plugin.trust } : {}),
       ...(context.resolvedGitCommit ? { resolvedGitCommit: context.resolvedGitCommit } : {}),
       // The validated SKILL.md name. The operator resolves the approved skill id (`extra:<name>`) from it first, and
       // applying the step requires exactly that id; a local or Git source's canonical key ends in a hash or the
@@ -765,7 +793,7 @@ function resolveShippedSkillPackSource(
   packId: string,
   sourceRef: string | undefined,
   root: string | undefined,
-): { sourceRef: string; sourceType: "local_path" } {
+): ReviewSource {
   if (sourceRef !== undefined) {
     throw new ValidationError({
       field: "packId",
