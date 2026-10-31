@@ -21,6 +21,39 @@ GoatCitadel is licensed under the Apache License 2.0 (see `LICENSE`). This file 
 - Modifications: listed in each pack's `UPSTREAM.md`; each pack carries the upstream `LICENSE`.
 - These packs are not loaded as skills. An operator brings one in through Skill Hub review, then installs and activates it through approvals.
 
+## superpowers
+
+- Repository: https://github.com/obra/superpowers
+- License: MIT, Copyright (c) 2025 Jesse Vincent
+- Adapted at commit: `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`
+- Vendored path: `skills/bundled/debugging/` (from `systematic-debugging` and its technique files), `skills/bundled/receiving-code-review/` (from `receiving-code-review`), and the "Before saying it works" section of `skills/bundled/qa/` (from `verification-before-completion`); each rewritten for GoatCitadel, no scripts, hooks, or plugin manifests
+- Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
+
+## Matt Pocock skills
+
+- Repository: https://github.com/mattpocock/skills
+- License: MIT, Copyright (c) 2026 Matt Pocock
+- Adapted at commit: `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`
+- Vendored path: `skills/bundled/debugging/` (from `diagnosing-bugs`), `skills/bundled/tdd/` (from `tdd`), `skills/bundled/grilling/` (from `grilling` and `domain-modeling`), `skills/bundled/codebase-design/` (from `codebase-design`), and the "Writing a GoatCitadel Skill" section of `skills/bundled/agentic-skill-architect/` (from `writing-for-agents`); each rewritten for GoatCitadel, no scripts or hooks
+- Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
+
+## Addy Osmani agent-skills
+
+- Repository: https://github.com/addyosmani/agent-skills
+- License: MIT, Copyright (c) 2025 Addy Osmani
+- Adapted at commit: `8bfcc1f9916f2eea55494d8c1fa7f4bde867dd9e`
+- Vendored path: `skills/bundled/secure-coding/` (from `security-and-hardening`), `skills/bundled/source-driven-development/` (from `source-driven-development`), `skills/bundled/spec-driven-development/` (from `spec-driven-development`, explicit-only), and the "Writing a GoatCitadel Skill" section of `skills/bundled/agentic-skill-architect/` (from `context-engineering`); each rewritten for GoatCitadel, no hooks, commands, agents, or evals
+- Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
+
+## ponytail
+
+- Repository: https://github.com/DietrichGebert/ponytail
+- License: MIT, Copyright (c) 2026 DietrichGebert
+- Adapted at commit: `96608e078b2d5ea607c5c3b8b5a54d1c1fba6846`
+- Vendored path: `skills/bundled/ponytail/` (SKILL.md rewritten for GoatCitadel from `ponytail` and `ponytail-review`; no hooks, plugins, benchmarks, or other skills)
+- Modifications: listed in the skill's `UPSTREAM.md`; the skill carries the upstream `LICENSE`.
+- Ships explicit-only: it loads only when the operator names it.
+
 ## Hermes Agent MCP catalog (optional-mcps)
 
 - Repository: https://github.com/nousresearch/hermes-agent

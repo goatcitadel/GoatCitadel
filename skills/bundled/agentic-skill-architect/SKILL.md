@@ -2,7 +2,7 @@
 name: agentic-skill-architect
 description: Design or review an "agentic skill" without confusing lightweight skills with runtime infrastructure. Use when deciding what belongs in a SKILL.md versus orchestration, policy, memory, durability, approvals, or operator UX, and when you need a practical skill concept, trust boundary, activation rules, and evaluation checklist.
 metadata:
-  version: "0.1.0"
+  version: "0.2.0"
   tags:
     - skills
     - architecture
@@ -204,6 +204,21 @@ Keep these outside `SKILL.md`:
 - skill import validation, trust state, and activation state
 
 In GoatCitadel, skills remain lightweight instruction artifacts. Runtime services remain explicit system components.
+
+## Writing a GoatCitadel Skill
+
+> Adapted from mattpocock/skills (`writing-for-agents`) at commit `4ae2317` and addyosmani/agent-skills (`context-engineering`) at commit `8bfcc1f` (MIT License). See `UPSTREAM.md`.
+
+When the review covers a `SKILL.md` itself, check these, most important first:
+
+1. **The description lists triggers only.** It starts with "Use when" and names situations and symptoms. A description that summarizes the workflow invites the model to follow the summary and skip the body.
+2. **The file is self-contained and small.** For bundled skills other than impeccable, the runtime injects `SKILL.md` alone; files under `reference/` never reach the model. Every `SKILL.md` also counts against the shared catalog budget (`node scripts/check-skill-catalog.mjs`), so prune lines that no longer change behavior.
+3. **Keywords match as substrings** of the whole message. Use multi-word phrases: "test" also matches "latest", and "review" matches "preview", which loads the skill on unrelated turns. A skill meant to load only on request ships with no keywords and empty routing phrases, so only `use <name>`, `@skill <name>`, or `$bundled:<name>` selects it.
+4. **Steer with recipes, not prohibitions.** Name the output's parts in order. A "never do X" list puts X in front of the model and still leaves the wanted shape unstated.
+5. **One worked example** beats several thin ones.
+6. **Order by stability.** Stable instructions come first; situational detail sits behind an observable condition ("if the operator names a file"); ask the model to read only what the turn needs.
+7. **Shipped text passes the promptware scanner.** Describe a risk in plain words; never quote an injection phrase, even as an example of what to refuse.
+8. **Tools and side effects stay declared.** List only the GoatCitadel tool ids the workflow uses, and leave approvals, pushes, and other side effects to the runtime's gates.
 
 ## Example Invocations
 

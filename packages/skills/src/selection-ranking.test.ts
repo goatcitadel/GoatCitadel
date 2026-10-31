@@ -19,7 +19,10 @@ function skill(name: string, keywords: string[] = []): LoadedSkill {
 
 describe("skill-selection shadow ranking", () => {
   it("retrieves description terms without searching instruction bodies", () => {
-    const networking = { ...skill("networking"), description: "Diagnose reverse proxy routing and unreachable containers." };
+    const networking = {
+      ...skill("networking"),
+      description: "Diagnose reverse proxy routing and unreachable containers.",
+    };
     const ranked = rankSkillSelectionCandidates({ text: "unreachable containers" }, [networking, skill("unrelated")]);
     expect(ranked.method).toBe("metadata_bm25_v2");
     expect(ranked.candidates.map((candidate) => candidate.skillId)).toEqual(["bundled:networking"]);
@@ -37,6 +40,26 @@ describe("skill-selection shadow ranking", () => {
     const ranked = rankSkillSelectionCandidates({ text: "research" }, skills);
     expect(ranked.candidates.map((item) => item.skillId)).toEqual(["bundled:research", "bundled:a", "bundled:z"]);
     expect(rankSkillSelectionCandidates({ text: "research" }, [...skills].reverse())).toEqual(ranked);
+  });
+
+  it("never nominates an explicit-only skill unless the request names it", () => {
+    // Explicit-only: routing hints present with no phrases or keywords, and no keywords of its own.
+    const explicitOnly: LoadedSkill = {
+      ...skill("ponytail"),
+      description: "Use when the operator explicitly asks for the smallest possible change.",
+      routingHints: {
+        phrases: [],
+        keywords: [],
+        surfaces: ["code"],
+        whenToUse: ["Make the smallest complete change when named."],
+        whenNotToUse: [],
+      },
+    };
+    const skills = [explicitOnly, skill("coding", ["change"])];
+    const implicit = rankSkillSelectionCandidates({ text: "make the smallest possible change" }, skills);
+    expect(implicit.candidates.map((candidate) => candidate.skillId)).toEqual(["bundled:coding"]);
+    const named = rankSkillSelectionCandidates({ text: "use ponytail for the smallest possible change" }, skills);
+    expect(named.candidates[0]).toMatchObject({ skillId: "bundled:ponytail", explicit: true });
   });
 
   it("keeps explicit selection first and honors caller-provided explicit selection", () => {

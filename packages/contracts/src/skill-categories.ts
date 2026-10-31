@@ -87,14 +87,23 @@ export const SKILL_CATEGORIES: readonly SkillCategoryDefinition[] = [
  * the two in step, so a new shipped skill fails it until it is given a category here.
  */
 export const SHIPPED_SKILL_CATEGORIES: Readonly<Record<string, SkillCategoryId>> = {
+  "bundled:codebase-design": "coding",
   "bundled:coding": "coding",
+  "bundled:debugging": "coding",
   "bundled:opencode": "coding",
+  "bundled:ponytail": "coding",
   "bundled:qa": "coding",
+  "bundled:receiving-code-review": "coding",
+  "bundled:secure-coding": "coding",
+  "bundled:source-driven-development": "coding",
+  "bundled:tdd": "coding",
   "extra:github-cli": "coding",
   "bundled:documentation": "writing",
   "bundled:research": "research",
   "bundled:planning": "planning",
   "bundled:agentic-skill-architect": "planning",
+  "bundled:grilling": "planning",
+  "bundled:spec-driven-development": "planning",
   "bundled:impeccable": "design",
   "bundled:n8n-workflow-architect": "automation",
   "bundled:sendclaw": "email",
