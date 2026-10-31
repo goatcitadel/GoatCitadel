@@ -224,6 +224,22 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     render(turnWith([{ ...toolRun({}), status: "blocked" } as ChatToolRunRecord]));
     expect(tools().open).toBe(true);
   });
+
+  it.each([
+    ["denied", { status: "blocked", error: "Denied by the operator." }, "started"],
+    ["failed", { result: { status: "failed", error: "Code Mode is off." } }, "approval_required"],
+  ])(
+    "opens the list while a turn with a %s and a later Code Mode request continues, as the card reports only the later",
+    (_label, earlier, laterStatus) => {
+      const request = { ...toolRun({}), toolName: "code_mode.request", args: { goal: "read a file" } };
+      const runs = [
+        { ...request, ...earlier },
+        { ...request, toolRunId: "tool-run-2", status: laterStatus },
+      ] as ChatToolRunRecord[];
+      render({ ...turnWith(runs), trace: { status: "running" } } as unknown as ChatThreadTurnRecord);
+      expect(tools().open).toBe(true);
+    },
+  );
 });
 
 describe("ChatTurnDetails tool rows", () => {

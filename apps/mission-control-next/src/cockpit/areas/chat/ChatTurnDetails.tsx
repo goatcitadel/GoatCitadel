@@ -179,15 +179,16 @@ export function ChatTurnDetails({
   // CH-39: opens while the turn is live or when a tool needs attention, and stays open once the operator opened it.
   // A list that only opened for a live turn folds shut when the turn settles cleanly. A Code Mode request is the
   // Code Mode card's: the card asks for it and states its outcome, so neither the request nor a turn parked on it
-  // opens the list. Nor does the turn that continues after Deny or Run it, when its only tools are such requests.
-  // Their rows stay here for an operator who opens it.
+  // opens the list. Nor does the turn that continues after Deny or Run it, when its one tool is that request: the
+  // card reports only the latest request, so with more than one an earlier outcome would be hidden. The rows stay
+  // here for an operator who opens it.
   const parkedOnCodeModeCard =
     !streaming &&
     turn.trace.status === "waiting_for_approval" &&
     turn.toolRuns.some(
       (tool) => isCodeModeRequest(tool) && (tool.status === "approval_required" || tool.status === "started"),
     );
-  const onlyCodeModeCard = !streaming && turn.toolRuns.length > 0 && turn.toolRuns.every(isCodeModeRequest);
+  const onlyCodeModeCard = !streaming && turn.toolRuns.length === 1 && turn.toolRuns.every(isCodeModeRequest);
   const toolDisclosure = useAutoOpenDisclosure(
     (turnLive && !parkedOnCodeModeCard && !onlyCodeModeCard) ||
       turn.toolRuns.some(
