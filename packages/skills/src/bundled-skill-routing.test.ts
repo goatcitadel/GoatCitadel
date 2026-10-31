@@ -42,6 +42,8 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["Review my pull request", []],
   ["Do a security review of this login handler", ["secure-coding"]],
   ["Is this query open to SQL injection?", ["secure-coding"]],
+  ["Check the official docs and write the Next.js streaming route handler", ["source-driven-development"]],
+  ["Is this API deprecated in the version we use? Follow the migration guide", ["source-driven-development"]],
 ];
 
 let service: SkillsService;

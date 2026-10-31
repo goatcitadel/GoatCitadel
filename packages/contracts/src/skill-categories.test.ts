@@ -36,7 +36,7 @@ describe("skill categories", () => {
     };
     const coverageIds = coverage.entries.map((entry) => entry.skillId).sort();
     expect(Object.keys(SHIPPED_SKILL_CATEGORIES).sort()).toEqual(coverageIds);
-    expect(coverageIds).toHaveLength(24);
+    expect(coverageIds).toHaveLength(25);
   });
 
   it("only maps shipped skills to a known category", () => {

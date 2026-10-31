@@ -209,6 +209,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use for UI resilience work (impeccable harden)."],
     confidenceBoost: 0.1,
   },
+  "source-driven-development": {
+    phrases: ["check the official docs", "migration guide"],
+    keywords: ["official docs", "deprecated api"],
+    surfaces: ["code"],
+    whenToUse: ["Ground version-sensitive code in the official docs for the installed version."],
+    whenNotToUse: ["Do not use for general web research (research)."],
+    confidenceBoost: 0.1,
+  },
   tdd: {
     phrases: ["write the test first", "red green refactor"],
     keywords: ["tdd", "test-driven"],
