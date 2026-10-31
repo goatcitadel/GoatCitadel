@@ -86,6 +86,14 @@ export function seedChatApprovalScenario(scope: SessionScope, signal?: AbortSign
   return postJson(`${DEV_VERIFICATION}/chat-approval-scenario`, scope, signal);
 }
 
+/** A turn waiting on a Chat Code Mode request (`code_mode.request`) approval. Seeding it runs no code. */
+export function seedChatCodeModeRequestScenario(
+  scope: SessionScope,
+  signal?: AbortSignal,
+): Promise<ChatApprovalScenario> {
+  return postJson(`${DEV_VERIFICATION}/chat-approval-scenario`, { ...scope, tool: "code_mode.request" }, signal);
+}
+
 export function seedChatUserInputScenario(scope: SessionScope, signal?: AbortSignal): Promise<ChatUserInputScenario> {
   return postJson(`${DEV_VERIFICATION}/chat-user-input-scenario`, scope, signal);
 }

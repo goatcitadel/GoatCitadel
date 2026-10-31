@@ -10,6 +10,7 @@ const mocks = vi.hoisted(() => ({
   fetchApprovals: vi.fn(),
   fetchDurableRun: vi.fn(),
   seedChatApprovalScenario: vi.fn(),
+  seedChatCodeModeRequestScenario: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   createChatSession: mocks.createChatSession,
@@ -19,7 +20,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApprovals: mocks.fetchApprovals }));
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({ fetchDurableRun: mocks.fetchDurableRun }));
-vi.mock("./dev-verification", () => ({ seedChatApprovalScenario: mocks.seedChatApprovalScenario }));
+vi.mock("./dev-verification", () => ({
+  seedChatApprovalScenario: mocks.seedChatApprovalScenario,
+  seedChatCodeModeRequestScenario: mocks.seedChatCodeModeRequestScenario,
+}));
 
 const SCENARIO = {
   sessionId: "s-1",
@@ -35,6 +39,7 @@ beforeEach(() => {
   }
   mocks.createChatSession.mockResolvedValue({ sessionId: "s-1", revision: 1, lifecycleStatus: "active" });
   mocks.seedChatApprovalScenario.mockResolvedValue(SCENARIO);
+  mocks.seedChatCodeModeRequestScenario.mockResolvedValue(SCENARIO);
   mocks.fetchChatPendingApprovals.mockResolvedValue({
     items: [{ approvalId: SCENARIO.approvalId, stale: false }],
     activeApprovalId: null,
@@ -152,5 +157,41 @@ describe("approval journeys", () => {
   it("tiers the approve journey as host because it can run the seeded command", () => {
     expect(findCheck(approvalChecks, "approvals.approve").tier).toBe("host");
     expect(findCheck(approvalChecks, "approvals.reject").tier).toBe("mutate");
+    expect(findCheck(approvalChecks, "approvals.code-mode-reject").tier).toBe("mutate");
+  });
+
+  it("denies a seeded Code Mode request and finds it recorded as rejected", async () => {
+    mocks.denyChatTool.mockResolvedValueOnce({ ok: true, approvalId: SCENARIO.approvalId });
+    const recorded = { approvalId: SCENARIO.approvalId, status: "rejected", kind: "code_mode.request" };
+    mocks.fetchApprovals.mockResolvedValueOnce({ items: [recorded] });
+    const ctx = makeTestContext();
+    await expect(findCheck(approvalChecks, "approvals.code-mode-reject").run(ctx)).resolves.toEqual({
+      status: "pass",
+      summary: "The Code Mode request was denied and recorded. No code ran.",
+      evidence: recorded,
+    });
+    expect(mocks.seedChatCodeModeRequestScenario).toHaveBeenCalledWith(
+      { sessionId: "s-1", workspaceId: "ws-testbench" },
+      ctx.signal,
+    );
+    expect(mocks.seedChatApprovalScenario).not.toHaveBeenCalled();
+    expect(mocks.approveChatTool).not.toHaveBeenCalled();
+    expect(ctx.steps.map((step) => step.title)).toEqual([
+      "Create session",
+      "Seed approval scenario",
+      "Approval is pending",
+      "Deny the request",
+      "Request recorded as rejected",
+    ]);
+  });
+
+  it("fails when the denied approval is not a Code Mode request", async () => {
+    mocks.denyChatTool.mockResolvedValueOnce({ ok: true, approvalId: SCENARIO.approvalId });
+    mocks.fetchApprovals.mockResolvedValueOnce({
+      items: [{ approvalId: SCENARIO.approvalId, status: "rejected", kind: "shell.exec" }],
+    });
+    await expect(findCheck(approvalChecks, "approvals.code-mode-reject").run(makeTestContext())).rejects.toThrow(
+      "The seeded approval is not a Code Mode request.",
+    );
   });
 });

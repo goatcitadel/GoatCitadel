@@ -114,3 +114,10 @@ export const WEB_TOOL_NAMES = new Set<string>(WEB_TOOL_NAME_LIST);
 export const MCP_BROWSER_FALLBACK_TOOL_NAMES = new Set<string>(MCP_BROWSER_FALLBACK_TOOL_NAME_LIST);
 export const PROMPT_LAB_LOCAL_FILE_TOOL_NAMES = new Set<string>(LOCAL_PATH_TOOL_NAME_LIST);
 export const PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAMES = new Set<string>(PROMPT_PACK_WEB_LOOKUP_DIRECT_TOOL_NAME_LIST);
+
+/**
+ * Document helpers that exist for Code Mode runs only. They return raw bytes or very large text, so the chat model
+ * never sees them in its tool schema, whatever the turn says or scores.
+ */
+export const CODE_MODE_ONLY_TOOL_NAME_LIST = ["docs.read_bytes", "docs.extract_text", "docs.decompress"] as const;
+export const CODE_MODE_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set(CODE_MODE_ONLY_TOOL_NAME_LIST);

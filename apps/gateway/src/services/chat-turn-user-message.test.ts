@@ -91,6 +91,25 @@ describe("chat-turn-user-message", () => {
     expect(context).toContain("Preview: sent directly to a vision-capable model.");
   });
 
+  it("an unreadable attachment names its id and docs.extract_text", async () => {
+    const deps = createDeps([
+      createAttachment({
+        attachmentId: "att-plan-pdf",
+        fileName: "saturday-plan.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 2048,
+        extractPreview: "",
+      }),
+    ]);
+
+    const context = await buildAttachmentPromptContext(deps, [{ attachmentId: "att-plan-pdf" }], false);
+
+    expect(context).toContain("- saturday-plan.pdf (application/pdf, 2048 bytes)");
+    expect(context).toContain(
+      "Preview: not extracted. attachmentId: att-plan-pdf. Code Mode can read it with docs.extract_text({ attachmentId }).",
+    );
+  });
+
   it("builds direct vision parts only for loadable small image attachments", async () => {
     const deps = createDeps([
       createAttachment({ attachmentId: "image-small", fileName: "small.png", mimeType: "image/png" }),

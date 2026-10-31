@@ -19,6 +19,7 @@ import type {
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
   CodeModeExecutionBackendsResponse,
+  CodeModeReadiness,
   CodeModeRunListOptions,
   CodeModeRunRecord,
   CodeModeRunVerificationRequest,
@@ -164,6 +165,11 @@ export async function fetchCodeModeRuns(
   return request(`/api/v1/code-mode/runs?${params.toString()}`);
 }
 
+/** Whether Code Mode can run now, or the first thing that blocks it. */
+export async function fetchCodeModeReadiness(): Promise<CodeModeReadiness> {
+  return request("/api/v1/code-mode/readiness");
+}
+
 export async function fetchCodeModeExecutionBackends(): Promise<CodeModeExecutionBackendsResponse> {
   return request("/api/v1/code-mode/execution-backends");
 }
@@ -269,4 +275,14 @@ export async function compareCodeModeRuns(
   return request(
     `/api/v1/code-mode/runs/${encodeURIComponent(runId)}/compare/${encodeURIComponent(baselineRunId)}${suffix}`,
   );
+}
+
+export async function keepCodeModeRun(
+  runId: string,
+  input: { name: string; summary: string },
+): Promise<{ candidateId: string; versionId: string; revision: number }> {
+  return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}/keep`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
 }

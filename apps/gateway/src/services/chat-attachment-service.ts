@@ -197,13 +197,22 @@ export async function getChatAttachment(deps: ChatAttachmentHost, attachmentId: 
 export async function readChatAttachmentContent(
   deps: Pick<ChatAttachmentHost, "config" | "storage">,
   attachmentId: string,
-  options: { maxBytes?: number } = {},
+  options: {
+    maxBytes?: number;
+    /** Refuse, before reading any bytes, an attachment uploaded to another session. */
+    sessionId?: string;
+    /** Read only up to `maxBytes` from `start` with a positioned read, not the whole file. */
+    window?: { start: number; maxBytes: number };
+  } = {},
 ): Promise<{
   record: ChatAttachmentRecord;
   fullPath: string;
   bytes: Buffer;
 }> {
   const record = await deps.storage.chatAttachments.get(attachmentId);
+  if (options.sessionId !== undefined && record.sessionId !== options.sessionId) {
+    throw new Error("Attachment is not part of this session.");
+  }
   const maxBytes = options.maxBytes;
   if (maxBytes !== undefined) {
     if (!Number.isSafeInteger(maxBytes) || maxBytes < 0) {
@@ -219,13 +228,40 @@ export async function readChatAttachmentContent(
     deps.config.toolPolicy.sandbox.writeJailRoots,
     deps.config.toolPolicy.sandbox.readOnlyRoots,
   );
-  const bytes =
-    maxBytes === undefined ? await fs.readFile(fullPath) : await readFileBounded(fullPath, maxBytes, attachmentId);
+  const bytes = options.window
+    ? await readFileWindow(fullPath, options.window)
+    : maxBytes === undefined
+      ? await fs.readFile(fullPath)
+      : await readFileBounded(fullPath, maxBytes, attachmentId);
   return {
     record,
     fullPath,
     bytes,
   };
+}
+
+/** Up to `maxBytes` of the file from `start`, read in place; past the end it is empty. */
+async function readFileWindow(fullPath: string, window: { start: number; maxBytes: number }): Promise<Buffer> {
+  if (![window.start, window.maxBytes].every((value) => Number.isSafeInteger(value) && value >= 0)) {
+    throw new Error("Attachment read window must use non-negative safe integers.");
+  }
+  const handle = await fs.open(fullPath, "r");
+  try {
+    const size = (await handle.stat()).size;
+    const start = Math.min(window.start, size);
+    const buffer = Buffer.alloc(Math.min(size - start, window.maxBytes));
+    let offset = 0;
+    while (offset < buffer.length) {
+      const { bytesRead } = await handle.read(buffer, offset, buffer.length - offset, start + offset);
+      if (bytesRead === 0) {
+        break;
+      }
+      offset += bytesRead;
+    }
+    return buffer.subarray(0, offset);
+  } finally {
+    await handle.close();
+  }
 }
 
 async function readFileBounded(fullPath: string, maxBytes: number, attachmentId: string): Promise<Buffer> {

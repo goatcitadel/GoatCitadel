@@ -71,7 +71,8 @@ type EngineWithBranchPrivates = {
   recordDangerProfileNetworkBypassIfNeeded(auditEventId: string, request: ToolInvokeRequest): Promise<void>;
 };
 
-describe("ToolPolicyEngine loop 15 branch tails", () => {
+// Every case imports engine.js afresh after resetModules, which can take longer than 5 s on a loaded CI runner.
+describe("ToolPolicyEngine loop 15 branch tails", { timeout: 30_000 }, () => {
   afterEach(() => {
     vi.doUnmock("./sandbox/shell-risk-gate.js");
     vi.resetModules();
@@ -94,7 +95,7 @@ describe("ToolPolicyEngine loop 15 branch tails", () => {
 
     expect(result.outcome).toBe("executed");
     expect(result.audit?.startedAt).toBe(result.audit?.completedAt);
-  }, 30_000);
+  });
 
   it("uses completed time when a runtime failure is recorded without an explicit start time", async () => {
     const { ToolPolicyEngine } = await import("./engine.js");

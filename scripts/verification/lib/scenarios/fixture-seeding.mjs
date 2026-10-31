@@ -58,7 +58,12 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
   // still resolve to the approval state. The chat-pending-user-input baseline
   // targets the user-input session explicitly via fixtureSessionKey.
   const seededSessionIds = Array.isArray(seedResponse.body?.sessionIds) ? seedResponse.body.sessionIds : [];
-  const userInputSessionId = seededSessionIds.find((candidate) => candidate && candidate !== sessionId);
+  const spareSessionIds = seededSessionIds.filter((candidate) => candidate && candidate !== sessionId);
+  const userInputSessionId = spareSessionIds[0];
+  // Opt-in Code Mode card sessions, seeded before the approval scenario for the same freshness reason.
+  const codeModeSessions = options.codeModeRequestScenarios
+    ? await seedCodeModeRequestSessions(gatewayUrl, workspaceId, spareSessionIds.slice(1), deps)
+    : {};
   if (userInputSessionId) {
     const userInputResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/chat-user-input-scenario", {
       method: "POST",
@@ -459,6 +464,7 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     sessions: {
       approval: sessionId,
       ...(userInputSessionId ? { userInput: userInputSessionId } : {}),
+      ...codeModeSessions,
     },
     projects: { primary: projectId },
     approvals: { primary: approvalId },
@@ -469,6 +475,36 @@ export async function seedMissionControlNextFixture(gatewayUrl, options = {}, de
     candidateId,
     candidateVersionId,
   };
+}
+
+/**
+ * Seeds the Chat Code Mode card's two recorded states on spare sessions: a turn waiting on its code_mode.request
+ * approval (`codeModePending`) and a finished turn whose request ran (`codeModeRan`). Nothing executes code.
+ *
+ * @param {string} gatewayUrl gateway base URL
+ * @param {string} workspaceId workspace the sessions belong to
+ * @param {string[]} spareSessionIds seeded sessions not used by another scenario
+ * @param {object} deps request and assertion dependencies
+ * @returns {Promise<{codeModePending: string, codeModeRan: string}>} the session id for each state
+ * @throws {Error} when fewer than two spare sessions exist or a seed request fails
+ */
+export async function seedCodeModeRequestSessions(gatewayUrl, workspaceId, spareSessionIds, deps) {
+  const { assertOk, requestJson } = deps;
+  const [pendingSessionId, ranSessionId] = spareSessionIds;
+  if (!pendingSessionId || !ranSessionId) {
+    throw new Error("mission-control-next Code Mode card scenarios need two spare seeded sessions");
+  }
+  const pendingResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/chat-approval-scenario", {
+    method: "POST",
+    body: { sessionId: pendingSessionId, workspaceId, tool: "code_mode.request" },
+  });
+  assertOk(pendingResponse, "create mission-control-next chat Code Mode request approval");
+  const ranResponse = await requestJson(gatewayUrl, "/api/v1/dev/verification/chat-code-mode-ran-scenario", {
+    method: "POST",
+    body: { sessionId: ranSessionId, workspaceId },
+  });
+  assertOk(ranResponse, "create mission-control-next chat Code Mode finished run");
+  return { codeModePending: pendingSessionId, codeModeRan: ranSessionId };
 }
 
 const SETTINGS_RECONCILIATION_CONFLICT_MESSAGE =

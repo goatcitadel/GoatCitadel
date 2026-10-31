@@ -97,6 +97,18 @@ describe("summarizeTurnToolRuns", () => {
     ).toBe("Tried to change a.css");
     // A call a settled turn left unfinished did not happen either.
     expect(summarizeTurnToolRuns([run("fs.patch", { path: "a.css" }, "started")], false)).toBe("Tried to change a.css");
+    // A Code Mode request settles as executed even when its code failed; its result says so.
+    expect(
+      summarizeTurnToolRuns(
+        [
+          {
+            ...run("code_mode.request"),
+            result: { status: "failed", error: "Code Mode is off." },
+          } as ChatToolRunRecord,
+        ],
+        false,
+      ),
+    ).toBe("Tried to use 1 tool");
   });
 });
 
