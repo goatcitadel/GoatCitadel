@@ -297,8 +297,35 @@ describe("a plugin's pieces over the real Gateway", { timeout: 300_000 }, () => 
         .groups.find((group) => group.groupId === "browser"),
     ).toMatchObject({ state: "off" });
     // The operator's own switch, in the tool policy file, was never written.
-    const toolPolicy = JSON.parse(fs.readFileSync(path.join(root, "config", "tool-policy.json"), "utf8"));
-    expect(toolPolicy.tools?.disabledGroups ?? []).toEqual([]);
+    const readOwnSwitch = () =>
+      JSON.parse(fs.readFileSync(path.join(root, "config", "tool-policy.json"), "utf8")).tools?.disabledGroups ?? [];
+    expect(readOwnSwitch()).toEqual([]);
+
+    // The Tools switch's own save can't switch a held group on: refused before any plan is made.
+    const plans = async () => (await live.storage.changePlans.list({ workspaceId: WORKSPACE_ID, limit: 200 })).length;
+    const approvals = async () => (await inject("GET", "/api/v1/approvals")).json<{ items: unknown[] }>().items.length;
+    const [plansBefore, approvalsBefore] = [await plans(), await approvals()];
+    const revision = () => inject("GET", "/api/v1/settings").then((read) => read.json<{ revision: number }>().revision);
+    const switchOn = await inject("PATCH", "/api/v1/settings", {
+      expectedRevision: await revision(),
+      toolGroupChange: { groupId: "browser", enabled: true },
+    });
+    expect(switchOn.statusCode, switchOn.body).toBe(409);
+    expect(switchOn.json()).toEqual(FROM_PLUGIN);
+    expect([await plans(), await approvals()]).toEqual([plansBefore, approvalsBefore]);
+    expect(readOwnSwitch()).toEqual([]);
+
+    // Switching the held group off is the operator's own switch: it completes and is kept.
+    const switchOff = await inject("PATCH", "/api/v1/settings", {
+      expectedRevision: await revision(),
+      toolGroupChange: { groupId: "browser", enabled: false },
+    });
+    expect(switchOff.statusCode, switchOff.body).toBe(200);
+    expect(switchOff.json()).toMatchObject({
+      switchedOffToolGroups: ["browser"],
+      changePlanReceipt: { status: "completed" },
+    });
+    expect(readOwnSwitch()).toEqual(["browser"]);
   });
 });
 

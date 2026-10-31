@@ -184,6 +184,22 @@ describe("buildGovernanceBlockGuidance", () => {
     expect(guidance).not.toMatch(RETRY_INVITATION);
   });
 
+  it("names the plugin that keeps a group off and points to uninstalling it, not to the Tools switch", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "git.status",
+      status: "blocked",
+      error: "blocked: tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+    });
+
+    expect(guidance).toContain("git.status is switched off: the plugin Meeting tools keeps its tool group off.");
+    expect(guidance).toContain("uninstall Meeting tools in Capabilities › Plugins");
+    expect(guidance).toMatch(/not a pending approval/i);
+    expect(guidance).not.toContain("Capabilities › Tools");
+    expect(guidance).not.toContain("the operator turned off");
+    expect(guidance).not.toContain("tools.deny");
+    expect(guidance).not.toMatch(RETRY_INVITATION);
+  });
+
   it("tells the model a switched-off group is the operator's switch, not tools.deny", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "channel.send",
@@ -367,6 +383,40 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).toContain("browser.interact is switched off");
     expect(text).toContain("switch tool groups back on in Capabilities › Tools");
     expect(text).not.toMatch(/narrower|specific URL/i);
+  });
+
+  it("sends the operator to Capabilities › Plugins when every block is a group a plugin keeps off", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "git.status",
+        error: "blocked: tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+      }),
+    ]);
+
+    expect(text).toContain("the plugin Meeting tools keeps its tool group off");
+    expect(text).toContain("uninstall the plugin that keeps a group off in Capabilities › Plugins");
+    expect(text).not.toContain("Capabilities › Tools");
+    expect(text).not.toContain("Settings > Tools");
+  });
+
+  it("names both places when a plugin's hold and the operator's switch stop tools together", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "git.status",
+        error: "blocked: tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+      }),
+      toolRun({
+        toolRunId: "run-2",
+        toolName: "channel.send",
+        error: "blocked: tool channel.send is in a tool group switched off by the operator (Messaging)",
+      }),
+    ]);
+
+    expect(text).toContain("uninstall Meeting tools in Capabilities › Plugins");
+    expect(text).toContain("the operator turned off its tool group in Capabilities › Tools");
+    expect(text).toContain("switch tool groups back on in Capabilities › Tools");
+    expect(text).toContain("Capabilities › Plugins");
+    expect(text).not.toContain("Settings > Tools");
   });
 
   it("keeps the Settings > Tools pointer when a switched-off block is mixed with another policy block", () => {

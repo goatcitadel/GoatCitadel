@@ -111,6 +111,27 @@ function isSwitchedOffRun(run: ChatToolRunRecord): boolean {
   return run.status === "blocked" && isSwitchedOffGroupBlock((run.error ?? "").toLowerCase(), run.result);
 }
 
+// The policy engine's reason when a plugin's hold, not the operator's switch, keeps the group off: it names the first
+// plugin that holds it, then the group's label.
+const PLUGIN_HOLD_PATTERN = /tool group switched off by the plugin (.+?)(?: \([^()]*\))?\s*$/u;
+
+/** The plugin the engine named for a hold, or undefined when the operator's switch (or no reason) stopped the tool. */
+function pluginHoldingGroup(error: string | undefined): string | undefined {
+  return PLUGIN_HOLD_PATTERN.exec(error ?? "")?.[1]?.trim() || undefined;
+}
+
+/** Where the operator lifts switched-off groups: the Tools switch, uninstalling the plugin that holds one, or both. */
+function switchedOffClosing(runs: readonly ChatToolRunRecord[]): string {
+  const held = runs.filter((run) => pluginHoldingGroup(run.error) !== undefined).length;
+  if (held === runs.length) {
+    return "The operator can uninstall the plugin that keeps a group off in Capabilities › Plugins. Once the group is on, ask again and I'll retry.";
+  }
+  if (held > 0) {
+    return "The operator can switch tool groups back on in Capabilities › Tools, and uninstall the plugin that keeps a group off in Capabilities › Plugins. Once the group is on, ask again and I'll retry.";
+  }
+  return "The operator can switch tool groups back on in Capabilities › Tools. Once the group is on, ask again and I'll retry.";
+}
+
 /**
  * Guidance for a tool stopped by operator governance: a tools.deny entry, a
  * tool outside the resolved allow list or permission profile, a Citadel Ward
@@ -138,6 +159,11 @@ export function buildGovernanceBlockGuidance(input: {
   }
   // Before the tools.deny branch: the remedy is the operator's switch, and nothing in tools.deny needs editing.
   if (isSwitchedOffGroupBlock(error, input.result)) {
+    // A plugin's hold is lifted only by uninstalling that plugin, never by the Tools switch.
+    const plugin = pluginHoldingGroup(input.error);
+    if (plugin) {
+      return `${tool} is switched off: the plugin ${plugin} keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can uninstall ${plugin} in Capabilities › Plugins to switch that group back on; tell them which tool you needed.`;
+    }
     return `${tool} is switched off: the operator turned off its tool group in Capabilities › Tools. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can switch that group back on; tell them which tool you needed.`;
   }
   if (error.includes("tool denied by policy")) {
@@ -272,9 +298,9 @@ export function buildPolicyBlockedRecoveryText(failedOrBlocked: readonly ChatToo
   const guidance = [
     ...new Set(failedOrBlocked.map((run) => buildGovernanceBlockGuidance(run)).filter((line) => line !== undefined)),
   ].slice(0, MAX_POLICY_GUIDANCE_LINES);
-  // A switched-off group is lifted in Capabilities › Tools, not by editing the tool policy.
+  // A switched-off group is lifted in Capabilities › Tools (or, for a plugin's hold, Plugins), not by editing the policy.
   const closing = failedOrBlocked.every(isSwitchedOffRun)
-    ? "The operator can switch tool groups back on in Capabilities › Tools. Once the group is on, ask again and I'll retry."
+    ? switchedOffClosing(failedOrBlocked)
     : "The operator can review what this workspace's tools may do in Settings > Tools. Once the policy allows it, ask again and I'll retry.";
   return [
     `I couldn't do that: this workspace's tool policy blocked ${tools}. A policy block is not caused by the input, so I stopped instead of retrying it with a different one.`,

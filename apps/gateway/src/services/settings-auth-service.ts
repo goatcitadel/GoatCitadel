@@ -542,9 +542,10 @@ export async function updateSettings(
   }
 
   if (input.toolApprovalMode) {
-    deps.config.toolPolicy.tools.approvalMode = input.toolApprovalMode;
-    deps.config.assistant.toolApprovalMode = input.toolApprovalMode;
-    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
+    const config = deps.config;
+    config.toolPolicy.tools.approvalMode = input.toolApprovalMode;
+    config.assistant.toolApprovalMode = input.toolApprovalMode;
+    deps.llmService.updateNetworkAllowlist(config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
   }
@@ -575,7 +576,9 @@ export async function updateSettings(
     const toolPolicy = deps.config.toolPolicy;
     if (input.operatorWriteRootChange) applyOperatorWriteRootChange(toolPolicy, input.operatorWriteRootChange);
     if (input.globalToolAccessChange) applyGlobalToolAccessChange(toolPolicy, input.globalToolAccessChange);
-    if (input.toolGroupChange) applyToolGroupChange(toolPolicy, input.toolGroupChange);
+    // Switching on a group a plugin holds is refused here, at prepare (through a candidate) and again at apply.
+    if (input.toolGroupChange)
+      applyToolGroupChange(toolPolicy, input.toolGroupChange, deps.readPluginToolGroupHolds?.() ?? []);
     if (input.outsideRootWriteMode) toolPolicy.sandbox.outsideRootWriteMode = input.outsideRootWriteMode;
   }
 

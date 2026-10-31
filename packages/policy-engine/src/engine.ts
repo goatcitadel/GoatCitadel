@@ -436,6 +436,17 @@ export class ToolPolicyEngine {
     return this.pluginToolGroupHolds;
   }
 
+  /**
+   * "the plugin <name>" for the first plugin, in hold order, that holds this tool's group off, its name on one line;
+   * "a plugin" when the name is empty.
+   */
+  private pluginHoldingTool(toolName: string): string {
+    const groupId = toolGroupForTool(toolName)?.id;
+    const holder = this.pluginToolGroupHolds.find((hold) => hold.groupId === groupId);
+    const pluginName = holder?.pluginName.replace(/[\p{Cc}\s]+/gu, " ").trim();
+    return pluginName ? `the plugin ${pluginName}` : "a plugin";
+  }
+
   /** The live config with every held group added to the operator's switch, as the policy resolver reads it. */
   private policyConfig(): ToolPolicyConfig {
     return withHeldToolGroups(
@@ -1307,10 +1318,10 @@ export class ToolPolicyEngine {
     for (const name of isOwnDeliveryMarker(options.ownDelivery) ? [] : toolNames) {
       if (policy.switchedOffTools?.has(name)) {
         const label = toolGroupForTool(name)?.label;
-        // A group only a plugin holds off says so, so the operator isn't told it was their own switch.
+        // A group only a plugin holds off names that plugin, so the operator isn't told it was their own switch.
         const switchedBy = toolNamesSwitchedOff(this.config.tools.disabledGroups).has(name)
           ? "the operator"
-          : "a plugin";
+          : this.pluginHoldingTool(name);
         return withPolicy(
           deny(
             riskLevel,

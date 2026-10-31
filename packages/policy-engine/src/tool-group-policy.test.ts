@@ -278,7 +278,7 @@ describe("switched-off tool groups in the policy engine", () => {
         expect(held.reasonCodes).toEqual(["tool_group_off"]);
         const blocked = await engine.invoke({ ...request("git.status"), sessionId });
         expect(blocked.outcome).toBe("blocked");
-        expect(blocked.policyReason).toContain("tool group switched off by a plugin (Git)");
+        expect(blocked.policyReason).toContain("tool group switched off by the plugin Meeting tools (Git)");
       }
       // A local operator override can't lift a hold either.
       const overridden = await engine.inspectAccess({
@@ -314,6 +314,24 @@ describe("switched-off tool groups in the policy engine", () => {
       // Without the operator's switch, the released group is back on.
       policy.tools.disabledGroups = [];
       expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+    });
+
+    it("names the first plugin that holds the group, on one line, and the operator when it's their switch too", async () => {
+      const policy = config();
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      engine.setPluginToolGroupHolds([
+        { ...meetingTools, pluginName: "  Meeting\n\ttools " },
+        { ...meetingTools, pluginId: "repo-rules", pluginName: "Repo rules" },
+      ]);
+
+      expect((await engine.invoke(request("git.status"))).policyReason).toContain(
+        "tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+      );
+
+      policy.tools.disabledGroups = ["git"];
+      expect((await engine.invoke(request("git.status"))).policyReason).toContain(
+        "tool group switched off by the operator (Git)",
+      );
     });
 
     it("ignores a hold on Core or an unknown group, and a hand-edited switch beside a hold", async () => {
