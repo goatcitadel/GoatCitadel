@@ -449,26 +449,38 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await waitForButton("Run it");
   });
 
-  it("shows the first sentence of a failure", async () => {
+  it("shows the first sentence of a failure, and the whole error in Details", async () => {
     await render(turnWith({ status: "failed", error: "Code Mode is off. Turn it on from the card in Chat." }));
-    expect(container.textContent).toContain("Code Mode is off.");
-    expect(container.textContent).not.toContain("from the card");
+    expect(rowText()).toContain("Code Mode is off.");
+    expect(rowText()).not.toContain("from the card");
+    expect(container.querySelector("details")!.textContent).toContain(
+      "Code Mode is off. Turn it on from the card in Chat.",
+    );
   });
 
-  it("drops a machine error code and keeps a dotted tool name whole", async () => {
+  const failedWith = (error: string, extra: Record<string, unknown> = {}) =>
+    turnWith({ status: "executed", result: { status: "failed", error, ...extra } });
+
+  it("says a helper failure in plain words and keeps the cause in Details", async () => {
+    const error =
+      "WRAPPER_EXECUTION_FAILED: Wrapper docs.extract_text did not execute: execution error: Path is outside read allowlist: /tmp/a.pdf";
+    await render(failedWith(error, { stderrPreview: "TypeError at line 3" }));
+    expect(rowText()).toContain("The code couldn't read a file.");
+    expect(rowText()).not.toContain("WRAPPER_EXECUTION_FAILED");
+    expect(rowText()).not.toContain("docs.extract_text");
+    const details = container.querySelector("details")!;
+    expect(details.textContent).toContain("Path is outside read allowlist: /tmp/a.pdf");
+    expect(details.textContent).toContain("TypeError at line 3");
+  });
+
+  it("says when the code tried to read a file that was not approved", async () => {
     await render(
-      turnWith({
-        status: "executed",
-        result: {
-          status: "failed",
-          error:
-            "WRAPPER_EXECUTION_FAILED: Wrapper docs.extract_text did not execute: execution error: Path is outside read allowlist: /tmp/a.pdf",
-        },
-      }),
+      failedWith(
+        'WRAPPER_EXECUTION_FAILED: ".env" is not in the files approved for this run, so docs.read_bytes cannot read it.',
+      ),
     );
-    expect(container.textContent).toContain("Wrapper docs.extract_text did not execute.");
-    expect(container.textContent).not.toContain("WRAPPER_EXECUTION_FAILED");
-    expect(container.textContent).not.toContain("allowlist");
+    expect(rowText()).toContain("The code tried to read a file that wasn't approved.");
+    expect(container.querySelector("details")!.textContent).toContain('".env" is not in the files approved');
   });
 
   const doneTurn = () =>

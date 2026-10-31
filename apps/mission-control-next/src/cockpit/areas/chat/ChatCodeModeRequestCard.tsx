@@ -8,69 +8,28 @@ import type {
   CodeModeReadiness,
 } from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
-import {
-  fetchCodeModeRun,
-  keepCodeModeRun,
-  promoteCapabilityCandidate,
-  resolveApproval,
-} from "@goatcitadel/mission-control-shared/api/client";
-import { codeModeRequestInput } from "@goatcitadel/mission-control-shared/content/code-mode-request-input";
 import { formatDuration } from "@goatcitadel/mission-control-shared/content/format";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
-import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { CODE_MODE_READINESS_KEY, useCodeModeReadiness } from "./useCodeModeReadiness";
 import { enableCodeMode } from "./enable-code-mode";
+import { ChatCodeModeKeepAsTool } from "./ChatCodeModeKeepAsTool";
+import { ChatCodeModeRequestDetails } from "./ChatCodeModeRequestDetails";
+import {
+  NOT_RUN,
+  failureLine,
+  failureReason,
+  readEntries,
+  readsLine,
+  text,
+  type CodeModeRequestArgs,
+} from "./code-mode-request-copy";
 
 const ApprovalDecisionBar = lazy(async () => ({
   default: (await import("./ChatApprovalRendererBody")).ApprovalDecisionBar,
 }));
 
 const CODE_MODE_REQUEST = "code_mode.request";
-const NOT_RUN = "Not run";
 const CHANGED_NOTE = "This request was updated. Choose again.";
-
-type Args = { goal?: unknown; source?: unknown; reads?: unknown; input?: unknown };
-const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
-
-/** The files and attachments the request lists in `reads`: the only ones its docs.* helpers may read. */
-const readEntries = (args: Args): string[] =>
-  Array.isArray(args.reads) ? args.reads.flatMap((entry) => (text(entry) ? [text(entry)] : [])) : [];
-
-const READS_SHOWN = 3;
-/** An attachment id as the Gateway mints it. */
-const ATTACHMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-/** One read as the row names it: an attachment by its file name, a path by its last part, never a raw id. */
-function readName(entry: string, attachmentNames: ReadonlyMap<string, string>): string {
-  const named = attachmentNames.get(entry);
-  if (named) return named;
-  if (ATTACHMENT_ID.test(entry)) return "an attachment";
-  return entry.split(/[\\/]/).filter(Boolean).at(-1) ?? entry;
-}
-
-/** "a.pdf, b.txt, c.csv and 2 more": the first few reads by name. */
-function readsLine(entries: string[], attachmentNames: ReadonlyMap<string, string>): string {
-  const names = entries.map((entry) => readName(entry, attachmentNames));
-  const shown = names.slice(0, READS_SHOWN).join(", ");
-  return names.length > READS_SHOWN ? `${shown} and ${names.length - READS_SHOWN} more` : shown;
-}
-
-const REASON_MAX_CHARS = 140;
-
-/**
- * The reason's first sentence in plain words: a leading machine code ("WRAPPER_EXECUTION_FAILED: ") is dropped, a dot
- * inside a name such as docs.extract_text does not end the sentence, a chained cause after ": " is left to Details,
- * and a long reason is cut short.
- */
-function firstSentence(message: string): string {
-  const plain = message.trim().replace(/^[A-Z][A-Z0-9_]+:\s*/, "");
-  const clause = /^[^\n]*?(?:[.!?](?=\s|$)|(?=:\s))/.exec(plain)?.[0] ?? plain.split("\n")[0] ?? "";
-  const trimmed = clause.trim();
-  const sentence = trimmed && !/[.!?]$/.test(trimmed) ? `${trimmed}.` : trimmed;
-  if (!sentence) return NOT_RUN;
-  return sentence.length > REASON_MAX_CHARS ? `${sentence.slice(0, REASON_MAX_CHARS - 1).trimEnd()}…` : sentence;
-}
 
 /** The newest code_mode.request run in the turn, or undefined. */
 function findRequestRun(turn: ChatThreadTurnRecord): ChatToolRunRecord | undefined {
@@ -115,7 +74,7 @@ function RequestRow({
   onRefreshThread(): void;
 }) {
   const queryClient = useQueryClient();
-  const args = (run.args ?? {}) as Args;
+  const args = (run.args ?? {}) as CodeModeRequestArgs;
   const goal = text(args.goal) || "complete this step";
   const open = run.status === "approval_required" || run.status === "started";
   const approvalId = run.approvalId;
@@ -171,8 +130,8 @@ function RequestRow({
     );
     keepRunId = text(run.result?.runId);
   } else if (run.status === "executed" || run.status === "failed") {
-    const reason = text(run.result?.error) || text(run.error);
-    body = <p className="text-fg-secondary">{reason ? firstSentence(reason) : NOT_RUN}</p>;
+    const reason = failureReason(run);
+    body = <p className="text-fg-secondary">{reason ? failureLine(reason) : NOT_RUN}</p>;
   } else if (
     run.status === "blocked" ||
     recordMissing ||
@@ -233,67 +192,9 @@ function RequestRow({
   return (
     <section aria-label="Code Mode request" aria-live={live ? "polite" : undefined} className="space-y-1 text-sm">
       {body}
-      {keepRunId ? <KeepAsTool runId={keepRunId} goal={goal} workspaceId={workspaceId} /> : null}
-      <RequestDetails run={run} args={args} workspaceId={workspaceId} />
+      {keepRunId ? <ChatCodeModeKeepAsTool runId={keepRunId} goal={goal} workspaceId={workspaceId} /> : null}
+      <ChatCodeModeRequestDetails run={run} args={args} workspaceId={workspaceId} />
     </section>
-  );
-}
-
-const toolName = (goal: string): string => {
-  const titled = goal.replace(/\b\p{L}/gu, (letter) => letter.toUpperCase());
-  return titled.slice(0, 60).trim() || "Saved Code Mode tool";
-};
-
-/**
- * Stages the finished run as a tool, then promotes it in the same click: the button label is the consent, so a
- * lifecycle approval raised by the promotion is approved here. A Change Plan, or a promotion that is not available,
- * leaves the tool saved for review in Capabilities.
- */
-function KeepAsTool({ runId, goal, workspaceId }: { runId: string; goal: string; workspaceId: string }) {
-  const [state, setState] = useState<"idle" | "keeping" | "kept" | "failed">("idle");
-  if (state === "kept") {
-    return (
-      <p className="text-fg-secondary">
-        Saved as a tool for review{" "}
-        <NativeOwnerLink href="/capabilities/skills" scope={workspaceId}>
-          Open Capabilities
-        </NativeOwnerLink>
-      </p>
-    );
-  }
-  const keep = async () => {
-    setState("keeping");
-    let staged: Awaited<ReturnType<typeof keepCodeModeRun>>;
-    try {
-      staged = await keepCodeModeRun(runId, { name: toolName(goal), summary: goal.slice(0, 200) });
-    } catch {
-      setState("failed");
-      return;
-    }
-    try {
-      const outcome = await promoteCapabilityCandidate(staged.candidateId, staged.revision, staged.versionId);
-      if (outcome.pendingApproval) await resolveApproval(outcome.pendingApproval.approvalId, "approve");
-    } catch {
-      // The tool is staged; promotion stays available from Capabilities.
-    }
-    setState("kept");
-  };
-  return (
-    <p className="flex flex-wrap items-center gap-2">
-      <button
-        type="button"
-        className="font-medium text-accent hover:underline disabled:opacity-60"
-        disabled={state === "keeping"}
-        onClick={() => void keep()}
-      >
-        Keep as a tool
-      </button>
-      {state === "failed" ? (
-        <span role="status" className="text-fg-muted">
-          Couldn&apos;t save it. Try again.
-        </span>
-      ) : null}
-    </p>
   );
 }
 
@@ -379,68 +280,4 @@ function PendingRow(props: {
       ) : null}
     </div>
   );
-}
-
-function RequestDetails({ run, args, workspaceId }: { run: ChatToolRunRecord; args: Args; workspaceId: string }) {
-  const reads = readEntries(args);
-  // The input decides what the code reads (`input.path`), so it is shown with the code.
-  const input = codeModeRequestInput(args.input);
-  const source = text(args.source);
-  const runId = text(run.result?.runId);
-  return (
-    <details className="text-xs text-fg-secondary">
-      <summary className="cursor-pointer font-medium">Details</summary>
-      <div className="mt-2 space-y-2">
-        {reads.length ? (
-          <div>
-            <p className="font-medium">Reads</p>
-            <ul className="list-disc pl-5">
-              {reads.map((entry) => (
-                <li key={entry} className="wrap-anywhere">
-                  {entry}
-                </li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {input ? (
-          <div>
-            <p className="font-medium">Input</p>
-            <p className="font-mono wrap-anywhere">{input}</p>
-          </div>
-        ) : null}
-        {source ? (
-          <details>
-            <summary className="cursor-pointer font-medium">Code</summary>
-            <pre className="mt-1 max-h-64 overflow-auto whitespace-pre-wrap rounded-md bg-sunken p-2 font-mono text-xs text-fg">
-              {source}
-            </pre>
-          </details>
-        ) : null}
-        <TechnicalDetails>
-          <div className="space-y-1 font-mono text-xs wrap-anywhere">
-            {run.approvalId ? <p>Approval: {run.approvalId}</p> : null}
-            {runId ? <p>Run: {runId}</p> : null}
-            {runId ? (
-              <CodeHash runId={runId} workspaceId={workspaceId} sessionId={run.sessionId} turnId={run.turnId} />
-            ) : null}
-          </div>
-        </TechnicalDetails>
-      </div>
-    </details>
-  );
-}
-
-function CodeHash(props: { runId: string; workspaceId: string; sessionId: string; turnId: string }) {
-  const query = useQuery({
-    queryKey: ["code-mode", "run", props.workspaceId, props.runId],
-    queryFn: () =>
-      fetchCodeModeRun(props.runId, {
-        workspaceId: props.workspaceId,
-        sessionId: props.sessionId,
-        turnId: props.turnId,
-      }),
-    staleTime: 60_000,
-  });
-  return query.data?.codeHash ? <p>Code hash: {query.data.codeHash}</p> : null;
 }
