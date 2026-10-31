@@ -1,5 +1,9 @@
 import { createServer } from "node:http";
 
+// Gmail runs only on a Google sign-in (installed-app OAuth, tokens in the OS keychain), never on a pasted
+// token, and the lane cannot sign in to Google. Its proof is that a fresh connection refuses the action.
+const SIGN_IN_REQUIRED_BLOCKED_REASONS = new Map([["automation.gmail", "gmail_auth_missing"]]);
+
 export async function runCatalogParityLane(context, _options = {}, deps) {
   const {
     assertOk,
@@ -29,7 +33,6 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
         TRELLO_TOKEN: "trello-token",
         NOTION_INTEGRATION_TOKEN: "notion-token",
         GITHUB_INTEGRATION_TOKEN: "github-token",
-        GMAIL_ACCESS_TOKEN: "gmail-token",
         GIF_SEARCH_API_KEY: "tenor-key",
       },
     });
@@ -156,15 +159,21 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
             },
           );
           assertOk(actionResult, `invoke ${catalogId}:${operatorAction.actionId}`);
-          if (actionResult.body?.status !== "executed") {
+          const signInBlockedReason = SIGN_IN_REQUIRED_BLOCKED_REASONS.get(catalogId);
+          const expectedStatus = signInBlockedReason ? "blocked" : "executed";
+          if (
+            actionResult.body?.status !== expectedStatus ||
+            (signInBlockedReason && actionResult.body?.blockedReason !== signInBlockedReason)
+          ) {
             throw new Error(
-              `catalog parity action ${catalogId}:${operatorAction.actionId} returned ${actionResult.body?.status ?? "unknown"}: ${JSON.stringify(actionResult.body)}`,
+              `catalog parity action ${catalogId}:${operatorAction.actionId} returned ${actionResult.body?.status ?? "unknown"}, expected ${signInBlockedReason ? `blocked (${signInBlockedReason})` : expectedStatus}: ${JSON.stringify(actionResult.body)}`,
             );
           }
           runtimeActionResults.push({
             catalogId,
             actionId: operatorAction.actionId,
             status: actionResult.body?.status,
+            blockedReason: actionResult.body?.blockedReason,
             message: actionResult.body?.message,
             output: actionResult.body?.output,
           });
@@ -280,16 +289,6 @@ async function startCatalogParityFixtureServer() {
       );
       return;
     }
-    if (url.pathname === "/gmail/v1/users/me/messages" && method === "GET") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ messages: [{ id: "msg-1", threadId: "thread-1" }] }));
-      return;
-    }
-    if (url.pathname === "/gmail/v1/users/me/messages/send" && method === "POST") {
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify({ id: "sent-1" }));
-      return;
-    }
     response.writeHead(404, { "content-type": "application/json" });
     response.end(JSON.stringify({ error: "not_found", path: url.pathname, method }));
   });
@@ -329,8 +328,10 @@ function buildCatalogParityConnectionConfig(catalogId, fixtureBaseUrl) {
         defaultRepo: "octo/widgets",
       };
     case "automation.gmail":
+      // Read Gmail on, so the refusal is the missing sign-in rather than a switched-off capability.
       return {
-        accessTokenEnv: "GMAIL_ACCESS_TOKEN",
+        clientId: "verification-client.apps.googleusercontent.com",
+        gmailRead: true,
       };
     case "automation.gif-search":
       return {
