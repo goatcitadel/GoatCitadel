@@ -156,3 +156,13 @@ it("shows an unsupported Gateway honestly and withholds all native selection act
   expect(api.save).not.toHaveBeenCalled();
   expect(api.reset).not.toHaveBeenCalled();
 });
+it("names the integration selection Integrations", async () => {
+  await mount();
+  const region = panel("Integrations selection");
+  expect(region).toBeDefined();
+  expect(button(region, "Refresh integrations scope")).toBeDefined();
+  expect(text(renderer!.root)).not.toContain("Plugins");
+  expect(renderer!.root.findAllByType("section").some((item) => item.props["aria-label"] === "Plugins selection")).toBe(
+    false,
+  );
+});

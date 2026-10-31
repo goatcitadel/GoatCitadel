@@ -1,7 +1,5 @@
 import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
-import { ValidationError, redactStructuredSecrets } from "@goatcitadel/contracts";
-import { PluginPackageStorageError } from "../services/integration-channel-service.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { sendRouteError } from "./_error-handler.js";
 import type {
@@ -35,17 +33,12 @@ import {
   externalConnectorServicesQuerySchema,
   externalConnectorStageActionSchema,
   externalSideEffectRunsQuerySchema,
-  pluginInstallSchema,
-  pluginParamsSchema,
   updateConnectionSchema,
 } from "./integrations-shared.js";
 
 const RATE_LIMIT_READ_MAX = 500;
 const RATE_LIMIT_MUTATION_MAX = 180;
 const RATE_LIMIT_AUTH_MAX = 60;
-
-// Absolute filesystem paths (Windows drive or POSIX) are scrubbed from logged causes.
-const ABSOLUTE_PATH_PATTERN = /(?:[A-Za-z]:[\\/]|\/)[^\s'"`]+/g;
 
 export function registerIntegrationControlRoutes(fastify: FastifyInstance): void {
   const pairingReadRoute = {
@@ -473,73 +466,6 @@ export function registerIntegrationControlRoutes(fastify: FastifyInstance): void
     } catch (error) {
       const message = (error as Error).message;
       return sendProjectedIntegrationError(reply, message.toLowerCase().includes("unknown") ? 404 : 409, message);
-    }
-  });
-
-  fastify.get("/api/v1/integrations/plugins", async (_request, reply) => {
-    return reply.send(
-      projectPublicSecretValue({
-        items: await fastify.services.integrations.listIntegrationPlugins(),
-      }),
-    );
-  });
-
-  fastify.post("/api/v1/integrations/plugins/install", async (request, reply) => {
-    const parsed = pluginInstallSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.code(400).send({ error: parsed.error.flatten() });
-    }
-    try {
-      return reply
-        .code(201)
-        .send(projectPublicSecretValue(await fastify.services.integrations.installIntegrationPlugin(parsed.data)));
-    } catch (error) {
-      if (error instanceof PluginPackageStorageError) {
-        // Leave bounded, redacted server-side evidence for the generic 503.
-        const cause =
-          error.cause instanceof Error
-            ? {
-                name: error.cause.name,
-                message: error.cause.message.replace(ABSOLUTE_PATH_PATTERN, "[path]").slice(0, 300),
-              }
-            : {};
-        request.log.warn({ err: redactStructuredSecrets(cause).value }, "integration plugin package storage failed");
-        return reply.code(503).send({ error: error.message });
-      }
-      return reply.code(400).send({ error: (error as Error).message });
-    }
-  });
-
-  fastify.post("/api/v1/integrations/plugins/:pluginId/enable", async (request, reply) => {
-    const params = pluginParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
-    }
-    try {
-      return reply.send(
-        projectPublicSecretValue(
-          await fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, true),
-        ),
-      );
-    } catch (error) {
-      // A quarantined plugin is a refused request, not a missing one.
-      return reply.code(error instanceof ValidationError ? 400 : 404).send({ error: (error as Error).message });
-    }
-  });
-
-  fastify.post("/api/v1/integrations/plugins/:pluginId/disable", async (request, reply) => {
-    const params = pluginParamsSchema.safeParse(request.params);
-    if (!params.success) {
-      return reply.code(400).send({ error: params.error.flatten() });
-    }
-    try {
-      return reply.send(
-        projectPublicSecretValue(
-          await fastify.services.integrations.setIntegrationPluginEnabled(params.data.pluginId, false),
-        ),
-      );
-    } catch (error) {
-      return reply.code(404).send({ error: (error as Error).message });
     }
   });
 

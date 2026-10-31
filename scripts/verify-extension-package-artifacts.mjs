@@ -7,43 +7,37 @@ import { pathToFileURL } from "node:url";
 
 const repoRoot = process.cwd();
 const packageDir = path.join(repoRoot, "packages", "extensions-sdk");
-const rootManifestPath = path.join(
-  repoRoot,
-  "templates",
-  "integration-plugins",
-  "reference-integration-plugin",
-  "goatcitadel.integration-plugin.json",
-);
-const packageManifestPath = path.join(
-  packageDir,
-  "templates",
-  "integration-plugins",
-  "reference-integration-plugin",
-  "goatcitadel.integration-plugin.json",
-);
-const distValidatorPath = path.join(packageDir, "dist", "integration-plugins.js");
+const packageJsonPath = path.join(packageDir, "package.json");
+const distIndexPath = path.join(packageDir, "dist", "index.js");
+// 2.0.0 keeps only the effective-tool snapshot helpers. A name outside this
+// list in the built barrel means a retired helper has crept back in.
+const EXPECTED_EXPORTS = [
+  "buildToolSchemaRefIndex",
+  "dereferenceEffectiveToolSchema",
+  "findEffectiveToolByName",
+  "listEffectiveCallableTools",
+  "validateCompactToolDirectorySnapshot",
+];
 let gnuTarCache;
 
-if (!fs.existsSync(distValidatorPath)) {
+if (!fs.existsSync(distIndexPath)) {
   fail("extensions-sdk dist is missing; run `pnpm --filter @goatcitadel/extensions-sdk build` first.");
 }
 
-const { validateIntegrationPluginAuthorManifest } = await import(pathToFileURL(distValidatorPath).href);
-const rootManifest = readJson(rootManifestPath);
-const packageManifest = readJson(packageManifestPath);
-const packageTemplateManifests = listManifestFiles(path.join(packageDir, "templates"));
-
-validateIntegrationPluginAuthorManifest(rootManifest);
-validateIntegrationPluginAuthorManifest(packageManifest);
-
-if (JSON.stringify(rootManifest) !== JSON.stringify(packageManifest)) {
-  fail("packaged reference integration-plugin manifest drifted from the repo reference scaffold.");
+const packageJson = readJson(packageJsonPath);
+const sdk = await import(pathToFileURL(distIndexPath).href);
+assertExportedNames(Object.keys(sdk), "built extensions-sdk barrel");
+const exportTargets = collectExportTargets(packageJson);
+if (exportTargets.length === 0) {
+  fail("extensions-sdk package.json declares no export targets.");
 }
-if (packageTemplateManifests.length === 0) {
-  fail("extensions-sdk templates do not include any distributed GoatCitadel manifests.");
+for (const target of exportTargets) {
+  if (!fs.existsSync(path.join(packageDir, target))) {
+    fail(`extensions-sdk export target ${target} does not exist in the built package.`);
+  }
 }
-for (const relativeManifestPath of packageTemplateManifests) {
-  readJson(path.join(packageDir, "templates", relativeManifestPath));
+if (packageJson.bin !== undefined) {
+  fail("extensions-sdk 2.0.0 ships no command; package.json must not declare a bin entry.");
 }
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-ext-pack-"));
@@ -74,32 +68,24 @@ try {
   if (tar.status !== 0) {
     fail(tar.stderr || tar.stdout || "tar extraction failed.");
   }
-  const extractedManifestPath = path.join(
-    extractDir,
-    "package",
-    "templates",
-    "integration-plugins",
-    "reference-integration-plugin",
-    "goatcitadel.integration-plugin.json",
-  );
-  if (!fs.existsSync(extractedManifestPath)) {
-    fail("packed extensions-sdk artifact is missing the reference integration-plugin manifest.");
+  const extractedPackageDir = path.join(extractDir, "package");
+  const extractedPackageJsonPath = path.join(extractedPackageDir, "package.json");
+  if (!fs.existsSync(extractedPackageJsonPath)) {
+    fail("packed extensions-sdk artifact is missing package.json.");
   }
-  const extractedManifest = readJson(extractedManifestPath);
-  validateIntegrationPluginAuthorManifest(extractedManifest);
-  if (JSON.stringify(extractedManifest) !== JSON.stringify(rootManifest)) {
-    fail("extracted reference integration-plugin manifest drifted from the repo reference scaffold.");
-  }
-  const extractedTemplateRoot = path.join(extractDir, "package", "templates");
-  const extractedTemplateManifests = listManifestFiles(extractedTemplateRoot);
-  if (JSON.stringify(extractedTemplateManifests) !== JSON.stringify(packageTemplateManifests)) {
+  const extractedPackageJson = readJson(extractedPackageJsonPath);
+  if (extractedPackageJson.version !== packageJson.version) {
     fail(
-      `packed extensions-sdk artifact manifest set drifted: expected ${packageTemplateManifests.join(", ")}, found ${extractedTemplateManifests.join(", ")}`,
+      `packed extensions-sdk version drifted: expected ${packageJson.version}, found ${extractedPackageJson.version}.`,
     );
   }
-  for (const relativeManifestPath of extractedTemplateManifests) {
-    readJson(path.join(extractedTemplateRoot, relativeManifestPath));
+  for (const target of collectExportTargets(extractedPackageJson)) {
+    if (!fs.existsSync(path.join(extractedPackageDir, target))) {
+      fail(`packed extensions-sdk artifact is missing export target ${target}.`);
+    }
   }
+  const extractedSdk = await import(pathToFileURL(path.join(extractedPackageDir, "dist", "index.js")).href);
+  assertExportedNames(Object.keys(extractedSdk), "packed extensions-sdk barrel");
   const skillBundleTarballName = verifyPortableSkillBundlePackageSurvivesExtraction(tempDir);
   console.log(`Verified extensions-sdk package artifact: ${path.basename(tarball)}`);
   console.log(`Verified portable skill-bundle package fixture: ${skillBundleTarballName}`);
@@ -111,26 +97,28 @@ function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
 }
 
-function listManifestFiles(rootDir) {
-  if (!fs.existsSync(rootDir)) {
-    return [];
+function assertExportedNames(actualNames, label) {
+  const actual = [...actualNames].sort();
+  const expected = [...EXPECTED_EXPORTS].sort();
+  if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+    fail(`${label} exports drifted: expected ${expected.join(", ")}, found ${actual.join(", ")}.`);
   }
-  const out = [];
-  walkManifestFiles(rootDir, rootDir, out);
-  return out.sort();
 }
 
-function walkManifestFiles(rootDir, currentDir, out) {
-  for (const entry of fs.readdirSync(currentDir, { withFileTypes: true })) {
-    const fullPath = path.join(currentDir, entry.name);
-    if (entry.isDirectory()) {
-      walkManifestFiles(rootDir, fullPath, out);
-      continue;
+// Relative file targets in "main", "types" and every condition of "exports".
+function collectExportTargets(manifest) {
+  const targets = new Set();
+  const visit = (value) => {
+    if (typeof value === "string") {
+      targets.add(value.replace(/^\.\//u, ""));
+    } else if (value && typeof value === "object") {
+      Object.values(value).forEach(visit);
     }
-    if (entry.isFile() && /^goatcitadel\..+\.json$/u.test(entry.name)) {
-      out.push(path.relative(rootDir, fullPath).replaceAll("\\", "/"));
-    }
-  }
+  };
+  visit(manifest.main);
+  visit(manifest.types);
+  visit(manifest.exports);
+  return [...targets].sort();
 }
 
 function findPackedTarball(tempDir, stdout) {

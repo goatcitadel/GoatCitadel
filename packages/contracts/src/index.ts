@@ -4,7 +4,6 @@ export * from "./activation.js";
 export * from "./autonomy.js";
 export * from "./capabilities.js";
 export * from "./capability-scope.js";
-export * from "./addons.js";
 export * from "./capability-packs.js";
 export * from "./continuation-gate.js";
 export * from "./evidence.js";

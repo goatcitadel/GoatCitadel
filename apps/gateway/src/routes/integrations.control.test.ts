@@ -1,8 +1,5 @@
 import fs from "node:fs";
-import path from "node:path";
-import { ValidationError, type IntegrationConnection, type IntegrationPluginRecord } from "@goatcitadel/contracts";
-import { PluginPackageStorageError } from "../services/integration-channel-service.js";
-import { buildInstalledIntegrationPluginRecord } from "../services/integration-plugin-author-contract.js";
+import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { buildGenericChannelInboundSignature } from "../services/generic-channel-webhook.js";
 import type { DurableInboundChannelAcceptInput } from "../services/channel-inbound-dispatch.js";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -820,257 +817,28 @@ describe("integrations control routes", () => {
     expect(rawReconnect.lastError).toContain("reconnect-path");
   });
 
-  it("projects integration plugin provenance and descriptor diagnostics across lifecycle responses", async () => {
-    const rawPlugin = {
-      pluginId: "plugin-token-id",
-      label: "Projected Plugin",
-      version: "1.0.0",
-      description: "Authorization: Bearer plugin-description-short",
-      source: "https://plugins.example.test/access-token/plugin-source-path?token=plugin-source-query",
-      sourceMetadata: {
-        type: "url",
-        display: "URL: https://plugins.example.test/client-secret/plugin-display-path?token=plugin-display-query",
-        integrityStatus: "verified",
-        expectedIntegrity: "sha256:plugin-integrity-hash",
-      },
-      integrityStatus: "verified",
-      trustWarnings: [
-        {
-          code: "plugin.runtime_warning",
-          severity: "warning",
-          message: "Provider returned Bearer plugin-warning-short",
-        },
-      ],
-      descriptorHealth: {
-        status: "warning",
-        checkedAt: "2026-07-09T00:00:00.000Z",
-        source: "https://plugins.example.test/api-key/plugin-health-path?token=plugin-health-query",
-        summary: "Proxy-Authorization: Bearer plugin-health-short",
-        issues: [],
-        evidence: {
-          owner: "gateway",
-          source: "integration_plugin_descriptor",
-          timestamp: "2026-07-09T00:00:00.000Z",
-          status: "warning",
-          descriptorHash: "descriptor-hash",
-        },
-      },
-      theme: { accentColor: "#17c3b2", dashboardVariant: "compact" },
-      enabled: true,
-      installedAt: "2026-07-09T00:00:00.000Z",
-      updatedAt: "2026-07-09T00:00:00.000Z",
-      capabilities: ["channel.adapter"],
-      requestCount: 9,
-    } as IntegrationPluginRecord & { requestCount: number };
-    const listIntegrationPlugins = vi.fn(() => [rawPlugin]);
-    const installIntegrationPlugin = vi.fn(() => rawPlugin);
-    const setIntegrationPluginEnabled = vi.fn(() => rawPlugin);
+  it("answers 404 for the retired integration plugin routes", async () => {
+    const listIntegrationPlugins = vi.fn();
+    const installIntegrationPlugin = vi.fn();
+    const setIntegrationPluginEnabled = vi.fn();
     app = Fastify();
-    decorateIntegrationServices(app, {
-      listIntegrationPlugins,
-      installIntegrationPlugin,
-      setIntegrationPluginEnabled,
-    });
+    decorateIntegrationServices(app, { listIntegrationPlugins, installIntegrationPlugin, setIntegrationPluginEnabled });
     await app.register(integrationsRoutes);
 
-    const install = await app.inject({
-      method: "POST",
-      url: "/api/v1/integrations/plugins/install",
-      payload: { source: "npm:safe-plugin" },
-    });
-    const listed = await app.inject({ method: "GET", url: "/api/v1/integrations/plugins" });
-    const enabled = await app.inject({
-      method: "POST",
-      url: "/api/v1/integrations/plugins/plugin-token-id/enable",
-    });
-
-    for (const response of [install, enabled]) {
-      expect(response.statusCode).toBeLessThan(300);
-      expect(response.json()).toMatchObject({
-        pluginId: "plugin-token-id",
-        description: "Authorization: [REDACTED]",
-        source: "https://plugins.example.test/access-token/[REDACTED]?token=[REDACTED]",
-        sourceMetadata: {
-          display: "URL: https://plugins.example.test/client-secret/[REDACTED]?token=[REDACTED]",
-          expectedIntegrity: "sha256:plugin-integrity-hash",
-        },
-        trustWarnings: [{ message: "Provider returned Bearer [REDACTED]" }],
-        descriptorHealth: {
-          source: "https://plugins.example.test/api-key/[REDACTED]?token=[REDACTED]",
-          summary: "Proxy-Authorization: [REDACTED]",
-          evidence: { descriptorHash: "descriptor-hash" },
-        },
-        theme: { accentColor: "#17c3b2", dashboardVariant: "compact" },
-        requestCount: 9,
-      });
+    const retired = [
+      { method: "GET", url: "/api/v1/integrations/plugins" },
+      { method: "POST", url: "/api/v1/integrations/plugins/install", payload: { source: "npm:p" } },
+      { method: "POST", url: "/api/v1/integrations/plugins/googlechat/enable" },
+      { method: "POST", url: "/api/v1/integrations/plugins/googlechat/disable" },
+    ] as const;
+    for (const request of retired) {
+      const response = await app.inject(request);
+      expect(response.statusCode, `${request.method} ${request.url}`).toBe(404);
     }
-    expect(listed.statusCode).toBe(200);
-    expect(listed.json().items[0]).toMatchObject(install.json());
-    expect(rawPlugin.description).toContain("plugin-description-short");
-    expect(rawPlugin.source).toContain("plugin-source-path");
-    expect(rawPlugin.theme).toEqual({ accentColor: "#17c3b2", dashboardVariant: "compact" });
-  });
 
-  it("maps install storage failures to 503 and validation failures to 400", async () => {
-    const installIntegrationPlugin = vi
-      .fn()
-      .mockImplementationOnce(() => {
-        throw new PluginPackageStorageError();
-      })
-      .mockImplementationOnce(() => {
-        throw new ValidationError({ field: "expectedIntegrity", message: "bad pin" });
-      });
-    app = Fastify();
-    decorateIntegrationServices(app, { installIntegrationPlugin });
-    await app.register(integrationsRoutes);
-    const request = {
-      method: "POST" as const,
-      url: "/api/v1/integrations/plugins/install",
-      payload: { source: "npm:p" },
-    };
-    const storage = await app.inject(request);
-    const validation = await app.inject(request);
-    expect(storage.statusCode).toBe(503);
-    expect(storage.json().error).toContain("could not be stored");
-    expect(validation.statusCode).toBe(400);
-  });
-
-  it("logs a redacted cause for an install storage 503", async () => {
-    const lines: string[] = [];
-    const installIntegrationPlugin = vi.fn(() => {
-      throw new PluginPackageStorageError({
-        cause: new Error("EACCES: permission denied, mkdir 'C:\\Users\\alice\\secret-store\\p' and /home/alice/data"),
-      });
-    });
-    app = Fastify({ logger: { level: "warn", stream: { write: (line: string) => void lines.push(line) } } });
-    decorateIntegrationServices(app, { installIntegrationPlugin });
-    await app.register(integrationsRoutes);
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/integrations/plugins/install",
-      payload: { source: "npm:p" },
-    });
-
-    expect(response.statusCode).toBe(503);
-    const logged = lines.join("");
-    expect(logged).toContain("integration plugin package storage failed");
-    expect(logged).toContain("EACCES");
-    expect(logged).not.toContain("alice");
-    expect(logged).not.toContain("secret-store");
-  });
-
-  it("refuses to enable a quarantined plugin with a 400 and the reason", async () => {
-    const setIntegrationPluginEnabled = vi.fn(() => {
-      throw new ValidationError({
-        field: "pluginId",
-        message:
-          "Plugin is quarantined after an integrity failure. Reinstall it; the new install's integrity result replaces the quarantine.",
-      });
-    });
-    app = Fastify();
-    decorateIntegrationServices(app, { setIntegrationPluginEnabled });
-    await app.register(integrationsRoutes);
-
-    const response = await app.inject({
-      method: "POST",
-      url: "/api/v1/integrations/plugins/quarantined-plugin/enable",
-    });
-
-    expect(response.statusCode).toBe(400);
-    expect(response.json().error).toContain("quarantined after an integrity failure");
-  });
-
-  it("supports reference plugin install, list, and enable-disable lifecycle routes", async () => {
-    const source = path.resolve(process.cwd(), "../../templates/integration-plugins/reference-integration-plugin");
-    let plugins: IntegrationPluginRecord[] = [
-      buildInstalledIntegrationPluginRecord({
-        now: "2026-03-30T08:00:00.000Z",
-        pluginId: "reference-integration-plugin",
-        source,
-      }),
-    ];
-    plugins = [{ ...plugins[0]!, enabled: false }];
-    const listIntegrationPlugins = vi.fn(() => plugins);
-    const installIntegrationPlugin = vi.fn((input: { source: string; pluginId?: string }) => {
-      const created = buildInstalledIntegrationPluginRecord({
-        now: "2026-03-30T09:00:00.000Z",
-        pluginId: input.pluginId ?? "reference-integration-plugin",
-        source: input.source,
-      });
-      plugins = [created];
-      return created;
-    });
-    const setIntegrationPluginEnabled = vi.fn((pluginId: string, enabled: boolean) => {
-      plugins = plugins.map((plugin) => (plugin.pluginId === pluginId ? { ...plugin, enabled } : plugin));
-      return plugins.find((plugin) => plugin.pluginId === pluginId)!;
-    });
-    app = Fastify();
-    decorateIntegrationServices(app, {
-      listIntegrationPlugins,
-      installIntegrationPlugin,
-      setIntegrationPluginEnabled,
-    });
-    await app.register(integrationsRoutes);
-
-    const installResponse = await app.inject({
-      method: "POST",
-      url: "/api/v1/integrations/plugins/install",
-      payload: { source },
-    });
-    expect(installResponse.statusCode).toBe(201);
-    expect(installIntegrationPlugin).toHaveBeenCalledWith({ source });
-    expect(installResponse.json()).toEqual(
-      expect.objectContaining({
-        pluginId: "reference-integration-plugin",
-        label: "Reference Integration Plugin",
-        source,
-        enabled: true,
-      }),
-    );
-
-    const disableResponse = await app.inject({
-      method: "POST",
-      url: "/api/v1/integrations/plugins/reference-integration-plugin/disable",
-    });
-    expect(disableResponse.statusCode).toBe(200);
-    expect(setIntegrationPluginEnabled).toHaveBeenCalledWith("reference-integration-plugin", false);
-    expect(disableResponse.json()).toEqual(
-      expect.objectContaining({
-        pluginId: "reference-integration-plugin",
-        enabled: false,
-      }),
-    );
-
-    const listResponse = await app.inject({
-      method: "GET",
-      url: "/api/v1/integrations/plugins",
-    });
-    expect(listResponse.statusCode).toBe(200);
-    expect(listIntegrationPlugins).toHaveBeenCalled();
-    expect(listResponse.json()).toEqual({
-      items: expect.arrayContaining([
-        expect.objectContaining({
-          pluginId: "reference-integration-plugin",
-          label: "Reference Integration Plugin",
-          source,
-          enabled: false,
-        }),
-      ]),
-    });
-
-    const enableResponse = await app.inject({
-      method: "POST",
-      url: "/api/v1/integrations/plugins/reference-integration-plugin/enable",
-    });
-    expect(enableResponse.statusCode).toBe(200);
-    expect(setIntegrationPluginEnabled).toHaveBeenCalledWith("reference-integration-plugin", true);
-    expect(enableResponse.json()).toEqual(
-      expect.objectContaining({
-        pluginId: "reference-integration-plugin",
-        enabled: true,
-      }),
-    );
+    expect(listIntegrationPlugins).not.toHaveBeenCalled();
+    expect(installIntegrationPlugin).not.toHaveBeenCalled();
+    expect(setIntegrationPluginEnabled).not.toHaveBeenCalled();
   });
 });
 

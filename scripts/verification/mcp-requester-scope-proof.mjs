@@ -601,7 +601,7 @@ const SPEC_SCENARIOS = [
   {
     scenario: 11,
     title:
-      "Direct routes, approved replay, browser fallback, plugin overrides, skills, and mesh/HX-408 descriptors converge on or stay outside the private gate; none can register a resolver",
+      "Direct routes, approved replay, browser fallback, the built-in tool runtime owner, skills, and mesh/HX-408 descriptors converge on or stay outside the private gate; none can register a resolver",
     checks: [
       "requester-scope.invocation-seams",
       "requester-scope.chat-freeze-fallback",

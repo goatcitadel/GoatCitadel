@@ -61,8 +61,10 @@ const CHECK_GROUPS = Object.freeze({
           minimumPassedTests: 12,
           expectedStdout: [
             "exposes normalized agentic runtime availability",
-            "keeps corrupt plugin manifests unavailable and non-callable",
+            "keeps corrupt provider manifests unavailable and non-callable",
             "keeps corrupt provider manifests quarantined from callable exposure",
+            "allows callable exposure only after integrity, approval, availability, and health pass",
+            "marks non-inspectable capabilities unavailable even when a runtime says callable",
             "hides configured harness capability when the executable is missing",
             "converts skill drift, memory misses, and repeated failures into proposal-only review records",
           ],
@@ -193,8 +195,8 @@ const CHECK_GROUPS = Object.freeze({
           timeoutMs: 180_000,
           expectedStdout: [
             "exposes normalized agentic runtime availability",
-            "normalizes harnesses, providers, plugins, and channels into one non-callable-safe surface",
-            "keeps corrupt plugin manifests unavailable and non-callable",
+            "normalizes harnesses, providers, and channels into one non-callable-safe surface",
+            "keeps corrupt provider manifests unavailable and non-callable",
             "keeps corrupt provider manifests quarantined from callable exposure",
             "hides configured harness capability when the executable is missing",
           ],
@@ -356,7 +358,7 @@ const CHECK_GROUPS = Object.freeze({
         },
       ),
       commandCheck(
-        "Gateway permission profile and plugin override governance behavior",
+        "Gateway permission profile and built-in runtime owner governance behavior",
         "pnpm",
         [
           "--filter",
@@ -367,7 +369,6 @@ const CHECK_GROUPS = Object.freeze({
           "--reporter",
           "verbose",
           "src/routes/tools.permission-profiles.test.ts",
-          "src/services/plugin-tool-override-service.test.ts",
           "src/services/tool-invocation-coordinator-service.test.ts",
           "--maxWorkers=1",
         ],
@@ -375,8 +376,8 @@ const CHECK_GROUPS = Object.freeze({
           timeoutMs: 180_000,
           sqliteSchemaTemplate: true,
           expectedStdout: [
-            "routes execution to plugin override handler when an active override exists",
-            "blocks plugin overrides when final policy would require approval",
+            "binds every tool call to the built-in runtime owner",
+            "blocks an approved external runtime action because no runtime handler is left to run it",
           ],
         },
       ),
@@ -456,37 +457,6 @@ const CHECK_GROUPS = Object.freeze({
             "exchanges authorization codes into OS secret-store refs without serializing raw tokens",
             "injects resolved OAuth bearer tokens into remote MCP HTTP calls without echoing secrets",
             "records successful MCP runtime policy as an external runtime execution",
-          ],
-        },
-      ),
-    ],
-  },
-  marketplace: {
-    title: "Plugin/provider marketplace callable-boundary behavior",
-    checks: [
-      commandCheck(
-        "Plugin/provider quarantine and callable exposure behavior",
-        "pnpm",
-        [
-          "--filter",
-          "@goatcitadel/gateway",
-          "exec",
-          "vitest",
-          "run",
-          "--reporter",
-          "verbose",
-          "src/services/plugin-provider-governance-service.test.ts",
-          "src/services/agentic-capability-availability.test.ts",
-          "src/routes/tasks.test.ts",
-        ],
-        {
-          timeoutMs: 120_000,
-          expectedStdout: [
-            "keeps corrupt plugin manifests unavailable and non-callable",
-            "keeps corrupt provider manifests quarantined from callable exposure",
-            "allows callable exposure only after integrity, approval, availability, and health pass",
-            "marks non-inspectable capabilities unavailable even when a runtime says callable",
-            "exposes normalized agentic runtime availability",
           ],
         },
       ),
@@ -614,7 +584,7 @@ const CHECK_GROUPS = Object.freeze({
         },
       ),
       commandCheck(
-        "Agentic availability route exposes harness/provider/plugin/channel callability",
+        "Agentic availability route exposes harness/provider/channel callability",
         "pnpm",
         [
           "--filter",
@@ -632,7 +602,7 @@ const CHECK_GROUPS = Object.freeze({
           timeoutMs: 180_000,
           expectedStdout: [
             "exposes normalized agentic runtime availability",
-            "normalizes harnesses, providers, plugins, and channels into one non-callable-safe surface",
+            "normalizes harnesses, providers, and channels into one non-callable-safe surface",
             "hides configured harness capability when the executable is missing",
           ],
         },

@@ -87,9 +87,8 @@ export function deriveEcosystemProofLaneItems(): EcosystemProofLaneItem[] {
     },
     {
       id: "extension-sdk",
-      label: "Extension / plugin SDK breadth",
-      description:
-        "Keep extension claims aligned with installed plugin trust metadata, diagnostics, and @goatcitadel/extensions-sdk evidence.",
+      label: "Extension SDK breadth",
+      description: "Keep extension claims aligned with diagnostics and @goatcitadel/extensions-sdk evidence.",
       meta: "Catalog-gated",
       actionLabel: "Integrations",
       route: { area: "settings", section: "integrations" },

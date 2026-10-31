@@ -7525,6 +7525,8 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
           addColumnIfMissingIfTableExists(db, "chat_turn_traces", "reasoning_text", "TEXT");
         },
       },
+      // Integration plugins are gone; their record list lived in one system_settings row.
+      { version: 273, name: "purge_integration_plugin_records", up: purgeIntegrationPluginRecords },
     ],
   },
 ];
@@ -13920,6 +13922,18 @@ function purgeCredentialRouteIdempotencyPayloadHashes(db: DatabaseSync): void {
       AND payload_hash <> @sentinel
   `,
   ).run({ sentinel: CREDENTIAL_ROUTE_HISTORICAL_PAYLOAD_HASH_SENTINEL });
+}
+
+// The removed integration plugin service kept every plugin record in this one
+// system_settings row. Nothing reads or writes it any more, so the migration
+// deletes it. The plugin_* columns on integration_connections stay, are never
+// written again, and stay readable for old rows. Plugin package files under the
+// data folder are not touched.
+function purgeIntegrationPluginRecords(db: DatabaseSync): void {
+  if (!tableExists(db, "system_settings")) {
+    return;
+  }
+  db.prepare("DELETE FROM system_settings WHERE setting_key = 'integration_plugins_v1'").run();
 }
 
 function scrubLegacyRemoteApprovalBearers(db: DatabaseSync): void {

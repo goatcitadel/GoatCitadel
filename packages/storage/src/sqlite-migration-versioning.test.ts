@@ -28,8 +28,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 272,
-        name: "chat_turn_traces_reasoning_text",
+        version: 273,
+        name: "purge_integration_plugin_records",
       },
     );
     db.close();

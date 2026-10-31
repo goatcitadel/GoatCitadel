@@ -18,7 +18,6 @@ import { ChannelEditingNote, ChannelNeeds } from "../../../features/native-route
 import { ChannelFirstMessageWebhook } from "../../../features/native-routes/settings/channel-setup/ChannelWebhookAddress";
 import { ChannelWizardFields, channelInputClass } from "./ChannelWizardFields";
 import { ChannelFeedback, ChannelRichBlocks, ChannelStepHelp } from "./ChannelWizardContent";
-import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
 
 export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
   const wizard = useChannelWizard({ ...props, allowAdvancedInput: false });
@@ -87,7 +86,6 @@ export function ChannelDraftEditor(props: ChannelSetupWizardProps) {
           </p>
         </div>
       </details>
-      <ExtensionConfigurationGuidance guidance={props.definition.configurationGuidance} />
       {wizard.advancedMode ? (
         <label className="block text-sm">
           Draft JSON

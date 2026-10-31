@@ -64,11 +64,6 @@ import {
 import type { McpRuntimeInvocationResult } from "./mcp-runtime.js";
 import { toMcpInvokeRequest, toolInvokeResultFromMcpRuntime } from "./gateway/external-runtime-approval-adapter.js";
 import { isNativeMcpToolName, type NativeMcpChatToolBinding } from "./gateway/native-mcp-chat-binding.js";
-import type {
-  PluginToolExecutionContext,
-  PluginToolHandler,
-  PluginToolOverrideService,
-} from "./plugin-tool-override-service.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 import type { EvidenceEnvelopeCreateRequest } from "./evidence-envelope-service.js";
 import { evaluateComputerUseSafety } from "../browser-runtime-guardrails.js";
@@ -124,7 +119,7 @@ const APPROVAL_REASON_RE = /^approval:([A-Za-z0-9_-]+)$/;
 
 function buildExternalRuntimePolicyFailure(
   finalPolicyCheck: ToolInvokeResult,
-  runtimeLabel = "plugin override",
+  runtimeLabel: string,
 ): ToolInvokeResult | undefined {
   if (finalPolicyCheck.outcome === "blocked" || finalPolicyCheck.outcome === "approval_required") {
     return finalPolicyCheck;
@@ -146,21 +141,6 @@ function buildExternalRuntimePolicyFailure(
 function readDryRunRequiresApproval(result: ToolInvokeResult["result"]): boolean {
   const policy = result?.policy;
   return Boolean(policy && typeof policy === "object" && "requiresApproval" in policy && policy.requiresApproval);
-}
-
-function buildPluginToolExecutionContext(
-  request: ToolInvokeRequest,
-  policyResult?: ToolInvokeResult,
-  approvedExternalRuntimeReplayId?: string,
-): PluginToolExecutionContext {
-  const policyContext = mergePolicyContexts(request.policyContext, readPolicyContextFromResult(policyResult));
-  return {
-    request: policyContext ? { ...request, policyContext } : request,
-    policyContext,
-    policyResult,
-    signal: request.signal,
-    approvedExternalRuntimeReplayId,
-  };
 }
 
 function readPolicyContextFromResult(result: ToolInvokeResult | undefined): ToolInvokeRequest["policyContext"] {
@@ -334,20 +314,13 @@ function buildWorkspacePathBridgeBlockedResult(
   };
 }
 
-function buildPluginRuntimeOwnerDriftResult(): ToolInvokeResult {
-  return {
-    outcome: "blocked",
-    policyReason: "blocked: immutable Chat tool runtime owner binding drifted",
-    auditEventId: randomUUID(),
-  };
-}
-
-function buildApprovedExternalRuntimeCancelledResult(): ToolInvokeResult {
-  return {
-    outcome: "blocked",
-    policyReason: "blocked: approved external runtime invocation was cancelled before execution",
-    auditEventId: randomUUID(),
-  };
+/**
+ * Nothing registers a tool runtime override since Phase 4, so every tool call
+ * runs on the built-in runtime owner. A stored `plugin` owner binding from an
+ * older record therefore never matches and the call fails closed.
+ */
+function currentToolRuntimeOwnerBinding(): ChatTurnCapabilityToolRuntimeOwnerBinding {
+  return buildToolRuntimeOwnerBinding("builtin");
 }
 
 function buildToolInvocationCancelledResult(): ToolInvokeResult {
@@ -687,8 +660,6 @@ export interface ToolInvocationCoordinatorHost {
     };
     context?: Record<string, unknown>;
   }): void;
-  readonly pluginToolOverrideService?: Pick<PluginToolOverrideService, "resolveActiveHandler"> &
-    Partial<Pick<PluginToolOverrideService, "resolveRuntimeOwnerBinding">>;
 }
 
 export interface ToolInvocationRuntimeOptions {
@@ -735,7 +706,7 @@ export interface ToolInvocationRuntimeOptions {
   /** Exact tool runtime owner admitted by the immutable Chat profile. */
   toolRuntimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
   /**
-   * Called before the execution fence when an allowed runtime-owner override
+   * Called before the execution fence when an inline tool hook dispatch
    * invalidates a frozen `none` classification.
    */
   onEffectPotentialEscalated?: (potential: ToolEffectPotentialRecord) => Promise<void>;
@@ -764,7 +735,6 @@ export interface ToolInvocationCoordinator {
 export interface ApprovedExternalRuntimeInvocationOptions {
   /** Process-local approval-worker cancellation authority; never deserialize from model input. */
   signal?: AbortSignal;
-  runtimeOwner?: ChatTurnCapabilityToolRuntimeOwnerBinding;
 }
 
 export class ToolInvocationCoordinatorService implements ToolInvocationCoordinator {
@@ -786,8 +756,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     await this.assertChatToolDispatchAllowed(request);
     const checkOwner = () => {
       if (!options.runtimeOwner) return;
-      const owner = this.resolveCurrentToolRuntimeOwnerBinding(request.toolName);
-      if (owner?.kind !== options.runtimeOwner.kind || owner.bindingHash !== options.runtimeOwner.bindingHash)
+      const owner = currentToolRuntimeOwnerBinding();
+      if (owner.kind !== options.runtimeOwner.kind || owner.bindingHash !== options.runtimeOwner.bindingHash)
         throw new ToolExecutionPreconditionError("Approved tool runtime owner changed from its admitted binding.");
     };
     checkOwner();
@@ -822,42 +792,6 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       await bridge(boundary);
       checkOwner();
     };
-  }
-
-  private resolveCurrentToolRuntimeOwnerBinding(
-    toolName: string,
-  ): ChatTurnCapabilityToolRuntimeOwnerBinding | undefined {
-    const service = this.host.pluginToolOverrideService;
-    if (!service) return buildToolRuntimeOwnerBinding("builtin");
-    const binding = service.resolveRuntimeOwnerBinding?.(toolName);
-    if (binding) return binding;
-    // A legacy override host cannot prove a stable handler generation. Treat
-    // an active handler as unbound; no-handler falls through to the builtin.
-    return service.resolveActiveHandler(toolName) ? undefined : buildToolRuntimeOwnerBinding("builtin");
-  }
-
-  private admitPluginRuntimeOwner(
-    toolName: string,
-    handler: PluginToolHandler,
-  ): ChatTurnCapabilityToolRuntimeOwnerBinding | undefined {
-    const currentHandler = this.host.pluginToolOverrideService?.resolveActiveHandler(toolName);
-    const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(toolName);
-    return currentHandler === handler && currentOwner?.kind === "plugin" ? currentOwner : undefined;
-  }
-
-  private isPluginRuntimeOwnerAdmissionCurrent(
-    toolName: string,
-    handler: PluginToolHandler,
-    admittedOwner: ChatTurnCapabilityToolRuntimeOwnerBinding,
-  ): boolean {
-    const currentHandler = this.host.pluginToolOverrideService?.resolveActiveHandler(toolName);
-    const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(toolName);
-    return (
-      currentHandler === handler &&
-      currentOwner?.kind === "plugin" &&
-      admittedOwner.kind === "plugin" &&
-      currentOwner.bindingHash === admittedOwner.bindingHash
-    );
   }
 
   private async runPostCommitConsumer(
@@ -1081,7 +1015,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       }
       admittedToolCallBeforeHookInterposition = currentInterposition;
 
-      const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(normalizedRequest.toolName);
+      const currentOwner = currentToolRuntimeOwnerBinding();
       const expectedOwner = options.toolRuntimeOwner;
       const expectedOwnerValid =
         expectedOwner === undefined ||
@@ -1089,10 +1023,9 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
           /^[a-f0-9]{64}$/u.test(expectedOwner.bindingHash));
       const exactOwner =
         expectedOwner !== undefined &&
-        currentOwner !== undefined &&
         expectedOwner.kind === currentOwner.kind &&
         expectedOwner.bindingHash === currentOwner.bindingHash;
-      const acceptedLegacyBuiltinOwner = expectedOwner === undefined && currentOwner?.kind === "builtin";
+      const acceptedLegacyBuiltinOwner = expectedOwner === undefined && currentOwner.kind === "builtin";
       if (!expectedOwnerValid || (!exactOwner && !acceptedLegacyBuiltinOwner)) {
         return {
           outcome: "blocked",
@@ -1182,9 +1115,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     }
 
     if (options.effectPotential && options.toolRuntimeOwner) {
-      const currentOwner = this.resolveCurrentToolRuntimeOwnerBinding(hookableRequest.toolName);
+      const currentOwner = currentToolRuntimeOwnerBinding();
       if (
-        !currentOwner ||
         currentOwner.kind !== options.toolRuntimeOwner.kind ||
         currentOwner.bindingHash !== options.toolRuntimeOwner.bindingHash
       ) {
@@ -1258,39 +1190,6 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       }
     }
 
-    const protectedApprovalActionDelivery = hasApprovalActionTemplate(hookableRequest);
-    const overrideHandler =
-      isCodeModeWrapperInvocation || protectedApprovalActionDelivery
-        ? undefined
-        : this.host.pluginToolOverrideService?.resolveActiveHandler(hookableRequest.toolName);
-    const admittedOverrideRuntimeOwner = overrideHandler
-      ? this.admitPluginRuntimeOwner(hookableRequest.toolName, overrideHandler)
-      : undefined;
-    if (
-      overrideHandler &&
-      (isNativeMcpToolName(hookableRequest.toolName) || isMeshChatToolName(hookableRequest.toolName))
-    ) {
-      return buildPluginRuntimeOwnerDriftResult();
-    }
-    if (overrideHandler && !admittedOverrideRuntimeOwner) {
-      return buildPluginRuntimeOwnerDriftResult();
-    }
-    if (
-      overrideHandler &&
-      options.effectPotential &&
-      (!options.toolRuntimeOwner ||
-        options.toolRuntimeOwner.kind !== "plugin" ||
-        options.toolRuntimeOwner.bindingHash !== admittedOverrideRuntimeOwner?.bindingHash)
-    ) {
-      return buildPluginRuntimeOwnerDriftResult();
-    }
-    if (overrideHandler && options.effectPotential?.potential === "none" && !options.onEffectPotentialEscalated) {
-      return {
-        outcome: "blocked",
-        policyReason: "blocked: plugin override cannot execute under an unchangeable no-effect classification",
-        auditEventId: randomUUID(),
-      };
-    }
     const bridgeApplication = await applyFreshWorkspacePathBridge(this.host, hookableRequest, {
       invocationId: toolHookEntityId,
       phase: "policy",
@@ -1299,40 +1198,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (!bridgeApplication.ok) {
       return bridgeApplication.result;
     }
-    let executionRequest = bridgeApplication.request;
+    const executionRequest = bridgeApplication.request;
     const workspacePathBridgeSnapshotIds = bridgeApplication.snapshotId ? [bridgeApplication.snapshotId] : [];
-    let approvedExternalRuntimeReplayId: string | undefined;
-    let finalPolicyCheck: ToolInvokeResult | undefined;
     // The own-delivery marker vouches for the tool its caller named; a hook that renames the tool loses it.
     const ownDelivery = hookableRequest.toolName === normalizedRequest.toolName ? options.ownDelivery : undefined;
-    const ownDeliveryOptions: [] | [{ ownDelivery: OwnDeliveryMarker }] = ownDelivery ? [{ ownDelivery }] : [];
-    if (overrideHandler) {
-      finalPolicyCheck = await this.host.policyEngine.invoke(
-        {
-          ...executionRequest,
-          externalRuntime: true,
-        },
-        ...ownDeliveryOptions,
-      );
-      const overridePolicyFailure = buildExternalRuntimePolicyFailure(finalPolicyCheck);
-      if (overridePolicyFailure) {
-        return overridePolicyFailure;
-      }
-      approvedExternalRuntimeReplayId = extractVerifiedApprovalReplayId(finalPolicyCheck, executionRequest);
-      if (approvedExternalRuntimeReplayId) {
-        return {
-          outcome: "blocked",
-          policyReason:
-            "blocked: approved external-runtime actions execute only through the canonical approval-effect worker",
-          auditEventId: finalPolicyCheck.auditEventId,
-          result: {
-            approvalId: approvedExternalRuntimeReplayId,
-            executionOwner: "approval_effect",
-          },
-          audit: finalPolicyCheck.audit,
-        };
-      }
-    }
     let result: ToolInvokeResult;
     const toolStartedAt = Date.now();
     this.host.recordDevDiagnostic?.({
@@ -1344,96 +1213,14 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       taskId: hookableRequest.taskId,
       toolRunId: toolHookEntityId,
       toolName: hookableRequest.toolName,
-      runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
+      runtimeKind: "tool.invocation",
       runtimeStatus: "started",
       context: {
         agentId: hookableRequest.agentId,
       },
     });
     try {
-      if (overrideHandler) {
-        if (!admittedOverrideRuntimeOwner) {
-          return buildPluginRuntimeOwnerDriftResult();
-        }
-        if (options.effectPotential?.potential === "none") {
-          await options.onEffectPotentialEscalated?.(
-            classifyToolEffectPotential({
-              toolName: hookableRequest.toolName,
-              trustedBuiltin: false,
-              sourceKind: "plugin",
-            }),
-          );
-        }
-        const preExecuteBridge = await applyFreshWorkspacePathBridge(this.host, executionRequest, {
-          invocationId: toolHookEntityId,
-          phase: "pre_execute",
-          ...(options.workspacePathBridgeSignal ? { signal: options.workspacePathBridgeSignal } : {}),
-        });
-        const preExecuteDriftReason =
-          preExecuteBridge.ok && isWorkspacePathBridgeCwdTool(executionRequest.toolName)
-            ? compareWorkspacePathBridgeApplications(bridgeApplication, preExecuteBridge, {
-                requireSnapshotFingerprint: true,
-              })
-            : undefined;
-        if (!preExecuteBridge.ok) {
-          result = preExecuteBridge.result;
-        } else if (preExecuteDriftReason) {
-          if (preExecuteBridge.snapshotId) workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
-          result = buildWorkspacePathBridgeBlockedResult(preExecuteDriftReason, preExecuteBridge.snapshotId);
-        } else {
-          executionRequest = preExecuteBridge.request;
-          if (preExecuteBridge.snapshotId) {
-            workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
-          }
-          if (
-            !this.isPluginRuntimeOwnerAdmissionCurrent(
-              hookableRequest.toolName,
-              overrideHandler,
-              admittedOverrideRuntimeOwner,
-            ) ||
-            options.workspacePathBridgeSignal?.aborted
-          ) {
-            result = options.workspacePathBridgeSignal?.aborted
-              ? buildToolInvocationCancelledResult()
-              : buildPluginRuntimeOwnerDriftResult();
-          } else {
-            await options.executionFence?.();
-            if (
-              !this.isPluginRuntimeOwnerAdmissionCurrent(
-                hookableRequest.toolName,
-                overrideHandler,
-                admittedOverrideRuntimeOwner,
-              ) ||
-              options.workspacePathBridgeSignal?.aborted
-            ) {
-              result = options.workspacePathBridgeSignal?.aborted
-                ? buildToolInvocationCancelledResult()
-                : buildPluginRuntimeOwnerDriftResult();
-            } else {
-              // Plugin handlers do not expose a deeper provider adapter boundary, so
-              // conservatively record it immediately before the approved handler.
-              await options.externalSideEffect?.markStarted();
-              if (
-                !this.isPluginRuntimeOwnerAdmissionCurrent(
-                  hookableRequest.toolName,
-                  overrideHandler,
-                  admittedOverrideRuntimeOwner,
-                ) ||
-                options.workspacePathBridgeSignal?.aborted
-              ) {
-                result = options.workspacePathBridgeSignal?.aborted
-                  ? buildToolInvocationCancelledResult()
-                  : buildPluginRuntimeOwnerDriftResult();
-              } else {
-                result = await overrideHandler(
-                  executionRequest.args ?? {},
-                  buildPluginToolExecutionContext(executionRequest, finalPolicyCheck, approvedExternalRuntimeReplayId),
-                );
-              }
-            }
-          }
-        }
-      } else if (isMeshChatToolName(executionRequest.toolName)) {
+      if (isMeshChatToolName(executionRequest.toolName)) {
         result = await this.invokeMeshToolFromToolRequest(executionRequest, options);
       } else if (executionRequest.toolName === "mcp.invoke" || isNativeMcpToolName(executionRequest.toolName)) {
         result = await this.invokeMcpToolFromToolRequest(executionRequest, options);
@@ -1477,7 +1264,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         toolRunId: toolHookEntityId,
         toolName: hookableRequest.toolName,
         durationMs: Date.now() - toolStartedAt,
-        runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
+        runtimeKind: "tool.invocation",
         runtimeStatus: "failed",
         runtimeError: {
           name: error instanceof Error ? error.name : undefined,
@@ -1508,12 +1295,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     // the seam where BOTH the produced output (result.result) and the ward decision
     // (result.wardEffect, surfaced by the policy engine in slice 3.1a) are in scope.
     // Non-redact invocations are untouched, so behavior is byte-identical to before.
-    // Plugin-override results carry no wardEffect of their own, so thread it from the
-    // pre-execution policy check (finalPolicyCheck) so the ward is not silently dropped
-    // on that path; for the engine path finalPolicyCheck is undefined and the result's
-    // own wardEffect is used, preserving prior behavior exactly.
     result = withWorkspacePathBridgeEvidence(result, workspacePathBridgeSnapshotIds);
-    result = withRedactWardApplied(result, finalPolicyCheck);
+    result = applyRedactWardEffect(result);
 
     const approvalForResult =
       result.outcome === "approval_required" && result.approvalId
@@ -1568,7 +1351,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         toolRunId: toolHookEntityId,
         toolName: hookableRequest.toolName,
         durationMs: Date.now() - toolStartedAt,
-        runtimeKind: overrideHandler ? "tool.invocation.override" : "tool.invocation",
+        runtimeKind: "tool.invocation",
         runtimeStatus: result.outcome === "blocked" || result.outcome === "approval_required" ? "blocked" : "completed",
         context: {
           outcome: result.outcome,
@@ -1589,7 +1372,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         approvalId: result.approvalId,
         toolCallHashes: [result.auditEventId ?? toolHookEntityId],
         metadata: {
-          runtime: overrideHandler ? "plugin_override" : "policy",
+          runtime: "policy",
           toolName: hookableRequest.toolName,
           taskId: hookableRequest.taskId,
           agentId: hookableRequest.agentId,
@@ -1651,8 +1434,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
   public async invokeApprovedExternalRuntimeTool(
     request: ToolInvokeRequest,
-    markExternalCallStarted?: () => void | Promise<void>,
-    options: ApprovedExternalRuntimeInvocationOptions = {},
+    _markExternalCallStarted?: () => void | Promise<void>,
+    _options: ApprovedExternalRuntimeInvocationOptions = {},
   ): Promise<ToolInvokeResult> {
     await this.assertChatToolDispatchAllowed(request);
     if (!this.host.isValidToolName(request.toolName)) {
@@ -1685,181 +1468,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         auditEventId: randomUUID(),
       };
     }
-    const overrideHandler = this.host.pluginToolOverrideService?.resolveActiveHandler(normalizedRequest.toolName);
-    if (!overrideHandler) {
-      return {
-        outcome: "blocked",
-        policyReason: `blocked: approved external runtime handler is unavailable for ${normalizedRequest.toolName}`,
-        auditEventId: randomUUID(),
-      };
-    }
-    const admittedOverrideRuntimeOwner = this.admitPluginRuntimeOwner(normalizedRequest.toolName, overrideHandler);
-    if (!admittedOverrideRuntimeOwner) {
-      return buildPluginRuntimeOwnerDriftResult();
-    }
-    if (
-      options.runtimeOwner &&
-      (options.runtimeOwner.kind !== admittedOverrideRuntimeOwner.kind ||
-        options.runtimeOwner.bindingHash !== admittedOverrideRuntimeOwner.bindingHash)
-    )
-      return buildPluginRuntimeOwnerDriftResult();
-    const workspacePathBridgeInvocationId = `approved:${randomUUID()}`;
-    const policyBridge = await applyFreshWorkspacePathBridge(this.host, normalizedRequest, {
-      invocationId: workspacePathBridgeInvocationId,
-      phase: "policy",
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-    if (!policyBridge.ok) {
-      return policyBridge.result;
-    }
-    if (options.signal?.aborted) {
-      return buildApprovedExternalRuntimeCancelledResult();
-    }
-    let executionRequest = policyBridge.request;
-    const workspacePathBridgeSnapshotIds = policyBridge.snapshotId ? [policyBridge.snapshotId] : [];
-    const finalPolicyCheck = await this.host.policyEngine.invoke({
-      ...executionRequest,
-      externalRuntime: true,
-    });
-    const overridePolicyFailure = buildExternalRuntimePolicyFailure(finalPolicyCheck);
-    if (overridePolicyFailure) {
-      return overridePolicyFailure;
-    }
-    const toolRunId = workspacePathBridgeInvocationId;
-    this.host.recordDevDiagnostic?.({
-      level: "debug",
-      category: "tools",
-      event: "tool.invocation.start",
-      message: "Starting approved external runtime invocation",
-      sessionId: executionRequest.sessionId,
-      taskId: executionRequest.taskId,
-      toolRunId,
-      toolName: executionRequest.toolName,
-      runtimeKind: "tool.invocation.override",
-      runtimeStatus: "started",
-      context: {
-        agentId: executionRequest.agentId,
-        approvalReplay: true,
-        workspacePathBridgeSnapshotId: workspacePathBridgeSnapshotIds.at(-1),
-      },
-    });
-    const preExecuteBridge = await applyFreshWorkspacePathBridge(this.host, executionRequest, {
-      invocationId: workspacePathBridgeInvocationId,
-      phase: "pre_execute",
-      ...(options.signal ? { signal: options.signal } : {}),
-    });
-    if (!preExecuteBridge.ok) {
-      return withWorkspacePathBridgeEvidence(preExecuteBridge.result, workspacePathBridgeSnapshotIds);
-    }
-    const preExecuteDriftReason = isWorkspacePathBridgeCwdTool(executionRequest.toolName)
-      ? compareWorkspacePathBridgeApplications(policyBridge, preExecuteBridge, {
-          requireSnapshotFingerprint: true,
-        })
-      : undefined;
-    if (preExecuteDriftReason) {
-      if (preExecuteBridge.snapshotId) workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
-      return withWorkspacePathBridgeEvidence(
-        buildWorkspacePathBridgeBlockedResult(preExecuteDriftReason, preExecuteBridge.snapshotId),
-        workspacePathBridgeSnapshotIds,
-      );
-    }
-    executionRequest = preExecuteBridge.request;
-    if (preExecuteBridge.snapshotId) {
-      workspacePathBridgeSnapshotIds.push(preExecuteBridge.snapshotId);
-    }
-    if (
-      options.signal?.aborted ||
-      !this.isPluginRuntimeOwnerAdmissionCurrent(
-        executionRequest.toolName,
-        overrideHandler,
-        admittedOverrideRuntimeOwner,
-      )
-    ) {
-      return options.signal?.aborted
-        ? buildApprovedExternalRuntimeCancelledResult()
-        : buildPluginRuntimeOwnerDriftResult();
-    }
-    await this.assertChatToolDispatchAllowed(executionRequest);
-    await markExternalCallStarted?.();
-    if (
-      options.signal?.aborted ||
-      !this.isPluginRuntimeOwnerAdmissionCurrent(
-        executionRequest.toolName,
-        overrideHandler,
-        admittedOverrideRuntimeOwner,
-      )
-    ) {
-      return options.signal?.aborted
-        ? buildApprovedExternalRuntimeCancelledResult()
-        : buildPluginRuntimeOwnerDriftResult();
-    }
-    // Apply the redact ward before the result flows into realtime projection and the
-    // evidence envelope below; the plugin result carries no wardEffect, so thread the
-    // decision from finalPolicyCheck (mirrors the primary invocation seam).
-    const result = withRedactWardApplied(
-      await overrideHandler(
-        executionRequest.args ?? {},
-        buildPluginToolExecutionContext(executionRequest, finalPolicyCheck, undefined),
-      ),
-      finalPolicyCheck,
-    );
-    const permissionProfileId =
-      executionRequest.policyContext?.permissionProfileId ?? executionRequest.permissionProfileId;
-    const localOperatorOverrideId =
-      executionRequest.policyContext?.localOperatorOverrideId ?? executionRequest.localOperatorOverrideId;
-    const linkedRunId = executionRequest.runId ?? executionRequest.policyContext?.runId;
-    await this.runPostCommitConsumer("approved external-runtime realtime projection", executionRequest, async () => {
-      await this.host.publishRealtime(
-        "tool_invoked",
-        "policy",
-        {
-          toolName: executionRequest.toolName,
-          sessionId: executionRequest.sessionId,
-          agentId: executionRequest.agentId,
-          taskId: executionRequest.taskId,
-          outcome: result.outcome,
-          policyReason: result.policyReason,
-          approvalId: result.approvalId,
-          auditEventId: result.auditEventId,
-          permissionProfileId,
-          localOperatorOverrideId,
-          runId: linkedRunId,
-          workspacePathBridgeSnapshotId: workspacePathBridgeSnapshotIds.at(-1),
-        },
-        {
-          eventClass: "operational_signal",
-          eventAuthority: "retained_stream",
-          links: {
-            sessionId: executionRequest.sessionId,
-            taskId: executionRequest.taskId,
-            approvalId: result.approvalId,
-            runId: linkedRunId,
-          },
-        },
-      );
-    });
-    await this.runPostCommitConsumer("approved external-runtime evidence recording", executionRequest, async () => {
-      await this.host.recordEvidenceEnvelope?.({
-        eventKind: "tool_invocation",
-        sessionId: executionRequest.sessionId,
-        runId: linkedRunId,
-        approvalId: result.approvalId,
-        toolCallHashes: [result.auditEventId ?? toolRunId],
-        metadata: {
-          runtime: "plugin_override",
-          toolName: executionRequest.toolName,
-          taskId: executionRequest.taskId,
-          agentId: executionRequest.agentId,
-          outcome: result.outcome,
-          policyReason: result.policyReason,
-          permissionProfileId,
-          localOperatorOverrideId,
-          approvalReplay: true,
-          workspacePathBridgeSnapshotIds,
-        },
-      });
-    });
-    return result;
+    // Nothing registers an external runtime handler since Phase 4, so an approved
+    // action of this kind has no owner left to run it and fails closed.
+    return {
+      outcome: "blocked",
+      policyReason: `blocked: approved external runtime handler is unavailable for ${normalizedRequest.toolName}`,
+      auditEventId: randomUUID(),
+    };
   }
 
   private async resolveMeshBinding(
@@ -1922,11 +1537,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     };
     const result = await dispatchMeshChatTool(
       {
-        resolveBinding: async (input, context) => {
-          if (this.host.pluginToolOverrideService?.resolveActiveHandler(input.toolName))
-            throw new ToolExecutionPreconditionError("Mesh runtime owner drifted");
-          return this.resolveMeshBinding(input, { meshTurnContext: context });
-        },
+        resolveBinding: async (input, context) => this.resolveMeshBinding(input, { meshTurnContext: context }),
         dispatch: (input, dispatchOptions) => this.host.dispatchMeshCapabilityInvocation!(input, dispatchOptions),
       },
       request,
@@ -2038,8 +1649,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     if (
       options.nativeCanonicalToolName &&
       ((resolveMcpServerConnectionMode(server) === "static" && !options.mcpRequesterTurnContext) ||
-        options.nativeCanonicalToolName !== `mcp.${input.serverId}.${input.toolName}` ||
-        this.host.pluginToolOverrideService?.resolveActiveHandler(options.nativeCanonicalToolName))
+        options.nativeCanonicalToolName !== `mcp.${input.serverId}.${input.toolName}`)
     ) {
       throw new ToolExecutionPreconditionError("Approved native MCP target or runtime owner drifted");
     }
@@ -2412,11 +2022,9 @@ function applyRedactWardEffect(result: ToolInvokeResult): ToolInvokeResult {
  * Applies the redact Citadel Ward to a result, threading the ward decision from the
  * pre-execution policy check when the produced result does not already carry one.
  *
- * Plugin-override handlers return a plain result with no `wardEffect` (they know
- * nothing about wards), so on those paths the ward decision lives only on the
- * pre-execution `policyCheck`. Without this, a `redact` ward matched for a
- * plugin-overridden tool would be silently dropped — enforced on the engine and MCP
- * seams but not on the plugin-override sibling path.
+ * An external runtime returns a plain result that may carry no `wardEffect` of its
+ * own, so on that path the ward decision lives only on the pre-execution
+ * `policyCheck`. Without this, a matched `redact` ward would be silently dropped.
  */
 function withRedactWardApplied(result: ToolInvokeResult, policyCheck: ToolInvokeResult | undefined): ToolInvokeResult {
   const withWard =

@@ -543,13 +543,6 @@ export async function runAgenticGovernanceLane(context) {
     subsystem: "agentic",
   });
   await runAgenticProofScenario(context, {
-    profile: "marketplace",
-    id: "agentic.marketplace.callable-governance",
-    lane: "agentic-governance",
-    title: "Plugin/provider marketplace callable-boundary behavior",
-    subsystem: "agentic",
-  });
-  await runAgenticProofScenario(context, {
     profile: "selfImprovement",
     id: "agentic.self-improvement.review-first",
     lane: "agentic-governance",
@@ -774,16 +767,6 @@ async function runAutonomousActivationGrantGovernanceScenario(context) {
   } finally {
     await stopVerificationStack(stack);
   }
-}
-
-export async function runAgenticPluginsMarketplaceLane(context) {
-  await runAgenticProofScenario(context, {
-    profile: "marketplace",
-    id: "agentic.marketplace.callable-governance",
-    lane: "agentic-plugins-marketplace",
-    title: "Plugin/provider marketplace callable-boundary behavior",
-    subsystem: "agentic",
-  });
 }
 
 export async function runAgenticMcpOAuthLane(context) {

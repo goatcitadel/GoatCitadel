@@ -82,7 +82,6 @@ The agentic parity lanes are focused behavior-backed lanes. They do not replace 
 - `verify:code:workbench-loop` (`agentic-workbench-loop`) focuses the Code Workbench patch, test, apply, export, and revert behavior.
 - `verify:channels:runtime` (`agentic-channels-runtime`) focuses durable channel delivery retry, stale-state, and route behavior.
 - `verify:harness:availability` (`agentic-harness-availability`) focuses agentic availability routes plus callable-boundary behavior when external harness anchors are absent or present.
-- `verify:plugins:marketplace` (`agentic-plugins-marketplace`) focuses plugin/provider marketplace callable-boundary behavior.
 - `verify:self-improvement:trust` (`agentic-self-improvement-trust`) focuses review-first self-improvement and curator trust behavior.
 
 These lanes are intentionally fail-closed on missing source anchors so parity claims cannot drift ahead of implemented or documented runtime truth.

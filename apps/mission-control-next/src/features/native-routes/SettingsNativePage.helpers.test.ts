@@ -433,7 +433,7 @@ describe("SettingsNativePage helpers", () => {
     expect(lanes.map((item) => item.label)).toEqual([
       "Voice Wake / Talk Mode",
       "Browser control",
-      "Extension / plugin SDK breadth",
+      "Extension SDK breadth",
       "Packaging and remote deployment parity",
       "Mobile companion/device surfaces",
       "Canvas / A2UI parity",

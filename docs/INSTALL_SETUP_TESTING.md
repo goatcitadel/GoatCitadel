@@ -6,7 +6,7 @@ Target release: `1.0.0`
 Related guides:
 
 - [Communication Channel Setup Guide](./COMMUNICATION_CHANNEL_SETUP_GUIDE.md)
-- [Plugin SDK Contract](./PLUGIN_SDK_CONTRACT.md)
+- [Extensions SDK Contract](./PLUGIN_SDK_CONTRACT.md)
 
 ## Install Paths
 

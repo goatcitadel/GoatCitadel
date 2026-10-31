@@ -495,7 +495,7 @@ export interface AgenticImprovementProposalSummary {
 
 export interface AgenticPluginProviderRuntimeStatus {
   runtimeId: string;
-  kind: "plugin" | "provider";
+  kind: "provider";
   label: string;
   status: AgenticHarnessAvailabilityStatus;
   manifestSource?: string;
@@ -543,7 +543,6 @@ export interface AgenticRuntimeAvailabilityResponse {
   generatedAt: string;
   items: AgenticCapabilityAvailability[];
   harnesses: AgenticHarnessAvailabilityRecord[];
-  plugins: AgenticPluginProviderRuntimeStatus[];
   providers: AgenticPluginProviderRuntimeStatus[];
   channels: AgenticCapabilityAvailability[];
   scalability: AgenticScalabilityTrackRecord[];

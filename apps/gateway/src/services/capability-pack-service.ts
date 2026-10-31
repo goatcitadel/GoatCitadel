@@ -278,8 +278,7 @@ export class CapabilityPackService {
         kind: asset.kind,
         requested,
         outcome: "review_recorded" as const,
-        reason:
-          "Operator review was recorded; activate this asset through its existing Skills, MCP, Plugins, or Tools surface.",
+        reason: "Operator review was recorded; activate this asset through its existing Skills, MCP, or Tools surface.",
         callableState: "unchanged" as const,
         activationSemantics: "requires_existing_surface" as const,
       };

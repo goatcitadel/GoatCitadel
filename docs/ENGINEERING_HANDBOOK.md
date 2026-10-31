@@ -83,7 +83,7 @@ Primary implementation goals:
 │  └─ mission-control          # Compatibility-only React + Vite operator console
 ├─ packages
 │  ├─ contracts                # Shared TypeScript contracts
-│  ├─ extensions-sdk           # Author-facing add-on / integration-plugin SDK helpers
+│  ├─ extensions-sdk           # Author-facing effective-tool snapshot helpers
 │  ├─ storage                  # SQLite repositories + JSONL logs
 │  ├─ gateway-core             # Session keying, event ingest, token ledger
 │  ├─ policy-engine            # Tool policy resolver + sandbox gates
@@ -149,14 +149,14 @@ Mission Control is an API client, not a backend extension. It:
 ### 3.3 Shared Domain Packages
 
 - `@goatcitadel/contracts`: types shared across backend and frontend.
-- `@goatcitadel/extensions-sdk`: published author-facing manifest schemas, validation, and file helpers for extensions.
+- `@goatcitadel/extensions-sdk`: author-facing effective-tool snapshot helpers. `1.0.0` is the last published version and still carries the retired add-on and integration-plugin helpers; the workspace's `2.0.0` keeps only the snapshot helpers and is not published yet.
 - `@goatcitadel/storage`: all SQLite repository and JSONL append/read logic.
 - `@goatcitadel/gateway-core`: event ingest and deterministic session key logic.
 - `@goatcitadel/policy-engine`: policy resolution and enforcement gates.
 - `@goatcitadel/skills`: skill loading and activation.
 - `@goatcitadel/orchestration`: orchestration run state transitions.
 
-Arena and the add-on machinery were removed; plugins replace add-ons in a later release. Settings › Advanced keeps capability packs as an experimental local/operator-reviewed surface for `1.0`, not a public marketplace. Keep claims conservative until permission grants, durable logs, rollback/version proof, runtime health, and local-vs-marketplace boundaries are implemented.
+Arena, the add-on machinery and integration plugins were removed; a new plugin model replaces them in a later release. Settings › Advanced keeps capability packs as an experimental local/operator-reviewed surface for `1.0`, not a public marketplace. Keep claims conservative until permission grants, durable logs, rollback/version proof, runtime health, and local-vs-marketplace boundaries are implemented.
 
 Desktop/mobile continuity must stay gateway-owned: signed device grants, install-token/device-request flows, desktop daemon/runtime state, and session/project/artifact/approval handoffs are the source of truth. Do not imply companion apps can bypass auth, policy, approvals, or the desktop runtime boundary.
 

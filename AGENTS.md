@@ -1,6 +1,6 @@
 # AGENTS.md - GoatCitadel
 
-Last updated: 2026-10-02
+Last updated: 2026-10-30
 
 ## Scope and Instruction Precedence
 
@@ -234,7 +234,7 @@ Canonical state belongs in repositories and durable logs, not inferred UI state.
 
 ### Integrations, Channels, and Extensions
 
-Visible integrations and channels must either have real operator actions and diagnostics or be clearly labeled as incomplete/blocked. Public extension claims should stay aligned with `@goatcitadel/extensions-sdk`.
+Visible integrations and channels must either have real operator actions and diagnostics or be clearly labeled as incomplete/blocked. Integration plugins and add-ons were removed; do not describe them as shipped. Public extension claims should stay aligned with `@goatcitadel/extensions-sdk` and `docs/PLUGIN_SDK_CONTRACT.md`: `1.0.0` is the last published version, and the workspace's `2.0.0` keeps only the effective-tool snapshot helpers.
 
 ## Memory Rules
 

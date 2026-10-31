@@ -1,6 +1,5 @@
 import { useState } from "react";
 import { Dialog } from "../../../../cockpit/ui/Dialog";
-import { ExtensionConfigurationGuidance } from "../../../../cockpit/areas/settings/ExtensionConfigurationGuidance";
 import { ChannelWizardFields } from "./ChannelWizardFieldCollection";
 import { ChannelCheckFeedback } from "./ChannelCheckFeedback";
 import { ClassicChannelHostsCheck } from "./ClassicChannelHostsCheck";
@@ -141,7 +140,6 @@ export function ChannelSetupWizard(props: ChannelSetupWizardProps) {
         </div>
       </details>
 
-      <ExtensionConfigurationGuidance guidance={definition.configurationGuidance} />
       <div className="mc-next-channel-wizard-identity">
         <label className="mc-next-settings-field">
           <span>Connection label</span>

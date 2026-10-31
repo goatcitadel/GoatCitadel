@@ -15269,6 +15269,14 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: `ALTER TABLE chat_turn_traces ADD COLUMN IF NOT EXISTS reasoning_text TEXT;`,
     integritySha256: "def735ddf240477f99514b1cb7832104fc39be55ce831a8b96cd0331253ab47f",
   },
+  {
+    // Parity with SQLite v273: integration plugins are gone; their record list lived in this one row.
+    // Data only. The plugin_* columns on integration_connections stay.
+    version: 222,
+    name: "purge_integration_plugin_records",
+    sql: `DELETE FROM system_settings WHERE setting_key = 'integration_plugins_v1';`,
+    integritySha256: "e501080db7b5b71c6942cc47d41f02e0cde4364dcf7a804fd4b4edc0784f6ec9",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {

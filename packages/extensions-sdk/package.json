@@ -1,14 +1,11 @@
 {
   "name": "@goatcitadel/extensions-sdk",
-  "version": "1.0.0",
+  "version": "2.0.0",
   "license": "Apache-2.0",
   "goatcitadelOwner": "extensions",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "goatcitadel-extension-preflight": "./dist/author-preflight-cli.js"
-  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -24,8 +21,7 @@
     "registry": "https://npm.pkg.github.com"
   },
   "files": [
-    "dist",
-    "templates"
+    "dist"
   ],
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",

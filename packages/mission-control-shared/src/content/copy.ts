@@ -607,7 +607,6 @@ export const pageCopy: Record<PageId, PageCopy> = {
       terms: [
         { term: "Catalog entry", meaning: "Template describing required fields and auth for a service." },
         { term: "Connection", meaning: "Saved config instance of a catalog entry used by runtime workflows." },
-        { term: "Plugin adapter", meaning: "Optional extension for integrations not built in yet." },
         { term: "Obsidian mode", meaning: "read_append allows note appends; read_only blocks writes." },
         { term: "Connected", meaning: "The saved integration is enabled and intended for live runtime use." },
         { term: "Paused", meaning: "The connection exists but should not be used for live work until resumed." },

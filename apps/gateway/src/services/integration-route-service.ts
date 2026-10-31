@@ -12,7 +12,6 @@ export const integrationRouteMethods = [
   "disconnectGoogleWorkspaceOAuth",
   "getExternalConnectorAction",
   "getExternalConnectorService",
-  "installIntegrationPlugin",
   "invokeIntegrationConnectionAction",
   "listExternalConnectorServices",
   "listExternalConnectorSources",
@@ -20,7 +19,6 @@ export const integrationRouteMethods = [
   "listDiscordPairings",
   "listIntegrationCatalog",
   "listIntegrationConnections",
-  "listIntegrationPlugins",
   "listNotificationDeliveries",
   "listNotificationRules",
   "listNotificationTargets",
@@ -37,7 +35,6 @@ export const integrationRouteMethods = [
   "runIntegrationConnectionDiagnostics",
   "stageExternalConnectorAction",
   "updateExternalConnectorReviewState",
-  "setIntegrationPluginEnabled",
   "updateIntegrationConnection",
 ] as const;
 
@@ -59,7 +56,6 @@ export function createIntegrationRoutePort(port: IntegrationChannelPort): Integr
     disconnectGoogleWorkspaceOAuth: (...args) => port.disconnectGoogleWorkspaceOAuth(...args),
     getExternalConnectorAction: (...args) => port.getExternalConnectorAction(...args),
     getExternalConnectorService: (...args) => port.getExternalConnectorService(...args),
-    installIntegrationPlugin: (...args) => port.installIntegrationPlugin(...args),
     invokeIntegrationConnectionAction: (...args) => port.invokeIntegrationConnectionAction(...args),
     listExternalConnectorServices: (...args) => port.listExternalConnectorServices(...args),
     listExternalConnectorSources: (...args) => port.listExternalConnectorSources(...args),
@@ -67,7 +63,6 @@ export function createIntegrationRoutePort(port: IntegrationChannelPort): Integr
     listDiscordPairings: (...args) => port.listDiscordPairings(...args),
     listIntegrationCatalog: (...args) => port.listIntegrationCatalog(...args),
     listIntegrationConnections: (...args) => port.listIntegrationConnections(...args),
-    listIntegrationPlugins: (...args) => port.listIntegrationPlugins(...args),
     listNotificationDeliveries: (...args) => port.listNotificationDeliveries(...args),
     listNotificationRules: (...args) => port.listNotificationRules(...args),
     listNotificationTargets: (...args) => port.listNotificationTargets(...args),
@@ -84,7 +79,6 @@ export function createIntegrationRoutePort(port: IntegrationChannelPort): Integr
     runIntegrationConnectionDiagnostics: (...args) => port.runIntegrationConnectionDiagnostics(...args),
     stageExternalConnectorAction: (...args) => port.stageExternalConnectorAction(...args),
     updateExternalConnectorReviewState: (...args) => port.updateExternalConnectorReviewState(...args),
-    setIntegrationPluginEnabled: (...args) => port.setIntegrationPluginEnabled(...args),
     updateIntegrationConnection: (...args) => port.updateIntegrationConnection(...args),
   };
 }

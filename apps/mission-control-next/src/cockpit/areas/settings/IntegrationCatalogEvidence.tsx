@@ -7,7 +7,6 @@ import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { integrationInputClass } from "./IntegrationFormFields";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
-import { ExtensionConfigurationGuidance } from "./ExtensionConfigurationGuidance";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { TimeText } from "../../ui/TimeText";
 import { RESUME_STATE_LABELS, SIDE_EFFECT_STATUS_LABELS } from "./integration-vocabulary";
@@ -25,12 +24,7 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
   const [limit, setLimit] = useState(10);
   const issue = s.data?.issues.find(
     (item) =>
-      item.label ===
-      (s.panel === "connectors"
-        ? "Dormant external connector catalog"
-        : s.panel === "plugins"
-          ? "Integration plugins"
-          : "External side-effect runs"),
+      item.label === (s.panel === "connectors" ? "Dormant external connector catalog" : "External side-effect runs"),
   );
   const services =
     s.data?.externalConnectorServices.filter((item) =>
@@ -147,44 +141,6 @@ export function IntegrationCatalogEvidence({ owner: s }: { owner: IntegrationSet
           {services.length > limit ? (
             <Button onClick={() => setLimit((value) => value + 10)}>Show more imported connectors</Button>
           ) : null}
-        </>
-      ) : s.panel === "plugins" ? (
-        <>
-          <h4 className="text-md font-semibold">Installed plugin trust</h4>
-          <p className="text-sm text-fg-secondary">
-            Installation-wide source and integrity records. Review does not enable plugins.
-          </p>
-          {!s.data?.plugins.length ? (
-            <p className="text-sm text-fg-muted">No integration plugins are installed.</p>
-          ) : null}
-          {s.data?.plugins.slice(0, 50).map((plugin) => (
-            <article key={plugin.pluginId} className="space-y-2 border-t border-line-subtle py-3">
-              <h5 className="font-medium">
-                {plugin.label} · {plugin.enabled ? "Enabled" : "Disabled"}
-              </h5>
-              <p className="text-sm text-fg-secondary">
-                Integrity: {plugin.integrityStatus ?? plugin.sourceMetadata?.integrityStatus ?? "unknown"}
-              </p>
-              <p className="break-all text-xs text-fg-muted">
-                {plugin.sourceMetadata?.display ?? plugin.source ?? "Source unavailable"}
-              </p>
-              {plugin.trustWarnings?.map((warning, index) => (
-                <p key={index} className="text-sm text-status-waiting">
-                  {warning.severity}: {warning.message}
-                </p>
-              ))}
-              {plugin.configurationForm ? (
-                <ExtensionConfigurationGuidance
-                  guidance={{
-                    pluginId: plugin.pluginId,
-                    pluginVersion: plugin.version,
-                    form: plugin.configurationForm,
-                    supportedFieldKeys: [],
-                  }}
-                />
-              ) : null}
-            </article>
-          ))}
         </>
       ) : (
         <>

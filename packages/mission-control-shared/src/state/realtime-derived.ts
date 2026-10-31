@@ -62,7 +62,7 @@ const TOPIC_RULES: Array<{ topic: RefreshTopic; keywords: string[] }> = [
   { topic: "mcp", keywords: ["mcp"] },
   { topic: "tasks", keywords: ["task", "trailboard"] },
   { topic: "improvement", keywords: ["improvement", "replay", "autotune", "self_improvement"] },
-  { topic: "integrations", keywords: ["integration", "plugin", "connection"] },
+  { topic: "integrations", keywords: ["integration", "connection"] },
   { topic: "npu", keywords: ["npu", "runtime", "sidecar", "voice", "provider", "model"] },
   { topic: "llamaCpp", keywords: ["llamacpp", "llama.cpp", "llama"] },
   { topic: "system", keywords: ["system", "daemon", "backup", "retention"] },
