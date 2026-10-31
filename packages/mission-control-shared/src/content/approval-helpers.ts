@@ -3,6 +3,7 @@ import { presentApprovalOutcome, presentApprovalStatus } from "./status-vocabula
 import { externalSourceKnowledgeApprovalEvidence } from "./external-source-approval-evidence.js";
 import { communicationsMailSendApprovalEvidence } from "./communications-approval-evidence.js";
 import { skillStateApprovalEvidence } from "./skill-state-approval-evidence.js";
+import { codeModeRequestInput } from "./code-mode-request-input.js";
 
 export interface ApprovalEvidenceBlock {
   label: string;
@@ -401,13 +402,6 @@ export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): App
       "Approving lets this one change apply once, exactly as planned. Some changes then wait for you to continue them. " +
       "Denying cancels it.",
   };
-}
-
-/** The input a Code Mode request hands its code, as compact JSON; undefined when it hands none. */
-function codeModeRequestInput(input: unknown): string | undefined {
-  if (input === undefined || input === null) return undefined;
-  if (typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 0) return undefined;
-  return JSON.stringify(input);
 }
 
 /**

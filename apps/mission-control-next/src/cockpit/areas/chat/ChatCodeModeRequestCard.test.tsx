@@ -131,6 +131,43 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(button("Deny")).toBeDefined();
   });
 
+  /** The row's own text, without the folded Details. */
+  const rowText = () =>
+    [...(container.firstElementChild?.children ?? [])]
+      .filter((child) => child.tagName !== "DETAILS")
+      .map((child) => child.textContent)
+      .join(" ");
+
+  it("names the files the code reads on the row, and shows its input in Details", async () => {
+    const reads = ["verification/saturday-plan.pdf", "C:\\notes\\b.txt", "c.csv", "d.json"];
+    await render(turnWith({ args: { goal: GOAL, source: SOURCE, reads, input: { path: reads[0] } } }));
+    await waitForButton("Run it");
+    expect(rowText()).toContain("Reads saturday-plan.pdf, b.txt, c.csv and 1 more");
+    expect(rowText()).not.toContain("verification/");
+    const details = container.querySelector("details")!;
+    expect(details.textContent).toContain("verification/saturday-plan.pdf");
+    expect(details.textContent).toContain('{"path":"verification/saturday-plan.pdf"}');
+  });
+
+  it("names an attachment by its file name, and never shows its id on the row", async () => {
+    const attachmentId = "0b6f3c2e-8d1a-4e5f-9a7b-1c2d3e4f5a6b";
+    const unknownId = "9f8e7d6c-5b4a-4321-8fed-cba987654321";
+    const turn = turnWith({ args: { goal: GOAL, source: SOURCE, reads: [attachmentId, unknownId] } });
+    await render({
+      ...turn,
+      userMessage: { attachments: [{ attachmentId, fileName: "plan.pdf", mimeType: "application/pdf", sizeBytes: 1 }] },
+    } as unknown as ChatThreadTurnRecord);
+    await waitForButton("Run it");
+    expect(rowText()).toContain("Reads plan.pdf, an attachment");
+    expect(rowText()).not.toContain(unknownId);
+  });
+
+  it("shows no Reads line when the request reads no files", async () => {
+    await render(turnWith({ args: { goal: GOAL, source: SOURCE } }));
+    await waitForButton("Run it");
+    expect(rowText()).not.toContain("Reads");
+  });
+
   it("Run it approves once and refreshes", async () => {
     await render(turnWith({}));
     await waitForButton("Run it");

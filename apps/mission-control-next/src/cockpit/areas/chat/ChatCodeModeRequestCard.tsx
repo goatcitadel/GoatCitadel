@@ -9,6 +9,7 @@ import {
   promoteCapabilityCandidate,
   resolveApproval,
 } from "@goatcitadel/mission-control-shared/api/client";
+import { codeModeRequestInput } from "@goatcitadel/mission-control-shared/content/code-mode-request-input";
 import { formatDuration } from "@goatcitadel/mission-control-shared/content/format";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
@@ -23,8 +24,31 @@ const ApprovalDecisionBar = lazy(async () => ({
 const CODE_MODE_REQUEST = "code_mode.request";
 const NOT_RUN = "Not run";
 
-type Args = { goal?: unknown; source?: unknown; reads?: unknown };
+type Args = { goal?: unknown; source?: unknown; reads?: unknown; input?: unknown };
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
+
+/** The files and attachments the request lists in `reads`: the only ones its docs.* helpers may read. */
+const readEntries = (args: Args): string[] =>
+  Array.isArray(args.reads) ? args.reads.flatMap((entry) => (text(entry) ? [text(entry)] : [])) : [];
+
+const READS_SHOWN = 3;
+/** An attachment id as the Gateway mints it. */
+const ATTACHMENT_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** One read as the row names it: an attachment by its file name, a path by its last part, never a raw id. */
+function readName(entry: string, attachmentNames: ReadonlyMap<string, string>): string {
+  const named = attachmentNames.get(entry);
+  if (named) return named;
+  if (ATTACHMENT_ID.test(entry)) return "an attachment";
+  return entry.split(/[\\/]/).filter(Boolean).at(-1) ?? entry;
+}
+
+/** "a.pdf, b.txt, c.csv and 2 more": the first few reads by name. */
+function readsLine(entries: string[], attachmentNames: ReadonlyMap<string, string>): string {
+  const names = entries.map((entry) => readName(entry, attachmentNames));
+  const shown = names.slice(0, READS_SHOWN).join(", ");
+  return names.length > READS_SHOWN ? `${shown} and ${names.length - READS_SHOWN} more` : shown;
+}
 
 const REASON_MAX_CHARS = 140;
 
@@ -59,17 +83,28 @@ export function ChatCodeModeRequestCard(props: {
 }) {
   const run = findRequestRun(props.turn);
   if (!run) return null;
+  const attachmentNames = new Map(
+    (props.turn.userMessage?.attachments ?? []).map((attachment) => [attachment.attachmentId, attachment.fileName]),
+  );
   return (
-    <RequestRow key={run.toolRunId} run={run} workspaceId={props.workspaceId} onRefreshThread={props.onRefreshThread} />
+    <RequestRow
+      key={run.toolRunId}
+      run={run}
+      attachmentNames={attachmentNames}
+      workspaceId={props.workspaceId}
+      onRefreshThread={props.onRefreshThread}
+    />
   );
 }
 
 function RequestRow({
   run,
+  attachmentNames,
   workspaceId,
   onRefreshThread,
 }: {
   run: ChatToolRunRecord;
+  attachmentNames: ReadonlyMap<string, string>;
   workspaceId: string;
   onRefreshThread(): void;
 }) {
@@ -156,6 +191,7 @@ function RequestRow({
     body = (
       <PendingRow
         goal={goal}
+        reads={readsLine(readEntries(args), attachmentNames)}
         record={record}
         workspaceId={workspaceId}
         sessionId={run.sessionId}
@@ -246,6 +282,8 @@ function KeepAsTool({ runId, goal, workspaceId }: { runId: string; goal: string;
 
 function PendingRow(props: {
   goal: string;
+  /** The files the code may read, by name; empty when it reads none. */
+  reads: string;
   record: ApprovalRequest | undefined;
   workspaceId: string;
   sessionId: string;
@@ -265,6 +303,7 @@ function PendingRow(props: {
         {off ? <span className="text-fg-muted"> · Code Mode is off</span> : null}
         {unsupported ? <span className="text-fg-muted"> · This computer can&apos;t run Code Mode</span> : null}
       </p>
+      {props.reads ? <p className="text-fg-muted wrap-anywhere">Reads {props.reads}</p> : null}
       {!record ? (
         <p role="status" className="text-fg-muted">
           Checking the request…
@@ -300,9 +339,9 @@ function PendingRow(props: {
 }
 
 function RequestDetails({ run, args, workspaceId }: { run: ChatToolRunRecord; args: Args; workspaceId: string }) {
-  const reads = Array.isArray(args.reads)
-    ? args.reads.filter((entry): entry is string => typeof entry === "string")
-    : [];
+  const reads = readEntries(args);
+  // The input decides what the code reads (`input.path`), so it is shown with the code.
+  const input = codeModeRequestInput(args.input);
   const source = text(args.source);
   const runId = text(run.result?.runId);
   return (
@@ -319,6 +358,12 @@ function RequestDetails({ run, args, workspaceId }: { run: ChatToolRunRecord; ar
                 </li>
               ))}
             </ul>
+          </div>
+        ) : null}
+        {input ? (
+          <div>
+            <p className="font-medium">Input</p>
+            <p className="font-mono wrap-anywhere">{input}</p>
           </div>
         ) : null}
         {source ? (
