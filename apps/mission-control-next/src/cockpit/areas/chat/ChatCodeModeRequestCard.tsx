@@ -72,6 +72,10 @@ function RequestRow({
   const pending = open && record?.status === "pending";
   const readiness = useCodeModeReadiness(pending);
 
+  // A request whose record is gone (404, expired) or never existed can never be decided: report it, don't wait.
+  const recordMissing = open && (!approvalId || (recordQuery.isSuccess && recordQuery.data === null));
+  const recordFailed = open && Boolean(approvalId) && recordQuery.isError && !record;
+
   let body: ReactElement;
   let live = false;
   if (run.status === "executed" && run.result?.status !== "failed") {
@@ -87,6 +91,7 @@ function RequestRow({
     body = <p className="text-fg-secondary">{reason ? firstSentence(reason) : NOT_RUN}</p>;
   } else if (
     run.status === "blocked" ||
+    recordMissing ||
     (open && record && record.status !== "pending" && record.status !== "approved")
   ) {
     body = <p className="text-fg-secondary">{NOT_RUN}</p>;
@@ -97,6 +102,22 @@ function RequestRow({
         <LoaderCircle aria-hidden="true" className="size-4 shrink-0 animate-spin" />
         Running code…
       </p>
+    );
+  } else if (recordFailed) {
+    body = (
+      <div className="space-y-2">
+        <p className="text-fg">Run code to {goal}</p>
+        <p role="status" className="text-fg-muted">
+          Couldn&apos;t load the request.{" "}
+          <button
+            type="button"
+            className="font-medium text-accent hover:underline"
+            onClick={() => void recordQuery.refetch()}
+          >
+            Try again
+          </button>
+        </p>
+      </div>
     );
   } else {
     body = (

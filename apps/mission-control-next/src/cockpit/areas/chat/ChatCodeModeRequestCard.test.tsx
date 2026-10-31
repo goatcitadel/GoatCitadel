@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
 import { __resetInboxApprovalAttemptsForTests } from "../inbox/inbox-approval-attempts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { ChatCodeModeRequestCard } from "./ChatCodeModeRequestCard";
 
 const api = vi.hoisted(() => ({
@@ -217,6 +218,29 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await render(turnWith({ status: "blocked", result: { approvalOutcome: "denied" } }));
     expect(container.textContent).toContain("Not run");
     expect(button("Run it")).toBeUndefined();
+  });
+
+  it("shows Not run when the approval record is gone (404)", async () => {
+    api.fetchApproval.mockRejectedValue(
+      new ApiRequestError("not found", { kind: "http", method: "GET", path: "/approvals/approval-1", status: 404 }),
+    );
+    await render(turnWith({}));
+    await waitFor(() => expect(container.textContent).toContain("Not run"));
+    expect(container.textContent).not.toContain("Checking the request");
+  });
+
+  it("shows Not run for a started run with no approval id", async () => {
+    await render(turnWith({ status: "started", approvalId: undefined }));
+    expect(container.textContent).toContain("Not run");
+    expect(container.textContent).not.toContain("Checking the request");
+  });
+
+  it("offers Try again when the record cannot be read", async () => {
+    api.fetchApproval.mockRejectedValueOnce(new Error("boom"));
+    await render(turnWith({}));
+    await waitForButton("Try again");
+    await act(async () => button("Try again")!.click());
+    await waitForButton("Run it");
   });
 
   it("shows the first sentence of a failure", async () => {
