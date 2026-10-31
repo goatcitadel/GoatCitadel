@@ -16,6 +16,7 @@ import { executeTool } from "@goatcitadel/policy-engine";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import {
   CODE_MODE_REQUEST_RESULT_MAX_BYTES,
+  CODE_MODE_REQUEST_RESULT_TOO_LARGE_ERROR,
   CapabilitySystemService,
   type ApprovedCodeModeRequest,
 } from "./capability-system-service.js";
@@ -135,6 +136,51 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     await expect(fx.service.runApprovedCodeModeRequest(request)).rejects.toThrow(/does not match the approved code/);
     expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
     expect(await fx.service.listCodeModeRuns({ sessionId: request.sessionId, limit: 10 })).toEqual([]);
+  });
+
+  it("refuses source the operator did not approve, even when the caller's source and hash agree", async () => {
+    const fx = createFixture();
+    const approvedSource = "return { pages: 3 };";
+    const callerSource = "return { pages: 4 };";
+
+    // The approval payload and the pending action both hold the approved source; the caller swaps in other code.
+    const swapped = {
+      ...fx.approvedRequest(approvedSource),
+      source: callerSource,
+      approvedSourceSha256: sha256(callerSource),
+    };
+    await expect(fx.service.runApprovedCodeModeRequest(swapped)).rejects.toThrow(/does not match the approved code/);
+
+    // Only the pending action differs from the caller (the approval payload agrees with it): still refused.
+    const pendingDiffers = fx.approvedRequest(callerSource, { pendingSource: approvedSource });
+    await expect(fx.service.runApprovedCodeModeRequest(pendingDiffers)).rejects.toThrow(
+      /does not match the approved code/,
+    );
+
+    // A pending action that is not a code_mode.request tool.invoke is refused too.
+    const wrongAction = fx.approvedRequest(callerSource, { pendingToolName: "shell.exec" });
+    await expect(fx.service.runApprovedCodeModeRequest(wrongAction)).rejects.toThrow(
+      /does not match the approved code/,
+    );
+
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+    expect(await fx.service.listCodeModeRuns({ sessionId: swapped.sessionId, limit: 10 })).toEqual([]);
+  });
+
+  it("runs from the approval payload when no pending action was registered", async () => {
+    const fx = createFixture();
+    const request = fx.approvedRequest("return { pages: 3 };", { pendingAction: false });
+
+    await expect(fx.service.runApprovedCodeModeRequest(request)).resolves.toMatchObject({ status: "completed" });
+
+    const noPendingSwap = fx.approvedRequest("return { pages: 3 };", { pendingAction: false });
+    await expect(
+      fx.service.runApprovedCodeModeRequest({
+        ...noPendingSwap,
+        source: "return { pages: 5 };",
+        approvedSourceSha256: sha256("return { pages: 5 };"),
+      }),
+    ).rejects.toThrow(/does not match the approved code/);
   });
 
   it("refuses when Code Mode cannot run", async () => {
@@ -257,13 +303,45 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     });
   });
 
-  it("fails a return value larger than the child IPC message bound", async () => {
+  it("fails a return value larger than the child IPC message bound with a plain error", async () => {
     const fx = createFixture();
 
     const result = await fx.service.runApprovedCodeModeRequest(fx.approvedRequest('return "x".repeat(1024 * 1024);'));
 
-    expect(result).toMatchObject({ status: "failed", error: expect.stringMatching(/maximum allowed size/) });
+    expect(result).toMatchObject({ status: "failed" });
+    expect(result.error).toBe("The code's result is too large to return (over 128 KB). Return a shorter result.");
+    expect(result.error).toBe(CODE_MODE_REQUEST_RESULT_TOO_LARGE_ERROR);
     expect(result).not.toHaveProperty("result");
+  });
+
+  it("lets a guest page through a long document with docs.extract_text offsets", async () => {
+    const fx = createFixture();
+    const textPath = path.join(fx.root, "long.txt");
+    const text = Array.from({ length: 150_000 }, (_, index) => String.fromCharCode(97 + (index % 26))).join("");
+    fs.writeFileSync(textPath, text);
+    const source = [
+      "let offset = 0; let pages = 0; let length = 0; let checksum = 0; let tail = '';",
+      "while (offset !== undefined) {",
+      "  const page = await capabilities.docs.extract_text({ path: input.path, offset });",
+      "  pages += 1; length += page.text.length; tail = page.text.slice(-10);",
+      "  for (let i = 0; i < page.text.length; i += 1) checksum = (checksum * 31 + page.text.charCodeAt(i)) % 1000000007;",
+      "  offset = page.nextOffset;",
+      "}",
+      "return { pages, length, checksum, tail };",
+    ].join("\n");
+
+    const result = await fx.service.runApprovedCodeModeRequest(
+      fx.approvedRequest(source, { input: { path: textPath } }),
+    );
+
+    expect(result.status).toBe("completed");
+    let checksum = 0;
+    for (let i = 0; i < text.length; i += 1) checksum = (checksum * 31 + text.charCodeAt(i)) % 1000000007;
+    expect(result.result).toEqual({ pages: 3, length: text.length, checksum, tail: text.slice(-10) });
+    expect(fx.invokeTool).toHaveBeenCalledTimes(3);
+    expect(fx.invokeTool).toHaveBeenLastCalledWith(
+      expect.objectContaining({ toolName: "docs.extract_text", args: { path: textPath, offset: 120_000 } }),
+    );
   });
 
   it("keeps a code_mode.request run out of the code_mode.run read-path terminalizers", async () => {
@@ -366,7 +444,14 @@ function createFixture() {
 
   const approvedRequest = (
     source: string,
-    options: { input?: Record<string, unknown>; resolve?: boolean } = {},
+    options: {
+      input?: Record<string, unknown>;
+      resolve?: boolean;
+      /** Register the policy engine's tool.invoke pending action (default true). */
+      pendingAction?: boolean;
+      pendingSource?: string;
+      pendingToolName?: string;
+    } = {},
   ): ApprovedCodeModeRequest => {
     turnCount += 1;
     const turnId = `turn-request-${fixtureId}-${turnCount}`;
@@ -388,6 +473,17 @@ function createFixture() {
       preview: { goal },
       linkage: { sessionId, turnId },
     });
+    if (options.pendingAction !== false) {
+      storage.pendingApprovalActions.upsertPending({
+        approvalId: approval.approvalId,
+        actionType: "tool.invoke",
+        request: {
+          toolName: options.pendingToolName ?? "code_mode.request",
+          args: { goal, source: options.pendingSource ?? source },
+          sessionId,
+        },
+      });
+    }
     if (options.resolve !== false) {
       storage.approvals.resolve(approval.approvalId, { decision: "approve", resolvedBy: "operator-1" });
     }
@@ -424,7 +520,7 @@ function docsExtractTextTool(): ToolCatalogEntry {
     riskLevel: "safe",
     requiresApproval: false,
     description: "Extract plain text from a PDF, DOCX or text file.",
-    argSchema: { type: "object", properties: { path: { type: "string" } } },
+    argSchema: { type: "object", properties: { path: { type: "string" }, offset: { type: "integer", minimum: 0 } } },
     examples: [],
     pack: "knowledge",
     readOnly: true,

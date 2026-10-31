@@ -7,9 +7,11 @@ import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts
 import { clampInt } from "@goatcitadel/contracts";
 import { parseNativeFileDocument } from "../native-document-parser.js";
 
-export const DOCS_READ_BYTES_MAX = 8 * 1024 * 1024;
-export const DOCS_EXTRACT_TEXT_MAX_CHARS = 200_000;
-export const DOCS_DECOMPRESS_MAX_OUTPUT = 16 * 1024 * 1024;
+// Each result must fit the 128 KB Code Mode IPC message bound, so the helpers page instead of returning large
+// payloads: 64 KiB of raw bytes is about 87 KB of base64.
+export const DOCS_READ_BYTES_MAX = 65_536;
+export const DOCS_EXTRACT_TEXT_MAX_CHARS = 60_000;
+export const DOCS_DECOMPRESS_MAX_OUTPUT = 65_536;
 /** Memory guard for text extraction, which needs the whole file to parse it. */
 const DOCS_EXTRACT_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
 
@@ -67,6 +69,7 @@ async function resolveSource(
   storage: AsyncStorage,
   deps: DocumentHelperExecutorDeps,
   maxBytes: number,
+  startByte = 0,
 ): Promise<ResolvedSource> {
   const rawPath = request.args.path;
   const rawAttachmentId = request.args.attachmentId;
@@ -85,18 +88,19 @@ async function resolveSource(
       if (!stat.isFile()) {
         throw new Error(`Not a file: ${full}`);
       }
-      const length = Math.min(stat.size, maxBytes);
+      const start = Math.min(startByte, stat.size);
+      const length = Math.min(stat.size - start, maxBytes);
       const buffer = Buffer.alloc(length);
       let offset = 0;
       while (offset < length) {
-        const { bytesRead } = await handle.read(buffer, offset, length - offset, offset);
+        const { bytesRead } = await handle.read(buffer, offset, length - offset, start + offset);
         if (bytesRead === 0) break;
         offset += bytesRead;
       }
       return {
         name: path.basename(full),
         bytes: buffer.subarray(0, offset),
-        cut: stat.size > maxBytes,
+        cut: stat.size - start > maxBytes,
         totalBytes: stat.size,
       };
     } finally {
@@ -107,10 +111,11 @@ async function resolveSource(
     throw new Error("Attachments are not readable here.");
   }
   const loaded = await deps.readAttachmentBytes(request, attachmentId as string);
+  const start = Math.min(startByte, loaded.bytes.length);
   return {
     name: loaded.fileName,
-    bytes: loaded.bytes.length > maxBytes ? loaded.bytes.subarray(0, maxBytes) : loaded.bytes,
-    cut: loaded.bytes.length > maxBytes,
+    bytes: loaded.bytes.subarray(start, start + maxBytes),
+    cut: loaded.bytes.length - start > maxBytes,
     totalBytes: loaded.bytes.length,
   };
 }
@@ -121,14 +126,18 @@ async function readBytes(
   storage: AsyncStorage,
   deps: DocumentHelperExecutorDeps,
 ) {
-  const maxBytes = clampInt(request.args.maxBytes, DOCS_READ_BYTES_MAX, 1, DOCS_READ_BYTES_MAX);
-  const source = await resolveSource(request, config, storage, deps, maxBytes);
+  const offset = clampInt(request.args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
+  const length = clampInt(request.args.length, DOCS_READ_BYTES_MAX, 1, DOCS_READ_BYTES_MAX);
+  const source = await resolveSource(request, config, storage, deps, length, offset);
+  const start = Math.min(offset, source.totalBytes);
   return {
     name: source.name,
     sizeBytes: source.totalBytes,
+    offset: start,
+    /** sha256 of the bytes in this page. */
     sha256: createHash("sha256").update(source.bytes).digest("hex"),
     base64: source.bytes.toString("base64"),
-    truncated: source.cut,
+    ...(source.cut ? { nextOffset: start + source.bytes.length } : {}),
   };
 }
 
@@ -138,6 +147,7 @@ async function extractText(
   storage: AsyncStorage,
   deps: DocumentHelperExecutorDeps,
 ) {
+  const offset = clampInt(request.args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const maxChars = clampInt(request.args.maxChars, DOCS_EXTRACT_TEXT_MAX_CHARS, 1, DOCS_EXTRACT_TEXT_MAX_CHARS);
   const source = await resolveSource(request, config, storage, deps, DOCS_EXTRACT_SOURCE_MAX_BYTES);
   if (source.cut) {
@@ -145,13 +155,16 @@ async function extractText(
   }
   const parsed = await parseNativeFileDocument(source.name, source.bytes);
   const text = parsed.normalizedText;
+  const end = Math.min(text.length, offset + maxChars);
   const format = parsed.parser.format === "pdf" || parsed.parser.format === "docx" ? parsed.parser.format : "text";
   return {
     name: source.name,
     format,
     ...(parsed.parser.pageCount === undefined ? {} : { pageCount: parsed.parser.pageCount }),
-    text: text.length > maxChars ? text.slice(0, maxChars) : text,
-    truncated: text.length > maxChars,
+    totalChars: text.length,
+    offset: Math.min(offset, text.length),
+    text: text.slice(offset, end),
+    ...(end < text.length ? { nextOffset: end } : {}),
   };
 }
 

@@ -291,6 +291,9 @@ interface CodeModeWrapperManifest {
 export const CODE_MODE_REQUEST_APPROVAL_KIND = "code_mode.request";
 /** Serialized size above which a Chat Code Mode request's return value is replaced by a preview. */
 export const CODE_MODE_REQUEST_RESULT_MAX_BYTES = 64 * 1024;
+/** What the turn sees when the guest's return value is over the 128 KB Code Mode IPC message bound. */
+export const CODE_MODE_REQUEST_RESULT_TOO_LARGE_ERROR =
+  "The code's result is too large to return (over 128 KB). Return a shorter result.";
 
 /** A Chat `code_mode.request` that the operator already approved. It never creates a second approval. */
 export interface ApprovedCodeModeRequest {
@@ -2579,6 +2582,7 @@ export class CapabilitySystemService {
     }
     validateGuestSource(request.source);
     const approval = await this.requireApprovedCodeModeRequestApproval(request);
+    await this.requireSourceMatchesApprovedCodeModeRequest(approval, request);
     const runId = codeModeRequestRunId(approval.approvalId);
     const existing =
       (await this.options.storage.codeModeRuns.find(runId)) ??
@@ -2677,6 +2681,42 @@ export class CapabilitySystemService {
       });
     }
     return approval;
+  }
+
+  /**
+   * Binds the run to the code the operator actually approved. The approval payload (immutable once created) and,
+   * when the policy engine registered one, the tool.invoke pending action each hold the approved `source`. Both must
+   * hash to `approvedSourceSha256`, which the caller already proved equals sha256(request.source).
+   */
+  private async requireSourceMatchesApprovedCodeModeRequest(
+    approval: ApprovalRequest,
+    request: ApprovedCodeModeRequest,
+  ): Promise<void> {
+    const mismatch = (): ConflictError =>
+      new ConflictError({
+        message: "The code to run does not match the approved code. Ask for approval again.",
+      });
+    const approvedSource = approval.payload?.source;
+    if (typeof approvedSource !== "string" || sha256Text(approvedSource) !== request.approvedSourceSha256) {
+      throw mismatch();
+    }
+    const pending = await this.options.storage.pendingApprovalActions.find(approval.approvalId);
+    if (!pending) {
+      return;
+    }
+    const pendingArgs = pending.request.args;
+    const pendingSource =
+      pendingArgs && typeof pendingArgs === "object" && !Array.isArray(pendingArgs)
+        ? (pendingArgs as Record<string, unknown>).source
+        : undefined;
+    if (
+      pending.actionType !== "tool.invoke" ||
+      pending.request.toolName !== CODE_MODE_REQUEST_APPROVAL_KIND ||
+      typeof pendingSource !== "string" ||
+      sha256Text(pendingSource) !== request.approvedSourceSha256
+    ) {
+      throw mismatch();
+    }
   }
 
   /** Freezes the catalog, wrapper manifest and policy snapshot and records the run as approval_pending. */
@@ -7310,9 +7350,26 @@ function summarizeApprovedCodeModeRequestRun(
     ...(completed && guestResult !== undefined ? { result: capCodeModeRequestResult(guestResult) } : {}),
     ...(run.stdoutPreview ? { stdoutPreview: run.stdoutPreview } : {}),
     ...(run.stderrPreview ? { stderrPreview: run.stderrPreview } : {}),
-    ...(completed ? {} : { error: run.error ?? "Code Mode run failed." }),
+    ...(completed ? {} : { error: describeApprovedCodeModeRequestError(run) }),
     durationMs,
   };
+}
+
+/**
+ * The child refuses to send a run.execute reply over the IPC bound and answers with MESSAGE_TOO_LARGE, flagged
+ * child_to_parent with no method. A too-large wrapper call (method set) or wrapper reply (no direction) keeps the
+ * recorded error, so only an oversized guest return gets the plain message.
+ */
+function describeApprovedCodeModeRequestError(run: CodeModeRunRecord): string {
+  const details = run.errorDetails;
+  if (
+    run.errorCode === "MESSAGE_TOO_LARGE" &&
+    details?.direction === "child_to_parent" &&
+    details.method === undefined
+  ) {
+    return CODE_MODE_REQUEST_RESULT_TOO_LARGE_ERROR;
+  }
+  return run.error ?? "Code Mode run failed.";
 }
 
 function buildCodeModeToolInvokeResult(run: CodeModeRunRecord): ToolInvokeResult {

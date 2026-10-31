@@ -1924,14 +1924,15 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description:
-      "Read a file or chat attachment as base64 bytes (capped at 8 MB) for Code Mode runs. Provide exactly one of path or attachmentId.",
+      "Read a file or chat attachment as base64 bytes for Code Mode runs, up to 64 KiB per call. Page with offset and length; nextOffset is set while bytes remain. Provide exactly one of path or attachmentId.",
     pack: "knowledge",
     argSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
         attachmentId: { type: "string" },
-        maxBytes: { type: "integer", minimum: 1, maximum: 8 * 1024 * 1024 },
+        offset: { type: "integer", minimum: 0 },
+        length: { type: "integer", minimum: 1, maximum: 65_536 },
       },
       additionalProperties: false,
     },
@@ -1946,14 +1947,15 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description:
-      "Extract plain text from a PDF, DOCX or text file or chat attachment for Code Mode runs. Provide exactly one of path or attachmentId.",
+      "Extract plain text from a PDF, DOCX or text file or chat attachment for Code Mode runs, up to 60000 characters per call. Page with offset (characters); nextOffset is set while text remains. Provide exactly one of path or attachmentId.",
     pack: "knowledge",
     argSchema: {
       type: "object",
       properties: {
         path: { type: "string" },
         attachmentId: { type: "string" },
-        maxChars: { type: "integer", minimum: 1, maximum: 200_000 },
+        offset: { type: "integer", minimum: 0 },
+        maxChars: { type: "integer", minimum: 1, maximum: 60_000 },
       },
       additionalProperties: false,
     },
@@ -1968,14 +1970,14 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "safe",
     requiresApproval: false,
     description:
-      "Decompress base64 gzip, deflate, raw-deflate or brotli data with a hard output cap, for Code Mode runs.",
+      "Decompress base64 gzip, deflate, raw-deflate or brotli data for Code Mode runs, with a hard output cap of 64 KiB.",
     pack: "knowledge",
     argSchema: {
       type: "object",
       properties: {
         base64: { type: "string", minLength: 1 },
         format: { type: "string", enum: ["gzip", "deflate", "raw-deflate", "brotli"] },
-        maxOutputBytes: { type: "integer", minimum: 1, maximum: 16 * 1024 * 1024 },
+        maxOutputBytes: { type: "integer", minimum: 1, maximum: 65_536 },
       },
       required: ["base64", "format"],
       additionalProperties: false,

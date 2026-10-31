@@ -7,7 +7,11 @@ import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { createPlainDocumentPdf } from "./document-pdf.js";
 import { executeTool } from "./tool-executor.js";
-import { DOCS_READ_BYTES_MAX } from "./tool-executor/document-helpers-executor.js";
+import {
+  DOCS_DECOMPRESS_MAX_OUTPUT,
+  DOCS_EXTRACT_TEXT_MAX_CHARS,
+  DOCS_READ_BYTES_MAX,
+} from "./tool-executor/document-helpers-executor.js";
 
 const createdRoots: string[] = [];
 const PHRASE = "Quarterly revenue grew twelve percent";
@@ -57,7 +61,41 @@ describe("document helper tools", () => {
     expect(result.format).toBe("pdf");
     expect(result.pageCount as number).toBeGreaterThanOrEqual(1);
     expect(String(result.text)).toContain(PHRASE);
-    expect(result.truncated).toBe(false);
+    expect(result.offset).toBe(0);
+    expect(result).not.toHaveProperty("nextOffset");
+  });
+
+  it("pages docs.extract_text by character offset", async () => {
+    const root = createRoot();
+    const file = path.join(root, "long.txt");
+    const text = Array.from({ length: 150_000 }, (_, index) => String.fromCharCode(97 + (index % 26))).join("");
+    fs.writeFileSync(file, text);
+    const config = createConfig(root);
+
+    const first = await executeTool(request("docs.extract_text", { path: file }), config, storage);
+    expect(DOCS_EXTRACT_TEXT_MAX_CHARS).toBe(60_000);
+    expect(first.format).toBe("text");
+    expect(first.totalChars).toBe(text.length);
+    expect(String(first.text)).toHaveLength(DOCS_EXTRACT_TEXT_MAX_CHARS);
+    expect(first.nextOffset).toBe(DOCS_EXTRACT_TEXT_MAX_CHARS);
+
+    const pages = [String(first.text)];
+    let next = first.nextOffset as number | undefined;
+    while (next !== undefined) {
+      const page = await executeTool(request("docs.extract_text", { path: file, offset: next }), config, storage);
+      expect(page.offset).toBe(next);
+      pages.push(String(page.text));
+      next = page.nextOffset as number | undefined;
+    }
+    expect(pages).toHaveLength(3);
+    expect(pages.join("")).toBe(text);
+
+    const clamped = await executeTool(
+      request("docs.extract_text", { path: file, maxChars: 1_000_000 }),
+      config,
+      storage,
+    );
+    expect(String(clamped.text)).toHaveLength(DOCS_EXTRACT_TEXT_MAX_CHARS);
   });
 
   it("rejects a path outside read roots", async () => {
@@ -85,14 +123,72 @@ describe("document helper tools", () => {
     );
   });
 
-  it("caps docs.read_bytes", async () => {
+  it("caps docs.read_bytes at 64 KiB per call", async () => {
     const root = createRoot();
     const file = path.join(root, "big.bin");
     fs.writeFileSync(file, Buffer.alloc(9 * 1024 * 1024, 1));
-    const result = await executeTool(request("docs.read_bytes", { path: file }), createConfig(root), storage);
-    expect(result.truncated).toBe(true);
+    const result = await executeTool(
+      request("docs.read_bytes", { path: file, length: 8 * 1024 * 1024 }),
+      createConfig(root),
+      storage,
+    );
+    expect(DOCS_READ_BYTES_MAX).toBe(65_536);
     expect(result.sizeBytes).toBe(9 * 1024 * 1024);
     expect(Buffer.from(String(result.base64), "base64").length).toBe(DOCS_READ_BYTES_MAX);
+    expect(result.nextOffset).toBe(DOCS_READ_BYTES_MAX);
+  });
+
+  it("pages docs.read_bytes with offset and length", async () => {
+    const root = createRoot();
+    const file = path.join(root, "data.bin");
+    const bytes = Buffer.from(Array.from({ length: 150_000 }, (_, index) => index % 251));
+    fs.writeFileSync(file, bytes);
+    const config = createConfig(root);
+
+    const chunks: Buffer[] = [];
+    let next: number | undefined = 0;
+    while (next !== undefined) {
+      const page = await executeTool(request("docs.read_bytes", { path: file, offset: next }), config, storage);
+      expect(page.offset).toBe(next);
+      chunks.push(Buffer.from(String(page.base64), "base64"));
+      next = page.nextOffset as number | undefined;
+    }
+    expect(chunks.map((chunk) => chunk.length)).toEqual([65_536, 65_536, 150_000 - 2 * 65_536]);
+    expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
+
+    const window = await executeTool(
+      request("docs.read_bytes", { path: file, offset: 100, length: 10 }),
+      config,
+      storage,
+    );
+    expect(Buffer.from(String(window.base64), "base64").equals(bytes.subarray(100, 110))).toBe(true);
+    expect(window.nextOffset).toBe(110);
+
+    const past = await executeTool(request("docs.read_bytes", { path: file, offset: 999_999 }), config, storage);
+    expect(past.base64).toBe("");
+    expect(past).not.toHaveProperty("nextOffset");
+  });
+
+  it("pages an attachment through docs.read_bytes", async () => {
+    const bytes = Buffer.from(Array.from({ length: 70_000 }, (_, index) => index % 7));
+    const readAttachmentBytes = vi.fn(async () => ({ fileName: "a.bin", mimeType: "application/octet-stream", bytes }));
+    const config = createConfig(createRoot());
+    const first = await executeTool(request("docs.read_bytes", { attachmentId: "att_1" }), config, storage, {
+      readAttachmentBytes,
+    });
+    expect(first.nextOffset).toBe(65_536);
+    const second = await executeTool(
+      request("docs.read_bytes", { attachmentId: "att_1", offset: first.nextOffset }),
+      config,
+      storage,
+      { readAttachmentBytes },
+    );
+    expect(second).not.toHaveProperty("nextOffset");
+    const joined = Buffer.concat([
+      Buffer.from(String(first.base64), "base64"),
+      Buffer.from(String(second.base64), "base64"),
+    ]);
+    expect(joined.equals(bytes)).toBe(true);
   });
 
   it("stops a decompression bomb", async () => {
@@ -104,6 +200,28 @@ describe("document helper tools", () => {
         storage,
       ),
     ).rejects.toThrow(/exceeds 1024 bytes/);
+  });
+
+  it("caps docs.decompress output at 64 KiB by default", async () => {
+    expect(DOCS_DECOMPRESS_MAX_OUTPUT).toBe(65_536);
+    const config = createConfig(createRoot());
+    const over = gzipSync(Buffer.alloc(65_537)).toString("base64");
+    await expect(
+      executeTool(request("docs.decompress", { base64: over, format: "gzip" }), config, storage),
+    ).rejects.toThrow(/exceeds 65536 bytes/);
+    await expect(
+      executeTool(
+        request("docs.decompress", { base64: over, format: "gzip", maxOutputBytes: 1_000_000 }),
+        config,
+        storage,
+      ),
+    ).rejects.toThrow(/exceeds 65536 bytes/);
+    const exact = await executeTool(
+      request("docs.decompress", { base64: gzipSync(Buffer.alloc(65_536)).toString("base64"), format: "gzip" }),
+      config,
+      storage,
+    );
+    expect(exact.outputBytes).toBe(65_536);
   });
 
   it("decompresses within the cap", async () => {
