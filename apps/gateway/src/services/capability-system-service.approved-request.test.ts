@@ -20,6 +20,7 @@ import {
   CapabilitySystemService,
   type ApprovedCodeModeRequest,
 } from "./capability-system-service.js";
+import { CODE_MODE_OFF_TOOL_ERROR, CODE_MODE_UNSUPPORTED_TOOL_ERROR } from "./code-mode-request-tool.js";
 
 // Each case spawns a real Code Mode child process; a contended Windows host needs headroom.
 const RUN_TIMEOUT_MS = 60_000;
@@ -376,6 +377,92 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     expect((await fx.asyncStorage.codeModeRuns.get(pendingRunId)).status).toBe("approval_pending");
   });
 });
+
+describe("CapabilitySystemService.runCodeModeRequestTool", { timeout: RUN_TIMEOUT_MS }, () => {
+  it("runs the approved tool call bound to its pending action's source", async () => {
+    const fx = createFixture();
+    const approved = fx.approvedRequest("return { pages: 3 };");
+
+    const result = await fx.service.runCodeModeRequestTool(toolRequest(approved));
+
+    expect(result).toMatchObject({ status: "completed", result: { pages: 3 } });
+  });
+
+  it("refuses a call without an approval or outside a Chat turn", async () => {
+    const fx = createFixture();
+    const approved = fx.approvedRequest("return { pages: 3 };");
+
+    await expect(
+      fx.service.runCodeModeRequestTool({ ...toolRequest(approved), approvedByApprovalId: undefined }),
+    ).rejects.toThrow(/runs only after the operator approves it/);
+    await expect(fx.service.runCodeModeRequestTool({ ...toolRequest(approved), turnId: undefined })).rejects.toThrow(
+      /only inside a Chat turn/,
+    );
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+
+  it("requires the operator's recorded decision on the approval", async () => {
+    const fx = createFixture();
+    const unresolved = fx.approvedRequest("return { pages: 3 };", { resolve: false });
+    await expect(fx.service.runCodeModeRequestTool(toolRequest(unresolved))).rejects.toThrow(
+      /needs the operator's approval decision/,
+    );
+
+    const noDecider = fx.approvedRequest("return { pages: 3 };", { resolve: false });
+    fx.storage.approvals.resolve(noDecider.approvalId, { decision: "approve", resolvedBy: " " });
+    await expect(fx.service.runCodeModeRequestTool(toolRequest(noDecider))).rejects.toThrow(
+      /needs the operator's approval decision/,
+    );
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the approval's pending action holds no code_mode.request source", async () => {
+    const fx = createFixture();
+    const noPending = fx.approvedRequest("return { pages: 3 };", { pendingAction: false });
+    await expect(fx.service.runCodeModeRequestTool(toolRequest(noPending))).rejects.toThrow(
+      /approved code for this request is missing/,
+    );
+    const otherTool = fx.approvedRequest("return { pages: 3 };", { pendingToolName: "shell.exec" });
+    await expect(fx.service.runCodeModeRequestTool(toolRequest(otherTool))).rejects.toThrow(
+      /approved code for this request is missing/,
+    );
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+
+  it("returns a failed result the turn can resume with when Code Mode cannot run", async () => {
+    const fx = createFixture();
+    const cases = [
+      [{ ...READY, enabled: false, canRun: false, reason: "code_mode_off" }, CODE_MODE_OFF_TOOL_ERROR],
+      [{ ...READY, sandboxEnabled: false, canRun: false, reason: "sandbox_off" }, CODE_MODE_OFF_TOOL_ERROR],
+      [
+        { ...READY, sandboxSupported: false, canRun: false, reason: "sandbox_unsupported" },
+        CODE_MODE_UNSUPPORTED_TOOL_ERROR,
+      ],
+    ] as const;
+    for (const [readiness, error] of cases) {
+      fx.readiness.mockResolvedValue(readiness);
+      const approved = fx.approvedRequest("return { pages: 3 };");
+      await expect(fx.service.runCodeModeRequestTool(toolRequest(approved))).resolves.toEqual({
+        status: "failed",
+        error,
+      });
+    }
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+});
+
+/** The replayed `code_mode.request` tool call the policy engine hands the hook once the operator approved it. */
+function toolRequest(approved: ApprovedCodeModeRequest): ToolInvokeRequest {
+  return {
+    toolName: "code_mode.request",
+    args: { goal: approved.goal, source: approved.source, ...(approved.input ? { input: approved.input } : {}) },
+    agentId: "assistant",
+    sessionId: approved.sessionId,
+    turnId: approved.turnId,
+    approvedByApprovalId: approved.approvalId,
+    policyContext: approved.policyContext,
+  };
+}
 
 function createFixture() {
   const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-code-mode-request-")));

@@ -82,6 +82,7 @@ import {
   classifyToolEffectPotential,
   ConflictError,
   NotFoundError,
+  PolicyViolationError,
   redactStructuredSecrets,
   SemanticValidationError,
   ValidationError,
@@ -157,6 +158,11 @@ import {
 } from "./skill-content-integrity.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import { CodeModeVerificationService } from "./code-mode-verification-service.js";
+import {
+  buildApprovedCodeModeRequestFromTool,
+  codeModeRequestToolFailure,
+  readCodeModeRequestToolIds,
+} from "./code-mode-request-tool.js";
 import {
   CandidateSkillQuarantine,
   describeCandidateQuarantine,
@@ -2559,6 +2565,38 @@ export class CapabilitySystemService {
     // its reservation (conservative — it over-restricts, never over-permits).
     await this.autonomousActivationGrants.recordGrantUse(result.matchedGrantId, input.estimatedCostUsd ?? 0);
     return evidence;
+  }
+
+  /**
+   * The policy engine's `code_mode.request` hook. It re-reads the approval the engine stamped, requires the
+   * operator's decision, and binds the run to the source stored with the approval's pending action. A run refused
+   * because Code Mode cannot run here comes back as a failed result, so the waiting turn resumes and can explain it.
+   */
+  public async runCodeModeRequestTool(request: ToolInvokeRequest): Promise<Record<string, unknown>> {
+    const storage = this.options.storage;
+    const { approvalId } = readCodeModeRequestToolIds(request);
+    const approval = await storage.approvals.get(approvalId);
+    if (
+      approval.kind !== CODE_MODE_REQUEST_APPROVAL_KIND ||
+      approval.status !== "approved" ||
+      !approval.resolvedBy?.trim()
+    ) {
+      throw new PolicyViolationError({ message: "code_mode.request needs the operator's approval decision to run." });
+    }
+    const pending = await storage.pendingApprovalActions.find(approvalId);
+    const approved = buildApprovedCodeModeRequestFromTool(
+      request,
+      pending?.actionType === "tool.invoke" ? pending.request : undefined,
+    );
+    try {
+      return { ...(await this.runApprovedCodeModeRequest(approved, request.signal)) };
+    } catch (error) {
+      const failure = codeModeRequestToolFailure(error);
+      if (failure) {
+        return failure;
+      }
+      throw error;
+    }
   }
 
   /**

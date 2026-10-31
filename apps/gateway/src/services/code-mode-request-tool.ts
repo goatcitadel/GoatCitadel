@@ -1,12 +1,7 @@
 import { createHash } from "node:crypto";
 import { ConflictError, GoatError, PolicyViolationError, type ToolInvokeRequest } from "@goatcitadel/contracts";
 import { CODE_MODE_REQUEST_TOOL_NAME, readCodeModeRequestArgs } from "@goatcitadel/policy-engine";
-import type { AsyncStorage } from "@goatcitadel/storage";
-import {
-  CODE_MODE_REQUEST_APPROVAL_KIND,
-  type ApprovedCodeModeRequest,
-  type ApprovedCodeModeResult,
-} from "./capability-system-service.js";
+import type { ApprovedCodeModeRequest } from "./capability-system-service.js";
 
 /**
  * What the turn sees when the operator approved a run while Code Mode (or its sandbox) is switched off. The approval
@@ -15,21 +10,15 @@ import {
  */
 export const CODE_MODE_OFF_TOOL_ERROR =
   "Code Mode is off. Turn it on from the card in Chat or in Settings, then ask again.";
+/** What the turn sees when the approved run cannot start because this machine has no Code Mode sandbox. */
+export const CODE_MODE_UNSUPPORTED_TOOL_ERROR = "This computer can't run Code Mode, so the code did not run.";
 
-export interface CodeModeRequestToolDeps {
-  storage: Pick<AsyncStorage, "approvals" | "pendingApprovalActions">;
-  runApprovedCodeModeRequest(request: ApprovedCodeModeRequest, signal?: AbortSignal): Promise<ApprovedCodeModeResult>;
-}
-
-/**
- * Runs an operator-approved `code_mode.request` for the Chat turn waiting on it. The policy engine stamps
- * `approvedByApprovalId` only on approved execution; this re-reads that approval, requires the operator's decision,
- * and binds the run to the source stored with the approval's pending action.
- */
-export async function runCodeModeRequestFromTool(
-  deps: CodeModeRequestToolDeps,
-  request: ToolInvokeRequest,
-): Promise<Record<string, unknown>> {
+/** The ids an approved `code_mode.request` tool call must carry: the policy engine stamps the approval id. */
+export function readCodeModeRequestToolIds(request: ToolInvokeRequest): {
+  approvalId: string;
+  sessionId: string;
+  turnId: string;
+} {
   const approvalId = request.approvedByApprovalId?.trim();
   const sessionId = request.sessionId.trim();
   const turnId = request.turnId?.trim();
@@ -39,49 +28,48 @@ export async function runCodeModeRequestFromTool(
   if (!sessionId || !turnId) {
     throw new PolicyViolationError({ message: "code_mode.request is available only inside a Chat turn." });
   }
-  const approval = await deps.storage.approvals.get(approvalId);
-  if (
-    approval.kind !== CODE_MODE_REQUEST_APPROVAL_KIND ||
-    approval.status !== "approved" ||
-    !approval.resolvedBy?.trim()
-  ) {
-    throw new PolicyViolationError({ message: "code_mode.request needs the operator's approval decision to run." });
-  }
-  const approvedSource = await readApprovedSource(deps, approvalId);
-  const args = readCodeModeRequestArgs(request.args);
-  try {
-    const result = await deps.runApprovedCodeModeRequest(
-      {
-        approvalId,
-        approvedSourceSha256: createHash("sha256").update(approvedSource).digest("hex"),
-        goal: args.goal,
-        language: args.language,
-        source: args.source,
-        ...(args.input ? { input: args.input } : {}),
-        sessionId,
-        turnId,
-        ...(request.workspaceId ? { workspaceId: request.workspaceId } : {}),
-        policyContext: request.policyContext ?? {},
-      },
-      request.signal,
-    );
-    return { ...result };
-  } catch (error) {
-    const reason = error instanceof GoatError ? error.details?.reason : undefined;
-    if (reason === "code_mode_off" || reason === "sandbox_off") {
-      return { status: "failed", error: CODE_MODE_OFF_TOOL_ERROR };
-    }
-    throw error;
-  }
+  return { approvalId, sessionId, turnId };
 }
 
-async function readApprovedSource(deps: CodeModeRequestToolDeps, approvalId: string): Promise<string> {
-  const pending = await deps.storage.pendingApprovalActions.find(approvalId);
-  const stored = pending?.actionType === "tool.invoke" ? pending.request : undefined;
-  const source =
-    stored?.toolName === CODE_MODE_REQUEST_TOOL_NAME ? (stored.args as { source?: unknown })?.source : undefined;
-  if (typeof source !== "string") {
+/**
+ * Builds the run request for an approved `code_mode.request` tool call, bound to the source stored with the
+ * approval's pending action (`storedRequest`).
+ */
+export function buildApprovedCodeModeRequestFromTool(
+  request: ToolInvokeRequest,
+  storedRequest: { toolName?: unknown; args?: unknown } | undefined,
+): ApprovedCodeModeRequest {
+  const { approvalId, sessionId, turnId } = readCodeModeRequestToolIds(request);
+  const storedSource =
+    storedRequest?.toolName === CODE_MODE_REQUEST_TOOL_NAME
+      ? (storedRequest.args as { source?: unknown } | undefined)?.source
+      : undefined;
+  if (typeof storedSource !== "string") {
     throw new ConflictError({ message: "The approved code for this request is missing. Ask for approval again." });
   }
-  return source;
+  const args = readCodeModeRequestArgs(request.args);
+  return {
+    approvalId,
+    approvedSourceSha256: createHash("sha256").update(storedSource).digest("hex"),
+    goal: args.goal,
+    language: args.language,
+    source: args.source,
+    ...(args.input ? { input: args.input } : {}),
+    sessionId,
+    turnId,
+    ...(request.workspaceId ? { workspaceId: request.workspaceId } : {}),
+    policyContext: request.policyContext ?? {},
+  };
+}
+
+/**
+ * The result the waiting turn resumes with when an approved run was refused because Code Mode cannot run here, or
+ * undefined for any other error (which the caller rethrows).
+ */
+export function codeModeRequestToolFailure(error: unknown): { status: "failed"; error: string } | undefined {
+  const reason = error instanceof GoatError ? error.details?.reason : undefined;
+  if (reason === "code_mode_off" || reason === "sandbox_off") {
+    return { status: "failed", error: CODE_MODE_OFF_TOOL_ERROR };
+  }
+  return reason === "sandbox_unsupported" ? { status: "failed", error: CODE_MODE_UNSUPPORTED_TOOL_ERROR } : undefined;
 }

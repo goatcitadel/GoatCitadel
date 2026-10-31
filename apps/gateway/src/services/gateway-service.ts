@@ -865,7 +865,6 @@ import { MemoryMaintenanceService } from "./memory-maintenance-service.js";
 import { MemoryLifecycleService } from "./memory-lifecycle-service.js";
 import { RuntimeLifecycleReadService } from "./runtime-lifecycle-read-service.js";
 import { CapabilitySystemService } from "./capability-system-service.js";
-import { runCodeModeRequestFromTool } from "./code-mode-request-tool.js";
 import { MeshCapabilityActivationService } from "./mesh-capability-activation-service.js";
 import { resolveMeshChatToolSchemas } from "./gateway/mesh-chat-catalog.js";
 import { MeshCapabilityInvocationService } from "./mesh-capability-invocation-service.js";
@@ -1501,15 +1500,7 @@ export class GatewayService {
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
       requestChangePlan: async (request, intent) => await this.requestChangePlanFromTool(request, intent),
-      runCodeModeRequest: async (request) =>
-        await runCodeModeRequestFromTool(
-          {
-            storage: this.storage,
-            runApprovedCodeModeRequest: (approved, signal) =>
-              this.capabilitySystemService.runApprovedCodeModeRequest(approved, signal),
-          },
-          request,
-        ),
+      runCodeModeRequest: (request) => this.capabilitySystemService.runCodeModeRequestTool(request),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
