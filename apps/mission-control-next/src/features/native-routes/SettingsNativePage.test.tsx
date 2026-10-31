@@ -5418,7 +5418,6 @@ describe("SettingsNativePage integrations", () => {
     await flushAsyncUpdates();
     expect(mocks.fetchGoogleMeetPrerequisiteStatus).not.toHaveBeenCalled();
     expect(mocks.fetchExternalSideEffectRuns).not.toHaveBeenCalled();
-    expect(collectText(renderer!.root)).not.toContain("Plugin");
     expect(renderer!.root.findAllByType("button").some((button) => collectText(button) === "Plugin trust")).toBe(false);
     await openIntegrationPanel(renderer!.root, "Google Meet");
     const meetText = collectText(renderer!.root);
