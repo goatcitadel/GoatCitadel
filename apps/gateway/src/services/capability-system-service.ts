@@ -47,6 +47,7 @@ import type {
   CodeModeAiderWorkspacePin,
   CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
+  CodeModeReadiness,
   CodeModeSandboxMetadata,
   CodeModeRunArtifactKind,
   CodeModeRunArtifactPreview,
@@ -220,7 +221,9 @@ export interface CapabilitySystemServiceOptions {
   rootDir: string;
   runtimeConfig: CapabilityRuntimeConfig;
   storage: Storage;
-  readFeatureFlags: () => Promise<Pick<FeatureFlagsConfig, "codeModeV1Enabled"> & Record<string, boolean>>;
+  readFeatureFlags: () => Promise<
+    Pick<FeatureFlagsConfig, "codeModeV1Enabled" | "codeModeHostSandboxEnabled"> & Record<string, boolean | undefined>
+  >;
   listToolCatalog: () => ToolCatalogEntry[];
   /**
    * HX-408: server-built mesh publication projection. Entries arrive with
@@ -487,8 +490,43 @@ export class CapabilitySystemService {
 
   private skillLifecycleBackfill?: { fingerprint: string; done: Promise<void> };
 
-  private resolveCurrentSandboxMetadata(): CodeModeSandboxMetadata {
-    return this.resolveSandboxMetadata(this.options.runtimeConfig.codeModeSandbox);
+  /**
+   * The sandbox config in force right now: the file/env config with
+   * bestEffortHostEnabled replaced by the live runtime flag, so the operator can switch the
+   * host sandbox from Chat or Settings without a restart.
+   */
+  private async readEffectiveSandboxConfig(): Promise<CapabilityRuntimeConfig["codeModeSandbox"]> {
+    const configured = this.options.runtimeConfig.codeModeSandbox;
+    const stored = (await this.options.readFeatureFlags()).codeModeHostSandboxEnabled;
+    return typeof stored === "boolean" ? { ...configured, bestEffortHostEnabled: stored } : configured;
+  }
+
+  private async resolveCurrentSandboxMetadata(): Promise<CodeModeSandboxMetadata> {
+    return this.resolveSandboxMetadata(await this.readEffectiveSandboxConfig());
+  }
+
+  public async getCodeModeReadiness(): Promise<CodeModeReadiness> {
+    const flags = await this.options.readFeatureFlags();
+    const enabled = flags.codeModeV1Enabled === true;
+    const config = await this.readEffectiveSandboxConfig();
+    const sandboxEnabled = config.bestEffortHostEnabled === true;
+    // Probe with the host sandbox forced on so support reflects the machine, not the switch.
+    const probe = this.resolveSandboxMetadata({ ...config, bestEffortHostEnabled: true });
+    const sandboxSupported = probe.available === true;
+    const reason: CodeModeReadiness["reason"] = !enabled
+      ? "code_mode_off"
+      : !sandboxSupported
+        ? "sandbox_unsupported"
+        : !sandboxEnabled
+          ? "sandbox_off"
+          : undefined;
+    return {
+      enabled,
+      sandboxEnabled,
+      sandboxSupported,
+      canRun: reason === undefined,
+      ...(reason ? { reason } : {}),
+    };
   }
 
   /**
@@ -714,7 +752,7 @@ export class CapabilitySystemService {
   public async listCodeModeExecutionBackends() {
     return buildCodeModeExecutionBackends({
       codeModeEnabled: (await this.options.readFeatureFlags()).codeModeV1Enabled,
-      sandbox: this.resolveCurrentSandboxMetadata(),
+      sandbox: await this.resolveCurrentSandboxMetadata(),
       dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
       aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
     });
@@ -1867,7 +1905,7 @@ export class CapabilitySystemService {
 
     const runId = `code-run-${randomUUID()}`;
     const runInput = request.input ?? {};
-    const sandbox = this.resolveCurrentSandboxMetadata();
+    const sandbox = await this.resolveCurrentSandboxMetadata();
     let executionBackend: CodeModeRunExecutionBackendRef;
     try {
       executionBackend = buildCodeModeRunExecutionBackendRef(sandbox, {
@@ -2638,7 +2676,7 @@ export class CapabilitySystemService {
         ...existing,
         status: "failed",
         error: reason,
-        sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
+        sandbox: existing.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
         finishedAt: refusedAt,
       });
       await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
@@ -2669,7 +2707,7 @@ export class CapabilitySystemService {
         ...existing,
         status: "expired",
         error: reason,
-        sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
+        sandbox: existing.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
         finishedAt: refusedAt,
       });
       await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
@@ -2695,7 +2733,7 @@ export class CapabilitySystemService {
       });
       throw new ConflictError({ message: `Code Mode run ${runId} refused: ${reason}.` });
     }
-    let sandbox = this.resolveCurrentSandboxMetadata();
+    let sandbox = await this.resolveCurrentSandboxMetadata();
     let finalRun = existing;
     let claimStartedAt: string | undefined;
     let claimGeneration: number | undefined;
@@ -3667,7 +3705,7 @@ export class CapabilitySystemService {
         approvalResolvedAt: approval.resolvedAt,
         ...(options?.pendingRunId !== undefined ? { pendingRunId: options.pendingRunId } : {}),
       },
-      sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
+      sandbox: run.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
       finishedAt: run.finishedAt ?? new Date().toISOString(),
     });
     await this.appendCodeModeMissingPendingActionEvent(approval, terminal, {
@@ -3730,7 +3768,7 @@ export class CapabilitySystemService {
       ...run,
       status: "expired",
       error: reason,
-      sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
+      sandbox: run.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
       finishedAt: run.finishedAt ?? new Date().toISOString(),
     });
     try {
@@ -4056,7 +4094,7 @@ export class CapabilitySystemService {
     const frozenAiderAdapter: CodeModeAiderAdapterConfig = { ...frozenAiderExecution.aiderAdapter };
     const backendRunner = createCodeModeExecutionBackendRunner({
       sandbox: input.sandbox,
-      sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
+      sandboxConfig: await this.readEffectiveSandboxConfig(),
       executionBackend: input.executionBackend,
       dockerLaunch: buildCodeModeDockerLaunchOptions(frozenDockerBackend),
       dockerBackendConfig: frozenDockerBackend,
@@ -4147,7 +4185,7 @@ export class CapabilitySystemService {
     const runTempRoot = path.join(this.tempRoot, input.runId);
     const backendRunner = createCodeModeExecutionBackendRunner({
       sandbox: input.sandbox,
-      sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
+      sandboxConfig: await this.readEffectiveSandboxConfig(),
       executionBackend: input.executionBackend,
       dockerLaunch: buildCodeModeDockerLaunchOptions(this.options.runtimeConfig.codeModeDockerBackend),
     });

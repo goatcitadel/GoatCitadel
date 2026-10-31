@@ -19,6 +19,7 @@ export type CapabilitiesRoutePort = Pick<
   | "getToolSchema"
   | "listCatalog"
   | "listCodeModeExecutionBackends"
+  | "getCodeModeReadiness"
   | "listCodeModeRuns"
   | "listCodeModeRunVerificationEvidence"
   | "verifyCodeModeRun"
@@ -153,6 +154,10 @@ export class CapabilitiesRouteService {
 
   public listCodeModeRuns(input: Parameters<CapabilitiesRoutePort["listCodeModeRuns"]>[0] = 100) {
     return this.capabilities.listCodeModeRuns(input);
+  }
+
+  public getCodeModeReadiness() {
+    return this.capabilities.getCodeModeReadiness();
   }
 
   public listCodeModeExecutionBackends() {

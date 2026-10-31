@@ -315,6 +315,15 @@ export interface CapabilityProposalEventRecord {
   createdAt: string;
 }
 
+/** Whether a Code Mode run can start right now, and if not, the first thing blocking it. */
+export interface CodeModeReadiness {
+  enabled: boolean;
+  sandboxEnabled: boolean;
+  sandboxSupported: boolean;
+  canRun: boolean;
+  reason?: "code_mode_off" | "sandbox_off" | "sandbox_unsupported";
+}
+
 export interface CodeModeSandboxMetadata {
   runnerId: string;
   runnerVersion: string;

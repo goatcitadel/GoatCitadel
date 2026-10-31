@@ -653,6 +653,10 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+  fastify.get("/api/v1/code-mode/readiness", async (_request, reply) => {
+    return reply.send(await fastify.services.capabilities.getCodeModeReadiness());
+  });
+
   fastify.get("/api/v1/code-mode/execution-backends", async (_request, reply) => {
     return reply.send(await fastify.services.capabilities.listCodeModeExecutionBackends());
   });

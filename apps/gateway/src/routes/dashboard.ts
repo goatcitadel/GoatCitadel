@@ -244,6 +244,7 @@ export const updateSettingsSchema = z.object({
       cronReviewQueueV1Enabled: z.boolean().optional(),
       replayRegressionV1Enabled: z.boolean().optional(),
       codeModeV1Enabled: z.boolean().optional(),
+      codeModeHostSandboxEnabled: z.boolean().optional(),
       improvementLedgerV1Enabled: z.boolean().optional(),
       improvementActivationV1Enabled: z.boolean().optional(),
       promptRetuneCampaignV1Enabled: z.boolean().optional(),
