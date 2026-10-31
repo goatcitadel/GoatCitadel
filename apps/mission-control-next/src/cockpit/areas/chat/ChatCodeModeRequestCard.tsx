@@ -103,6 +103,9 @@ function RequestRow({
     void queryClient.invalidateQueries({ queryKey: CODE_MODE_READINESS_KEY });
     refreshThread.current();
   }, [queryClient, settledStatus]);
+  // A click checked against a record that changed meanwhile (the model's explanation lands a few seconds after the
+  // request) is not sent, and the buttons remount for the new record, which clears their error. The row keeps the note.
+  const [changed, setChanged] = useState(false);
 
   let body: ReactElement;
   let live = false;
@@ -158,8 +161,15 @@ function RequestRow({
         sessionId={run.sessionId}
         reason={readiness.data?.reason}
         readinessKnown={!readiness.isPending}
+        changed={changed}
         onSettled={() => {
+          setChanged(false);
           void queryClient.invalidateQueries({ queryKey: CODE_MODE_READINESS_KEY });
+          void recordQuery.refetch();
+          onRefreshThread();
+        }}
+        onInvalidated={() => {
+          setChanged(true);
           void recordQuery.refetch();
           onRefreshThread();
         }}
@@ -241,7 +251,9 @@ function PendingRow(props: {
   sessionId: string;
   reason: "code_mode_off" | "sandbox_off" | "sandbox_unsupported" | undefined;
   readinessKnown: boolean;
+  changed: boolean;
   onSettled(): void;
+  onInvalidated(): void;
 }) {
   const { goal, record, reason } = props;
   const off = reason === "code_mode_off" || reason === "sandbox_off";
@@ -274,10 +286,15 @@ function PendingRow(props: {
             withholdApprove={unsupported}
             prepareApprove={off ? enableCodeMode : undefined}
             onResolved={props.onSettled}
-            onInvalidated={props.onSettled}
+            onInvalidated={props.onInvalidated}
           />
         </Suspense>
       )}
+      {props.changed && record ? (
+        <p role="status" className="text-fg-muted">
+          This request was updated. Choose again.
+        </p>
+      ) : null}
     </div>
   );
 }

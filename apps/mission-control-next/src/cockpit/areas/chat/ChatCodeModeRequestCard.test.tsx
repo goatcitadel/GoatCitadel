@@ -162,6 +162,27 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await waitFor(() => expect(onRefreshThread).toHaveBeenCalled());
   });
 
+  it("asks to choose again when the request changed before the click was checked", async () => {
+    // The model's explanation lands on the record a few seconds after it is created.
+    api.fetchApproval.mockResolvedValueOnce({ ...approval(), explanationStatus: "pending" });
+    api.fetchApproval.mockResolvedValue({
+      ...approval(),
+      explanationStatus: "completed",
+      explanation: { summary: "Reads one PDF." },
+    });
+    await render(turnWith({}));
+    await waitForButton("Run it");
+    await act(async () => button("Run it")!.click());
+    await waitFor(() => expect(container.textContent).toContain("This request was updated. Choose again."));
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+    // The first read, the click's check, then the row's re-read of the updated record.
+    await waitFor(() => expect(api.fetchApproval).toHaveBeenCalledTimes(3));
+    await act(async () => undefined);
+    await act(async () => button("Run it")!.click());
+    await waitFor(() => expect(api.resolveApproval).toHaveBeenCalledWith("approval-1", "approve"));
+    await waitFor(() => expect(container.textContent).not.toContain("Choose again"));
+  });
+
   it("Turn on Code Mode and run enables then approves", async () => {
     api.fetchCodeModeReadiness.mockResolvedValue({
       enabled: false,
