@@ -961,11 +961,15 @@ export class LlmService {
   /**
    * @internal Secret-owner seam for in-process consumers (OpenAI Realtime voice) that call a
    * provider's API outside chat dispatch. Same order as dispatch: keychain, env var, inline config.
-   * Never expose the returned value through a route or projection.
+   * Returns nothing unless the provider's baseUrl has `origin`, so a key for another endpoint never
+   * reaches the caller's fixed host. Never expose the returned value through a route or projection.
    */
-  public resolveProviderApiKeyForRuntime(providerId: string): string | undefined {
+  public resolveProviderApiKeyForOrigin(providerId: string, origin: string): string | undefined {
     const provider = this.providers.get(providerId);
-    return provider ? this.resolveApiKey(provider) : undefined;
+    if (!provider || !URL.canParse(provider.baseUrl) || new URL(provider.baseUrl).origin !== origin) {
+      return undefined;
+    }
+    return this.resolveApiKey(provider);
   }
 
   /** @internal Read-only availability probe used to choose an explicit secret owner. */

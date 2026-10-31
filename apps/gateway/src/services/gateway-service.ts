@@ -1352,7 +1352,7 @@ export class GatewayService {
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       readChatAttachmentContent: async (id) => await this.readChatAttachmentContent(id),
       getChatAttachment: (id) => this.getChatAttachment(id),
-      resolveOpenAIApiKey: () => this.llmService.resolveProviderApiKeyForRuntime("openai"),
+      resolveOpenAIApiKey: () => this.llmService.resolveProviderApiKeyForOrigin("openai", "https://api.openai.com"),
     });
     this.channelVoiceInboundService = new ChannelVoiceInboundService({
       fetchWithTimeout: async (url, init) => await this.fetchWithDiagnosticsTimeout(url, init),
