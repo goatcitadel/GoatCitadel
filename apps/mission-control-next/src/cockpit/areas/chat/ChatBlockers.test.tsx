@@ -487,3 +487,33 @@ it("enables Approve for a code_mode.run once specialist evidence matches", async
   await act(async () => release({ replay: { approval: record, events: [], effects: [] } }));
   await vi.waitFor(() => expect(findButton("Review danger approval")!.disabled).toBe(false));
 });
+
+it("says why a code_mode.run approval can't be approved yet, and checks the code again on request", async () => {
+  const record = {
+    approvalId: "run-1",
+    kind: "code_mode.run",
+    status: "pending",
+    riskLevel: "danger",
+    payload: { runId: "r1" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  api.fetchApproval.mockResolvedValue(record);
+  specialist.read.mockRejectedValueOnce(new Error("Gateway unavailable"));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: "run-1", kind: "code_mode.run", riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Gateway unavailable");
+  expect(findButton("Review danger approval")!.disabled).toBe(true);
+  specialist.read.mockResolvedValue({ replay: { approval: record, events: [], effects: [] } });
+  await act(async () => findButton("Check again")!.click());
+  await vi.waitFor(() => expect(findButton("Review danger approval")!.disabled).toBe(false));
+  expect(findButton("Check again")).toBeUndefined();
+});
