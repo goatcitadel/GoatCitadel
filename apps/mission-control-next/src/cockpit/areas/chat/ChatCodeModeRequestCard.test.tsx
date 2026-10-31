@@ -522,6 +522,31 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(api.resolveApproval).toHaveBeenCalledWith("approval-life", "approve");
   });
 
+  it("does not say Saved as a tool when the approved promotion failed or has not finished", async () => {
+    api.keepCodeModeRun.mockResolvedValue(staged);
+    api.promoteCapabilityCandidate.mockResolvedValue({
+      pendingApproval: { approvalId: "approval-life", kind: "capability.lifecycle" },
+    });
+    const approvedWith = (status: string) => async () => ({
+      approval: { ...approval("approved"), approvalId: "approval-life" },
+      effects: [{ effectId: "effect-1", status }],
+    });
+    api.resolveApproval.mockImplementation(approvedWith("failed"));
+    await render(doneTurn());
+    await act(async () => button("Keep as a tool")!.click());
+    await waitFor(() => expect(rowText()).toContain("Saved as a tool for review. It couldn't be turned on here."));
+    act(() => root.unmount());
+    root = createRoot(container);
+    for (const status of ["pending", "running"]) {
+      api.resolveApproval.mockImplementation(approvedWith(status));
+      await render({ ...doneTurn(), turnId: `turn-${status}` } as ChatThreadTurnRecord);
+      await act(async () => button("Keep as a tool")!.click());
+      await waitFor(() => expect(rowText()).toContain("Saved as a tool. It's still being turned on."));
+      act(() => root.unmount());
+      root = createRoot(container);
+    }
+  });
+
   it("shows Saved as a tool when the tool was already promoted", async () => {
     api.keepCodeModeRun.mockResolvedValue(staged);
     api.promoteCapabilityCandidate.mockResolvedValue({ pendingApproval: null, noMutationRequired: true, detail: {} });

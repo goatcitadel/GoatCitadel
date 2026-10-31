@@ -12,24 +12,35 @@ const toolName = (goal: string): string => {
 };
 
 type Staged = Awaited<ReturnType<typeof keepCodeModeRun>>;
-/** Where a kept tool ended up: promoted, staged for review in Capabilities, or staged after its promotion failed. */
-type Kept = "saved" | "review" | "unfinished";
+/**
+ * Where a kept tool ended up: promoted, staged for review in Capabilities, staged after its promotion failed, or
+ * approved with its promotion still being applied.
+ */
+type Kept = "saved" | "review" | "unfinished" | "applying";
 
 const KEPT: Record<Kept, string> = {
   saved: "Saved as a tool",
   review: "Saved as a tool for review",
   unfinished: "Saved as a tool for review. It couldn't be turned on here.",
+  applying: "Saved as a tool. It's still being turned on.",
 };
 
+/** An approved lifecycle approval promotes the tool through its effects, so it is saved once none is left over. */
+function appliedOutcome(effects: ReadonlyArray<{ status: string }>): Kept {
+  if (effects.some((effect) => effect.status === "failed")) return "unfinished";
+  if (effects.some((effect) => effect.status === "pending" || effect.status === "running")) return "applying";
+  return "saved";
+}
+
 /**
- * Promotes a staged tool in this click. A lifecycle approval it raises is approved here, so an approved one leaves the
- * tool promoted; a Change Plan leaves it for review.
+ * Promotes a staged tool in this click. A lifecycle approval it raises is approved here, so an approved one whose
+ * effects all finished leaves the tool promoted; a Change Plan leaves it for review.
  */
 async function promote(staged: Staged): Promise<Kept> {
   const outcome = await promoteCapabilityCandidate(staged.candidateId, staged.revision, staged.versionId);
   if (outcome.pendingApproval) {
     const resolved = await resolveApproval(outcome.pendingApproval.approvalId, "approve");
-    return resolved.approval.status === "approved" ? "saved" : "review";
+    return resolved.approval.status === "approved" ? appliedOutcome(resolved.effects) : "review";
   }
   return outcome.noMutationRequired ? "saved" : "review";
 }
@@ -58,7 +69,7 @@ export function ChatCodeModeKeepAsTool({
     if (active && active !== document.body) return;
     keptRef.current?.focus({ preventScroll: true });
   }, [state]);
-  if (state === "saved" || state === "review" || state === "unfinished") {
+  if (state !== "idle" && state !== "keeping" && state !== "failed") {
     return (
       <p ref={keptRef} tabIndex={-1} className="text-fg-secondary outline-none">
         {KEPT[state]}{" "}
