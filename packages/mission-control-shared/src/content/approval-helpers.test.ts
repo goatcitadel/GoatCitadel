@@ -367,9 +367,19 @@ it("shows what a Chat Code Mode request reads and the input its code gets, so th
     'Input: {"path":".env"}',
   ]);
   expect(model?.changes).toEqual([{ label: "Code to run", content: source }]);
-  // A request without reads may read no files, and one without input gets none.
-  expect(request({ goal, source })?.targetEntries).toEqual([
+  // The Gateway refuses every helper call that names anything outside Reads, so the consequence can say so.
+  expect(model?.consequence).toBe(
+    "Approving runs this exact code once, on this computer in a restricted sandbox. It can read only what is " +
+      "listed under Reads. Denying keeps it from running.",
+  );
+  // A request without reads reads no files, and one without input gets none.
+  const readsNothing = request({ goal, source });
+  expect(readsNothing?.targetEntries).toEqual([
     { label: "Goal", value: goal },
     { label: "Reads", value: "No files" },
   ]);
+  expect(readsNothing?.consequence).toBe(
+    "Approving runs this exact code once, on this computer in a restricted sandbox. It can't read any files. " +
+      "Denying keeps it from running.",
+  );
 });

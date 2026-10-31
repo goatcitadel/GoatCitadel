@@ -406,8 +406,8 @@ export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): App
 
 /**
  * A Chat `code_mode.request` approval carries the exact goal and script as its payload (the Gateway runs only that
- * script, bound by hash), with the files it may read and the input its code gets: the input decides what the code
- * reads, so it is shown too. Without a goal and a script there is nothing exact to approve.
+ * script, bound by hash), with the files and folders it may read and the input its code gets: the input decides what
+ * the code reads, so it is shown too. Without a goal and a script there is nothing exact to approve.
  */
 export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
   const payload = approval.payload as Record<string, unknown> | undefined;
@@ -418,7 +418,8 @@ export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): Appr
   const input = codeModeRequestInput(payload?.input);
   const entries: ApprovalTargetEntry[] = [
     { label: "Goal", value: goal },
-    // A request that lists no files may read none.
+    // The Gateway refuses every helper call in the run that names anything else, so a request that lists none reads
+    // no files.
     { label: "Reads", value: reads.length ? reads.join(", ") : "No files" },
     ...(input ? [{ label: "Input", value: input }] : []),
   ];
@@ -429,7 +430,9 @@ export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): Appr
     changes: [{ label: "Code to run", content: source }],
     supporting: [],
     consequence:
-      "Approving runs this exact code once, on this computer in a restricted sandbox. Denying keeps it from running.",
+      "Approving runs this exact code once, on this computer in a restricted sandbox. " +
+      (reads.length ? "It can read only what is listed under Reads. " : "It can't read any files. ") +
+      "Denying keeps it from running.",
   };
 }
 

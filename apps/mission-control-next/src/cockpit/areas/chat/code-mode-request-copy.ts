@@ -8,7 +8,7 @@ export const NOT_RUN = "Not run";
 export type CodeModeRequestArgs = { goal?: unknown; source?: unknown; reads?: unknown; input?: unknown };
 export const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
 
-/** The files and attachments the request lists in `reads`: the only ones its docs.* helpers may read. */
+/** The files, folders and attachments the request lists in `reads`: the only ones any of its helpers may read. */
 export const readEntries = (args: CodeModeRequestArgs): string[] =>
   Array.isArray(args.reads) ? args.reads.flatMap((entry) => (text(entry) ? [text(entry)] : [])) : [];
 
