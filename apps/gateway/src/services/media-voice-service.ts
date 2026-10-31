@@ -973,6 +973,7 @@ export class MediaVoiceService {
     const model = normalizeRealtimeModel(input.model);
     const voice = normalizeRealtimeVoice(input.voice);
     const voiceSessionId = randomUUID();
+    const systemSettings = this.deps.storage.systemSettings;
 
     if (!apiKey) {
       const status: OpenAIRealtimeVoiceStatus = {
@@ -984,7 +985,7 @@ export class MediaVoiceService {
         updatedAt: now,
         lastError: OPENAI_REALTIME_MISSING_KEY_MESSAGE,
       };
-      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
       throw new OpenAIRealtimeVoiceError(OPENAI_REALTIME_MISSING_KEY_MESSAGE, 400);
     }
 
@@ -998,7 +999,7 @@ export class MediaVoiceService {
       }
     }
 
-    await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+    await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
       provider: "openai-realtime",
       state: "connecting",
       apiKeyReady: true,
@@ -1027,7 +1028,7 @@ export class MediaVoiceService {
         updatedAt: createdAt,
         activeVoiceSessionId: voiceSessionId,
       };
-      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
       await this.markGoogleMeetRealtimeSessionStarted(input, createdAt);
       await this.deps.publishRealtime("system", "voice", {
         type: "openai_realtime_client_secret_created",
@@ -1071,7 +1072,7 @@ export class MediaVoiceService {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "OpenAI Realtime voice failed.";
-      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+      await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
         provider: "openai-realtime",
         state: "error",
         apiKeyReady: true,
