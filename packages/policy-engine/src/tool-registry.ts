@@ -39,6 +39,12 @@ export const RUNTIME_CONFIGURE_TOOL_NAME = "runtime.configure";
 /** Model-callable, plan-creation-only entry to the Evolution Control Plane. */
 export const CHANGE_REQUEST_TOOL_NAME = "change.request";
 
+/**
+ * Model-callable request to run a short Code Mode script in the current Chat turn. It always needs an explicit
+ * operator approval: no grant, relief, bypass mode or profile skips it.
+ */
+export const CODE_MODE_REQUEST_TOOL_NAME = "code_mode.request";
+
 /** tests.run, lint.run and build.run only ever run a package script; they accept no command. */
 const RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA = {
   type: "object",
@@ -622,6 +628,49 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use this only to create a Change Plan; tell the operator that Chat will show the exact confirmation action.",
       "Never include credentials, OAuth values, filesystem paths, patches, commands, arbitrary setting keys, or delegated-agent requests.",
+    ],
+  },
+  {
+    name: CODE_MODE_REQUEST_TOOL_NAME,
+    category: "ops",
+    riskLevel: "caution",
+    requiresApproval: true,
+    description:
+      "Ask the operator to run a short script on this computer in a restricted sandbox, then continue with its result. The operator approves every run.",
+    argSchema: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          minLength: 1,
+          maxLength: 120,
+          description: 'A plain verb phrase shown to the operator, such as "read the text of saturday-plan.pdf".',
+        },
+        source: {
+          type: "string",
+          minLength: 1,
+          maxLength: 20_000,
+          description:
+            "The script body. It reads `input`, may await helpers, and returns the answer. Long documents come back in pages: call again with `offset: nextOffset` while nextOffset is set.",
+        },
+        language: { type: "string", enum: ["javascript", "typescript"] },
+        input: { type: "object", description: "File paths and values the script uses." },
+        reads: {
+          type: "array",
+          maxItems: 10,
+          items: { type: "string", minLength: 1, maxLength: 1_024 },
+          description: "Paths and attachment IDs the script reads, shown in the details.",
+        },
+      },
+      required: ["goal", "source"],
+      additionalProperties: false,
+    },
+    pack: "core",
+    recommendedContexts: ["chat"],
+    codeModeAllowed: false,
+    usageHints: [
+      "Use only when no available tool can do a step, such as reading a binary file. Put paths and values in `input`, return the answer, and keep the script short.",
+      "Inside the script call helpers as `await capabilities.docs.extract_text({ path: input.path })` (docs.extract_text, docs.read_bytes, docs.decompress, fs.read, fs.list).",
     ],
   },
   {

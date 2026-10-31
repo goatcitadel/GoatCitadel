@@ -37,6 +37,7 @@ export function chatToolDisplayName(run: ChatToolRunRecord): string {
     "docs.read_bytes": "Read file bytes",
     "docs.extract_text": "Extract document text",
     "docs.decompress": "Decompress data",
+    "code_mode.request": "Run code",
   };
   const name = typeof run.toolName === "string" ? run.toolName : "";
   return names[name] ?? (humanizeToken(name) || "Tool");

@@ -13,6 +13,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   "skills.read": "Read a skill's instructions",
   "tool_artifact.read": "Read saved tool output",
   "change.request": "Ask to change your setup",
+  "code_mode.request": "Ask to run code",
   "runtime.configure": "Ask to set up a search provider",
   "session.status": "Check the chat's status",
   "session.search": "Search this chat's history",

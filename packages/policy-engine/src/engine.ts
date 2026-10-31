@@ -70,7 +70,12 @@ import {
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
 } from "./research-search-official-providers.js";
-import { createDefaultToolRegistry, type ToolDefinition, type ToolRegistry } from "./tool-registry.js";
+import {
+  CODE_MODE_REQUEST_TOOL_NAME,
+  createDefaultToolRegistry,
+  type ToolDefinition,
+  type ToolRegistry,
+} from "./tool-registry.js";
 import { matchesAnyToolPattern, matchesToolPattern } from "./tool-patterns.js";
 import {
   readMcpToolPolicyBinding,
@@ -642,14 +647,23 @@ export class ToolPolicyEngine {
     });
   }
 
-  public async invoke(request: ToolInvokeRequest, options: ToolPolicyInvokeOptions = {}): Promise<ToolInvokeResult> {
+  public async invoke(
+    callerRequest: ToolInvokeRequest,
+    options: ToolPolicyInvokeOptions = {},
+  ): Promise<ToolInvokeResult> {
+    // approvedByApprovalId is engine-owned: only executeApprovedAction sets it, never a caller.
+    const request = withoutEngineOwnedApproval(callerRequest);
     const identity = this.resolveInvocationPolicy(request, options);
     if (identity.binding && request.externalRuntime !== true) {
       throw new ToolExecutionPreconditionError("Mapped remote tools require the external runtime owner");
     }
     const pendingActionRequest = toPendingApprovalRequestRecord(request);
     assertNoRawRemoteApprovalBearer(pendingActionRequest);
-    const directApprovalBypassId = await getVerifiedApprovalBypassId(request, this.storage);
+    // A code_mode.request never rides a re-sent approval reference; it runs only from the operator's decision.
+    const directApprovalBypassId =
+      request.toolName === CODE_MODE_REQUEST_TOOL_NAME
+        ? undefined
+        : await getVerifiedApprovalBypassId(request, this.storage);
     if (directApprovalBypassId) {
       const result = await this.executeApprovedAction(directApprovalBypassId, request.signal, {
         ...(request.externalRuntime === true ? { deferResolution: true } : {}),
@@ -1493,6 +1507,11 @@ export class ToolPolicyEngine {
     if (officialSearchConsentRequired) {
       requiresApproval = true;
     }
+    // Code Mode always needs an explicit operator decision: no grant, MCP relief, profile or bypass mode clears it.
+    const codeModeRequestRequiresApproval = request.toolName === CODE_MODE_REQUEST_TOOL_NAME;
+    if (codeModeRequestRequiresApproval) {
+      requiresApproval = true;
+    }
 
     const accessReason = this.buildAccessReason({
       policy,
@@ -1511,6 +1530,10 @@ export class ToolPolicyEngine {
     if (officialSearchConsentRequired) {
       accessReason.reasonCodes.push("official_search_provider_consent_required");
       accessReason.policyReason = "official search provider consent is required";
+    }
+    if (codeModeRequestRequiresApproval) {
+      accessReason.reasonCodes.push("code_mode_request_requires_approval");
+      accessReason.policyReason = "running code needs the operator's approval";
     }
     if (outsideRootWriteRequiresApproval) {
       accessReason.reasonCodes.push("outside_root_write_requires_approval");
@@ -2244,7 +2267,11 @@ export class ToolPolicyEngine {
     internalCall?: ReturnType<typeof buildInternalToolCall>,
     options: ToolPolicyInvokeOptions = {},
   ): Promise<ToolInvokeResult> {
-    const executionRequest = withExecutionGrantContext(request, evaluation);
+    // The executor sees an approval id only when this execution runs under that operator approval.
+    const executionRequest: ToolInvokeRequest = {
+      ...withExecutionGrantContext(withoutEngineOwnedApproval(request), evaluation),
+      ...(approvalId ? { approvedByApprovalId: approvalId } : {}),
+    };
     if (grantIdToConsume && !(await this.storage.toolGrants.consumeOne(grantIdToConsume))) {
       const reason = "blocked: one-time tool grant is no longer available";
       await this.recordBlocked(auditEventId, request, reason, {
@@ -2838,6 +2865,13 @@ function readApprovalOriginSurface(value: unknown): ApprovalLinkage["originSurfa
 
 function stripUndefined<T extends Record<string, unknown>>(input: T): T {
   return Object.fromEntries(Object.entries(input).filter(([, value]) => value !== undefined)) as T;
+}
+
+/** Drops the engine-owned approval stamp so only an approved execution can carry one. */
+function withoutEngineOwnedApproval(request: ToolInvokeRequest): ToolInvokeRequest {
+  if (!("approvedByApprovalId" in request)) return request;
+  const { approvedByApprovalId: _callerSupplied, ...rest } = request;
+  return rest;
 }
 
 function withExecutionGrantContext(request: ToolInvokeRequest, evaluation?: AccessEvaluation): ToolInvokeRequest {

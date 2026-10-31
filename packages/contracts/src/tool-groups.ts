@@ -39,6 +39,7 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
       "skills.read",
       "tool_artifact.read",
       "change.request",
+      "code_mode.request",
       "runtime.configure",
       "session.status",
       "session.search",
