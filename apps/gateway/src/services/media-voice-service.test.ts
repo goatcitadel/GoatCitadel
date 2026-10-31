@@ -687,7 +687,7 @@ describe("MediaVoiceService", () => {
     const env = {
       OPENAI_API_KEY: process.env.OPENAI_API_KEY,
     };
-    process.env.OPENAI_API_KEY = "sk-env-ignored-when-the-provider-owner-answers";
+    delete process.env.OPENAI_API_KEY;
     try {
       await expect(service.getVoiceStatus()).resolves.toMatchObject({
         realtime: {
@@ -696,6 +696,26 @@ describe("MediaVoiceService", () => {
           lastError: "No OpenAI API key: add one under Settings › Providers › OpenAI, or set OPENAI_API_KEY.",
         },
       });
+    } finally {
+      restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
+    }
+  });
+
+  it("falls back to OPENAI_API_KEY when the config has no OpenAI provider", async () => {
+    const service = new MediaVoiceService({ ...createDeps(), resolveOpenAIApiKey: () => undefined });
+    const env = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    process.env.OPENAI_API_KEY = "sk-env-only";
+    try {
+      await expect(service.getVoiceStatus()).resolves.toMatchObject({
+        realtime: { apiKeyReady: true },
+      });
+      expect(
+        service
+          .getGoogleMeetPrerequisiteStatus({ provider: "openai-realtime", userStartConfirmed: false })
+          .prerequisites.find((item) => item.id === "provider_key")?.ready,
+      ).toBe(true);
     } finally {
       restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
     }

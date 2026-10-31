@@ -1372,9 +1372,9 @@ export class MediaVoiceService {
     };
   }
 
+  // The provider lookup misses when the config has no `openai` entry; OPENAI_API_KEY still works then.
   private resolveOpenAIApiKey(): string | undefined {
-    const resolved = this.deps.resolveOpenAIApiKey ? this.deps.resolveOpenAIApiKey() : process.env.OPENAI_API_KEY;
-    return resolved?.trim() || undefined;
+    return this.deps.resolveOpenAIApiKey?.()?.trim() || process.env.OPENAI_API_KEY?.trim() || undefined;
   }
 
   private buildOpenAIRealtimeSafetyIdentifier(): string {
