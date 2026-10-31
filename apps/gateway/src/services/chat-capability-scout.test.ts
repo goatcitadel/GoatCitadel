@@ -394,7 +394,8 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
             toolRunId: "run-1",
             turnId: "turn-1",
             sessionId: "session-1",
-            toolName: "documents.create",
+            // Reading the lesson notes failed: a gap a local Code Mode script can close.
+            toolName: "docs.ingest",
             status: "failed" as const,
             startedAt: new Date().toISOString(),
           },
@@ -753,6 +754,30 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
         ["Build a tool to read .pdf files"], // turn 3
         ["Build a tool to read .pdf files"], // turn 4
         [], // turn 5: no evidence in this turn
+      ]);
+    });
+
+    it("counts only failures of tools whose job a local Code Mode script can do", async () => {
+      const turn = SATURDAY_SESSION_TURNS[0]!;
+      const scout = (runs: Parameters<typeof withRuns>[0]) =>
+        scoutCapabilityUpgradeSuggestions({
+          content: turn.content,
+          assistantText: turn.assistantText,
+          sessionId: "session-1",
+          trace: { ...createTrace(), toolRuns: withRuns([...turn.toolRuns, ...runs]) },
+          deps: emptyDeps(),
+        });
+      const titles = async (runs: Parameters<typeof withRuns>[0]) =>
+        (await scout(runs)).filter((item) => item.kind === "code_mode_build").map((item) => item.title);
+
+      // Code Mode has no network: a failed web search or page fetch in a research turn is not a gap it can close.
+      expect(await titles([{ toolName: "browser.search", status: "failed" }])).toEqual([]);
+      expect(await titles([{ toolName: "browser.extract", status: "failed" }])).toEqual([]);
+      expect(await titles([{ toolName: "http.get", status: "failed" }])).toEqual([]);
+      expect(await titles([{ toolName: "slack.send", status: "failed" }])).toEqual([]);
+      // A failed file read is.
+      expect(await titles([{ toolName: "fs.read", status: "failed" }])).toEqual([
+        "Build a tool for what fs read couldn't do",
       ]);
     });
 

@@ -463,9 +463,23 @@ export function collectGapEvidence(input: CapabilityScoutInput): GapEvidence | u
     const ext = fileExtension(attachment.fileName);
     if (ext) return { kind: "unreadable_attachment", ext };
   }
-  const failed = toolRuns.find((run) => run.status === "failed" && run.toolName !== "code_mode.request");
+  const failed = toolRuns.find((run) => run.status === "failed" && CODE_MODE_REPLACEABLE_TOOL_NAMES.has(run.toolName));
   return failed ? { kind: "tool_failed", toolName: failed.toolName } : undefined;
 }
+
+/**
+ * Tools whose job a local, read-only Code Mode script can do: reading, parsing and converting files. Code Mode has
+ * no network, so a failed web, search, provider or send tool is not evidence it would help.
+ */
+const CODE_MODE_REPLACEABLE_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "fs.read",
+  "file.read_range",
+  "tool_artifact.read",
+  "docs.ingest",
+  "docs.read_bytes",
+  "docs.extract_text",
+  "docs.decompress",
+]);
 
 function summarizeReusableBehavior(content: string): string {
   const normalized = content.replace(/\s+/g, " ").trim();
