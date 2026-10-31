@@ -68,6 +68,17 @@ interface ApprovalDecisionBarProps {
    * a skill change that belongs to no workspace and that the operator asked for themselves.
    */
   reviewedInPlace?: boolean;
+  /** Wording for the one-click approve button, when the action has its own ("Run it"). */
+  approveLabel?: string;
+  /** Styles the approve button as a danger action with a shield. */
+  approveDanger?: boolean;
+  /** Leaves out the approve button, so only Deny is offered (the action cannot run here). */
+  withholdApprove?: boolean;
+  /**
+   * Runs after the record is re-read and before the approval is sent. If it throws, nothing is approved and the
+   * error is shown beside the buttons.
+   */
+  prepareApprove?: () => Promise<void>;
   onResolved: (message: string) => void;
   onInvalidated: (message?: string) => void;
 }
@@ -116,6 +127,10 @@ function ApprovalDecisionReview({
   compact = false,
   stickyDecisions = false,
   reviewedInPlace = false,
+  approveLabel,
+  approveDanger = false,
+  withholdApprove = false,
+  prepareApprove,
   onResolved,
   onInvalidated,
   detached,
@@ -221,6 +236,15 @@ function ApprovalDecisionReview({
           onInvalidated("Specialist review changed. Refresh and review the current target before approving.");
           return;
         }
+      }
+      if (decision === "approve" && prepareApprove) {
+        try {
+          await prepareApprove();
+        } catch (cause) {
+          if (current.current) setError(describeApiError(cause).summary);
+          return;
+        }
+        if (!current.current || !access.current()) return;
       }
       updateInboxApprovalAttempt(
         workspaceId,
@@ -334,11 +358,11 @@ function ApprovalDecisionReview({
       <p className="text-fg-muted">This approval has expired and can no longer be decided.</p>
     );
   // Without the exact action preview nothing can be approved, but denying withholds the action, so Deny stays.
-  const canApprove = hasPreview || specializedReview;
+  const canApprove = (hasPreview || specializedReview) && !withholdApprove;
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
-      {canApprove ? (
+      {hasPreview || specializedReview ? (
         compact ? null : (
           <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
         )
@@ -377,6 +401,8 @@ function ApprovalDecisionReview({
               }
               pending={Boolean(attempt) || (specializedReview && !specialistReady)}
               reviewedInPlace={reviewedInPlace}
+              approveLabel={approveLabel}
+              approveDanger={approveDanger}
               onApprove={() => void decide("approve")}
             />
           </span>

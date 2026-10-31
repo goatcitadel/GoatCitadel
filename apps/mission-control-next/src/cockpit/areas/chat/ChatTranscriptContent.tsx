@@ -27,6 +27,7 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
+import { ChatCodeModeRequestCard } from "./ChatCodeModeRequestCard";
 import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
 import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
@@ -205,6 +206,12 @@ export const Turn = memo(function Turn({
           onNewConversation={actions.historicalReadOnly ? undefined : onNewConversation}
         />
       ) : null}
+      {/* Its own row, not inside the reply: the request waits for the operator before any reply text exists. */}
+      <ChatCodeModeRequestCard
+        turn={turn}
+        workspaceId={actions.workspaceId}
+        onRefreshThread={actions.onRefreshThread}
+      />
       {turn.assistantMessage ||
       turn.toolRuns.length ||
       turn.citations.length ||

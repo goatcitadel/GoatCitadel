@@ -13,6 +13,7 @@ import { ChatPendingQuestion } from "./ChatPendingQuestion";
 import { presentApprovalAction } from "./chat-vocabulary";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { readSpecialistEvidence, specialistEvidenceMatches } from "../inbox/specialist-approval-evidence";
 
 type Blockers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -76,6 +77,28 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           expiresAt: reviewedApproval.expiresAt,
         }
       : pendingApproval;
+  // A code_mode.request approval belongs to the Code Mode card in the reply, which asks once with its own wording.
+  const ownedByCodeModeCard =
+    approval?.kind === "code_mode.request" ||
+    approval?.toolName === "code_mode.request" ||
+    reviewedApproval?.kind === "code_mode.request";
+  // A Code Mode run approval is approved only against the exact code and target it reads back (as the Inbox does).
+  const specialistTarget =
+    reviewedApproval?.status === "pending" && reviewedApproval.kind === "code_mode.run" ? reviewedApproval : undefined;
+  const specialistQuery = useQuery({
+    queryKey: ["approvals", "specialist", workspaceId, specialistTarget],
+    queryFn: () => readSpecialistEvidence(specialistTarget!),
+    enabled: Boolean(specialistTarget),
+    retry: false,
+    staleTime: 0,
+  });
+  const specialistEvidence =
+    specialistTarget &&
+    !specialistQuery.isError &&
+    specialistQuery.data &&
+    specialistEvidenceMatches(specialistTarget, specialistQuery.data)
+      ? specialistQuery.data
+      : undefined;
   const input = props.pendingUserInput;
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
@@ -101,7 +124,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
         if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusWithin.current = false;
       }}
     >
-      {approval ? (
+      {approval && !ownedByCodeModeCard ? (
         <section
           aria-label={decided ? "Decided approval" : "Pending approval"}
           className={`mt-3 rounded-md border bg-raised p-3 text-sm ${decided ? "border-line-subtle" : "border-status-waiting"}`}
@@ -147,6 +170,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
             approval={reviewedApproval}
             workspaceId={workspaceId}
             sessionId={props.selectedSessionId ?? undefined}
+            specialistEvidence={specialistEvidence}
             recordPending={recordQuery.isPending && !recordQuery.isError}
             recovery={{
               failed: recordFailed,

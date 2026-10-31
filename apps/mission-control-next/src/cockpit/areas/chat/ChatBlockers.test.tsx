@@ -20,6 +20,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchApprovals: api.fetchApprovals,
   resolveApproval: api.resolveApproval,
 }));
+const specialist = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("../inbox/specialist-approval-evidence", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../inbox/specialist-approval-evidence")>()),
+  readSpecialistEvidence: specialist.read,
+  specialistEvidenceMatches: () => true,
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "default" }),
 }));
@@ -427,4 +433,57 @@ it("moves focus to the composer when a decision removes the card it was in (CH-1
   } finally {
     composer.remove();
   }
+});
+
+it("does not duplicate a code_mode.request approval", async () => {
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "cm-1",
+    kind: "code_mode.request",
+    status: "pending",
+    riskLevel: "caution",
+    payload: { goal: "read a file", source: "return 1;" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({
+            pendingApproval: { approvalId: "cm-1", kind: "code_mode.request", riskLevel: "caution" },
+          })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  expect(container.textContent).not.toContain("Approval needed");
+  expect(container.querySelector("button")).toBeNull();
+});
+
+it("enables Approve for a code_mode.run once specialist evidence matches", async () => {
+  const record = {
+    approvalId: "run-1",
+    kind: "code_mode.run",
+    status: "pending",
+    riskLevel: "danger",
+    payload: { runId: "r1" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  api.fetchApproval.mockResolvedValue(record);
+  let release!: (value: unknown) => void;
+  specialist.read.mockReturnValue(new Promise((resolve) => (release = resolve)));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: "run-1", kind: "code_mode.run", riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Review danger approval")).toBeDefined());
+  expect(findButton("Review danger approval")!.disabled).toBe(true);
+  await act(async () => release({ replay: { approval: record, events: [], effects: [] } }));
+  await vi.waitFor(() => expect(findButton("Review danger approval")!.disabled).toBe(false));
 });

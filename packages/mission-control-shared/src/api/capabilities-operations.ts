@@ -19,6 +19,7 @@ import type {
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
   CodeModeExecutionBackendsResponse,
+  CodeModeReadiness,
   CodeModeRunListOptions,
   CodeModeRunRecord,
   CodeModeRunVerificationRequest,
@@ -162,6 +163,11 @@ export async function fetchCodeModeRuns(
     params.set("status", options.status);
   }
   return request(`/api/v1/code-mode/runs?${params.toString()}`);
+}
+
+/** Whether Code Mode can run now, or the first thing that blocks it. */
+export async function fetchCodeModeReadiness(): Promise<CodeModeReadiness> {
+  return request("/api/v1/code-mode/readiness");
 }
 
 export async function fetchCodeModeExecutionBackends(): Promise<CodeModeExecutionBackendsResponse> {

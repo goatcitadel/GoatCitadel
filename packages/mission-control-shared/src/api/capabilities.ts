@@ -87,6 +87,7 @@ export {
   rollbackCapabilityCandidate,
   fetchCodeModeRuns,
   fetchCodeModeExecutionBackends,
+  fetchCodeModeReadiness,
   fetchCodeModeRun,
   fetchCodeModeRunVerificationEvidence,
   verifyCodeModeRun,

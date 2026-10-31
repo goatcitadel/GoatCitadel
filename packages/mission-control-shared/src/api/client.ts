@@ -652,6 +652,7 @@ export {
   fetchCapabilityProposals,
   fetchAutonomousActivationGrants,
   fetchCodeModeExecutionBackends,
+  fetchCodeModeReadiness,
   fetchCodeModeRun,
   fetchCodeModeRuns,
   promoteCapabilityCandidate,

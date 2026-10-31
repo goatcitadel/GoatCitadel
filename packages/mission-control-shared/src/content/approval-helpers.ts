@@ -345,6 +345,10 @@ export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalReques
   if (approval.kind === "external_source.knowledge_snapshot") return externalSourceKnowledgeApprovalEvidence(approval);
   if (approval.kind === "communications.mail.send") return communicationsMailSendApprovalEvidence(approval);
   if (approval.kind === "change.request") return changeRequestApprovalEvidence(approval);
+  if (approval.kind === "code_mode.request") {
+    const codeEvidence = codeModeRequestApprovalEvidence(approval);
+    if (codeEvidence) return codeEvidence;
+  }
   if (approval.kind === "change_plan_effect") {
     const planEvidence = changePlanEffectApprovalEvidence(approval);
     if (planEvidence) return planEvidence;
@@ -396,6 +400,26 @@ export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): App
     consequence:
       "Approving lets this one change apply once, exactly as planned. Some changes then wait for you to continue them. " +
       "Denying cancels it.",
+  };
+}
+
+/**
+ * A Chat `code_mode.request` approval carries the exact goal and script as its payload (the Gateway runs only that
+ * script, bound by hash). Without both there is nothing exact to approve.
+ */
+export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
+  const payload = approval.payload as Record<string, unknown> | undefined;
+  const goal = nonEmptyText(payload?.goal);
+  const source = typeof payload?.source === "string" && payload.source.trim() ? payload.source : undefined;
+  if (!goal || !source) return null;
+  return {
+    targets: [`Goal: ${goal}`],
+    targetEntries: [{ label: "Goal", value: goal }],
+    commands: [],
+    changes: [{ label: "Code to run", content: source }],
+    supporting: [],
+    consequence:
+      "Approving runs this exact code once, on this computer in a restricted sandbox. Denying keeps it from running.",
   };
 }
 
