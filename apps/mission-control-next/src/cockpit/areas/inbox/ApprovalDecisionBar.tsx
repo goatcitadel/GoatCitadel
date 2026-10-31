@@ -82,8 +82,11 @@ interface ApprovalDecisionBarProps {
    */
   prepareApprove?: PrepareApprove;
   onResolved: (message: string) => void;
-  /** The click was not sent. `message` says why when it is not that the record changed. */
-  onInvalidated: (message?: string) => void;
+  /**
+   * The click was not sent. `message` says why when it is not that the record changed, and `line` is that message as
+   * the bar shows it, with the link to its next step when there is one.
+   */
+  onInvalidated: (message?: string, line?: ReactNode) => void;
 }
 
 export function ApprovalDecisionBar(props: ApprovalDecisionBarProps) {
@@ -245,7 +248,7 @@ function ApprovalDecisionReview({
         // The preparation may already have changed something (Code Mode is on). A review that remounted meanwhile
         // does not send this click, and its owner says so (choose again, or why it stopped) instead of dropping it.
         const outlived = !current.current || !access.current();
-        if (outlived) onInvalidated(failure?.summary);
+        if (outlived) onInvalidated(failure?.summary, failure?.line);
         else if (failure) setError(failure.line);
         if (outlived || failure) return;
       }

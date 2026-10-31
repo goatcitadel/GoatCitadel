@@ -105,8 +105,8 @@ function RequestRow({
   }, [queryClient, settledStatus]);
   // A click checked against a record that changed meanwhile (the model's explanation lands a few seconds after the
   // request, perhaps while Code Mode is being turned on) is not sent, and the buttons remount for the new record, which
-  // clears their error. The row keeps the note.
-  const [note, setNote] = useState("");
+  // clears their error. The row keeps the note, with the error's link to its next step (an Inbox step) when it has one.
+  const [note, setNote] = useState<ReactNode>("");
   // Turning Code Mode on changes what the row offers, so readiness is read again whatever the outcome: the button
   // turns to "Run it" once both switches are on, and the row still says Code Mode is off when only one went on.
   const turnOnCodeMode = async (progress: (message: string) => void) => {
@@ -199,8 +199,8 @@ function RequestRow({
           void recordQuery.refetch();
           onRefreshThread();
         }}
-        onInvalidated={(message) => {
-          setNote(message ?? CHANGED_NOTE);
+        onInvalidated={(message, messageLine) => {
+          setNote(messageLine ?? message ?? CHANGED_NOTE);
           void recordQuery.refetch();
           onRefreshThread();
         }}
@@ -260,9 +260,9 @@ function PendingRow(props: {
   onRetryReadiness(): void;
   turnOnCodeMode(progress: (message: string) => void): Promise<void>;
   /** Why the last click was not sent, kept while the buttons remount; empty when there is nothing to say. */
-  note: string;
+  note: ReactNode;
   onSettled(): void;
-  onInvalidated(message?: string): void;
+  onInvalidated(message?: string, line?: ReactNode): void;
 }) {
   const { record, readiness } = props;
   const off = readiness === "off";

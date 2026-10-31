@@ -343,6 +343,35 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 
+  it("keeps the Inbox link when the request changed while turning Code Mode on stopped at an Inbox step", async () => {
+    api.fetchCodeModeReadiness.mockResolvedValue(codeModeOff);
+    api.fetchSettings.mockResolvedValue({ revision: 7, features: {} });
+    api.patchSettings.mockResolvedValue({
+      revision: 8,
+      changePlanReceipt: { planId: "plan-1", status: "awaiting_approval", revision: 1 },
+    });
+    let finishPlan!: (value: unknown) => void;
+    api.approvePlanInPlace.mockReturnValueOnce(new Promise((resolve) => (finishPlan = resolve)));
+    await render(turnWith({}));
+    await waitForButton("Turn on Code Mode and run");
+    await act(async () => button("Turn on Code Mode and run")!.click());
+    await waitFor(() => expect(api.approvePlanInPlace).toHaveBeenCalledTimes(1));
+    api.fetchApproval.mockResolvedValue({ ...approval(), explanationStatus: "completed" });
+    await act(async () => client.invalidateQueries({ queryKey: ["approvals"] }));
+    await waitFor(() =>
+      expect(client.getQueryData(["approvals", "record", "default", "approval-1"])).toMatchObject({
+        explanationStatus: "completed",
+      }),
+    );
+    // Let the buttons remount for the updated record before the switch stops at its Inbox step.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    await act(async () => finishPlan({ kind: "elsewhere", plan: { planId: "plan-1" }, approvalId: "settings-1" }));
+    await waitFor(() => expect(container.textContent).toContain("needs one more step in Inbox"));
+    const link = [...container.querySelectorAll("a")].find((a) => a.textContent === "Approve it in Inbox");
+    expect(link?.getAttribute("href")).toContain("approvalId=settings-1");
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  });
+
   it("unsupported sandbox offers only Deny", async () => {
     api.fetchCodeModeReadiness.mockResolvedValue({
       enabled: true,
