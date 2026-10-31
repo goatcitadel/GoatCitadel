@@ -431,7 +431,7 @@ describe("parsePluginManifest", () => {
       expect(pathMessage("/etc/skills")).toBe("A piece's path must be relative to the plugin folder.");
       expect(pathMessage("skills\\notes")).toBe("A piece's path must use forward slashes.");
       expect(pathMessage("skills/../notes")).toBe("A piece's path must not contain '..'.");
-      expect(pathMessage("skills/café")).toBe("A piece's path must be NFC-normalized.");
+      expect(pathMessage("skills/cafe\u0301")).toBe("A piece's path must be NFC-normalized.");
       expect(pathMessage("skills/notes.")).toBe(
         'A piece\'s path must be a plain path every computer can hold: no empty or "." parts, no colon, no name that ' +
           "ends in a dot or a space, no .git folder and no device name such as CON.",
@@ -584,7 +584,7 @@ describe("parsePluginManifest", () => {
       "tab\there.md",
       "nul\u0000.md",
       "bad\uFFFD.md",
-      "ﬁle.md",
+      "\ufb01le.md",
       "e\u0301.md",
       `${"a".repeat(256)}/b.md`,
       `${"a/".repeat(2_049)}b`,

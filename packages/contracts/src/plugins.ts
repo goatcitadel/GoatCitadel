@@ -350,7 +350,7 @@ export function isPortablePluginPath(relativePath: string): boolean {
     relativePath.length > MAX_PORTABLE_PATH_LENGTH ||
     relativePath !== relativePath.normalize("NFKC") ||
     relativePath.includes("\\") ||
-    relativePath.includes("�")
+    relativePath.includes("\ufffd")
   ) {
     return false;
   }

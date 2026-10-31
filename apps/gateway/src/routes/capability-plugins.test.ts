@@ -190,7 +190,7 @@ describe("capability plugin routes", () => {
     const { service, sources } = routeService();
     const { server } = await build(service);
 
-    for (const workspaceId of [" default", "default ", " default", "ﬁle-lab", "default\t"]) {
+    for (const workspaceId of [" default", "default ", "\u00a0default", "\ufb01le-lab", "default\t"]) {
       const inspect = await server.inject({
         method: "POST",
         url: INSPECTIONS_URL,
