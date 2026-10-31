@@ -9,6 +9,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use for ordinary code implementation without a skill-boundary question."],
     confidenceBoost: 0.12,
   },
+  "codebase-design": {
+    phrases: ["design it twice", "module boundaries"],
+    keywords: ["deep module", "shallow module"],
+    surfaces: ["code"],
+    whenToUse: ["Judge and reshape module interfaces."],
+    whenNotToUse: ["Do not use for visual or UI design."],
+    confidenceBoost: 0.1,
+  },
   coding: {
     phrases: ["implement", "refactor", "fix", "patch", "bug fix", "feature"],
     keywords: ["code", "test", "typecheck", "implementation"],

@@ -11,6 +11,14 @@
       "catalogExposure": "suggestable"
     },
     {
+      "skillId": "bundled:codebase-design",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "bundled:coding",
       "owner": "code",
       "source": "bundled",

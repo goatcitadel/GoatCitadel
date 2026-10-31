@@ -12,6 +12,13 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
     totalBytes: 7496,
   },
   {
+    skillId: "bundled:codebase-design",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "973b9558c8424e67f0b37e82270f83c762a70a1e604a74e8f84aa4ab72c6e489",
+    fileCount: 3,
+    totalBytes: 6262,
+  },
+  {
     skillId: "bundled:coding",
     manifestVersion: "goatcitadel.skill-tree.v1",
     treeSha256: "c0ebdd82fc2a473b63b0a7d75051f6595f0ddbf244369ae9034f2db91b48da32",

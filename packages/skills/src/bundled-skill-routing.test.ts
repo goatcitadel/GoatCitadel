@@ -35,6 +35,8 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["Sort the list with the latest first", []],
   ["Grill me on this shared-workspace design", ["grilling"]],
   ["Poke holes in my migration plan", ["grilling"]],
+  ["Is this a shallow module? Should I merge these pass-through layers?", ["codebase-design"]],
+  ["Design it twice before we pick the cache interface", ["codebase-design"]],
 ];
 
 let service: SkillsService;
