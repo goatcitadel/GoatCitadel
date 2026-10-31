@@ -103,6 +103,7 @@ export interface ChatTurnCapabilityToolMeshPublicationBinding {
 }
 
 export interface ChatTurnCapabilityToolRuntimeOwnerBinding {
+  /** "plugin": old records only; nothing produces it since Phase 4. */
   kind: "builtin" | "plugin";
   /** Secret-safe digest of the exact runtime owner generation. */
   bindingHash: string;

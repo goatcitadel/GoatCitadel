@@ -367,7 +367,6 @@ const CHECK_GROUPS = Object.freeze({
           "--reporter",
           "verbose",
           "src/routes/tools.permission-profiles.test.ts",
-          "src/services/plugin-tool-override-service.test.ts",
           "src/services/tool-invocation-coordinator-service.test.ts",
           "--maxWorkers=1",
         ],

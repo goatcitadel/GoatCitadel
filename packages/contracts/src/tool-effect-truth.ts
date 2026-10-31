@@ -18,6 +18,10 @@ export type ToolEffectPotential = "none" | "unknown";
  */
 export type ToolEffectOutcomeKind = "none" | "uncertain" | "concrete";
 
+/**
+ * "plugin": old records, and tool names that still look like a plugin's (classified
+ * as untrusted). No plugin runtime produces it since Phase 4.
+ */
 export type ToolEffectSourceKind = "builtin" | "browser" | "shell" | "mcp" | "plugin" | "remote" | "unknown";
 
 export type ToolEffectPotentialReason =

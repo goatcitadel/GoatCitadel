@@ -1,21 +1,13 @@
 import { describe, expect, it, vi } from "vitest";
-import type {
-  ApprovalRequest,
-  ChatTurnCapabilityToolRuntimeOwnerBinding,
-  ToolInvokeRequest,
-  ToolInvokeResult,
-} from "@goatcitadel/contracts";
+import type { ApprovalRequest, ToolInvokeRequest, ToolInvokeResult } from "@goatcitadel/contracts";
 import {
   ToolInvocationCoordinatorService,
   type ToolInvocationCoordinatorHost,
   type WorkspacePathBridgeExecutionDecision,
   type WorkspacePathBridgeResolutionContext,
 } from "./tool-invocation-coordinator-service.js";
-import type { PluginToolHandler } from "./plugin-tool-override-service.js";
 import type { ToolProcessSpawnBoundary } from "@goatcitadel/policy-engine";
 
-const STABLE_PLUGIN_OWNER = { kind: "plugin", bindingHash: "a".repeat(64) } as const;
-const REPLACEMENT_PLUGIN_OWNER = { kind: "plugin", bindingHash: "b".repeat(64) } as const;
 const STABLE_BRIDGE_FINGERPRINT = "c".repeat(64);
 const REPLACEMENT_BRIDGE_FINGERPRINT = "d".repeat(64);
 const STABLE_BRIDGE_GIT_IDENTITY = "e".repeat(64);
@@ -92,24 +84,6 @@ const BRIDGE_STABILITY_CASES: readonly BridgeStabilityCase[] = [
   },
 ];
 
-function createMutablePluginRuntime(initialHandler: PluginToolHandler) {
-  let currentHandler: PluginToolHandler | undefined = initialHandler;
-  let currentOwner: ChatTurnCapabilityToolRuntimeOwnerBinding | undefined = STABLE_PLUGIN_OWNER;
-  const service = {
-    resolveActiveHandler: vi.fn(() => currentHandler),
-    resolveRuntimeOwnerBinding: vi.fn(() => currentOwner as ChatTurnCapabilityToolRuntimeOwnerBinding),
-  } as unknown as NonNullable<ToolInvocationCoordinatorHost["pluginToolOverrideService"]>;
-  return {
-    service,
-    setHandler: (handler: PluginToolHandler | undefined) => {
-      currentHandler = handler;
-    },
-    setOwner: (owner: ChatTurnCapabilityToolRuntimeOwnerBinding | undefined) => {
-      currentOwner = owner;
-    },
-  };
-}
-
 function createRequest(cwd = "F:\\workspace\\project"): ToolInvokeRequest {
   return {
     toolName: "shell.exec",
@@ -144,8 +118,6 @@ function createHost(
       options?: { beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void> },
     ) => Promise<ToolInvokeResult>;
     runInlineHooks?: ToolInvocationCoordinatorHost["hooksService"]["runInlineHooks"];
-    pluginHandler?: (args: Record<string, unknown>, context: unknown) => Promise<ToolInvokeResult>;
-    pluginToolOverrideService?: ToolInvocationCoordinatorHost["pluginToolOverrideService"];
   } = {},
 ): ToolInvocationCoordinatorHost {
   const host = {
@@ -173,16 +145,6 @@ function createHost(
     scheduleApprovalExplanationById: vi.fn(),
     publishRealtime: vi.fn(),
     recordEvidenceEnvelope: vi.fn(),
-    ...(input.pluginToolOverrideService
-      ? { pluginToolOverrideService: input.pluginToolOverrideService }
-      : input.pluginHandler
-        ? {
-            pluginToolOverrideService: {
-              resolveActiveHandler: vi.fn(() => input.pluginHandler),
-              resolveRuntimeOwnerBinding: vi.fn(() => STABLE_PLUGIN_OWNER),
-            },
-          }
-        : {}),
     ...(input.resolve ? { resolveWorkspacePathBridgeBeforeExecution: input.resolve } : {}),
   };
   return host as unknown as ToolInvocationCoordinatorHost;
@@ -261,412 +223,53 @@ describe("ToolInvocationCoordinatorService workspace path execution bridge", () 
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 
-  it("fails closed when approved replay has no resolver", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "plugin",
-        auditEventId: "plugin-audit",
-      }),
-    );
-    const host = createHost({ pluginHandler });
-    const coordinator = new ToolInvocationCoordinatorService(host);
-
-    await expect(coordinator.invokeApprovedExternalRuntimeTool(createRequest())).resolves.toMatchObject({
-      outcome: "blocked",
-      policyReason: "blocked: workspace path was not freshly verified for execution",
-    });
-    expect(host.policyEngine.invoke).not.toHaveBeenCalled();
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["malformed", { status: "verified", snapshotId: "historical", canonicalCwd: "/tmp/../project" }],
-    ["blocked", { status: "blocked", reasonCode: "outside_jail", snapshotId: "approved-blocked" }],
-  ] as const)("fails closed when approved replay receives a %s resolver decision", async (_label, decision) => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "plugin",
-        auditEventId: "plugin-audit",
-      }),
-    );
-    const resolve = vi.fn(async () => decision as WorkspacePathBridgeExecutionDecision);
-    const host = createHost({ resolve, pluginHandler });
-    const coordinator = new ToolInvocationCoordinatorService(host);
-
-    const result = await coordinator.invokeApprovedExternalRuntimeTool(createRequest());
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      policyReason: "blocked: workspace path was not freshly verified for execution",
-    });
-    expect(host.policyEngine.invoke).not.toHaveBeenCalled();
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it("blocks approved replay when fresh pre-execute verification detects cwd drift", async () => {
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "plugin",
-        auditEventId: "plugin-audit",
-      }),
-    );
-    const resolve = vi.fn(
-      async (
-        _request: ToolInvokeRequest,
-        context: WorkspacePathBridgeResolutionContext,
-      ): Promise<WorkspacePathBridgeExecutionDecision> =>
-        context.phase === "policy"
-          ? { status: "verified", snapshotId: "approved-policy", canonicalCwd: "F:\\canonical\\project" }
-          : { status: "verified", snapshotId: "approved-pre-execute", canonicalCwd: "F:\\swapped\\project" },
-    );
-    const host = createHost({ resolve, pluginHandler });
-    const coordinator = new ToolInvocationCoordinatorService(host);
-
-    const result = await coordinator.invokeApprovedExternalRuntimeTool(createRequest());
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      result: {
-        workspacePathBridge: {
-          status: "blocked",
-          reasonCode: "round_trip_mismatch",
-          snapshotId: "approved-pre-execute",
-          priorVerifiedSnapshotIds: ["approved-policy", "approved-pre-execute"],
-        },
-      },
-    });
-    expect(resolve).toHaveBeenCalledTimes(2);
-    expect(host.policyEngine.invoke).toHaveBeenCalledTimes(1);
-    expect(pluginHandler).not.toHaveBeenCalled();
-  });
-
-  it("freshly verifies successful approved replay at policy and immediate pre-handler boundaries", async () => {
-    const order: string[] = [];
-    const invocationIds: string[] = [];
-    const resolve = vi.fn(
-      async (
-        request: ToolInvokeRequest,
-        context: WorkspacePathBridgeResolutionContext,
-      ): Promise<WorkspacePathBridgeExecutionDecision> => {
-        order.push(`bridge:${context.phase}`);
-        invocationIds.push(context.invocationId);
-        expect(request.args.cwd).toBe(context.phase === "policy" ? "F:\\workspace\\project" : "F:\\canonical\\project");
-        return {
-          status: "verified",
-          snapshotId: `approved-${context.phase}`,
-          canonicalCwd: "F:\\canonical\\project",
-          snapshotFingerprintSha256: STABLE_BRIDGE_FINGERPRINT,
-        };
-      },
-    );
-    const invoke = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
-      order.push("policy");
-      expect(request.args.cwd).toBe("F:\\canonical\\project");
-      return { outcome: "executed", policyReason: "approved policy", auditEventId: "policy-audit" };
-    });
-    const pluginHandler = vi.fn(async (args: Record<string, unknown>): Promise<ToolInvokeResult> => {
-      order.push("handler");
-      expect(args.cwd).toBe("F:\\canonical\\project");
-      return { outcome: "executed", policyReason: "plugin", auditEventId: "plugin-audit" };
-    });
-    const host = createHost({ resolve, invoke, pluginHandler });
-    const coordinator = new ToolInvocationCoordinatorService(host);
-    const markExternalCallStarted = vi.fn(() => order.push("started"));
-    const request = createRequest();
-
-    await expect(
-      coordinator.invokeApprovedExternalRuntimeTool(request, markExternalCallStarted),
-    ).resolves.toMatchObject({ outcome: "executed" });
-
-    expect(order).toEqual(["bridge:policy", "policy", "bridge:pre_execute", "started", "handler"]);
-    expect(new Set(invocationIds).size).toBe(1);
-    expect(invocationIds[0]).toMatch(/^approved:[0-9a-f-]{36}$/u);
-    expect(request.args.cwd).toBe("F:\\workspace\\project");
-    expect(host.publishRealtime).toHaveBeenCalledWith(
-      "tool_invoked",
-      "policy",
-      expect.objectContaining({ workspacePathBridgeSnapshotId: "approved-pre_execute" }),
-      expect.any(Object),
-    );
-    expect(host.recordEvidenceEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          approvalReplay: true,
-          workspacePathBridgeSnapshotIds: ["approved-policy", "approved-pre_execute"],
-        }),
-      }),
-    );
-  });
-
   it.each(BRIDGE_STABILITY_CASES)(
-    "enforces generic plugin bridge stability for $label",
+    "enforces builtin bridge stability for $label",
     async ({ policy, preExecute, expectedReason }) => {
-      const pluginHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          policyReason: "plugin",
-          auditEventId: "plugin-audit",
-        }),
-      );
       const resolve = vi.fn(
         async (
           _request: ToolInvokeRequest,
           context: WorkspacePathBridgeResolutionContext,
         ): Promise<WorkspacePathBridgeExecutionDecision> =>
           verifiedBridgeDecision(
-            `generic-stability-${context.phase}`,
+            `builtin-stability-${context.phase}`,
             context.phase === "policy" ? policy : preExecute,
           ),
       );
-      const host = createHost({ resolve, pluginHandler });
+      const invoke = vi.fn(
+        async (
+          request: ToolInvokeRequest,
+          options?: { beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void> },
+        ): Promise<ToolInvokeResult> => {
+          await options?.beforeExecute?.({ toolName: "shell.exec", cwd: String(request.args.cwd) });
+          return { outcome: "executed", policyReason: "allowed", auditEventId: "audit-stability" };
+        },
+      );
+      const host = createHost({ resolve, invoke });
       const coordinator = new ToolInvocationCoordinatorService(host);
       const executionFence = vi.fn();
-      const markStarted = vi.fn();
-      const markNotRequired = vi.fn();
 
-      const result = await coordinator.invokeTool(createRequest(), {
-        executionFence,
-        externalSideEffect: { markStarted, markNotRequired },
-      });
+      const invocation = coordinator.invokeTool(createRequest(), { executionFence });
 
       if (!expectedReason) {
-        expect(result).toMatchObject({ outcome: "executed" });
+        await expect(invocation).resolves.toMatchObject({ outcome: "executed" });
         expect(executionFence).toHaveBeenCalledTimes(1);
-        expect(markStarted).toHaveBeenCalledTimes(1);
-        expect(pluginHandler).toHaveBeenCalledTimes(1);
         return;
       }
-      expect(result).toMatchObject({
-        outcome: "blocked",
+      await expect(invocation).rejects.toMatchObject({
+        name: "ToolExecutionPreconditionError",
         result: {
           workspacePathBridge: {
             status: "blocked",
             reasonCode: expectedReason,
-            snapshotId: "generic-stability-pre_execute",
+            snapshotId: "builtin-stability-pre_execute",
           },
         },
       });
+      expect(host.policyEngine.invoke).toHaveBeenCalledTimes(1);
       expect(executionFence).not.toHaveBeenCalled();
-      expect(markStarted).not.toHaveBeenCalled();
-      expect(pluginHandler).not.toHaveBeenCalled();
     },
   );
-
-  it.each(BRIDGE_STABILITY_CASES)(
-    "enforces approved replay bridge stability for $label",
-    async ({ policy, preExecute, expectedReason }) => {
-      const pluginHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          policyReason: "plugin",
-          auditEventId: "plugin-audit",
-        }),
-      );
-      const resolve = vi.fn(
-        async (
-          _request: ToolInvokeRequest,
-          context: WorkspacePathBridgeResolutionContext,
-        ): Promise<WorkspacePathBridgeExecutionDecision> =>
-          verifiedBridgeDecision(
-            `approved-stability-${context.phase}`,
-            context.phase === "policy" ? policy : preExecute,
-          ),
-      );
-      const host = createHost({ resolve, pluginHandler });
-      const coordinator = new ToolInvocationCoordinatorService(host);
-      const markExternalCallStarted = vi.fn();
-
-      const result = await coordinator.invokeApprovedExternalRuntimeTool(createRequest(), markExternalCallStarted);
-
-      if (!expectedReason) {
-        expect(result).toMatchObject({ outcome: "executed" });
-        expect(markExternalCallStarted).toHaveBeenCalledTimes(1);
-        expect(pluginHandler).toHaveBeenCalledTimes(1);
-        return;
-      }
-      expect(result).toMatchObject({
-        outcome: "blocked",
-        result: {
-          workspacePathBridge: {
-            status: "blocked",
-            reasonCode: expectedReason,
-            snapshotId: "approved-stability-pre_execute",
-          },
-        },
-      });
-      expect(markExternalCallStarted).not.toHaveBeenCalled();
-      expect(pluginHandler).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["replacement", "removal", "generation", "owner-unavailable"] as const)(
-    "blocks generic plugin execution when %s drift occurs during awaited pre-execute verification",
-    async (mutation) => {
-      const admittedHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          policyReason: "admitted plugin",
-          auditEventId: "admitted-plugin-audit",
-        }),
-      );
-      const replacementHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          policyReason: "replacement plugin",
-          auditEventId: "replacement-plugin-audit",
-        }),
-      );
-      const runtime = createMutablePluginRuntime(admittedHandler);
-      const resolve = vi.fn(
-        async (
-          _request: ToolInvokeRequest,
-          context: WorkspacePathBridgeResolutionContext,
-        ): Promise<WorkspacePathBridgeExecutionDecision> => {
-          if (context.phase === "pre_execute") {
-            await Promise.resolve();
-            if (mutation === "replacement") runtime.setHandler(replacementHandler);
-            if (mutation === "removal") runtime.setHandler(undefined);
-            if (mutation === "generation") runtime.setOwner(REPLACEMENT_PLUGIN_OWNER);
-            if (mutation === "owner-unavailable") runtime.setOwner(undefined);
-          }
-          return {
-            status: "verified",
-            snapshotId: `generic-${context.phase}`,
-            canonicalCwd: "F:\\canonical\\project",
-            snapshotFingerprintSha256: STABLE_BRIDGE_FINGERPRINT,
-          };
-        },
-      );
-      const executionFence = vi.fn();
-      const markStarted = vi.fn();
-      const markNotRequired = vi.fn();
-      const host = createHost({
-        resolve,
-        pluginToolOverrideService: runtime.service,
-      });
-      const coordinator = new ToolInvocationCoordinatorService(host);
-
-      const result = await coordinator.invokeTool(createRequest(), {
-        executionFence,
-        externalSideEffect: { markStarted, markNotRequired },
-      });
-
-      expect(result).toMatchObject({
-        outcome: "blocked",
-        policyReason: expect.stringContaining("runtime owner binding drifted"),
-      });
-      expect(admittedHandler).not.toHaveBeenCalled();
-      expect(replacementHandler).not.toHaveBeenCalled();
-      expect(executionFence).not.toHaveBeenCalled();
-      expect(markStarted).not.toHaveBeenCalled();
-      expect(markNotRequired).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["replacement", "removal", "generation", "owner-unavailable"] as const)(
-    "blocks approved replay when %s drift occurs during awaited pre-execute verification",
-    async (mutation) => {
-      const admittedHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          policyReason: "admitted plugin",
-          auditEventId: "admitted-plugin-audit",
-        }),
-      );
-      const replacementHandler = vi.fn(
-        async (): Promise<ToolInvokeResult> => ({
-          outcome: "executed",
-          policyReason: "replacement plugin",
-          auditEventId: "replacement-plugin-audit",
-        }),
-      );
-      const runtime = createMutablePluginRuntime(admittedHandler);
-      const resolve = vi.fn(
-        async (
-          _request: ToolInvokeRequest,
-          context: WorkspacePathBridgeResolutionContext,
-        ): Promise<WorkspacePathBridgeExecutionDecision> => {
-          if (context.phase === "pre_execute") {
-            await Promise.resolve();
-            if (mutation === "replacement") runtime.setHandler(replacementHandler);
-            if (mutation === "removal") runtime.setHandler(undefined);
-            if (mutation === "generation") runtime.setOwner(REPLACEMENT_PLUGIN_OWNER);
-            if (mutation === "owner-unavailable") runtime.setOwner(undefined);
-          }
-          return {
-            status: "verified",
-            snapshotId: `approved-drift-${context.phase}`,
-            canonicalCwd: "F:\\canonical\\project",
-            snapshotFingerprintSha256: STABLE_BRIDGE_FINGERPRINT,
-          };
-        },
-      );
-      const markExternalCallStarted = vi.fn();
-      const host = createHost({
-        resolve,
-        pluginToolOverrideService: runtime.service,
-      });
-      const coordinator = new ToolInvocationCoordinatorService(host);
-
-      const result = await coordinator.invokeApprovedExternalRuntimeTool(createRequest(), markExternalCallStarted);
-
-      expect(result).toMatchObject({
-        outcome: "blocked",
-        policyReason: expect.stringContaining("runtime owner binding drifted"),
-      });
-      expect(admittedHandler).not.toHaveBeenCalled();
-      expect(replacementHandler).not.toHaveBeenCalled();
-      expect(markExternalCallStarted).not.toHaveBeenCalled();
-    },
-  );
-
-  it("threads the approval-worker signal through both bridge phases and stops an aborted replay before its boundary", async () => {
-    const controller = new AbortController();
-    const admittedHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "admitted plugin",
-        auditEventId: "admitted-plugin-audit",
-      }),
-    );
-    const runtime = createMutablePluginRuntime(admittedHandler);
-    const resolve = vi.fn(
-      async (
-        _request: ToolInvokeRequest,
-        context: WorkspacePathBridgeResolutionContext,
-      ): Promise<WorkspacePathBridgeExecutionDecision> => {
-        expect(context.signal).toBe(controller.signal);
-        if (context.phase === "pre_execute") {
-          await Promise.resolve();
-          controller.abort();
-        }
-        return {
-          status: "verified",
-          snapshotId: `approved-signal-${context.phase}`,
-          canonicalCwd: "F:\\canonical\\project",
-          snapshotFingerprintSha256: STABLE_BRIDGE_FINGERPRINT,
-        };
-      },
-    );
-    const markExternalCallStarted = vi.fn();
-    const host = createHost({ resolve, pluginToolOverrideService: runtime.service });
-    const coordinator = new ToolInvocationCoordinatorService(host);
-
-    const result = await coordinator.invokeApprovedExternalRuntimeTool(createRequest(), markExternalCallStarted, {
-      signal: controller.signal,
-    });
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
-      policyReason: "blocked: approved external runtime invocation was cancelled before execution",
-    });
-    expect(resolve).toHaveBeenCalledTimes(2);
-    expect(markExternalCallStarted).not.toHaveBeenCalled();
-    expect(admittedHandler).not.toHaveBeenCalled();
-  });
 
   it("passes only the process-local resolver signal into path verification", async () => {
     const trustedSignal = new AbortController().signal;
@@ -908,55 +511,7 @@ describe("ToolInvocationCoordinatorService workspace path execution bridge", () 
     expect(historicalInspect).not.toHaveBeenCalled();
   });
 
-  it("enforces fresh bridge evidence before plugin policy and revalidates immediately before the handler", async () => {
-    const order: string[] = [];
-    const resolve = vi.fn(
-      async (
-        request: ToolInvokeRequest,
-        context: WorkspacePathBridgeResolutionContext,
-      ): Promise<WorkspacePathBridgeExecutionDecision> => {
-        order.push(`bridge:${context.phase}`);
-        if (context.phase === "policy") {
-          expect(request.args.cwd).toBe("/f/Work Space/Project");
-        } else {
-          expect(request.args.cwd).toBe("F:\\Work Space\\Project");
-        }
-        return {
-          status: "verified",
-          snapshotId: `plugin-${context.phase}`,
-          canonicalCwd: "F:\\Work Space\\Project",
-          snapshotFingerprintSha256: STABLE_BRIDGE_FINGERPRINT,
-        };
-      },
-    );
-    const invoke = vi.fn(async (request: ToolInvokeRequest): Promise<ToolInvokeResult> => {
-      order.push("policy");
-      expect(request).toMatchObject({ externalRuntime: true, args: { cwd: "F:\\Work Space\\Project" } });
-      return { outcome: "executed", policyReason: "allowed", auditEventId: "policy-audit" };
-    });
-    const pluginHandler = vi.fn(async (args: Record<string, unknown>, context: unknown): Promise<ToolInvokeResult> => {
-      order.push("plugin");
-      expect(args.cwd).toBe("F:\\Work Space\\Project");
-      expect(context).toMatchObject({ request: { args: { cwd: "F:\\Work Space\\Project" } } });
-      return { outcome: "executed", policyReason: "plugin allowed", auditEventId: "plugin-audit" };
-    });
-    const host = createHost({ resolve, invoke, pluginHandler });
-    const coordinator = new ToolInvocationCoordinatorService(host);
-
-    const result = await coordinator.invokeTool(createRequest("/f/Work Space/Project"));
-
-    expect(order).toEqual(["bridge:policy", "policy", "bridge:pre_execute", "plugin"]);
-    expect(result).toMatchObject({ outcome: "executed" });
-    expect(host.recordEvidenceEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        metadata: expect.objectContaining({
-          workspacePathBridgeSnapshotIds: ["plugin-policy", "plugin-pre_execute"],
-        }),
-      }),
-    );
-  });
-
-  it("blocks a plugin when the pre-execute TOCTOU revalidation detects retargeting", async () => {
+  it("blocks a builtin when the pre-execute TOCTOU revalidation detects retargeting", async () => {
     const resolve = vi.fn(
       async (
         _request: ToolInvokeRequest,
@@ -966,29 +521,30 @@ describe("ToolInvocationCoordinatorService workspace path execution bridge", () 
           ? { status: "verified", snapshotId: "policy-snapshot", canonicalCwd: "F:\\canonical\\project" }
           : { status: "blocked", reasonCode: "symlink_escape", snapshotId: "pre-execute-snapshot" },
     );
-    const pluginHandler = vi.fn(
-      async (): Promise<ToolInvokeResult> => ({
-        outcome: "executed",
-        policyReason: "unsafe",
-        auditEventId: "plugin-audit",
-      }),
+    const spawned = vi.fn();
+    const invoke = vi.fn(
+      async (
+        request: ToolInvokeRequest,
+        options?: { beforeExecute?: (boundary?: ToolProcessSpawnBoundary) => void | Promise<void> },
+      ): Promise<ToolInvokeResult> => {
+        await options?.beforeExecute?.({ toolName: "shell.exec", cwd: String(request.args.cwd) });
+        spawned();
+        return { outcome: "executed", policyReason: "unsafe", auditEventId: "audit-unsafe" };
+      },
     );
-    const coordinator = new ToolInvocationCoordinatorService(createHost({ resolve, pluginHandler }));
+    const coordinator = new ToolInvocationCoordinatorService(createHost({ resolve, invoke }));
 
-    const result = await coordinator.invokeTool(createRequest());
-
-    expect(result).toMatchObject({
-      outcome: "blocked",
+    await expect(coordinator.invokeTool(createRequest())).rejects.toMatchObject({
+      name: "ToolExecutionPreconditionError",
       result: {
         workspacePathBridge: {
           status: "blocked",
           reasonCode: "symlink_escape",
           snapshotId: "pre-execute-snapshot",
-          priorVerifiedSnapshotIds: ["policy-snapshot"],
         },
       },
     });
-    expect(pluginHandler).not.toHaveBeenCalled();
+    expect(spawned).not.toHaveBeenCalled();
   });
 
   it("preserves non-cwd invocations without a bridge resolver", async () => {
