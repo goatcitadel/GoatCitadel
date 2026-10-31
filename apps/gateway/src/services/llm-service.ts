@@ -557,6 +557,19 @@ export class LlmService {
     return this.listProviders(options);
   }
 
+  /** Providers whose model catalogs boot warming loads, active first. The quick listing sees neither saved keychain
+   * keys nor an unprobed Claude Code CLI login, so both are added for the active provider only: on Windows each
+   * keychain read is a blocking PowerShell call, so other providers' saved keys stay unread. */
+  public async resolveCatalogPrewarmTargets(): Promise<{ activeProviderId: string; providerIds: string[] }> {
+    const activeProviderId = this.activeProviderId;
+    await this.ensureProviderReadiness(activeProviderId);
+    const providerIds = this.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true })
+      .providers.filter((provider) => provider.hasApiKey)
+      .map((provider) => provider.providerId)
+      .sort((left, right) => Number(right === activeProviderId) - Number(left === activeProviderId));
+    return { activeProviderId, providerIds };
+  }
+
   /** Re-probe `claude auth status` for the local Claude Code CLI provider; listings only read the cache. */
   public async refreshClaudeCodeCliReadiness(): Promise<LlmProviderAuthReadiness> {
     return projectClaudeCodeCliAuthReadiness(await checkClaudeCodeCliReadiness(this.claudeCodeCli, { refresh: true }));
