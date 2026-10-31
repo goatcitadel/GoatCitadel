@@ -566,3 +566,31 @@ function humanizeSuppressionReason(reason: string): string {
 function normalize(input: string): string {
   return input.trim().toLowerCase();
 }
+
+/** Adds the turn's attachments that never became readable text (images go to vision, not here). */
+export async function withUnreadableTurnAttachments<T extends { trace?: ChatTurnTraceRecord }>(
+  storage: {
+    chatMessages: { get(id: string): Promise<{ attachments?: Array<{ attachmentId: string }> } | undefined> };
+    chatAttachments: {
+      listByIds(
+        ids: string[],
+      ): Promise<Array<{ fileName: string; mimeType: string; mediaType?: string; extractStatus: string }>>;
+    };
+  },
+  input: T,
+): Promise<T & { unreadableAttachments: Array<{ fileName: string; mimeType: string }> }> {
+  const userMessageId = input.trace?.userMessageId;
+  try {
+    const ids = userMessageId
+      ? ((await storage.chatMessages.get(userMessageId))?.attachments ?? []).map((item) => item.attachmentId)
+      : [];
+    const records = ids.length > 0 ? await storage.chatAttachments.listByIds(ids) : [];
+    const unreadableAttachments = records
+      .filter((record) => record.extractStatus !== "ready" && record.mediaType !== "image")
+      .map((record) => ({ fileName: record.fileName, mimeType: record.mimeType }));
+    return { ...input, unreadableAttachments };
+  } catch (error) {
+    logScoutFailure("attachment lookup", error);
+    return { ...input, unreadableAttachments: [] };
+  }
+}
