@@ -6,6 +6,9 @@
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
+  "bin": {
+    "goatcitadel-plugin-preflight": "./dist/plugin-preflight-cli.js"
+  },
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
@@ -21,7 +24,8 @@
     "registry": "https://npm.pkg.github.com"
   },
   "files": [
-    "dist"
+    "dist",
+    "templates"
   ],
   "dependencies": {
     "@goatcitadel/contracts": "workspace:*",
