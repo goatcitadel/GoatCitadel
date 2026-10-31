@@ -39,6 +39,7 @@ import { MOBILE_PUSH_POSTGRES_SCHEMA_SQL } from "./mobile-push-schema.js";
 import { MOBILE_APPROVAL_KEY_POSTGRES_SCHEMA_SQL } from "./mobile-approval-key-schema.js";
 import {
   CHANGE_PLAN_CONNECTOR_INSTALL_POSTGRES_SQL,
+  CHANGE_PLAN_PLUGIN_INSTALL_POSTGRES_SQL,
   CHANGE_PLAN_POSTGRES_SCHEMA_SQL,
   CHANGE_PLAN_PACK_POSTGRES_SQL,
 } from "../change-plan-schema.js";
@@ -15276,6 +15277,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "purge_integration_plugin_records",
     sql: `DELETE FROM system_settings WHERE setting_key = 'integration_plugins_v1';`,
     integritySha256: "e501080db7b5b71c6942cc47d41f02e0cde4364dcf7a804fd4b4edc0784f6ec9",
+  },
+  {
+    // Parity with SQLite v274: Capabilities records 'plugin_install' and 'plugin_uninstall' plans.
+    version: 223,
+    name: "plugin_install_change_plans",
+    sql: CHANGE_PLAN_PLUGIN_INSTALL_POSTGRES_SQL,
+    integritySha256: "65aa2f48688d429fe57c21a721a6d328bff49fa30577ec1ce612c30a26155269",
   },
 ];
 

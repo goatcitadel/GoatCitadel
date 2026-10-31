@@ -50,6 +50,7 @@ import {
   createChangePlanSchema,
   upgradeChangePlanConnectorInstallSchema,
   upgradeChangePlanPackSchema,
+  upgradeChangePlanPluginInstallSchema,
 } from "./change-plan-schema.js";
 import { upgradeNativeWorkerCells } from "./remote-worker-native-cell-migration.js";
 import { createRemoteWorkerBudgetSchema } from "./remote-worker-budget-schema.js";
@@ -7527,6 +7528,8 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
       },
       // Integration plugins are gone; their record list lived in one system_settings row.
       { version: 273, name: "purge_integration_plugin_records", up: purgeIntegrationPluginRecords },
+      // Capabilities records plugin installs and removals as their own plan kinds.
+      { version: 274, name: "plugin_install_change_plans", up: upgradeChangePlanPluginInstallSchema },
     ],
   },
 ];

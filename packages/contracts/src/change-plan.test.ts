@@ -21,6 +21,8 @@ describe("Evolution Control Plane Change Plan contract", () => {
       "capability_candidate",
       "capability_pack",
       "connector_install",
+      "plugin_install",
+      "plugin_uninstall",
       "improvement_candidate",
       "managed_source_registration",
       "product_source_update",
@@ -40,6 +42,8 @@ describe("Evolution Control Plane Change Plan contract", () => {
     expect(changePlanScopeForKind("capability_candidate")).toBe("capability");
     expect(changePlanScopeForKind("capability_pack")).toBe("capability");
     expect(changePlanScopeForKind("connector_install")).toBe("capability");
+    expect(changePlanScopeForKind("plugin_install")).toBe("capability");
+    expect(changePlanScopeForKind("plugin_uninstall")).toBe("capability");
     expect(changePlanScopeForKind("improvement_candidate")).toBe("improvement");
     expect(changePlanScopeForKind("managed_source_registration")).toBe("product_source");
     expect(changePlanScopeForKind("product_source_update")).toBe("product_source");
@@ -288,6 +292,126 @@ describe("Evolution Control Plane Change Plan contract", () => {
     expect(
       install({ templateId: "linear", enableChatConnectors: true, policy: { approvalPosture: "nothing_asks" } }),
     ).toBe(false);
+  });
+
+  describe("plugin install and uninstall requests", () => {
+    const hashA = "a".repeat(64);
+    const hashB = "0123456789abcdef".repeat(4);
+    const ref = (uuid = "123e4567-e89b-42d3-a456-426614174000") => `keychain:goatcitadel:hook:${uuid}`;
+    const install = (overrides: Record<string, unknown> = {}) => ({
+      kind: "plugin_install",
+      inspectionId: "inspection-1",
+      manifestSha256: hashA,
+      snapshotTreeSha256: hashB,
+      workspaceId: "default",
+      ...overrides,
+    });
+    const uninstall = (overrides: Record<string, unknown> = {}) => ({
+      kind: "plugin_uninstall",
+      pluginId: "acme-helper",
+      installPlanId: "plan-1",
+      ...overrides,
+    });
+    const without = (value: Record<string, unknown>, key: string) =>
+      Object.fromEntries(Object.entries(value).filter(([name]) => name !== key));
+    const refsOfSize = (count: number) =>
+      Object.fromEntries(
+        Array.from({ length: count }, (_, index) => [
+          `hook-${index}`,
+          ref(`123e4567-e89b-42d3-a456-${String(index).padStart(12, "0")}`),
+        ]),
+      );
+
+    it.each([
+      ["an install without hooks", install()],
+      ["an install with one hook secret ref", install({ hookSecretRefs: { "audit-hook": ref() } })],
+      ["an install with the most hook secret refs", install({ hookSecretRefs: refsOfSize(32) })],
+      ["an install with a one-character piece id", install({ hookSecretRefs: { a: ref() } })],
+      ["an uninstall", uninstall()],
+      ["an uninstall of a two-character plugin id", uninstall({ pluginId: "ab" })],
+      ["an uninstall of the longest plugin id", uninstall({ pluginId: `a${"b".repeat(47)}` })],
+    ])("accepts %s", (_name, request) => {
+      expect(isChangePlanRequest(request)).toBe(true);
+    });
+
+    it.each([
+      ["an install with no manifest hash", without(install(), "manifestSha256")],
+      ["an install with no tree hash", without(install(), "snapshotTreeSha256")],
+      ["an install with no inspection id", without(install(), "inspectionId")],
+      ["an install with no workspace id", without(install(), "workspaceId")],
+      ["an install with an uppercase manifest hash", install({ manifestSha256: "A".repeat(64) })],
+      ["an install with an uppercase tree hash", install({ snapshotTreeSha256: hashB.toUpperCase() })],
+      ["an install with a short manifest hash", install({ manifestSha256: "a".repeat(63) })],
+      ["an install with a long tree hash", install({ snapshotTreeSha256: "a".repeat(65) })],
+      ["an install with a non-hex hash", install({ manifestSha256: "g".repeat(64) })],
+      ["an install with a hash that is not text", install({ manifestSha256: 42 })],
+      ["an install with an extra field", install({ sourceUrl: "https://example.test/plugin.git" })],
+      ["an install with a policy field", install({ policy: { approvalPosture: "nothing_asks" } })],
+      ["an install with a path as the inspection id", install({ inspectionId: "C:/plugins/acme" })],
+      ["an install with a dotted inspection id", install({ inspectionId: "../acme" })],
+      ["an install with a path as the workspace id", install({ workspaceId: "../default" })],
+      ["an install with hook secret refs that are null", install({ hookSecretRefs: null })],
+      ["an install with hook secret refs as a list", install({ hookSecretRefs: [ref()] })],
+      ["an install with an empty hook secret refs object", install({ hookSecretRefs: {} })],
+      ["an install with 33 hook secret refs", install({ hookSecretRefs: refsOfSize(33) })],
+      [
+        "an install with a raw secret where a ref belongs",
+        install({ hookSecretRefs: { "audit-hook": "whsec_live_0123456789abcdef" } }),
+      ],
+      [
+        "an install with a key-store ref for a different namespace",
+        install({
+          hookSecretRefs: { "audit-hook": "keychain:goatcitadel:provider:123e4567-e89b-42d3-a456-426614174000" },
+        }),
+      ],
+      [
+        "an install with a ref that has no id",
+        install({ hookSecretRefs: { "audit-hook": "keychain:goatcitadel:hook:" } }),
+      ],
+      [
+        "an install with an uppercase ref id",
+        install({ hookSecretRefs: { "audit-hook": ref("123E4567-E89B-42D3-A456-426614174000") } }),
+      ],
+      ["an install with a ref id that is not a uuid", install({ hookSecretRefs: { "audit-hook": ref("not-a-uuid") } })],
+      ["an install with a ref that has trailing text", install({ hookSecretRefs: { "audit-hook": `${ref()} extra` } })],
+      ["an install with a ref that is not text", install({ hookSecretRefs: { "audit-hook": 42 } })],
+      ["an install with an uppercase piece id key", install({ hookSecretRefs: { "Audit-Hook": ref() } })],
+      ["an install with an underscore piece id key", install({ hookSecretRefs: { audit_hook: ref() } })],
+      ["an install with an empty piece id key", install({ hookSecretRefs: { "": ref() } })],
+      ["an install with a 49-character piece id key", install({ hookSecretRefs: { [`a${"b".repeat(48)}`]: ref() } })],
+      [
+        "an install with a hook secret refs object holding a raw value field",
+        install({ hookSecretRefs: { "audit-hook": { value: "secret" } } }),
+      ],
+      ["an uninstall with no plugin id", without(uninstall(), "pluginId")],
+      ["an uninstall with no install plan id", without(uninstall(), "installPlanId")],
+      ["an uninstall with an extra field", uninstall({ removeFiles: true })],
+      ["an uninstall with an uppercase plugin id", uninstall({ pluginId: "Acme-Helper" })],
+      ["an uninstall with a one-character plugin id", uninstall({ pluginId: "a" })],
+      ["an uninstall with a 49-character plugin id", uninstall({ pluginId: `a${"b".repeat(48)}` })],
+      ["an uninstall with a plugin id that starts with a hyphen", uninstall({ pluginId: "-acme" })],
+      ["an uninstall with an underscore plugin id", uninstall({ pluginId: "acme_helper" })],
+      ["an uninstall with a path as the plugin id", uninstall({ pluginId: "../acme" })],
+      ["an uninstall with a path as the install plan id", uninstall({ installPlanId: "C:/plans/1" })],
+      ["an uninstall with a dotted install plan id", uninstall({ installPlanId: "plan..1" })],
+      ["an uninstall with an install plan id that is not text", uninstall({ installPlanId: 7 })],
+      ["an uninstall that carries install fields", uninstall({ manifestSha256: hashA })],
+    ])("rejects %s", (_name, request) => {
+      expect(isChangePlanRequest(request)).toBe(false);
+    });
+
+    it("keeps the install request to ids, hashes and refs, never a source or a secret value", () => {
+      const request = install({ hookSecretRefs: { "audit-hook": ref() } });
+      expect(Object.keys(request).sort()).toEqual([
+        "hookSecretRefs",
+        "inspectionId",
+        "kind",
+        "manifestSha256",
+        "snapshotTreeSha256",
+        "workspaceId",
+      ]);
+      expect(isChangePlanRequest(request)).toBe(true);
+    });
   });
 
   it("accepts the public web address operation as a string to set or null to clear", () => {

@@ -218,6 +218,46 @@ export function upgradeChangePlanConnectorInstallSchema(db: SqlExecutor): void {
   `);
 }
 
+/**
+ * Lets the Capabilities surface record plugin install and uninstall plans: widens the plan kind CHECK with
+ * 'plugin_install' and 'plugin_uninstall' (keeping 'capability_pack' and 'connector_install'). The origin surface
+ * already allows 'capabilities' after v271, but the base text still emits the v145 origins, so this rebuild redoes both
+ * replacements. Same rebuild as `upgradeChangePlanConnectorInstallSchema`; every plan, event and link is copied back
+ * unchanged.
+ */
+export function upgradeChangePlanPluginInstallSchema(db: SqlExecutor): void {
+  db.exec(`
+    CREATE TEMP TABLE gc_plugin_install_migration_plans AS SELECT * FROM change_plans;
+    CREATE TEMP TABLE gc_plugin_install_migration_events AS SELECT * FROM change_plan_events;
+    CREATE TEMP TABLE gc_plugin_install_migration_links AS SELECT * FROM change_plan_links;
+    DROP TABLE change_plan_links;
+    DROP TABLE change_plan_events;
+    DROP TABLE change_plans;
+  `);
+  createChangePlanSchema({
+    exec: (sql) =>
+      db.exec(
+        replaceReviewedSchemaText(
+          replaceReviewedSchemaText(
+            sql,
+            "'managed_source_registration', 'product_source_update'",
+            "'managed_source_registration', 'product_source_update', 'capability_pack', 'connector_install', 'plugin_install', 'plugin_uninstall'",
+          ),
+          "CHECK(origin_surface IN ('chat', 'settings', 'system'))",
+          "CHECK(origin_surface IN ('chat', 'settings', 'system', 'capabilities'))",
+        ),
+      ),
+  });
+  db.exec(`
+    INSERT INTO change_plans SELECT * FROM gc_plugin_install_migration_plans;
+    INSERT INTO change_plan_events SELECT * FROM gc_plugin_install_migration_events;
+    INSERT INTO change_plan_links SELECT * FROM gc_plugin_install_migration_links;
+    DROP TABLE gc_plugin_install_migration_links;
+    DROP TABLE gc_plugin_install_migration_events;
+    DROP TABLE gc_plugin_install_migration_plans;
+  `);
+}
+
 export const CHANGE_PLAN_PACK_POSTGRES_SQL = `
   -- Dynamic v2 bootstrap creates columns without CHECK constraints. Older
   -- PostgreSQL-owned tables have the named constraint; validate it before widening.
@@ -283,6 +323,34 @@ export const CHANGE_PLAN_CONNECTOR_INSTALL_POSTGRES_SQL = `
     'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
     'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
     'managed_source_registration', 'product_source_update', 'capability_pack', 'connector_install'
+  ));
+`;
+
+/**
+ * Parity with `upgradeChangePlanPluginInstallSchema`: validate the kind CHECK that v220 left, then widen it. v220 already
+ * widened the origin CHECK, so only the kind CHECK changes here.
+ */
+export const CHANGE_PLAN_PLUGIN_INSTALL_POSTGRES_SQL = `
+  ALTER TABLE change_plans ADD CONSTRAINT gc_plugin_install_kind_before CHECK(kind IN (
+    'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
+    'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
+    'managed_source_registration', 'product_source_update', 'capability_pack', 'connector_install'
+  )) NOT VALID;
+  DO $$ BEGIN
+    IF EXISTS (
+      SELECT 1 FROM pg_constraint old_check
+      JOIN pg_constraint probe ON probe.conrelid = old_check.conrelid AND probe.conname = 'gc_plugin_install_kind_before'
+      WHERE old_check.conrelid = 'change_plans'::regclass AND old_check.conname = 'change_plans_kind_check'
+        AND (old_check.contype <> 'c' OR pg_get_expr(old_check.conbin, old_check.conrelid) IS DISTINCT FROM pg_get_expr(probe.conbin, probe.conrelid))
+    ) THEN RAISE EXCEPTION 'Plugin install migration found a drifted plan kind constraint'; END IF;
+  END $$;
+  ALTER TABLE change_plans DROP CONSTRAINT gc_plugin_install_kind_before;
+  ALTER TABLE change_plans DROP CONSTRAINT IF EXISTS change_plans_kind_check;
+  ALTER TABLE change_plans ADD CONSTRAINT change_plans_kind_check CHECK(kind IN (
+    'session_model', 'installation_default_model', 'provider_connection', 'runtime_configuration',
+    'channel_connection', 'runtime_remediation', 'capability_candidate', 'improvement_candidate',
+    'managed_source_registration', 'product_source_update', 'capability_pack', 'connector_install',
+    'plugin_install', 'plugin_uninstall'
   ));
 `;
 

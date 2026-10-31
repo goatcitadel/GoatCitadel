@@ -31,6 +31,22 @@ export const EVOLUTION_GOVERNED_MUTATION_INVENTORY: readonly GovernedMutationInv
     mutationBoundary: "ConnectorInstallChangePlanAdapter.apply",
   },
   {
+    kind: "plugin_install",
+    owner: "capability_plugins",
+    // The operator's own install only: the generic create route and the `change.request` schema don't offer this kind.
+    canonicalEntryPoints: ["POST /api/v1/capabilities/plugins/install"],
+    compatibilityEntryPoints: [],
+    mutationBoundary: "PluginInstallChangePlanAdapter.apply",
+  },
+  {
+    kind: "plugin_uninstall",
+    owner: "capability_plugins",
+    // The operator's own removal only, for the same reason.
+    canonicalEntryPoints: ["POST /api/v1/capabilities/plugins/uninstall"],
+    compatibilityEntryPoints: [],
+    mutationBoundary: "PluginUninstallChangePlanAdapter.apply",
+  },
+  {
     kind: "session_model",
     owner: "chat_session_prefs",
     canonicalEntryPoints: ["POST /api/v1/change-plans", "change.request"],

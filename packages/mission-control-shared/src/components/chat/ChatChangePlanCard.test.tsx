@@ -141,6 +141,43 @@ describe("ChatChangePlanCard", () => {
     expect(renderer.toJSON()).toBeNull();
   });
 
+  it.each([
+    [
+      "plugin_install",
+      "Install a plugin",
+      {
+        kind: "plugin_install",
+        inspectionId: "inspection-1",
+        manifestSha256: "a".repeat(64),
+        snapshotTreeSha256: "b".repeat(64),
+        workspaceId: "workspace-1",
+      },
+    ],
+    [
+      "plugin_uninstall",
+      "Remove a plugin",
+      { kind: "plugin_uninstall", pluginId: "acme-helper", installPlanId: "plan-0" },
+    ],
+  ] as const)("names a %s plan in its details instead of the generic Change label", (kind, label, request) => {
+    let renderer!: ReactTestRenderer;
+    act(() => {
+      renderer = create(
+        <ChatChangePlanCard
+          plan={plan({
+            kind,
+            scope: "capability",
+            origin: { surface: "capabilities", workspaceId: "workspace-1" },
+            request,
+          })}
+        />,
+      );
+    });
+
+    const text = JSON.stringify(renderer.toJSON());
+    expect(text).toContain(label);
+    expect(text).not.toContain('"Change"');
+  });
+
   it("honors a host-owned terminal dismissal without mutating the plan", () => {
     let renderer!: ReactTestRenderer;
     act(() => {
@@ -177,7 +214,16 @@ function secondaryActionsRegion(renderer: ReactTestRenderer) {
 }
 
 it("keeps rollback references available in the explicit receipt details", () => {
-  const renderer = create(<ChatChangePlanCard plan={plan({status: "failed", phase: "terminal", rollbackRefs: ["owner:rollback:exact"], result: {summary: "One child applied; another failed."}})} />);
+  const renderer = create(
+    <ChatChangePlanCard
+      plan={plan({
+        status: "failed",
+        phase: "terminal",
+        rollbackRefs: ["owner:rollback:exact"],
+        result: { summary: "One child applied; another failed." },
+      })}
+    />,
+  );
   expect(detailsRegion(renderer).props.hidden).toBe(true);
   act(() => findButton(renderer, "Details").props.onClick());
   expect(detailsRegion(renderer).props.hidden).toBe(false);

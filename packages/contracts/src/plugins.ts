@@ -90,7 +90,8 @@ export type PluginPin = { kind: "commit"; commit: string } | { kind: "content"; 
 // The strict schema (rule 8, after the named refusals)
 // ---------------------------------------------------------------------------
 
-const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/u;
+/** A plugin id in a manifest: 2 to 48 lowercase letters, digits or hyphens, starting with a letter or digit. */
+export const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/u;
 /** A piece id in a plugin manifest. The Skill Hub review checks a plugin skill's id against the same rule. */
 export const PLUGIN_PIECE_ID_PATTERN = /^[a-z0-9-]{1,48}$/u;
 const VERSION_PATTERN = /^[0-9A-Za-z.+-]+$/u;

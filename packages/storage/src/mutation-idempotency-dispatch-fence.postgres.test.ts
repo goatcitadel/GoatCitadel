@@ -52,8 +52,8 @@ test(
 
       // The full registry (not a canonical prefix) runs the schema-shape gate.
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222]);
-      assert.equal(migrated.latestVersion, 222);
+      assert.deepEqual(migrated.appliedVersions, [212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223]);
+      assert.equal(migrated.latestVersion, 223);
 
       const cronRows = await admin.query<{ job_id: string; enabled: string; revision: string }>(
         `SELECT job_id, enabled::text AS enabled, revision::text AS revision FROM ${schema}.cron_jobs ORDER BY job_id`,
@@ -145,8 +145,8 @@ test(
       await admin.query(`ALTER TABLE ${schema}.external_side_effect_runs DROP COLUMN replay_record_json`);
 
       const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-      assert.deepEqual(migrated.appliedVersions, [216, 217, 218, 219, 220, 221, 222]);
-      assert.equal(migrated.latestVersion, 222);
+      assert.deepEqual(migrated.appliedVersions, [216, 217, 218, 219, 220, 221, 222, 223]);
+      assert.equal(migrated.latestVersion, 223);
 
       const column = await admin.query<{ data_type: string; is_nullable: string }>(
         `SELECT data_type, is_nullable FROM information_schema.columns

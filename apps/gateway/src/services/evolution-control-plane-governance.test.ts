@@ -32,7 +32,9 @@ describe("Evolution Control Plane governed route inventory", () => {
   it("binds compatibility entrypoints to one named owner mutation boundary", () => {
     for (const entry of EVOLUTION_GOVERNED_MUTATION_INVENTORY) {
       expect(entry.mutationBoundary).toMatch(/ChangePlanAdapter\.(apply|stage)$/u);
-      if (entry.kind === "connector_install") continue;
+      if (entry.kind === "connector_install" || entry.kind === "plugin_install" || entry.kind === "plugin_uninstall") {
+        continue;
+      }
       expect(entry.canonicalEntryPoints).toContain("POST /api/v1/change-plans");
     }
   });
@@ -42,6 +44,27 @@ describe("Evolution Control Plane governed route inventory", () => {
     const install = EVOLUTION_GOVERNED_MUTATION_INVENTORY.find((entry) => entry.kind === "connector_install");
     expect(install?.canonicalEntryPoints).toEqual(["POST /api/v1/capabilities/connectors/install"]);
     expect(install?.compatibilityEntryPoints).toEqual([]);
+  });
+
+  // A plugin install or uninstall is the operator's own Capabilities action, so neither the generic API nor a model
+  // starts one. Tasks 16 and 18 create the two adapters named here.
+  it("keeps a plugin install and uninstall on their own operator routes", () => {
+    const entryOf = (kind: "plugin_install" | "plugin_uninstall") =>
+      EVOLUTION_GOVERNED_MUTATION_INVENTORY.find((entry) => entry.kind === kind);
+    expect(entryOf("plugin_install")).toEqual({
+      kind: "plugin_install",
+      owner: "capability_plugins",
+      canonicalEntryPoints: ["POST /api/v1/capabilities/plugins/install"],
+      compatibilityEntryPoints: [],
+      mutationBoundary: "PluginInstallChangePlanAdapter.apply",
+    });
+    expect(entryOf("plugin_uninstall")).toEqual({
+      kind: "plugin_uninstall",
+      owner: "capability_plugins",
+      canonicalEntryPoints: ["POST /api/v1/capabilities/plugins/uninstall"],
+      compatibilityEntryPoints: [],
+      mutationBoundary: "PluginUninstallChangePlanAdapter.apply",
+    });
   });
 
   it("normalizes every registered owner to the inspect, describeInputs, validate, apply, verify, and reconcile contract", () => {
