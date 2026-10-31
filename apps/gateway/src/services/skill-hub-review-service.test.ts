@@ -669,31 +669,99 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
     expect(resolve).not.toHaveBeenCalled();
   });
 
-  it("answers a plain refusal when the plugin's snapshot folder cannot be resolved", async () => {
+  it("refuses a plugin skill that is null or not an object with the same plain error", async () => {
+    const resolve = vi.fn(() => "unreachable");
+    const service = refusingService({ resolvePluginSkillDir: resolve });
+
+    for (const notASkill of [null, "meeting-notes", 42, true, ["meeting-notes"]]) {
+      await expect(
+        service.reviewSource({
+          workspaceId: "workspace-1",
+          pluginSkill: notASkill as unknown as PluginSkillInput,
+          idempotencyKey: "review-plugin-not-an-object",
+          actorId: "operator:alice",
+        }),
+        JSON.stringify(notASkill),
+      ).rejects.toMatchObject({ code: "FIELD_INVALID", details: { field: "pluginSkill" } });
+    }
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
+  it("passes the stored copy's own plain refusal through when it cannot find the plugin's folder", async () => {
+    const storeRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goat-plugin-lookup-"));
+    try {
+      const store = new PluginSnapshotStore(path.join(storeRoot, "snapshots"));
+      const service = refusingService({
+        resolvePluginSkillDir: (treeSha256, relativePath) => store.resolve(treeSha256, relativePath),
+      });
+      for (const snapshotTreeSha256 of ["b".repeat(64), "not-a-hash"]) {
+        // What the store itself says: plain words, written to be shown.
+        const storeSays = (() => {
+          try {
+            store.resolve(snapshotTreeSha256, PLUGIN_SKILL_PATH);
+          } catch (error) {
+            return (error as Error).message;
+          }
+          throw new Error("the store was expected to refuse");
+        })();
+
+        const refusal = await refusalOf(service, validPluginSkill({ snapshotTreeSha256 }));
+
+        expect(refusal).toMatchObject({ code: "FIELD_INVALID", details: { field: "pluginSkill" } });
+        expect(refusal.message).toBe(storeSays);
+        for (const hidden of [path.basename(storeRoot), "ENOENT"]) {
+          expect(refusal.message).not.toContain(hidden);
+          expect(JSON.stringify(refusal)).not.toContain(hidden);
+        }
+      }
+    } finally {
+      await fs.rm(storeRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("answers an unexpected lookup failure with a fixed plain message and keeps the original as the cause", async () => {
     const hiddenPath = path.join(os.tmpdir(), "goat-hidden-plugin-store", "snapshots");
-    const service = refusingService({
-      resolvePluginSkillDir: () => {
-        throw new Error(`ENOENT: no such file or directory, stat '${hiddenPath}'`);
-      },
-    });
+    for (const [code, systemCall] of [
+      ["ENOENT", "no such file or directory"],
+      ["EACCES", "permission denied"],
+    ]) {
+      const original = Object.assign(new Error(`${code}: ${systemCall}, stat '${hiddenPath}'`), { code });
+      const service = refusingService({
+        resolvePluginSkillDir: () => {
+          throw original;
+        },
+      });
 
-    const refusal = await service
-      .reviewSource({
-        workspaceId: "workspace-1",
-        pluginSkill: validPluginSkill(),
-        idempotencyKey: "review-plugin-missing",
-        actorId: "operator:alice",
-      })
-      .then(
-        () => undefined,
-        (error: unknown) => error,
-      );
+      const refusal = await refusalOf(service, validPluginSkill());
 
-    expect(refusal).toMatchObject({ code: "FIELD_INVALID", details: { field: "pluginSkill" } });
-    expect((refusal as Error).message).not.toContain("goat-hidden-plugin-store");
-    expect((refusal as Error).message).not.toContain("ENOENT");
+      expect(refusal).toMatchObject({ code: "FIELD_INVALID", details: { field: "pluginSkill" } });
+      expect(refusal.message).toBe("That plugin's skill isn't available to review.");
+      for (const hidden of ["goat-hidden-plugin-store", "ENOENT", "EACCES", systemCall]) {
+        expect(refusal.message).not.toContain(hidden);
+        expect(JSON.stringify(refusal)).not.toContain(hidden);
+      }
+      // The original is kept for the logs, and stays off the message and the wire shape.
+      expect(refusal.cause).toBe(original);
+    }
   });
 });
+
+/** The refusal a plugin skill review answers, or a failure if it answered a review. */
+async function refusalOf(service: SkillHubReviewService, pluginSkill: PluginSkillInput): Promise<Error> {
+  const outcome = await service
+    .reviewSource({
+      workspaceId: "workspace-1",
+      pluginSkill,
+      idempotencyKey: "review-plugin-refused",
+      actorId: "operator:alice",
+    })
+    .then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+  if (!(outcome instanceof Error)) throw new Error("the review was expected to be refused");
+  return outcome;
+}
 
 const PLUGIN_ID = "meeting-tools";
 const PIECE_ID = "meeting-notes";

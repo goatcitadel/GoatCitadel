@@ -91,14 +91,15 @@ export type PluginPin = { kind: "commit"; commit: string } | { kind: "content"; 
 // ---------------------------------------------------------------------------
 
 const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/u;
-const PIECE_ID_PATTERN = /^[a-z0-9-]{1,48}$/u;
+/** A piece id in a plugin manifest. The Skill Hub review checks a plugin skill's id against the same rule. */
+export const PLUGIN_PIECE_ID_PATTERN = /^[a-z0-9-]{1,48}$/u;
 const VERSION_PATTERN = /^[0-9A-Za-z.+-]+$/u;
 /** Connector template ids and tool group ids. Dots are allowed so the Gateway can name a group it will not switch off. */
 const REFERENCE_ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,63}$/u;
 const MAX_PATH_LENGTH = 512;
 const MAX_URL_LENGTH = 2048;
 
-const pieceId = z.string().regex(PIECE_ID_PATTERN, "must be 1 to 48 lowercase letters, digits or hyphens");
+const pieceId = z.string().regex(PLUGIN_PIECE_ID_PATTERN, "must be 1 to 48 lowercase letters, digits or hyphens");
 const referenceId = z.string().regex(REFERENCE_ID_PATTERN, "must be a plain lowercase id");
 const piecePath = z.string().min(1).max(MAX_PATH_LENGTH);
 const httpsUrl = z.string().min(1).max(MAX_URL_LENGTH).refine(isHttpsUrl, "must be an https address");

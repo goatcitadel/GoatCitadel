@@ -1,16 +1,16 @@
 import path from "node:path";
 import {
+  PLUGIN_PIECE_ID_PATTERN,
   ValidationError,
   pluginManifestSchema,
   type PluginTrust,
   type SkillSourceProvider,
 } from "@goatcitadel/contracts";
+import { PluginSnapshotPathError } from "./plugin-snapshot-store.js";
 
 // How the Skill Hub review reads one skill out of a plugin's stored copy. The review owns the checks; this file only
 // turns the plugin skill the Gateway's plugin check handed it into a folder to read and the name the record keeps.
 
-/** A plugin's piece id, as the manifest allows it (`pluginManifestSchema` holds the plugin id rule itself). */
-const PLUGIN_PIECE_ID_PATTERN = /^[a-z0-9-]{1,48}$/u;
 const PLUGIN_PIN_LABEL_PATTERN = /^(?:commit:[a-f0-9]{40}|content:[a-f0-9]{64})$/u;
 const PLUGIN_TRUSTS: ReadonlySet<string> = new Set<PluginTrust>(["built_in", "unverified"]);
 
@@ -60,9 +60,17 @@ export function resolvePluginSkillSource(
   otherSources: { packId?: string; sourceRef?: string },
   resolveDir: PluginSkillDirResolver | undefined,
 ): PluginSkillSource {
-  const refuse = (message: string): never => {
-    throw new ValidationError({ field: "pluginSkill", message });
+  // `cause` keeps an unexpected failure for the logs; like the native one it stays off the message and the wire shape.
+  const refuse = (message: string, cause?: unknown): never => {
+    const refusal = new ValidationError({ field: "pluginSkill", message });
+    if (cause !== undefined) {
+      Object.defineProperty(refusal, "cause", { value: cause, configurable: true, writable: true });
+    }
+    throw refusal;
   };
+  if (typeof skill !== "object" || skill === null || Array.isArray(skill)) {
+    return refuse("The plugin's skill details aren't valid.");
+  }
   if (otherSources.packId !== undefined || otherSources.sourceRef !== undefined) {
     return refuse("Review a plugin's skill on its own, not together with a shipped skill pack or a source URL.");
   }
@@ -85,9 +93,12 @@ export function resolvePluginSkillSource(
   let skillDir: string;
   try {
     skillDir = resolveDir(skill.snapshotTreeSha256, skill.path);
-  } catch {
-    // The store's own answer can name its folders; the refusal never does.
-    return refuse("That plugin's skill isn't available to review.");
+  } catch (error) {
+    // The stored copy's own refusals are plain by design ("That plugin copy isn't on this computer."), so they pass
+    // through. Anything else (a disk fault, say) can name folders: the operator gets a fixed message and the original
+    // rides on `cause`.
+    if (error instanceof PluginSnapshotPathError) return refuse(error.message);
+    return refuse("That plugin's skill isn't available to review.", error);
   }
   const key = `plugin:${skill.pluginId}/${skill.pieceId}`;
   return {
