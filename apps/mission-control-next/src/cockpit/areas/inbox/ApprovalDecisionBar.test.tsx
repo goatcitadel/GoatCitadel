@@ -7,12 +7,18 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ApprovalDecisionBar } from "./ApprovalDecisionBar";
 import { __resetInboxApprovalAttemptsForTests } from "./inbox-approval-attempts";
+import { refuseNetwork } from "../../../test/refuse-network";
 
 const api = vi.hoisted(() => ({ fetchApproval: vi.fn(), resolveApproval: vi.fn() }));
 const preferences = vi.hoisted(() => ({ activeWorkspaceId: "default", showTechnicalDetails: false }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ resolveApproval: api.resolveApproval }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
+// The review summary names workspaces from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
+refuseNetwork();
 
 const approval: ApprovalRequest = {
   approvalId: "approval-a",

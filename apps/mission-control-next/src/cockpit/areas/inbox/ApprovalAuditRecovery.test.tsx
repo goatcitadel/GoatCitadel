@@ -8,6 +8,7 @@ import { __resetApprovalOperationAttemptsForTests } from "./approval-operation-a
 import { ApprovalAuditRecovery } from "./ApprovalAuditRecovery";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { refuseNetwork } from "../../../test/refuse-network";
 const api = vi.hoisted(() => ({
   replay: vi.fn(),
   lifecycle: vi.fn(),
@@ -23,6 +24,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   resumeDurableRun: api.resume,
   fetchDevDiagnostics: vi.fn(),
 }));
+// The recovery names its workspace from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
+refuseNetwork();
 const approval = {
   approvalId: "approval",
   kind: "tool.invoke",

@@ -6,6 +6,14 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RiskApprovalAction } from "./RiskApprovalAction";
+import { refuseNetwork } from "../../../test/refuse-network";
+
+// The review summary names workspaces from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/workspaces")>()),
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
+refuseNetwork();
 
 let root: Root;
 let container: HTMLDivElement;
