@@ -694,29 +694,66 @@ describe("CapabilityPluginInspectionService", () => {
     expect(reviewSkill).not.toHaveBeenCalled();
   });
 
-  it("answers a review whose key is bound to other material with a plain 409", async () => {
-    const { inspect, saved } = await harness({
-      overrides: {
-        reviewSkill: vi.fn(async (): Promise<SkillHubReviewResult> => {
-          throw new ConflictError({
-            code: "WRITE_CONFLICT",
-            message: "Skill Hub review idempotency key is already bound to different source material.",
-          });
-        }),
-      },
+  it("checks a skill again under a fresh key when its copy's earlier check came out differently", async () => {
+    const differentMaterial = () =>
+      new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "Skill Hub review idempotency key is already bound to different source material.",
+      });
+    const reviewSkill = vi.fn(async (input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> => {
+      // The content key's check was made under rules that have since changed; a key of this inspection's own passes.
+      if (/^plugin:[a-f0-9]{64}:meeting-notes$/u.test(input.idempotencyKey)) throw differentMaterial();
+      return reviewed("skill-hub-review-fresh");
+    });
+    const { inspect, log } = await harness({
+      pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
+      overrides: { reviewSkill },
     });
 
-    const refusal = await inspect().then(
+    const inspection = await inspect();
+
+    const treeSha256 = inspection.pin.kind === "content" ? inspection.pin.treeSha256 : "";
+    expect(piece(inspection, "meeting-notes")).toMatchObject({
+      check: { status: "ready" },
+      skillSnapshotId: "skill-hub-review-fresh",
+    });
+    expect(reviewSkill.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+      `plugin:${treeSha256}:meeting-notes`,
+      `plugin:${treeSha256}:meeting-notes:4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e7f`,
+    ]);
+    // Only the piece and the copy are logged, never the review's words.
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+      { pieceId: "meeting-notes", treeSha256 },
+      "a plugin skill's content key was superseded by a fresh check",
+    );
+  });
+
+  it("treats a second different-material conflict, on the fresh key, as a fault", async () => {
+    const reviewSkill = vi.fn(async (): Promise<SkillHubReviewResult> => {
+      throw new ConflictError({
+        code: "WRITE_CONFLICT",
+        message: "Skill Hub review idempotency key is already bound to different source material.",
+      });
+    });
+    const { inspect, log, saved } = await harness({ overrides: { reviewSkill } });
+
+    const fault = await inspect().then(
       () => undefined,
       (error: unknown) => error,
     );
 
-    expect(refusal).toBeInstanceOf(ConflictError);
-    expect(refusal).toMatchObject({
-      code: "STATE_CONFLICT",
-      message: "This copy of the skill was checked before with a different result, so it can't be checked again.",
-      details: { pieceId: "meeting-notes" },
-    });
+    expect(fault).toBeInstanceOf(Error);
+    expect(fault).not.toBeInstanceOf(ConflictError);
+    expect((fault as Error).message).toBe("A plugin's skill check broke.");
+    // The content key once, then the fresh key once: never a third try.
+    expect(reviewSkill).toHaveBeenCalledTimes(2);
+    expect(log.warn).toHaveBeenLastCalledWith(
+      {
+        pieceId: "meeting-notes",
+        err: expect.objectContaining({ name: "ConflictError", message: expect.stringContaining("different source") }),
+      },
+      "a plugin's skill check broke",
+    );
     expect(saved).toEqual([]);
   });
 

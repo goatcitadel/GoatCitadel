@@ -52,8 +52,6 @@ export const ASKS_FIRST = {
 
 const SKILL_BLOCKED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
-const SKILL_CHECK_CHANGED_MESSAGE =
-  "This copy of the skill was checked before with a different result, so it can't be checked again.";
 const KEY_REUSED_MESSAGE = "This request's key was already used for a different plugin check. Check it with a new key.";
 const ANSWER_GONE_MESSAGE =
   "This plugin check is no longer kept, so its answer can't be sent again. Check the plugin again.";
@@ -158,6 +156,8 @@ interface InspectionContext {
   readonly treeSha256: string;
   readonly trust: PluginTrust;
   readonly pin: PluginPin;
+  /** This inspection's id, which a skill's fresh check is keyed by when its content key was superseded. */
+  readonly inspectionId: string;
   readonly savedConnectorLabels: () => Promise<ReadonlySet<string>>;
   readonly settings: () => Promise<CapabilityPluginInspectionSettings>;
 }
@@ -232,6 +232,7 @@ export class CapabilityPluginInspectionService {
       treeSha256: fetched.snapshot.treeSha256,
       trust: fetched.trust,
       pin: fetched.pin,
+      inspectionId: frame.inspectionId,
       savedConnectorLabels: once(
         async () => new Set((await this.sources.listSavedConnectorLabels()).map((label) => mcpServerLabelKey(label))),
       ),
@@ -273,7 +274,8 @@ export class CapabilityPluginInspectionService {
 
   /**
    * The Skill Hub's own review of the skill's folder in the snapshot: ready, or blocked with its first code. The review
-   * is keyed by the snapshot and the piece, so checking the same copy again replays the same check.
+   * is keyed by the snapshot and the piece, so checking the same copy again replays the same check; when that check came
+   * out differently under the review's rules of the time, it is checked once more under a fresh key (Ruling R38).
    */
   private async checkSkill(
     piece: Extract<PluginPiece, { kind: "skill" }>,
@@ -296,13 +298,18 @@ export class CapabilityPluginInspectionService {
       trust: context.trust,
       pinLabel: context.pin.kind === "commit" ? `commit:${context.pin.commit}` : `content:${context.pin.treeSha256}`,
     };
+    const review = (idempotencyKey: string) =>
+      this.sources.reviewSkill({ workspaceId: input.workspaceId, pluginSkill, idempotencyKey, actorId: input.actorId });
+    const contentKey = `plugin:${context.treeSha256}:${piece.id}`;
     let reviewed: SkillHubReviewResult;
     try {
-      reviewed = await this.sources.reviewSkill({
-        workspaceId: input.workspaceId,
-        pluginSkill,
-        idempotencyKey: `plugin:${context.treeSha256}:${piece.id}`,
-        actorId: input.actorId,
+      reviewed = await review(contentKey).catch((error: unknown) => {
+        if (!isKeyBoundToOtherMaterial(error)) throw error;
+        // This copy's earlier check came out differently, so the review's own rules or output changed since. Check it
+        // once more under a key of this inspection's own (Ruling R38); the earlier check stays as it is.
+        const superseded = redactStructuredSecrets({ pieceId: piece.id, treeSha256: context.treeSha256 }).value;
+        input.log.warn(superseded, "a plugin skill's content key was superseded by a fresh check");
+        return review(`${contentKey}:${context.inspectionId}`);
       });
     } catch (error) {
       return { ...view, label: piece.id, check: skillRefusal(error, piece.id, input.log) };
@@ -452,9 +459,9 @@ async function checkToolGroup(
 /**
  * The review's refusal of a plugin's skill, as a blocked piece. Its code is kept when it is one of the review's own
  * codes; the review's words, which name the Skill Hub, are not. A refusal on `pluginSkill` is already plain and passes
- * through, and its cause (which can name folders) goes only to the server log. A review whose key is bound to other
- * material (this copy's earlier check came out differently) is a plain 409. Any other conflict is a broken invariant
- * of the review, and like anything else it is a fault: logged, and answered as a plain 503 by the route.
+ * through, and its cause (which can name folders) goes only to the server log. A conflict that reaches here (another
+ * different-material conflict, on the fresh key the content key's own one was retried under, or any other) is a broken
+ * invariant of the review, and like anything else it is a fault: logged, and answered as a plain 503 by the route.
  */
 function skillRefusal(error: unknown, pieceId: string, log: CapabilityPluginInspectionLog): CapabilityPluginPieceCheck {
   if (error instanceof ValidationError) {
@@ -467,13 +474,20 @@ function skillRefusal(error: unknown, pieceId: string, log: CapabilityPluginInsp
     if (typeof field === "string" && REVIEW_CODE.test(field)) return blocked(field, SKILL_BLOCKED_MESSAGE);
   }
   if (error instanceof ConflictError) {
-    if (error.code === "WRITE_CONFLICT" && error.message === REVIEW_KEY_BOUND_MESSAGE) {
-      throw new ConflictError({ code: "STATE_CONFLICT", message: SKILL_CHECK_CHANGED_MESSAGE, details: { pieceId } });
-    }
     warn(log, pieceId, error, "a plugin's skill check broke");
     throw new Error("A plugin's skill check broke.", { cause: error });
   }
   throw error;
+}
+
+/**
+ * The review's refusal of a key already bound to other material (`assertSourceReplay`): for a content key, this copy was
+ * checked before and came out differently.
+ */
+function isKeyBoundToOtherMaterial(error: unknown): boolean {
+  return (
+    error instanceof ConflictError && error.code === "WRITE_CONFLICT" && error.message === REVIEW_KEY_BOUND_MESSAGE
+  );
 }
 
 /** The kept answer again: the inspection, or its manifest refusal. */
