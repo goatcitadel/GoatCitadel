@@ -3,20 +3,25 @@ import fs from "node:fs/promises";
 import fsSync from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFile } from "node:child_process";
-import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP } from "node:net";
-import { promisify } from "node:util";
 import { createHash, randomUUID } from "node:crypto";
 import AdmZip from "adm-zip";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
-import {
-  assertHostAllowed,
-  assertNotPrivateOrReservedHost,
-  assertWritePathInJail,
-  fetchAllowlisted,
-} from "@goatcitadel/policy-engine";
+import { assertWritePathInJail, fetchAllowlisted } from "@goatcitadel/policy-engine";
 import { readBoundedResponseBytes, readBoundedResponseText } from "./bounded-response-reader.js";
+import {
+  assertBoundedGitMetadata,
+  assertGitSourceHostIsPublic,
+  buildHardenedGitCloneArgs,
+  buildSanitizedGitEnvironment,
+  hardenedGitConfigArgs,
+  materializeBoundedGitTree,
+  parseBoundedGitTree,
+  resolveGitHeadRevision,
+  runGitClone,
+  startGitDeadline,
+  type BoundedGitTreeOptions,
+  type MaterializedGitTreeFile,
+} from "./hardened-git.js";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
 import { NETWORK_INDICATOR_PATTERN, SUSPICIOUS_SCRIPT_PATTERN } from "./skill-content-validation.js";
 import { PROMPTWARE_MAX_FINDINGS, scanPromptwareContent } from "./assembled-prompt-injection-guard.js";
@@ -68,18 +73,16 @@ const TEMP_CLEANUP_OPTIONS = {
   maxRetries: 5,
   retryDelay: 100,
 } as const;
-const execFileAsync = promisify(execFile);
 
-const HARDENED_GIT_CONFIG = [
-  "protocol.allow=never",
-  "protocol.https.allow=always",
-  "http.followRedirects=false",
-] as const;
-const GIT_MATERIALIZATION_TIMEOUT_MS = 60_000;
-const GIT_COMMAND_TIMEOUT_MS = 15_000;
-const GIT_TREE_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
-const GIT_METADATA_MAX_BYTES = 16 * 1024 * 1024;
-const GIT_METADATA_MAX_ENTRIES = 2_048;
+// The Git cluster (hardened config, bounded tree reads, host check) lives in `hardened-git.ts`; the skill import
+// passes its own limits and error class so its messages and `SkillContentIntegrityLimitError` stay as they were.
+const SKILL_GIT_TREE_OPTIONS: BoundedGitTreeOptions = {
+  limits: SKILL_CONTENT_INTEGRITY_LIMITS,
+  label: "skill",
+  limitError: SkillContentIntegrityLimitError,
+};
+
+export { assertGitSourceHostIsPublic };
 
 interface MaterializedSkillSource {
   sourceDir: string;
@@ -1559,28 +1562,21 @@ export class SkillImportService {
     const safeSourceRef = assertSafeGitPositionalArg(sourceRef, "Git source ref");
     const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-skill-git-"));
     const cloneDir = path.join(tempRoot, "repo");
-    const materializationController = new AbortController();
-    const materializationTimeout = setTimeout(
-      () => materializationController.abort(new Error("Git skill materialization timed out.")),
-      GIT_MATERIALIZATION_TIMEOUT_MS,
-    );
+    const materializationDeadline = startGitDeadline("Git skill materialization timed out.");
     try {
       await assertGitSourceHostIsPublic(safeSourceRef);
-      await execFileAsync("git", buildHardenedGitCloneArgs(safeSourceRef, cloneDir), {
-        windowsHide: true,
-        env: buildSanitizedSkillImportGitEnvironment(),
-        signal: materializationController.signal,
-        timeout: GIT_MATERIALIZATION_TIMEOUT_MS,
-        maxBuffer: GIT_TREE_OUTPUT_MAX_BYTES,
-      });
-      await assertBoundedGitMetadata(cloneDir);
-      await materializeBoundedGitTree(cloneDir, materializationController.signal);
+      await runGitClone(
+        buildHardenedGitCloneArgs(safeSourceRef, cloneDir, SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes),
+        materializationDeadline.signal,
+      );
+      await assertBoundedGitMetadata(cloneDir, SkillContentIntegrityLimitError);
+      await materializeBoundedGitTree(cloneDir, materializationDeadline.signal, SKILL_GIT_TREE_OPTIONS);
       await preflightSkillContentTree(cloneDir);
     } catch (error) {
       await removeTempRoot(tempRoot).catch(() => undefined);
       throw new Error(`Failed to clone git source: ${(error as Error).message}`, { cause: error });
     } finally {
-      clearTimeout(materializationTimeout);
+      materializationDeadline.stop();
     }
     let skillDir: string;
     try {
@@ -2541,287 +2537,6 @@ function buildNativeOverlapRecords(duplicateFamily?: string) {
   ];
 }
 
-async function resolveGitHeadRevision(repoDir: string): Promise<string | undefined> {
-  const result = await execFileAsync("git", [...hardenedGitConfigArgs(), "rev-parse", "HEAD"], {
-    cwd: repoDir,
-    windowsHide: true,
-    env: buildSanitizedSkillImportGitEnvironment(),
-    timeout: GIT_COMMAND_TIMEOUT_MS,
-    maxBuffer: 4_096,
-  });
-  const stdout = String(result.stdout ?? "").trim();
-  return stdout || undefined;
-}
-
-type GitSourceDnsLookup = (hostname: string) => Promise<Array<{ address: string }>>;
-
-// SECURITY (G2-10): the clone runs in a git subprocess outside fetchAllowlisted,
-// so apply the same private/loopback/link-local/metadata egress rule up front,
-// to the literal host and to every address it resolves to. No operator LAN
-// exception is plumbed into this service, so private targets fail closed.
-// Git re-resolves the name itself, so this narrows rather than eliminates
-// DNS-rebinding; redirects are already disabled in the hardened git config.
-export async function assertGitSourceHostIsPublic(
-  sourceRef: string,
-  lookup: GitSourceDnsLookup = (hostname) => dnsLookup(hostname, { all: true, verbatim: true }),
-): Promise<void> {
-  let parsed: URL;
-  try {
-    parsed = new URL(sourceRef);
-  } catch {
-    throw new Error("Git source must be an https URL.");
-  }
-  if (parsed.protocol !== "https:") {
-    throw new Error("Git source must be an https URL.");
-  }
-  assertHostAllowed(parsed.toString(), ["*"]);
-  // URL keeps IPv6 literals bracketed ("[2606:4700::1]"); strip them so the literal is checked, not resolved.
-  const hostname = parsed.hostname.replace(/^\[|\]$/gu, "");
-  if (isIP(hostname)) {
-    return;
-  }
-  let addresses: Array<{ address: string }>;
-  try {
-    addresses = await lookup(hostname);
-  } catch (error) {
-    throw new Error(`Git source host could not be resolved: ${(error as Error).message}`, { cause: error });
-  }
-  if (addresses.length === 0) {
-    throw new Error("Git source host did not resolve to any address.");
-  }
-  for (const entry of addresses) {
-    const literal = entry.address.includes(":") ? `[${entry.address}]` : entry.address;
-    assertNotPrivateOrReservedHost(`https://${literal}/`);
-  }
-}
-
-function hardenedGitConfigArgs(): string[] {
-  return HARDENED_GIT_CONFIG.flatMap((entry) => ["-c", entry]);
-}
-
-function buildHardenedGitCloneArgs(sourceRef: string, cloneDir: string): string[] {
-  return [
-    ...hardenedGitConfigArgs(),
-    "clone",
-    "--quiet",
-    "--depth",
-    "1",
-    "--single-branch",
-    "--no-tags",
-    "--no-checkout",
-    `--filter=blob:limit=${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1}`,
-    "--",
-    sourceRef,
-    cloneDir,
-  ];
-}
-
-interface MaterializedGitTreeFile {
-  objectId: string;
-  relativePath: string;
-  bytes: number;
-}
-
-async function materializeBoundedGitTree(repoDir: string, signal: AbortSignal): Promise<void> {
-  const listing = await runBoundedGit(repoDir, ["ls-tree", "-r", "-z", "--full-tree", "HEAD"], {
-    signal,
-    encoding: "utf8",
-    maxBuffer: GIT_TREE_OUTPUT_MAX_BYTES,
-  });
-  const files = parseBoundedGitTree(String(listing.stdout ?? ""));
-  let totalBytes = 0;
-  for (const file of files) {
-    const sizeResult = await runBoundedGit(repoDir, ["cat-file", "-s", file.objectId], {
-      signal,
-      encoding: "utf8",
-      maxBuffer: 4_096,
-    });
-    const rawSize = String(sizeResult.stdout ?? "").trim();
-    if (!/^(?:0|[1-9]\d*)$/u.test(rawSize)) {
-      throw new SkillContentIntegrityLimitError(
-        `Git skill blob ${file.relativePath} is unavailable inside the bounded partial clone.`,
-      );
-    }
-    const bytes = Number(rawSize);
-    if (!Number.isSafeInteger(bytes) || bytes > SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes) {
-      throw new SkillContentIntegrityLimitError(
-        `Git skill blob ${file.relativePath} exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes} bytes.`,
-      );
-    }
-    totalBytes += bytes;
-    if (!Number.isSafeInteger(totalBytes) || totalBytes > SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes) {
-      throw new SkillContentIntegrityLimitError(
-        `Git skill tree exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxTotalBytes} total bytes.`,
-      );
-    }
-    file.bytes = bytes;
-  }
-
-  for (const file of files) {
-    const blob = await runBoundedGit(repoDir, ["cat-file", "blob", file.objectId], {
-      signal,
-      encoding: "buffer",
-      maxBuffer: SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes + 1_024,
-    });
-    const content = Buffer.isBuffer(blob.stdout) ? blob.stdout : Buffer.from(blob.stdout ?? "");
-    if (content.byteLength !== file.bytes) {
-      throw new Error(`Git skill blob ${file.relativePath} changed during bounded materialization.`);
-    }
-    const destination = path.resolve(repoDir, ...file.relativePath.split("/"));
-    assertWritePathInJail(destination, [repoDir]);
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.writeFile(destination, content, { flag: "wx" });
-  }
-}
-
-function parseBoundedGitTree(output: string): MaterializedGitTreeFile[] {
-  const records = output ? output.split("\0") : [];
-  if (records.at(-1) === "") records.pop();
-  if (records.length > SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles) {
-    throw new SkillContentIntegrityLimitError(
-      `Git skill tree exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxFiles} files.`,
-    );
-  }
-  const files: MaterializedGitTreeFile[] = [];
-  const portablePaths = new Set<string>();
-  const directories = new Set<string>();
-  for (const record of records) {
-    const separator = record.indexOf("\t");
-    if (separator <= 0) throw new Error("Git skill tree returned malformed metadata.");
-    const metadata = record.slice(0, separator).split(" ");
-    const relativePath = record.slice(separator + 1);
-    const [mode, objectType, objectId] = metadata;
-    if (mode !== "100644" || objectType !== "blob" || !/^[a-f0-9]{40}$/u.test(objectId ?? "")) {
-      throw new Error(`Git skill tree contains a symlink, submodule, or unsupported object at ${relativePath}.`);
-    }
-    assertPortableGitTreePath(relativePath);
-    const collisionKey = relativePath.toLowerCase();
-    if (portablePaths.has(collisionKey) || directories.has(collisionKey)) {
-      throw new Error(`Git skill tree contains a case-colliding path: ${relativePath}.`);
-    }
-    portablePaths.add(collisionKey);
-    const segments = relativePath.split("/");
-    for (let index = 1; index < segments.length; index += 1) {
-      const directory = segments.slice(0, index).join("/").toLowerCase();
-      if (portablePaths.has(directory)) {
-        throw new Error(`Git skill tree contains a file-directory collision: ${relativePath}.`);
-      }
-      directories.add(directory);
-    }
-    if (directories.size + portablePaths.size > SKILL_CONTENT_INTEGRITY_LIMITS.maxEntries) {
-      throw new SkillContentIntegrityLimitError(
-        `Git skill tree exceeds ${SKILL_CONTENT_INTEGRITY_LIMITS.maxEntries} filesystem entries.`,
-      );
-    }
-    files.push({ objectId: objectId!, relativePath, bytes: 0 });
-  }
-  return files;
-}
-
-function assertPortableGitTreePath(relativePath: string): void {
-  const segments = relativePath.split("/");
-  if (
-    !relativePath ||
-    relativePath.length > 4_096 ||
-    relativePath !== relativePath.normalize("NFKC") ||
-    relativePath.includes("\\") ||
-    relativePath.includes("\uFFFD") ||
-    path.posix.isAbsolute(relativePath) ||
-    path.win32.isAbsolute(relativePath) ||
-    segments.some(
-      (segment) =>
-        !segment ||
-        segment === "." ||
-        segment === ".." ||
-        segment.length > 255 ||
-        containsAsciiControlCharacter(segment) ||
-        segment.includes(":") ||
-        /[. ]$/u.test(segment) ||
-        segment.toLowerCase() === ".git" ||
-        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(segment),
-    )
-  ) {
-    throw new Error(`Git skill tree contains a non-portable path: ${relativePath}.`);
-  }
-}
-
-function containsAsciiControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return true;
-  }
-  return false;
-}
-
-async function assertBoundedGitMetadata(repoDir: string): Promise<void> {
-  const objectsDir = path.join(repoDir, ".git", "objects");
-  const queue = [objectsDir];
-  let entries = 0;
-  let bytes = 0;
-  while (queue.length > 0) {
-    const current = queue.shift();
-    if (!current) continue;
-    const children = await fs.readdir(current, { withFileTypes: true });
-    for (const child of children) {
-      entries += 1;
-      if (entries > GIT_METADATA_MAX_ENTRIES) {
-        throw new SkillContentIntegrityLimitError(
-          `Git partial-clone metadata exceeds ${GIT_METADATA_MAX_ENTRIES} entries.`,
-        );
-      }
-      const childPath = path.join(current, child.name);
-      const stat = await fs.lstat(childPath);
-      if (stat.isSymbolicLink()) throw new Error("Git partial-clone metadata contains a symbolic link.");
-      if (stat.isDirectory()) {
-        queue.push(childPath);
-      } else if (stat.isFile()) {
-        bytes += stat.size;
-        if (!Number.isSafeInteger(bytes) || bytes > GIT_METADATA_MAX_BYTES) {
-          throw new SkillContentIntegrityLimitError(
-            `Git partial-clone metadata exceeds ${GIT_METADATA_MAX_BYTES} bytes.`,
-          );
-        }
-      } else {
-        throw new Error("Git partial-clone metadata contains an unsupported filesystem entry.");
-      }
-    }
-  }
-}
-
-function runBoundedGit(
-  cwd: string,
-  args: string[],
-  options: { signal: AbortSignal; encoding: "utf8" | "buffer"; maxBuffer: number },
-) {
-  return execFileAsync("git", [...hardenedGitConfigArgs(), ...args], {
-    cwd,
-    windowsHide: true,
-    env: buildSanitizedSkillImportGitEnvironment(),
-    signal: options.signal,
-    timeout: GIT_COMMAND_TIMEOUT_MS,
-    maxBuffer: options.maxBuffer,
-    encoding: options.encoding === "buffer" ? null : "utf8",
-  });
-}
-
-function buildSanitizedSkillImportGitEnvironment(): NodeJS.ProcessEnv {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !key.toUpperCase().startsWith("GIT_")),
-  ) as NodeJS.ProcessEnv;
-  return {
-    ...env,
-    GIT_ATTR_NOSYSTEM: "1",
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_CONFIG_NOSYSTEM: "1",
-    GIT_CONFIG_SYSTEM: process.platform === "win32" ? "NUL" : "/dev/null",
-    GIT_LFS_SKIP_SMUDGE: "1",
-    GIT_NO_LAZY_FETCH: "1",
-    GIT_OPTIONAL_LOCKS: "0",
-    GIT_PAGER: "cat",
-    GIT_TERMINAL_PROMPT: "0",
-  };
-}
-
 // Test-only projection for the production Git trust boundary. It exposes no
 // subprocess primitive and keeps environment assertions deterministic.
 export function __skillImportGitSecurityForTests(): {
@@ -2831,13 +2546,17 @@ export function __skillImportGitSecurityForTests(): {
 } {
   return {
     args: hardenedGitConfigArgs(),
-    cloneArgs: buildHardenedGitCloneArgs("https://github.com/example/repo.git", "C:/bounded/repo"),
-    env: buildSanitizedSkillImportGitEnvironment(),
+    cloneArgs: buildHardenedGitCloneArgs(
+      "https://github.com/example/repo.git",
+      "C:/bounded/repo",
+      SKILL_CONTENT_INTEGRITY_LIMITS.maxFileBytes,
+    ),
+    env: buildSanitizedGitEnvironment(),
   };
 }
 
 export function __parseSkillImportGitTreeForTests(output: string): MaterializedGitTreeFile[] {
-  return parseBoundedGitTree(output);
+  return parseBoundedGitTree(output, SKILL_GIT_TREE_OPTIONS);
 }
 
 // SECURITY (codex finding #14): The marketplace allowlist is the security
@@ -3050,6 +2769,8 @@ function getProviderLabel(provider: SkillSourceProvider): string {
       return "GitHub";
     case "external":
       return "External";
+    case "goatcitadel_plugin":
+      return "Plugin";
     case "local":
     default:
       return "Local";

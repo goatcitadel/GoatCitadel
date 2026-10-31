@@ -67,12 +67,21 @@ const REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE =
   "/api/v1/ops/workspaces/:workspaceId/remote-workers/:workerId/generations/:workerGeneration/mesh-node-join-authorities";
 /** A connector install answers a retry from the Change Plan its key made, so the retry gets the same receipt (M8). */
 const CONNECTOR_INSTALL_ROUTE = "/api/v1/capabilities/connectors/install";
+/**
+ * A plugin inspection answers a retry from the inspection its key made (kept by the plugin store), so the retry gets the
+ * same inspection or the same refused manifest, and nothing is fetched or checked again.
+ */
+const CAPABILITY_PLUGIN_INSPECTIONS_ROUTE = "/api/v1/capabilities/plugins/inspections";
 /** Per upload route, the query fields that describe a streamed upload; nothing else from the query reaches its fingerprint. */
 const STREAMED_UPLOAD_QUERY_FIELDS: Readonly<Record<string, readonly string[]>> = {
   "/api/v1/files/upload": ["relativePath", "expectAbsent"],
   "/api/v1/chat/attachments": ["sessionId", "projectId", "fileName", "mimeType"],
 };
-const CANONICAL_REPLAY_ROUTES = new Set([SECURE_CONFIGURATION_ROUTE, CONNECTOR_INSTALL_ROUTE]);
+const CANONICAL_REPLAY_ROUTES = new Set([
+  SECURE_CONFIGURATION_ROUTE,
+  CONNECTOR_INSTALL_ROUTE,
+  CAPABILITY_PLUGIN_INSPECTIONS_ROUTE,
+]);
 const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([
   REMOTE_WORKER_BOOTSTRAP_ROUTE,
   REMOTE_WORKER_MESH_JOIN_AUTHORITY_ROUTE,
@@ -146,9 +155,10 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     if (claim.outcome === "duplicate" && CANONICAL_REPLAY_ROUTES.has(routePath)) {
       // These handlers own a secret-independent replay path backed by their
       // canonical repository (the secure-configuration prompt, the connector
-      // install's Change Plan). Let an exact transport retry recover a
-      // secret-free receipt after a lost response; newly supplied bytes are
-      // ignored. In-progress and payload-mismatch claims remain blocked.
+      // install's Change Plan, the plugin store's kept inspection). Let an
+      // exact transport retry recover a secret-free receipt after a lost
+      // response; newly supplied bytes are ignored. In-progress and
+      // payload-mismatch claims remain blocked.
       request.mutationIdempotencyOutcome = "committed";
       return;
     }

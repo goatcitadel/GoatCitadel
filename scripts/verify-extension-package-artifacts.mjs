@@ -9,15 +9,25 @@ const repoRoot = process.cwd();
 const packageDir = path.join(repoRoot, "packages", "extensions-sdk");
 const packageJsonPath = path.join(packageDir, "package.json");
 const distIndexPath = path.join(packageDir, "dist", "index.js");
-// 2.0.0 keeps only the effective-tool snapshot helpers. A name outside this
-// list in the built barrel means a retired helper has crept back in.
+// 2.0.0 keeps the effective-tool snapshot helpers and adds the plugin
+// manifest tools. A name outside this list in the built barrel means a retired
+// helper has crept back in.
 const EXPECTED_EXPORTS = [
+  "PLUGIN_LIMITS",
+  "PLUGIN_MANIFEST_FILENAME",
   "buildToolSchemaRefIndex",
   "dereferenceEffectiveToolSchema",
   "findEffectiveToolByName",
   "listEffectiveCallableTools",
+  "loadPluginManifest",
+  "parsePluginManifest",
+  "pluginManifestSchema",
   "validateCompactToolDirectorySnapshot",
 ];
+// The one command the package ships, and the folder inside it that holds the
+// reference plugin.
+const PREFLIGHT_BIN_NAME = "goatcitadel-plugin-preflight";
+const REFERENCE_PLUGIN_DIR = path.join("templates", "plugins", "reference-plugin");
 let gnuTarCache;
 
 if (!fs.existsSync(distIndexPath)) {
@@ -36,9 +46,8 @@ for (const target of exportTargets) {
     fail(`extensions-sdk export target ${target} does not exist in the built package.`);
   }
 }
-if (packageJson.bin !== undefined) {
-  fail("extensions-sdk 2.0.0 ships no command; package.json must not declare a bin entry.");
-}
+const preflightBin = assertPreflightBin(packageJson, packageDir, "extensions-sdk");
+const workspaceReferencePlugin = verifyReferencePlugin(packageDir, preflightBin, "workspace reference plugin");
 
 const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-ext-pack-"));
 try {
@@ -84,10 +93,24 @@ try {
       fail(`packed extensions-sdk artifact is missing export target ${target}.`);
     }
   }
+  // The barrel and the command import @goatcitadel/contracts, which an install would put in node_modules.
+  linkWorkspaceDependencies(extractedPackageJson, extractedPackageDir);
+  const packedPreflightBin = assertPreflightBin(extractedPackageJson, extractedPackageDir, "packed extensions-sdk");
+  const packedReferencePlugin = verifyReferencePlugin(
+    extractedPackageDir,
+    packedPreflightBin,
+    "packed reference plugin",
+  );
+  if (packedReferencePlugin.manifestSha256 !== workspaceReferencePlugin.manifestSha256) {
+    fail(
+      `packed reference plugin drifted from the workspace copy: expected ${workspaceReferencePlugin.manifestSha256}, found ${packedReferencePlugin.manifestSha256}.`,
+    );
+  }
   const extractedSdk = await import(pathToFileURL(path.join(extractedPackageDir, "dist", "index.js")).href);
   assertExportedNames(Object.keys(extractedSdk), "packed extensions-sdk barrel");
   const skillBundleTarballName = verifyPortableSkillBundlePackageSurvivesExtraction(tempDir);
   console.log(`Verified extensions-sdk package artifact: ${path.basename(tarball)}`);
+  console.log(`Verified reference plugin ${workspaceReferencePlugin.pluginId} in the workspace and the packed copy.`);
   console.log(`Verified portable skill-bundle package fixture: ${skillBundleTarballName}`);
 } finally {
   fs.rmSync(tempDir, { recursive: true, force: true });
@@ -95,6 +118,64 @@ try {
 
 function readJson(filePath) {
   return JSON.parse(fs.readFileSync(filePath, "utf8"));
+}
+
+// The package ships exactly one command, and its file must exist in the folder it is checked in.
+function assertPreflightBin(manifest, root, label) {
+  const names = manifest.bin && typeof manifest.bin === "object" ? Object.keys(manifest.bin) : [];
+  if (names.length !== 1 || names[0] !== PREFLIGHT_BIN_NAME) {
+    fail(`${label} must declare exactly the bin ${PREFLIGHT_BIN_NAME}; found ${JSON.stringify(manifest.bin)}.`);
+  }
+  const target = manifest.bin[PREFLIGHT_BIN_NAME];
+  if (typeof target !== "string" || !fs.existsSync(path.join(root, target))) {
+    fail(`${label} bin ${PREFLIGHT_BIN_NAME} points at ${JSON.stringify(target)}, which does not exist.`);
+  }
+  return path.join(root, target);
+}
+
+// Run the package's own preflight command on the reference plugin it ships, and check that every file the
+// manifest names is there. The command only reads the folder it is given.
+function verifyReferencePlugin(root, binPath, label) {
+  const pluginDir = path.join(root, REFERENCE_PLUGIN_DIR);
+  const run = spawnSync(process.execPath, [binPath, pluginDir], { encoding: "utf8", shell: false });
+  if (run.error) {
+    fail(run.error.message);
+  }
+  const match = /^ok (\S+) ([0-9a-f]{64})$/u.exec((run.stdout ?? "").trim());
+  if (run.status !== 0 || !match) {
+    fail(
+      `${label} was refused by ${PREFLIGHT_BIN_NAME} (exit ${run.status}): ${(run.stderr || run.stdout || "no output").trim()}`,
+    );
+  }
+  const manifest = readJson(path.join(pluginDir, "goatcitadel-plugin.json"));
+  for (const piece of manifest.pieces) {
+    const pieceFile =
+      piece.kind === "skill"
+        ? path.join(piece.path, "SKILL.md")
+        : piece.kind === "prompt_pack"
+          ? piece.path
+          : undefined;
+    if (pieceFile !== undefined && !fs.existsSync(path.join(pluginDir, pieceFile))) {
+      fail(`${label} is missing ${pieceFile}, which piece ${piece.id} names.`);
+    }
+  }
+  return { pluginId: match[1], manifestSha256: match[2] };
+}
+
+// Make the tarball's workspace dependencies resolvable, the way an install would.
+function linkWorkspaceDependencies(manifest, root) {
+  for (const name of Object.keys(manifest.dependencies ?? {})) {
+    if (!name.startsWith("@goatcitadel/")) {
+      continue;
+    }
+    const workspaceDir = path.join(repoRoot, "packages", name.slice("@goatcitadel/".length));
+    if (!fs.existsSync(path.join(workspaceDir, "package.json"))) {
+      fail(`extensions-sdk depends on ${name}, which is not a workspace package.`);
+    }
+    const linkPath = path.join(root, "node_modules", ...name.split("/"));
+    fs.mkdirSync(path.dirname(linkPath), { recursive: true });
+    fs.symlinkSync(workspaceDir, linkPath, "junction");
+  }
 }
 
 function assertExportedNames(actualNames, label) {

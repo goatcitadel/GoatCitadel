@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "reference-plugin",
+  "name": "Reference plugin",
+  "description": "A small plugin that shows the manifest: one skill that tidies meeting notes and one prompt pack that checks it.",
+  "version": "1.0.0",
+  "author": "GoatCitadel",
+  "pieces": [
+    {
+      "kind": "skill",
+      "id": "meeting-notes",
+      "path": "skills/meeting-notes"
+    },
+    {
+      "kind": "prompt_pack",
+      "id": "meeting-notes-check",
+      "path": "prompt-packs/meeting-notes-check.md"
+    }
+  ]
+}

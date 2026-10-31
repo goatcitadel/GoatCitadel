@@ -622,6 +622,11 @@ async function exerciseRoutes(app: FastifyInstance, chat: ChatSeed): Promise<Exe
   await requestNotServerError(
     app,
     "GET",
+    `/api/v1/capabilities/plugins?workspaceId=${encodeURIComponent(workspaceId)}`,
+  );
+  await requestNotServerError(
+    app,
+    "GET",
     `/api/v1/capabilities/skills/detail?workspaceId=${encodeURIComponent(workspaceId)}&skillId=bundled%3Aresearch`,
   );
   if (serverId) {

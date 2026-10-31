@@ -56,6 +56,14 @@ export function buildCapabilitySkillInstall(item: SkillHubOperatorItem): Capabil
   return projectImportProvenanceReferencesForPublic(install);
 }
 
+/**
+ * Where a check's install is, whatever its source: the same step the installs list reads, for a check whose source the
+ * list itself leaves out, such as a plugin's skill.
+ */
+export function skillHubInstallStep(item: SkillHubOperatorItem): CapabilitySkillInstallStep {
+  return readInstallStep(item).step;
+}
+
 /** Whether the install is on its way in, or stopped on the way: the installs list holds exactly these. */
 export function isUnfinishedInstall(install: Pick<CapabilitySkillInstall, "step">): boolean {
   return !SETTLED_OR_NOT_STARTED.has(install.step);

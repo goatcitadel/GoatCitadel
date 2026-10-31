@@ -1257,19 +1257,7 @@ export class HooksService {
   }
 
   private assertWebhookUrlAllowed(rawUrl: string): void {
-    let url: URL;
-    try {
-      url = new URL(rawUrl);
-    } catch (error) {
-      throw new ValidationError({
-        message: `Invalid hook webhook URL: ${(error as Error).message}`,
-      });
-    }
-    if (url.protocol !== "https:") {
-      throw new ValidationError({
-        message: "Hook webhook URLs must use HTTPS.",
-      });
-    }
+    const url = parseHookWebhookUrl(rawUrl);
     try {
       assertHostAllowed(url.toString(), this.resolveHookEgressAllowlist());
     } catch (error) {
@@ -1278,6 +1266,27 @@ export class HooksService {
       });
     }
   }
+}
+
+/**
+ * A hook's webhook address, once it parses and uses `https`. The hooks egress allowlist is checked after this, by the
+ * hooks service, against the operator's own list.
+ */
+export function parseHookWebhookUrl(rawUrl: string): URL {
+  let url: URL;
+  try {
+    url = new URL(rawUrl);
+  } catch (error) {
+    throw new ValidationError({
+      message: `Invalid hook webhook URL: ${(error as Error).message}`,
+    });
+  }
+  if (url.protocol !== "https:") {
+    throw new ValidationError({
+      message: "Hook webhook URLs must use HTTPS.",
+    });
+  }
+  return url;
 }
 
 function buildDeliveryIdempotencyKey(trigger: HookTrigger, entityType: string, entityId: string): string {

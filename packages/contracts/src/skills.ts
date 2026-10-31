@@ -103,7 +103,15 @@ export interface SkillResolveInput {
   explicitSkills?: string[];
 }
 
-export type SkillSourceProvider = "agentskill" | "skillsmp" | "clawhub" | "github" | "local" | "external";
+/** `goatcitadel_plugin` is a skill that sits inside a plugin: the Gateway records it, no listing or request names it. */
+export type SkillSourceProvider =
+  | "agentskill"
+  | "skillsmp"
+  | "clawhub"
+  | "github"
+  | "local"
+  | "external"
+  | "goatcitadel_plugin";
 
 export type SkillImportSourceType = "local_path" | "local_zip" | "git_url" | "remote_bundle";
 export type SkillSourceKind = "marketplace_listing" | "upstream_repo" | "reference" | "local";

@@ -394,7 +394,7 @@ if (!/@goatcitadel\/extensions-sdk/.test(pluginSdkDoc)) {
   errors.push("docs/PLUGIN_SDK_CONTRACT.md must name @goatcitadel/extensions-sdk explicitly.");
 }
 if (!/@goatcitadel\/extensions-sdk@2\.0\.0/.test(pluginSdkDoc)) {
-  errors.push("docs/PLUGIN_SDK_CONTRACT.md must describe the 2.0.0 SDK package, which keeps only the effective-tools helpers.");
+  errors.push("docs/PLUGIN_SDK_CONTRACT.md must describe the 2.0.0 SDK package, which keeps the effective-tool snapshot helpers and adds the plugin manifest validator.");
 }
 if (
   !pluginSdkDoc

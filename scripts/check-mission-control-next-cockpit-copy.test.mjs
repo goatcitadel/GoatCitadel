@@ -211,4 +211,28 @@ describe("glossary and plurals (GL-R02)", () => {
     assert.ok(roots.some((dir) => dir.endsWith("packages/mission-control-shared/src/components")));
     for (const root of COPY_ROOTS) await fs.access(root.dir);
   });
+
+  it("reads the copy written outside the cockpit that the cockpit shows as written", async () => {
+    const shown = COPY_ROOTS.find((root) => root.id === "shown-as-written");
+    assert.deepEqual(shown?.files, [
+      "packages/contracts/src/hooks.ts",
+      "apps/gateway/src/services/capability-plugin-inspection-service.ts",
+      "apps/gateway/src/services/capability-plugins-route-service.ts",
+      "apps/gateway/src/services/plugin-source-service.ts",
+      "apps/gateway/src/services/plugin-snapshot-store.ts",
+      "apps/gateway/src/services/plugin-git-messages.ts",
+      "apps/gateway/src/services/skill-hub-plugin-skill-source.ts",
+    ]);
+    // The skill import's Git words stay out: only a plugin fetch's own file is read.
+    for (const skillWords of ["hardened-git.ts", "hardened-git-wording.ts"]) {
+      assert.ok(!shown.files.includes(`apps/gateway/src/services/${skillWords}`), skillWords);
+    }
+    for (const file of shown.files) {
+      const contents = await fs.readFile(path.join(shown.dir, ...file.split("/")), "utf8");
+      // The guard really reads these files' copy: a glossary word in one of their lines would count.
+      assert.deepEqual(countCopyRatchets(file, `${contents}\nconst line = "Read the Gateway snapshot.";\n`), {
+        "glossary-terms": 2,
+      });
+    }
+  });
 });
