@@ -47,8 +47,12 @@ function firstSentence(message: string): string {
   return sentence.length > REASON_MAX_CHARS ? `${sentence.slice(0, REASON_MAX_CHARS - 1).trimEnd()}…` : sentence;
 }
 
-/** A refusal for a read outside the approved `reads` (the Gateway's wording). */
-const UNAPPROVED_READ = /is not in the files approved for this run/;
+/**
+ * A refusal for a read outside the approved `reads` (the Gateway's wording): a target not in the list, a helper call
+ * that names no target, or a helper the run leaves out, such as one that searches.
+ */
+const UNAPPROVED_READ =
+  /is not in the files approved for this run|must name a file or folder approved for this run|is not available in this run, which can read only the files approved for it/;
 /** A failed call from the code to one of its helpers; file-reading helpers are named docs.*, fs.* and file.*. */
 const HELPER_FAILED = /^(?:WRAPPER_EXECUTION_FAILED:|Wrapper \S+ did not execute)/;
 const FILE_HELPER = /\b(?:docs|fs|file)\.[a-z_]+/;

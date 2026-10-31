@@ -531,6 +531,16 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(container.querySelector("details")!.textContent).toContain('".env" is not in the files approved');
   });
 
+  it.each([
+    "WRAPPER_EXECUTION_FAILED: fs.stat must name a file or folder approved for this run.",
+    "WRAPPER_EXECUTION_FAILED: code.search is not available in this run, which can read only the files approved for it.",
+  ])("says a read outside the approved files was refused when the Gateway refuses %s", async (error) => {
+    await render(failedWith(error));
+    expect(rowText()).toContain("The code tried to read a file that wasn't approved.");
+    expect(rowText()).not.toContain("A helper the code called failed.");
+    expect(container.querySelector("details")!.textContent).toContain(error.replace("WRAPPER_EXECUTION_FAILED: ", ""));
+  });
+
   const doneTurn = () =>
     turnWith({ status: "executed", result: { status: "completed", durationMs: 1200, runId: "r1" } });
   const staged = { candidateId: "candidate-1", versionId: "version-1", revision: 1 };
