@@ -112,9 +112,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:qa",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "77f4a0b28c37095e6f699cc610816f098e28a7acc8a780994861ee845f207dbc",
-    fileCount: 1,
-    totalBytes: 562,
+    treeSha256: "1f845f6dffb414e481a3277d9ee60dfb90704de225166fcc2136b523adbc2537",
+    fileCount: 3,
+    totalBytes: 3377,
   },
   {
     skillId: "bundled:receiving-code-review",

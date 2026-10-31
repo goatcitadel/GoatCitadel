@@ -26,7 +26,7 @@ GoatCitadel is licensed under the Apache License 2.0 (see `LICENSE`). This file 
 - Repository: https://github.com/obra/superpowers
 - License: MIT, Copyright (c) 2025 Jesse Vincent
 - Adapted at commit: `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`
-- Vendored path: `skills/bundled/debugging/` (from `systematic-debugging` and its technique files) and `skills/bundled/receiving-code-review/` (from `receiving-code-review`); each SKILL.md rewritten for GoatCitadel, no scripts, hooks, or plugin manifests
+- Vendored path: `skills/bundled/debugging/` (from `systematic-debugging` and its technique files), `skills/bundled/receiving-code-review/` (from `receiving-code-review`), and the "Before saying it works" section of `skills/bundled/qa/` (from `verification-before-completion`); each rewritten for GoatCitadel, no scripts, hooks, or plugin manifests
 - Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
 
 ## Matt Pocock skills
