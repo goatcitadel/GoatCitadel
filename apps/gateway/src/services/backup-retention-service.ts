@@ -416,10 +416,17 @@ export class BackupRetentionService {
       }
     }
     const pgDumpCommand = resolvePgDumpCommand(this.config);
-    execFileSync(pgDumpCommand, ["--format=custom", "--file", dumpPath, connectionString], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    });
+    try {
+      execFileSync(pgDumpCommand, ["--format=custom", "--file", dumpPath, connectionString], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      });
+    } catch (error) {
+      // execFileSync echoes the full argv (including the credentialed
+      // connection string) in its message, and that message reaches the UI.
+      // eslint-disable-next-line preserve-caught-error -- The raw cause carries the credentialed argv; only the redacted detail may surface.
+      throw new Error(`pg_dump failed: ${redactPgDumpFailure(error, connectionString)}`);
+    }
   }
 }
 
@@ -892,6 +899,20 @@ function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
   );
 }
 
+function redactPgDumpFailure(error: unknown, connectionString: string): string {
+  const stderr = (error as { stderr?: unknown } | null)?.stderr;
+  const detail =
+    typeof stderr === "string" && stderr.trim()
+      ? stderr.trim()
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return detail
+    .split(connectionString)
+    .join("[redacted connection string]")
+    .replace(/(postgres(?:ql)?:\/\/)[^@\s/]*@/gi, "$1[redacted]@");
+}
+
 function resolveCommandOnPath(command: string): string | undefined {
   try {
     const locator = process.platform === "win32" ? "where.exe" : "which";
@@ -968,3 +989,7 @@ function isDockerContainerRunning(containerName: string): boolean {
     return false;
   }
 }
+
+export const __backupRetentionInternals = {
+  redactPgDumpFailure,
+};

@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { discoverNativePostgresTool } from "./native-postgres-discovery.js";
+import { discoverNativePostgresTool, nativePostgresInstallRoots } from "./native-postgres-discovery.js";
 
 const tempDirs: string[] = [];
 
@@ -45,5 +45,24 @@ describe("discoverNativePostgresTool", () => {
     await writeTool(programFiles, "16", "psql.exe");
 
     expect(discoverNativePostgresTool("pg_dump", "win32", { ProgramFiles: programFiles })).toBeUndefined();
+  });
+
+  it("reads the major from the resolved path of an unversioned entry like Homebrew libpq", async () => {
+    const programFiles = await makeProgramFiles();
+    await writeTool(programFiles, "16", "pg_dump.exe");
+    const keg = path.join(programFiles, "Cellar", "libpq", "18.0_1");
+    await fs.mkdir(path.join(keg, "bin"), { recursive: true });
+    await fs.writeFile(path.join(keg, "bin", "pg_dump.exe"), "", "utf8");
+    await fs.symlink(keg, path.join(programFiles, "PostgreSQL", "libpq"), "junction");
+
+    expect(discoverNativePostgresTool("pg_dump", "win32", { ProgramFiles: programFiles })).toBe(
+      path.join(programFiles, "PostgreSQL", "libpq", "bin", "pg_dump.exe"),
+    );
+  });
+});
+
+describe("nativePostgresInstallRoots", () => {
+  it("includes the EDB macOS installer root", () => {
+    expect(nativePostgresInstallRoots("darwin", {})).toContain("/Library/PostgreSQL");
   });
 });
