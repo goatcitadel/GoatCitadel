@@ -40,6 +40,8 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["The reviewer said to swap this Map for a plain object, address the review", ["receiving-code-review"]],
   ["Here are the PR comments from the bot, work through them", ["receiving-code-review"]],
   ["Review my pull request", []],
+  ["Do a security review of this login handler", ["secure-coding"]],
+  ["Is this query open to SQL injection?", ["secure-coding"]],
 ];
 
 let service: SkillsService;

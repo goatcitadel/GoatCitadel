@@ -201,6 +201,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not replace code fixes with test descriptions when a confirmed bug is in scope."],
     confidenceBoost: 0.08,
   },
+  "secure-coding": {
+    phrases: ["security review", "threat model"],
+    keywords: ["owasp", "sql injection", "xss"],
+    surfaces: ["code"],
+    whenToUse: ["Write or review code at a trust boundary."],
+    whenNotToUse: ["Do not use for UI resilience work (impeccable harden)."],
+    confidenceBoost: 0.1,
+  },
   tdd: {
     phrases: ["write the test first", "red green refactor"],
     keywords: ["tdd", "test-driven"],
