@@ -4831,12 +4831,14 @@ export class ChatTurnAgentRunner {
             } else if (
               repair &&
               repair.feedback.length > 0 &&
+              toolSchema.modelToCanonical.size > 0 &&
               repair.unresolved.every((issue) => issue.kind === "unsupported_name")
             ) {
               // Every call names a tool this turn does not offer, often one the
               // history shows from an earlier turn. Nothing executes: each call is
               // answered below with the valid tools, so the model can recover on
-              // the next loop instead of the turn failing.
+              // the next loop instead of the turn failing. A turn that offers no
+              // tools at all (e.g. draft-only skill capture) still fails closed.
               toolCallRepairFeedback = repair.feedback;
             } else {
               const repairableIncompleteToolCall =
