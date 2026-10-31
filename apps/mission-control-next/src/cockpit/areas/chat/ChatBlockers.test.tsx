@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatBlockers } from "./ChatBlockers";
 
@@ -20,6 +20,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchApprovals: api.fetchApprovals,
   resolveApproval: api.resolveApproval,
 }));
+// The approval reviews name workspaces from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
 const specialist = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("../inbox/specialist-approval-evidence", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../inbox/specialist-approval-evidence")>()),
@@ -29,6 +33,21 @@ vi.mock("../inbox/specialist-approval-evidence", async (importOriginal) => ({
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "default" }),
 }));
+// Every read goes through the api modules mocked above. A request that slips past them would reach the Gateway URL,
+// the operator's own install on this computer, so fetch is refused for the whole file (a read a test left running
+// can still call it after the test) and any call fails the test.
+const network = vi.fn((input: unknown) => Promise.reject(new Error(`Unmocked request: ${String(input)}`)));
+const takeRequests = () => {
+  const requests = network.mock.calls.map(([input]) => String(input));
+  network.mockClear();
+  return requests;
+};
+beforeAll(() => vi.stubGlobal("fetch", network));
+afterAll(() => {
+  const requests = takeRequests();
+  vi.unstubAllGlobals();
+  expect(requests).toEqual([]);
+});
 
 let root: Root;
 let container: HTMLDivElement;
@@ -61,6 +80,7 @@ afterEach(() => {
   client.clear();
   api.fetchApproval.mockReset();
   api.fetchApprovals.mockReset();
+  expect(takeRequests()).toEqual([]);
 });
 
 describe("Chat blockers", () => {
