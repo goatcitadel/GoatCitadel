@@ -7,21 +7,29 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   COMMIT_FETCH_REFUSED_MESSAGE,
   GitCommitFetchRefusedError,
+  GitFetchFailedError,
   GitFetchInputError,
+  GitHostLookupError,
   GitHostRefusedError,
   GitTreeLimitError,
   GitTreeRefusedError,
+  HostLookupError,
+  HostNotPublicError,
+  __admitGitSourceUrlForTests,
   __fetchGitTreeForTests,
   __gitTreeFetchArgsForTests,
+  assertBoundedGitMetadata,
   buildSanitizedGitEnvironment,
   createTreePathTracker,
   fetchGitTree,
   hardenedGitConfigArgs,
   isGitProcessFailure,
   isPortableTreePath,
+  labelledGitTreeWording,
   parseBoundedGitTree,
   type BoundedGitTreeOptions,
 } from "./hardened-git.js";
+import { PLUGIN_GIT_TREE_WORDING } from "./plugin-git-messages.js";
 
 const LIMITS = { maxFiles: 256, maxTotalBytes: 8 * 1024 * 1024, maxFileBytes: 1024 * 1024 };
 const HARDENED_CONFIG = [
@@ -175,7 +183,8 @@ describe("fetchGitTree (through a local bare repository)", () => {
       limits: { ...LIMITS, maxFiles: 2 },
     }).catch((error: unknown) => error);
     expect(tooManyFiles).toBeInstanceOf(GitTreeLimitError);
-    expect((tooManyFiles as Error).message).toBe("Git plugin tree exceeds 2 files.");
+    // A plugin's fetch speaks plainly: these words reach the operator as written.
+    expect((tooManyFiles as Error).message).toBe("A plugin can hold at most 2 files.");
 
     const tooManyBytes = await __fetchGitTreeForTests({
       url: bareUrl,
@@ -183,7 +192,7 @@ describe("fetchGitTree (through a local bare repository)", () => {
       limits: { ...LIMITS, maxTotalBytes: 6 },
     }).catch((error: unknown) => error);
     expect(tooManyBytes).toBeInstanceOf(GitTreeLimitError);
-    expect((tooManyBytes as Error).message).toBe("Git plugin tree exceeds 6 total bytes.");
+    expect((tooManyBytes as Error).message).toBe("A plugin can hold at most 6 bytes in all.");
   });
 });
 
@@ -336,6 +345,35 @@ describe("fetchGitTree in production", () => {
     }
   });
 
+  it("tells a host name that didn't resolve from a private host", async () => {
+    const unresolved = await __admitGitSourceUrlForTests("https://github.com/o/r", async () => {
+      throw Object.assign(new Error("getaddrinfo ENOTFOUND github.com"), { code: "ENOTFOUND" });
+    }).catch((error: unknown) => error);
+    expect(unresolved).toBeInstanceOf(GitHostLookupError);
+    expect((unresolved as Error).message).toBe(
+      "GoatCitadel couldn't reach that host. Check the connection and try again.",
+    );
+    expect((unresolved as Error).cause).toBeInstanceOf(HostLookupError);
+
+    const nothing = await __admitGitSourceUrlForTests("https://github.com/o/r", async () => []).catch(
+      (error: unknown) => error,
+    );
+    expect(nothing).toBeInstanceOf(GitHostLookupError);
+
+    // A private address is still refused as one, with the network guard's own refusal as the cause.
+    const privateHost = await __admitGitSourceUrlForTests("https://github.com/o/r", async () => [
+      { address: "10.0.0.5" },
+    ]).catch((error: unknown) => error);
+    expect(privateHost).toBeInstanceOf(GitHostRefusedError);
+    expect((privateHost as Error).message).toBe("That address isn't a public host.");
+    expect((privateHost as Error).cause).toBeInstanceOf(Error);
+    expect((privateHost as Error).cause).not.toBeInstanceOf(HostNotPublicError);
+
+    await expect(
+      __admitGitSourceUrlForTests("https://github.com/o/r", async () => [{ address: "140.82.112.3" }]),
+    ).resolves.toBe("https://github.com/o/r");
+  });
+
   it("refuses limits that aren't positive whole numbers", async () => {
     const failure = await fetchGitTree({
       url: "https://github.com/o/r",
@@ -370,6 +408,90 @@ describe("the tree rules the Git readers share", () => {
     expect(() =>
       parseBoundedGitTree(twoFiles, { ...pluginOptions, limits: { ...pluginOptions.limits, maxFiles: 1 } }),
     ).toThrow(GitTreeLimitError);
+  });
+
+  it("keeps the skill import's own words for every refusal", () => {
+    const skill = labelledGitTreeWording("skill");
+    expect({
+      treeName: skill.treeName,
+      tooManyFiles: skill.tooManyFiles(80),
+      unsupportedObject: skill.unsupportedObject("scripts/run"),
+      notPortable: skill.notPortable(".git/config"),
+      listingUnreadable: skill.listingUnreadable,
+      fileUnavailable: skill.fileUnavailable("SKILL.md", 10),
+      fileTooLarge: skill.fileTooLarge("SKILL.md", 10),
+      tooManyBytes: skill.tooManyBytes(20),
+      fileChanged: skill.fileChanged("SKILL.md"),
+      metadataTooManyEntries: skill.metadataTooManyEntries(2048),
+      metadataTooManyBytes: skill.metadataTooManyBytes(16),
+      metadataLink: skill.metadataLink,
+      metadataUnsupportedEntry: skill.metadataUnsupportedEntry,
+    }).toEqual({
+      treeName: "Git skill tree",
+      tooManyFiles: "Git skill tree exceeds 80 files.",
+      unsupportedObject: "Git skill tree contains a symlink, submodule, or unsupported object at scripts/run.",
+      notPortable: "Git skill tree contains a non-portable path: .git/config.",
+      listingUnreadable: "Git skill tree returned malformed metadata.",
+      fileUnavailable: "Git skill blob SKILL.md is unavailable inside the bounded partial clone.",
+      fileTooLarge: "Git skill blob SKILL.md exceeds 10 bytes.",
+      tooManyBytes: "Git skill tree exceeds 20 total bytes.",
+      fileChanged: "Git skill blob SKILL.md changed during bounded materialization.",
+      metadataTooManyEntries: "Git partial-clone metadata exceeds 2048 entries.",
+      metadataTooManyBytes: "Git partial-clone metadata exceeds 16 bytes.",
+      metadataLink: "Git partial-clone metadata contains a symbolic link.",
+      metadataUnsupportedEntry: "Git partial-clone metadata contains an unsupported filesystem entry.",
+    });
+  });
+
+  it("refuses a plugin's tree in plain words, and calls a list it can't read a Git failure", () => {
+    const plain: BoundedGitTreeOptions = { ...pluginOptions, wording: PLUGIN_GIT_TREE_WORDING };
+    expect(() => parseBoundedGitTree(`160000 commit ${oid}\tvendor/lib\0`, plain)).toThrow(
+      new GitTreeRefusedError(
+        "vendor/lib isn't a plain file. A plugin can't hold links, other repositories or files that run.",
+      ),
+    );
+    expect(() => parseBoundedGitTree(`100644 blob ${oid}\tskills/con\0`, plain)).toThrow(
+      new GitTreeRefusedError("skills/con has a name that can't be used in a plugin."),
+    );
+    const twoFiles = `100644 blob ${oid}\ta.md\u0000100644 blob ${oid}\tb.md\u0000`;
+    expect(() => parseBoundedGitTree(twoFiles, { ...plain, limits: { ...plain.limits, maxFiles: 1 } })).toThrow(
+      new GitTreeLimitError("A plugin can hold at most 1 file."),
+    );
+
+    // A record with no tab is Git's doing, in each caller's own words.
+    for (const [options, message] of [
+      [plain, "Git sent a list of files GoatCitadel couldn't read."],
+      [{ ...pluginOptions, label: "skill" }, "Git skill tree returned malformed metadata."],
+    ] as const) {
+      const failure = (() => {
+        try {
+          return parseBoundedGitTree(`100644 blob ${oid} no-tab\0`, options);
+        } catch (error) {
+          return error;
+        }
+      })();
+      expect(failure).toBeInstanceOf(GitFetchFailedError);
+      expect((failure as Error).message).toBe(message);
+    }
+  });
+
+  it("calls a link in the repository's own files a Git failure, in each caller's own words", async () => {
+    const repoDir = fs.mkdtempSync(path.join(scratchRoot, "metadata-"));
+    const objects = path.join(repoDir, ".git", "objects");
+    fs.mkdirSync(objects, { recursive: true });
+    const outside = fs.mkdtempSync(path.join(scratchRoot, "outside-"));
+    fs.symlinkSync(outside, path.join(objects, "pack"), process.platform === "win32" ? "junction" : "dir");
+
+    const pluginFailure = await assertBoundedGitMetadata(repoDir, GitTreeLimitError, PLUGIN_GIT_TREE_WORDING).catch(
+      (error: unknown) => error,
+    );
+    expect(pluginFailure).toBeInstanceOf(GitFetchFailedError);
+    expect((pluginFailure as Error).message).toBe(
+      "Git's copy of the repository held a link, which GoatCitadel doesn't follow.",
+    );
+    const skillFailure = await assertBoundedGitMetadata(repoDir, GitTreeLimitError).catch((error: unknown) => error);
+    expect(skillFailure).toBeInstanceOf(GitFetchFailedError);
+    expect((skillFailure as Error).message).toBe("Git partial-clone metadata contains a symbolic link.");
   });
 
   it("tracks collisions and the entry limit", () => {

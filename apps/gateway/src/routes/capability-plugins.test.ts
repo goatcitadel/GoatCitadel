@@ -118,10 +118,13 @@ describe("capability plugin routes", () => {
     app = null;
   });
 
-  /** `operator: false` makes the operator check refuse, as it does for a caller without operator sign-in. */
+  /**
+   * `operator: false` makes the operator check refuse, as it does for a caller without operator sign-in. `actor` is the
+   * signed-in actor, "" for none.
+   */
   async function build(
     service: CapabilityPluginsRouteService | undefined,
-    options: { operator?: boolean; mutationStore?: MutationIdempotencyStore } = {},
+    options: { operator?: boolean; mutationStore?: MutationIdempotencyStore; actor?: string } = {},
   ) {
     const requireOperatorAuth = vi.fn(async (_request: FastifyRequest, reply: FastifyReply) => {
       if (options.operator === false) return reply.code(403).send({ error: "Operator authentication is required." });
@@ -132,7 +135,7 @@ describe("capability plugin routes", () => {
     await app.register(idempotencyHeaderPlugin, options.mutationStore ? { mutationStore: options.mutationStore } : {});
     app.decorateRequest("authActorId", "");
     app.addHook("onRequest", async (request) => {
-      request.authActorId = "operator-1";
+      request.authActorId = options.actor ?? "operator-1";
     });
     app.decorate("requireOperatorAuth", requireOperatorAuth as never);
     app.decorate("services", (service ? { capabilityPlugins: service } : {}) as never);
@@ -183,6 +186,36 @@ describe("capability plugin routes", () => {
     expect(sources.listInstalled).not.toHaveBeenCalled();
   });
 
+  it("refuses a workspace id the Skill Hub review would refuse with a 400, not a 503", async () => {
+    const { service, sources } = routeService();
+    const { server } = await build(service);
+
+    for (const workspaceId of [" default", "default ", " default", "ﬁle-lab", "default\t"]) {
+      const inspect = await server.inject({
+        method: "POST",
+        url: INSPECTIONS_URL,
+        payload: { ...BODY, workspaceId },
+        headers: KEY,
+      });
+      const list = await server.inject({
+        method: "GET",
+        url: `/api/v1/capabilities/plugins?workspaceId=${encodeURIComponent(workspaceId)}`,
+      });
+      expect([inspect.statusCode, list.statusCode], JSON.stringify(workspaceId)).toEqual([400, 400]);
+    }
+    expect(sources.inspect).not.toHaveBeenCalled();
+    expect(sources.listInstalled).not.toHaveBeenCalled();
+
+    // A plain workspace id still goes through.
+    const plain = await server.inject({
+      method: "POST",
+      url: INSPECTIONS_URL,
+      payload: { ...BODY, workspaceId: "lab-2" },
+      headers: KEY,
+    });
+    expect(plain.statusCode).toBe(201);
+  });
+
   it("sets the rate limits", async () => {
     const { service, sources } = routeService();
     const { server, requireOperatorAuth } = await build(service);
@@ -204,6 +237,7 @@ describe("capability plugin routes", () => {
     expect(sources.inspect).toHaveBeenCalledExactlyOnceWith({
       ...BODY,
       actorId: "operator-1",
+      actorScope: "operator-1",
       idempotencyKey: "inspect-7f0c",
       log: expect.objectContaining({ warn: expect.any(Function) }),
       replayOnly: false,
@@ -542,7 +576,11 @@ describe("capability plugin routes", () => {
       };
     }
 
-    it("gets the first answer again, the same 201 or the same 422, from the Gateway's own attempt record", async () => {
+    /**
+     * Built-in plugins whose folders stand in for their snapshots, inspected through the real inspection, the real
+     * plugin store and the Gateway's real attempt record. `actor` is the signed-in actor, "" for none.
+     */
+    async function realReplay(actor?: string) {
       const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-plugin-replay-"));
       roots.push(root);
       const manifests: Record<string, Record<string, unknown>> = {
@@ -594,29 +632,37 @@ describe("capability plugin routes", () => {
         promptPackExists: async () => false,
         lookupHost: async () => [],
         findInstalled: (pluginId) => store.get(pluginId),
-        findKeptInspection: (actorId, key) => store.findInspectionByRequest(actorId, key),
+        findKeptInspection: (actorScope, key) => store.findInspectionByRequest(actorScope, key),
         saveInspection: (kept, treeSha256, request) => store.saveInspection(kept, treeSha256, request),
         now: () => new Date(),
         newInspectionId: () => `4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e${String(++sequence).padStart(2, "0")}`,
+        gatewayVersion: "1.0.0",
       });
       const { service } = routeService({ inspect: (input) => inspection.inspect(input) });
       const database = createDatabase({ dbPath: ":memory:" });
       databases.push(database);
       const attempts = new MutationIdempotencyRepository(database);
       const { server } = await build(service, {
+        ...(actor === undefined ? {} : { actor }),
         mutationStore: {
           claim: async (input) => attempts.claim(input),
           markCompleted: async (input) => attempts.markCompleted(input),
           markFailed: async (input) => attempts.markFailed(input),
         },
       });
-      const post = (pluginId: string, key: string) =>
+      const post = (pluginId: string, key: string, remoteAddress = "127.0.0.1") =>
         server.inject({
           method: "POST",
           url: INSPECTIONS_URL,
+          remoteAddress,
           headers: { "idempotency-key": key },
           payload: { workspaceId: "default", source: { kind: "built_in", pluginId } },
         });
+      return { post, fetchSource, attempts };
+    }
+
+    it("gets the first answer again, the same 201 or the same 422, from the Gateway's own attempt record", async () => {
+      const { post, fetchSource, attempts } = await realReplay();
 
       const first = await post("good-plugin", "attempt-good");
       const retried = await post("good-plugin", "attempt-good");
@@ -640,6 +686,23 @@ describe("capability plugin routes", () => {
       // A key reused for another request is still refused by the attempt record.
       expect(changed.statusCode).toBe(409);
       expect(changed.json()).toEqual({ error: "Idempotency-Key was reused with a different payload" });
+    });
+
+    it("answers a same-key retry without sign-in from the kept inspection, whatever address it comes from", async () => {
+      const { post, fetchSource, attempts } = await realReplay("");
+
+      const first = await post("good-plugin", "attempt-unsigned", "10.0.0.7");
+      // The retry comes back through another address, as it can behind a proxy or after a network change.
+      const retried = await post("good-plugin", "attempt-unsigned", "10.0.0.8");
+
+      expect([first.statusCode, retried.statusCode], retried.body).toEqual([201, 201]);
+      expect(retried.json()).toEqual(first.json());
+      expect(fetchSource).toHaveBeenCalledTimes(1);
+      // The attempt record and the kept inspection share the idempotency plugin's scope: "" without sign-in.
+      expect(
+        attempts.get({ method: "POST", routePath: INSPECTIONS_URL, idempotencyKey: "attempt-unsigned", actorScope: "" })
+          ?.status,
+      ).toBe("completed");
     });
   });
 

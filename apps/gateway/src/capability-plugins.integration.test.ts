@@ -236,6 +236,8 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
       entry.startsWith("data/plugins/") ||
       entry.startsWith("data/skill-hub/artifacts/");
     expect(added.filter((entry) => !insideAllowed(entry))).toEqual([]);
+    // The temp copy the snapshot was made through is gone: only the snapshot itself stays under data/plugins.
+    expectNoTempCopies(root);
 
     // The skill's check is a Skill Hub record, yet it shows nowhere on the Skills tab.
     const installs = await inject("GET", `/api/v1/capabilities/skills/installs?workspaceId=${WORKSPACE_ID}`);
@@ -288,6 +290,7 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
     });
     expect([sent.statusCode, resent.statusCode], resent.body).toEqual([201, 201]);
     expect(resent.json()).toEqual(sent.json());
+    expectNoTempCopies(root);
   });
 
   it("refuses a built-in plugin that isn't shipped, with its code and nothing kept", async () => {
@@ -309,6 +312,12 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
 });
 
 /** Every file and folder under `dir`, relative and with `/`, skipping SQLite's own side files. */
+/** `<data>/plugins/tmp` holds nothing after an inspection, or isn't there at all. */
+function expectNoTempCopies(root: string): void {
+  const tempRoot = path.join(root, "data", "plugins", "tmp");
+  expect(fs.existsSync(tempRoot) ? fs.readdirSync(tempRoot) : []).toEqual([]);
+}
+
 function listPaths(dir: string): string[] {
   const found: string[] = [];
   const walk = (current: string) => {

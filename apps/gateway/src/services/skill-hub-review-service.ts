@@ -49,6 +49,8 @@ const REVIEW_POLICY_ID = "goatcitadel.skill-hub-admission";
 const REVIEW_POLICY_VERSION = "1.0.0";
 const REVIEW_POLICY_REVISION = 1;
 const REVIEW_IDEMPOTENCY_MAX_LENGTH = 256;
+/** The refusal of a key already bound to other material; the plugin inspection checks a skill again on exactly this. */
+export const SOURCE_REPLAY_CONFLICT = "Skill Hub review idempotency key is already bound to different source material.";
 const MARKETPLACE_HOSTS = new Set([
   "agentskill.sh",
   "www.agentskill.sh",
@@ -914,10 +916,7 @@ function assertSourceReplay(stored: SkillHubSnapshotRecord, expected: PreparedRe
     stored.permissionEnvelopeSha256 === digest(expected.permissionEnvelope) &&
     canonicalJsonString(stored.compatibility) === canonicalJsonString(expected.compatibility);
   if (!same) {
-    throw new ConflictError({
-      code: "WRITE_CONFLICT",
-      message: "Skill Hub review idempotency key is already bound to different source material.",
-    });
+    throw new ConflictError({ code: "WRITE_CONFLICT", message: SOURCE_REPLAY_CONFLICT });
   }
 }
 

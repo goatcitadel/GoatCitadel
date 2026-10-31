@@ -12,7 +12,9 @@ import {
 } from "@goatcitadel/contracts";
 import {
   GitCommitFetchRefusedError,
+  GitFetchFailedError,
   GitFetchInputError,
+  GitHostLookupError,
   GitHostRefusedError,
   GitTreeLimitError,
   GitTreeRefusedError,
@@ -60,6 +62,7 @@ export type PluginSourceRefusalReason =
   | "COMMIT_NOT_FETCHABLE"
   | "GIT_FETCH_FAILED"
   | "HOST_NOT_PUBLIC"
+  | "HOST_NOT_FOUND"
   | "FOLDER_INSTALL_NOT_ALLOWED"
   | "INVALID_FOLDER"
   | "FOLDER_NOT_FOUND"
@@ -84,6 +87,7 @@ export class PluginSourceError extends Error {
 const BUILT_IN_DISPLAY = "Ships with GoatCitadel";
 const UNTRUSTED_GIT_HOST_MESSAGE = "GoatCitadel installs plugins only from GitHub, GitLab, Bitbucket or Codeberg.";
 const FOLDER_REFUSED_MESSAGE = "Folder installs work only when GoatCitadel runs on this computer.";
+const GIT_FETCH_FAILED_MESSAGE = "GoatCitadel couldn't fetch that Git repository.";
 
 /**
  * Fetches a plugin source into a snapshot. Throws `PluginSourceError` for anything the source did wrong or the host
@@ -159,7 +163,7 @@ function admitGitUrl(raw: unknown): URL {
   if (url.search || url.hash) throw invalidGitSource("Leave anything after a ? or # out of the address.");
   if (!isTrustedGitForgeUrl(url)) throw new PluginSourceError(400, "UNTRUSTED_GIT_HOST", UNTRUSTED_GIT_HOST_MESSAGE);
   if (!namesGitRepository(url.pathname)) {
-    throw invalidGitSource("The address should name a repository, like https://github.com/owner/repo.");
+    throw invalidGitSource("The address should name a repository, like https://github.com/example/my-plugin.");
   }
   return url;
 }
@@ -197,13 +201,20 @@ function asGitFailure(error: unknown): unknown {
   if (error instanceof GitHostRefusedError) {
     return new PluginSourceError(422, "HOST_NOT_PUBLIC", error.message, { cause: error });
   }
+  // A host name that didn't resolve may be fine once the connection is, so it is never called private.
+  if (error instanceof GitHostLookupError) {
+    return new PluginSourceError(502, "HOST_NOT_FOUND", error.message, { cause: error });
+  }
+  // The host or Git sent something other than what was asked for; its fixed sentence says what.
+  if (error instanceof GitFetchFailedError) {
+    return new PluginSourceError(502, "GIT_FETCH_FAILED", `${GIT_FETCH_FAILED_MESSAGE} ${error.message}`, {
+      cause: error,
+    });
+  }
   if (isGitProcessFailure(error)) {
-    return new PluginSourceError(
-      502,
-      "GIT_FETCH_FAILED",
-      `GoatCitadel couldn't fetch that Git repository. ${describeGitFailure(error)}`,
-      { cause: error },
-    );
+    return new PluginSourceError(502, "GIT_FETCH_FAILED", `${GIT_FETCH_FAILED_MESSAGE} ${describeGitFailure(error)}`, {
+      cause: error,
+    });
   }
   return error;
 }
@@ -274,8 +285,9 @@ async function requireAbsoluteFolder(raw: unknown): Promise<string> {
     throw new PluginSourceError(400, "INVALID_FOLDER", "Give the full path of a folder on this computer.");
   }
   const folder = path.resolve(raw);
-  // A folder source is the plugin's own folder; its `.git` folder is version-control metadata, never a plugin.
-  if (path.basename(folder).toLowerCase() === ".git") {
+  // A folder source is the plugin's own folder; its `.git` folder is version-control metadata, never a plugin. Windows
+  // drops a name's trailing dots and spaces, so `.git.` and `.git ` name that same folder.
+  if (isGitFolderName(path.basename(folder))) {
     throw new PluginSourceError(400, "INVALID_FOLDER", "Choose the plugin's folder, not its .git folder.");
   }
   let info;
@@ -292,6 +304,11 @@ async function requireAbsoluteFolder(raw: unknown): Promise<string> {
     throw new PluginSourceError(400, "INVALID_FOLDER", "That path isn't a folder.");
   }
   return folder;
+}
+
+/** Whether a folder's name is `.git` in any case, once the trailing dots and spaces Windows ignores are dropped. */
+function isGitFolderName(name: string): boolean {
+  return name.replace(/[. ]+$/u, "").toLowerCase() === ".git";
 }
 
 // ---------------------------------------------------------------------------

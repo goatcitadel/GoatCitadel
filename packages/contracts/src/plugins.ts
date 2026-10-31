@@ -324,8 +324,61 @@ function pathProblem(kind: "skill" | "prompt_pack", value: string): string | und
   if (value.includes("..")) return "must not contain '..'";
   if (value.includes("\u0000")) return "must not contain a NUL character";
   if (value.normalize("NFC") !== value) return "must be NFC-normalized";
+  if (!isPortablePluginPath(value)) return PATH_NOT_PORTABLE;
   if (kind === "prompt_pack" && !value.endsWith(".md")) return "must name a .md file";
   return undefined;
+}
+
+const PATH_NOT_PORTABLE =
+  'must be a plain path every computer can hold: no empty or "." parts, no colon, no name that ends in a dot or a ' +
+  "space, no .git folder and no device name such as CON";
+const WINDOWS_DEVICE_NAME = /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu;
+const MAX_PORTABLE_PATH_LENGTH = 4_096;
+const MAX_PORTABLE_SEGMENT_LENGTH = 255;
+
+/**
+ * Whether a path inside a plugin, relative and with `/` separators, is written the same on every disk GoatCitadel runs
+ * on. The manifest's piece paths and every file GoatCitadel copies from a plugin are held to it. It refuses a path that
+ * is empty, absolute or over 4,096 characters, isn't NFKC, holds a `\`, a control character or a replacement character,
+ * or has a part that is empty, `.` or `..`, over 255 characters, holds a `:`, ends in a dot or a space, is `.git` in any
+ * case, or is a Windows device name such as `CON` or `com1.txt`.
+ */
+export function isPortablePluginPath(relativePath: string): boolean {
+  if (
+    typeof relativePath !== "string" ||
+    !relativePath ||
+    relativePath.length > MAX_PORTABLE_PATH_LENGTH ||
+    relativePath !== relativePath.normalize("NFKC") ||
+    relativePath.includes("\\") ||
+    relativePath.includes("�")
+  ) {
+    return false;
+  }
+  // A leading `/` leaves an empty first part, and a drive (`C:`) or a stream (`a:b`) holds a colon, so neither needs a
+  // rule of its own.
+  return relativePath.split("/").every(isPortableSegment);
+}
+
+function isPortableSegment(segment: string): boolean {
+  return !(
+    !segment ||
+    segment === "." ||
+    segment === ".." ||
+    segment.length > MAX_PORTABLE_SEGMENT_LENGTH ||
+    containsControlCharacter(segment) ||
+    segment.includes(":") ||
+    /[. ]$/u.test(segment) ||
+    segment.toLowerCase() === ".git" ||
+    WINDOWS_DEVICE_NAME.test(segment)
+  );
+}
+
+function containsControlCharacter(value: string): boolean {
+  for (const character of value) {
+    const codePoint = character.codePointAt(0);
+    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------

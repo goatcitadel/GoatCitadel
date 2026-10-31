@@ -65,6 +65,25 @@ describe("goatcitadel-plugin-preflight", () => {
     expect(err.join("\n")).toContain("pieces[0].mode");
   });
 
+  it("refuses a piece path GoatCitadel's copy of the plugin can't hold, as an inspection would", async () => {
+    fs.writeFileSync(
+      path.join(workDir, PLUGIN_MANIFEST_FILENAME),
+      JSON.stringify({
+        schemaVersion: 1,
+        pluginId: "dot-path",
+        name: "Dot path",
+        description: "A skill whose path starts with ./.",
+        version: "1.0.0",
+        pieces: [{ kind: "skill", id: "notes", path: "./skills/notes" }],
+      }),
+    );
+    const { exitCode, out, err } = await preflight([workDir]);
+    expect(exitCode).toBe(1);
+    expect(out).toEqual([]);
+    expect(err.join("\n")).toContain("PIECE_PATH_INVALID");
+    expect(err.join("\n")).toContain("pieces[0].path");
+  });
+
   it("prints MANIFEST_MISSING and exits 1 for a folder with no manifest", async () => {
     const { exitCode, err } = await preflight([workDir]);
     expect(exitCode).toBe(1);

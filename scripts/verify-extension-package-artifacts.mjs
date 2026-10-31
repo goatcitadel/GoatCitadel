@@ -9,9 +9,9 @@ const repoRoot = process.cwd();
 const packageDir = path.join(repoRoot, "packages", "extensions-sdk");
 const packageJsonPath = path.join(packageDir, "package.json");
 const distIndexPath = path.join(packageDir, "dist", "index.js");
-// 2.0.0 keeps the effective-tool snapshot helpers and the plugin manifest
-// tools. A name outside this list in the built barrel means a retired helper
-// has crept back in.
+// 2.0.0 keeps the effective-tool snapshot helpers and adds the plugin
+// manifest tools. A name outside this list in the built barrel means a retired
+// helper has crept back in.
 const EXPECTED_EXPORTS = [
   "PLUGIN_LIMITS",
   "PLUGIN_MANIFEST_FILENAME",

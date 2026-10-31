@@ -13,6 +13,7 @@ import {
   type CapabilityPluginPieceView,
   type McpServerTemplateRecord,
   type PluginManifest,
+  type PluginManifestParse,
   type PluginPiece,
   type PluginPin,
   type PluginSource,
@@ -28,7 +29,11 @@ import { PluginSnapshotPathError } from "./plugin-snapshot-store.js";
 import type { FetchedPluginSource } from "./plugin-source-service.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 import type { SkillHubPluginSkillInput } from "./skill-hub-plugin-skill-source.js";
-import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
+import {
+  SOURCE_REPLAY_CONFLICT,
+  type SkillHubReviewResult,
+  type SkillHubSourceReviewInput,
+} from "./skill-hub-review-service.js";
 
 // Inspecting a plugin: fetch its source into a snapshot, read its manifest, and check every piece with the check its
 // own owner uses (the Skill Hub's review for a skill, the connector install's template rule, the tool switch's list,
@@ -67,8 +72,7 @@ const PROMPT_PACK_INVALID_MESSAGE = "The prompt pack file isn't a prompt pack Go
 const PROMPT_PACK_TAKEN_MESSAGE = "Another prompt pack already uses the id this one needs.";
 const PROMPT_PACK_VARIABLES_OFF_MESSAGE =
   "This prompt pack declares run variables, and typed run variables are switched off. A plugin can't switch them on.";
-/** The Skill Hub review's refusal of a key bound to other material (`assertSourceReplay`), pinned by its own test. */
-const REVIEW_KEY_BOUND_MESSAGE = "Skill Hub review idempotency key is already bound to different source material.";
+const BUILT_IN_ID_MISMATCH_MESSAGE = "This built-in plugin's manifest names a different plugin id.";
 /** The review's own refusal codes are upper snake case, as the Skills tab's check reads them. */
 const REVIEW_CODE = /^[A-Z][A-Z0-9_]*$/u;
 /** Groups a plugin can never hold off. `mcp.invoke` is Core's own connector tool, named here so it can't slip past. */
@@ -84,8 +88,14 @@ export interface CapabilityPluginInspectionLog {
 export interface CapabilityPluginInspectInput {
   workspaceId: string;
   source: PluginSource;
+  /** Who asked, as the Skill Hub's review records it. */
   actorId: string;
-  /** The request's own key: the same key from the same operator gets the same answer while the inspection is kept. */
+  /**
+   * The scope the Gateway's idempotency plugin holds this request's key under: the signed-in actor, or "" without
+   * sign-in. The kept inspection is found by this same scope, so a retry the plugin calls answered finds its answer.
+   */
+  actorScope: string;
+  /** The request's own key: the same key in the same scope gets the same answer while the inspection is kept. */
   idempotencyKey: string;
   log: CapabilityPluginInspectionLog;
   /** The request is a retry of one already answered: answer it again from the kept inspection, or refuse. */
@@ -122,9 +132,9 @@ export interface CapabilityPluginInspectionSources {
   lookupHost(hostname: string): Promise<Array<{ address: string }>>;
   /** The plugin store's record of an installed plugin. */
   findInstalled(pluginId: string): Promise<StoredPlugin | undefined>;
-  /** The kept inspection that answered this operator's key, with its request's fingerprint. */
+  /** The kept inspection that answered this key in this scope, with its request's fingerprint. */
   findKeptInspection(
-    actorId: string,
+    actorScope: string,
     idempotencyKey: string,
   ): Promise<{ inspection: CapabilityPluginInspection; payloadSha256: string } | undefined>;
   /** Keeps the inspection with the snapshot it read and the request it answered. */
@@ -135,6 +145,11 @@ export interface CapabilityPluginInspectionSources {
   ): Promise<void>;
   now(): Date;
   newInspectionId(): string;
+  /**
+   * The Gateway package's version, read once. A skill's review is keyed by it as well as by the copy, so review rules
+   * that change with a release check each skill once more, and inspecting a copy again within a release replays.
+   */
+  gatewayVersion: string;
 }
 
 /** The manifest was refused. Its inspection is kept, with `refusal`, so it can be read back. */
@@ -166,7 +181,7 @@ export class CapabilityPluginInspectionService {
   public constructor(private readonly sources: CapabilityPluginInspectionSources) {}
 
   /**
-   * Inspects a plugin source. A key this operator already used answers that inspection again while it is kept: the same
+   * Inspects a plugin source. A key already used in this scope answers that inspection again while it is kept: the same
    * inspection, or the same manifest refusal; the key with another request is a 409. Otherwise it throws the source's
    * own `PluginSourceError` when the source can't be fetched, a `CapabilityPluginManifestRefusedError` (with its
    * inspection kept) when the manifest is refused, and a 409 when the plugin is already installed; then every piece is
@@ -174,11 +189,11 @@ export class CapabilityPluginInspectionService {
    */
   public async inspect(input: CapabilityPluginInspectInput): Promise<CapabilityPluginInspection> {
     const request: CapabilityPluginInspectionRequestKey = {
-      actorId: input.actorId,
+      actorScope: input.actorScope,
       idempotencyKey: input.idempotencyKey,
       payloadSha256: requestFingerprint(input),
     };
-    const kept = await this.sources.findKeptInspection(request.actorId, request.idempotencyKey);
+    const kept = await this.sources.findKeptInspection(request.actorScope, request.idempotencyKey);
     if (kept) {
       if (kept.payloadSha256 !== request.payloadSha256) {
         throw new ConflictError({ code: "STATE_CONFLICT", message: KEY_REUSED_MESSAGE });
@@ -188,7 +203,7 @@ export class CapabilityPluginInspectionService {
     if (input.replayOnly) throw new ConflictError({ code: "STATE_CONFLICT", message: ANSWER_GONE_MESSAGE });
 
     const fetched = await this.sources.fetchSource(input.source);
-    const parsed = await readPluginManifestFile(fetched.snapshot.dir);
+    const parsed = refuseOtherBuiltInId(await readPluginManifestFile(fetched.snapshot.dir), input.source);
     const inspectedAt = this.sources.now();
     const frame = {
       inspectionId: this.sources.newInspectionId(),
@@ -274,8 +289,9 @@ export class CapabilityPluginInspectionService {
 
   /**
    * The Skill Hub's own review of the skill's folder in the snapshot: ready, or blocked with its first code. The review
-   * is keyed by the snapshot and the piece, so checking the same copy again replays the same check; when that check came
-   * out differently under the review's rules of the time, it is checked once more under a fresh key (Ruling R38).
+   * is keyed by the snapshot, the piece and the Gateway's version, so checking the same copy again on the same release
+   * replays the same check. When that check came out differently because the review's rules changed within a release,
+   * the skill is checked once more under a key of this inspection's own, and the earlier check stays as it is.
    */
   private async checkSkill(
     piece: Extract<PluginPiece, { kind: "skill" }>,
@@ -300,13 +316,13 @@ export class CapabilityPluginInspectionService {
     };
     const review = (idempotencyKey: string) =>
       this.sources.reviewSkill({ workspaceId: input.workspaceId, pluginSkill, idempotencyKey, actorId: input.actorId });
-    const contentKey = `plugin:${context.treeSha256}:${piece.id}`;
+    const contentKey = `plugin:${context.treeSha256}:${piece.id}@${this.sources.gatewayVersion}`;
     let reviewed: SkillHubReviewResult;
     try {
       reviewed = await review(contentKey).catch((error: unknown) => {
         if (!isKeyBoundToOtherMaterial(error)) throw error;
         // This copy's earlier check came out differently, so the review's own rules or output changed since. Check it
-        // once more under a key of this inspection's own (Ruling R38); the earlier check stays as it is.
+        // once more under a key of this inspection's own; the earlier check stays as it is.
         const superseded = redactStructuredSecrets({ pieceId: piece.id, treeSha256: context.treeSha256 }).value;
         input.log.warn(superseded, "a plugin skill's content key was superseded by a fresh check");
         return review(`${contentKey}:${context.inspectionId}`);
@@ -485,9 +501,16 @@ function skillRefusal(error: unknown, pieceId: string, log: CapabilityPluginInsp
  * checked before and came out differently.
  */
 function isKeyBoundToOtherMaterial(error: unknown): boolean {
-  return (
-    error instanceof ConflictError && error.code === "WRITE_CONFLICT" && error.message === REVIEW_KEY_BOUND_MESSAGE
-  );
+  return error instanceof ConflictError && error.code === "WRITE_CONFLICT" && error.message === SOURCE_REPLAY_CONFLICT;
+}
+
+/**
+ * A built-in plugin's manifest must name the folder it ships in, which is the id a built-in inspection asks for, as the
+ * list of built-in plugins requires. Any other manifest, and any other answer, passes as it is.
+ */
+function refuseOtherBuiltInId(parsed: PluginManifestParse, source: PluginSource): PluginManifestParse {
+  if (!parsed.ok || source.kind !== "built_in" || parsed.manifest.pluginId === source.pluginId) return parsed;
+  return { ok: false, code: "MANIFEST_INVALID", message: BUILT_IN_ID_MISMATCH_MESSAGE, field: "pluginId" };
 }
 
 /** The kept answer again: the inspection, or its manifest refusal. */

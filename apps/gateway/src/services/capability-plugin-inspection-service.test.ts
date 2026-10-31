@@ -16,12 +16,14 @@ import {
   type CapabilityPluginInspectionSources,
 } from "./capability-plugin-inspection-service.js";
 import type { CapabilityPluginInspectionRequestKey, StoredPlugin } from "./capability-plugin-store.js";
-import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
+import { PluginSnapshotPathError, PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { PluginSourceError, fetchPluginSource } from "./plugin-source-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 
 const NOW = Date.parse("2026-10-31T12:00:00.000Z");
 const PLUGIN_ID = "meeting-tools";
+/** The Gateway version the harness composes the service with: a skill's review key names it. */
+const GATEWAY_VERSION = "1.4.2-rc.1";
 
 const POLICY = {
   requireFirstToolApproval: true,
@@ -180,9 +182,9 @@ async function harness(
     promptPackExists: vi.fn(async () => false),
     lookupHost: vi.fn(async () => [{ address: "93.184.216.34" }]),
     findInstalled: vi.fn(async () => undefined),
-    findKeptInspection: vi.fn(async (actorId: string, idempotencyKey: string) => {
+    findKeptInspection: vi.fn(async (actorScope: string, idempotencyKey: string) => {
       const kept = saved.find(
-        (entry) => entry.request.actorId === actorId && entry.request.idempotencyKey === idempotencyKey,
+        (entry) => entry.request.actorScope === actorScope && entry.request.idempotencyKey === idempotencyKey,
       );
       return kept && { inspection: kept.inspection, payloadSha256: kept.request.payloadSha256 };
     }),
@@ -191,6 +193,7 @@ async function harness(
     }),
     now: () => new Date(NOW),
     newInspectionId: () => "4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e7f",
+    gatewayVersion: GATEWAY_VERSION,
     ...options.overrides,
   };
   const log = { warn: vi.fn() };
@@ -200,6 +203,7 @@ async function harness(
       workspaceId: "default",
       source: { kind: "folder", path: pluginDir },
       actorId: "operator-1",
+      actorScope: "operator-1",
       idempotencyKey: "inspect-7f0c",
       log,
       ...overrides,
@@ -248,7 +252,7 @@ describe("CapabilityPluginInspectionService", () => {
     ]);
     expect(piece(inspection, "meeting-notes")).toMatchObject({
       label: "meeting-notes",
-      skillSnapshotId: expect.stringMatching(/^skill-hub-review-plugin:[a-f0-9]{64}:meeting-notes$/u),
+      skillSnapshotId: expect.stringMatching(/^skill-hub-review-plugin:[a-f0-9]{64}:meeting-notes@1\.4\.2-rc\.1$/u),
     });
     expect(piece(inspection, "notes")).toMatchObject({
       label: "Notes App",
@@ -274,7 +278,7 @@ describe("CapabilityPluginInspectionService", () => {
         trust: "unverified",
         pinLabel: `content:${treeSha256}`,
       },
-      idempotencyKey: `plugin:${treeSha256}:meeting-notes`,
+      idempotencyKey: `plugin:${treeSha256}:meeting-notes@${GATEWAY_VERSION}`,
       actorId: "operator-1",
     });
     // The inspection is kept with the snapshot it read, so installing reads the same bytes, and with its request.
@@ -283,7 +287,7 @@ describe("CapabilityPluginInspectionService", () => {
         inspection,
         snapshotTreeSha256: treeSha256,
         request: {
-          actorId: "operator-1",
+          actorScope: "operator-1",
           idempotencyKey: "inspect-7f0c",
           payloadSha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
         },
@@ -303,7 +307,7 @@ describe("CapabilityPluginInspectionService", () => {
       pieces,
       overrides: {
         reviewSkill: vi.fn(async (input: SkillHubSourceReviewInput) =>
-          input.idempotencyKey.endsWith(":other-notes")
+          input.idempotencyKey.includes(":other-notes@")
             ? reviewed("review-other", ["PROMPT_INJECTION_DETECTED", "UNKNOWN_FRONTMATTER_DIMENSION"], "other-notes")
             : reviewed("review-meeting"),
         ),
@@ -340,7 +344,7 @@ describe("CapabilityPluginInspectionService", () => {
       pieces,
       overrides: {
         reviewSkill: vi.fn(async (input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> => {
-          if (input.idempotencyKey.endsWith(":other-notes")) throw lookupFault;
+          if (input.idempotencyKey.includes(":other-notes@")) throw lookupFault;
           throw new ValidationError({ field: "PROMPT_INJECTION_DETECTED", message: "Skill Hub blocked it." });
         }),
       },
@@ -578,6 +582,37 @@ describe("CapabilityPluginInspectionService", () => {
     expect(reviewSkill).not.toHaveBeenCalled();
   });
 
+  it("refuses a built-in plugin whose manifest names another plugin id, as the list leaves it out", async () => {
+    const { inspect, root, pluginDir, saved, reviewSkill } = await harness({
+      pieces: [{ kind: "tool_group_off", id: "no-browser", groupId: "browser" }],
+    });
+    // The same folder ships twice: once under its own id, once under another.
+    await fs.cp(pluginDir, path.join(root, "plugins", PLUGIN_ID), { recursive: true });
+    await fs.cp(pluginDir, path.join(root, "plugins", "other-tools"), { recursive: true });
+
+    const matching = await inspect({ source: { kind: "built_in", pluginId: PLUGIN_ID } });
+    const refusal = (await inspect({
+      source: { kind: "built_in", pluginId: "other-tools" },
+      idempotencyKey: "inspect-other",
+    }).catch((error: unknown) => error)) as CapabilityPluginManifestRefusedError;
+
+    expect(matching).toMatchObject({ pluginId: PLUGIN_ID, trust: "built_in", installable: true });
+    expect(refusal).toBeInstanceOf(CapabilityPluginManifestRefusedError);
+    expect(refusal.field).toBe("pluginId");
+    expect(refusal.inspection).toMatchObject({
+      pluginId: "",
+      installable: false,
+      refusal: {
+        code: "MANIFEST_INVALID",
+        message: "This built-in plugin's manifest names a different plugin id.",
+        field: "pluginId",
+      },
+    });
+    // Kept like any refused manifest, so the same key gets the same answer.
+    expect(saved.map((entry) => entry.inspection.refusal?.code)).toEqual([undefined, "MANIFEST_INVALID"]);
+    expect(reviewSkill).not.toHaveBeenCalled();
+  });
+
   it("passes a refused source through as the source's own refusal, and keeps nothing", async () => {
     const { service, saved } = await harness();
 
@@ -586,6 +621,7 @@ describe("CapabilityPluginInspectionService", () => {
         workspaceId: "default",
         source: { kind: "git", url: "https://example.test/owner/repo" },
         actorId: "operator-1",
+        actorScope: "operator-1",
         idempotencyKey: "inspect-git",
         log: { warn: vi.fn() },
       })
@@ -664,7 +700,7 @@ describe("CapabilityPluginInspectionService", () => {
     expect(fetchCalls).toHaveLength(1);
   });
 
-  it("keys a skill's review by the copy and the piece, so checking the same folder again replays one check", async () => {
+  it("keys a skill's review by the copy, the piece and the Gateway's version, so checking again replays one check", async () => {
     const { inspect, reviewSkill } = await harness();
 
     const first = await inspect();
@@ -672,13 +708,50 @@ describe("CapabilityPluginInspectionService", () => {
 
     const keys = reviewSkill.mock.calls.map(([input]) => input.idempotencyKey);
     const treeSha256 = first.pin.kind === "content" ? first.pin.treeSha256 : "";
-    expect(keys).toEqual([`plugin:${treeSha256}:meeting-notes`, `plugin:${treeSha256}:meeting-notes`]);
+    const contentKey = `plugin:${treeSha256}:meeting-notes@${GATEWAY_VERSION}`;
+    expect(keys).toEqual([contentKey, contentKey]);
     expect(piece(second, "meeting-notes").skillSnapshotId).toBe(piece(first, "meeting-notes").skillSnapshotId);
+  });
+
+  it("checks the same copy once more after a release, under that release's key", async () => {
+    const { sources, inspect, reviewSkill } = await harness();
+
+    const first = await inspect();
+    sources.gatewayVersion = "1.5.0";
+    await inspect({ idempotencyKey: "inspect-next-release" });
+
+    const treeSha256 = first.pin.kind === "content" ? first.pin.treeSha256 : "";
+    expect(reviewSkill.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
+      `plugin:${treeSha256}:meeting-notes@1.4.2-rc.1`,
+      `plugin:${treeSha256}:meeting-notes@1.5.0`,
+    ]);
+    // The longest key the review can be given still fits its own key rule: 256 plain characters.
+    const longest = `plugin:${"a".repeat(64)}:${"p".repeat(48)}@${"9".repeat(64)}:4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e7f`;
+    expect(longest.length).toBeLessThanOrEqual(256);
+    expect(longest).toMatch(/^[\p{L}\p{N}._:@/+*-]+$/u);
+  });
+
+  it("refuses a path the copy can't hold as the manifest's own path refusal, as the preflight does", async () => {
+    const { inspect, reviewSkill } = await harness({
+      pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes/" }],
+    });
+
+    const refusal = (await inspect().catch((error: unknown) => error)) as CapabilityPluginManifestRefusedError;
+
+    expect(refusal).toBeInstanceOf(CapabilityPluginManifestRefusedError);
+    expect(refusal.field).toBe("pieces[0].path");
+    expect(refusal.inspection.refusal).toMatchObject({ code: "PIECE_PATH_INVALID", field: "pieces[0].path" });
+    expect(reviewSkill).not.toHaveBeenCalled();
   });
 
   it("blocks a skill whose path the snapshot store refuses, without asking for a review", async () => {
     const { inspect, reviewSkill } = await harness({
-      pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes/" }],
+      pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
+      overrides: {
+        resolveSnapshotPath: () => {
+          throw new PluginSnapshotPathError("That plugin copy isn't on this computer.");
+        },
+      },
     });
 
     const inspection = await inspect();
@@ -688,7 +761,7 @@ describe("CapabilityPluginInspectionService", () => {
       kind: "skill",
       label: "meeting-notes",
       asksFirst: "Follows your tool rules. Added after GoatCitadel's checks, then switched on.",
-      check: { status: "blocked", code: "PIECE_PATH_INVALID", message: "That path is outside the plugin's files." },
+      check: { status: "blocked", code: "PIECE_PATH_INVALID", message: "That plugin copy isn't on this computer." },
     });
     expect(inspection.installable).toBe(false);
     expect(reviewSkill).not.toHaveBeenCalled();
@@ -702,7 +775,7 @@ describe("CapabilityPluginInspectionService", () => {
       });
     const reviewSkill = vi.fn(async (input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> => {
       // The content key's check was made under rules that have since changed; a key of this inspection's own passes.
-      if (/^plugin:[a-f0-9]{64}:meeting-notes$/u.test(input.idempotencyKey)) throw differentMaterial();
+      if (/^plugin:[a-f0-9]{64}:meeting-notes@[^:]+$/u.test(input.idempotencyKey)) throw differentMaterial();
       return reviewed("skill-hub-review-fresh");
     });
     const { inspect, log } = await harness({
@@ -718,8 +791,8 @@ describe("CapabilityPluginInspectionService", () => {
       skillSnapshotId: "skill-hub-review-fresh",
     });
     expect(reviewSkill.mock.calls.map(([input]) => input.idempotencyKey)).toEqual([
-      `plugin:${treeSha256}:meeting-notes`,
-      `plugin:${treeSha256}:meeting-notes:4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e7f`,
+      `plugin:${treeSha256}:meeting-notes@${GATEWAY_VERSION}`,
+      `plugin:${treeSha256}:meeting-notes@${GATEWAY_VERSION}:4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e7f`,
     ]);
     // Only the piece and the copy are logged, never the review's words.
     expect(log.warn).toHaveBeenCalledExactlyOnceWith(

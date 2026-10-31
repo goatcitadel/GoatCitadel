@@ -155,9 +155,10 @@ export const idempotencyHeaderPlugin = fp<IdempotencyHeaderPluginOptions>(async 
     if (claim.outcome === "duplicate" && CANONICAL_REPLAY_ROUTES.has(routePath)) {
       // These handlers own a secret-independent replay path backed by their
       // canonical repository (the secure-configuration prompt, the connector
-      // install's Change Plan). Let an exact transport retry recover a
-      // secret-free receipt after a lost response; newly supplied bytes are
-      // ignored. In-progress and payload-mismatch claims remain blocked.
+      // install's Change Plan, the plugin store's kept inspection). Let an
+      // exact transport retry recover a secret-free receipt after a lost
+      // response; newly supplied bytes are ignored. In-progress and
+      // payload-mismatch claims remain blocked.
       request.mutationIdempotencyOutcome = "committed";
       return;
     }

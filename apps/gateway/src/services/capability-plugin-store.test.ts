@@ -202,11 +202,11 @@ describe("CapabilityPluginStore", () => {
     expect(rows.writes).toBe(0);
   });
 
-  it("finds an inspection by the operator and key that asked for it, until it runs out of time", async () => {
+  it("finds an inspection by the scope and key that asked for it, until it runs out of time", async () => {
     const rows = new SettingRows();
     let now = NOW;
     const store = new CapabilityPluginStore(rows, () => new Date(now));
-    const request = { actorId: "operator-1", idempotencyKey: "inspect-1", payloadSha256: "f".repeat(64) };
+    const request = { actorScope: "operator-1", idempotencyKey: "inspect-1", payloadSha256: "f".repeat(64) };
     await store.saveInspection(inspection(1), "1".padStart(64, "0"), request);
     await store.saveInspection(inspection(2), "2".padStart(64, "0"));
 
@@ -221,6 +221,15 @@ describe("CapabilityPluginStore", () => {
       inspection: inspection(1),
       snapshotTreeSha256: "1".padStart(64, "0"),
     });
+
+    // Without sign-in the scope is "", as the idempotency plugin's is: that is a scope of its own.
+    const unsigned = { actorScope: "", idempotencyKey: "inspect-3", payloadSha256: "e".repeat(64) };
+    await store.saveInspection(inspection(3), "3".padStart(64, "0"), unsigned);
+    await expect(store.findInspectionByRequest("", "inspect-3")).resolves.toEqual({
+      inspection: inspection(3),
+      payloadSha256: "e".repeat(64),
+    });
+    await expect(store.findInspectionByRequest("operator-1", "inspect-3")).resolves.toBeUndefined();
 
     now = Date.parse(inspection(1).expiresAt);
     await expect(store.findInspectionByRequest("operator-1", "inspect-1")).resolves.toBeUndefined();

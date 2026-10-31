@@ -13,6 +13,7 @@ import {
 import { captureSkillContentIntegrity } from "./skill-content-integrity.js";
 import {
   SKILL_HUB_REVIEW_SCHEMA_VERSION,
+  SOURCE_REPLAY_CONFLICT,
   SkillHubReviewService,
   type SkillHubReviewServiceOptions,
   type SkillHubSourceReviewInput,
@@ -144,7 +145,14 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
     expect(replay.journeyEvent).toEqual(created.journeyEvent);
 
     await fs.appendFile(path.join(harness.sourceDir, "SKILL.md"), "\nChanged bytes.\n", "utf8");
-    await expect(harness.service.reviewSource(input)).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    // The plugin inspection checks a skill again on exactly these words, so they are pinned here.
+    await expect(harness.service.reviewSource(input)).rejects.toMatchObject({
+      code: "WRITE_CONFLICT",
+      message: "Skill Hub review idempotency key is already bound to different source material.",
+    });
+    expect(SOURCE_REPLAY_CONFLICT).toBe(
+      "Skill Hub review idempotency key is already bound to different source material.",
+    );
     expect(databaseCount(harness.storage, "skill_hub_snapshots")).toBe(1);
   });
 
@@ -632,7 +640,7 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
         idempotencyKey: "review-plugin-no-resolver",
         actorId: "operator:alice",
       }),
-    ).rejects.toThrow("Plugin skills are not available in this Gateway.");
+    ).rejects.toThrow("GoatCitadel can't review plugin skills here.");
   });
 
   it("refuses a plugin skill with a malformed id, pin, trust or path before it reads anything", async () => {

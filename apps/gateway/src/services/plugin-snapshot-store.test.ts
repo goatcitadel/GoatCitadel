@@ -92,6 +92,35 @@ describe("PluginSnapshotStore.importDirectory", () => {
     for (const source of sources) expect(fs.existsSync(source)).toBe(false);
   });
 
+  it("throws the rename's own error when it fails and the snapshot can't be looked at, with the look as context", async () => {
+    const source = makeFolder(files);
+    const wanted = path.join(storeRoot, expectedTreeHash(files));
+    const renameFailure = Object.assign(new Error(`EPERM: operation not permitted, rename '${source}'`), {
+      code: "EPERM",
+    });
+    const lookFailure = Object.assign(new Error(`EACCES: permission denied, lstat '${wanted}'`), { code: "EACCES" });
+    const realLstatSync = fs.lstatSync.bind(fs);
+    let looks = 0;
+    // The first look (before the rename) finds nothing there; the look after the failed rename can't be made.
+    const lstatSync = vi.spyOn(fs, "lstatSync").mockImplementation(((target: string, ...rest: unknown[]) => {
+      if (target === wanted && (looks += 1) > 1) throw lookFailure;
+      return realLstatSync(target, ...(rest as []));
+    }) as never);
+    const rename = vi.spyOn(fs.promises, "rename").mockRejectedValueOnce(renameFailure);
+    try {
+      const thrown = await store.importDirectory(source).catch((error: unknown) => error);
+      expect(thrown).toBe(renameFailure);
+      expect((thrown as Error).cause).toBe(lookFailure);
+      expect(looks).toBe(2);
+    } finally {
+      rename.mockRestore();
+      lstatSync.mockRestore();
+    }
+    // Nothing was stored, and the folder is left for the caller to remove.
+    expect(fs.existsSync(wanted)).toBe(false);
+    expect(fs.existsSync(source)).toBe(true);
+  });
+
   it("does not depend on the order the files were written", async () => {
     const reversed = Object.fromEntries(Object.entries(files).reverse());
     const a = await store.importDirectory(makeFolder(files));

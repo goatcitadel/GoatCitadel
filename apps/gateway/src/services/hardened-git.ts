@@ -4,7 +4,22 @@ import fs from "node:fs/promises";
 import { isIP } from "node:net";
 import path from "node:path";
 import { promisify } from "node:util";
+import { isPortablePluginPath } from "@goatcitadel/contracts";
 import { assertHostAllowed, assertNotPrivateOrReservedHost, assertWritePathInJail } from "@goatcitadel/policy-engine";
+import {
+  PARTIAL_CLONE_METADATA_WORDING,
+  labelledGitTreeWording,
+  type GitMetadataWording,
+  type GitTreeWording,
+} from "./hardened-git-wording.js";
+import {
+  COMMIT_FETCH_REFUSED_MESSAGE,
+  GIT_FETCH_FAILURE_MESSAGES,
+  GIT_INPUT_MESSAGES,
+  HOST_NOT_PUBLIC_MESSAGE,
+  HOST_UNREACHABLE_MESSAGE,
+  PLUGIN_GIT_TREE_WORDING,
+} from "./plugin-git-messages.js";
 import { assertSafeGitPositionalArg } from "./security-utils.js";
 
 // Hardened Git: the one place the Gateway runs the system Git client against a remote address.
@@ -40,8 +55,7 @@ const GIT_REF_PATTERN = /^[A-Za-z0-9._/-]{1,200}$/u;
 const COMMIT_REFUSAL_PATTERN =
   /not our ref|unadvertised object|couldn't find remote ref|no such remote ref|does not allow request/iu;
 
-export const COMMIT_FETCH_REFUSED_MESSAGE =
-  "This host can't fetch that exact commit. Leave the pin empty, or use a branch or tag.";
+export { COMMIT_FETCH_REFUSED_MESSAGE, labelledGitTreeWording, type GitMetadataWording, type GitTreeWording };
 
 /** The limits a tree is held to: what the Skill Hub's `SKILL_CONTENT_INTEGRITY_LIMITS` and a plugin's limits both fit. */
 export interface BoundedGitLimits {
@@ -60,6 +74,12 @@ export interface BoundedGitTreeOptions {
   /** Names the tree in messages: "Git skill tree ...", "Git plugin tree ...". */
   label: string;
   limitError: GitLimitErrorClass;
+  /** Words for each refusal in place of the label's. The skill import gives none, so its messages stay as they were. */
+  wording?: GitTreeWording;
+}
+
+function treeWording(options: BoundedGitTreeOptions): GitTreeWording {
+  return options.wording ?? labelledGitTreeWording(options.label);
 }
 
 export interface MaterializedGitTreeFile {
@@ -92,11 +112,31 @@ export class GitCommitFetchRefusedError extends Error {
   }
 }
 
-/** The address doesn't lead to a public host: it is private, reserved, or didn't resolve. The cause keeps the detail. */
+/** The address doesn't lead to a public host: it is private, loopback, metadata or reserved. The cause keeps the detail. */
 export class GitHostRefusedError extends Error {
   public constructor(options?: { cause?: unknown }) {
-    super("That address isn't a public host.", options);
+    super(HOST_NOT_PUBLIC_MESSAGE, options);
     this.name = "GitHostRefusedError";
+  }
+}
+
+/** The address's host name didn't resolve, or resolved to nothing. The cause is the `HostLookupError`. */
+export class GitHostLookupError extends Error {
+  public constructor(options?: { cause?: unknown }) {
+    super(HOST_UNREACHABLE_MESSAGE, options);
+    this.name = "GitHostLookupError";
+  }
+}
+
+/**
+ * Git, or the host behind it, sent something GoatCitadel can't use: a commit other than the one asked for, a file list
+ * it can't read, a file whose size changed between two reads, or a repository whose own files hold a link. It is the
+ * remote's doing, not a fault here. The message is a fixed sentence, in the caller's own words.
+ */
+export class GitFetchFailedError extends Error {
+  public constructor(message: string) {
+    super(message);
+    this.name = "GitFetchFailedError";
   }
 }
 
@@ -361,7 +401,8 @@ export async function materializeBoundedGitTree(
   options: BoundedGitTreeOptions,
   destDir: string = repoDir,
 ): Promise<void> {
-  const { limits, label, limitError } = options;
+  const { limits, limitError } = options;
+  const words = treeWording(options);
   const listing = await runBoundedGit(repoDir, ["ls-tree", "-r", "-z", "--full-tree", "HEAD"], {
     signal,
     encoding: "utf8",
@@ -377,15 +418,15 @@ export async function materializeBoundedGitTree(
     });
     const rawSize = String(sizeResult.stdout ?? "").trim();
     if (!/^(?:0|[1-9]\d*)$/u.test(rawSize)) {
-      throw new limitError(`Git ${label} blob ${file.relativePath} is unavailable inside the bounded partial clone.`);
+      throw new limitError(words.fileUnavailable(file.relativePath, limits.maxFileBytes));
     }
     const bytes = Number(rawSize);
     if (!Number.isSafeInteger(bytes) || bytes > limits.maxFileBytes) {
-      throw new limitError(`Git ${label} blob ${file.relativePath} exceeds ${limits.maxFileBytes} bytes.`);
+      throw new limitError(words.fileTooLarge(file.relativePath, limits.maxFileBytes));
     }
     totalBytes += bytes;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limits.maxTotalBytes) {
-      throw new limitError(`Git ${label} tree exceeds ${limits.maxTotalBytes} total bytes.`);
+      throw new limitError(words.tooManyBytes(limits.maxTotalBytes));
     }
     file.bytes = bytes;
   }
@@ -397,9 +438,7 @@ export async function materializeBoundedGitTree(
       maxBuffer: limits.maxFileBytes + 1_024,
     });
     const content = Buffer.isBuffer(blob.stdout) ? blob.stdout : Buffer.from(blob.stdout ?? "");
-    if (content.byteLength !== file.bytes) {
-      throw new Error(`Git ${label} blob ${file.relativePath} changed during bounded materialization.`);
-    }
+    if (content.byteLength !== file.bytes) throw new GitFetchFailedError(words.fileChanged(file.relativePath));
     const destination = path.resolve(destDir, ...file.relativePath.split("/"));
     assertWritePathInJail(destination, [destDir]);
     await fs.mkdir(path.dirname(destination), { recursive: true });
@@ -408,26 +447,25 @@ export async function materializeBoundedGitTree(
 }
 
 export function parseBoundedGitTree(output: string, options: BoundedGitTreeOptions): MaterializedGitTreeFile[] {
-  const { limits, label, limitError } = options;
+  const { limits, limitError } = options;
+  const words = treeWording(options);
   const records = output ? output.split("\0") : [];
   if (records.at(-1) === "") records.pop();
   if (records.length > limits.maxFiles) {
-    throw new limitError(`Git ${label} tree exceeds ${limits.maxFiles} files.`);
+    throw new limitError(words.tooManyFiles(limits.maxFiles));
   }
   const files: MaterializedGitTreeFile[] = [];
-  const admitPath = createTreePathTracker(`Git ${label} tree`, limits.maxEntries, limitError);
+  const admitPath = createTreePathTracker(words.treeName, limits.maxEntries, limitError);
   for (const record of records) {
     const separator = record.indexOf("\t");
-    if (separator <= 0) throw new Error(`Git ${label} tree returned malformed metadata.`);
+    if (separator <= 0) throw new GitFetchFailedError(words.listingUnreadable);
     const metadata = record.slice(0, separator).split(" ");
     const relativePath = record.slice(separator + 1);
     const [mode, objectType, objectId] = metadata;
     if (mode !== "100644" || objectType !== "blob" || !/^[a-f0-9]{40}$/u.test(objectId ?? "")) {
-      throw new GitTreeRefusedError(
-        `Git ${label} tree contains a symlink, submodule, or unsupported object at ${relativePath}.`,
-      );
+      throw new GitTreeRefusedError(words.unsupportedObject(relativePath));
     }
-    assertPortableGitTreePath(relativePath, label);
+    if (!isPortableTreePath(relativePath)) throw new GitTreeRefusedError(words.notPortable(relativePath));
     admitPath(relativePath);
     files.push({ objectId: objectId!, relativePath, bytes: 0 });
   }
@@ -472,47 +510,18 @@ export function createTreePathTracker(
   };
 }
 
-export function assertPortableGitTreePath(relativePath: string, label: string): void {
-  if (!isPortableTreePath(relativePath)) {
-    throw new GitTreeRefusedError(`Git ${label} tree contains a non-portable path: ${relativePath}.`);
-  }
-}
+/**
+ * Whether a relative path with `/` separators can be written the same on every disk GoatCitadel runs on. This is the
+ * contracts' own rule, `isPortablePluginPath`, which a plugin manifest's piece paths are held to as well, so the
+ * preflight, a fetched tree and the snapshot store all refuse the same paths.
+ */
+export const isPortableTreePath: (relativePath: string) => boolean = isPortablePluginPath;
 
-/** Whether a relative path with `/` separators can be written the same on every disk GoatCitadel runs on. */
-export function isPortableTreePath(relativePath: string): boolean {
-  const segments = relativePath.split("/");
-  return !(
-    !relativePath ||
-    relativePath.length > 4_096 ||
-    relativePath !== relativePath.normalize("NFKC") ||
-    relativePath.includes("\\") ||
-    relativePath.includes("\uFFFD") ||
-    path.posix.isAbsolute(relativePath) ||
-    path.win32.isAbsolute(relativePath) ||
-    segments.some(
-      (segment) =>
-        !segment ||
-        segment === "." ||
-        segment === ".." ||
-        segment.length > 255 ||
-        containsAsciiControlCharacter(segment) ||
-        segment.includes(":") ||
-        /[. ]$/u.test(segment) ||
-        segment.toLowerCase() === ".git" ||
-        /^(?:con|prn|aux|nul|com[1-9]|lpt[1-9])(?:\..*)?$/iu.test(segment),
-    )
-  );
-}
-
-function containsAsciiControlCharacter(value: string): boolean {
-  for (const character of value) {
-    const codePoint = character.codePointAt(0);
-    if (codePoint !== undefined && (codePoint <= 0x1f || codePoint === 0x7f)) return true;
-  }
-  return false;
-}
-
-export async function assertBoundedGitMetadata(repoDir: string, limitError: GitLimitErrorClass): Promise<void> {
+export async function assertBoundedGitMetadata(
+  repoDir: string,
+  limitError: GitLimitErrorClass,
+  wording: GitMetadataWording = PARTIAL_CLONE_METADATA_WORDING,
+): Promise<void> {
   const objectsDir = path.join(repoDir, ".git", "objects");
   const queue = [objectsDir];
   let entries = 0;
@@ -524,20 +533,20 @@ export async function assertBoundedGitMetadata(repoDir: string, limitError: GitL
     for (const child of children) {
       entries += 1;
       if (entries > GIT_METADATA_MAX_ENTRIES) {
-        throw new limitError(`Git partial-clone metadata exceeds ${GIT_METADATA_MAX_ENTRIES} entries.`);
+        throw new limitError(wording.metadataTooManyEntries(GIT_METADATA_MAX_ENTRIES));
       }
       const childPath = path.join(current, child.name);
       const stat = await fs.lstat(childPath);
-      if (stat.isSymbolicLink()) throw new Error("Git partial-clone metadata contains a symbolic link.");
+      if (stat.isSymbolicLink()) throw new GitFetchFailedError(wording.metadataLink);
       if (stat.isDirectory()) {
         queue.push(childPath);
       } else if (stat.isFile()) {
         bytes += stat.size;
         if (!Number.isSafeInteger(bytes) || bytes > GIT_METADATA_MAX_BYTES) {
-          throw new limitError(`Git partial-clone metadata exceeds ${GIT_METADATA_MAX_BYTES} bytes.`);
+          throw new limitError(wording.metadataTooManyBytes(GIT_METADATA_MAX_BYTES));
         }
       } else {
-        throw new Error("Git partial-clone metadata contains an unsupported filesystem entry.");
+        throw new GitFetchFailedError(wording.metadataUnsupportedEntry);
       }
     }
   }
@@ -574,27 +583,39 @@ interface GitTreeFetchPolicy {
 
 const PRODUCTION_POLICY: GitTreeFetchPolicy = {
   extraConfig: [],
-  async admitUrl(rawUrl) {
-    const safeUrl = safeGitArgument(rawUrl, "Git source address");
-    let parsed: URL;
-    try {
-      parsed = new URL(safeUrl);
-    } catch {
-      throw new GitFetchInputError("Git source must be an https URL.");
-    }
-    if (parsed.protocol !== "https:") throw new GitFetchInputError("Git source must be an https URL.");
-    if (parsed.username || parsed.password) {
-      throw new GitFetchInputError("Git source must not carry a user name or token.");
-    }
-    try {
-      await assertGitSourceHostIsPublic(parsed.href);
-    } catch (error) {
-      throw new GitHostRefusedError({ cause: error });
-    }
-    // Git gets the address as parsed here, not the text it came in as, so both read it the same way.
-    return parsed.href;
-  },
+  admitUrl: (rawUrl) => admitGitSourceUrl(rawUrl, lookUpHostAddresses),
 };
+
+/**
+ * A plain https address with no user name or token, whose host is public: the literal, and every address a name
+ * resolves to. A private or reserved host is a `GitHostRefusedError` (with the network guard's refusal as its cause), and
+ * a name that doesn't resolve is a `GitHostLookupError`, so a lookup that failed is never called a private host.
+ */
+async function admitGitSourceUrl(rawUrl: string, lookup: HostAddressLookup): Promise<string> {
+  const safeUrl = safeGitArgument(rawUrl, "Git source address");
+  let parsed: URL;
+  try {
+    parsed = new URL(safeUrl);
+  } catch {
+    throw new GitFetchInputError(GIT_INPUT_MESSAGES.notHttps);
+  }
+  if (parsed.protocol !== "https:") throw new GitFetchInputError(GIT_INPUT_MESSAGES.notHttps);
+  if (parsed.username || parsed.password) throw new GitFetchInputError(GIT_INPUT_MESSAGES.credentials);
+  try {
+    await assertHostResolvesPublic(parsed, lookup);
+  } catch (error) {
+    if (error instanceof HostLookupError) throw new GitHostLookupError({ cause: error });
+    throw new GitHostRefusedError({ cause: error instanceof HostNotPublicError ? error.cause : error });
+  }
+  // Git gets the address as parsed here, not the text it came in as, so both read it the same way.
+  return parsed.href;
+}
+
+// Test-only route to the production address check with a stand-in resolver, so a lookup that fails can be shown
+// without the network.
+export function __admitGitSourceUrlForTests(rawUrl: string, lookup: HostAddressLookup): Promise<string> {
+  return admitGitSourceUrl(rawUrl, lookup);
+}
 
 /**
  * Fetches a Git address into `destDir` as plain files and answers the commit that was written.
@@ -634,7 +655,12 @@ async function fetchGitTreeUnder(input: FetchGitTreeInput, policy: GitTreeFetchP
   const url = await policy.admitUrl(input.url);
   const destDir = path.resolve(input.destDir);
   const repoDir = `${destDir}.git-scratch`;
-  const options: BoundedGitTreeOptions = { limits, label: "plugin", limitError: GitTreeLimitError };
+  const options: BoundedGitTreeOptions = {
+    limits,
+    label: "plugin",
+    limitError: GitTreeLimitError,
+    wording: PLUGIN_GIT_TREE_WORDING,
+  };
   const deadline = startGitDeadline("Git plugin fetch timed out.");
   // The scratch repository is removed only if this call made it: a folder that was already there is not ours.
   let scratchCreated = false;
@@ -647,11 +673,11 @@ async function fetchGitTreeUnder(input: FetchGitTreeInput, policy: GitTreeFetchP
       await runFetchStep(step, deadline.signal, target);
     }
     if (target.kind === "commit") await pointHeadAtFetchedCommit(repoDir, target.commit, deadline.signal);
-    await assertBoundedGitMetadata(repoDir, GitTreeLimitError);
+    await assertBoundedGitMetadata(repoDir, GitTreeLimitError, PLUGIN_GIT_TREE_WORDING);
     await materializeBoundedGitTree(repoDir, deadline.signal, options, destDir);
     const commit = await resolveGitHeadRevision(repoDir);
     if (!/^[a-f0-9]{40}$/u.test(commit ?? "") || (target.kind === "commit" && commit !== target.commit)) {
-      throw new Error("The fetched Git revision is not the exact commit that was asked for.");
+      throw new GitFetchFailedError(GIT_FETCH_FAILURE_MESSAGES.commitUnconfirmed);
     }
     return { commit: commit! };
   } finally {
@@ -725,7 +751,7 @@ async function pointHeadAtFetchedCommit(repoDir: string, commit: string, signal:
     maxBuffer: 4_096,
   });
   if (String(resolved.stdout ?? "").trim() !== commit) {
-    throw new Error("The host sent a different commit from the one that was asked for.");
+    throw new GitFetchFailedError(GIT_FETCH_FAILURE_MESSAGES.otherCommit);
   }
   await runBoundedGit(repoDir, ["update-ref", "HEAD", commit], { signal, encoding: "utf8", maxBuffer: 4_096 });
 }
@@ -744,7 +770,7 @@ function parseFetchTarget(ref: string | undefined): GitFetchTarget {
   if (!trimmed) return { kind: "default" };
   if (GIT_COMMIT_PATTERN.test(trimmed)) return { kind: "commit", commit: trimmed.toLowerCase() };
   if (!GIT_REF_PATTERN.test(trimmed) || trimmed.includes("..")) {
-    throw new GitFetchInputError("Git ref must be a full commit, or a branch or tag name.");
+    throw new GitFetchInputError(GIT_INPUT_MESSAGES.ref);
   }
   return { kind: "branch", ref: safeGitArgument(trimmed, "Git ref") };
 }
@@ -752,7 +778,7 @@ function parseFetchTarget(ref: string | undefined): GitFetchTarget {
 function parseFetchLimits(limits: FetchGitTreeInput["limits"]): BoundedGitLimits {
   for (const value of [limits.maxFiles, limits.maxFileBytes, limits.maxTotalBytes]) {
     if (!Number.isSafeInteger(value) || value < 1) {
-      throw new GitFetchInputError("Git tree limits must be positive whole numbers.");
+      throw new GitFetchInputError(GIT_INPUT_MESSAGES.limits);
     }
   }
   return { ...limits, maxEntries: treeEntryLimit(limits.maxFiles) };

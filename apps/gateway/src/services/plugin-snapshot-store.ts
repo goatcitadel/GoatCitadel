@@ -203,10 +203,10 @@ export class PluginSnapshotStore {
     }
     try {
       await fs.rename(sourceDir, snapshot.dir);
-    } catch (error) {
+    } catch (renameError) {
       // A rename onto a folder that is already there fails (EPERM on Windows, ENOTEMPTY or EEXIST elsewhere): another
-      // writer got there first, and that is the answer.
-      if (!isPlainDirectory(snapshot.dir)) throw error;
+      // writer got there first, and that is the answer. Otherwise the rename's own error is the one thrown.
+      if (!wonByAnotherWriter(snapshot.dir, renameError)) throw renameError;
       await fs.rm(sourceDir, TEMP_REMOVAL_OPTIONS);
     }
     return snapshot;
@@ -214,8 +214,9 @@ export class PluginSnapshotStore {
 
   /**
    * The folder of a snapshot, or of a path inside it. The answer is built only from the hash and a checked relative
-   * path, and the path need not exist. Throws when the hash isn't a SHA-256, no such snapshot is stored, or the path
-   * is absolute, climbs out, or isn't a portable path.
+   * path, and the path need not exist. Throws a `PluginSnapshotPathError` when the hash isn't a SHA-256, no such snapshot
+   * is stored, or the path is absolute, climbs out, or isn't a portable path, and the raw I/O error when the snapshot's
+   * folder can't be looked at (a permission error, say).
    */
   public resolve(treeSha256: string, relativePath?: string): string {
     if (!SHA256_PATTERN.test(treeSha256))
@@ -247,6 +248,22 @@ function isPlainDirectory(target: string): boolean {
     const code = (error as NodeJS.ErrnoException).code;
     if (code === "ENOENT" || code === "ENOTDIR") return false;
     throw error;
+  }
+}
+
+/**
+ * After a failed rename, whether the snapshot is there as a real folder: another writer's rename won. When that can't be
+ * looked at either, the answer is no, so the rename's own error is thrown, carrying the failed look as its `cause`
+ * (unless it already has one): the look is context, never a replacement.
+ */
+function wonByAnotherWriter(snapshotDir: string, renameError: unknown): boolean {
+  try {
+    return isPlainDirectory(snapshotDir);
+  } catch (lookError) {
+    if (renameError instanceof Error && renameError.cause === undefined) {
+      Object.defineProperty(renameError, "cause", { value: lookError, configurable: true, writable: true });
+    }
+    return false;
   }
 }
 

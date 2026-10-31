@@ -57,8 +57,8 @@ export function buildCapabilitySkillInstall(item: SkillHubOperatorItem): Capabil
 }
 
 /**
- * Where a check's install is, whatever its source: the step the installs list reads (Ruling R41), for a check whose
- * source the list itself leaves out, such as a plugin's skill.
+ * Where a check's install is, whatever its source: the same step the installs list reads, for a check whose source the
+ * list itself leaves out, such as a plugin's skill.
  */
 export function skillHubInstallStep(item: SkillHubOperatorItem): CapabilitySkillInstallStep {
   return readInstallStep(item).step;

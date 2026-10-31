@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { createRequire } from "node:module";
 import path from "node:path";
 import {
   NotFoundError,
@@ -21,6 +22,8 @@ import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 
 const log = logger.child("capability-plugins");
+/** What a version may hold to name a review key: the review's own key characters, kept short. */
+const GATEWAY_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/u;
 
 /** The install's folders and profile, read from its config. */
 export interface CapabilityPluginsConfig {
@@ -117,10 +120,11 @@ export function composeCapabilityPlugins({
     },
     lookupHost: (hostname) => lookUpHostAddresses(hostname),
     findInstalled: (pluginId) => store.get(pluginId),
-    findKeptInspection: (actorId, idempotencyKey) => store.findInspectionByRequest(actorId, idempotencyKey),
+    findKeptInspection: (actorScope, idempotencyKey) => store.findInspectionByRequest(actorScope, idempotencyKey),
     saveInspection: (kept, snapshotTreeSha256, request) => store.saveInspection(kept, snapshotTreeSha256, request),
     now: () => new Date(),
     newInspectionId: () => randomUUID(),
+    gatewayVersion: readGatewayVersion(),
   });
   return new CapabilityPluginsRouteService({
     listInstalled: () => store.list(),
@@ -132,6 +136,19 @@ export function composeCapabilityPlugins({
     readInspection: async (inspectionId) => (await store.getInspection(inspectionId))?.inspection,
     reportFailure: reportFailedRead,
   });
+}
+
+/**
+ * The Gateway package's own version (`apps/gateway/package.json`, two folders up from this file in `src` and in
+ * `dist` alike), read once when plugins are wired. A plugin skill's review key names it. A version that can't be read,
+ * or doesn't fit a review key, stops plugins being wired rather than keying every check to a made-up release.
+ */
+export function readGatewayVersion(load: (specifier: string) => unknown = createRequire(import.meta.url)): string {
+  const version = (load("../../package.json") as { version?: unknown } | undefined)?.version;
+  if (typeof version !== "string" || !GATEWAY_VERSION_PATTERN.test(version)) {
+    throw new Error("The Gateway package's version can't name a plugin skill's review key.");
+  }
+  return version;
 }
 
 /** The operator sees a plain line or a part left out; the real error stays in the redacted server log. */

@@ -74,7 +74,7 @@ export function resolvePluginSkillSource(
   if (otherSources.packId !== undefined || otherSources.sourceRef !== undefined) {
     return refuse("Review a plugin's skill on its own, not together with a shipped skill pack or a source URL.");
   }
-  if (!resolveDir) return refuse("Plugin skills are not available in this Gateway.");
+  if (!resolveDir) return refuse("GoatCitadel can't review plugin skills here.");
   if (typeof skill.pluginId !== "string" || !pluginManifestSchema.shape.pluginId.safeParse(skill.pluginId).success) {
     return refuse("The plugin's id isn't valid.");
   }

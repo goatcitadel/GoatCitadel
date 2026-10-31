@@ -11,10 +11,13 @@ vi.mock("./hardened-git.js", async (importOriginal) => ({
 
 import {
   GitCommitFetchRefusedError,
+  GitFetchFailedError,
   GitFetchInputError,
+  GitHostLookupError,
   GitHostRefusedError,
   GitTreeLimitError,
   GitTreeRefusedError,
+  HostLookupError,
   fetchGitTree,
 } from "./hardened-git.js";
 import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
@@ -212,11 +215,11 @@ describe("fetchPluginSource: Git", () => {
   });
 
   it("maps the other Git failures without leaking paths", async () => {
-    fetchGitTreeMock.mockRejectedValueOnce(new GitTreeLimitError("Git plugin tree exceeds 256 files."));
+    fetchGitTreeMock.mockRejectedValueOnce(new GitTreeLimitError("A plugin can hold at most 256 files."));
     expect(await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()))).toMatchObject({
       statusCode: 413,
       reason: "TREE_OVER_LIMITS",
-      message: "Git plugin tree exceeds 256 files.",
+      message: "A plugin can hold at most 256 files.",
     });
 
     fetchGitTreeMock.mockRejectedValueOnce(
@@ -330,8 +333,41 @@ describe("fetchPluginSource: Git", () => {
       expect(tempLeftovers()).toEqual([]);
     });
 
+    it("answers a host that sent something other than what was asked for with a 502 and that fixed sentence", async () => {
+      for (const sentence of [
+        "The host sent a different commit from the one that was asked for.",
+        "Git sent a list of files GoatCitadel couldn't read.",
+      ]) {
+        fetchGitTreeMock.mockRejectedValueOnce(new GitFetchFailedError(sentence));
+        const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
+        expect(failure, sentence).toMatchObject({
+          statusCode: 502,
+          reason: "GIT_FETCH_FAILED",
+          message: `GoatCitadel couldn't fetch that Git repository. ${sentence}`,
+        });
+      }
+      expect(tempLeftovers()).toEqual([]);
+    });
+
+    it("answers a host name that didn't resolve with a 502, never as a private host", async () => {
+      const lookup = new HostLookupError("unresolved", {
+        cause: Object.assign(new Error("getaddrinfo ENOTFOUND github.com"), { code: "ENOTFOUND" }),
+      });
+      fetchGitTreeMock.mockRejectedValueOnce(new GitHostLookupError({ cause: lookup }));
+
+      const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
+
+      expect(failure).toMatchObject({
+        statusCode: 502,
+        reason: "HOST_NOT_FOUND",
+        message: "GoatCitadel couldn't reach that host. Check the connection and try again.",
+      });
+      expect(failure.cause).toBeInstanceOf(GitHostLookupError);
+      expectPlain(failure);
+    });
+
     it("lets any other error of GoatCitadel's own through unchanged", async () => {
-      const failure = new Error("The fetched Git revision is not the exact commit that was asked for.");
+      const failure = new Error("Something GoatCitadel did itself went wrong.");
       fetchGitTreeMock.mockRejectedValueOnce(failure);
       const thrown = await fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()).catch(
         (error: unknown) => error,
@@ -359,13 +395,15 @@ describe("fetchPluginSource: Git", () => {
 
     it("refuses a tree the Git reader found unsafe, in the tree's own words", async () => {
       fetchGitTreeMock.mockRejectedValueOnce(
-        new GitTreeRefusedError("Git plugin tree contains a symlink, submodule, or unsupported object at skills/link."),
+        new GitTreeRefusedError(
+          "skills/link isn't a plain file. A plugin can't hold links, other repositories or files that run.",
+        ),
       );
       const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
       expect(failure).toMatchObject({
         statusCode: 422,
         reason: "UNSAFE_TREE",
-        message: "Git plugin tree contains a symlink, submodule, or unsupported object at skills/link.",
+        message: "skills/link isn't a plain file. A plugin can't hold links, other repositories or files that run.",
       });
     });
   });
@@ -511,7 +549,16 @@ describe("fetchPluginSource: folder", () => {
 
   it("refuses a folder that is itself a .git folder", async () => {
     const gitFolder = makeFolder({ HEAD: "ref: refs/heads/main", "objects/ab/cdef": "object" }, scratchRoot, ".git");
-    for (const folderPath of [gitFolder, `${gitFolder}${path.sep}`, path.join(path.dirname(gitFolder), ".GIT")]) {
+    // Windows drops a name's trailing dots and spaces, so these spellings name the same .git folder there.
+    const windowsSpellings = [".git.", ".git ", ".GIT. ", ".Git.."].map((name) =>
+      path.join(path.dirname(gitFolder), name),
+    );
+    for (const folderPath of [
+      gitFolder,
+      `${gitFolder}${path.sep}`,
+      path.join(path.dirname(gitFolder), ".GIT"),
+      ...windowsSpellings,
+    ]) {
       const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folderPath }, inputs()));
       expect(failure, folderPath).toMatchObject({
         statusCode: 400,

@@ -14,7 +14,13 @@ import { PluginSourceError } from "../services/plugin-source-service.js";
 import { sendRouteError } from "./_error-handler.js";
 import { withRouteAccess } from "./route-access.js";
 
-const workspaceIdSchema = z.string().min(1).max(200);
+// The Skill Hub review's identity rule (`normalizeIdentity`), so a workspace it would refuse is a 400 here, not a 503:
+// text with no space at either end that NFKC leaves as it is.
+const workspaceIdSchema = z
+  .string()
+  .min(1)
+  .max(200)
+  .refine((value) => value === value.normalize("NFKC").trim(), "must be NFKC text with no space at either end");
 const listQuerySchema = z.object({ workspaceId: workspaceIdSchema }).strict();
 const inspectionParamsSchema = z.object({ inspectionId: z.uuid() }).strict();
 const inspectionQuerySchema = z.object({}).strict();
@@ -80,12 +86,13 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
    * hook through the hooks address rules and a public host, and a prompt pack through the prompt-pack parser. It
    * installs nothing. 201 with the inspection. A source that can't be fetched answers its own status (403 on
    * `remote_hardened` for a folder, 400 for a bad address or path, 404 for a missing one, 422 for a refused or private
-   * one, 502 when Git fails) and a refused manifest a 422, each with plain words and `details.code`
-   * (`CapabilityPluginRefusal`); a refused manifest's inspection is kept and named by `details.inspectionId`. A plugin
-   * that is already installed is a 409. No server path is ever sent. The `Idempotency-Key` names the attempt: sent again
-   * by the same operator for the same request while the inspection is kept (24 hours, the newest 50), it gets the
-   * first answer again, the same 201 or the same refused-manifest 422, without fetching or checking anything; with a
-   * different request it is a 409. A source refusal keeps nothing, so its key can be tried again.
+   * one, 502 when its host can't be reached or Git fails) and a refused manifest a 422, each with plain words and
+   * `details.code` (`CapabilityPluginRefusal`); a refused manifest's inspection is kept and named by
+   * `details.inspectionId`. A plugin that is already installed is a 409. No server path is ever sent. The
+   * `Idempotency-Key` names the attempt: sent again by the same operator (or, without sign-in, by any caller, as the
+   * idempotency plugin scopes it) for the same request while the inspection is kept (24 hours, the newest 50), it gets
+   * the first answer again, the same 201 or the same refused-manifest 422, without fetching or checking anything; with
+   * a different request it is a 409. A source refusal keeps nothing, so its key can be tried again.
    */
   fastify.post("/api/v1/capabilities/plugins/inspections", operatorInspect, async (request, reply) => {
     const body = inspectionBodySchema.safeParse(request.body);
@@ -98,6 +105,7 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
         workspaceId: body.data.workspaceId,
         source: body.data.source,
         actorId: actorIdFor(request),
+        actorScope: idempotencyScopeFor(request),
         idempotencyKey: key.data,
         log: request.log,
         // The Gateway's attempt record says this key was answered: only the kept answer may be sent again.
@@ -132,6 +140,15 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
 /** The operator who asked; without an actor from sign-in, the caller's address. */
 function actorIdFor(request: { authActorId?: string; ip?: string }): string {
   return request.authActorId?.trim() || `ip:${request.ip ?? "unknown"}`;
+}
+
+/**
+ * The scope the Gateway's idempotency plugin holds the key under (`plugins/idempotency.ts`): the signed-in actor, or ""
+ * without sign-in. The kept inspection is found by exactly this scope, so a retry the plugin calls answered always
+ * finds its answer, whatever address it comes from.
+ */
+function idempotencyScopeFor(request: { authActorId?: string }): string {
+  return request.authActorId?.trim() || "";
 }
 
 /**

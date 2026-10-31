@@ -5,6 +5,7 @@ import { HOOK_TRIGGER_VALUES } from "./hooks.js";
 import {
   PLUGIN_LIMITS,
   PLUGIN_MANIFEST_FILENAME,
+  isPortablePluginPath,
   parsePluginManifest,
   pluginManifestTooLarge,
   type PluginManifestRefusalCode,
@@ -313,6 +314,28 @@ describe("parsePluginManifest", () => {
         code: "PIECE_PATH_INVALID",
         field: "pieces[0].path",
       },
+      // The paths GoatCitadel's copy of a plugin can't hold are refused here too, so the preflight and an inspection
+      // agree about them.
+      ...[
+        "./skills/notes",
+        "skills/notes/",
+        "skills//notes",
+        "skills/notes.",
+        "skills/con",
+        "skills/a:b",
+        "skills/.git/x",
+      ].map((path) => ({
+        name: `the skill path ${JSON.stringify(path)}`,
+        manifest: withPiece(0, (piece) => ({ ...piece, path })),
+        code: "PIECE_PATH_INVALID" as const,
+        field: "pieces[0].path",
+      })),
+      {
+        name: "a prompt pack path with a trailing space",
+        manifest: withPiece(4, (piece) => ({ ...piece, path: "prompt-packs/checks.md " })),
+        code: "PIECE_PATH_INVALID",
+        field: "pieces[4].path",
+      },
       {
         name: "a prompt pack path that is not .md",
         manifest: withPiece(4, (piece) => ({ ...piece, path: "prompt-packs/checks.txt" })),
@@ -401,6 +424,18 @@ describe("parsePluginManifest", () => {
       expect(refusal.code).toBe(code);
       expect(refusal.field).toBe(field);
       expect(refusal.message.length).toBeGreaterThan(0);
+    });
+
+    it("says why a path is refused, keeping the words for the paths it always refused", () => {
+      const pathMessage = (path: string) => refusalOf(withPiece(0, (piece) => ({ ...piece, path }))).message;
+      expect(pathMessage("/etc/skills")).toBe("A piece's path must be relative to the plugin folder.");
+      expect(pathMessage("skills\\notes")).toBe("A piece's path must use forward slashes.");
+      expect(pathMessage("skills/../notes")).toBe("A piece's path must not contain '..'.");
+      expect(pathMessage("skills/café")).toBe("A piece's path must be NFC-normalized.");
+      expect(pathMessage("skills/notes.")).toBe(
+        'A piece\'s path must be a plain path every computer can hold: no empty or "." parts, no colon, no name that ' +
+          "ends in a dot or a space, no .git folder and no device name such as CON.",
+      );
     });
 
     it("refuses more pieces than the limit", () => {
@@ -522,6 +557,40 @@ describe("parsePluginManifest", () => {
       expect(refusal.code).toBe(code);
       expect(refusal.field).toBe(field);
     });
+  });
+
+  it("holds a plugin path to what every disk can write the same", () => {
+    for (const ok of ["SKILL.md", "skills/a/SKILL.md", "docs/guide.v2.md", "naïve/readme.md", ".github/notes.md"]) {
+      expect(isPortablePluginPath(ok), ok).toBe(true);
+    }
+    for (const bad of [
+      "",
+      "../up.md",
+      "a/../b.md",
+      "/abs.md",
+      "C:/drive.md",
+      "a\\b.md",
+      "a//b.md",
+      "./a.md",
+      "a/",
+      ".git/config",
+      "a/.GIT/config",
+      "a/CON.txt",
+      "a/aux",
+      "a/com1",
+      "a/stream.txt:evil",
+      "a/trailing.",
+      "a/trailing ",
+      "tab\there.md",
+      "nul\u0000.md",
+      "bad\uFFFD.md",
+      "ﬁle.md",
+      "e\u0301.md",
+      `${"a".repeat(256)}/b.md`,
+      `${"a/".repeat(2_049)}b`,
+    ]) {
+      expect(isPortablePluginPath(bad), JSON.stringify(bad)).toBe(false);
+    }
   });
 
   it("refuses duplicate piece ids", () => {

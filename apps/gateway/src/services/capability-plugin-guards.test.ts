@@ -18,11 +18,15 @@ import { describe, expect, it } from "vitest";
 const PLUGIN_SKILL_TOKEN = /\bpluginSkill\b/u;
 const REVIEW_SERVICE = "apps/gateway/src/services/skill-hub-review-service.ts";
 const SOURCE_HELPER = "apps/gateway/src/services/skill-hub-plugin-skill-source.ts";
-// Task 13 creates the inspection service. It is allowed here already, and is expected to appear with that task.
 const INSPECTION_SERVICE = "apps/gateway/src/services/capability-plugin-inspection-service.ts";
 const ALLOWED_FILES = new Set([REVIEW_SERVICE, SOURCE_HELPER, INSPECTION_SERVICE]);
 const HELPER_SPECIFIER = "skill-hub-plugin-skill-source";
-const HELPER_TYPE_IMPORT = /\bimport\s+type\s+[^;]*?\bfrom\s+["'][^"']*\/skill-hub-plugin-skill-source(?:\.js)?["']/gu;
+/**
+ * One `import type` statement of the helper, bounded by its own clause (a default name, `* as name` or one `{ ... }`)
+ * and its `from "..."`, so it never reaches into the next statement when a semicolon is left off.
+ */
+const HELPER_TYPE_IMPORT =
+  /\bimport\s+type\s+(?:\{[^}]*\}|\*\s+as\s+[\w$]+|[\w$]+)\s+from\s+["'][^"']*\/skill-hub-plugin-skill-source(?:\.js)?["']/gu;
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "build", "coverage", "out", "artifacts"]);
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 
@@ -43,9 +47,7 @@ describe("plugin skill review guard", () => {
     const inventory = readInventory();
     // The walk really reached the files that define the input, and the routes that must never carry it.
     const paths = inventory.map((file) => file.relativePath);
-    for (const owner of ALLOWED_FILES) {
-      if (owner !== INSPECTION_SERVICE) expect(paths, owner).toContain(owner);
-    }
+    for (const owner of ALLOWED_FILES) expect(paths, owner).toContain(owner);
     const review = inventory.find((file) => file.relativePath === REVIEW_SERVICE);
     expect(PLUGIN_SKILL_TOKEN.test(review?.content ?? "")).toBe(true);
     expect(paths).toEqual(
@@ -99,6 +101,18 @@ describe("plugin skill review guard", () => {
     ).not.toThrow();
     expect(() =>
       assertHelperImportedOnlyByReview([{ relativePath: INSPECTION_SERVICE, content: multiLineTypeOnly }]),
+    ).not.toThrow();
+    // A type import of another module with no semicolon, then a value import of the helper: the value import is seen.
+    const semicolonless = [
+      'import type { CapabilityPluginInspection } from "@goatcitadel/contracts"',
+      'import { resolvePluginSkillSource } from "./skill-hub-plugin-skill-source.js";',
+    ].join("\n");
+    expect(() =>
+      assertHelperImportedOnlyByReview([{ relativePath: INSPECTION_SERVICE, content: semicolonless }]),
+    ).toThrow(`The plugin skill source helper is imported outside the review: ${INSPECTION_SERVICE}`);
+    const semicolonlessTypeOnly = typeOnly.replace(/;$/u, "");
+    expect(() =>
+      assertHelperImportedOnlyByReview([{ relativePath: INSPECTION_SERVICE, content: semicolonlessTypeOnly }]),
     ).not.toThrow();
     expect(() =>
       assertHelperImportedOnlyByReview([

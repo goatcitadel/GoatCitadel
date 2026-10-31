@@ -64,9 +64,10 @@ export interface CapabilityPluginSettingRows {
   ): Promise<CapabilityPluginSettingRecord | undefined>;
 }
 
-/** The request an inspection answered, so the same key from the same operator gets the same answer again. */
+/** The request an inspection answered, so the same key in the same scope gets the same answer again. */
 export interface CapabilityPluginInspectionRequestKey {
-  actorId: string;
+  /** The scope the Gateway's idempotency plugin holds the key under: the signed-in actor, or "" without sign-in. */
+  actorScope: string;
   idempotencyKey: string;
   /** The SHA-256 of the request's workspace and source, so a key reused for another check is told apart. */
   payloadSha256: string;
@@ -148,15 +149,17 @@ export class CapabilityPluginStore {
     return { inspection: kept.inspection, snapshotTreeSha256: kept.snapshotTreeSha256 };
   }
 
-  /** The kept inspection that answered this operator's key, unless it has run out of time or been dropped. */
+  /** The kept inspection that answered this key in this scope, unless it has run out of time or been dropped. */
   public async findInspectionByRequest(
-    actorId: string,
+    actorScope: string,
     idempotencyKey: string,
   ): Promise<{ inspection: CapabilityPluginInspection; payloadSha256: string } | undefined> {
     const nowMs = this.now().getTime();
     const kept = (await this.read()).value.inspections.find(
       (item) =>
-        item.request?.actorId === actorId && item.request.idempotencyKey === idempotencyKey && !hasExpired(item, nowMs),
+        item.request?.actorScope === actorScope &&
+        item.request.idempotencyKey === idempotencyKey &&
+        !hasExpired(item, nowMs),
     );
     return kept?.request ? { inspection: kept.inspection, payloadSha256: kept.request.payloadSha256 } : undefined;
   }
