@@ -6,7 +6,10 @@ import {
   type DesignAdvisory,
 } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
-import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
+import {
+  getChatToolRunDiagnostics,
+  isFailedCodeModeRequest,
+} from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 const ChatOpenCodeEvidence = lazy(async () => ({
@@ -20,6 +23,7 @@ import { groupToolRunRetries } from "./chat-tool-run-groups";
 import { summarizeTurnToolRuns, toolRunTarget, type ToolRunTarget } from "./chat-tool-run-summary";
 import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
+import { failureLine, failureReason } from "./code-mode-request-copy";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
@@ -60,10 +64,17 @@ function readDesignAdvisories(tool: ChatToolRunRecord): DesignAdvisory[] {
   });
 }
 
+/** A Code Mode request whose code failed settles as a call, so its recorded error is in its result. */
+const failedRequestError = (tool: ChatToolRunRecord): string =>
+  isFailedCodeModeRequest(tool) ? failureReason(tool) : "";
+
 function toolRunSummaryText(tool: ChatToolRunRecord): string {
+  const requestError = failedRequestError(tool);
   return (
     // An approved call that settled records empty guidance, which is no guidance.
     tool.failureGuidance ||
+    // A failed Code Mode request reads as its card says it; the recorded error stays under technical details.
+    (requestError ? failureLine(requestError) : "") ||
     getChatToolRunDiagnostics(tool).summary ||
     (tool.error ? presentErrorText(tool.error).summary : "")
   );
@@ -237,6 +248,7 @@ export function ChatTurnDetails({
               const target = toolRunTarget(tool);
               const changes = toolRunLineChanges(tool);
               const duration = toolRunDuration(tool);
+              const requestError = failedRequestError(tool);
               return (
                 <li key={key} data-tool-run-id={tool.toolRunId} className="flex flex-wrap justify-between gap-2 py-2">
                   <span className="min-w-0 text-fg-secondary">
@@ -268,6 +280,13 @@ export function ChatTurnDetails({
                   {tool.error ? (
                     <div className="w-full">
                       <RecordedErrorDetails error={tool.error} />
+                    </div>
+                  ) : null}
+                  {requestError && requestError !== tool.error && requestError !== failureLine(requestError) ? (
+                    <div className="w-full">
+                      <TechnicalDetails label="Recorded error">
+                        <p className="break-all font-mono text-xs">{requestError}</p>
+                      </TechnicalDetails>
                     </div>
                   ) : null}
                   {effect ? <p className="w-full">{effect.plainSummary}</p> : null}

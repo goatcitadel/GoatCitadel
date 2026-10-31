@@ -244,6 +244,28 @@ describe("ChatTurnDetails tool rows", () => {
     expect(row.textContent).toContain("Code Mode is off.");
   });
 
+  it("says why a Code Mode request failed in plain words, with its recorded error under technical details", () => {
+    const error =
+      "WRAPPER_EXECUTION_FAILED: Wrapper docs.extract_text did not execute: execution error: Path is outside read allowlist: /tmp/a.pdf";
+    const failed = {
+      ...toolRun({ runId: "r1", status: "failed", error, durationMs: 0 }),
+      toolName: "code_mode.request",
+      args: { goal: "read a file" },
+    } as ChatToolRunRecord;
+    const row = () => container.querySelector('[data-tool-run-id="tool-run-1"]')!;
+    render(turnWith([failed]));
+    expect(row().textContent).toContain("The code couldn't read a file.");
+    expect(row().textContent).not.toContain("WRAPPER_EXECUTION_FAILED");
+    preferences.showTechnicalDetails = true;
+    try {
+      render(turnWith([{ ...failed }]));
+      expect(row().textContent).toContain("Recorded error");
+      expect(row().textContent).toContain(error);
+    } finally {
+      preferences.showTechnicalDetails = false;
+    }
+  });
+
   it("names what a call touched, how long it took and the lines it changed", () => {
     const edit = {
       ...toolRun({ bytesWritten: 1 }),
