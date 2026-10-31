@@ -74,9 +74,14 @@ describe("code_mode.request executor", () => {
   it("tells the model to list every file the script reads in reads, because nothing else can be read", () => {
     const definition = createDefaultToolRegistry().get(CODE_MODE_REQUEST_TOOL_NAME);
     const reads = (definition?.argSchema?.properties as Record<string, { description?: string }>).reads;
-    expect(reads?.description).toMatch(/every file path and attachment ID/i);
-    expect(reads?.description).toMatch(/can read only these/);
-    expect(definition?.usageHints?.join(" ")).toMatch(/`reads`/);
+    expect(reads?.description).toMatch(/every file path, folder path \(for fs\.list\) and attachment ID/i);
+    expect(reads?.description).toMatch(/each helper call must name one of these; with none the script reads no files/);
+    const hints = definition?.usageHints?.join(" ") ?? "";
+    expect(hints).toMatch(/`reads`/);
+    // The hint names only the helpers a request run can call, each with the target it must name.
+    expect(hints).toMatch(/fs\.read, file\.read_range, fs\.stat, docs\.extract_text or docs\.read_bytes on a path/);
+    expect(hints).toMatch(/fs\.list on a folder listed in `reads`/);
+    expect(hints).not.toMatch(/file\.find|code\.search|session\.search/);
   });
 
   it("fails plainly when the runtime has no Code Mode hook", async () => {
