@@ -477,7 +477,7 @@ Shared packages:
 - [packages/memory-core](./packages/memory-core): context and memory composition utilities
 - [packages/mesh-core](./packages/mesh-core): multi-node mesh runtime primitives (join tokens, mTLS/tailnet posture, leases, owner failover, replication)
 - [packages/skills](./packages/skills): skill loading and activation support
-- [packages/extensions-sdk](./packages/extensions-sdk): author SDK for add-ons and integration plugins
+- [packages/extensions-sdk](./packages/extensions-sdk): author SDK for the effective-tool snapshot helpers
 - [packages/threaded-surface-core](./packages/threaded-surface-core): shared threaded-surface runtime components behind Chat
 - [packages/mission-control-shared](./packages/mission-control-shared): shared Mission Control API clients, hooks, and UI primitives
 
@@ -493,7 +493,7 @@ Use the smallest lane that proves your change. The full lane set:
 | Code Mode & sandbox | `verify:code-mode:sandbox` · `verify:code-mode:hostile-sandbox` · `verify:code:workbench-loop` |
 | Contracts & compatibility | `verify:api:compat` · `verify:auth:matrix` · `verify:ui:parity` · `verify:catalog:parity` · `verify:memory:truth` · `verify:realtime:truth` · `verify:mesh:readiness` · `verify:mcp:conformance` · `verify:a2a:full` · `verify:channels:runtime` · `verify:storage:migration-parity` |
 | Security & supply chain | `security:trivy` · `verify:supply-chain` · `verify:security:evals` · `verify:artifacts:redaction` · `verify:repo:hygiene` |
-| Ecosystem & packaging | `verify:extensions:package` · `verify:extensions:package:from-build` · `verify:plugins:marketplace` · `verify:skills:catalog` · `verify:workflows` · `verify:design:quality` · `verify:deep:core` · `verify:deep:ecosystem` |
+| Ecosystem & packaging | `verify:extensions:package` · `verify:extensions:package:from-build` · `verify:skills:catalog` · `verify:workflows` · `verify:design:quality` · `verify:deep:core` · `verify:deep:ecosystem` |
 | Architecture guard | `verify:architecture:metrics` |
 
 `verify:review` is the final review step for a completed `verify:all` artifact. It intentionally refuses an
@@ -538,7 +538,7 @@ Safe public claims today:
 - Backup create/list/verify are shipped, and backup verify reports both archive integrity and `contractVerified` minimum-set truth.
 - `verify:backup:roundtrip` now restores and verifies the full minimum operator backup set: SQLite state, transcripts, audit logs, and every runtime `config/*.json` file.
 - Filesystem-backed restore is offline-only for `1.0`; the live admin restore route returns `offline_restore_required` instead of mutating an active runtime.
-- `@goatcitadel/extensions-sdk` is the author boundary for add-ons and integration plugins.
+- `@goatcitadel/extensions-sdk` is the author boundary for the effective-tool snapshot helpers. `1.0.0` is the last published version; the workspace's `2.0.0` keeps only those helpers and is not published yet.
 - Docker adds a useful runtime boundary when paired with auth and policy configuration.
 - Multi-user RBAC is not shipped for `1.0`; gateway auth is deployment-level while permission profiles, tool grants, route access classes, Local Operator Override, and deny-wins policy govern actions inside the authenticated runtime.
 
@@ -574,7 +574,7 @@ Do not claim without fresh proof:
 - [docs/LLAMA_CPP_INTEGRATION_MEMO.md](./docs/LLAMA_CPP_INTEGRATION_MEMO.md)
 - [docs/INSTALL_SETUP_TESTING.md](./docs/INSTALL_SETUP_TESTING.md)
 - [docs/ENGINEERING_HANDBOOK.md](./docs/ENGINEERING_HANDBOOK.md)
-- [docs/PLUGIN_SDK_CONTRACT.md](./docs/PLUGIN_SDK_CONTRACT.md)
+- [docs/PLUGIN_SDK_CONTRACT.md](./docs/PLUGIN_SDK_CONTRACT.md) (Extensions SDK contract)
 - [docs/security/findings-triage.md](./docs/security/findings-triage.md)
 
 ## Repo Layout
@@ -583,7 +583,7 @@ Do not claim without fresh proof:
 apps/                                      product runtimes and UI
 packages/                                  shared libraries and runtime modules
 scripts/                                   repo automation and verification
-templates/                                 add-on, integration, companion, and verification templates
+templates/                                 companion, Obsidian, and verification templates
 config/*.example.json                      public config templates
 docs/brand/                                optimized public brand assets used by this README
 scripts/verification/baselines/visual/     checked-in Mission Control visual baselines

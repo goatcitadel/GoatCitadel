@@ -393,8 +393,11 @@ if (/public SDK story is still partial/i.test(pluginSdkDoc) || /no published Typ
 if (!/@goatcitadel\/extensions-sdk/.test(pluginSdkDoc)) {
   errors.push("docs/PLUGIN_SDK_CONTRACT.md must name @goatcitadel/extensions-sdk explicitly.");
 }
+if (!/@goatcitadel\/extensions-sdk@2\.0\.0/.test(pluginSdkDoc)) {
+  errors.push("docs/PLUGIN_SDK_CONTRACT.md must describe the 2.0.0 SDK package, which keeps only the effective-tools helpers.");
+}
 if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
-  errors.push("docs/PLUGIN_SDK_CONTRACT.md must describe the stable published 1.0.0 SDK package boundary.");
+  errors.push("docs/PLUGIN_SDK_CONTRACT.md must say that 1.0.0 is the last published SDK version.");
 }
 
 const contract = await readFile(path.join(root, "docs", "1_0_CONTRACT.md"), "utf8");
@@ -714,8 +717,14 @@ for (const fileName of visualBaselineCoverage.unexpectedFiles) {
 
 // The root package carries the released product-line version (0.1.0 RC since
 // 2026-07-04); workspace packages stay on their independently published 1.0.0
-// line. A deliberate version bump must update this pin in the same change.
-const expectedPackageVersions = { "package.json": "0.1.0-rc.1" };
+// line. The extensions SDK is the exception: it moved to 2.0.0 when integration
+// plugins and add-ons left it, though 1.0.0 stays its last published version
+// until 2.0.0 is tagged. A deliberate version bump must update this pin in the
+// same change.
+const expectedPackageVersions = {
+  "package.json": "0.1.0-rc.1",
+  "packages/extensions-sdk/package.json": "2.0.0",
+};
 
 for (const relPath of workspacePackageFiles) {
   const parsed = JSON.parse(await readFile(path.join(root, relPath), "utf8"));

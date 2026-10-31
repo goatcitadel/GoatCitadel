@@ -1,15 +1,15 @@
 # Security Policy
 
-Last updated: 2026-07-25
+Last updated: 2026-10-30
 
 ## Supported Versions
 
-The published product line is the `0.1.0-rc.1` release candidate, shipped as the GitHub prerelease `GoatCitadel 0.1.0 RC`. Workspace libraries such as `@goatcitadel/extensions-sdk` are versioned and published independently on their own `1.0.0` line. Security support follows the current published release candidate first; source builds are supported at the current `main` commit only.
+The published product line is the `0.1.0-rc.1` release candidate, shipped as the GitHub prerelease `GoatCitadel 0.1.0 RC`. Workspace libraries such as `@goatcitadel/extensions-sdk` are versioned and published independently of the product. `@goatcitadel/extensions-sdk@1.0.0` is the last published version; the workspace's `2.0.0` is not published yet. Security support follows the current published release candidate first; source builds are supported at the current `main` commit only.
 
 | Line | Supported |
 |---|---|
 | `0.1.0-rc.x` release candidate | Yes |
-| Published workspace packages on `1.0.0` (for example `@goatcitadel/extensions-sdk`) | Yes |
+| Published workspace packages (today `@goatcitadel/extensions-sdk@1.0.0`, and `2.0.0` once it is published) | Yes |
 | `main` source builds | Best effort, current commit only |
 | The historical `v1.0.0` git tag and earlier prerelease builds | No |
 

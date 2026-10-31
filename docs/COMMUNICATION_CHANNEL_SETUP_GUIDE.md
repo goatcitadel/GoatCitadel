@@ -645,7 +645,6 @@ Channel maturity is now truth-based:
 
 - `native`: built-in and broadly supported in the current runtime
 - `beta`: implemented in the current runtime but still stabilizing
-- `plugin`: available through an installed plugin adapter
 - `disabled`: cataloged but not available in the current runtime
 
 Visible built-in channels must now resolve to `native` or `beta` in the catalog. Runtime availability remains a separate signal so operators can distinguish between "implemented but currently blocked" and "implemented and runnable now."
