@@ -326,6 +326,57 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
     await live.approvalEffectsService.awaitResolutionEffects(turn.approvalId);
     await expectTurnResumed(live, turn.approvalId, turn.turnId, turn.runId);
   });
+
+  it("docs.* reads an attachment only in the session it was uploaded to", async () => {
+    const live = await startGateway();
+    const now = new Date().toISOString();
+    for (const sessionId of ["session-attachment-owner", "session-attachment-other"]) {
+      await live.storage.sessions.upsert({
+        sessionId,
+        sessionKey: `mission:operator:${sessionId}`,
+        kind: "dm",
+        channel: "mission",
+        account: "operator",
+        timestamp: now,
+      });
+      await live.storage.chatSessionMeta.ensure(sessionId, now, "default");
+    }
+    const uploaded = await live.routeServices.chatAttachments.uploadChatAttachment({
+      sessionId: "session-attachment-owner",
+      fileName: "saturday-plan.txt",
+      mimeType: "text/plain",
+      bytesBase64: Buffer.from("Farmers market at nine").toString("base64"),
+    });
+    // Outside a Code Mode run the call asks first; the approved call runs the gateway's attachment hook.
+    const extract = async (sessionId: string) => {
+      const requested = await live.invokeTool({
+        toolName: "docs.extract_text",
+        args: { attachmentId: uploaded.attachmentId },
+        agentId: "assistant",
+        sessionId,
+        workspaceId: "default",
+        surface: "chat",
+        policyContext: { authActorSource: "loopback", operatorId: "operator", surface: "chat" },
+      });
+      expect(requested.outcome).toBe("approval_required");
+      const resolved = await live.resolveApproval(requested.approvalId!, {
+        decision: "approve",
+        resolvedBy: "operator",
+      });
+      return resolved.effects.find((effect) => effect.effectKind === "pending_action_execute")?.result;
+    };
+
+    expect(await extract("session-attachment-owner")).toMatchObject({
+      outcome: "executed",
+      result: { name: "saturday-plan.txt", text: "Farmers market at nine" },
+    });
+    const other = await extract("session-attachment-other");
+    expect(other).toMatchObject({
+      outcome: "blocked",
+      policyReason: "execution error: Attachment is not part of this session.",
+    });
+    expect(JSON.stringify(other)).not.toContain("Farmers market");
+  });
 });
 
 const POST_COMMIT_ELIGIBILITY = {
