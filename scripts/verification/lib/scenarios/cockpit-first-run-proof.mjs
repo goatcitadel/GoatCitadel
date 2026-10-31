@@ -203,7 +203,8 @@ export async function runCockpitFirstRunGuardProof({ context, stack, requestJson
             // after that read, or it answers Keep instead of the Finish preflight and Finish stays disabled.
             await area.getByRole("status").filter({ hasText: "Current approval rule reviewed." }).waitFor();
             const finish = area.getByRole("button", { name: "Finish setup and open Chat", exact: true });
-            await finish.waitFor();
+            // Finish is always rendered; arm only once it is enabled, so the click sends the preflight at once.
+            await area.getByRole("button", { name: "Finish setup and open Chat", exact: true, disabled: false }).waitFor();
             staleRead = true;
             await finish.click();
             // The Finish preflight's own refusal, not Keep current rule's "Setup changed. Review …".
