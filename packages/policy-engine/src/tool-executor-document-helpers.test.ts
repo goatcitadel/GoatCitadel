@@ -206,6 +206,36 @@ describe("document helper tools", () => {
     expect(past).not.toHaveProperty("nextOffset");
   });
 
+  it("reads only the requested window of an attachment", async () => {
+    const bytes = Buffer.from(Array.from({ length: 70_000 }, (_, index) => index % 7));
+    // A ranged hook returns just the window and the full size, as the gateway's positioned read does.
+    const readAttachmentBytes = vi.fn(
+      async (_request: ToolInvokeRequest, _attachmentId: string, window: { start: number; maxBytes: number }) => ({
+        fileName: "a.bin",
+        mimeType: "application/octet-stream",
+        bytes: bytes.subarray(window.start, window.start + window.maxBytes),
+        totalBytes: bytes.length,
+      }),
+    );
+    const config = createConfig(createRoot());
+    const page = await executeTool(
+      request("docs.read_bytes", { attachmentId: "att_1", offset: 65_536 }),
+      config,
+      storage,
+      { readAttachmentBytes },
+    );
+    expect(readAttachmentBytes.mock.calls[0]?.[2]).toEqual({ start: 65_536, maxBytes: 65_536 });
+    expect(Buffer.from(String(page.base64), "base64").equals(bytes.subarray(65_536))).toBe(true);
+    expect(page).toMatchObject({ sizeBytes: 70_000, offset: 65_536 });
+    expect(page).not.toHaveProperty("nextOffset");
+
+    await executeTool(request("docs.extract_text", { attachmentId: "att_1" }), config, storage, {
+      readAttachmentBytes,
+    }).catch(() => undefined);
+    // Text extraction asks for the whole file up to its memory guard, so the size check runs before the read.
+    expect(readAttachmentBytes.mock.calls[1]?.[2]).toEqual({ start: 0, maxBytes: 64 * 1024 * 1024 });
+  });
+
   it("pages an attachment through docs.read_bytes", async () => {
     const bytes = Buffer.from(Array.from({ length: 70_000 }, (_, index) => index % 7));
     const readAttachmentBytes = vi.fn(async () => ({ fileName: "a.bin", mimeType: "application/octet-stream", bytes }));

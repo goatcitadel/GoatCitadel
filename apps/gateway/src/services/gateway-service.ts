@@ -1476,13 +1476,11 @@ export class GatewayService {
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
-      readAttachmentBytes: async (request, attachmentId) => {
-        const loaded = await this.readChatAttachmentContent(attachmentId);
-        // Session-scoped: a run can read only attachments uploaded to the session it runs in.
-        if (loaded.record.sessionId !== request.sessionId) {
-          throw new Error("Attachment is not part of this session.");
-        }
-        return { fileName: loaded.record.fileName, mimeType: loaded.record.mimeType, bytes: loaded.bytes };
+      readAttachmentBytes: async (request, attachmentId, window) => {
+        // Session-scoped (checked before any bytes are read) and ranged: only the call's window is read.
+        const loaded = await this.readChatAttachmentContent(attachmentId, { sessionId: request.sessionId, window });
+        const { fileName, mimeType, sizeBytes: totalBytes } = loaded.record;
+        return { fileName, mimeType, bytes: loaded.bytes, totalBytes };
       },
       resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
       resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
@@ -9145,12 +9143,11 @@ export class GatewayService {
     return await chatAttachmentService.getChatAttachment(this.buildChatAttachmentHost(), attachmentId);
   }
 
-  private async readChatAttachmentContent(attachmentId: string): Promise<{
-    record: ChatAttachmentRecord;
-    fullPath: string;
-    bytes: Buffer;
-  }> {
-    return chatAttachmentService.readChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId);
+  private async readChatAttachmentContent(
+    attachmentId: string,
+    options?: Parameters<typeof chatAttachmentService.readChatAttachmentContent>[2],
+  ): Promise<{ record: ChatAttachmentRecord; fullPath: string; bytes: Buffer }> {
+    return chatAttachmentService.readChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId, options);
   }
 
   private buildChatAttachmentHost(): chatAttachmentService.ChatAttachmentHost {

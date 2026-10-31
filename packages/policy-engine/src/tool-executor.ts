@@ -139,11 +139,15 @@ export function setShellOutputRetentionBytesForTesting(
 export type { ChannelEnvSecretRequest, ChannelEnvSecretResolution };
 
 export interface ToolExecutorRuntimeHooks {
-  /** Gateway-owned, session-scoped read of a chat attachment's stored bytes for the document helpers. */
+  /**
+   * Gateway-owned, session-scoped read of a chat attachment's stored bytes for the document helpers: the window
+   * the call needs, with `totalBytes` set when only that window was read.
+   */
   readAttachmentBytes?: (
     request: ToolInvokeRequest,
     attachmentId: string,
-  ) => Promise<{ fileName: string; mimeType: string; bytes: Buffer }>;
+    window: { start: number; maxBytes: number },
+  ) => Promise<{ fileName: string; mimeType: string; bytes: Buffer; totalBytes?: number }>;
   /**
    * Gateway-owned eligibility for writes outside every write root (an ordinary
    * interactive session, not a delegated child, A2A peer, or mesh node). Absent

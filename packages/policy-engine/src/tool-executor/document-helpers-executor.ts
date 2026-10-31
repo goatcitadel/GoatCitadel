@@ -25,7 +25,16 @@ const DOCUMENT_HELPER_TOOL_NAMES = new Set(["docs.read_bytes", "docs.extract_tex
 export interface DocumentHelperAttachmentBytes {
   fileName: string;
   mimeType: string;
+  /** The requested window, or the whole attachment when `totalBytes` is unset. */
   bytes: Buffer;
+  /** The attachment's full size; set when `bytes` holds only the requested window. */
+  totalBytes?: number;
+}
+
+/** The byte window a helper call needs: up to `maxBytes` from `start`. */
+export interface DocumentHelperAttachmentWindow {
+  start: number;
+  maxBytes: number;
 }
 
 export interface DocumentHelperExecutorDeps {
@@ -35,7 +44,11 @@ export interface DocumentHelperExecutorDeps {
     config: ToolPolicyConfig,
     storage: AsyncStorage,
   ) => Promise<void>;
-  readAttachmentBytes?: (request: ToolInvokeRequest, attachmentId: string) => Promise<DocumentHelperAttachmentBytes>;
+  readAttachmentBytes?: (
+    request: ToolInvokeRequest,
+    attachmentId: string,
+    window: DocumentHelperAttachmentWindow,
+  ) => Promise<DocumentHelperAttachmentBytes>;
 }
 
 export function isDocumentHelperToolName(toolName: string): boolean {
@@ -115,13 +128,18 @@ async function resolveSource(
   if (!deps.readAttachmentBytes) {
     throw new Error("Attachments are not readable here.");
   }
-  const loaded = await deps.readAttachmentBytes(request, attachmentId as string);
-  const start = Math.min(startByte, loaded.bytes.length);
+  // Ask for just the window, so a ranged hook reads one page instead of the whole attachment per call.
+  const loaded = await deps.readAttachmentBytes(request, attachmentId as string, { start: startByte, maxBytes });
+  const totalBytes = loaded.totalBytes ?? loaded.bytes.length;
+  const start = Math.min(startByte, totalBytes);
   return {
     name: loaded.fileName,
-    bytes: loaded.bytes.subarray(start, start + maxBytes),
-    cut: loaded.bytes.length - start > maxBytes,
-    totalBytes: loaded.bytes.length,
+    bytes:
+      loaded.totalBytes === undefined
+        ? loaded.bytes.subarray(start, start + maxBytes)
+        : loaded.bytes.subarray(0, maxBytes),
+    cut: totalBytes - start > maxBytes,
+    totalBytes,
   };
 }
 
