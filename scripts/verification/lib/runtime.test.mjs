@@ -3,6 +3,7 @@ import { test } from "node:test";
 
 import {
   buildVerificationGatewayCommand,
+  buildVerificationGatewayEnv,
   buildVerificationProcessEnv,
   buildVerificationProcessLogName,
   buildVerificationUiCommand,
@@ -90,6 +91,26 @@ test("verification stacks name their UI origin for a Gateway that does not trust
   // A Gateway-only stack changes nothing.
   const gatewayOnly = { GOATCITADEL_AUTH_MODE: "none" };
   assert.equal(withVerificationUiOrigin(gatewayOnly, undefined, {}), gatewayOnly);
+});
+
+test("a verification Gateway launches without an inherited origin list its lane omits", () => {
+  const uiUrl = "http://127.0.0.1:37407";
+  const inherited = { PATH: "safe-path", GOATCITADEL_ALLOWED_ORIGINS: "https://citadel.example.com" };
+  const launchEnv = (gatewayEnvOmit) =>
+    // What startProcess hands the Gateway process.
+    buildVerificationProcessEnv(
+      inherited,
+      buildVerificationGatewayEnv({ runtimeRoot: "isolated-root", gatewayPort: 41000, uiUrl, gatewayEnvOmit }, inherited),
+      gatewayEnvOmit,
+    );
+
+  const omitted = launchEnv(["GOATCITADEL_ALLOWED_ORIGINS"]);
+  assert.doesNotMatch(omitted.GOATCITADEL_ALLOWED_ORIGINS, /citadel\.example\.com/u);
+  assert.match(omitted.GOATCITADEL_ALLOWED_ORIGINS, /(^|,)http:\/\/127\.0\.0\.1:37407$/u);
+  assert.equal(omitted.GOATCITADEL_AUTH_MODE, "none");
+  assert.equal(omitted.GATEWAY_PORT, "41000");
+  assert.equal(omitted.PATH, "safe-path");
+  assert.equal(launchEnv([]).GOATCITADEL_ALLOWED_ORIGINS, `https://citadel.example.com,${uiUrl}`);
 });
 
 test("verification Gateway launch directly owns the runtime process", () => {

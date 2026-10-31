@@ -40,24 +40,13 @@ export async function startVerificationStack(context, options = {}) {
   // Chosen before the Gateway starts so its origin policy can name the UI (see withVerificationUiOrigin).
   const uiPort = options.includeUi !== false ? await resolveUiPort(options.uiPort, gatewayPort) : undefined;
   const uiUrl = uiPort ? `http://127.0.0.1:${uiPort}` : undefined;
-  const gatewayEnv = withVerificationUiOrigin(
-    {
-      GOATCITADEL_ROOT_DIR: runtimeRoot,
-      GATEWAY_HOST: "127.0.0.1",
-      GATEWAY_PORT: String(gatewayPort),
-      GOATCITADEL_AUTH_MODE: "none",
-      GOATCITADEL_DATABASE_DRIVER: "sqlite",
-      GOATCITADEL_DISABLE_SECRET_STORE: "true",
-      GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
-      GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
-      // The Gateway otherwise reads, and copies to verify, the operator's real ~/.GoatCitadel/backups.
-      GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
-      ...options.gatewayEnv,
-    },
+  const gatewayEnv = buildVerificationGatewayEnv({
+    runtimeRoot,
+    gatewayPort,
     uiUrl,
-    // Only what the Gateway would inherit: a lane that omits the shell's origin list must not get it back here.
-    buildVerificationProcessEnv(process.env, {}, options.gatewayEnvOmit),
-  );
+    gatewayEnv: options.gatewayEnv,
+    gatewayEnvOmit: options.gatewayEnvOmit,
+  });
 
   const gateway =
     options.gatewayMode === "built"
@@ -234,6 +223,31 @@ export async function startProcess(context, name, commandArgs, extraEnv, options
     child.once("error", flush);
   });
   return handle;
+}
+
+/** The verification stack's own Gateway variables; startProcess merges them over the inherited env. */
+export function buildVerificationGatewayEnv(
+  { runtimeRoot, gatewayPort, uiUrl, gatewayEnv, gatewayEnvOmit },
+  baseEnv = process.env,
+) {
+  return withVerificationUiOrigin(
+    {
+      GOATCITADEL_ROOT_DIR: runtimeRoot,
+      GATEWAY_HOST: "127.0.0.1",
+      GATEWAY_PORT: String(gatewayPort),
+      GOATCITADEL_AUTH_MODE: "none",
+      GOATCITADEL_DATABASE_DRIVER: "sqlite",
+      GOATCITADEL_DISABLE_SECRET_STORE: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_ENABLED: "true",
+      GOATCITADEL_DEV_DIAGNOSTICS_VERBOSE: "false",
+      // The Gateway otherwise reads, and copies to verify, the operator's real ~/.GoatCitadel/backups.
+      GOATCITADEL_BACKUP_DIR: path.join(runtimeRoot, "backups"),
+      ...gatewayEnv,
+    },
+    uiUrl,
+    // Only what the Gateway would inherit: a lane that omits the shell's origin list must not get it back here.
+    buildVerificationProcessEnv(baseEnv, {}, gatewayEnvOmit),
+  );
 }
 
 export function buildVerificationProcessEnv(baseEnv, extraEnv = {}, omitEnv = []) {
