@@ -1,6 +1,6 @@
 NOTICE
 
-This directory vendors prose from impeccable (https://github.com/pbakaus/impeccable), copyright its contributors, licensed under the Apache License, Version 2.0 (see the LICENSE file in this directory). Vendored at commit c63b8dd7dd5a5f3c32eaabe1af76d0694f863ed2.
+This directory vendors prose from impeccable (https://github.com/pbakaus/impeccable), copyright its contributors, licensed under the Apache License, Version 2.0 (see the LICENSE file in this directory). Vendored at commit 4f956490f0056ae1ff5ea80372cf56e83c001d3c.
 
 The vendored files were modified for the GoatCitadel runtime: the launcher, hooks, live mode, doctor, pin shortcuts, and native-platform references were removed, upstream placeholders were resolved, oversize references were split by section, and the SKILL.md Setup section now reads the workspace design context. UPSTREAM.md lists every file, hash, exclusion, and transform.
 

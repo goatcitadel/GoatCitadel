@@ -22,6 +22,7 @@ All notable changes to GoatCitadel are documented in this file.
 
 ### Changed
 
+- The impeccable design skill is refreshed to upstream `4f95649`: typesetting covers line breaks (`text-wrap: balance` and `pretty`), hardening covers Arabic script, ambition scales with the surface's mode (bold for marketing and experience pages, precise and restrained for operational and reading surfaces), and a brief can no longer override a craft-floor line marked as a ban. Upstream's new desktop-app and native-platform critique steps are not vendored.
 - A Slack post that arrives twice, as a message and as an `app_mention`, runs one turn. Slack events now dedupe on the post's channel and timestamp instead of the event id. A retry that straddles the upgrade may run once more.
 - On a Discord connection that lets only allowlisted senders in, an owner who is also on the allowlist skips the pairing code in direct messages, and the default server channel answers only the allowlisted senders. The owner mark affects only that direct-message skip, so clearing it never opens the channel to everyone, and an owner mark without the allowlist entry changes nothing.
 - The Slack tile in the channel picker no longer says receiving needs a public web address.
