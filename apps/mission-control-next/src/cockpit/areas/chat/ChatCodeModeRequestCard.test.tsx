@@ -494,11 +494,23 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     });
     await render(doneTurn());
     await act(async () => button("Keep as a tool")!.click());
-    await waitFor(() => expect(container.textContent).toContain("Saved as a tool for review"));
+    // The lifecycle approval was approved in the same click, so the tool is promoted, not waiting on review.
+    await waitFor(() => expect(rowText()).toContain("Saved as a tool"));
+    expect(rowText()).not.toContain("for review");
     expect(api.keepCodeModeRun).toHaveBeenCalledWith("r1", expect.objectContaining({ summary: GOAL }));
     expect(api.keepCodeModeRun.mock.calls[0]![1].name).toBe("Read The Text Of Saturday-Plan.Pdf");
     expect(api.promoteCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 1, "version-1");
     expect(api.resolveApproval).toHaveBeenCalledWith("approval-life", "approve");
+  });
+
+  it("shows Saved as a tool when the tool was already promoted", async () => {
+    api.keepCodeModeRun.mockResolvedValue(staged);
+    api.promoteCapabilityCandidate.mockResolvedValue({ pendingApproval: null, noMutationRequired: true, detail: {} });
+    await render(doneTurn());
+    await act(async () => button("Keep as a tool")!.click());
+    await waitFor(() => expect(rowText()).toContain("Saved as a tool"));
+    expect(rowText()).not.toContain("for review");
+    expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 
   it("shows Saved as a tool for review when promote returns a change plan", async () => {
@@ -512,5 +524,14 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await act(async () => button("Keep as a tool")!.click());
     await waitFor(() => expect(container.textContent).toContain("Saved as a tool for review"));
     expect(api.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("says so when the tool was saved but could not be turned on here", async () => {
+    api.keepCodeModeRun.mockResolvedValue(staged);
+    api.promoteCapabilityCandidate.mockRejectedValue(new Error("Revision changed."));
+    await render(doneTurn());
+    await act(async () => button("Keep as a tool")!.click());
+    await waitFor(() => expect(rowText()).toContain("Saved as a tool for review. It couldn't be turned on here."));
+    expect(container.querySelector('a[href*="/capabilities"]')).not.toBeNull();
   });
 });
