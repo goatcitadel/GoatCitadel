@@ -201,8 +201,22 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     } as unknown as ChatThreadTurnRecord;
     render(parked);
     expect(tools().open).toBe(false);
+    // After Deny or Run it the same turn continues without a browser stream; the card already states the request.
+    const continuing = (run: ChatToolRunRecord) =>
+      ({ ...turnWith([run]), trace: { status: "running" } }) as unknown as ChatThreadTurnRecord;
+    const denied = { ...request, status: "blocked", error: "Denied by the operator." } as ChatToolRunRecord;
+    render(continuing(denied));
+    expect(tools().open).toBe(false);
     // Denied (blocked) and failed requests are already stated by the Code Mode card in the reply.
-    render(turnWith([{ ...request, status: "blocked", error: "Denied by the operator." } as ChatToolRunRecord]));
+    render(turnWith([denied]));
+    expect(tools().open).toBe(false);
+    render(parked);
+    const ran = { ...request, result: { status: "completed", value: 3 } } as ChatToolRunRecord;
+    render(continuing({ ...ran, status: "started" } as ChatToolRunRecord));
+    expect(tools().open).toBe(false);
+    render(continuing(ran));
+    expect(tools().open).toBe(false);
+    render(turnWith([ran]));
     expect(tools().open).toBe(false);
     render(turnWith([{ ...request, result: { status: "failed", error: "Code Mode is off." } } as ChatToolRunRecord]));
     expect(tools().open).toBe(false);
