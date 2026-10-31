@@ -112,12 +112,19 @@ function isSwitchedOffRun(run: ChatToolRunRecord): boolean {
 }
 
 // The policy engine's reason when a plugin's hold, not the operator's switch, keeps the group off: it names the first
-// plugin that holds it, then the group's label.
-const PLUGIN_HOLD_PATTERN = /tool group switched off by the plugin (.+?)(?: \([^()]*\))?\s*$/u;
+// plugin that holds it, then the group's label, or says "a plugin" when it has no name to give.
+const PLUGIN_HOLD_PATTERN = /tool group switched off by (?:the plugin (.+?)|a plugin)(?: \([^()]*\))?\s*$/u;
+/** Stands in for a holder the engine couldn't name, so the guidance still points to uninstalling a plugin. */
+const UNNAMED_PLUGIN = "a plugin";
 
-/** The plugin the engine named for a hold, or undefined when the operator's switch (or no reason) stopped the tool. */
+/**
+ * The plugin the engine named for a hold ("a plugin" when it gave no name), or undefined when the operator's switch (or
+ * no reason) stopped the tool.
+ */
 function pluginHoldingGroup(error: string | undefined): string | undefined {
-  return PLUGIN_HOLD_PATTERN.exec(error ?? "")?.[1]?.trim() || undefined;
+  const match = PLUGIN_HOLD_PATTERN.exec(error ?? "");
+  if (!match) return undefined;
+  return match[1]?.trim() || UNNAMED_PLUGIN;
 }
 
 /** Where the operator lifts switched-off groups: the Tools switch, uninstalling the plugin that holds one, or both. */
@@ -161,6 +168,9 @@ export function buildGovernanceBlockGuidance(input: {
   if (isSwitchedOffGroupBlock(error, input.result)) {
     // A plugin's hold is lifted only by uninstalling that plugin, never by the Tools switch.
     const plugin = pluginHoldingGroup(input.error);
+    if (plugin === UNNAMED_PLUGIN) {
+      return `${tool} is switched off: a plugin keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can uninstall that plugin in Capabilities › Plugins to switch that group back on; tell them which tool you needed.`;
+    }
     if (plugin) {
       return `${tool} is switched off: the plugin ${plugin} keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can uninstall ${plugin} in Capabilities › Plugins to switch that group back on; tell them which tool you needed.`;
     }

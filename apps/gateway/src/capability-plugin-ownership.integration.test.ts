@@ -290,6 +290,13 @@ describe("a plugin's pieces over the real Gateway", { timeout: 300_000 }, () => 
       switchedOffToolGroups: ["browser"],
       pluginToolGroupHolds: [{ groupId: "browser", pluginId: PLUGIN_ID, pluginName: "Meeting tools" }],
     });
+    // Now the hold is in force and the settings read browser as off, another check of the other plugin still reads
+    // the operator's own switch: its piece is ready, never "already there" because of Meeting tools' hold.
+    const whileHeld = await inspect(OTHER_PLUGIN_ID);
+    expect(whileHeld.pieces.map((piece) => [piece.pieceId, piece.check])).toEqual([
+      ["no-browser", { status: "ready" }],
+    ]);
+    expect((await inject("GET", "/api/v1/settings")).json()).toMatchObject({ switchedOffToolGroups: ["browser"] });
     const tools = await inject("GET", `/api/v1/capabilities/tools?workspaceId=${WORKSPACE_ID}`);
     expect(
       tools
@@ -312,6 +319,18 @@ describe("a plugin's pieces over the real Gateway", { timeout: 300_000 }, () => 
     });
     expect(switchOn.statusCode, switchOn.body).toBe(409);
     expect(switchOn.json()).toEqual(FROM_PLUGIN);
+    expect([await plans(), await approvals()]).toEqual([plansBefore, approvalsBefore]);
+    expect(readOwnSwitch()).toEqual([]);
+    // The generic Change Plan route reaches the same settings check, before any plan is written.
+    const planned = await inject("POST", "/api/v1/change-plans", {
+      surface: "settings",
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "tool_group_access", groupId: "browser", enabled: true },
+      },
+    });
+    expect(planned.statusCode, planned.body).toBe(409);
+    expect(planned.json()).toEqual(FROM_PLUGIN);
     expect([await plans(), await approvals()]).toEqual([plansBefore, approvalsBefore]);
     expect(readOwnSwitch()).toEqual([]);
 

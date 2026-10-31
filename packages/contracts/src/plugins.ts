@@ -141,7 +141,12 @@ export const pluginManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
     pluginId: z.string().regex(PLUGIN_ID_PATTERN, "must be 2 to 48 lowercase letters, digits or hyphens"),
-    name: z.string().min(1).max(80),
+    // A name only of spaces would leave every "From <name>" refusal and hold reason with nothing to say.
+    name: z
+      .string()
+      .min(1)
+      .max(80)
+      .refine((value) => value.trim().length > 0, "must not be blank"),
     description: z.string().min(1).max(500),
     version: z.string().min(1).max(32).regex(VERSION_PATTERN, "may hold only letters, digits and . + -"),
     author: z.string().max(120).optional(),

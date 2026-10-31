@@ -200,6 +200,26 @@ describe("buildGovernanceBlockGuidance", () => {
     expect(guidance).not.toMatch(RETRY_INVITATION);
   });
 
+  it("points to uninstalling a plugin when the engine couldn't name the one that keeps the group off", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "git.status",
+      status: "blocked",
+      error: "blocked: tool git.status is in a tool group switched off by a plugin (Git)",
+    });
+
+    expect(guidance).toContain("git.status is switched off: a plugin keeps its tool group off.");
+    expect(guidance).toContain("uninstall that plugin in Capabilities › Plugins");
+    expect(guidance).not.toContain("Capabilities › Tools");
+    expect(guidance).not.toContain("the operator turned off");
+
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "git.status", error: "tool git.status is in a tool group switched off by a plugin" }),
+    ]);
+    expect(text).toContain("a plugin keeps its tool group off");
+    expect(text).toContain("uninstall the plugin that keeps a group off in Capabilities › Plugins");
+    expect(text).not.toContain("Capabilities › Tools");
+  });
+
   it("tells the model a switched-off group is the operator's switch, not tools.deny", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "channel.send",

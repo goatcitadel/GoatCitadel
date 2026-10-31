@@ -380,6 +380,13 @@ describe("parsePluginManifest", () => {
         field: "schemaVersion",
       },
       { name: "an empty name", manifest: { ...validManifest(), name: "" }, code: "MANIFEST_INVALID", field: "name" },
+      { name: "a blank name", manifest: { ...validManifest(), name: "   " }, code: "MANIFEST_INVALID", field: "name" },
+      {
+        name: "a name of only line breaks and tabs",
+        manifest: { ...validManifest(), name: "\n\t " },
+        code: "MANIFEST_INVALID",
+        field: "name",
+      },
       {
         name: "a version with a space",
         manifest: { ...validManifest(), version: "1.0 beta" },
@@ -436,6 +443,16 @@ describe("parsePluginManifest", () => {
         'A piece\'s path must be a plain path every computer can hold: no empty or "." parts, no colon, no name that ' +
           "ends in a dot or a space, no .git folder and no device name such as CON.",
       );
+    });
+
+    it("says a blank name must not be blank, and keeps a name with spaces around it", () => {
+      expect(refusalOf({ ...validManifest(), name: "  \t" }).message).toBe(
+        "The manifest isn't valid at name: must not be blank.",
+      );
+      expect(parsePluginManifest(JSON.stringify({ ...validManifest(), name: " Meeting tools " }))).toMatchObject({
+        ok: true,
+        manifest: { name: " Meeting tools " },
+      });
     });
 
     it("refuses more pieces than the limit", () => {
