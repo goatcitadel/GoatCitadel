@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatToolRunRecord, CodeModeReadiness, ToolCatalogEntry } from "@goatcitadel/contracts";
+import {
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ChatToolRunRecord,
+  type CodeModeReadiness,
+  type ToolCatalogEntry,
+} from "@goatcitadel/contracts";
 import {
   ChatTurnAgentRunner,
   type ChatTurnAgentRunnerInput,
@@ -216,6 +222,20 @@ describe("code_mode.request exposure", () => {
       reason: "code_mode_off",
     };
     expect((await exposed(unsupportedButOff, { authActorSource: "loopback" })).exposed).toBe(false);
+  });
+
+  it("keeps code_mode.request away from server-only, scheduled, heartbeat and mesh turns", async () => {
+    expect((await exposed(ready, { serverOnlyPosture: true })).exposed).toBe(false);
+    expect((await exposed(ready, { permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID })).exposed).toBe(false);
+    expect((await exposed(ready, { permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID })).exposed).toBe(false);
+    expect((await exposed(ready, { authActorSource: "mesh_node" })).exposed).toBe(false);
+  });
+
+  it("does not offer code_mode.request when the readiness read fails", async () => {
+    const { runner, getCodeModeReadiness } = codeModeHarness(ready);
+    getCodeModeReadiness.mockRejectedValueOnce(new Error("readiness unavailable"));
+    const schema = await runner.resolveCapabilityToolSchema({ ...input(), authActorSource: "loopback" });
+    expect(schema.canonicalToModel.has("code_mode.request")).toBe(false);
   });
 
   it("reads Code Mode readiness once per tool schema", async () => {
