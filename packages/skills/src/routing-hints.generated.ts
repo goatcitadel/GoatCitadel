@@ -137,6 +137,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not silently mutate durable memory or runtime policy."],
     confidenceBoost: 0.12,
   },
+  grilling: {
+    phrases: ["grill me", "poke holes in"],
+    keywords: ["grill me", "poke holes"],
+    surfaces: ["chat", "cowork"],
+    whenToUse: ["Question a design in rounds of open decisions before building."],
+    whenNotToUse: ["Do not use when the operator wants the work done now."],
+    confidenceBoost: 0.1,
+  },
   "mcp-vetter": {
     phrases: ["vet this mcp", "mcp install review", "review this mcp server"],
     keywords: ["mcp", "server", "tool", "install"],

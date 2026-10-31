@@ -43,6 +43,14 @@
       "catalogExposure": "inspectable"
     },
     {
+      "skillId": "bundled:grilling",
+      "owner": "chat",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "bundled:impeccable",
       "owner": "mission-control-next",
       "source": "bundled",

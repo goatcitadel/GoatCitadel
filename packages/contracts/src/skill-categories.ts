@@ -97,6 +97,7 @@ export const SHIPPED_SKILL_CATEGORIES: Readonly<Record<string, SkillCategoryId>>
   "bundled:research": "research",
   "bundled:planning": "planning",
   "bundled:agentic-skill-architect": "planning",
+  "bundled:grilling": "planning",
   "bundled:impeccable": "design",
   "bundled:n8n-workflow-architect": "automation",
   "bundled:sendclaw": "email",

@@ -40,6 +40,13 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
     totalBytes: 22840,
   },
   {
+    skillId: "bundled:grilling",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "13ec6024baf911fdf7e4fe0246e1180c8307dfbd303d078f4b99b87b7d20dd32",
+    fileCount: 3,
+    totalBytes: 5632,
+  },
+  {
     skillId: "bundled:impeccable",
     manifestVersion: "goatcitadel.skill-tree.v1",
     treeSha256: "a3ad069670e9705316d38a961d3e60384967a67a0648c5cdf71c051e75fc8411",

@@ -33,6 +33,8 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["Write the test first, then implement the parser", ["tdd"]],
   ["Run the test suite and tell me what fails", []],
   ["Sort the list with the latest first", []],
+  ["Grill me on this shared-workspace design", ["grilling"]],
+  ["Poke holes in my migration plan", ["grilling"]],
 ];
 
 let service: SkillsService;
