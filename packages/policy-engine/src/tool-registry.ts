@@ -636,7 +636,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     riskLevel: "caution",
     requiresApproval: true,
     description:
-      "Ask the operator to run a short script on this computer in a restricted sandbox, then continue with its result. The operator approves every run.",
+      "Ask the operator to run a short script on this computer in a restricted sandbox, then continue with its result. The operator approves every run. The docs.* helpers (capabilities.docs.read_bytes, extract_text, decompress) exist only inside the script; never call them as tools.",
     argSchema: {
       type: "object",
       properties: {
