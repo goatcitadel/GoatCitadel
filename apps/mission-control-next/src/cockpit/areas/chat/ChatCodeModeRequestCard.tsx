@@ -1,4 +1,4 @@
-import { lazy, Suspense, useState, type ReactElement } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactElement } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
 import type { ApprovalRequest, ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
@@ -92,6 +92,17 @@ function RequestRow({
   // A request whose record is gone (404, expired) or never existed can never be decided: report it, don't wait.
   const recordMissing = open && (!approvalId || (recordQuery.isSuccess && recordQuery.data === null));
   const recordFailed = open && Boolean(approvalId) && recordQuery.isError && !record;
+  // The approve call returns only after the code ran, and the approval_resolved event refetches the record first: the
+  // row turns to "Running code…" and the decision buttons unmount before they hear back. So the row itself re-reads
+  // the thread and the pending queue once the record settles, which lets the composer go.
+  const settledStatus = open && record && record.status !== "pending" ? record.status : undefined;
+  const refreshThread = useRef(onRefreshThread);
+  refreshThread.current = onRefreshThread;
+  useEffect(() => {
+    if (!settledStatus) return;
+    void queryClient.invalidateQueries({ queryKey: CODE_MODE_READINESS_KEY });
+    refreshThread.current();
+  }, [queryClient, settledStatus]);
 
   let body: ReactElement;
   let live = false;

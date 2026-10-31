@@ -141,6 +141,27 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(document.querySelector('[role="dialog"]')).toBeNull();
   });
 
+  it("refreshes the thread when the record settles before the approve call returns", async () => {
+    // The Gateway runs the code before it answers the approve call, and its approval_resolved event refetches the
+    // record first: the row turns to "Running code…" and the decision buttons unmount before they hear back.
+    let finishApprove!: () => void;
+    api.resolveApproval.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          finishApprove = () => resolve({ approval: approval("approved"), effects: [] });
+        }),
+    );
+    await render(turnWith({}));
+    await waitForButton("Run it");
+    await act(async () => button("Run it")!.click());
+    await waitFor(() => expect(api.resolveApproval).toHaveBeenCalledTimes(1));
+    api.fetchApproval.mockResolvedValue(approval("approved"));
+    await act(async () => client.invalidateQueries({ queryKey: ["approvals"] }));
+    await waitFor(() => expect(container.textContent).toContain("Running code…"));
+    await act(async () => finishApprove());
+    await waitFor(() => expect(onRefreshThread).toHaveBeenCalled());
+  });
+
   it("Turn on Code Mode and run enables then approves", async () => {
     api.fetchCodeModeReadiness.mockResolvedValue({
       enabled: false,
