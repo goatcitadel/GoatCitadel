@@ -233,26 +233,46 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
 
   /** The template, if this install may add it now; otherwise a plain refusal naming the field the client maps. */
   private async resolve(request: ChangePlanConnectorInstallRequest): Promise<McpServerTemplateRecord> {
-    const template = this.deps.templates.find((item) => item.templateId === request.templateId);
-    if (
-      !template ||
-      !isVisibleMcpTemplateRecord(template) ||
-      EXCLUDED_CONNECTOR_TEMPLATE_IDS.has(template.templateId)
-    ) {
-      throw refusal("templateId", "This app can't be installed from Capabilities.");
-    }
-    if (template.authType === "token") {
-      throw refusal("needsApiKey", `${template.label} needs an API key. Set it up in Settings.`);
-    }
-    if (template.authType === "oauth2" && !hasMcpOAuthEndpointSource(template.oauth)) {
-      throw refusal("needsSignInSetup", `${template.label}'s sign-in isn't set up yet. Set it up in Settings.`);
-    }
+    const found = findInstallableConnectorTemplate(this.deps.templates, request.templateId);
+    if (!found.ok) throw refusal(found.field, found.message);
+    const { template } = found;
     const label = mcpServerLabelKey(template.label);
     if ((await this.deps.readMcpServers()).some((server) => mcpServerLabelKey(server.label) === label)) {
       throw refusal("alreadyInstalled", `${template.label} is already saved.`);
     }
     return template;
   }
+}
+
+/** A template Capabilities may install, or the plain refusal with the request field the client maps it to. */
+export type InstallableConnectorTemplate =
+  | { ok: true; template: McpServerTemplateRecord }
+  | { ok: false; field: "templateId" | "needsApiKey" | "needsSignInSetup"; message: string };
+
+/**
+ * The template rule an install applies before it reads any saved server: the template is shipped, visible, not one
+ * Capabilities leaves out, doesn't need an API key, and has somewhere to sign in when it signs in. Whether a server
+ * with its label is already saved is the caller's own check.
+ */
+export function findInstallableConnectorTemplate(
+  templates: readonly McpServerTemplateRecord[],
+  templateId: string,
+): InstallableConnectorTemplate {
+  const template = templates.find((item) => item.templateId === templateId);
+  if (!template || !isVisibleMcpTemplateRecord(template) || EXCLUDED_CONNECTOR_TEMPLATE_IDS.has(template.templateId)) {
+    return { ok: false, field: "templateId", message: "This app can't be installed from Capabilities." };
+  }
+  if (template.authType === "token") {
+    return { ok: false, field: "needsApiKey", message: `${template.label} needs an API key. Set it up in Settings.` };
+  }
+  if (template.authType === "oauth2" && !hasMcpOAuthEndpointSource(template.oauth)) {
+    return {
+      ok: false,
+      field: "needsSignInSetup",
+      message: `${template.label}'s sign-in isn't set up yet. Set it up in Settings.`,
+    };
+  }
+  return { ok: true, template };
 }
 
 /** Wires the install to GatewayService's owners, the way the pack adapter and the MCP routes reach them. */
@@ -308,8 +328,12 @@ function refusal(field: string, message: string): ConflictError {
 
 /** The template's hosts the list doesn't cover yet, lower-cased, matched the way the network policy matches them. */
 function missingHosts(template: McpServerTemplateRecord, allowlist: readonly string[]): string[] {
-  const hosts = [...new Set((template.networkHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean))];
-  return hosts.filter((host) => !isHostAllowlistedInList(host, [...allowlist]));
+  return connectorTemplateHosts(template).filter((host) => !isHostAllowlistedInList(host, [...allowlist]));
+}
+
+/** The hosts a template needs allowed, lower-cased and without repeats. */
+export function connectorTemplateHosts(template: Pick<McpServerTemplateRecord, "networkHosts">): string[] {
+  return [...new Set((template.networkHosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean))];
 }
 
 /**

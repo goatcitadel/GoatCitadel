@@ -180,6 +180,7 @@ export * from "./capability-connectors.js";
 export * from "./capability-tools.js";
 export * from "./capability-skills.js";
 export * from "./plugins.js";
+export * from "./capability-plugins.js";
 export * from "./update-scout.js";
 export * from "./prompt-pack.js";
 export * from "./local-ai.js";

@@ -480,6 +480,7 @@ import { WebSearchCredentialService } from "./web-search-credential-service.js";
 import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
 import { composeCapabilityTools, composeCapabilityToolUsage } from "./capability-tools-composition.js";
 import { composeCapabilitySkills } from "./capability-skills-composition.js";
+import { composeCapabilityPlugins, pluginSnapshotResolver } from "./capability-plugins-composition.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
 import { applyRuntimeBrowserBackendDefaults } from "./runtime-browser-backend-defaults.js";
@@ -1980,6 +1981,7 @@ export class GatewayService {
       ),
       skillImport: this.skillImportService,
       shippedSkillPackRoot: path.join(config.rootDir, "skills", "import-packs"),
+      resolvePluginSkillDir: pluginSnapshotResolver(config),
     });
     this.skillMutationService = new SkillMutationService({
       rootDir: config.rootDir,
@@ -3948,6 +3950,14 @@ export class GatewayService {
         skillHub: composed.skills,
         skillHubSnapshots: this.storage.skillHubSnapshots,
         skillSources: this.skillImportService,
+      }),
+      capabilityPlugins: composeCapabilityPlugins({
+        config: this.config,
+        mcp: this,
+        settings: this,
+        skillHub: composed.skills,
+        systemSettings: this.storage.systemSettings,
+        promptPacks: this.storage.promptPacks,
       }),
     };
   }

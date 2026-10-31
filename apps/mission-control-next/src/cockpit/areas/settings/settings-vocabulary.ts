@@ -21,6 +21,7 @@ import type {
   LlamaCppRuntimeStatus,
   ConnectorDiagnosticReport,
 } from "@goatcitadel/contracts";
+import { HOOK_TRIGGER_LABELS } from "@goatcitadel/contracts";
 import type { ProviderModelCatalogOption } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import type {
   DaemonRuntimeDiagnosticSeverity,
@@ -209,39 +210,6 @@ export const MODEL_REFRESH_STATUS_LABELS: Record<
   error: "last check failed",
 };
 
-export const HOOK_TRIGGER_LABELS: Record<HookTrigger, string> = {
-  "llm.model.select.before": "Before a model is chosen",
-  "llm.request.before": "Before a model request",
-  "gateway.dispatch.before": "Before GoatCitadel dispatch",
-  transform_llm_output: "Transform model output",
-  "llm.response.after": "After a model response",
-  before_prompt_build: "Before the prompt is built",
-  llm_input: "Model input",
-  llm_output: "Model output",
-  "tool.call.before": "Before a tool call",
-  "tool.call.after": "After a tool call",
-  "tool.call.error": "When a tool call fails",
-  after_tool_call: "After a tool call (legacy)",
-  "approval.request.before": "Before an approval request",
-  "approval.create.before": "Before an approval is created",
-  "approval.resolve.after": "After an approval is decided",
-  "approval.response.after": "After an approval response",
-  "orchestration.run.before": "Before a run starts",
-  "orchestration.phase.before": "Before a run phase",
-  "orchestration.phase.after": "After a run phase",
-  "orchestration.retry.scheduled": "When a retry is scheduled",
-  "orchestration.run.woken": "When a run wakes",
-  before_message_write: "Before a message is saved",
-  agent_end: "When an agent finishes",
-  "session.start": "When a session starts",
-  "session.end": "When a session ends",
-  "prompt.submit.before": "Before a prompt is sent",
-  "context.compaction.before": "Before context is compacted",
-  "context.compaction.after": "After context is compacted",
-  "subagent.start": "When a helper agent starts",
-  "subagent.end": "When a helper agent ends",
-  "agent.finalize.before": "Before an agent finishes its answer",
-};
 export function presentHookTrigger(value: string): string {
   return HOOK_TRIGGER_LABELS[value as HookTrigger] ?? "Another lifecycle event";
 }

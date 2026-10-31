@@ -1,0 +1,560 @@
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  ConflictError,
+  ValidationError,
+  type CapabilityPluginInspection,
+  type CapabilityPluginPieceView,
+  type McpServerTemplateRecord,
+} from "@goatcitadel/contracts";
+import {
+  CapabilityPluginInspectionService,
+  CapabilityPluginManifestRefusedError,
+  type CapabilityPluginInspectionSources,
+} from "./capability-plugin-inspection-service.js";
+import type { StoredPlugin } from "./capability-plugin-store.js";
+import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
+import { PluginSourceError, fetchPluginSource } from "./plugin-source-service.js";
+import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
+
+const NOW = Date.parse("2026-10-31T12:00:00.000Z");
+const PLUGIN_ID = "meeting-tools";
+
+const POLICY = {
+  requireFirstToolApproval: true,
+  redactionMode: "basic" as const,
+  allowedToolPatterns: [],
+  blockedToolPatterns: [],
+};
+
+function template(overrides: Partial<McpServerTemplateRecord> & Pick<McpServerTemplateRecord, "templateId" | "label">) {
+  return {
+    description: `${overrides.label} for tests.`,
+    transport: "http",
+    url: "https://mcp.notes.test/mcp",
+    authType: "oauth2",
+    oauth: { metadataDiscovery: true },
+    category: "data",
+    trustTier: "restricted",
+    costTier: "unknown",
+    policy: POLICY,
+    enabledByDefault: false,
+    ...overrides,
+  } satisfies McpServerTemplateRecord;
+}
+
+const TEMPLATES: McpServerTemplateRecord[] = [
+  template({ templateId: "notes-app", label: "Notes App", networkHosts: ["mcp.notes.test", "AUTH.notes.test"] }),
+  template({
+    templateId: "keyed",
+    label: "Keyed",
+    transport: "stdio",
+    url: undefined,
+    command: "npx",
+    authType: "token",
+    oauth: undefined,
+  }),
+];
+
+const SKILL_MD = ["---", "name: meeting-notes", "description: Notes for meetings.", "---", "", "Take notes.", ""].join(
+  "\n",
+);
+const PROMPT_PACK_MD = [
+  "# Meeting checks",
+  "",
+  "Pack-Version: Meeting checks",
+  "",
+  "# Chat",
+  "",
+  "## No Tools",
+  "",
+  "### TEST-C901: Summary",
+  "",
+  "Summarize the meeting in two lines.",
+  "",
+  "### TEST-C902: Actions",
+  "",
+  "List the actions from the meeting.",
+  "",
+].join("\n");
+
+type Pieces = Array<Record<string, unknown>>;
+
+const EVERY_KIND: Pieces = [
+  { kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" },
+  { kind: "connector", id: "notes", templateId: "notes-app" },
+  { kind: "connector", id: "notes-strict", templateId: "notes-app", asksFirst: "everything" },
+  { kind: "tool_group_off", id: "no-browser", groupId: "browser" },
+  { kind: "hook", id: "tool-watch", trigger: "tool.call.after", url: "https://hooks.example.test/goatcitadel" },
+  { kind: "prompt_pack", id: "checks", path: "prompt-packs/checks.md" },
+];
+
+const roots: string[] = [];
+
+afterEach(async () => {
+  for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
+});
+
+function reviewed(snapshotId: string, blockerCodes: string[] = [], skillName = "meeting-notes"): SkillHubReviewResult {
+  return {
+    snapshot: { snapshotId, blockerCodes, provenance: { skillName } },
+    replayed: false,
+  } as unknown as SkillHubReviewResult;
+}
+
+/**
+ * A plugin folder on disk, fetched through the real folder source into a real snapshot store. Every other owner is a
+ * plain function the case can replace.
+ */
+async function harness(
+  options: { pieces?: Pieces; manifest?: string; overrides?: Partial<CapabilityPluginInspectionSources> } = {},
+) {
+  const root = await fs.mkdtemp(path.join(os.tmpdir(), "gc-plugin-inspection-"));
+  roots.push(root);
+  const pluginDir = path.join(root, "source", PLUGIN_ID);
+  const manifest =
+    options.manifest ??
+    JSON.stringify({
+      schemaVersion: 1,
+      pluginId: PLUGIN_ID,
+      name: "Meeting tools",
+      description: "Notes and checks for meetings.",
+      version: "1.2.0",
+      author: "Example Author",
+      pieces: options.pieces ?? EVERY_KIND,
+    });
+  const files: Record<string, string> = {
+    "goatcitadel-plugin.json": manifest,
+    "skills/meeting-notes/SKILL.md": SKILL_MD,
+    "skills/other-notes/SKILL.md": SKILL_MD.replace("meeting-notes", "other-notes"),
+    "prompt-packs/checks.md": PROMPT_PACK_MD,
+    // No Pack-Version, so the pack is named from the label an install saves it under.
+    "prompt-packs/one.md": (PROMPT_PACK_MD.split("### TEST-C902")[0] ?? "").replace(
+      "Pack-Version: Meeting checks\n\n",
+      "",
+    ),
+  };
+  for (const [relativePath, content] of Object.entries(files)) {
+    const target = path.join(pluginDir, ...relativePath.split("/"));
+    await fs.mkdir(path.dirname(target), { recursive: true });
+    await fs.writeFile(target, content, "utf8");
+  }
+  const snapshots = new PluginSnapshotStore(path.join(root, "data", "plugins", "snapshots"));
+  const saved: Array<{ inspection: CapabilityPluginInspection; snapshotTreeSha256: string }> = [];
+  const reviewSkill = vi.fn(async (input: SkillHubSourceReviewInput) =>
+    reviewed(`skill-hub-review-${input.idempotencyKey}`),
+  );
+  const sources: CapabilityPluginInspectionSources = {
+    fetchSource: (source) =>
+      fetchPluginSource(source, {
+        importSnapshot: (dir) => snapshots.importDirectory(dir),
+        builtInRoot: path.join(root, "plugins"),
+        deploymentProfile: "trusted_local",
+        tempRoot: path.join(root, "data", "plugins", "tmp"),
+      }),
+    resolveSnapshotPath: (treeSha256, relativePath) => snapshots.resolve(treeSha256, relativePath),
+    reviewSkill,
+    connectorTemplates: () => TEMPLATES,
+    listSavedConnectorLabels: vi.fn(async () => []),
+    listSwitchedOffToolGroups: vi.fn(async () => []),
+    promptPackExists: vi.fn(async () => false),
+    lookupHost: vi.fn(async () => [{ address: "93.184.216.34" }]),
+    findInstalled: vi.fn(async () => undefined),
+    saveInspection: vi.fn(async (inspection, snapshotTreeSha256) => {
+      saved.push({ inspection, snapshotTreeSha256 });
+    }),
+    now: () => new Date(NOW),
+    newInspectionId: () => "4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e7f",
+    ...options.overrides,
+  };
+  const log = { warn: vi.fn() };
+  const service = new CapabilityPluginInspectionService(sources);
+  const inspect = () =>
+    service.inspect({
+      workspaceId: "default",
+      source: { kind: "folder", path: pluginDir },
+      actorId: "operator-1",
+      idempotencyKey: "inspect-7f0c",
+      log,
+    });
+  return { service, sources, saved, reviewSkill, log, inspect, root };
+}
+
+function piece(inspection: CapabilityPluginInspection, pieceId: string): CapabilityPluginPieceView {
+  const found = inspection.pieces.find((item) => item.pieceId === pieceId);
+  if (!found) throw new Error(`no piece ${pieceId}`);
+  return found;
+}
+
+describe("CapabilityPluginInspectionService", () => {
+  it("marks a plugin installable only when every piece passes", async () => {
+    const { inspect, saved, reviewSkill, root } = await harness();
+
+    const inspection = await inspect();
+
+    expect(inspection).toMatchObject({
+      inspectionId: "4b5c3a3e-6f0e-4c1d-9a7e-2f1b0c9d8e7f",
+      workspaceId: "default",
+      pluginId: PLUGIN_ID,
+      name: "Meeting tools",
+      description: "Notes and checks for meetings.",
+      version: "1.2.0",
+      author: "Example Author",
+      trust: "unverified",
+      sourceKind: "folder",
+      sourceDisplay: PLUGIN_ID,
+      ignored: [],
+      installable: true,
+      inspectedAt: "2026-10-31T12:00:00.000Z",
+      expiresAt: "2026-11-01T12:00:00.000Z",
+    });
+    expect(inspection.pin).toEqual({ kind: "content", treeSha256: expect.stringMatching(/^[a-f0-9]{64}$/u) });
+    expect(inspection.manifestSha256).toMatch(/^[a-f0-9]{64}$/u);
+    expect(inspection.refusal).toBeUndefined();
+    expect(inspection.pieces.map((item) => [item.pieceId, item.kind, item.check])).toEqual([
+      ["meeting-notes", "skill", { status: "ready" }],
+      ["notes", "connector", { status: "ready" }],
+      ["notes-strict", "connector", { status: "ready" }],
+      ["no-browser", "tool_group_off", { status: "ready" }],
+      ["tool-watch", "hook", { status: "ready" }],
+      ["checks", "prompt_pack", { status: "ready" }],
+    ]);
+    expect(piece(inspection, "meeting-notes")).toMatchObject({
+      label: "meeting-notes",
+      skillSnapshotId: "skill-hub-review-inspect-7f0c:skill:meeting-notes",
+    });
+    expect(piece(inspection, "notes")).toMatchObject({
+      label: "Notes App",
+      hosts: ["mcp.notes.test", "auth.notes.test"],
+    });
+    expect(piece(inspection, "no-browser")).toMatchObject({ label: "Browser" });
+    expect(piece(inspection, "tool-watch")).toMatchObject({
+      label: "After a tool call",
+      hosts: ["hooks.example.test"],
+      needsSecret: true,
+    });
+    expect(piece(inspection, "checks").label).toBe("Meeting checks");
+
+    // The skill went through the Skill Hub's own review of its folder in the snapshot, under the inspection's key.
+    const treeSha256 = inspection.pin.kind === "content" ? inspection.pin.treeSha256 : "";
+    expect(reviewSkill).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      pluginSkill: {
+        snapshotTreeSha256: treeSha256,
+        path: "skills/meeting-notes",
+        pluginId: PLUGIN_ID,
+        pieceId: "meeting-notes",
+        trust: "unverified",
+        pinLabel: `content:${treeSha256}`,
+      },
+      idempotencyKey: "inspect-7f0c:skill:meeting-notes",
+      actorId: "operator-1",
+    });
+    // The inspection is kept with the snapshot it read, so installing reads the same bytes.
+    expect(saved).toEqual([{ inspection, snapshotTreeSha256: treeSha256 }]);
+    // The folder it came from is named by its own name only; no path on this computer is kept or answered.
+    expect(JSON.stringify(inspection)).not.toContain(path.basename(root));
+  });
+
+  it("blocks the whole plugin when one skill is blocked", async () => {
+    const pieces: Pieces = [
+      { kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" },
+      { kind: "skill", id: "other-notes", path: "skills/other-notes" },
+      { kind: "tool_group_off", id: "no-browser", groupId: "browser" },
+    ];
+    const { inspect } = await harness({
+      pieces,
+      overrides: {
+        reviewSkill: vi.fn(async (input: SkillHubSourceReviewInput) =>
+          input.idempotencyKey.endsWith(":other-notes")
+            ? reviewed("review-other", ["PROMPT_INJECTION_DETECTED", "UNKNOWN_FRONTMATTER_DIMENSION"], "other-notes")
+            : reviewed("review-meeting"),
+        ),
+      },
+    });
+
+    const inspection = await inspect();
+
+    expect(inspection.installable).toBe(false);
+    expect(piece(inspection, "meeting-notes").check).toEqual({ status: "ready" });
+    expect(piece(inspection, "other-notes")).toMatchObject({
+      label: "other-notes",
+      skillSnapshotId: "review-other",
+      check: {
+        status: "blocked",
+        code: "PROMPT_INJECTION_DETECTED",
+        message: "This skill didn't pass GoatCitadel's checks.",
+      },
+    });
+    expect(piece(inspection, "no-browser").check).toEqual({ status: "ready" });
+  });
+
+  it("blocks a skill the review refuses, with the review's code, and logs a refusal's cause only on the server", async () => {
+    const pieces: Pieces = [
+      { kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" },
+      { kind: "skill", id: "other-notes", path: "skills/other-notes" },
+    ];
+    const lookupFault = new ValidationError({
+      field: "pluginSkill",
+      message: "That plugin's skill isn't available to review.",
+    });
+    Object.defineProperty(lookupFault, "cause", { value: new Error("EIO reading C:\\data\\plugins\\snapshots\\x") });
+    const { inspect, log } = await harness({
+      pieces,
+      overrides: {
+        reviewSkill: vi.fn(async (input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> => {
+          if (input.idempotencyKey.endsWith(":other-notes")) throw lookupFault;
+          throw new ValidationError({ field: "PROMPT_INJECTION_DETECTED", message: "Skill Hub blocked it." });
+        }),
+      },
+    });
+
+    const inspection = await inspect();
+
+    expect(piece(inspection, "meeting-notes").check).toEqual({
+      status: "blocked",
+      code: "PROMPT_INJECTION_DETECTED",
+      message: "This skill didn't pass GoatCitadel's checks.",
+    });
+    expect(piece(inspection, "other-notes").check).toEqual({
+      status: "blocked",
+      code: "PLUGIN_SKILL_UNAVAILABLE",
+      message: "That plugin's skill isn't available to review.",
+    });
+    expect(JSON.stringify(inspection)).not.toContain("EIO");
+    expect(log.warn).toHaveBeenCalledExactlyOnceWith(
+      { pieceId: "other-notes", err: expect.objectContaining({ message: expect.stringContaining("EIO") }) },
+      "a plugin's skill couldn't be reviewed",
+    );
+  });
+
+  it("marks an already saved connector as already there", async () => {
+    const pieces: Pieces = [
+      { kind: "connector", id: "notes", templateId: "notes-app" },
+      { kind: "connector", id: "keyed", templateId: "keyed" },
+      { kind: "connector", id: "unknown", templateId: "unknown-app" },
+    ];
+    const { inspect } = await harness({
+      pieces,
+      overrides: { listSavedConnectorLabels: vi.fn(async () => ["NOTES APP"]) },
+    });
+
+    const inspection = await inspect();
+
+    expect(piece(inspection, "notes")).toEqual({
+      pieceId: "notes",
+      kind: "connector",
+      label: "Notes App",
+      asksFirst: "Reading runs freely; creating or changing something asks first in Chat.",
+      check: { status: "already_there" },
+    });
+    // The install's own template rule, word for word.
+    expect(piece(inspection, "keyed")).toMatchObject({
+      label: "Keyed",
+      check: { status: "blocked", code: "needsApiKey", message: "Keyed needs an API key. Set it up in Settings." },
+    });
+    expect(piece(inspection, "unknown")).toMatchObject({
+      label: "unknown-app",
+      check: { status: "blocked", code: "templateId", message: "This app can't be installed from Capabilities." },
+    });
+  });
+
+  it("refuses a group that can't be switched off", async () => {
+    const pieces: Pieces = [
+      { kind: "tool_group_off", id: "core", groupId: "core" },
+      { kind: "tool_group_off", id: "invoke", groupId: "mcp.invoke" },
+      { kind: "tool_group_off", id: "unknown", groupId: "teleport" },
+      { kind: "tool_group_off", id: "web", groupId: "web_search" },
+      { kind: "tool_group_off", id: "browser", groupId: "browser" },
+    ];
+    const { inspect } = await harness({
+      pieces,
+      overrides: { listSwitchedOffToolGroups: vi.fn(async () => ["web_search"]) },
+    });
+
+    const inspection = await inspect();
+
+    const notSwitchable = {
+      status: "blocked",
+      code: "GROUP_NOT_SWITCHABLE",
+      message: "That group can't be switched off.",
+    };
+    expect(piece(inspection, "core").check).toEqual(notSwitchable);
+    expect(piece(inspection, "invoke").check).toEqual(notSwitchable);
+    expect(piece(inspection, "unknown").check).toEqual({
+      status: "blocked",
+      code: "UNKNOWN_TOOL_GROUP",
+      message: "GoatCitadel has no tool group with that id.",
+    });
+    expect(piece(inspection, "web").check).toEqual({ status: "already_there" });
+    expect(piece(inspection, "browser").check).toEqual({ status: "ready" });
+    expect(inspection.installable).toBe(false);
+  });
+
+  it("refuses a hook to a private address", async () => {
+    const pieces: Pieces = [
+      { kind: "hook", id: "literal", trigger: "session.start", url: "https://10.0.0.5/hook" },
+      { kind: "hook", id: "loopback", trigger: "session.start", url: "https://[::1]/hook" },
+      { kind: "hook", id: "rebound", trigger: "session.start", url: "https://rebound.example.test/hook" },
+      { kind: "hook", id: "missing", trigger: "session.start", url: "https://missing.example.test/hook" },
+      { kind: "hook", id: "public", trigger: "session.start", url: "https://hooks.example.test:8443/hook" },
+    ];
+    const lookupHost = vi.fn(async (hostname: string) => {
+      if (hostname === "rebound.example.test") return [{ address: "93.184.216.34" }, { address: "169.254.169.254" }];
+      if (hostname === "missing.example.test") throw new Error("ENOTFOUND");
+      return [{ address: "93.184.216.34" }];
+    });
+    const { inspect } = await harness({ pieces, overrides: { lookupHost } });
+
+    const inspection = await inspect();
+
+    const notPublic = { status: "blocked", code: "HOST_NOT_PUBLIC", message: "That address isn't a public host." };
+    expect(piece(inspection, "literal").check).toEqual(notPublic);
+    expect(piece(inspection, "loopback").check).toEqual(notPublic);
+    expect(piece(inspection, "rebound").check).toEqual(notPublic);
+    expect(piece(inspection, "missing").check).toEqual({
+      status: "blocked",
+      code: "HOST_NOT_FOUND",
+      message: "That address's host can't be found.",
+    });
+    expect(piece(inspection, "public")).toMatchObject({ hosts: ["hooks.example.test"], check: { status: "ready" } });
+    // A literal address is checked as written; only names are looked up.
+    expect(lookupHost.mock.calls.map(([hostname]) => hostname).sort()).toEqual([
+      "hooks.example.test",
+      "missing.example.test",
+      "rebound.example.test",
+    ]);
+  });
+
+  it("refuses a prompt pack id that is taken", async () => {
+    const pieces: Pieces = [
+      { kind: "prompt_pack", id: "checks", path: "prompt-packs/checks.md" },
+      { kind: "prompt_pack", id: "missing", path: "prompt-packs/missing.md" },
+    ];
+    const promptPackExists = vi.fn(async (packId: string) => packId === `plugin-${PLUGIN_ID}-checks`);
+    const { inspect } = await harness({ pieces, overrides: { promptPackExists } });
+
+    const inspection = await inspect();
+
+    expect(piece(inspection, "checks")).toMatchObject({
+      label: "Meeting checks",
+      check: {
+        status: "blocked",
+        code: "PROMPT_PACK_ID_TAKEN",
+        message: "Another prompt pack already uses the id this one needs.",
+      },
+    });
+    expect(piece(inspection, "missing").check).toEqual({
+      status: "blocked",
+      code: "PROMPT_PACK_MISSING",
+      message: "The plugin doesn't have that prompt pack file.",
+    });
+    expect(promptPackExists).toHaveBeenCalledExactlyOnceWith(`plugin-${PLUGIN_ID}-checks`);
+    expect(inspection.installable).toBe(false);
+  });
+
+  it("answers 409 for a plugin that is already installed", async () => {
+    const installed = { pluginId: PLUGIN_ID, name: "Meeting tools" } as StoredPlugin;
+    const { inspect, reviewSkill, saved } = await harness({
+      overrides: { findInstalled: vi.fn(async (pluginId: string) => (pluginId === PLUGIN_ID ? installed : undefined)) },
+    });
+
+    const refusal = await inspect().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refusal).toBeInstanceOf(ConflictError);
+    expect(refusal).toMatchObject({
+      httpStatus: 409,
+      code: "ALREADY_EXISTS",
+      message: "Meeting tools is already installed.",
+      details: { pluginId: PLUGIN_ID },
+    });
+    // Nothing is checked or kept for a plugin that is already there.
+    expect(reviewSkill).not.toHaveBeenCalled();
+    expect(saved).toEqual([]);
+  });
+
+  it("writes the exact asks-first lines", async () => {
+    const pieces: Pieces = [
+      ...EVERY_KIND,
+      { kind: "prompt_pack", id: "one", path: "prompt-packs/one.md" },
+      { kind: "hook", id: "approvals", trigger: "approval.resolve.after", url: "https://hooks.example.test:8443/a" },
+    ];
+    const { inspect } = await harness({ pieces });
+
+    const inspection = await inspect();
+
+    expect(Object.fromEntries(inspection.pieces.map((item) => [item.pieceId, item.asksFirst]))).toEqual({
+      "meeting-notes": "Follows your tool rules. Added after GoatCitadel's checks, then switched on.",
+      notes: "Reading runs freely; creating or changing something asks first in Chat.",
+      "notes-strict": "Everything it does asks first in Chat.",
+      "no-browser": "Turns Browser off in every chat while installed.",
+      "tool-watch": "Sends event details, never message text, to hooks.example.test: After a tool call.",
+      checks: "Adds 2 tests to Library › Prompt packs. Nothing runs until you press Run.",
+      one: "Adds 1 test to Library › Prompt packs. Nothing runs until you press Run.",
+      approvals: "Sends event details, never message text, to hooks.example.test:8443: After an approval is decided.",
+    });
+    // A pack is named as the prompt-pack owner names it: its Pack-Version, or else the label an install gives it.
+    expect(piece(inspection, "checks").label).toBe("Meeting checks");
+    expect(piece(inspection, "one").label).toBe("Plugin Meeting tools");
+  });
+
+  it("keeps a refused manifest's inspection and refuses it with its own code", async () => {
+    const { inspect, saved, reviewSkill } = await harness({
+      manifest: JSON.stringify({
+        schemaVersion: 1,
+        pluginId: PLUGIN_ID,
+        name: "Meeting tools",
+        description: "Notes.",
+        version: "1.0.0",
+        featureFlags: { durableKernelV1Enabled: false },
+        pieces: [{ kind: "tool_group_off", id: "no-browser", groupId: "browser" }],
+      }),
+    });
+
+    const refusal = await inspect().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(refusal).toBeInstanceOf(CapabilityPluginManifestRefusedError);
+    const { inspection, field } = refusal as CapabilityPluginManifestRefusedError;
+    expect(field).toBe("featureFlags");
+    expect(inspection).toMatchObject({
+      pluginId: "",
+      pieces: [],
+      installable: false,
+      refusal: {
+        code: "FEATURE_FLAGS_NOT_ALLOWED",
+        message: "Plugins can't carry feature flags or runtime presets.",
+      },
+    });
+    expect(saved.map((entry) => entry.inspection)).toEqual([inspection]);
+    expect(reviewSkill).not.toHaveBeenCalled();
+  });
+
+  it("passes a refused source through as the source's own refusal, and keeps nothing", async () => {
+    const { service, saved } = await harness();
+
+    const refusal = await service
+      .inspect({
+        workspaceId: "default",
+        source: { kind: "git", url: "https://example.test/owner/repo" },
+        actorId: "operator-1",
+        idempotencyKey: "inspect-git",
+        log: { warn: vi.fn() },
+      })
+      .then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+    expect(refusal).toBeInstanceOf(PluginSourceError);
+    expect(refusal).toMatchObject({ statusCode: 400, reason: "UNTRUSTED_GIT_HOST" });
+    expect(saved).toEqual([]);
+  });
+});

@@ -246,7 +246,55 @@ export async function resolveGitHeadRevision(repoDir: string): Promise<string | 
 // The address
 // ---------------------------------------------------------------------------
 
-type GitSourceDnsLookup = (hostname: string) => Promise<Array<{ address: string }>>;
+/** Every address a host name resolves to. */
+export type HostAddressLookup = (hostname: string) => Promise<Array<{ address: string }>>;
+
+/** The system resolver, asked for every address in the order it gives them. */
+export const lookUpHostAddresses: HostAddressLookup = (hostname) => dnsLookup(hostname, { all: true, verbatim: true });
+
+/** A host name that didn't resolve (`unresolved`, with the resolver's error as `cause`) or resolved to nothing. */
+export class HostLookupError extends Error {
+  public constructor(
+    public readonly kind: "unresolved" | "no_address",
+    options?: { cause?: unknown },
+  ) {
+    super(
+      kind === "unresolved" ? "The host could not be resolved." : "The host did not resolve to any address.",
+      options,
+    );
+    this.name = "HostLookupError";
+  }
+}
+
+/**
+ * Refuses a host that is private, loopback, link-local, metadata or reserved: the literal in `url`, and, for a name,
+ * every address it resolves to. A name that doesn't resolve, or resolves to nothing, is a `HostLookupError`; a refused
+ * host throws the network guard's own error. The URL's scheme is the caller's to check.
+ */
+export async function assertHostResolvesPublic(
+  url: URL,
+  lookup: HostAddressLookup = lookUpHostAddresses,
+): Promise<void> {
+  assertHostAllowed(url.toString(), ["*"]);
+  // URL keeps IPv6 literals bracketed ("[2606:4700::1]"); strip them so the literal is checked, not resolved.
+  const hostname = url.hostname.replace(/^\[|\]$/gu, "");
+  if (isIP(hostname)) {
+    return;
+  }
+  let addresses: Array<{ address: string }>;
+  try {
+    addresses = await lookup(hostname);
+  } catch (error) {
+    throw new HostLookupError("unresolved", { cause: error });
+  }
+  if (addresses.length === 0) {
+    throw new HostLookupError("no_address");
+  }
+  for (const entry of addresses) {
+    const literal = entry.address.includes(":") ? `[${entry.address}]` : entry.address;
+    assertNotPrivateOrReservedHost(`https://${literal}/`);
+  }
+}
 
 // SECURITY (G2-10): the clone runs in a git subprocess outside fetchAllowlisted,
 // so apply the same private/loopback/link-local/metadata egress rule up front,
@@ -256,7 +304,7 @@ type GitSourceDnsLookup = (hostname: string) => Promise<Array<{ address: string 
 // DNS-rebinding; redirects are already disabled in the hardened git config.
 export async function assertGitSourceHostIsPublic(
   sourceRef: string,
-  lookup: GitSourceDnsLookup = (hostname) => dnsLookup(hostname, { all: true, verbatim: true }),
+  lookup: HostAddressLookup = lookUpHostAddresses,
 ): Promise<void> {
   let parsed: URL;
   try {
@@ -267,25 +315,18 @@ export async function assertGitSourceHostIsPublic(
   if (parsed.protocol !== "https:") {
     throw new Error("Git source must be an https URL.");
   }
-  assertHostAllowed(parsed.toString(), ["*"]);
-  // URL keeps IPv6 literals bracketed ("[2606:4700::1]"); strip them so the literal is checked, not resolved.
-  const hostname = parsed.hostname.replace(/^\[|\]$/gu, "");
-  if (isIP(hostname)) {
-    return;
-  }
-  let addresses: Array<{ address: string }>;
   try {
-    addresses = await lookup(hostname);
+    await assertHostResolvesPublic(parsed, lookup);
   } catch (error) {
-    throw new Error(`Git source host could not be resolved: ${(error as Error).message}`, { cause: error });
+    throw inGitWords(error);
   }
-  if (addresses.length === 0) {
-    throw new Error("Git source host did not resolve to any address.");
-  }
-  for (const entry of addresses) {
-    const literal = entry.address.includes(":") ? `[${entry.address}]` : entry.address;
-    assertNotPrivateOrReservedHost(`https://${literal}/`);
-  }
+}
+
+/** A failed host lookup in the Git source's own words, with the resolver's error as the cause; anything else as it is. */
+function inGitWords(error: unknown): unknown {
+  if (!(error instanceof HostLookupError)) return error;
+  if (error.kind === "no_address") return new Error("Git source host did not resolve to any address.");
+  return new Error(`Git source host could not be resolved: ${(error.cause as Error).message}`, { cause: error.cause });
 }
 
 // ---------------------------------------------------------------------------

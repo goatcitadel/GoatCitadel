@@ -63,6 +63,7 @@ import { knowledgeRoutes } from "./routes/knowledge.js";
 import { authRoutes } from "./routes/auth.js";
 import { secretsRoutes } from "./routes/secrets.js";
 import { capabilityConnectorsRoutes } from "./routes/capability-connectors.js";
+import { capabilityPluginsRoutes } from "./routes/capability-plugins.js";
 import { capabilityToolsRoutes } from "./routes/capability-tools.js";
 import { capabilitySkillsRoutes } from "./routes/capability-skills.js";
 import { webSearchSettingsRoutes } from "./routes/web-search-settings.js";
@@ -411,6 +412,7 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
     await app.register(capabilityConnectorsRoutes);
     await app.register(capabilityToolsRoutes);
     await app.register(capabilitySkillsRoutes);
+    await app.register(capabilityPluginsRoutes);
     await app.register(gatewayEventsRoute);
     await app.register(sessionsListRoute);
     await app.register(toolsInvokeRoute);
