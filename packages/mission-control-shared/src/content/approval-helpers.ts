@@ -3,6 +3,7 @@ import { presentApprovalOutcome, presentApprovalStatus } from "./status-vocabula
 import { externalSourceKnowledgeApprovalEvidence } from "./external-source-approval-evidence.js";
 import { communicationsMailSendApprovalEvidence } from "./communications-approval-evidence.js";
 import { skillStateApprovalEvidence } from "./skill-state-approval-evidence.js";
+import { codeModeRequestInput } from "./code-mode-request-input.js";
 
 export interface ApprovalEvidenceBlock {
   label: string;
@@ -345,6 +346,10 @@ export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalReques
   if (approval.kind === "external_source.knowledge_snapshot") return externalSourceKnowledgeApprovalEvidence(approval);
   if (approval.kind === "communications.mail.send") return communicationsMailSendApprovalEvidence(approval);
   if (approval.kind === "change.request") return changeRequestApprovalEvidence(approval);
+  if (approval.kind === "code_mode.request") {
+    const codeEvidence = codeModeRequestApprovalEvidence(approval);
+    if (codeEvidence) return codeEvidence;
+  }
   if (approval.kind === "change_plan_effect") {
     const planEvidence = changePlanEffectApprovalEvidence(approval);
     if (planEvidence) return planEvidence;
@@ -396,6 +401,42 @@ export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): App
     consequence:
       "Approving lets this one change apply once, exactly as planned. Some changes then wait for you to continue them. " +
       "Denying cancels it.",
+  };
+}
+
+/**
+ * A Chat `code_mode.request` approval carries the exact goal and script as its payload (the Gateway runs only that
+ * script, bound by hash), with the files and folders it may read and the input its code gets: the input decides what
+ * the code reads, so it is shown too. Without a goal and a script there is nothing exact to approve.
+ */
+export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
+  const payload = approval.payload as Record<string, unknown> | undefined;
+  const goal = nonEmptyText(payload?.goal);
+  const source = typeof payload?.source === "string" && payload.source.trim() ? payload.source : undefined;
+  if (!goal || !source) return null;
+  const reads = Array.isArray(payload?.reads) ? payload.reads.flatMap((entry) => nonEmptyText(entry) ?? []) : [];
+  const input = codeModeRequestInput(payload?.input);
+  const entries: ApprovalTargetEntry[] = [
+    { label: "Goal", value: goal },
+    // The Gateway refuses every helper call in the run that names anything else, so with none listed its helpers read
+    // no files.
+    { label: "Reads", value: reads.length ? reads.join(", ") : "No files" },
+    ...(input ? [{ label: "Input", value: input }] : []),
+  ];
+  return {
+    targets: entries.map((entry) => `${entry.label}: ${entry.value}`),
+    targetEntries: entries,
+    commands: [],
+    changes: [{ label: "Code to run", content: source }],
+    supporting: [],
+    // The limit is the Gateway's check on every helper call, not the sandbox (the code is trusted, never claimed to be
+    // contained as hostile code), so the line says GoatCitadel holds the reads to the list.
+    consequence:
+      "Approving runs this exact code once, on this computer in a restricted sandbox. " +
+      (reads.length
+        ? "GoatCitadel lets it read only what is listed under Reads. "
+        : "GoatCitadel lets it read no files. ") +
+      "Denying keeps it from running.",
   };
 }
 

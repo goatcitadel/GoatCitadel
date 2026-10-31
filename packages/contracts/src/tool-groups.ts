@@ -39,6 +39,7 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
       "skills.read",
       "tool_artifact.read",
       "change.request",
+      "code_mode.request",
       "runtime.configure",
       "session.status",
       "session.search",
@@ -143,6 +144,9 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
     switchable: true,
     toolNames: [
       "docs.ingest",
+      "docs.read_bytes",
+      "docs.extract_text",
+      "docs.decompress",
       "docs.search",
       "embeddings.index",
       "embeddings.query",

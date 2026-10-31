@@ -2,7 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { ChatBlockers } from "./ChatBlockers";
 
@@ -20,9 +20,34 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchApprovals: api.fetchApprovals,
   resolveApproval: api.resolveApproval,
 }));
+// The approval reviews name workspaces from the workspace list.
+vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
+  fetchWorkspaces: vi.fn(async () => ({ items: [] })),
+}));
+const specialist = vi.hoisted(() => ({ read: vi.fn() }));
+vi.mock("../inbox/specialist-approval-evidence", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../inbox/specialist-approval-evidence")>()),
+  readSpecialistEvidence: specialist.read,
+  specialistEvidenceMatches: () => true,
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "default" }),
 }));
+// Every read goes through the api modules mocked above. A request that slips past them would reach the Gateway URL,
+// the operator's own install on this computer, so fetch is refused for the whole file (a read a test left running
+// can still call it after the test) and any call fails the test.
+const network = vi.fn((input: unknown) => Promise.reject(new Error(`Unmocked request: ${String(input)}`)));
+const takeRequests = () => {
+  const requests = network.mock.calls.map(([input]) => String(input));
+  network.mockClear();
+  return requests;
+};
+beforeAll(() => vi.stubGlobal("fetch", network));
+afterAll(() => {
+  const requests = takeRequests();
+  vi.unstubAllGlobals();
+  expect(requests).toEqual([]);
+});
 
 let root: Root;
 let container: HTMLDivElement;
@@ -55,6 +80,7 @@ afterEach(() => {
   client.clear();
   api.fetchApproval.mockReset();
   api.fetchApprovals.mockReset();
+  expect(takeRequests()).toEqual([]);
 });
 
 describe("Chat blockers", () => {
@@ -427,4 +453,125 @@ it("moves focus to the composer when a decision removes the card it was in (CH-1
   } finally {
     composer.remove();
   }
+});
+
+it("does not duplicate a code_mode.request approval", async () => {
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "cm-1",
+    kind: "code_mode.request",
+    status: "pending",
+    riskLevel: "caution",
+    payload: { goal: "read a file", source: "return 1;" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({
+            pendingApproval: { approvalId: "cm-1", kind: "code_mode.request", riskLevel: "caution" },
+          })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  expect(container.textContent).not.toContain("Approval needed");
+  expect(container.querySelector("button")).toBeNull();
+});
+
+it("enables Approve for a code_mode.run once specialist evidence matches", async () => {
+  const record = {
+    approvalId: "run-1",
+    kind: "code_mode.run",
+    status: "pending",
+    riskLevel: "danger",
+    payload: { runId: "r1" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  api.fetchApproval.mockResolvedValue(record);
+  let release!: (value: unknown) => void;
+  specialist.read.mockReturnValue(new Promise((resolve) => (release = resolve)));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: "run-1", kind: "code_mode.run", riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Review danger approval")).toBeDefined());
+  expect(findButton("Review danger approval")!.disabled).toBe(true);
+  await act(async () => release({ replay: { approval: record, events: [], effects: [] } }));
+  await vi.waitFor(() => expect(findButton("Review danger approval")!.disabled).toBe(false));
+});
+
+it("says why a code_mode.run approval can't be approved yet, and checks the code again on request", async () => {
+  const record = {
+    approvalId: "run-1",
+    kind: "code_mode.run",
+    status: "pending",
+    riskLevel: "danger",
+    payload: { runId: "r1" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  api.fetchApproval.mockResolvedValue(record);
+  specialist.read.mockRejectedValueOnce(new Error("Gateway unavailable"));
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: "run-1", kind: "code_mode.run", riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
+  expect(container.querySelector('[role="alert"]')?.textContent).toContain("Gateway unavailable");
+  expect(findButton("Review danger approval")!.disabled).toBe(true);
+  specialist.read.mockResolvedValue({ replay: { approval: record, events: [], effects: [] } });
+  await act(async () => findButton("Check again")!.click());
+  await vi.waitFor(() => expect(findButton("Review danger approval")!.disabled).toBe(false));
+  expect(findButton("Check again")).toBeUndefined();
+});
+
+it("does not send a second specialist read while Check again is still reading", async () => {
+  const record = {
+    approvalId: "run-1",
+    kind: "code_mode.run",
+    status: "pending",
+    riskLevel: "danger",
+    payload: { runId: "r1" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  const evidence = { replay: { approval: record, events: [], effects: [] } };
+  api.fetchApproval.mockResolvedValue(record);
+  specialist.read.mockResolvedValueOnce(evidence);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: "run-1", kind: "code_mode.run", riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Review danger approval")?.disabled).toBe(false));
+  // A later read fails, so the earlier answer no longer counts; the failure stays recorded while it is read again.
+  specialist.read.mockRejectedValueOnce(new Error("Gateway unavailable"));
+  await act(async () => client.refetchQueries({ queryKey: ["approvals", "specialist"] }));
+  await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
+  let release!: (value: unknown) => void;
+  specialist.read.mockReturnValue(new Promise((resolve) => (release = resolve)));
+  await act(async () => findButton("Check again")!.click());
+  const reads = specialist.read.mock.calls.length;
+  await vi.waitFor(() => expect(findButton("Check again")?.disabled ?? true).toBe(true));
+  await act(async () => findButton("Check again")?.click());
+  expect(specialist.read).toHaveBeenCalledTimes(reads);
+  await act(async () => release(evidence));
+  await vi.waitFor(() => expect(findButton("Check again")).toBeUndefined());
 });

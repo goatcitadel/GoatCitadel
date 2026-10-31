@@ -4,7 +4,12 @@ import { fetchDurableRun } from "@goatcitadel/mission-control-shared/api/durable
 import { ensure, pass, waitFor } from "../runner/assert";
 import type { CheckContext, CheckDef, RouteKey } from "../runner/types";
 import { createScratchSession, requireWorkspace } from "./context";
-import { seedChatApprovalScenario, type ChatApprovalScenario } from "./dev-verification";
+import {
+  seedChatApprovalScenario,
+  seedChatCodeModeRequestScenario,
+  type ChatApprovalScenario,
+  type SessionScope,
+} from "./dev-verification";
 
 const SEED_ROUTES: readonly RouteKey[] = [
   "POST /api/v1/chat/sessions",
@@ -18,10 +23,15 @@ const SEED_STEPS = ["Create session", "Seed approval scenario", "Approval is pen
 /** Statuses that show the approval woke the run; failed, cancelled, dead-lettered, or paused runs did not resume. */
 const WOKEN_RUN_STATUSES: readonly string[] = ["queued", "running", "completed"];
 
-async function seedPendingApproval(ctx: CheckContext): Promise<ChatApprovalScenario> {
+type SeedScenario = (scope: SessionScope, signal?: AbortSignal) => Promise<ChatApprovalScenario>;
+
+async function seedPendingApproval(
+  ctx: CheckContext,
+  seed: SeedScenario = seedChatApprovalScenario,
+): Promise<ChatApprovalScenario> {
   const session = await ctx.step("Create session", () => createScratchSession(ctx, "approval"));
   const scenario = await ctx.step("Seed approval scenario", () =>
-    seedChatApprovalScenario({ sessionId: session.sessionId, workspaceId: requireWorkspace(ctx) }, ctx.signal),
+    seed({ sessionId: session.sessionId, workspaceId: requireWorkspace(ctx) }, ctx.signal),
   );
   await ctx.step("Approval is pending", async () => {
     const pending = await fetchChatPendingApprovals(session.sessionId);
@@ -60,6 +70,29 @@ export const approvalChecks: readonly CheckDef[] = [
         waitForApprovalStatus(ctx, scenario.approvalId, "rejected"),
       );
       return pass("The approval was rejected and recorded.", approval);
+    },
+  },
+  {
+    id: "approvals.code-mode-reject",
+    kind: "journey",
+    domain: "approvals",
+    title: "Deny a pending Code Mode request in Chat",
+    tier: "mutate",
+    needsWorkspace: true,
+    description:
+      "Seeds a Chat turn waiting on a code_mode.request approval, the request the Chat Code Mode card shows, then denies it. No code runs.",
+    routes: [...SEED_ROUTES, "POST /api/v1/chat/tools/deny"],
+    steps: [...SEED_STEPS, "Deny the request", "Request recorded as rejected"],
+    async run(ctx) {
+      const scenario = await seedPendingApproval(ctx, seedChatCodeModeRequestScenario);
+      const denied = await ctx.step("Deny the request", () => denyChatTool(scenario.sessionId, scenario.approvalId));
+      ensure(denied.ok, "The gateway did not accept the denial.", denied);
+      const approval = await ctx.step("Request recorded as rejected", async () => {
+        const recorded = await waitForApprovalStatus(ctx, scenario.approvalId, "rejected");
+        ensure(recorded?.kind === "code_mode.request", "The seeded approval is not a Code Mode request.", recorded);
+        return recorded;
+      });
+      return pass("The Code Mode request was denied and recorded. No code ran.", approval);
     },
   },
   {

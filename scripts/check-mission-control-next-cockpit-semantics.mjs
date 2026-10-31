@@ -38,7 +38,10 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // and why a check or step stopped (+2). The Git address field's refusal uses Field's own alert.
 // 900: the add-on screens went (-7): AddonsSettings had six live regions and AddonEvidence one. Capability packs stay.
 // 898: the plugin setup guidance went (-2): its unsupported-version note and its copy-sample status line.
-export const LIVE_REGION_BUDGET = 898;
+// 904: Chat's Code Mode request row announces its one status line (Running code…, then the outcome), why a read it
+// needs failed (the request, Code Mode readiness), why a click was not sent, and why Keep as a tool did not save (+5);
+// its loading lines are not announced. A code_mode.run approval in Chat says why Approve waits, as Inbox does (+1).
+export const LIVE_REGION_BUDGET = 904;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

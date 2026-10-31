@@ -17,6 +17,21 @@ export const COCKPIT_VISUAL_MANIFEST = [
     // A following transcript opens at its newest turn; never capture it mid-pin.
     readyAtLatest: true,
   },
+  // The Chat Code Mode card: waiting with Code Mode on, waiting with it off (one click turns it on and runs), and ran.
+  // The visual lane pins the readiness read per state; the pending and enable captures share one seeded request.
+  ...[
+    ["pending", "codeModePending"],
+    ["enable", "codeModePending"],
+    ["done", "codeModeRan"],
+  ].map(([state, fixtureSessionKey]) => ({
+    slug: `cockpit-chat-code-mode-card-${state}`,
+    href: "/chat",
+    shell: "cockpit",
+    fixtureSessionKey,
+    readySelector: 'section[aria-label="Chat"] [aria-label="Messages"]',
+    readyAtLatest: true,
+    visualState: `code-mode-${state}`,
+  })),
   { slug: "cockpit-inbox", href: "/inbox", shell: "cockpit", readyText: "Inbox" },
   ...[
     ["board", "/work", "Work"],

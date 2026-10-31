@@ -432,7 +432,7 @@ import {
 import { AssemblyService, bindAssemblyChatCompletion } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
-import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
+import { scoutCapabilityUpgradeSuggestions, withUnreadableTurnAttachments } from "./chat-capability-scout.js";
 import { classifyCapabilityGapFromTrace } from "./capability-gap-classifier.js";
 import { collectMcpBrowserFallbackTargets, invokeMcpRuntimeTool, type StdioClient } from "./mcp-runtime.js";
 import { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
@@ -1471,6 +1471,12 @@ export class GatewayService {
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
+      readAttachmentBytes: async (request, attachmentId, window) => {
+        // Session-scoped (checked before any bytes are read) and ranged: only the call's window is read.
+        const loaded = await this.readChatAttachmentContent(attachmentId, { sessionId: request.sessionId, window });
+        const { fileName, mimeType, sizeBytes: totalBytes } = loaded.record;
+        return { fileName, mimeType, bytes: loaded.bytes, totalBytes };
+      },
       resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
       resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
       // Live Settings value: a tool call that names another Firecrawl endpoint or key variable is blocked.
@@ -1487,6 +1493,7 @@ export class GatewayService {
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
       requestChangePlan: async (request, intent) => await this.requestChangePlanFromTool(request, intent),
+      runCodeModeRequest: (request) => this.capabilitySystemService.runCodeModeRequestTool(request),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -1628,6 +1635,7 @@ export class GatewayService {
         features: await this.readFeatureFlags(),
         runtimeExposure: this.buildRuntimeExposureSnapshot(),
       }),
+      resolveToolRequestPaths: (request) => this.resolveToolInvokeRequestPaths(request),
       resolvePolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       getChatSessionWorkbench: async (sessionId) => this.routeServices.chatSessions.getChatSessionWorkbench(sessionId),
       applyChatSessionWorkbenchPatch: (sessionId, input) =>
@@ -1951,6 +1959,7 @@ export class GatewayService {
       chatThinkingStreamV1Enabled: async () => await this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
       boundedToolExposureV1Enabled: async () => await this.isFeatureEnabled("boundedToolExposureV1Enabled"),
+      getCodeModeReadiness: async () => await this.capabilitySystemService.getCodeModeReadiness(),
       observeToolSchemaSelection: (diagnostics) => log.debug("Chat tool schema selection metrics", diagnostics),
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
       promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
@@ -8399,7 +8408,7 @@ export class GatewayService {
       }
     }
     return scoutCapabilityUpgradeSuggestions({
-      ...input,
+      ...(await withUnreadableTurnAttachments(this.storage, input)),
       policyContext,
       deps: {
         listToolCatalog: () => this.listToolCatalog(),
@@ -9135,12 +9144,11 @@ export class GatewayService {
     return await chatAttachmentService.getChatAttachment(this.buildChatAttachmentHost(), attachmentId);
   }
 
-  private async readChatAttachmentContent(attachmentId: string): Promise<{
-    record: ChatAttachmentRecord;
-    fullPath: string;
-    bytes: Buffer;
-  }> {
-    return chatAttachmentService.readChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId);
+  private async readChatAttachmentContent(
+    attachmentId: string,
+    options?: Parameters<typeof chatAttachmentService.readChatAttachmentContent>[2],
+  ): Promise<{ record: ChatAttachmentRecord; fullPath: string; bytes: Buffer }> {
+    return chatAttachmentService.readChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId, options);
   }
 
   private buildChatAttachmentHost(): chatAttachmentService.ChatAttachmentHost {

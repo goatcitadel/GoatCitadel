@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatMode } from "@goatcitadel/contracts";
 import {
   buildBaseAgentSystemPrompt,
+  CODE_MODE_REQUEST_PROMPT_LINE,
   DEEP_RESEARCH_PROMPT_SECTION,
   type BaseAgentRuntimeInfo,
   type BuildBaseAgentSystemPromptInput,
@@ -245,6 +246,28 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).toContain("Settings › Tools › Global filesystem tool access");
     expect(tail).not.toContain("change.request");
     expect(tail).not.toContain("tool policy file");
+  });
+
+  it("offers code_mode.request only when it is in the toolset", () => {
+    const withTool = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames: ["fs.read", "code_mode.request"], skills: [] } }),
+    );
+    const without = buildBaseAgentSystemPrompt(input({ toolset: { toolNames: ["fs.read"], skills: [] } }));
+    const toolsOff = buildBaseAgentSystemPrompt(
+      input({
+        toolsUnavailableReason: "manual_autonomy",
+        toolset: { toolNames: ["fs.read", "code_mode.request"], skills: [] },
+      }),
+    );
+    expect(withTool.volatileTail).toContain(CODE_MODE_REQUEST_PROMPT_LINE);
+    expect(without.volatileTail).not.toContain(CODE_MODE_REQUEST_PROMPT_LINE);
+    expect(toolsOff.volatileTail).not.toContain(CODE_MODE_REQUEST_PROMPT_LINE);
+    expect(withTool.stablePrefix).not.toContain("code_mode.request");
+    expect(withTool.stablePrefix).toBe(without.stablePrefix);
+    // The run can read only the files, folders and attachments the model lists, so the prompt says to list them all.
+    expect(CODE_MODE_REQUEST_PROMPT_LINE).toMatch(
+      /List in `reads` every file, folder or attachment the script reads; it can read only those, and cannot search\./,
+    );
   });
 
   it("points at Capabilities › Tools when Files is switched off", () => {

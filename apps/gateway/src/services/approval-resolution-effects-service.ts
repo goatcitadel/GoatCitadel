@@ -152,6 +152,7 @@ import {
 import { isCodeModePendingActionType } from "./code-mode-pending-action-types.js";
 import { buildPlainApprovedToolFailureText } from "./user-facing-failure-text.js";
 import { readToolDomainExecutionFailure, type ToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
+import { isResumableCodeModeRequestFailure } from "./code-mode-request-resume.js";
 import type { SharedHostLifecycleAdmissionPort, SharedHostWorkReservation } from "./shared-host-lifecycle-service.js";
 import {
   DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND,
@@ -3018,7 +3019,7 @@ export class ApprovalEffectsService {
         return;
       }
       if (pendingAction?.resolutionStatus === "executed") {
-        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result);
+        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result, pendingAction);
         let materializationAction = pendingAction;
         if (storedExecutionFailure && pendingAction.result) {
           materializationAction = await runClaimedApprovalEffectTransaction(
@@ -3060,7 +3061,7 @@ export class ApprovalEffectsService {
       return;
     }
     if (pendingAction.resolutionStatus && pendingAction.resolutionStatus !== "pending") {
-      const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result);
+      const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result, pendingAction);
       if (pendingAction.resolutionStatus === "failed" && storedExecutionFailure) {
         if (
           !(await this.materializeFailedChatApprovalOrDefer(
@@ -3141,7 +3142,10 @@ export class ApprovalEffectsService {
     ) {
       const completionPendingAction = refreshedPendingAction;
       if (refreshedPendingAction.resolutionStatus === "executed") {
-        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(refreshedPendingAction.result);
+        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(
+          refreshedPendingAction.result,
+          refreshedPendingAction,
+        );
         let materializationAction = refreshedPendingAction;
         if (storedExecutionFailure && refreshedPendingAction.result) {
           const actionRecord = toolInvokeResultToRecord(executedAction, refreshedPendingAction.actionType);
@@ -3174,7 +3178,10 @@ export class ApprovalEffectsService {
         }
         return;
       } else if (refreshedPendingAction.resolutionStatus === "failed") {
-        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(refreshedPendingAction.result);
+        const storedExecutionFailure = readStoredApprovedActionExecutionFailure(
+          refreshedPendingAction.result,
+          refreshedPendingAction,
+        );
         if (storedExecutionFailure) {
           if (
             !(await this.materializeFailedChatApprovalOrDefer(
@@ -3251,7 +3258,7 @@ export class ApprovalEffectsService {
       return;
     }
 
-    const executionFailure = readApprovedActionExecutionFailure(executedAction);
+    const executionFailure = readApprovedActionExecutionFailure(executedAction, pendingAction);
     if (executedAction?.outcome === "executed" && !executionFailure) {
       const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
       if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
@@ -5011,12 +5018,16 @@ function buildFailedApprovedToolActionOutput(toolName: string, failure: ToolDoma
 
 function readApprovedActionExecutionFailure(
   result: ToolInvokeResult | undefined,
+  pendingAction: PendingApprovalAction | undefined,
 ): ToolDomainExecutionFailure | undefined {
   if (!result) {
     return undefined;
   }
   const domainResult = asRecord(result.result);
   const domainFailure = domainResult ? readToolDomainExecutionFailure(domainResult, result.policyReason) : undefined;
+  if (isResumableCodeModeRequestFailure(pendingAction, result.outcome, domainFailure)) {
+    return undefined;
+  }
   if (domainFailure) {
     return domainFailure;
   }
@@ -5032,6 +5043,7 @@ function readApprovedActionExecutionFailure(
 
 function readStoredApprovedActionExecutionFailure(
   actionRecord: Record<string, unknown> | undefined,
+  pendingAction: PendingApprovalAction | undefined,
 ): ToolDomainExecutionFailure | undefined {
   if (!actionRecord) {
     return undefined;
@@ -5055,6 +5067,9 @@ function readStoredApprovedActionExecutionFailure(
   }
   const result = asRecord(actionRecord.result);
   const domainFailure = result ? readToolDomainExecutionFailure(result, policyReason) : undefined;
+  if (isResumableCodeModeRequestFailure(pendingAction, outcome, domainFailure)) {
+    return undefined;
+  }
   if (domainFailure) {
     return domainFailure;
   }

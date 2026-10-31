@@ -304,6 +304,10 @@ export function useCockpitRealtime(input: {
     let active = true;
     const generation = currentScope.current.generation;
     const delivered = new Set<string>();
+    // An approval decided where it was asked (a one-click card, a Settings dialog) needs no Inbox notification:
+    // one already shown is dismissed, and one still waiting on its Inbox read is not shown.
+    const settledApprovalIds = new Set<string>();
+    const approvalToastIds = new Map<string, string>();
     const { sink, dispose } = createRealtimeSink(queryClient);
     const inboxReader = createInboxReader(queryClient);
     const isCurrent = () =>
@@ -328,6 +332,13 @@ export function useCockpitRealtime(input: {
           appendRetainedActivity(queryClient, event, queryKeys.systemActivity());
           appendRetainedActivity(queryClient, event, queryKeys.workActivityAll());
         }
+        const settledApprovalId = event.eventType === "approval_resolved" ? event.links?.approvalId : undefined;
+        if (settledApprovalId) {
+          settledApprovalIds.add(settledApprovalId);
+          const shownId = approvalToastIds.get(settledApprovalId);
+          approvalToastIds.delete(settledApprovalId);
+          if (shownId) requestCockpitToast((toast) => toast.dismiss(shownId), isCurrent);
+        }
         const notification = deriveRealtimeNotification(event);
         const decision = decideNotificationDelivery(notification, {
           replayed: delivery.replayed,
@@ -347,6 +358,8 @@ export function useCockpitRealtime(input: {
             if (!isCurrentWorkspace()) return;
             const item = resolveInboxNotificationItem(projection, event, notification, scopeWorkspaceId);
             if (!item || delivered.has(item.id)) return;
+            const approvalId = item.kind === "approval" ? item.source.approvalId : undefined;
+            if (approvalId && settledApprovalIds.has(approvalId)) return;
             const focused = pageFocused();
             const preferences = preferencesRef.current;
             const deliveryDecision = decideNotificationDelivery(notification, {
@@ -361,6 +374,7 @@ export function useCockpitRealtime(input: {
               if (isCurrentWorkspace()) navigateRef.current(inboxItemLocation(item));
             };
             const id = `inbox:${scopeWorkspaceId}:${item.id}`;
+            if (approvalId) approvalToastIds.set(approvalId, id);
             if (preferences.toastsEnabled)
               requestCockpitToast(
                 (toast) => {
@@ -381,6 +395,7 @@ export function useCockpitRealtime(input: {
                   const currentPreferences = preferencesRef.current;
                   return (
                     isCurrentWorkspace() &&
+                    !(approvalId && settledApprovalIds.has(approvalId)) &&
                     currentPreferences.toastsEnabled &&
                     !(currentPreferences.onlyWhenUnfocused && pageFocused()) &&
                     decideNotificationDelivery(notification, {

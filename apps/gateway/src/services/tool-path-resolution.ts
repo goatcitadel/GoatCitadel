@@ -89,6 +89,9 @@ const TOOL_PATH_SPECS: Record<string, ToolPathSpec[]> = {
   "lint.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
   "build.run": [{ key: "cwd", kind: "cwd", injectDefault: true }],
   "docs.ingest": [{ key: "source", kind: "read", when: (request) => request.args?.sourceType === "file" }],
+  "docs.read_bytes": [{ key: "path", kind: "read" }],
+  "docs.extract_text": [{ key: "path", kind: "read" }],
+  "docs.decompress": [{ key: "path", kind: "read" }],
   "git.worktree.create": [{ key: "path", kind: "write" }],
   "git.worktree.remove": [{ key: "path", kind: "write" }],
 };

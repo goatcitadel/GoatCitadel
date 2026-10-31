@@ -315,6 +315,15 @@ export interface CapabilityProposalEventRecord {
   createdAt: string;
 }
 
+/** Whether a Code Mode run can start right now, and if not, the first thing blocking it. */
+export interface CodeModeReadiness {
+  enabled: boolean;
+  sandboxEnabled: boolean;
+  sandboxSupported: boolean;
+  canRun: boolean;
+  reason?: "code_mode_off" | "sandbox_off" | "sandbox_unsupported";
+}
+
 export interface CodeModeSandboxMetadata {
   runnerId: string;
   runnerVersion: string;
@@ -662,9 +671,20 @@ export interface CodeModeAiderReplayResponse {
   run: CodeModeRunRecord;
 }
 
+/** The approval a Code Mode run executed under, when it was not its own `code_mode.run` approval. */
+export interface CodeModeRunApprovalSource {
+  kind: "code_mode.request";
+  approvalId: string;
+}
+
 export interface CodeModeRunRecord {
   runId: string;
   status: CodeModeRunStatus;
+  /**
+   * Set when the run executed under a Chat `code_mode.request` tool approval. The Gateway computes it at read
+   * time from `approvalId`; it is never stored, so a raw repository read does not carry it.
+   */
+  approvalSource?: CodeModeRunApprovalSource;
   language: CodeModeLanguage;
   originSurface?: import("./proactive.js").ProactiveOriginSurface;
   workspaceId?: string;

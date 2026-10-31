@@ -1,5 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatToolRunRecord, ToolCatalogEntry } from "@goatcitadel/contracts";
+import {
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ChatToolRunRecord,
+  type CodeModeReadiness,
+  type ToolCatalogEntry,
+} from "@goatcitadel/contracts";
 import {
   ChatTurnAgentRunner,
   type ChatTurnAgentRunnerInput,
@@ -144,5 +150,97 @@ describe("ordinary Chat bounded tool exposure", () => {
     expect([...quick.canonicalToModel.keys()]).toEqual(["browser.search"]);
     expect(quick.selectionDiagnostics).toBeUndefined();
     expect((await runner.resolveCapabilityToolSchema({ ...input(), toolAutonomy: "manual" })).tools).toEqual([]);
+  });
+});
+
+describe("code_mode.request exposure", () => {
+  function codeModeHarness(readiness: CodeModeReadiness | undefined) {
+    const catalog = [
+      tool("capabilities.search"),
+      tool("skills.read"),
+      tool("time.now"),
+      { ...tool("code_mode.request", "Ask the operator to run a short script"), requiresApproval: true },
+      ...Array.from({ length: 16 }, (_, index) => tool(`fixture.tool_${String(index).padStart(2, "0")}`)),
+    ];
+    const getCodeModeReadiness = vi.fn(async () => readiness!);
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => catalog,
+      boundedToolExposureV1Enabled: async () => true,
+      inspectToolAccess: vi.fn(async ({ toolName }: { toolName: string }) => ({
+        allowed: true,
+        requiresApproval: toolName === "code_mode.request",
+        reasonCodes: [],
+      })),
+      ...(readiness ? { getCodeModeReadiness } : {}),
+      createChatCompletion: vi.fn(),
+      invokeTool: vi.fn(),
+    });
+    return { runner, getCodeModeReadiness };
+  }
+  const ready: CodeModeReadiness = { enabled: true, sandboxEnabled: true, sandboxSupported: true, canRun: true };
+  const off = (reason: NonNullable<CodeModeReadiness["reason"]>): CodeModeReadiness => ({
+    enabled: reason !== "code_mode_off",
+    sandboxEnabled: reason === "code_mode_off",
+    sandboxSupported: reason !== "sandbox_unsupported",
+    canRun: false,
+    reason,
+  });
+  async function exposed(readiness: CodeModeReadiness | undefined, overrides: Partial<ChatTurnAgentRunnerInput> = {}) {
+    const schema = await codeModeHarness(readiness).runner.resolveCapabilityToolSchema({ ...input(), ...overrides });
+    return { schema, exposed: schema.canonicalToModel.has("code_mode.request") };
+  }
+
+  it("exposes code_mode.request as essential in chat when Code Mode can run or can be turned on", async () => {
+    const whenReady = await exposed(ready);
+    expect(whenReady.exposed).toBe(true);
+    // Essentials count toward the cap, so the schema stays at eight.
+    expect(whenReady.schema.tools).toHaveLength(8);
+    expect((await exposed(off("code_mode_off"), { authActorSource: "loopback" })).exposed).toBe(true);
+    expect((await exposed(off("sandbox_off"), { authActorSource: "token" })).exposed).toBe(true);
+    expect((await exposed(ready, { authActorSource: "device" })).exposed).toBe(true);
+  });
+
+  it("keeps code_mode.request away from turns that cannot approve or run it", async () => {
+    expect((await exposed(off("sandbox_unsupported"), { authActorSource: "loopback" })).exposed).toBe(false);
+    expect((await exposed(off("code_mode_off"))).exposed).toBe(false);
+    expect((await exposed(off("code_mode_off"), { authActorSource: "companion" })).exposed).toBe(false);
+    expect((await exposed(ready, { authActorSource: "companion" })).exposed).toBe(false);
+    expect((await exposed(ready, { authActorSource: "a2a_peer" })).exposed).toBe(false);
+    expect((await exposed(ready, { parentDelegationStepId: "delegation-step-1" })).exposed).toBe(false);
+    expect((await exposed(ready, { toolAutonomy: "manual" })).exposed).toBe(false);
+    expect((await exposed(ready, { mode: "code" })).exposed).toBe(false);
+    expect((await exposed(undefined)).exposed).toBe(false);
+  });
+
+  it("never offers the turn-on path on a machine that cannot run the sandbox", async () => {
+    const unsupportedButOff: CodeModeReadiness = {
+      enabled: false,
+      sandboxEnabled: false,
+      sandboxSupported: false,
+      canRun: false,
+      reason: "code_mode_off",
+    };
+    expect((await exposed(unsupportedButOff, { authActorSource: "loopback" })).exposed).toBe(false);
+  });
+
+  it("keeps code_mode.request away from server-only, scheduled, heartbeat and mesh turns", async () => {
+    expect((await exposed(ready, { serverOnlyPosture: true })).exposed).toBe(false);
+    expect((await exposed(ready, { permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID })).exposed).toBe(false);
+    expect((await exposed(ready, { permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID })).exposed).toBe(false);
+    expect((await exposed(ready, { authActorSource: "mesh_node" })).exposed).toBe(false);
+  });
+
+  it("does not offer code_mode.request when the readiness read fails", async () => {
+    const { runner, getCodeModeReadiness } = codeModeHarness(ready);
+    getCodeModeReadiness.mockRejectedValueOnce(new Error("readiness unavailable"));
+    const schema = await runner.resolveCapabilityToolSchema({ ...input(), authActorSource: "loopback" });
+    expect(schema.canonicalToModel.has("code_mode.request")).toBe(false);
+  });
+
+  it("reads Code Mode readiness once per tool schema", async () => {
+    const { runner, getCodeModeReadiness } = codeModeHarness(ready);
+    await runner.resolveCapabilityToolSchema(input());
+    expect(getCodeModeReadiness).toHaveBeenCalledTimes(1);
   });
 });

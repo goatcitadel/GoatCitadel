@@ -374,6 +374,165 @@ describe("dev verification routes", () => {
     });
   });
 
+  it("seeds a chat turn waiting on a Code Mode request approval", async () => {
+    const createApproval = vi.fn(async (input: { kind: string; riskLevel: string }) => ({
+      approvalId: "approval-code-1",
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: {},
+      preview: {},
+      createdAt: "2026-10-30T00:00:00.000Z",
+      expiresAt: "2026-10-30T00:10:00.000Z",
+      explanationStatus: "not_requested",
+    }));
+    const chatToolRunCreate = vi.fn((input: { toolRunId: string }) => ({ toolRunId: input.toolRunId }));
+    const inlineUpsert = vi.fn();
+    const chatMessageUpsert = vi.fn();
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    app.decorateRequest("authActorId", "loopback:verification-route-test");
+    app.decorateRequest("authActorSource", "loopback");
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createApproval,
+      seedDurableChatWait: vi.fn(() => ({
+        runId: "durable-code-1",
+        assistantMessageId: "assistant-code-1",
+        version: 1,
+      })),
+      settleDurableChatWait: vi.fn(async () => undefined),
+      storage: {
+        approvalWaitRuns: { getRunId: vi.fn(() => "approval-wait-code-1") },
+        chatMessages: { upsert: chatMessageUpsert },
+        chatTurnTraces: { create: storageTurnCreate },
+        chatToolRuns: { create: chatToolRunCreate },
+        chatInlineApprovals: { upsert: inlineUpsert },
+        chatSessionBranchState: { setActiveLeaf: vi.fn() },
+      },
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/chat-approval-scenario",
+      payload: { sessionId: "session-1", workspaceId: "workspace-1", tool: "code_mode.request" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    expect(createApproval).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "code_mode.request",
+        riskLevel: "caution",
+        // The payload is the tool's arguments, as the policy engine writes it; the card reviews goal and source.
+        payload: expect.objectContaining({ goal: "read the text of saturday-plan.pdf", source: expect.any(String) }),
+        linkage: {
+          sessionId: "session-1",
+          turnId: expect.any(String),
+          workspaceId: "workspace-1",
+          toolName: "code_mode.request",
+        },
+      }),
+    );
+    expect(createApproval.mock.calls[0]?.[0]).not.toHaveProperty("payload.sessionId");
+    expect(chatToolRunCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolName: "code_mode.request",
+        status: "approval_required",
+        approvalId: "approval-code-1",
+        args: expect.objectContaining({ goal: "read the text of saturday-plan.pdf", source: expect.any(String) }),
+      }),
+    );
+    expect(inlineUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "code_mode.request", toolName: "code_mode.request", status: "pending" }),
+    );
+    expect(chatMessageUpsert).toHaveBeenCalledWith(
+      expect.objectContaining({ role: "user", content: "Read saturday-plan.pdf and review it." }),
+    );
+    expect(response.json()).toMatchObject({ approvalId: "approval-code-1", chatTurnDurableRunId: "durable-code-1" });
+  });
+
+  it("rejects an unknown approval scenario tool", async () => {
+    const createApproval = vi.fn();
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, { isDevDiagnosticsEnabled: () => true, createApproval });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/chat-approval-scenario",
+      payload: { sessionId: "session-1", workspaceId: "workspace-1", tool: "fs.write" },
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(createApproval).not.toHaveBeenCalled();
+  });
+
+  it("seeds a finished chat turn whose Code Mode request ran, without an approval or a run", async () => {
+    const createApproval = vi.fn();
+    const chatToolRunCreate = vi.fn((input: { toolRunId: string }) => ({ toolRunId: input.toolRunId }));
+    const chatMessageUpsert = vi.fn();
+    const branchSetActiveLeaf = vi.fn();
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      createApproval,
+      storage: {
+        chatMessages: { upsert: chatMessageUpsert },
+        chatTurnTraces: { create: storageTurnCreate },
+        chatToolRuns: { create: chatToolRunCreate },
+        chatSessionBranchState: { setActiveLeaf: branchSetActiveLeaf },
+      },
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/chat-code-mode-ran-scenario",
+      payload: { sessionId: "session-1", workspaceId: "workspace-1" },
+    });
+
+    expect(response.statusCode).toBe(201);
+    const body = response.json() as { turnId: string; toolRunId: string; codeModeRunId: string };
+    expect(createApproval).not.toHaveBeenCalled();
+    expect(storageTurnCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ turnId: body.turnId, sessionId: "session-1", status: "completed" }),
+    );
+    expect(chatToolRunCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolRunId: body.toolRunId,
+        turnId: body.turnId,
+        toolName: "code_mode.request",
+        status: "executed",
+        result: { status: "completed", runId: body.codeModeRunId, durationMs: 1_800 },
+      }),
+    );
+    expect(chatToolRunCreate.mock.calls[0]?.[0]).not.toHaveProperty("approvalId");
+    expect(chatMessageUpsert).toHaveBeenCalledTimes(2);
+    expect(branchSetActiveLeaf).toHaveBeenCalledWith("session-1", body.turnId);
+  });
+
+  it("keeps the Code Mode ran scenario behind the dev verification switch", async () => {
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, { isDevDiagnosticsEnabled: () => false });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/dev/verification/chat-code-mode-ran-scenario",
+      payload: { sessionId: "session-1", workspaceId: "workspace-1" },
+    });
+
+    expect(response.statusCode).toBe(404);
+  });
+
   it("seeds deterministic Chat attachment evidence only through the enabled private fixture", async () => {
     const seedChatAttachmentEvidence = vi.fn(() => ({
       workspaceId: "workspace-1",

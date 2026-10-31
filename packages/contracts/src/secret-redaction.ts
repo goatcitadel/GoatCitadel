@@ -329,14 +329,15 @@ function isSafeStructuredStringValue(key: string, value: string): boolean {
 }
 
 function isStructuredBinaryPayloadKey(key: string): boolean {
-  return /^(?:(?:BYTES|DATA)_BASE64|B64_JSON)$/.test(normalizeStructuredKey(key));
+  return /^(?:(?:BYTES|DATA)_BASE64|BASE64|B64_JSON)$/.test(normalizeStructuredKey(key));
 }
 
 function isCanonicalBase64Payload(value: string): boolean {
   return (
     value.length > 0 &&
     value.length % 4 === 0 &&
-    /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(value)
+    // A flat class with trailing padding: a repeated group overflows the regex stack on multi-megabyte payloads.
+    /^[A-Za-z0-9+/]+={0,2}$/.test(value)
   );
 }
 

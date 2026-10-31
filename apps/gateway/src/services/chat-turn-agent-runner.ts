@@ -56,6 +56,7 @@ import { assertMeshChatToolSchema, type MeshChatToolSchema } from "./gateway/mes
 import { type MeshChatTurnContextHandle } from "./gateway/mesh-chat-binding.js";
 import type {
   CapabilityCatalogEntry,
+  CodeModeReadiness,
   ChatCitationRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -143,6 +144,7 @@ import {
 } from "./prompt-pack-harness-normalization.js";
 import { resolveChatReasoningEffort, resolvePromptLabReasoningEffort } from "./chat-reasoning-controls.js";
 import {
+  CODE_MODE_ONLY_TOOL_NAMES,
   LOCAL_PATH_TOOL_NAMES,
   LOCAL_QUERY_TOOL_NAMES,
   MCP_BROWSER_FALLBACK_TOOL_NAMES,
@@ -264,6 +266,7 @@ import {
   listReadOnlyBuiltinToolNames,
   validateResearchPresentationArgs,
   RUNTIME_CONFIGURE_TOOL_NAME,
+  CODE_MODE_REQUEST_TOOL_NAME,
   SUBAGENT_FANOUT_TOOL_NAME,
   SUBMIT_WORK_RESULT_TOOL_NAME,
   type RuntimeConfigurationTargetId,
@@ -900,6 +903,8 @@ export interface ChatTurnAgentRunnerDeps {
   ): Promise<ChatCompletionRequest>;
   /** Rollout-gated ordinary Chat schema exposure. Historical profiles retain their frozen schemas. */
   boundedToolExposureV1Enabled?: () => Promise<boolean>;
+  /** Whether Code Mode can run now, or why not. Absent means `code_mode.request` is never offered. */
+  getCodeModeReadiness?: () => Promise<CodeModeReadiness>;
   observeToolSchemaSelection?: (diagnostics: Readonly<ToolSchemaSelectionDiagnostics>) => void;
   assertFeatureReferencesCurrent?(
     input: Pick<
@@ -1208,6 +1213,21 @@ async function mapWithBoundedConcurrency<TItem, TResult>(
   return results;
 }
 
+type ToolPolicyActorSource = NonNullable<ToolPolicyActorContext["authActorSource"]>;
+/** Actors that never see `code_mode.request`: they cannot give the operator's approval in this Chat. */
+const CODE_MODE_REQUEST_EXCLUDED_ACTOR_SOURCES: ReadonlySet<ToolPolicyActorSource> = new Set([
+  "companion",
+  "a2a_peer",
+  "mesh_node",
+]);
+/** Operator-authenticated actors, whose approval card can turn Code Mode on. */
+const CODE_MODE_REQUEST_OPERATOR_ACTOR_SOURCES: ReadonlySet<ToolPolicyActorSource> = new Set([
+  "token",
+  "basic",
+  "loopback",
+  "device",
+]);
+
 export function buildTurnToolPolicyContext(
   input: Partial<ChatTurnAgentRunnerInput>,
   overrides: Partial<ToolPolicyActorContext> = {},
@@ -1456,6 +1476,43 @@ export class ChatTurnAgentRunner {
 
   private async isOptionalUserInputEnabled(): Promise<boolean> {
     return (await this.deps.chatAsyncClarificationV1Enabled?.()) === true;
+  }
+
+  /**
+   * `code_mode.request` is offered only in an interactive Chat turn the operator can approve: never to a delegated
+   * child, a companion, A2A or mesh actor, or a scheduled or system turn. When Code Mode is off (or its sandbox is
+   * switched off) it is still offered to an operator-authenticated session, whose approval card can turn it on; it is
+   * never offered on a machine that cannot run the sandbox.
+   */
+  private async isCodeModeRequestEligible(
+    input: Pick<
+      ChatTurnAgentRunnerInput,
+      "mode" | "parentDelegationStepId" | "authActorSource" | "policyContext" | "serverOnlyPosture"
+    >,
+    restrictedAutonomousProfile: boolean,
+  ): Promise<boolean> {
+    const actorSource = input.authActorSource ?? input.policyContext?.authActorSource;
+    const getCodeModeReadiness = this.deps.getCodeModeReadiness;
+    if (
+      input.mode !== "chat" ||
+      input.parentDelegationStepId ||
+      input.serverOnlyPosture ||
+      restrictedAutonomousProfile ||
+      (actorSource !== undefined && CODE_MODE_REQUEST_EXCLUDED_ACTOR_SOURCES.has(actorSource)) ||
+      !getCodeModeReadiness
+    ) {
+      return false;
+    }
+    let readiness: CodeModeReadiness;
+    try {
+      readiness = await getCodeModeReadiness();
+    } catch {
+      return false;
+    }
+    if (readiness.canRun) return true;
+    const canTurnOn =
+      readiness.sandboxSupported && (readiness.reason === "code_mode_off" || readiness.reason === "sandbox_off");
+    return canTurnOn && actorSource !== undefined && CODE_MODE_REQUEST_OPERATOR_ACTOR_SOURCES.has(actorSource);
   }
 
   /** Reads the turn's optional-input mailbox under its write fence; undefined when no reader is wired. */
@@ -6925,7 +6982,10 @@ export class ChatTurnAgentRunner {
       !input.parentDelegationStepId &&
       !restrictedAutonomousProfile &&
       (await this.isOptionalUserInputEnabled());
+    const codeModeRequestEligible = await this.isCodeModeRequestEligible(input, restrictedAutonomousProfile);
     for (const tool of catalog) {
+      if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
+      if (tool.toolName === CODE_MODE_REQUEST_TOOL_NAME && !codeModeRequestEligible) continue;
       if ((tool.toolName === "capabilities.search" || tool.toolName === "skills.read") && !boundedExposure) continue;
       if (tool.toolName === "user_input.request" && !optionalInputToolEligible) continue;
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
@@ -7119,6 +7179,7 @@ export class ChatTurnAgentRunner {
       subagentFanoutEligible,
       routedContextToolsEligible,
       delegatedWorkResultEligible,
+      codeModeRequestEligible,
     });
     if (boundedExposure) {
       essentialToolNames.push("capabilities.search", "skills.read");
@@ -10074,6 +10135,7 @@ function buildEssentialToolSet(input: {
   subagentFanoutEligible?: boolean;
   routedContextToolsEligible?: boolean;
   delegatedWorkResultEligible?: boolean;
+  codeModeRequestEligible?: boolean;
 }): string[] {
   if (input.quickWebProfile) {
     return input.webMode === "off" ? [] : ["browser.search"];
@@ -10115,6 +10177,10 @@ function buildEssentialToolSet(input: {
   }
   if (input.delegatedWorkResultEligible) {
     tools.add(SUBMIT_WORK_RESULT_TOOL_NAME);
+  }
+  if (input.codeModeRequestEligible) {
+    // The model reaches for it only when no other tool fits, which scoring cannot foresee.
+    tools.add(CODE_MODE_REQUEST_TOOL_NAME);
   }
   if (
     input.memoryLookupIntent ||
@@ -10168,6 +10234,7 @@ function buildEssentialToolSet(input: {
 export function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: string): Record<string, unknown> {
   if (toolName === "user_input.request")
     return { title: "Clarification", question: "Which preference applies to this task?" };
+  if (toolName === CODE_MODE_REQUEST_TOOL_NAME) return { goal: "probe", source: "return null;" };
   if (toolName === "presentations.create") {
     return {
       path: buildSafeWritePath("tool-access-probe.pptx", safeWriteFallbackDir),

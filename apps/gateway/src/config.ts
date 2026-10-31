@@ -88,6 +88,8 @@ export interface FeatureFlagsConfig {
   cronReviewQueueV1Enabled: boolean;
   replayRegressionV1Enabled: boolean;
   codeModeV1Enabled: boolean;
+  /** Runtime switch for the Code Mode host sandbox; defaults from codeModeSandbox.bestEffortHostEnabled. */
+  codeModeHostSandboxEnabled?: boolean;
   improvementLedgerV1Enabled: boolean;
   improvementActivationV1Enabled: boolean;
   promptRetuneCampaignV1Enabled: boolean;
@@ -1106,6 +1108,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
   const bestEffortSandboxEnabled = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED);
   if (bestEffortSandboxEnabled !== undefined) {
     assistant.capabilities.codeModeSandbox.bestEffortHostEnabled = bestEffortSandboxEnabled;
+    assistant.features.codeModeHostSandboxEnabled = bestEffortSandboxEnabled;
   }
   const codeModeDockerBackendEnabled = parseBooleanEnv(process.env.GOATCITADEL_CODE_MODE_DOCKER_BACKEND_ENABLED);
   if (codeModeDockerBackendEnabled !== undefined) {
@@ -1466,6 +1469,8 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       cronReviewQueueV1Enabled: featuresInput.cronReviewQueueV1Enabled ?? false,
       replayRegressionV1Enabled: featuresInput.replayRegressionV1Enabled ?? false,
       codeModeV1Enabled: featuresInput.codeModeV1Enabled ?? false,
+      codeModeHostSandboxEnabled:
+        featuresInput.codeModeHostSandboxEnabled ?? capabilitiesInput.codeModeSandbox?.bestEffortHostEnabled ?? false,
       improvementLedgerV1Enabled: featuresInput.improvementLedgerV1Enabled ?? false,
       improvementActivationV1Enabled: featuresInput.improvementActivationV1Enabled ?? false,
       promptRetuneCampaignV1Enabled: featuresInput.promptRetuneCampaignV1Enabled ?? false,

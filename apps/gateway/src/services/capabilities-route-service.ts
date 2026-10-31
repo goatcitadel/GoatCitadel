@@ -19,10 +19,12 @@ export type CapabilitiesRoutePort = Pick<
   | "getToolSchema"
   | "listCatalog"
   | "listCodeModeExecutionBackends"
+  | "getCodeModeReadiness"
   | "listCodeModeRuns"
   | "listCodeModeRunVerificationEvidence"
   | "verifyCodeModeRun"
   | "requestCodeModeAiderPromotion"
+  | "keepCodeModeRunAsCandidate"
   | "replayCodeModeAiderRun"
   | "compareCodeModeRuns"
   | "createAutonomousActivationGrant"
@@ -155,6 +157,10 @@ export class CapabilitiesRouteService {
     return this.capabilities.listCodeModeRuns(input);
   }
 
+  public getCodeModeReadiness() {
+    return this.capabilities.getCodeModeReadiness();
+  }
+
   public listCodeModeExecutionBackends() {
     return this.capabilities.listCodeModeExecutionBackends();
   }
@@ -194,6 +200,10 @@ export class CapabilitiesRouteService {
     operatorId?: string,
   ) {
     return this.capabilities.verifyCodeModeRun(runId, input, scope, operatorId);
+  }
+
+  public keepCodeModeRunAsCandidate(runId: string, input: { name: string; summary: string }) {
+    return this.capabilities.keepCodeModeRunAsCandidate(runId, input);
   }
 
   public requestCodeModeAiderPromotion(

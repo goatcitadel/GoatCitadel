@@ -96,6 +96,16 @@ Operator truth:
 - Windows-only hostile-code wording is allowed only when `hostileSandboxClaim.platformClaims.win32.publicClaimAllowed` is true from Windows AppContainer adversarial canary proof on the exact release SHA
 - aggregate hostile-code promotion remains blocked until `verify:code-mode:hostile-sandbox` has green native Linux Firejail, macOS Seatbelt, and Windows AppContainer adversarial canary proof
 
+### Chat-Requested Runs
+
+In an interactive Chat turn the assistant can call `code_mode.request` with a short goal, the script, an `input` object, and `reads`: every file path, folder path and attachment ID the script reads.
+
+- It is never offered to a delegated child, a companion, A2A or mesh actor, a scheduled, heartbeat or server-only turn, or on a machine that cannot run the Code Mode sandbox (readiness reports `sandbox_unsupported` before `code_mode_off`). When Code Mode or its sandbox is switched off, an operator-authenticated session is still offered it, and the approval card in Chat can turn both on.
+- Every run needs one operator approval of that tool call, and no second `code_mode.run` approval is created. The run is bound to it: the approved source hash is checked against the approval payload and the stored pending action, and the input and `reads` are frozen in the run's hashed policy snapshot.
+- The run keeps the same sandbox, managed artifacts and execution-time hash checks as any other Code Mode run. Inside it the Code Mode-only helpers page through a file or attachment: `docs.read_bytes` (64 KiB per call), `docs.extract_text` (60,000 characters or 96 KiB per page) and `docs.decompress` (64 KiB of output). Every helper call must name a target from the approved `reads`, compared after the session's tool path resolution: `fs.read`, `file.read_range`, `fs.stat`, `docs.read_bytes` and `docs.extract_text` name a listed path, `fs.list` names a folder that is itself listed, and the `docs.*` readers may name a listed attachment instead, which must belong to the run's own Chat session. A call that names no target is refused; `docs.decompress` reads no file. Any other helper, including those that search across the read roots (`file.find`, `code.search`, `code.search_files`, `session.search`), is left out of the run's hashed wrapper manifest and refused by name if called. A run with empty or missing `reads` reads no files through its helpers. The Gateway enforces this limit on every helper call; it is not isolation of the script, which is trusted code in the restricted OS sandbox like any Code Mode run, and no hostile-code sandbox is claimed (see Code Mode v1 above). A `code_mode.run` run's helpers stay limited by the read roots alone.
+- The guest result returns to the same turn, which continues; a result over 64 KB comes back as a preview, and one over the 128 KB IPC bound fails the run with a plain error. Deny, expiry, Code Mode off and an unsupported sandbox also resume the turn so the assistant can say the code did not run. A run that crossed its dispatch boundary and then lost its owner reports `manualReconciliationRequired` and does not resume the turn, even when its approval is delivered again after Code Mode was switched off.
+- `GET /api/v1/code-mode/readiness` reports whether Code Mode can run and why not. A finished Chat run can be kept through `POST /api/v1/code-mode/runs/:runId/keep`, which stages an inactive candidate from the run's hash-checked source; it stays inspectable-only until its governed lifecycle promotes it.
+
 ### Launch Contract
 
 Production runs launch a child-process harness with:
@@ -218,6 +228,7 @@ While a blocking approval is active, draft text remains editable but send is dis
 ## Operator Notes
 
 - Enable Code Mode v1 with `GOATCITADEL_FEATURE_CODE_MODE_V1_ENABLED=true`.
+- `features.codeModeV1Enabled` and `features.codeModeHostSandboxEnabled` can also be switched at run time from Settings or from the Code Mode card in Chat; each switch is a governed Settings change. Once stored, `codeModeHostSandboxEnabled` overrides `codeModeSandbox.bestEffortHostEnabled` (and `GOATCITADEL_CODE_MODE_BEST_EFFORT_SANDBOX_ENABLED`) without a restart.
 - Candidate root override: `GOATCITADEL_CAPABILITY_CANDIDATE_ROOT`
 - Artifact root override: `GOATCITADEL_CODE_MODE_ARTIFACT_ROOT`
 - Temp root override: `GOATCITADEL_CODE_MODE_TEMP_ROOT`

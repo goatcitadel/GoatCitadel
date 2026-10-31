@@ -2,9 +2,13 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 
 import {
+  assertMobileBlockingActionsReachable,
   assertMobileVisualGeometry,
   assertVisualTraceRetentionProbeScope,
   collectVisualBrowserConsoleEvidence,
+  createVisualCodeModeReadiness,
+  installVisualCodeModeReadinessFixture,
+  isCodeModeCardVisualState,
   parseVisualTraceRetentionProbe,
   prepareVisualScenarioState,
   runVisualRegressionLane,
@@ -206,6 +210,146 @@ test("composer palette visual state opens through the keyboard contract", async 
   assert.equal(calls[0], "Control+K");
   assert.equal(calls[1], ".mc-next-command-popover.palette-sheet");
   assert.deepEqual(calls[3], ["searchbox", { name: "Search commands and context" }]);
+});
+
+test("Code Mode card states wait on the card's own control", async () => {
+  for (const [visualState, name] of [
+    ["code-mode-pending", "Run it"],
+    ["code-mode-enable", "Turn on Code Mode and run"],
+    ["code-mode-done", "Keep as a tool"],
+  ]) {
+    const calls = [];
+    const page = {
+      locator(selector) {
+        calls.push(selector);
+        return {
+          getByRole(role, options) {
+            calls.push([role, options]);
+            return {
+              async waitFor(options) {
+                calls.push(options);
+              },
+            };
+          },
+        };
+      },
+    };
+    await prepareVisualScenarioState(page, { visualState });
+    assert.deepEqual(calls, [
+      '[role="group"][aria-label="Code Mode request"]',
+      ["button", { name, exact: true }],
+      { state: "visible", timeout: 15000 },
+    ]);
+  }
+});
+
+test("Code Mode readiness is pinned only for the pending and Code-Mode-off captures", () => {
+  assert.deepEqual(createVisualCodeModeReadiness("code-mode-pending"), {
+    enabled: true,
+    sandboxEnabled: true,
+    sandboxSupported: true,
+    canRun: true,
+  });
+  assert.equal(createVisualCodeModeReadiness("code-mode-enable").reason, "code_mode_off");
+  assert.equal(createVisualCodeModeReadiness("code-mode-enable").canRun, false);
+  assert.equal(createVisualCodeModeReadiness("code-mode-done"), null);
+  assert.equal(createVisualCodeModeReadiness("composer-palette"), null);
+  assert.equal(createVisualCodeModeReadiness(undefined), null);
+  assert.equal(isCodeModeCardVisualState("code-mode-done"), true);
+  assert.equal(isCodeModeCardVisualState("toString"), false);
+});
+
+function codeModeReadinessRoute({ method = "GET", ok = true, body }) {
+  const calls = [];
+  return {
+    calls,
+    route: {
+      request: () => ({ method: () => method }),
+      async continue() {
+        calls.push("continue");
+      },
+      async fetch() {
+        calls.push("fetch");
+        return { ok: () => ok, json: async () => body };
+      },
+      async fulfill(options) {
+        calls.push(["fulfill", options.json]);
+      },
+    },
+  };
+}
+
+test("Code Mode readiness fixture keeps the Gateway's answer outside the pinned states", async () => {
+  let handler;
+  const fixture = await installVisualCodeModeReadinessFixture({
+    async route(pattern, callback) {
+      assert.equal(pattern, "**/api/v1/code-mode/readiness");
+      handler = callback;
+    },
+  });
+  const gateway = {
+    enabled: true,
+    sandboxEnabled: false,
+    sandboxSupported: false,
+    canRun: false,
+    reason: "sandbox_off",
+  };
+
+  const untouched = codeModeReadinessRoute({ body: gateway });
+  await handler(untouched.route);
+  assert.deepEqual(untouched.calls, ["continue"]);
+
+  fixture.setVisualState("code-mode-enable");
+  const pinned = codeModeReadinessRoute({ body: gateway });
+  await handler(pinned.route);
+  assert.deepEqual(pinned.calls, ["fetch", ["fulfill", createVisualCodeModeReadiness("code-mode-enable")]]);
+
+  const enveloped = codeModeReadinessRoute({ body: { success: true, data: gateway } });
+  await handler(enveloped.route);
+  assert.deepEqual(enveloped.calls[1], [
+    "fulfill",
+    { success: true, data: createVisualCodeModeReadiness("code-mode-enable") },
+  ]);
+
+  const failed = codeModeReadinessRoute({ ok: false, body: { error: "unavailable" } });
+  await handler(failed.route);
+  assert.deepEqual(failed.calls, ["fetch", ["fulfill", undefined]]);
+
+  const write = codeModeReadinessRoute({ method: "POST", body: gateway });
+  await handler(write.route);
+  assert.deepEqual(write.calls, ["continue"]);
+
+  fixture.setVisualState("code-mode-done");
+  const done = codeModeReadinessRoute({ body: gateway });
+  await handler(done.route);
+  assert.deepEqual(done.calls, ["continue"]);
+});
+
+test("mobile Code Mode decisions must both be reachable", async () => {
+  const selectors = [];
+  const page = {
+    locator(selector) {
+      selectors.push(selector);
+      return { count: async () => 1 };
+    },
+  };
+  await assert.rejects(
+    assertMobileBlockingActionsReachable(
+      page,
+      { slug: "cockpit-chat-code-mode-card-enable", visualState: "code-mode-enable" },
+      { slug: "mobile-light", viewport: { width: 390, height: 844 } },
+    ),
+    /did not render blocking decision buttons/,
+  );
+  assert.deepEqual(selectors, [
+    '[role="group"][aria-label="Code Mode request"] [role="group"][aria-label="Approval decisions"] button',
+  ]);
+  await assertMobileBlockingActionsReachable(
+    page,
+    { slug: "cockpit-chat-code-mode-card-done", visualState: "code-mode-done" },
+    { slug: "mobile-light", viewport: { width: 390, height: 844 } },
+  );
+  assert.equal(selectors.length, 1, "the done state has no decision to reach");
 });
 
 test("mobile pending-input geometry checks overflow and every operator control", async () => {

@@ -38,10 +38,12 @@ import { executeBrowserTool, isBrowserToolName } from "./browser-tools.js";
 import { scanBrowserContentGuard } from "./browser-content-guard.js";
 import type { ResolveOfficialSearchCredential } from "./research-search-official-providers.js";
 import type { FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";
+import { readCodeModeRequestArgs } from "./tool-executor/code-mode-request-args.js";
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import {
   CHANGE_REQUEST_TOOL_NAME,
+  CODE_MODE_REQUEST_TOOL_NAME,
   RUNTIME_CONFIGURATION_TARGET_IDS,
   RUNTIME_CONFIGURE_TOOL_NAME,
   type RuntimeConfigurationTargetId,
@@ -70,6 +72,7 @@ import {
 } from "./tool-executor/context-executor.js";
 import { executeFilesystemTool, isFilesystemToolName } from "./tool-executor/filesystem-executor.js";
 import { executeKnowledgeTool, isKnowledgeToolName } from "./tool-executor/knowledge-executor.js";
+import { executeDocumentHelperTool, isDocumentHelperToolName } from "./tool-executor/document-helpers-executor.js";
 import {
   executeScheduleManage,
   executeSubagentFanout,
@@ -136,6 +139,15 @@ export function setShellOutputRetentionBytesForTesting(
 export type { ChannelEnvSecretRequest, ChannelEnvSecretResolution };
 
 export interface ToolExecutorRuntimeHooks {
+  /**
+   * Gateway-owned, session-scoped read of a chat attachment's stored bytes for the document helpers: the window
+   * the call needs, with `totalBytes` set when only that window was read.
+   */
+  readAttachmentBytes?: (
+    request: ToolInvokeRequest,
+    attachmentId: string,
+    window: { start: number; maxBytes: number },
+  ) => Promise<{ fileName: string; mimeType: string; bytes: Buffer; totalBytes?: number }>;
   /**
    * Gateway-owned eligibility for writes outside every write root (an ordinary
    * interactive session, not a delegated child, A2A peer, or mesh node). Absent
@@ -237,6 +249,11 @@ export interface ToolExecutorRuntimeHooks {
   configureRuntime?: (request: ToolInvokeRequest, targetId: RuntimeConfigurationTargetId) => void | Promise<void>;
   /** Plan creation only. The hook must return a model-safe projection without action nonces. */
   requestChangePlan?: (request: ToolInvokeRequest, intent: ChangePlanRequest) => Promise<ChangePlanModelToolResult>;
+  /**
+   * Gateway-owned run of an operator-approved `code_mode.request`. The executor calls it only when the policy engine
+   * stamped `approvedByApprovalId`; the Gateway re-checks the approval and the approved code before it runs.
+   */
+  runCodeModeRequest?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Post-authorization, Gateway-owned presentation image generation hook. */
   preparePresentationVisuals?: PreparePresentationVisuals;
 }
@@ -373,6 +390,14 @@ export async function executeTool(
       }),
     );
   }
+  if (isDocumentHelperToolName(request.toolName)) {
+    return finalizeToolResult(
+      await executeDocumentHelperTool(request, config, storage, {
+        assertReadPathAllowedForRequest,
+        ...(runtimeHooks.readAttachmentBytes ? { readAttachmentBytes: runtimeHooks.readAttachmentBytes } : {}),
+      }),
+    );
+  }
   if (isArtifactToolName(request.toolName)) {
     return finalizeToolResult(
       await executeArtifactTool(request.toolName, request.args, writeConfig, {
@@ -409,6 +434,16 @@ export async function executeTool(
       }
       const intent = readChangePlanIntent(request.args);
       return finalizeToolResult({ ...(await runtimeHooks.requestChangePlan(request, intent)) });
+    }
+    case CODE_MODE_REQUEST_TOOL_NAME: {
+      if (!request.approvedByApprovalId?.trim()) {
+        throw new Error("code_mode.request requires an operator approval before it can run.");
+      }
+      readCodeModeRequestArgs(request.args);
+      if (!runtimeHooks.runCodeModeRequest) {
+        throw new Error("Code Mode requests are unavailable in this runtime.");
+      }
+      return finalizeToolResult({ ...(await runtimeHooks.runCodeModeRequest(request)) });
     }
     case RUNTIME_CONFIGURE_TOOL_NAME: {
       const targetId = readRuntimeConfigurationTarget(request.args);

@@ -189,6 +189,11 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
   return lines.join("\n");
 }
 
+/** Offered only when the turn's toolset has `code_mode.request`, so it lives in the volatile tail. */
+export const CODE_MODE_REQUEST_PROMPT_LINE =
+  "- When no available tool can do a needed step, call code_mode.request with a short goal and script instead of saying you can't. List in `reads` every file, folder or attachment the script reads; it can read only those, and cannot search. The operator approves it with one click and you continue with the result.";
+const CODE_MODE_REQUEST_PROMPT_SECTION = `## Running code\n${CODE_MODE_REQUEST_PROMPT_LINE}`;
+
 /** The label the operator sees on the tool group switch, so the prompt names the control that exists. */
 function switchedOffGroupLabel(toolName: string): string {
   return toolGroupForTool(toolName)?.label ?? "tool group";
@@ -387,6 +392,9 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   }
   const writeAndRunSection = toolsCallable ? buildWriteAndRunPolicySection(toolset) : undefined;
   if (writeAndRunSection) tailSections.push(writeAndRunSection);
+  if (toolsCallable && toolset.toolNames.includes("code_mode.request")) {
+    tailSections.push(CODE_MODE_REQUEST_PROMPT_SECTION);
+  }
 
   // Skills are read through a tool, so a turn without callable tools cannot draw on them either.
   const skills = toolsCallable

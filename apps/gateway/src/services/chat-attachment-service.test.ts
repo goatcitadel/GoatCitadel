@@ -317,6 +317,44 @@ describe("chat-attachment-service", () => {
     await expect(readChatAttachmentContent(host, record.attachmentId)).rejects.toThrow(/outside read allowlist/i);
   });
 
+  it("reads one window of an attachment, and only for the session it belongs to", async () => {
+    const { host, rootDir, storage } = await createHost();
+    roots.push(rootDir);
+    storages.push(storage);
+    const uploaded = await uploadChatAttachment(host, {
+      sessionId: "sess-1",
+      fileName: "pages.txt",
+      mimeType: "text/plain",
+      bytesBase64: Buffer.from("abcdefghij").toString("base64"),
+    });
+    const readSpy = vi.spyOn(fs, "readFile");
+    const openSpy = vi.spyOn(fs, "open");
+
+    const page = await readChatAttachmentContent(host, uploaded.attachmentId, {
+      sessionId: "sess-1",
+      window: { start: 3, maxBytes: 4 },
+    });
+    expect(page.bytes.toString()).toBe("defg");
+    const tail = await readChatAttachmentContent(host, uploaded.attachmentId, {
+      sessionId: "sess-1",
+      window: { start: 8, maxBytes: 4 },
+    });
+    expect(tail.bytes.toString()).toBe("ij");
+    // A positioned read of the window, never a whole-file read.
+    expect(readSpy).not.toHaveBeenCalled();
+    openSpy.mockClear();
+
+    await expect(
+      readChatAttachmentContent(host, uploaded.attachmentId, {
+        sessionId: "sess-other",
+        window: { start: 0, maxBytes: 4 },
+      }),
+    ).rejects.toThrow("Attachment is not part of this session.");
+    // The session is checked before any bytes are read.
+    expect(openSpy).not.toHaveBeenCalled();
+    expect(readSpy).not.toHaveBeenCalled();
+  });
+
   it("rejects an oversized stored record before attempting a filesystem read", async () => {
     const { host, rootDir, storage } = await createHost();
     roots.push(rootDir);

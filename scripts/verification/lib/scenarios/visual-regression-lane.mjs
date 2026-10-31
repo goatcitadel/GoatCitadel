@@ -98,7 +98,10 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
     await ensureOnboardingComplete(stack.gatewayUrl, "verification-visual-regression");
     await pinVisualRegressionProvider(stack.gatewayUrl, stub.providerId);
     const fixture = verificationTarget.isNext
-      ? await seedMissionControlNextFixture(stack.gatewayUrl, { runtimeRoot: stack.runtimeRoot })
+      ? await seedMissionControlNextFixture(stack.gatewayUrl, {
+          runtimeRoot: stack.runtimeRoot,
+          codeModeRequestScenarios: true,
+        })
       : null;
     const manualProofArtifacts = [];
     const browser = await chromium.launch({ headless: true });
@@ -120,6 +123,9 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
           if (verificationTarget.isNext && visualRoutes.some((route) => route.slug === "settings-local-ai")) {
             await installVisualLocalAiFixture(page);
           }
+          const codeModeReadiness = visualRoutes.some((route) => isCodeModeCardVisualState(route.visualState))
+            ? await installVisualCodeModeReadinessFixture(page)
+            : null;
           const browserLog = attachBrowserLogging(page);
           for (const route of visualRoutes) {
             const scenarioRecord = await runScenario(
@@ -137,6 +143,8 @@ export async function runVisualRegressionLane(context, options = {}, deps) {
                 const trace = await startBrowserTrace(context, { page, slug: artifactSlug });
                 let artifacts;
                 try {
+                  // Pinned before navigation: the card reads readiness as soon as its approval record loads.
+                  codeModeReadiness?.setVisualState(route.visualState);
                   await page.goto(
                     buildVerificationUiUrl(stack.uiUrl, resolveVisualRouteHref(route, variant, fixture)),
                     {
@@ -354,7 +362,72 @@ export function parseVisualTraceRetentionProbe(value) {
   throw new Error("GOATCITADEL_VERIFY_VISUAL_TRACE_RETENTION_PROBE must be an explicit true/false boolean");
 }
 
+const CODE_MODE_CARD_SELECTOR = '[role="group"][aria-label="Code Mode request"]';
+
+/** Each Code Mode card state, the readiness the card is shown (null keeps the Gateway's) and the control it settles on. */
+const CODE_MODE_CARD_VISUAL_STATES = Object.freeze({
+  "code-mode-pending": {
+    readiness: { enabled: true, sandboxEnabled: true, sandboxSupported: true, canRun: true },
+    readyButton: "Run it",
+  },
+  "code-mode-enable": {
+    readiness: {
+      enabled: false,
+      sandboxEnabled: true,
+      sandboxSupported: true,
+      canRun: false,
+      reason: "code_mode_off",
+    },
+    readyButton: "Turn on Code Mode and run",
+  },
+  "code-mode-done": { readiness: null, readyButton: "Keep as a tool" },
+});
+
+export function isCodeModeCardVisualState(visualState) {
+  return Object.hasOwn(CODE_MODE_CARD_VISUAL_STATES, visualState ?? "");
+}
+
+/** The pinned Code Mode readiness for a card state, or null to keep the Gateway's answer. */
+export function createVisualCodeModeReadiness(visualState) {
+  const readiness = isCodeModeCardVisualState(visualState)
+    ? CODE_MODE_CARD_VISUAL_STATES[visualState].readiness
+    : null;
+  return readiness ? { ...readiness } : null;
+}
+
+/**
+ * Visual-only Code Mode readiness. The lane's Gateway runs with Code Mode on, and whether the host sandbox is
+ * available differs between CI Linux and developer Windows, so the card's pending and Code-Mode-off captures pin the
+ * answer per state. Failed Gateway responses and every other route keep the real readiness; nothing here runs code
+ * or changes a setting.
+ */
+export async function installVisualCodeModeReadinessFixture(page) {
+  let visualState;
+  await page.route("**/api/v1/code-mode/readiness", async (route) => {
+    const fixture = route.request().method() === "GET" ? createVisualCodeModeReadiness(visualState) : null;
+    if (!fixture) return route.continue();
+    const response = await route.fetch();
+    if (!response.ok()) return route.fulfill({ response });
+    const body = await response.json();
+    const enveloped = Boolean(body?.data) && ("success" in body || "meta" in body);
+    await route.fulfill({ response, json: enveloped ? { ...body, data: fixture } : fixture });
+  });
+  return {
+    setVisualState(value) {
+      visualState = value;
+    },
+  };
+}
+
 export async function prepareVisualScenarioState(page, route) {
+  if (isCodeModeCardVisualState(route?.visualState)) {
+    const { readyButton } = CODE_MODE_CARD_VISUAL_STATES[route.visualState];
+    await page
+      .locator(CODE_MODE_CARD_SELECTOR)
+      .getByRole("button", { name: readyButton, exact: true })
+      .waitFor({ state: "visible", timeout: 15000 });
+    return;
+  }
   if (route?.visualState !== "composer-palette") {
     return;
   }
@@ -446,15 +519,19 @@ export async function assertMobileBlockingActionsReachable(page, route, variant)
   if (!variant?.viewport || variant.viewport.width > 840) {
     return;
   }
+  const codeModeDecision =
+    route?.visualState === "code-mode-pending" || route?.visualState === "code-mode-enable";
   const selector = route?.slug === "chat-pending-approval"
     ? '.mc-next-thread-blocking-prompt[data-blocker-kind="approval"] .chat-approval-actions > button'
     : route?.slug === "chat-pending-user-input"
       ? '.mc-next-thread-blocking-prompt[data-blocker-kind="user-input"] .chat-approval-actions > button'
-      : null;
+      : codeModeDecision
+        ? `${CODE_MODE_CARD_SELECTOR} [role="group"][aria-label="Approval decisions"] button`
+        : null;
   if (!selector) return;
   const buttons = page.locator(selector);
   const count = await buttons.count();
-  if (count < (route.slug === "chat-pending-approval" ? 2 : 1)) {
+  if (count < (route.slug === "chat-pending-approval" || codeModeDecision ? 2 : 1)) {
     throw new Error(`${route.slug} ${variant.slug} did not render blocking decision buttons`);
   }
   for (let index = 0; index < count; index += 1) {
