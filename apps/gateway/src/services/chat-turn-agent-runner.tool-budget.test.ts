@@ -207,6 +207,17 @@ describe("code_mode.request exposure", () => {
     expect((await exposed(undefined)).exposed).toBe(false);
   });
 
+  it("never offers the turn-on path on a machine that cannot run the sandbox", async () => {
+    const unsupportedButOff: CodeModeReadiness = {
+      enabled: false,
+      sandboxEnabled: false,
+      sandboxSupported: false,
+      canRun: false,
+      reason: "code_mode_off",
+    };
+    expect((await exposed(unsupportedButOff, { authActorSource: "loopback" })).exposed).toBe(false);
+  });
+
   it("reads Code Mode readiness once per tool schema", async () => {
     const { runner, getCodeModeReadiness } = codeModeHarness(ready);
     await runner.resolveCapabilityToolSchema(input());

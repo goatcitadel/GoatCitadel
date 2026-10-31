@@ -96,4 +96,14 @@ describe("CapabilitySystemService.getCodeModeReadiness", () => {
       reason: "sandbox_unsupported",
     });
   });
+
+  it("reports sandbox_unsupported before code_mode_off, so an unsupported host is never offered the switch", async () => {
+    const { service } = buildHarness({ flags: { codeModeV1Enabled: false }, supported: false });
+    expect(await service.getCodeModeReadiness()).toMatchObject({
+      enabled: false,
+      canRun: false,
+      sandboxSupported: false,
+      reason: "sandbox_unsupported",
+    });
+  });
 });

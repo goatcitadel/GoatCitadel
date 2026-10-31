@@ -1492,24 +1492,26 @@ export class ChatTurnAgentRunner {
     restrictedAutonomousProfile: boolean,
   ): Promise<boolean> {
     const actorSource = input.authActorSource ?? input.policyContext?.authActorSource;
+    const getCodeModeReadiness = this.deps.getCodeModeReadiness;
     if (
       input.mode !== "chat" ||
       input.parentDelegationStepId ||
       input.serverOnlyPosture ||
       restrictedAutonomousProfile ||
       (actorSource !== undefined && CODE_MODE_REQUEST_EXCLUDED_ACTOR_SOURCES.has(actorSource)) ||
-      !this.deps.getCodeModeReadiness
+      !getCodeModeReadiness
     ) {
       return false;
     }
     let readiness: CodeModeReadiness;
     try {
-      readiness = await this.deps.getCodeModeReadiness();
+      readiness = await getCodeModeReadiness();
     } catch {
       return false;
     }
     if (readiness.canRun) return true;
-    const canTurnOn = readiness.reason === "code_mode_off" || readiness.reason === "sandbox_off";
+    const canTurnOn =
+      readiness.sandboxSupported && (readiness.reason === "code_mode_off" || readiness.reason === "sandbox_off");
     return canTurnOn && actorSource !== undefined && CODE_MODE_REQUEST_OPERATOR_ACTOR_SOURCES.has(actorSource);
   }
 

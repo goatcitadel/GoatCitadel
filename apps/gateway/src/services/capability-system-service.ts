@@ -571,10 +571,11 @@ export class CapabilitySystemService {
     // Probe with the host sandbox forced on so support reflects the machine, not the switch.
     const probe = this.resolveSandboxMetadata({ ...config, bestEffortHostEnabled: true });
     const sandboxSupported = probe.available === true;
-    const reason: CodeModeReadiness["reason"] = !enabled
-      ? "code_mode_off"
-      : !sandboxSupported
-        ? "sandbox_unsupported"
+    // Unsupported comes first: it is a fact about the machine that no switch changes.
+    const reason: CodeModeReadiness["reason"] = !sandboxSupported
+      ? "sandbox_unsupported"
+      : !enabled
+        ? "code_mode_off"
         : !sandboxEnabled
           ? "sandbox_off"
           : undefined;
