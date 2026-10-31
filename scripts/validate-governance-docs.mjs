@@ -396,7 +396,11 @@ if (!/@goatcitadel\/extensions-sdk/.test(pluginSdkDoc)) {
 if (!/@goatcitadel\/extensions-sdk@2\.0\.0/.test(pluginSdkDoc)) {
   errors.push("docs/PLUGIN_SDK_CONTRACT.md must describe the 2.0.0 SDK package, which keeps only the effective-tools helpers.");
 }
-if (!/@goatcitadel\/extensions-sdk@1\.0\.0/.test(pluginSdkDoc)) {
+if (
+  !pluginSdkDoc
+    .split(/\r?\n/)
+    .some((line) => /@goatcitadel\/extensions-sdk@1\.0\.0/.test(line) && /last published/i.test(line))
+) {
   errors.push("docs/PLUGIN_SDK_CONTRACT.md must say that 1.0.0 is the last published SDK version.");
 }
 

@@ -251,7 +251,7 @@ export function SettingsPosturePanel({
 }: {
   settings: Awaited<ReturnType<typeof fetchSettings>> | null;
   mcpServers: McpServerRecord[];
-  integrations: Array<{ connectionId?: string; enabled?: boolean; status?: string; pluginId?: string }>;
+  integrations: Array<{ connectionId?: string; enabled?: boolean; status?: string; label?: string }>;
   workspaces: Array<{ workspaceId?: string; name?: string }>;
   onNavigate: (section: "providers" | "mcp" | "integrations" | "access") => void;
 }) {
@@ -276,7 +276,7 @@ export function SettingsPosturePanel({
 
   const integrationRows: SettingsPostureCardRow[] = integrations.slice(0, 4).map((connection) => ({
     name:
-      connection.pluginId ??
+      connection.label ??
       (connection.connectionId ? `Integration ${connection.connectionId.slice(0, 8)}` : "Integration"),
     state: connection.enabled === false ? "disabled" : "configured",
     tone: connection.enabled === false ? "muted" : "safe",

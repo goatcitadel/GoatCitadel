@@ -4,7 +4,7 @@ Last updated: 2026-10-30
 
 ## Supported Versions
 
-The published product line is the `0.1.0-rc.1` release candidate, shipped as the GitHub prerelease `GoatCitadel 0.1.0 RC`. Workspace libraries such as `@goatcitadel/extensions-sdk` are versioned and published independently of the product. `@goatcitadel/extensions-sdk@1.0.0` is the last published version; the workspace's `2.0.0` is not published yet. Security support follows the current published release candidate first; source builds are supported at the current `main` commit only.
+The published product line is the `0.1.0-rc.1` release candidate, shipped as the GitHub prerelease `GoatCitadel 0.1.0 RC`. Workspace libraries such as `@goatcitadel/extensions-sdk` are versioned and published independently of the product. `@goatcitadel/extensions-sdk@1.0.0` is the last published version; the workspace's `2.0.0` is not published yet. Security fixes cover the package, but its retired add-on and integration-plugin helpers don't work with current GoatCitadel. Security support follows the current published release candidate first; source builds are supported at the current `main` commit only.
 
 | Line | Supported |
 |---|---|

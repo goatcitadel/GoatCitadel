@@ -63,6 +63,8 @@ const CHECK_GROUPS = Object.freeze({
             "exposes normalized agentic runtime availability",
             "keeps corrupt provider manifests unavailable and non-callable",
             "keeps corrupt provider manifests quarantined from callable exposure",
+            "allows callable exposure only after integrity, approval, availability, and health pass",
+            "marks non-inspectable capabilities unavailable even when a runtime says callable",
             "hides configured harness capability when the executable is missing",
             "converts skill drift, memory misses, and repeated failures into proposal-only review records",
           ],

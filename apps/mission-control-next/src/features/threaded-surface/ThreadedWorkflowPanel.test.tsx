@@ -254,8 +254,7 @@ function buildCodePanel(
 
 describe("ThreadedWorkflowPanel", () => {
   beforeEach(() => {
-    // The answer carries no plugin list any more. The cast below keeps this fixture valid until the contract drops it.
-    const availability: Omit<AgenticRuntimeAvailabilityResponse, "plugins"> = {
+    const availability: AgenticRuntimeAvailabilityResponse = {
       generatedAt: "2026-05-05T12:00:00.000Z",
       items: [],
       scalability: [],
@@ -307,7 +306,7 @@ describe("ThreadedWorkflowPanel", () => {
         },
       ],
     };
-    mockedFetchAgenticRuntimeAvailability.mockResolvedValue(availability as AgenticRuntimeAvailabilityResponse);
+    mockedFetchAgenticRuntimeAvailability.mockResolvedValue(availability);
     mockedFetchAgenticChannelDeliveries.mockResolvedValue({
       count: 1,
       deliveries: [
