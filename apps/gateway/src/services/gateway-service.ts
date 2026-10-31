@@ -8416,9 +8416,11 @@ export class GatewayService {
         policyContext = undefined;
       }
     }
+    const unreadableAttachments = await this.collectUnreadableTurnAttachments(input.trace);
     return scoutCapabilityUpgradeSuggestions({
       ...input,
       policyContext,
+      unreadableAttachments,
       deps: {
         listToolCatalog: () => this.listToolCatalog(),
         evaluateToolAccess: async (request) => await this.evaluateToolAccess(request),
@@ -8445,6 +8447,23 @@ export class GatewayService {
         },
       },
     });
+  }
+
+  /** Attachments on the turn's user message that never became readable text (images go to vision, not here). */
+  private async collectUnreadableTurnAttachments(
+    trace?: ChatTurnTraceRecord,
+  ): Promise<Array<{ fileName: string; mimeType: string }>> {
+    if (!trace?.userMessageId) return [];
+    try {
+      const userMessage = await this.storage.chatMessages.get(trace.userMessageId);
+      const ids = (userMessage?.attachments ?? []).map((item) => item.attachmentId);
+      if (ids.length === 0) return [];
+      return (await this.storage.chatAttachments.listByIds(ids))
+        .filter((record) => record.extractStatus !== "ready" && record.mediaType !== "image")
+        .map((record) => ({ fileName: record.fileName, mimeType: record.mimeType }));
+    } catch {
+      return [];
+    }
   }
 
   public async recordCapabilityGapFromTrace(input: {

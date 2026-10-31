@@ -40,8 +40,15 @@ interface CapabilityScoutInput {
   sessionId: string;
   trace?: ChatTurnTraceRecord;
   policyContext?: ToolPolicyActorContext;
+  /** Attachments the model could not read as text and that were not handed to a vision model. */
+  unreadableAttachments?: Array<{ fileName: string; mimeType: string }>;
   deps: CapabilityScoutDeps;
 }
+
+export type GapEvidence =
+  | { kind: "binary_read"; ext: string }
+  | { kind: "unreadable_attachment"; ext: string }
+  | { kind: "tool_failed"; toolName: string };
 
 interface RankedSuggestion {
   score: number;
@@ -113,12 +120,19 @@ export async function scoutCapabilityUpgradeSuggestions(
   input: CapabilityScoutInput,
 ): Promise<ChatCapabilityUpgradeSuggestion[]> {
   if (input.trace?.routing?.turnControl?.toolClosure || input.trace?.status === "cancelled") return [];
+  const gapEvidence = collectGapEvidence(input);
   const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
   const documentArtifactIntent = !presentationArtifactIntent && detectDocumentArtifactIntent(input.content);
-  if (!looksToolOrientedRequest(input.content) && !presentationArtifactIntent && !documentArtifactIntent) {
+  if (
+    !gapEvidence &&
+    !looksToolOrientedRequest(input.content) &&
+    !presentationArtifactIntent &&
+    !documentArtifactIntent
+  ) {
     return [];
   }
   if (
+    !gapEvidence &&
     !looksLikeCapabilityGap(input.assistantText, input.trace) &&
     !looksLikeMissingRequestedPresentationArtifact(input, presentationArtifactIntent) &&
     !looksLikeMissingRequestedDocumentArtifact(input, documentArtifactIntent)
@@ -294,10 +308,11 @@ export async function scoutCapabilityUpgradeSuggestions(
     logScoutFailure("mcp template discovery", error);
   }
 
-  if (!discoveryFailed && ranked.length === 0) {
+  const ranCodeModeRequest = (input.trace?.toolRuns ?? []).some((run) => run.toolName === "code_mode.request");
+  if (!discoveryFailed && ranked.length === 0 && gapEvidence && !ranCodeModeRequest) {
     ranked.push({
       score: 0.32,
-      suggestion: buildCodeModeCapabilityBuildSuggestion(input),
+      suggestion: buildCodeModeCapabilityBuildSuggestion(input, gapEvidence),
     });
   }
 
@@ -387,7 +402,10 @@ function buildCapabilitySearchQuery(content: string): string | undefined {
   return tokens.join(" ");
 }
 
-function buildCodeModeCapabilityBuildSuggestion(input: CapabilityScoutInput): ChatCapabilityUpgradeSuggestion {
+function buildCodeModeCapabilityBuildSuggestion(
+  input: CapabilityScoutInput,
+  evidence: GapEvidence,
+): ChatCapabilityUpgradeSuggestion {
   const sourceTurnId = input.trace?.turnId;
   const candidateId = `candidate-${sha256Text(
     ["code-mode-gap", input.sessionId, sourceTurnId ?? "", input.content].join(":"),
@@ -395,7 +413,7 @@ function buildCodeModeCapabilityBuildSuggestion(input: CapabilityScoutInput): Ch
   const intendedBehavior = summarizeReusableBehavior(input.content);
   return {
     kind: "code_mode_build",
-    title: buildCodeModeBuildTitle(input.content),
+    title: buildCodeModeBuildTitle(evidence),
     summary:
       "No callable, disabled, importable, or configurable capability matched this gap. GoatCitadel can stage a self-authored SKILL.md capability candidate for review from this conversation.",
     reason:
@@ -418,15 +436,41 @@ function buildCodeModeCapabilityBuildSuggestion(input: CapabilityScoutInput): Ch
   };
 }
 
-function buildCodeModeBuildTitle(content: string): string {
-  const tokens = tokenize(content)
-    .filter((token) => !STOP_WORDS.has(token))
-    .slice(0, 5);
-  if (tokens.length === 0) {
-    return "Build reusable capability";
+function buildCodeModeBuildTitle(evidence: GapEvidence): string {
+  if (evidence.kind === "tool_failed") {
+    return `Build a tool for what ${displayToolName(evidence.toolName)} couldn't do`;
   }
-  const label = tokens.map((token) => token[0]!.toUpperCase() + token.slice(1)).join(" ");
-  return `Build reusable skill: ${label}`;
+  return `Build a tool to read .${evidence.ext} files`;
+}
+
+function displayToolName(toolName: string): string {
+  return toolName.replace(/[._]+/g, " ").trim() || toolName;
+}
+
+function fileExtension(name: string): string | undefined {
+  const match = /.([a-z0-9]{1,8})$/i.exec(name.trim());
+  return match?.[1]?.toLowerCase();
+}
+
+/**
+ * Concrete proof that the turn hit a gap Code Mode could close: a binary file the
+ * file tool could not read, an attachment that was never readable as text, or a
+ * tool that failed. Assistant wording alone is not evidence.
+ */
+export function collectGapEvidence(input: CapabilityScoutInput): GapEvidence | undefined {
+  const toolRuns = input.trace?.toolRuns ?? [];
+  for (const run of toolRuns) {
+    if (run.toolName !== "fs.read" || run.status !== "executed" || run.result?.binary !== true) continue;
+    const target = typeof run.args?.path === "string" ? run.args.path : String(run.result.path ?? "");
+    const ext = fileExtension(target);
+    if (ext) return { kind: "binary_read", ext };
+  }
+  for (const attachment of input.unreadableAttachments ?? []) {
+    const ext = fileExtension(attachment.fileName);
+    if (ext) return { kind: "unreadable_attachment", ext };
+  }
+  const failed = toolRuns.find((run) => run.status === "failed" && run.toolName !== "code_mode.request");
+  return failed ? { kind: "tool_failed", toolName: failed.toolName } : undefined;
 }
 
 function summarizeReusableBehavior(content: string): string {
