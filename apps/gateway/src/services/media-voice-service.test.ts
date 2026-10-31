@@ -633,7 +633,7 @@ describe("MediaVoiceService", () => {
     globalThis.fetch = fetchMock as unknown as typeof fetch;
     try {
       await expect(service.createRealtimeVoiceClientSecret({ surface: "chat" })).rejects.toThrow(
-        "OpenAI Realtime voice requires OPENAI_API_KEY.",
+        "No OpenAI API key: add one under Settings › Providers › OpenAI, or set OPENAI_API_KEY.",
       );
       expect(fetchMock).not.toHaveBeenCalled();
       expect(systemSettings.set).toHaveBeenCalledWith(
@@ -646,6 +646,78 @@ describe("MediaVoiceService", () => {
     } finally {
       restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
       globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("uses the OpenAI key saved in Settings › Providers when OPENAI_API_KEY is unset", async () => {
+    const systemSettings = createSystemSettings();
+    const resolveOpenAIApiKey = vi.fn(() => " sk-from-keychain ");
+    const service = new MediaVoiceService({ ...createDeps({ systemSettings }), resolveOpenAIApiKey });
+    const env = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    const originalFetch = globalThis.fetch;
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ value: "ek_test", expires_at: 1_783_468_800 })));
+    delete process.env.OPENAI_API_KEY;
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    try {
+      await expect(service.getVoiceStatus()).resolves.toMatchObject({
+        realtime: { state: expect.not.stringMatching(/^missing_api_key$/), apiKeyReady: true },
+      });
+      await service.createRealtimeVoiceClientSecret({ surface: "chat" });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://api.openai.com/v1/realtime/client_secrets",
+        expect.objectContaining({
+          headers: expect.objectContaining({ Authorization: "Bearer sk-from-keychain" }),
+        }),
+      );
+      expect(
+        service
+          .getGoogleMeetPrerequisiteStatus({ provider: "openai-realtime", userStartConfirmed: false })
+          .prerequisites.find((item) => item.id === "provider_key")?.ready,
+      ).toBe(true);
+    } finally {
+      restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
+      globalThis.fetch = originalFetch;
+    }
+  });
+
+  it("reports missing_api_key when neither Providers nor OPENAI_API_KEY has a key", async () => {
+    const service = new MediaVoiceService({ ...createDeps(), resolveOpenAIApiKey: () => undefined });
+    const env = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    delete process.env.OPENAI_API_KEY;
+    try {
+      await expect(service.getVoiceStatus()).resolves.toMatchObject({
+        realtime: {
+          state: "missing_api_key",
+          apiKeyReady: false,
+          lastError: "No OpenAI API key: add one under Settings › Providers › OpenAI, or set OPENAI_API_KEY.",
+        },
+      });
+    } finally {
+      restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
+    }
+  });
+
+  it("falls back to OPENAI_API_KEY when the config has no OpenAI provider", async () => {
+    const service = new MediaVoiceService({ ...createDeps(), resolveOpenAIApiKey: () => undefined });
+    const env = {
+      OPENAI_API_KEY: process.env.OPENAI_API_KEY,
+    };
+    process.env.OPENAI_API_KEY = "sk-env-only";
+    try {
+      await expect(service.getVoiceStatus()).resolves.toMatchObject({
+        realtime: { apiKeyReady: true },
+      });
+      expect(
+        service
+          .getGoogleMeetPrerequisiteStatus({ provider: "openai-realtime", userStartConfirmed: false })
+          .prerequisites.find((item) => item.id === "provider_key")?.ready,
+      ).toBe(true);
+    } finally {
+      restoreEnvValue("OPENAI_API_KEY", env.OPENAI_API_KEY);
     }
   });
 

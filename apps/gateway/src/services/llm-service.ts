@@ -958,6 +958,20 @@ export class LlmService {
     return this.secretStore.getProviderApiKey(providerId);
   }
 
+  /**
+   * @internal Secret-owner seam for in-process consumers (OpenAI Realtime voice) that call a
+   * provider's API outside chat dispatch. Same order as dispatch: keychain, env var, inline config.
+   * Returns nothing unless the provider's baseUrl has `origin`, so a key for another endpoint never
+   * reaches the caller's fixed host. Never expose the returned value through a route or projection.
+   */
+  public resolveProviderApiKeyForOrigin(providerId: string, origin: string): string | undefined {
+    const provider = this.providers.get(providerId);
+    if (!provider || !URL.canParse(provider.baseUrl) || new URL(provider.baseUrl).origin !== origin) {
+      return undefined;
+    }
+    return this.resolveApiKey(provider);
+  }
+
   /** @internal Read-only availability probe used to choose an explicit secret owner. */
   public isProviderKeychainAvailable(): boolean {
     return this.secretStore.isAvailable();
