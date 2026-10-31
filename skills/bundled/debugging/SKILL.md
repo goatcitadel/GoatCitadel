@@ -11,7 +11,6 @@ metadata:
     - fs.read
     - shell.exec
   keywords:
-    - root cause
     - flaky test
     - intermittent failure
     - stack trace

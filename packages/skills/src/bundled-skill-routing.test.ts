@@ -2,6 +2,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { beforeAll, describe, expect, it } from "vitest";
 import { SkillsService } from "./loader.js";
+import { rankSkillSelectionCandidates } from "./selection-ranking.js";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const bundledDir = path.resolve(here, "../../../skills/bundled");
@@ -50,6 +51,18 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["@skill spec-driven-development for team invites", ["spec-driven-development"]],
   ["use spec-driven-development to plan the export feature", ["spec-driven-development"]],
   ["Write a spec for this feature", []],
+  // Substring false positives found in the branch review.
+  ["What's a good recipe for a flaky pie crust?", []],
+  ["What's the root cause of inflation?", []],
+  ["Make the chart readable for red-green colour blindness", []],
+  ["Sort the feed latest-first", []],
+  ["Stress-test my API with 1000 concurrent users", []],
+  ["Grill this steak recipe for me", []],
+  ["Interview me about my career for the podcast", []],
+  ["Check the docs/ folder and update the changelog", []],
+  ["Write a migration guide for users upgrading to 2.0", []],
+  ["Leave review comments on the open pull request", []],
+  ["Give me review feedback on my blog post draft", []],
 ];
 
 let service: SkillsService;
@@ -70,5 +83,22 @@ function selectedNew(text: string): string[] {
 describe("bundled skill routing", () => {
   it.each(CASES)("%s", (text, expected) => {
     expect(selectedNew(text)).toEqual([...expected].sort());
+  });
+});
+
+// The gateway's ranked selection mode nominates candidates by metadata score instead of substring match.
+const EXPLICIT_ONLY = ["bundled:ponytail", "bundled:spec-driven-development"];
+const RANKED_UNNAMED = [
+  "Keep this change small and minimal",
+  "Make the smallest possible change to fix this",
+  "Write a spec for this feature",
+  "Write a written specification before any code for the export feature",
+];
+
+describe("bundled skill ranked selection", () => {
+  it.each(RANKED_UNNAMED)("does not nominate an explicit-only skill for %s", async (text) => {
+    const ranked = rankSkillSelectionCandidates({ text }, await service.reload(), 5);
+    const nominated = ranked.candidates.map((candidate) => candidate.skillId);
+    expect(nominated.filter((skillId) => EXPLICIT_ONLY.includes(skillId))).toEqual([]);
   });
 });

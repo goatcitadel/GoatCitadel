@@ -34,7 +34,7 @@ GoatCitadel is licensed under the Apache License 2.0 (see `LICENSE`). This file 
 - Repository: https://github.com/mattpocock/skills
 - License: MIT, Copyright (c) 2026 Matt Pocock
 - Adapted at commit: `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`
-- Vendored path: `skills/bundled/debugging/` (from `diagnosing-bugs`), `skills/bundled/tdd/` (from `tdd`), `skills/bundled/grilling/` (from `grilling` and `domain-modeling`), and `skills/bundled/codebase-design/` (from `codebase-design`); each SKILL.md rewritten for GoatCitadel, no scripts or hooks
+- Vendored path: `skills/bundled/debugging/` (from `diagnosing-bugs`), `skills/bundled/tdd/` (from `tdd`), `skills/bundled/grilling/` (from `grilling` and `domain-modeling`), `skills/bundled/codebase-design/` (from `codebase-design`), and the "Writing a GoatCitadel Skill" section of `skills/bundled/agentic-skill-architect/` (from `writing-for-agents`); each rewritten for GoatCitadel, no scripts or hooks
 - Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
 
 ## Addy Osmani agent-skills
@@ -42,7 +42,7 @@ GoatCitadel is licensed under the Apache License 2.0 (see `LICENSE`). This file 
 - Repository: https://github.com/addyosmani/agent-skills
 - License: MIT, Copyright (c) 2025 Addy Osmani
 - Adapted at commit: `8bfcc1f9916f2eea55494d8c1fa7f4bde867dd9e`
-- Vendored path: `skills/bundled/secure-coding/` (from `security-and-hardening`) `skills/bundled/source-driven-development/` (from `source-driven-development`), and `skills/bundled/spec-driven-development/` (from `spec-driven-development`, explicit-only); each SKILL.md rewritten for GoatCitadel, no hooks, commands, agents, or evals
+- Vendored path: `skills/bundled/secure-coding/` (from `security-and-hardening`), `skills/bundled/source-driven-development/` (from `source-driven-development`), `skills/bundled/spec-driven-development/` (from `spec-driven-development`, explicit-only), and the "Writing a GoatCitadel Skill" section of `skills/bundled/agentic-skill-architect/` (from `context-engineering`); each rewritten for GoatCitadel, no hooks, commands, agents, or evals
 - Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
 
 ## ponytail

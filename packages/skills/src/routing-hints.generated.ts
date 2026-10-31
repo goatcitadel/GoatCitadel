@@ -27,7 +27,7 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
   },
   debugging: {
     phrases: ["find the root cause", "why is this failing", "track down the bug"],
-    keywords: ["flaky", "stack trace", "root cause"],
+    keywords: ["flaky test", "stack trace"],
     surfaces: ["code", "chat"],
     whenToUse: ["Find a defect's cause with a reproduction before changing code."],
     whenNotToUse: ["Do not use for planned features or refactors with no failure."],
@@ -210,7 +210,7 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     confidenceBoost: 0.1,
   },
   "source-driven-development": {
-    phrases: ["check the official docs", "migration guide"],
+    phrases: ["check the official docs", "follow the migration guide"],
     keywords: ["official docs", "deprecated api"],
     surfaces: ["code"],
     whenToUse: ["Ground version-sensitive code in the official docs for the installed version."],
@@ -243,7 +243,7 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
   },
   "receiving-code-review": {
     phrases: ["address the review", "reviewer said"],
-    keywords: ["review feedback", "pr comments"],
+    keywords: ["reviewer suggested", "pr comments from"],
     surfaces: ["code"],
     whenToUse: ["Evaluate review feedback before acting on it."],
     whenNotToUse: ["Do not use to perform a review of someone else's code."],

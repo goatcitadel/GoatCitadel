@@ -15,10 +15,9 @@ metadata:
     - tdd
     - test-driven
     - test driven
-    - test-first
     - write the test first
     - write the tests first
-    - red-green
+    - red-green-refactor
 ---
 
 # Test-Driven Development

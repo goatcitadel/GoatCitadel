@@ -1,6 +1,6 @@
 ---
 name: ponytail
-description: "Use when the operator explicitly asks for ponytail or for the smallest possible change, with every addition justified."
+description: "Use only when the operator names ponytail; it then makes the smallest complete change, with every addition justified."
 metadata:
   version: "0.1.0"
   tags:

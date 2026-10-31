@@ -11,13 +11,12 @@ metadata:
     - fs.read
     - shell.exec
   keywords:
-    - review feedback
-    - review comments
     - reviewer said
     - reviewer suggested
     - address the review
-    - pr comments
-    - code review feedback
+    - respond to the review
+    - pr comments from
+    - review comments from
 ---
 
 # Receiving Code Review

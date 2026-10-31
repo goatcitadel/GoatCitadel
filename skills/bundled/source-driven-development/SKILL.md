@@ -17,10 +17,9 @@ metadata:
   keywords:
     - official docs
     - official documentation
-    - check the docs
     - according to the docs
     - deprecated api
-    - migration guide
+    - follow the migration guide
 ---
 
 # Source-Driven Development

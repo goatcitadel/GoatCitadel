@@ -28,9 +28,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:debugging",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "135023d9226a98ca0aa66d4ba0a26622abfa422afb2ad5f7f5a7e50b37d9b419",
+    treeSha256: "f2d25c58e71e4deee318c7aa3c8738b599a7f1932b112cb07d05683d5fc282a1",
     fileCount: 3,
-    totalBytes: 8434,
+    totalBytes: 8417,
   },
   {
     skillId: "bundled:documentation",
@@ -49,9 +49,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:grilling",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "13ec6024baf911fdf7e4fe0246e1180c8307dfbd303d078f4b99b87b7d20dd32",
+    treeSha256: "dbf03535946f1d1f9abc6c0b18d3e11d49d40f63ad91d1cff06b6747522e0557",
     fileCount: 3,
-    totalBytes: 5632,
+    totalBytes: 5602,
   },
   {
     skillId: "bundled:impeccable",
@@ -105,9 +105,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:ponytail",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "31a95cba0608e7e974beb3071f624cd4e27037ee61888d61915219cde6b34906",
+    treeSha256: "e280480bc460779017a29832db1a273108308a7c27cc337d62a583a5071699c9",
     fileCount: 3,
-    totalBytes: 5675,
+    totalBytes: 5674,
   },
   {
     skillId: "bundled:qa",
@@ -119,9 +119,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:receiving-code-review",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "778ae3426a5eafcdc883c443a88c571f0c4ff48f28c041aa00abbfb7f01bf4a9",
+    treeSha256: "60801e0893aae702f3c7017b892b91938391984ef5d672a5ead2fc0a825bfc3c",
     fileCount: 3,
-    totalBytes: 5649,
+    totalBytes: 5638,
   },
   {
     skillId: "bundled:research",
@@ -147,9 +147,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:source-driven-development",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "11c80c0608700da602f32813508f491eeab39687b35ef8a811b4e4a211247438",
+    treeSha256: "9c1fa099be04648275d7f539f3405c442135ef27505e155c613567ba9b228e3c",
     fileCount: 3,
-    totalBytes: 5325,
+    totalBytes: 5315,
   },
   {
     skillId: "bundled:spec-driven-development",
@@ -161,8 +161,8 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:tdd",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "9e27f6a1bcd844c623aa118c6e3da92baa902e23320cfd12d0bc37563da57165",
+    treeSha256: "ab9b13cbbbf5e1a755f40731659d59d7411b1a3d63a76842829ca81a75002158",
     fileCount: 3,
-    totalBytes: 5770,
+    totalBytes: 5762,
   },
 ];

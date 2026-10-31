@@ -12,11 +12,9 @@ metadata:
     - memory.read
   keywords:
     - grill me
-    - grill this
     - poke holes
-    - stress-test my
-    - stress-test this
-    - interview me about
+    - stress-test this design
+    - stress-test my plan
 ---
 
 # Grilling

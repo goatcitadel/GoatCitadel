@@ -28,6 +28,16 @@ export interface SkillSelectionRanking {
   candidatesTruncated: boolean;
 }
 
+/**
+ * An explicit-only skill ships routing hints with no phrases or keywords and declares no keywords of its own,
+ * so substring activation never selects it; ranking must not nominate it from description or whenToUse text either.
+ */
+function isExplicitOnly(skill: LoadedSkill): boolean {
+  const hints = skill.routingHints;
+  if (!hints) return false;
+  return hints.phrases.length === 0 && hints.keywords.length === 0 && (skill.keywords ?? []).length === 0;
+}
+
 /** Metadata scores nominate candidates; they are not confidence, activation, or permission. */
 export function rankSkillSelectionCandidates(
   input: SkillResolveInput,
@@ -71,6 +81,7 @@ export function rankSkillSelectionCandidates(
     ]),
   );
   const weights = [8, 4, 1, 2];
+  const explicitOnly = documents.map((document) => isExplicitOnly(document.skill));
   const ranked = documents
     .map((document) => {
       let score = 0;
@@ -93,7 +104,7 @@ export function rankSkillSelectionCandidates(
         explicit: document.explicit,
       };
     })
-    .filter((candidate) => candidate.explicit || candidate.score > 0)
+    .filter((candidate, index) => candidate.explicit || (candidate.score > 0 && !explicitOnly[index]))
     .sort(
       (left, right) =>
         Number(right.explicit) - Number(left.explicit) ||
