@@ -403,18 +403,34 @@ export function changePlanEffectApprovalEvidence(approval: ApprovalRequest): App
   };
 }
 
+/** The input a Code Mode request hands its code, as compact JSON; undefined when it hands none. */
+function codeModeRequestInput(input: unknown): string | undefined {
+  if (input === undefined || input === null) return undefined;
+  if (typeof input === "object" && !Array.isArray(input) && Object.keys(input).length === 0) return undefined;
+  return JSON.stringify(input);
+}
+
 /**
  * A Chat `code_mode.request` approval carries the exact goal and script as its payload (the Gateway runs only that
- * script, bound by hash). Without both there is nothing exact to approve.
+ * script, bound by hash), with the files it may read and the input its code gets: the input decides what the code
+ * reads, so it is shown too. Without a goal and a script there is nothing exact to approve.
  */
 export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
   const payload = approval.payload as Record<string, unknown> | undefined;
   const goal = nonEmptyText(payload?.goal);
   const source = typeof payload?.source === "string" && payload.source.trim() ? payload.source : undefined;
   if (!goal || !source) return null;
+  const reads = Array.isArray(payload?.reads) ? payload.reads.flatMap((entry) => nonEmptyText(entry) ?? []) : [];
+  const input = codeModeRequestInput(payload?.input);
+  const entries: ApprovalTargetEntry[] = [
+    { label: "Goal", value: goal },
+    // A request that lists no files may read none.
+    { label: "Reads", value: reads.length ? reads.join(", ") : "No files" },
+    ...(input ? [{ label: "Input", value: input }] : []),
+  ];
   return {
-    targets: [`Goal: ${goal}`],
-    targetEntries: [{ label: "Goal", value: goal }],
+    targets: entries.map((entry) => `${entry.label}: ${entry.value}`),
+    targetEntries: entries,
     commands: [],
     changes: [{ label: "Code to run", content: source }],
     supporting: [],
