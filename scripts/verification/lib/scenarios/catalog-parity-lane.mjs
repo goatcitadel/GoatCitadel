@@ -1,8 +1,11 @@
 import { createServer } from "node:http";
 
 // Gmail runs only on a Google sign-in (installed-app OAuth, tokens in the OS keychain), never on a pasted
-// token, and the lane cannot sign in to Google. Its proof is that a fresh connection refuses the action.
-const SIGN_IN_REQUIRED_BLOCKED_REASONS = new Map([["automation.gmail", "gmail_auth_missing"]]);
+// token, and the lane cannot sign in to Google. Its proof is that a fresh connection refuses the action for
+// the sign-in itself (missing, or no keychain to hold it), not for a switched-off capability.
+const SIGN_IN_REQUIRED_REFUSALS = new Map([
+  ["automation.gmail", { blockedReason: "gmail_auth_missing", message: /Google sign-in/u }],
+]);
 
 export async function runCatalogParityLane(context, _options = {}, deps) {
   const {
@@ -25,6 +28,7 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
       gatewayEnv: {
         GOATCITADEL_TRELLO_API_BASE_URL: fixture.baseUrl,
         GOATCITADEL_TENOR_API_BASE_URL: fixture.baseUrl,
+        // Gmail is refused before any request; this keeps a regression on the fixture rather than Google.
         GOATCITADEL_GMAIL_API_BASE_URL: fixture.baseUrl,
         GOATCITADEL_NOTION_API_BASE_URL: fixture.baseUrl,
         GOATCITADEL_GITHUB_API_BASE_URL: fixture.baseUrl,
@@ -159,14 +163,16 @@ export async function runCatalogParityLane(context, _options = {}, deps) {
             },
           );
           assertOk(actionResult, `invoke ${catalogId}:${operatorAction.actionId}`);
-          const signInBlockedReason = SIGN_IN_REQUIRED_BLOCKED_REASONS.get(catalogId);
-          const expectedStatus = signInBlockedReason ? "blocked" : "executed";
+          const signInRefusal = SIGN_IN_REQUIRED_REFUSALS.get(catalogId);
+          const expectedStatus = signInRefusal ? "blocked" : "executed";
           if (
             actionResult.body?.status !== expectedStatus ||
-            (signInBlockedReason && actionResult.body?.blockedReason !== signInBlockedReason)
+            (signInRefusal &&
+              (actionResult.body?.blockedReason !== signInRefusal.blockedReason ||
+                !signInRefusal.message.test(actionResult.body?.message ?? "")))
           ) {
             throw new Error(
-              `catalog parity action ${catalogId}:${operatorAction.actionId} returned ${actionResult.body?.status ?? "unknown"}, expected ${signInBlockedReason ? `blocked (${signInBlockedReason})` : expectedStatus}: ${JSON.stringify(actionResult.body)}`,
+              `catalog parity action ${catalogId}:${operatorAction.actionId} returned ${actionResult.body?.status ?? "unknown"}, expected ${signInRefusal ? `blocked (${signInRefusal.blockedReason}) for the Google sign-in` : expectedStatus}: ${JSON.stringify(actionResult.body)}`,
             );
           }
           runtimeActionResults.push({
@@ -328,7 +334,7 @@ function buildCatalogParityConnectionConfig(catalogId, fixtureBaseUrl) {
         defaultRepo: "octo/widgets",
       };
     case "automation.gmail":
-      // Read Gmail on, so the refusal is the missing sign-in rather than a switched-off capability.
+      // Read Gmail on, so the refusal is about the sign-in rather than a switched-off capability.
       return {
         clientId: "verification-client.apps.googleusercontent.com",
         gmailRead: true,
