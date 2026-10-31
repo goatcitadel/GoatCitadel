@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest
 import type {
   ApprovalCreateInput,
   CodeModeReadiness,
+  CodeModeRunRecord,
   ToolCatalogEntry,
   ToolInvokeRequest,
   ToolInvokeResult,
@@ -402,6 +403,50 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     );
   });
 
+  it("fails a request run whose owner was lost after dispatch when the approval is delivered again", async () => {
+    const fx = createFixture();
+    const request = fx.approvedRequest("return { pages: 3 };");
+    const runId = await seedStaleRequestRun(fx, request, "boundary_crossed");
+
+    const result = await fx.service.runApprovedCodeModeRequest(request);
+
+    expect(result).toMatchObject({ runId, status: "failed" });
+    expect(result.error).toMatch(/interrupted/i);
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+    expect((await fx.asyncStorage.codeModeRuns.get(runId)).status).toBe("failed");
+  });
+
+  it("runs a request run whose stale claim never reached dispatch when the approval is delivered again", async () => {
+    const fx = createFixture();
+    const request = fx.approvedRequest("return { pages: 3 };");
+    const runId = await seedStaleRequestRun(fx, request, "claimed");
+
+    const result = await fx.service.runApprovedCodeModeRequest(request);
+
+    expect(result).toMatchObject({ runId, status: "completed", result: { pages: 3 } });
+  });
+
+  it("terminalizes an orphaned request run on read instead of leaving it running", async () => {
+    const fx = createFixture();
+    const dispatched = fx.approvedRequest("return { pages: 3 };");
+    const dispatchedRunId = await seedStaleRequestRun(fx, dispatched, "boundary_crossed");
+    // The shared approved-action boundary resolved the pending action; nothing delivers this approval again.
+    fx.storage.pendingApprovalActions.markResolved(dispatched.approvalId, "failed", {
+      manualReconciliationRequired: true,
+    });
+    const claimed = fx.approvedRequest("return { pages: 3 };");
+    const claimedRunId = await seedStaleRequestRun(fx, claimed, "claimed");
+    fx.storage.pendingApprovalActions.markResolved(claimed.approvalId, "failed", {
+      manualReconciliationRequired: true,
+    });
+
+    expect((await fx.service.getCodeModeRun(dispatchedRunId)).status).toBe("failed");
+    expect((await fx.asyncStorage.codeModeRuns.get(dispatchedRunId)).status).toBe("failed");
+    const claimedRun = await fx.service.getCodeModeRun(claimedRunId);
+    expect(claimedRun).toMatchObject({ status: "failed", errorCode: "code_mode_request_not_started" });
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+
   it("keeps a code_mode.request run out of the code_mode.run read-path terminalizers", async () => {
     const fx = createFixture();
     const request = fx.approvedRequest("return { ok: true };");
@@ -513,6 +558,40 @@ describe("CapabilitySystemService.runCodeModeRequestTool", { timeout: RUN_TIMEOU
     expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Registers a request run and leaves it `running` under a claim old enough to be stale, as a gateway killed mid-run
+ * would: still at `claimed` (before dispatch) or past the dispatch boundary.
+ */
+async function seedStaleRequestRun(
+  fx: ReturnType<typeof createFixture>,
+  request: ApprovedCodeModeRequest,
+  phase: "claimed" | "boundary_crossed",
+): Promise<string> {
+  const internals = fx.service as unknown as {
+    registerApprovedCodeModeRequestRun(runId: string, request: ApprovedCodeModeRequest): Promise<CodeModeRunRecord>;
+  };
+  const runId = `code-run-request-${sha256(`code_mode.request:${request.approvalId}`).slice(0, 32)}`;
+  const registered = await internals.registerApprovedCodeModeRequestRun(runId, request);
+  const startedAt = new Date(Date.now() - 10 * 60_000).toISOString();
+  const claimed = await fx.asyncStorage.codeModeRuns.claimForExecution({
+    runId,
+    approvalId: request.approvalId,
+    sandbox: registered.sandbox!,
+    startedAt,
+  });
+  if (phase === "boundary_crossed") {
+    await fx.asyncStorage.codeModeRuns.markExecutionBoundaryCrossed({
+      runId,
+      approvalId: request.approvalId,
+      startedAt,
+      executionGeneration: claimed!.executionRecovery.generation,
+      boundaryCrossedAt: startedAt,
+    });
+  }
+  expect((await fx.asyncStorage.codeModeRuns.get(runId)).status).toBe("running");
+  return runId;
+}
 
 /** The replayed `code_mode.request` tool call the policy engine hands the hook once the operator approved it. */
 function toolRequest(approved: ApprovedCodeModeRequest): ToolInvokeRequest {

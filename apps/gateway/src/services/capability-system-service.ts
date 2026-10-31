@@ -2628,11 +2628,22 @@ export class CapabilitySystemService {
     const approval = await this.requireApprovedCodeModeRequestApproval(request);
     await this.requireSourceMatchesApprovedCodeModeRequest(approval, request);
     const runId = codeModeRequestRunId(approval.approvalId);
-    const existing =
-      (await this.options.storage.codeModeRuns.find(runId)) ??
-      (await this.registerApprovedCodeModeRequestRun(runId, request));
+    const storage = this.options.storage;
+    let existing =
+      (await storage.codeModeRuns.find(runId)) ?? (await this.registerApprovedCodeModeRequestRun(runId, request));
     if (existing.codeHash !== request.approvedSourceSha256 || existing.approvalId !== approval.approvalId) {
       throw new ConflictError({ message: `Code Mode run ${runId} is bound to different approved code.` });
+    }
+    if (existing.status === "running") {
+      // The gateway lost this run's owner: a claim that never dispatched is released and runs now; one that crossed
+      // the dispatch boundary is marked interrupted (failed), and the turn resumes with that failure.
+      existing =
+        (await recoverStaleCodeModeExecutionClaim(
+          storage.codeModeRuns,
+          existing,
+          approval.approvalId,
+          new Date().toISOString(),
+        )) ?? existing;
     }
     if (existing.status === "completed" || existing.status === "failed") {
       return summarizeApprovedCodeModeRequestRun(existing, stripTrustedCodeWriteVerification(existing.result), {
@@ -2656,7 +2667,7 @@ export class CapabilitySystemService {
     let finalRun = outcome.run;
     if (outcome.kind === "deferred") {
       // No pending action re-drives this run, so a deferred start is recorded as a failure the turn can see.
-      finalRun = await this.options.storage.codeModeRuns.upsert({
+      finalRun = await storage.codeModeRuns.upsert({
         ...outcome.run,
         status: "failed",
         error: `Code Mode could not start: ${outcome.reason}`,
@@ -4039,13 +4050,49 @@ export class CapabilitySystemService {
     // A Chat code_mode.request run has a tool.invoke pending action, not a code_mode.run one, so the
     // code_mode.run read-path terminalizers do not apply to it.
     const terminalized = approvalSource
-      ? projected
+      ? await this.terminalizeOrphanedCodeModeRequestRun(projected)
       : await this.terminalizeExpiredCodeModeRun(
           await this.terminalizeResolvedCodeModeRunWithMissingPendingAction(projected),
         );
     const hydrated = await this.hydrateCodeModeRunLinkage(terminalized);
     const refreshed = (await this.codeModeVerification?.refreshRun(hydrated)) ?? hydrated;
     return approvalSource ? { ...refreshed, approvalSource } : refreshed;
+  }
+
+  /**
+   * A Chat request run whose owner was lost (a gateway restart mid-run) never stays `running` or `approval_pending`
+   * on reads: a stale claim goes through the claim-aware recovery, and a run that never started fails once its
+   * tool.invoke pending action is resolved, because nothing will deliver that approval again.
+   */
+  private async terminalizeOrphanedCodeModeRequestRun(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
+    const approvalId = run.approvalId;
+    if (!approvalId || (run.status !== "running" && run.status !== "approval_pending")) {
+      return run;
+    }
+    const storage = this.options.storage;
+    const current =
+      run.status === "running"
+        ? ((await recoverStaleCodeModeExecutionClaim(
+            storage.codeModeRuns,
+            run,
+            approvalId,
+            new Date().toISOString(),
+          )) ?? run)
+        : run;
+    const pendingStatus =
+      current.status === "approval_pending"
+        ? (await storage.pendingApprovalActions.find(approvalId))?.resolutionStatus
+        : undefined;
+    if (pendingStatus === undefined || pendingStatus === "pending") {
+      return current;
+    }
+    return await storage.codeModeRuns.upsert({
+      ...current,
+      status: "failed",
+      error: "Code Mode could not start: the gateway restarted before the run started.",
+      errorCode: "code_mode_request_not_started",
+      finishedAt: new Date().toISOString(),
+    });
   }
 
   private async terminalizeCodeModeRunForMissingPendingAction(
