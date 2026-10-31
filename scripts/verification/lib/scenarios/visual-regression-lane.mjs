@@ -362,7 +362,7 @@ export function parseVisualTraceRetentionProbe(value) {
   throw new Error("GOATCITADEL_VERIFY_VISUAL_TRACE_RETENTION_PROBE must be an explicit true/false boolean");
 }
 
-const CODE_MODE_CARD_SELECTOR = 'section[aria-label="Code Mode request"]';
+const CODE_MODE_CARD_SELECTOR = '[role="group"][aria-label="Code Mode request"]';
 
 /** Each Code Mode card state, the readiness the card is shown (null keeps the Gateway's) and the control it settles on. */
 const CODE_MODE_CARD_VISUAL_STATES = Object.freeze({

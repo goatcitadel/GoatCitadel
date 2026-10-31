@@ -236,7 +236,7 @@ test("Code Mode card states wait on the card's own control", async () => {
     };
     await prepareVisualScenarioState(page, { visualState });
     assert.deepEqual(calls, [
-      'section[aria-label="Code Mode request"]',
+      '[role="group"][aria-label="Code Mode request"]',
       ["button", { name, exact: true }],
       { state: "visible", timeout: 15000 },
     ]);
@@ -342,7 +342,7 @@ test("mobile Code Mode decisions must both be reachable", async () => {
     /did not render blocking decision buttons/,
   );
   assert.deepEqual(selectors, [
-    'section[aria-label="Code Mode request"] [role="group"][aria-label="Approval decisions"] button',
+    '[role="group"][aria-label="Code Mode request"] [role="group"][aria-label="Approval decisions"] button',
   ]);
   await assertMobileBlockingActionsReachable(
     page,

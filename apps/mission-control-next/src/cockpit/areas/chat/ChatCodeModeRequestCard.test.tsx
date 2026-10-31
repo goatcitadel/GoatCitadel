@@ -410,14 +410,33 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(container.textContent).not.toContain("Checking Code Mode…");
   });
 
-  it("running then done", async () => {
+  /** The row's one status line, which stays mounted through every state so each outcome is announced. */
+  const statusLine = () =>
+    container.querySelector<HTMLElement>('[role="group"][aria-label="Code Mode request"] > [role="status"]');
+
+  it("running then done, on one status line that is not a landmark", async () => {
     api.fetchApproval.mockResolvedValue(approval("approved"));
     await render(turnWith({}));
-    await waitFor(() => expect(container.textContent).toContain("Running code…"));
-    expect(container.querySelector("[aria-live='polite']")).not.toBeNull();
+    await waitFor(() => expect(statusLine()?.textContent).toContain("Running code…"));
+    const line = statusLine();
     await render(turnWith({ status: "executed", result: { status: "completed", durationMs: 1200, runId: "r1" } }));
-    expect(container.textContent).toContain(`Ran code to ${GOAL}`);
+    expect(statusLine()).toBe(line);
+    expect(line?.textContent).toContain(`Ran code to ${GOAL}`);
     expect(container.textContent).not.toContain("Running code…");
+    // Every turn that asks adds a row; none of them is a landmark.
+    expect(container.querySelector("section")).toBeNull();
+  });
+
+  it("moves focus to the row's status line when a decision replaces the buttons", async () => {
+    api.fetchApproval.mockResolvedValueOnce(approval());
+    await render(turnWith({}));
+    await waitForButton("Deny");
+    api.fetchApproval.mockResolvedValueOnce(approval());
+    api.fetchApproval.mockResolvedValue(approval("rejected"));
+    act(() => button("Deny")!.focus());
+    await act(async () => button("Deny")!.click());
+    await waitFor(() => expect(statusLine()?.textContent).toBe("Not run"));
+    expect(document.activeElement).toBe(statusLine());
   });
 
   it("denied shows Not run", async () => {
@@ -533,5 +552,16 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await act(async () => button("Keep as a tool")!.click());
     await waitFor(() => expect(rowText()).toContain("Saved as a tool for review. It couldn't be turned on here."));
     expect(container.querySelector('a[href*="/capabilities"]')).not.toBeNull();
+  });
+
+  it("moves focus to the saved line after Keep as a tool", async () => {
+    api.keepCodeModeRun.mockResolvedValue(staged);
+    api.promoteCapabilityCandidate.mockResolvedValue({ pendingApproval: null, noMutationRequired: true, detail: {} });
+    await render(doneTurn());
+    act(() => button("Keep as a tool")!.focus());
+    await act(async () => button("Keep as a tool")!.click());
+    await waitFor(() => expect(rowText()).toContain("Saved as a tool"));
+    expect(document.activeElement).not.toBe(document.body);
+    expect(document.activeElement?.textContent).toContain("Saved as a tool");
   });
 });

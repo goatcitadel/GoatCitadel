@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   keepCodeModeRun,
   promoteCapabilityCandidate,
@@ -48,9 +48,19 @@ export function ChatCodeModeKeepAsTool({
   workspaceId: string;
 }) {
   const [state, setState] = useState<"idle" | "keeping" | "failed" | Kept>("idle");
+  // The click replaces its button with the outcome line; focus that fell to <body> moves to the line, once.
+  const refocus = useRef(false);
+  const keptRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (!refocus.current || state === "idle" || state === "keeping") return;
+    refocus.current = false;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    keptRef.current?.focus({ preventScroll: true });
+  }, [state]);
   if (state === "saved" || state === "review" || state === "unfinished") {
     return (
-      <p className="text-fg-secondary">
+      <p ref={keptRef} tabIndex={-1} className="text-fg-secondary outline-none">
         {KEPT[state]}{" "}
         <NativeOwnerLink href="/capabilities/skills" scope={workspaceId}>
           Open Capabilities
@@ -59,6 +69,7 @@ export function ChatCodeModeKeepAsTool({
     );
   }
   const keep = async () => {
+    refocus.current = true;
     setState("keeping");
     let staged: Staged;
     try {

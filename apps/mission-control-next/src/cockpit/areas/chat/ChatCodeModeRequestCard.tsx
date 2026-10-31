@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState, type ReactElement } from "react";
+import { lazy, Suspense, useEffect, useRef, useState, type ReactNode } from "react";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
 import type {
@@ -116,61 +116,80 @@ function RequestRow({
       void queryClient.invalidateQueries({ queryKey: CODE_MODE_READINESS_KEY });
     }
   };
+  // As in the generic approval card (CH-18): a decision replaces its buttons. If focus was inside and fell to <body>,
+  // it moves once to the row's state line, which then says what happened.
+  const focusWithin = useRef(false);
+  const lineRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => {
+    if (!focusWithin.current) return;
+    const active = document.activeElement;
+    if (active && active !== document.body) return;
+    focusWithin.current = false;
+    lineRef.current?.focus({ preventScroll: true });
+  });
 
-  let body: ReactElement;
-  let live = false;
+  // The row's state line stays mounted in every state, so each change ("Running code…", the outcome) is announced.
+  let line: ReactNode;
+  let lineClass = "text-fg-secondary";
+  let controls: ReactNode = null;
   let keepRunId = "";
+  const readinessNow = readinessState(readiness);
   if (run.status === "executed" && run.result?.status !== "failed") {
     const duration = typeof run.result?.durationMs === "number" ? formatDuration(run.result.durationMs) : "";
-    body = (
-      <p className="text-fg">
+    line = (
+      <>
         Ran code to {goal}
         {duration ? <span className="text-fg-muted"> · {duration}</span> : null}
-      </p>
+      </>
     );
+    lineClass = "text-fg";
     keepRunId = text(run.result?.runId);
   } else if (run.status === "executed" || run.status === "failed") {
     const reason = failureReason(run);
-    body = <p className="text-fg-secondary">{reason ? failureLine(reason) : NOT_RUN}</p>;
+    line = reason ? failureLine(reason) : NOT_RUN;
   } else if (
     run.status === "blocked" ||
     recordMissing ||
     (open && record && record.status !== "pending" && record.status !== "approved")
   ) {
-    body = <p className="text-fg-secondary">{NOT_RUN}</p>;
+    line = NOT_RUN;
   } else if (open && record?.status === "approved") {
-    live = true;
-    body = (
-      <p className="flex items-center gap-2 text-fg-secondary">
+    line = (
+      <>
         <LoaderCircle aria-hidden="true" className="size-4 shrink-0 animate-spin" />
         Running code…
-      </p>
+      </>
     );
-  } else if (recordFailed) {
-    body = (
-      <div className="space-y-2">
-        <p className="text-fg">Run code to {goal}</p>
-        <p role="status" className="text-fg-muted">
-          Couldn&apos;t load the request.{" "}
-          <button
-            type="button"
-            className="font-medium text-accent hover:underline"
-            onClick={() => void recordQuery.refetch()}
-          >
-            Try again
-          </button>
-        </p>
-      </div>
-    );
+    lineClass = "flex items-center gap-2 text-fg-secondary";
   } else {
-    body = (
+    line = (
+      <>
+        Run code to {goal}
+        {readinessNow === "off" ? <span className="text-fg-muted"> · Code Mode is off</span> : null}
+        {readinessNow === "unsupported" ? (
+          <span className="text-fg-muted"> · This computer can&apos;t run Code Mode</span>
+        ) : null}
+      </>
+    );
+    lineClass = "text-fg";
+    controls = recordFailed ? (
+      <p role="status" className="text-fg-muted">
+        Couldn&apos;t load the request.{" "}
+        <button
+          type="button"
+          className="font-medium text-accent hover:underline"
+          onClick={() => void recordQuery.refetch()}
+        >
+          Try again
+        </button>
+      </p>
+    ) : (
       <PendingRow
-        goal={goal}
         reads={readsLine(readEntries(args), attachmentNames)}
         record={record}
         workspaceId={workspaceId}
         sessionId={run.sessionId}
-        readiness={readinessState(readiness)}
+        readiness={readinessNow}
         onRetryReadiness={() => void readiness.refetch()}
         turnOnCodeMode={turnOnCodeMode}
         note={note}
@@ -190,11 +209,27 @@ function RequestRow({
   }
 
   return (
-    <section aria-label="Code Mode request" aria-live={live ? "polite" : undefined} className="space-y-1 text-sm">
-      {body}
+    // A group, not a landmark: every turn that asks adds one.
+    <div
+      role="group"
+      aria-label="Code Mode request"
+      className="space-y-1 text-sm"
+      onFocusCapture={() => {
+        focusWithin.current = true;
+      }}
+      onBlurCapture={(event) => {
+        // A button disabled by its own click (the decision is being checked) loses focus too; the row keeps it.
+        if (event.target instanceof HTMLButtonElement && event.target.disabled) return;
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) focusWithin.current = false;
+      }}
+    >
+      <p ref={lineRef} role="status" tabIndex={-1} className={`outline-none ${lineClass}`}>
+        {line}
+      </p>
+      {controls}
       {keepRunId ? <ChatCodeModeKeepAsTool runId={keepRunId} goal={goal} workspaceId={workspaceId} /> : null}
       <ChatCodeModeRequestDetails run={run} args={args} workspaceId={workspaceId} />
-    </section>
+    </div>
   );
 }
 
@@ -214,8 +249,8 @@ function readinessState(query: UseQueryResult<CodeModeReadiness>): ReadinessStat
   return reason === "code_mode_off" || reason === "sandbox_off" ? "off" : "ready";
 }
 
+/** The controls under a pending request's line: what it reads, then the decision once readiness is known. */
 function PendingRow(props: {
-  goal: string;
   /** The files the code may read, by name; empty when it reads none. */
   reads: string;
   record: ApprovalRequest | undefined;
@@ -229,16 +264,11 @@ function PendingRow(props: {
   onSettled(): void;
   onInvalidated(message?: string): void;
 }) {
-  const { goal, record, readiness } = props;
+  const { record, readiness } = props;
   const off = readiness === "off";
   const unsupported = readiness === "unsupported";
   return (
     <div className="space-y-2">
-      <p className="text-fg">
-        Run code to {goal}
-        {off ? <span className="text-fg-muted"> · Code Mode is off</span> : null}
-        {unsupported ? <span className="text-fg-muted"> · This computer can&apos;t run Code Mode</span> : null}
-      </p>
       {props.reads ? <p className="text-fg-muted wrap-anywhere">Reads {props.reads}</p> : null}
       {!record || readiness === "checking" ? (
         <p role="status" className="text-fg-muted">
