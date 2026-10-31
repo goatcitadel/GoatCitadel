@@ -331,6 +331,8 @@ export interface ApprovedCodeModeResult {
   stdoutPreview?: string;
   stderrPreview?: string;
   error?: string;
+  /** Set when the run crossed its dispatch boundary and was then lost, so the approval keeps its reconciliation gate. */
+  manualReconciliationRequired?: true;
   durationMs: number;
 }
 
@@ -2628,7 +2630,15 @@ export class CapabilitySystemService {
     signal?: AbortSignal,
   ): Promise<ApprovedCodeModeResult> {
     const startedAtMs = Date.now();
-    await this.requireCodeModeReadyToRun();
+    const storage = this.options.storage;
+    const runId = codeModeRequestRunId(request.approvalId);
+    // A run already recorded for this approval is answered from its record even when Code Mode is now off: code that
+    // crossed its dispatch boundary may have run, so "Code Mode is off" would misreport it. Readiness is then checked
+    // only before the run would execute.
+    const recorded = await storage.codeModeRuns.find(runId);
+    if (!recorded) {
+      await this.requireCodeModeReadyToRun();
+    }
     if (!request.source.trim()) {
       throw new ValidationError({ message: "Code Mode source is required." });
     }
@@ -2638,7 +2648,6 @@ export class CapabilitySystemService {
       });
     }
     validateGuestSource(request.source);
-    const storage = this.options.storage;
     const approval = this.requireApprovedCodeModeRequestApproval(
       request,
       await storage.approvals.get(request.approvalId).catch(() => undefined),
@@ -2648,15 +2657,14 @@ export class CapabilitySystemService {
       request,
       await storage.pendingApprovalActions.find(approval.approvalId),
     );
-    const runId = codeModeRequestRunId(approval.approvalId);
-    let existing =
-      (await storage.codeModeRuns.find(runId)) ?? (await this.registerApprovedCodeModeRequestRun(runId, request));
+    let existing = recorded ?? (await this.registerApprovedCodeModeRequestRun(runId, request));
     if (existing.codeHash !== request.approvedSourceSha256 || existing.approvalId !== approval.approvalId) {
       throw new ConflictError({ message: `Code Mode run ${runId} is bound to different approved code.` });
     }
     if (existing.status === "running") {
-      // The gateway lost this run's owner: a claim that never dispatched is released and runs now; one that crossed
-      // the dispatch boundary is marked interrupted (failed), and the turn resumes with that failure.
+      // A stale claim means the gateway lost this run's owner: one that never dispatched is released and runs now; one
+      // that crossed the dispatch boundary is marked interrupted (failed) and needs manual reconciliation, so the turn
+      // does not resume on it. A claim that is not stale yet is still running and is refused below.
       existing =
         (await recoverStaleCodeModeExecutionClaim(
           storage.codeModeRuns,
@@ -2672,6 +2680,9 @@ export class CapabilitySystemService {
     }
     if (existing.status !== "approval_pending") {
       throw new ConflictError({ message: `Code Mode run ${runId} is ${existing.status} and cannot run now.` });
+    }
+    if (recorded) {
+      await this.requireCodeModeReadyToRun();
     }
 
     const outcome = await this.executeClaimedCodeModeRun({
@@ -7574,6 +7585,7 @@ function summarizeApprovedCodeModeRequestRun(
     ...(run.stdoutPreview ? { stdoutPreview: run.stdoutPreview } : {}),
     ...(run.stderrPreview ? { stderrPreview: run.stderrPreview } : {}),
     ...(completed ? {} : { error: describeApprovedCodeModeRequestError(run) }),
+    ...(run.executionRecovery.disposition === "manual_reconciliation" ? { manualReconciliationRequired: true } : {}),
     durationMs,
   };
 }

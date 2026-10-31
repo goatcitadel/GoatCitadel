@@ -135,6 +135,31 @@ describe("document helper tools", () => {
     30_000,
   );
 
+  it("advances every docs.extract_text page by a whole character when maxChars is 1", async () => {
+    const root = createRoot();
+    const file = path.join(root, "emoji.txt");
+    const text = "\u{1F600}a\u{1F680}";
+    fs.writeFileSync(file, text);
+    const config = createConfig(root);
+
+    const pages: string[] = [];
+    let next: number | undefined = 0;
+    while (next !== undefined && pages.length < text.length) {
+      const page = await executeTool(
+        request("docs.extract_text", { path: file, offset: next, maxChars: 1 }),
+        config,
+        storage,
+      );
+      if (page.nextOffset !== undefined) {
+        expect(page.nextOffset).toBeGreaterThan(next);
+      }
+      pages.push(String(page.text));
+      next = page.nextOffset as number | undefined;
+    }
+    expect(next).toBeUndefined();
+    expect(pages).toEqual(["\u{1F600}", "a", "\u{1F680}"]);
+  });
+
   it("rejects a path outside read roots", async () => {
     const root = createRoot();
     const outside = createRoot();

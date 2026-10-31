@@ -262,8 +262,16 @@ describe("code_mode.request through the real Gateway approval path", { timeout: 
 
   it("Code Mode off when approved from Inbox", async () => {
     const live = await startGateway();
-    // The shipped default: Code Mode is off, so the real service refuses before anything runs.
-    expect((await capabilitySystem(live).getCodeModeReadiness()).reason).toBe("code_mode_off");
+    const service = capabilitySystem(live);
+    // The shipped default: Code Mode is off, so the real service refuses before anything runs. A host without the
+    // Code Mode sandbox (the Linux CI runner) reports sandbox_unsupported first, so pin the sandbox as supported.
+    const shipped = await service.getCodeModeReadiness();
+    expect(shipped).toMatchObject({ enabled: false, canRun: false });
+    vi.spyOn(service, "getCodeModeReadiness").mockResolvedValue({
+      ...shipped,
+      sandboxSupported: true,
+      reason: "code_mode_off",
+    });
     const turn = await requestInWaitingTurn(live, "off");
 
     await live.resolveApproval(turn.approvalId, { decision: "approve", resolvedBy: "operator" });

@@ -214,14 +214,19 @@ function jsonByteCost(text: string, index: number): { units: number; bytes: numb
   return { units: 1, bytes: code < 0x800 ? 2 : 3 };
 }
 
-/** Page end from offset: at most maxChars code units and maxBytes JSON-encoded bytes, never splitting a surrogate pair. */
+/**
+ * Page end from offset: up to maxChars code units and maxBytes JSON-encoded bytes, never splitting a surrogate pair.
+ * A page always takes at least one whole character, so the only page longer than maxChars is a single surrogate pair
+ * when maxChars is 1; pagination always advances.
+ */
 function pageEnd(text: string, offset: number, maxChars: number, maxBytes: number): number {
+  const start = Math.min(offset, text.length);
   const limit = Math.min(text.length, offset + maxChars);
-  let index = Math.min(offset, text.length);
+  let index = start;
   let bytes = 0;
   while (index < limit) {
     const cost = jsonByteCost(text, index);
-    if (index + cost.units > limit || bytes + cost.bytes > maxBytes) {
+    if (index > start && (index + cost.units > limit || bytes + cost.bytes > maxBytes)) {
       break;
     }
     bytes += cost.bytes;

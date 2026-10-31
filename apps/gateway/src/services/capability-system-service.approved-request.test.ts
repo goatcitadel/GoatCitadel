@@ -22,6 +22,7 @@ import {
   type ApprovedCodeModeRequest,
 } from "./capability-system-service.js";
 import { CODE_MODE_OFF_TOOL_ERROR, CODE_MODE_UNSUPPORTED_TOOL_ERROR } from "./code-mode-request-tool.js";
+import { readToolDomainExecutionFailure } from "./tool-domain-result-truth.js";
 
 // Each case spawns a real Code Mode child process; a contended Windows host needs headroom.
 const RUN_TIMEOUT_MS = 60_000;
@@ -248,6 +249,7 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     const second = await fx.service.runApprovedCodeModeRequest(request);
 
     expect(second).toMatchObject({ runId: first.runId, status: "completed", result: { pages: 3 } });
+    expect(second).not.toHaveProperty("manualReconciliationRequired");
     expect(fx.spawnCodeModeChild).toHaveBeenCalledTimes(1);
   });
 
@@ -561,10 +563,54 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
 
     const result = await fx.service.runApprovedCodeModeRequest(request);
 
-    expect(result).toMatchObject({ runId, status: "failed" });
+    expect(result).toMatchObject({ runId, status: "failed", manualReconciliationRequired: true });
     expect(result.error).toMatch(/interrupted/i);
     expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
     expect((await fx.asyncStorage.codeModeRuns.get(runId)).status).toBe("failed");
+    // The approval effect reads the flag, so it keeps the reconciliation gate instead of resuming Chat.
+    expect(readToolDomainExecutionFailure({ ...result }, "allowed")).toMatchObject({
+      kind: "manual_reconciliation",
+      manualReconciliationRequired: true,
+    });
+    // A later delivery of the same approval reads the terminal run and still reports it.
+    await expect(fx.service.runApprovedCodeModeRequest(request)).resolves.toMatchObject({
+      runId,
+      status: "failed",
+      manualReconciliationRequired: true,
+    });
+  });
+
+  it("reports a run lost after dispatch as needing reconciliation even when Code Mode is now off", async () => {
+    const fx = createFixture();
+    const request = fx.approvedRequest("return { pages: 3 };");
+    const runId = await seedStaleRequestRun(fx, request, "boundary_crossed");
+    fx.readiness.mockResolvedValue({ ...READY, enabled: false, canRun: false, reason: "code_mode_off" });
+
+    // The stale run is recovered from its record, not refused as "Code Mode is off": it may already have run.
+    await expect(fx.service.runCodeModeRequestTool(toolRequest(request))).resolves.toMatchObject({
+      runId,
+      status: "failed",
+      manualReconciliationRequired: true,
+    });
+    // Once terminal, a later delivery still reads the record.
+    await expect(fx.service.runCodeModeRequestTool(toolRequest(request))).resolves.toMatchObject({
+      runId,
+      manualReconciliationRequired: true,
+    });
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+  });
+
+  it("refuses a stale claim that never reached dispatch while Code Mode is off, without running it", async () => {
+    const fx = createFixture();
+    const request = fx.approvedRequest("return { pages: 3 };");
+    await seedStaleRequestRun(fx, request, "claimed");
+    fx.readiness.mockResolvedValue({ ...READY, enabled: false, canRun: false, reason: "code_mode_off" });
+
+    await expect(fx.service.runCodeModeRequestTool(toolRequest(request))).resolves.toEqual({
+      status: "failed",
+      error: CODE_MODE_OFF_TOOL_ERROR,
+    });
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
   });
 
   it("runs a request run whose stale claim never reached dispatch when the approval is delivered again", async () => {
