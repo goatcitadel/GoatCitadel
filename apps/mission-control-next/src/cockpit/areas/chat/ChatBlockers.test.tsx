@@ -517,3 +517,41 @@ it("says why a code_mode.run approval can't be approved yet, and checks the code
   await vi.waitFor(() => expect(findButton("Review danger approval")!.disabled).toBe(false));
   expect(findButton("Check again")).toBeUndefined();
 });
+
+it("does not send a second specialist read while Check again is still reading", async () => {
+  const record = {
+    approvalId: "run-1",
+    kind: "code_mode.run",
+    status: "pending",
+    riskLevel: "danger",
+    payload: { runId: "r1" },
+    preview: {},
+    createdAt: "2026-10-01T00:00:00Z",
+  };
+  const evidence = { replay: { approval: record, events: [], effects: [] } };
+  api.fetchApproval.mockResolvedValue(record);
+  specialist.read.mockResolvedValueOnce(evidence);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({ pendingApproval: { approvalId: "run-1", kind: "code_mode.run", riskLevel: "danger" } })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(findButton("Review danger approval")?.disabled).toBe(false));
+  // A later read fails, so the earlier answer no longer counts; the failure stays recorded while it is read again.
+  specialist.read.mockRejectedValueOnce(new Error("Gateway unavailable"));
+  await act(async () => client.refetchQueries({ queryKey: ["approvals", "specialist"] }));
+  await vi.waitFor(() => expect(findButton("Check again")).toBeDefined());
+  let release!: (value: unknown) => void;
+  specialist.read.mockReturnValue(new Promise((resolve) => (release = resolve)));
+  await act(async () => findButton("Check again")!.click());
+  const reads = specialist.read.mock.calls.length;
+  await vi.waitFor(() => expect(findButton("Check again")?.disabled ?? true).toBe(true));
+  await act(async () => findButton("Check again")?.click());
+  expect(specialist.read).toHaveBeenCalledTimes(reads);
+  await act(async () => release(evidence));
+  await vi.waitFor(() => expect(findButton("Check again")).toBeUndefined());
+});

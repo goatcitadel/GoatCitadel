@@ -179,7 +179,14 @@ export function ChatBlockers({ props }: { props: Blockers }) {
                     : "The specialist review is unavailable or changed. Check again before approving."}
               </p>
               {specialistChecking ? null : (
-                <Button type="button" size="sm" onClick={() => void specialistQuery.refetch()}>
+                // A read that failed after an earlier answer stays failed while it is read again, so the button
+                // waits for that read, as in the Inbox detail.
+                <Button
+                  type="button"
+                  size="sm"
+                  disabled={specialistQuery.isFetching}
+                  onClick={() => void specialistQuery.refetch()}
+                >
                   Check again
                 </Button>
               )}
