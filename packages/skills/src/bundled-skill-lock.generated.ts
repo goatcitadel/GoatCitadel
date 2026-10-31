@@ -109,4 +109,11 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
     fileCount: 2,
     totalBytes: 9852,
   },
+  {
+    skillId: "bundled:tdd",
+    manifestVersion: "goatcitadel.skill-tree.v1",
+    treeSha256: "9e27f6a1bcd844c623aa118c6e3da92baa902e23320cfd12d0bc37563da57165",
+    fileCount: 3,
+    totalBytes: 5770,
+  },
 ];

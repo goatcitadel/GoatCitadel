@@ -29,6 +29,10 @@ const CASES: ReadonlyArray<readonly [text: string, expected: readonly string[]]>
   ["Harden the empty states and error copy on the settings page", []],
   ["What's a good recipe for grilled chicken?", []],
   ["Summarize this article for me", []],
+  ["Add a slugify helper using TDD", ["tdd"]],
+  ["Write the test first, then implement the parser", ["tdd"]],
+  ["Run the test suite and tell me what fails", []],
+  ["Sort the list with the latest first", []],
 ];
 
 let service: SkillsService;

@@ -34,7 +34,7 @@ GoatCitadel is licensed under the Apache License 2.0 (see `LICENSE`). This file 
 - Repository: https://github.com/mattpocock/skills
 - License: MIT, Copyright (c) 2026 Matt Pocock
 - Adapted at commit: `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`
-- Vendored path: `skills/bundled/debugging/` (SKILL.md rewritten for GoatCitadel from `diagnosing-bugs`; no scripts or hooks)
+- Vendored path: `skills/bundled/debugging/` (from `diagnosing-bugs`) and `skills/bundled/tdd/` (from `tdd`); each SKILL.md rewritten for GoatCitadel, no scripts or hooks
 - Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
 
 ## Hermes Agent MCP catalog (optional-mcps)

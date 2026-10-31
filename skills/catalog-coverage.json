@@ -123,6 +123,14 @@
       "catalogExposure": "inspectable"
     },
     {
+      "skillId": "bundled:tdd",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "extra:genie-npu-ir20",
       "owner": "settings",
       "source": "extra",

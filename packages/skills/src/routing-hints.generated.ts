@@ -185,6 +185,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not replace code fixes with test descriptions when a confirmed bug is in scope."],
     confidenceBoost: 0.08,
   },
+  tdd: {
+    phrases: ["write the test first", "red green refactor"],
+    keywords: ["tdd", "test-driven"],
+    surfaces: ["code"],
+    whenToUse: ["Drive a change with a failing test written first."],
+    whenNotToUse: ["Do not use to run or triage an existing suite."],
+    confidenceBoost: 0.1,
+  },
   research: {
     phrases: ["research", "compare", "source analysis", "benchmark review"],
     keywords: ["research", "compare", "source", "benchmark"],
