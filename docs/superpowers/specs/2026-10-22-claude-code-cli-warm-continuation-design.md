@@ -89,6 +89,7 @@ All must hold, or the step ends cold as today:
 
 - the warm flag is on (see **Operator decisions**), the step was bridged, and `stop_reason` is `tool_use`;
 - the step emitted every `tool_use` it saw. A `parallel_tool_calls: false` step that dropped calls is not parked;
+- every `tool_use` names a manifest tool. The CLI answers a call outside its manifest itself and moves on without the stub, so such a step is not parked;
 - the request has a `sessionId` and `turnId` in its attribution;
 - step N's `request.signal` has not aborted.
 

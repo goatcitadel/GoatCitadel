@@ -11,8 +11,11 @@ import { normalizeAnthropicUsage } from "./llm-provider-anthropic.js";
  * Bridged ("step mode") handling for the Claude Code CLI stream mapper: the
  * init tripwire, the governance faults, and the collection of one model step's
  * `tool_use` blocks into OpenAI-shaped `tool_calls`. Anything the bridge does
- * not expect fails the step closed. A continuation segment of a parked process
- * additionally accepts the CLI's echo of each tool result the Gateway delivered.
+ * not expect fails the step closed. A `tool_use` naming a tool the step does not
+ * offer is the exception: it passes to the runner, which answers it as
+ * unavailable, and the CLI's own error answer to it is accepted. A continuation
+ * segment of a parked process additionally accepts the CLI's echo of each tool
+ * result the Gateway delivered.
  *
  * This module has no runtime imports from the stream or bridge modules (both
  * import this one), so the server name lives here and the bridge re-exports it. Chunk shape and typed failures come from the shared
@@ -38,6 +41,11 @@ export interface ClaudeCliToolStepCollector {
   usage(): ClaudeCliUsage | undefined;
   /** Continuation only: true while a delivered result has not been echoed back yet. */
   awaitingEchoes(): boolean;
+  /**
+   * False once a call names a tool the manifest does not offer. The CLI answers such a call itself
+   * instead of waiting on the stub, so its process must not be parked.
+   */
+  everyCallOffered(): boolean;
 }
 
 export interface ClaudeCliToolStepOptions {
@@ -53,9 +61,14 @@ export function isClaudeCliToolUseBlock(block: Record<string, unknown>): boolean
   return block.type === "tool_use" || block.type === "server_tool_use" || block.type === "mcp_tool_use";
 }
 
-interface StartedCall {
-  id: string;
+interface AdmittedCall {
   modelName: string;
+  /** False for a name outside the manifest: the CLI has no such tool, so it answers the call itself. */
+  offered: boolean;
+}
+
+interface StartedCall extends AdmittedCall {
+  id: string;
 }
 
 export function createClaudeCliToolStepCollector(
@@ -71,6 +84,8 @@ export function createClaudeCliToolStepCollector(
   const argumentsById = new Map<string, string>();
   const delivered = options.continuation?.delivered;
   const echoed = new Set<string>();
+  /** Calls outside the manifest that the CLI already answered with its own error. */
+  const selfAnswered = new Set<string>();
   // A continuation resumes a process whose init was checked at its first step; another init is a mismatch.
   let sawInit = delivered !== undefined;
   let messageStarts = 0;
@@ -83,12 +98,18 @@ export function createClaudeCliToolStepCollector(
     if (!sawInit) fail("claude_cli_bridge_mismatch", "model output arrived before the CLI reported its tools");
   };
 
-  /** Validates a tool block's type and name and returns the runner's model-facing name. */
-  const admitToolBlock = (block: Record<string, unknown>): string => {
+  /**
+   * Validates a tool block's type and name and returns the runner's model-facing name. A name outside
+   * the manifest (often a tool the history shows from an earlier turn) keeps its own name, without the
+   * bridge prefix: the runner's tool-call repair answers it as unavailable, and nothing can run it,
+   * because the init tripwire proved the CLI has only the stub's tools.
+   */
+  const admitToolBlock = (block: Record<string, unknown>): AdmittedCall => {
     requireInit();
     if (block.type !== "tool_use") fail("claude_cli_tool_use_blocked");
-    const modelName = typeof block.name === "string" ? manifest.cliNameToModelName.get(block.name) : undefined;
-    return modelName ?? fail("claude_cli_tool_use_blocked");
+    const cliName = typeof block.name === "string" && block.name ? block.name : fail("claude_cli_tool_use_blocked");
+    const modelName = manifest.cliNameToModelName.get(cliName);
+    return modelName ? { modelName, offered: true } : { modelName: withoutBridgePrefix(cliName), offered: false };
   };
 
   const onInit = (event: Record<string, unknown>): void => {
@@ -100,19 +121,24 @@ export function createClaudeCliToolStepCollector(
 
   const onBlockStart = (block: Record<string, unknown>): boolean => {
     if (!isClaudeCliToolUseBlock(block)) return false;
-    const modelName = admitToolBlock(block);
+    const admitted = admitToolBlock(block);
     const id = typeof block.id === "string" && block.id ? block.id : fail("claude_cli_bridge_mismatch");
     if (calls.some((call) => call.id === id)) fail("claude_cli_bridge_mismatch", "a tool call id repeated");
-    calls.push({ id, modelName });
+    calls.push({ id, ...admitted });
     return true;
   };
 
   const onAssistant = (content: unknown[]): void => {
     for (const block of content) {
       if (!isRecord(block) || !isClaudeCliToolUseBlock(block)) continue;
-      const modelName = admitToolBlock(block);
+      const admitted = admitToolBlock(block);
       const call = calls.find((entry) => entry.id === block.id);
-      if (!call || call.modelName !== modelName || argumentsById.has(call.id)) {
+      if (
+        !call ||
+        call.modelName !== admitted.modelName ||
+        call.offered !== admitted.offered ||
+        argumentsById.has(call.id)
+      ) {
         return fail("claude_cli_bridge_mismatch", "a tool call arrived without its stream start");
       }
       argumentsById.set(call.id, toArguments(block.input));
@@ -139,13 +165,23 @@ export function createClaudeCliToolStepCollector(
     emitted = toolCalls.map(({ id, function: fn }) => ({ id, name: fn.name, arguments: fn.arguments }));
   };
 
-  /** Continuation only: accepts each delivered result's echo once, before the segment's model message. */
+  /**
+   * Accepts the CLI's own error answer to a call outside the manifest, once each, which can arrive before
+   * message_stop. A continuation also accepts each delivered result's echo once, before its model message.
+   */
   const onToolResults = (message: unknown): void => {
-    if (!delivered) return fail("claude_cli_bridge_mismatch", "the CLI produced a tool result itself");
     const content = isRecord(message) && Array.isArray(message.content) ? message.content : [];
     for (const block of content) {
       if (!isRecord(block) || block.type !== "tool_result") continue;
       const id = typeof block.tool_use_id === "string" ? block.tool_use_id : undefined;
+      if (id !== undefined && calls.some((call) => call.id === id && !call.offered)) {
+        if (block.is_error !== true || selfAnswered.has(id)) {
+          return fail("claude_cli_bridge_mismatch", "the CLI answered a tool call outside the manifest unexpectedly");
+        }
+        selfAnswered.add(id);
+        continue;
+      }
+      if (!delivered) return fail("claude_cli_bridge_mismatch", "the CLI produced a tool result itself");
       const expected = id === undefined ? undefined : delivered.get(id);
       if (messageStarts > 0 || id === undefined || expected === undefined || echoed.has(id)) {
         return fail("claude_cli_bridge_mismatch", "the CLI produced a tool result the Gateway did not deliver");
@@ -236,7 +272,17 @@ export function createClaudeCliToolStepCollector(
     awaitingEchoes() {
       return delivered !== undefined && echoed.size < delivered.size;
     },
+    everyCallOffered() {
+      return calls.every((call) => call.offered);
+    },
   };
+}
+
+/** A name outside the manifest without the bridge prefix, as the runner's tool names never carry it. */
+function withoutBridgePrefix(cliName: string): string {
+  return cliName.startsWith(CLAUDE_CLI_MCP_TOOL_PREFIX) && cliName.length > CLAUDE_CLI_MCP_TOOL_PREFIX.length
+    ? cliName.slice(CLAUDE_CLI_MCP_TOOL_PREFIX.length)
+    : cliName;
 }
 
 /** A `tool_result` echo's text: a string as is, or text blocks joined with no separator. */

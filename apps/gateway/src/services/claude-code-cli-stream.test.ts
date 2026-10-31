@@ -554,6 +554,40 @@ describe("continuation segments", () => {
       calls: [{ id: "toolu_01Gamma", name: "notes_echo", arguments: '{"text":"again"}' }],
     });
     expect(mapper.emittedAssistant()).toBe(emitted);
+    expect(mapper.everyCallOffered()).toBe(true);
+  });
+
+  it("a continuation whose model calls a tool outside the manifest yields it and accepts the CLI's own answer", () => {
+    const gone = "mcp__goatcitadel__code_mode_request";
+    const mapper = continuation({ [ID_A]: "value" });
+    pushAll(mapper, [
+      textEcho(ID_A, "value"),
+      messageStart,
+      streamEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: "toolu_01Gone", name: gone, input: {} },
+      }),
+      line({
+        type: "assistant",
+        message: {
+          model: MODEL,
+          role: "assistant",
+          content: [{ type: "tool_use", id: "toolu_01Gone", name: gone, input: {} }],
+        },
+      }),
+      // Not a delivered id: the CLI's error answer to a tool it does not have.
+      echo("toolu_01Gone", `<tool_use_error>Error: No such tool available: ${gone}</tool_use_error>`, {
+        is_error: true,
+      }),
+      messageDelta("tool_use"),
+      messageStop,
+    ]);
+    expect(mapper.emittedAssistant()).toEqual({
+      text: "",
+      calls: [{ id: "toolu_01Gone", name: "code_mode_request", arguments: "{}" }],
+    });
+    expect(mapper.everyCallOffered()).toBe(false);
   });
 
   it("a continuation that ends with a result finishes as text", () => {

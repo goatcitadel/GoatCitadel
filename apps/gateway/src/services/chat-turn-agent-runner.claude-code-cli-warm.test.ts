@@ -377,7 +377,119 @@ describe("ChatTurnAgentRunner with warm Claude Code CLI continuation", () => {
     expect(result.turnTrace.status).toBe("cancelled");
     await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
   });
+
+  it("a call to a tool the turn no longer offers is answered as unavailable, and the turn ends with the reply", async () => {
+    const reply = "Code Mode is not available in this chat, so here is the plan in prose instead.";
+    const harness = createFakeClaudeCliHarness([
+      unofferedToolStepScript({ id: "toolu_gone", name: "code_mode_request", input: { task: "rerun" } }),
+      textStepScript(reply),
+    ]);
+    const service = createService(harness, true);
+    const { runner, invokeTool, storage } = createRunner(service, { invokeTool: executedStatus });
+    // After a Gateway restart the history still shows an earlier Code Mode run this turn does not offer.
+    const input = turnInput({
+      content: "Run that Code Mode task again.",
+      historyMessages: [
+        { role: "user", content: "Use Code Mode to draft the plan." },
+        { role: "assistant", content: "I ran code_mode.request and drafted the plan." },
+        { role: "user", content: "Run that Code Mode task again." },
+      ],
+    });
+
+    const { result } = await collectTurn(runner, input);
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.failure).toBeUndefined();
+    expect(result.assistantContent).toContain(reply);
+    // Nothing ran: the runner answered the call itself, and the CLI's process was not parked.
+    expect(invokeTool).not.toHaveBeenCalled();
+    expect(listToolRuns(storage, input.turnId)).toEqual([]);
+    expect(harness.spawns).toHaveLength(2);
+    expectBridged(harness);
+    expect(parkedCount(service)).toBe(0);
+    const nextStdin = renderedStdin(harness, 1);
+    expect(nextStdin).toContain("[Assistant tool call toolu_gone: code_mode_request]");
+    expect(nextStdin).toContain("[Tool result toolu_gone]");
+    expect(nextStdin).toContain('"error":"unsupported_tool"');
+    expect(nextStdin).toContain("Valid tools for this turn: session.status.");
+    await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
+  });
+
+  it("after an unavailable-tool answer, the model's offered call parks and the next step still resumes warm", async () => {
+    const harness = createFakeClaudeCliHarness([
+      unofferedToolStepScript({ id: "toolu_gone", name: "code_mode_request", input: { task: "rerun" } }),
+      // The recovered step calls an offered tool, parks, and resumes warm with its result.
+      warmToolStepScript([firstA], [{ text: FINAL_TEXT }]),
+    ]);
+    const service = createService(harness, true);
+    const { runner, invokeTool, storage } = createRunner(service, { invokeTool: executedStatus });
+    const input = turnInput();
+
+    const { result } = await collectTurn(runner, input);
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.assistantContent).toContain(FINAL_TEXT);
+    expect(invokeTool.mock.calls.map(([request]) => request.args)).toEqual([{ probe: 1 }]);
+    expect(listToolRuns(storage, input.turnId).map((run) => run.status)).toEqual(["executed"]);
+    // Two processes for three steps: the first was killed at its stop, the second carried the last two.
+    expect(harness.spawns).toHaveLength(2);
+    expectBridged(harness);
+    expect(harness.killTree).toHaveBeenCalledTimes(1);
+    expect(parkedCount(service)).toBe(0);
+    // The parked step's messages, which the warm match re-hashed, carry the unavailable-tool answer.
+    expect(renderedStdin(harness, 1)).toContain("[Tool result toolu_gone]");
+    await vi.waitFor(() => expect(readdirSync(scratchRoot)).toEqual([]));
+  });
 });
+
+/**
+ * A step whose model calls a tool its manifest does not offer. Like the real CLI, which has no such
+ * tool, it answers the call itself with an error before message_stop, then starts its next model call.
+ */
+function unofferedToolStepScript(call: FakeClaudeCliCall): FakeClaudeCliScript {
+  return ({ stdout }, spawned) => {
+    const name = `mcp__goatcitadel__${call.name}`;
+    stdout.write(bridgedInit(manifestToolNames(spawned) ?? []));
+    stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 2 } } }));
+    stdout.write(
+      streamEvent({
+        type: "content_block_start",
+        index: 0,
+        content_block: { type: "tool_use", id: call.id, name, input: {} },
+      }),
+    );
+    stdout.write(
+      line({ type: "assistant", message: { content: [{ type: "tool_use", id: call.id, name, input: call.input }] } }),
+    );
+    stdout.write(
+      line({
+        type: "user",
+        message: {
+          role: "user",
+          content: [
+            {
+              type: "tool_result",
+              tool_use_id: call.id,
+              content: `<tool_use_error>Error: No such tool available: ${name}</tool_use_error>`,
+              is_error: true,
+            },
+          ],
+        },
+        parent_tool_use_id: null,
+      }),
+    );
+    stdout.write(streamEvent({ type: "content_block_stop", index: 0 }));
+    stdout.write(
+      streamEvent({
+        type: "message_delta",
+        delta: { stop_reason: "tool_use" },
+        usage: { input_tokens: 5, output_tokens: 9 },
+      }),
+    );
+    stdout.write(streamEvent({ type: "message_stop" }));
+    stdout.write(streamEvent({ type: "message_start", message: { usage: { input_tokens: 2 } } }));
+  };
+}
 
 type MockToolRunStorage = {
   chatToolRuns: {
