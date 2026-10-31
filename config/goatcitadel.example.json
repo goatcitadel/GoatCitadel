@@ -11,6 +11,7 @@
       "codeModeArtifactRoot": "./data/code-mode-artifacts",
       "tempRoot": "./data/code-mode-temp",
       "codeModeSandbox": {
+        "_comment": "bestEffortHostEnabled can also be switched at runtime (features.codeModeHostSandboxEnabled) from Settings or Chat; the runtime value wins once set.",
         "required": true,
         "bestEffortHostEnabled": false
       },

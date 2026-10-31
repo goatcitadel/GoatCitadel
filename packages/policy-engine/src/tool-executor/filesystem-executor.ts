@@ -4,6 +4,7 @@ import { createHash, randomUUID } from "node:crypto";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { clampInt } from "@goatcitadel/contracts";
+import { looksBinary } from "../native-document-parser.js";
 import { assertToolWritePath } from "../sandbox/tool-write-gate.js";
 
 export const FILESYSTEM_TOOL_NAMES = new Set([
@@ -85,8 +86,30 @@ async function fsRead(
   const p = required(args.path, "path");
   await deps.assertReadPathAllowedForRequest(p, request, config, storage);
   const full = path.resolve(p);
+  const sample = await readFileSample(full);
+  if (looksBinary(sample)) {
+    const stat = await fs.stat(full);
+    return {
+      path: full,
+      bytes: stat.size,
+      content: "",
+      binary: true,
+      hint: "Binary file. Inside Code Mode use docs.extract_text or docs.read_bytes.",
+    };
+  }
   const { content, bytes, sha256 } = await readUtf8FileBounded(full, FILESYSTEM_READ_MAX_BYTES);
   return { path: full, bytes, content, sha256 };
+}
+
+async function readFileSample(full: string): Promise<Buffer> {
+  const handle = await fs.open(full, "r");
+  try {
+    const buffer = Buffer.alloc(4096);
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return buffer.subarray(0, bytesRead);
+  } finally {
+    await handle.close();
+  }
 }
 
 async function fileReadRange(
@@ -239,8 +262,13 @@ async function fsPatch(args: Record<string, unknown>, config: ToolPolicyConfig) 
   const expectedSha256 = required(args.expectedSha256, "expectedSha256").toLowerCase();
   const oldText = args.oldText;
   const newText = args.newText;
-  if (!/^[a-f0-9]{64}$/u.test(expectedSha256) || typeof oldText !== "string" || !oldText ||
-      typeof newText !== "string" || oldText === newText) {
+  if (
+    !/^[a-f0-9]{64}$/u.test(expectedSha256) ||
+    typeof oldText !== "string" ||
+    !oldText ||
+    typeof newText !== "string" ||
+    oldText === newText
+  ) {
     throw new Error("fs.patch requires a valid SHA-256 and one non-empty changed text replacement.");
   }
   assertToolWritePath(p, config.sandbox);
@@ -475,7 +503,11 @@ async function searchFileContents(input: {
   };
 }
 
-async function readUtf8FileBounded(fullPath: string, maxBytes: number, strict = false): Promise<{ content: string; bytes: number; sha256: string }> {
+async function readUtf8FileBounded(
+  fullPath: string,
+  maxBytes: number,
+  strict = false,
+): Promise<{ content: string; bytes: number; sha256: string }> {
   const handle = await fs.open(fullPath, "r");
   try {
     const stat = await handle.stat();

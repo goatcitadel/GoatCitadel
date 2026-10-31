@@ -21,6 +21,7 @@ export {
   type MeshToolPolicyBinding,
 } from "./mesh-tool-policy-binding.js";
 export * from "./tool-executor.js";
+export { readCodeModeRequestArgs, type CodeModeRequestArgs } from "./tool-executor/code-mode-request-args.js";
 export * from "./presentation-visual-runtime.js";
 export * from "./tool-security.js";
 export * from "./browser-content-guard.js";

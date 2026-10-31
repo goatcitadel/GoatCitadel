@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   buildApprovalEvidenceModel,
   buildApprovalReviewEvidenceModel,
+  buildApprovalRequestReviewEvidenceModel,
   approvalResolutionLabel,
   findTraceMetadata,
   formatInferredIds,
@@ -238,39 +239,101 @@ it("keeps every exact target and full command in approval review", () => {
   expect(review!.commands.join(" ")).toContain(command);
   expect(buildApprovalEvidenceModel({ targets, command })!.commands.join(" ")).not.toContain(command);
 });
-it.each(["memory.write", "memory.upsert"])("keeps full %s content readable for exact review without broadening arbitrary content fields", toolName => {
-  const content = "  " + "Memory sentence ".repeat(200) + "\nSecond line\n";
-  expect(buildApprovalReviewEvidenceModel({ toolName, content })?.changes).toEqual([{ label: "Memory content", content }]);
-  expect(buildApprovalReviewEvidenceModel({ toolName, content: "One line" })?.changes).toEqual([{ label: "Memory content", content: "One line" }]);
-  expect(buildApprovalEvidenceModel({ toolName, content })?.changes[0]?.content.length).toBeLessThan(content.length);
-  expect(buildApprovalReviewEvidenceModel({ toolName: "unrelated", content: "One line" })).toBeNull();
-});
+it.each(["memory.write", "memory.upsert"])(
+  "keeps full %s content readable for exact review without broadening arbitrary content fields",
+  (toolName) => {
+    const content = "  " + "Memory sentence ".repeat(200) + "\nSecond line\n";
+    expect(buildApprovalReviewEvidenceModel({ toolName, content })?.changes).toEqual([
+      { label: "Memory content", content },
+    ]);
+    expect(buildApprovalReviewEvidenceModel({ toolName, content: "One line" })?.changes).toEqual([
+      { label: "Memory content", content: "One line" },
+    ]);
+    expect(buildApprovalEvidenceModel({ toolName, content })?.changes[0]?.content.length).toBeLessThan(content.length);
+    expect(buildApprovalReviewEvidenceModel({ toolName: "unrelated", content: "One line" })).toBeNull();
+  },
+);
 
 it("preserves exact lifecycle content and title while keeping compact review bounded", () => {
   const requestedContent = "  " + "Memory value ".repeat(200) + "\nSecond line\n";
-  const preview = { reviewKind: "memory.lifecycle.patch", requestedTitle: "Updated title", requestedContent, pinnedSummary: "Requested pinned state: unpinned", ttlSummary: "Requested TTL: 60 seconds" };
-  expect(buildApprovalReviewEvidenceModel(preview)?.changes).toEqual([{ label: "Requested memory title", content: "Updated title" }, { label: "Requested memory content", content: requestedContent }]);
+  const preview = {
+    reviewKind: "memory.lifecycle.patch",
+    requestedTitle: "Updated title",
+    requestedContent,
+    pinnedSummary: "Requested pinned state: unpinned",
+    ttlSummary: "Requested TTL: 60 seconds",
+  };
+  expect(buildApprovalReviewEvidenceModel(preview)?.changes).toEqual([
+    { label: "Requested memory title", content: "Updated title" },
+    { label: "Requested memory content", content: requestedContent },
+  ]);
   expect(buildApprovalEvidenceModel(preview)?.changes[1]?.content.length).toBeLessThan(requestedContent.length);
   expect(buildApprovalReviewEvidenceModel({ ...preview, requestedContent: "  \n" })?.changes[1]?.content).toBe("  \n");
 });
 
 it("keeps every exact batch target paired with its scope and requested values", () => {
- const model = buildApprovalReviewEvidenceModel({ reviewKind: "memory.lifecycle.batch", reviewedItems: [{ target: "First memory", scopeSummary: "Workspace one; namespace decisions", consequence: "Apply reviewed changes", pinnedSummary: "Unpin item" }, { target: "Second memory", scopeSummary: "Workspace one; namespace workspace", consequence: "Forget this item from active recall." }] });
- expect(model?.changes).toEqual([{ label: "Memory target 1", content: "Target: First memory\nWorkspace one; namespace decisions\nConsequence: Apply reviewed changes\nUnpin item" }, { label: "Memory target 2", content: "Target: Second memory\nWorkspace one; namespace workspace\nConsequence: Forget this item from active recall." }]);
+  const model = buildApprovalReviewEvidenceModel({
+    reviewKind: "memory.lifecycle.batch",
+    reviewedItems: [
+      {
+        target: "First memory",
+        scopeSummary: "Workspace one; namespace decisions",
+        consequence: "Apply reviewed changes",
+        pinnedSummary: "Unpin item",
+      },
+      {
+        target: "Second memory",
+        scopeSummary: "Workspace one; namespace workspace",
+        consequence: "Forget this item from active recall.",
+      },
+    ],
+  });
+  expect(model?.changes).toEqual([
+    {
+      label: "Memory target 1",
+      content:
+        "Target: First memory\nWorkspace one; namespace decisions\nConsequence: Apply reviewed changes\nUnpin item",
+    },
+    {
+      label: "Memory target 2",
+      content:
+        "Target: Second memory\nWorkspace one; namespace workspace\nConsequence: Forget this item from active recall.",
+    },
+  ]);
 });
 
 it("shows memory review summaries as the Gateway wrote them and pairs each target with its own label", () => {
-  const preview = { reviewKind: "memory.lifecycle.patch", title: "Approve memory item update", target: "Target: launch plan", scopeSummary: "Workspace: ws-1; namespace: notes", contentSummary: "Requested content: 41 UTF-8 bytes before redaction.", pinnedSummary: "Requested pinned state: unpinned", ttlSummary: "Requested TTL: 600 seconds", withheldSummary: "Secret-looking values are redacted." };
+  const preview = {
+    reviewKind: "memory.lifecycle.patch",
+    title: "Approve memory item update",
+    target: "Target: launch plan",
+    scopeSummary: "Workspace: ws-1; namespace: notes",
+    contentSummary: "Requested content: 41 UTF-8 bytes before redaction.",
+    pinnedSummary: "Requested pinned state: unpinned",
+    ttlSummary: "Requested TTL: 600 seconds",
+    withheldSummary: "Secret-looking values are redacted.",
+  };
   const model = buildApprovalReviewEvidenceModel(preview);
   // The user-supplied title is kept exactly, even when it starts with "Target:".
   expect(model?.targetEntries).toEqual([{ label: "Target", value: "Target: launch plan" }]);
   expect(model?.targets).toEqual(["Target: Target: launch plan"]);
-  expect(model?.supporting).toEqual(expect.arrayContaining(["Workspace: ws-1; namespace: notes", "Requested content: 41 UTF-8 bytes before redaction.", "Requested pinned state: unpinned", "Requested TTL: 600 seconds", "Secret-looking values are redacted."]));
+  expect(model?.supporting).toEqual(
+    expect.arrayContaining([
+      "Workspace: ws-1; namespace: notes",
+      "Requested content: 41 UTF-8 bytes before redaction.",
+      "Requested pinned state: unpinned",
+      "Requested TTL: 600 seconds",
+      "Secret-looking values are redacted.",
+    ]),
+  );
   expect(model?.supporting.some((line) => /Summary: /.test(line))).toBe(false);
 });
 
 it("shortens one-line preview text at a word boundary instead of mid-word", () => {
-  const reason = "Namespace is the storage target; workspace and session identify the requesting context, not a separate storage boundary. ".repeat(3);
+  const reason =
+    "Namespace is the storage target; workspace and session identify the requesting context, not a separate storage boundary. ".repeat(
+      3,
+    );
   const line = buildApprovalEvidenceModel({ reason })!.supporting.find((entry) => entry.startsWith("Reason: "))!;
   expect(line.endsWith("…")).toBe(true);
   expect(line).not.toContain("\n...");
@@ -278,4 +341,46 @@ it("shortens one-line preview text at a word boundary instead of mid-word", () =
   expect(reason.split(/\s+/u)).toContain(lastWord);
   const command = "run " + "x".repeat(2000);
   expect(buildApprovalEvidenceModel({ command })!.commands[0]!.endsWith("…")).toBe(true);
+});
+
+it("shows what a Chat Code Mode request reads and the input its code gets, so the review is what can run", () => {
+  const request = (payload: Record<string, unknown>) =>
+    buildApprovalRequestReviewEvidenceModel(
+      approval({ approvalId: "cm-1", createdAt: "2026-10-31T00:00:00Z", kind: "code_mode.request", payload }),
+    );
+  const goal = "read the text of saturday-plan.pdf";
+  const source = "return await capabilities.docs.extract_text({ path: input.path });";
+  const model = request({
+    goal,
+    source,
+    reads: ["verification/saturday-plan.pdf", "notes.txt"],
+    input: { path: ".env" },
+  });
+  expect(model?.targetEntries).toEqual([
+    { label: "Goal", value: goal },
+    { label: "Reads", value: "verification/saturday-plan.pdf, notes.txt" },
+    { label: "Input", value: '{"path":".env"}' },
+  ]);
+  expect(model?.targets).toEqual([
+    `Goal: ${goal}`,
+    "Reads: verification/saturday-plan.pdf, notes.txt",
+    'Input: {"path":".env"}',
+  ]);
+  expect(model?.changes).toEqual([{ label: "Code to run", content: source }]);
+  // The Gateway refuses every helper call that names anything outside Reads, so the consequence says GoatCitadel holds
+  // the reads to that list; it never says the sandbox does, which would claim hostile-code sandboxing.
+  expect(model?.consequence).toBe(
+    "Approving runs this exact code once, on this computer in a restricted sandbox. GoatCitadel lets it read only " +
+      "what is listed under Reads. Denying keeps it from running.",
+  );
+  // A request without reads reads no files, and one without input gets none.
+  const readsNothing = request({ goal, source });
+  expect(readsNothing?.targetEntries).toEqual([
+    { label: "Goal", value: goal },
+    { label: "Reads", value: "No files" },
+  ]);
+  expect(readsNothing?.consequence).toBe(
+    "Approving runs this exact code once, on this computer in a restricted sandbox. GoatCitadel lets it read no " +
+      "files. Denying keeps it from running.",
+  );
 });

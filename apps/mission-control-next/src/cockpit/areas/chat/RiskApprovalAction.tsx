@@ -23,6 +23,8 @@ export function RiskApprovalAction({
   onApprove,
   specialistReview,
   reviewedInPlace = false,
+  approveLabel,
+  approveDanger = false,
 }: {
   approval: ChatPendingApprovalState;
   workspaceId?: string;
@@ -35,6 +37,10 @@ export function RiskApprovalAction({
    * preview approves in one click instead of opening a second review. Nuclear keeps its typed confirmation.
    */
   reviewedInPlace?: boolean;
+  /** Names the one-click approve button for an action with its own wording, such as "Run it". */
+  approveLabel?: string;
+  /** Styles the one-click approve button as a danger action with a shield. */
+  approveDanger?: boolean;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
@@ -80,7 +86,7 @@ export function RiskApprovalAction({
       return (
         <Button type="button" variant="danger" size="sm" disabled={disabled} onClick={onApprove}>
           <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
-          Approve once
+          {approveLabel ?? "Approve once"}
         </Button>
       );
     return (
@@ -227,8 +233,15 @@ export function RiskApprovalAction({
     );
   }
   return (
-    <Button type="button" size="sm" variant="primary" disabled={disabled} onClick={onApprove}>
-      Approve once
+    <Button
+      type="button"
+      size="sm"
+      variant={approveDanger ? "danger" : "primary"}
+      disabled={disabled}
+      onClick={onApprove}
+    >
+      {approveDanger ? <ShieldAlert aria-hidden="true" className="size-4 shrink-0" /> : null}
+      {approveLabel ?? "Approve once"}
     </Button>
   );
 }

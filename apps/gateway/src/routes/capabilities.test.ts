@@ -170,6 +170,13 @@ describe("capabilities routes", () => {
           workspaceId: typeof input === "number" ? undefined : input.workspaceId,
         },
       ]),
+      getCodeModeReadiness: vi.fn(async () => ({
+        enabled: true,
+        sandboxEnabled: false,
+        sandboxSupported: true,
+        canRun: false,
+        reason: "sandbox_off",
+      })),
       listCodeModeExecutionBackends: vi.fn(async () => ({
         generatedAt: "2026-05-31T00:00:00.000Z",
         readOnly: true,
@@ -1045,6 +1052,15 @@ describe("capabilities routes", () => {
     expect(proposalsResponse.statusCode).toBe(200);
     expect(runsResponse.statusCode).toBe(200);
     expect(backendsResponse.statusCode).toBe(200);
+    const readinessResponse = await app!.inject({ method: "GET", url: "/api/v1/code-mode/readiness" });
+    expect(readinessResponse.statusCode).toBe(200);
+    expect(readinessResponse.json()).toEqual({
+      enabled: true,
+      sandboxEnabled: false,
+      sandboxSupported: true,
+      canRun: false,
+      reason: "sandbox_off",
+    });
     expect(service.listCapabilityCatalog).toHaveBeenCalledWith("inspectable");
     expect(service.listCapabilityProposals).toHaveBeenCalledWith(2);
     expect(service.listCodeModeRuns).toHaveBeenCalledWith({ limit: 3, workspaceId: "default" });

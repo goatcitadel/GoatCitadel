@@ -6,7 +6,10 @@ import {
   type DesignAdvisory,
 } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
-import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
+import {
+  getChatToolRunDiagnostics,
+  isFailedCodeModeRequest,
+} from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 const ChatOpenCodeEvidence = lazy(async () => ({
@@ -20,6 +23,7 @@ import { groupToolRunRetries } from "./chat-tool-run-groups";
 import { summarizeTurnToolRuns, toolRunTarget, type ToolRunTarget } from "./chat-tool-run-summary";
 import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
+import { failureLine, failureReason } from "./code-mode-request-copy";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
@@ -41,6 +45,8 @@ type TurnActions = Pick<
   | "onOpenGeneratedArtifact"
 >;
 
+const isCodeModeRequest = (tool: ChatToolRunRecord): boolean => tool.toolName === "code_mode.request";
+
 function activityLabel(tool: ChatToolRunRecord): string {
   return presentToolRunStatus(tool).label;
 }
@@ -58,10 +64,18 @@ function readDesignAdvisories(tool: ChatToolRunRecord): DesignAdvisory[] {
   });
 }
 
+/** A Code Mode request whose code failed settles as a call, so its recorded error is in its result. */
+const failedRequestError = (tool: ChatToolRunRecord): string =>
+  isFailedCodeModeRequest(tool) ? failureReason(tool) : "";
+
 function toolRunSummaryText(tool: ChatToolRunRecord): string {
+  const requestError = failedRequestError(tool);
   return (
-    tool.failureGuidance ??
-    getChatToolRunDiagnostics(tool).summary ??
+    // An approved call that settled records empty guidance, which is no guidance.
+    tool.failureGuidance ||
+    // A failed Code Mode request reads as its card says it; the recorded error stays under technical details.
+    (requestError ? failureLine(requestError) : "") ||
+    getChatToolRunDiagnostics(tool).summary ||
     (tool.error ? presentErrorText(tool.error).summary : "")
   );
 }
@@ -163,10 +177,24 @@ export function ChatTurnDetails({
   // the turn without a browser stream, and the turn is still working.
   const turnLive = streaming || !isChatTurnTerminalStatus(turn.trace.status);
   // CH-39: opens while the turn is live or when a tool needs attention, and stays open once the operator opened it.
-  // A list that only opened for a live turn folds shut when the turn settles cleanly.
+  // A list that only opened for a live turn folds shut when the turn settles cleanly. A Code Mode request is the
+  // Code Mode card's: the card asks for it and states its outcome, so neither the request nor a turn parked on it
+  // opens the list. Nor does the turn that continues after Deny or Run it, when its one tool is that request: the
+  // card reports only the latest request, so with more than one an earlier outcome would be hidden. The rows stay
+  // here for an operator who opens it.
+  const parkedOnCodeModeCard =
+    !streaming &&
+    turn.trace.status === "waiting_for_approval" &&
+    turn.toolRuns.some(
+      (tool) => isCodeModeRequest(tool) && (tool.status === "approval_required" || tool.status === "started"),
+    );
+  const onlyCodeModeCard = !streaming && turn.toolRuns.length === 1 && turn.toolRuns.every(isCodeModeRequest);
   const toolDisclosure = useAutoOpenDisclosure(
-    turnLive ||
-      turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+    (turnLive && !parkedOnCodeModeCard && !onlyCodeModeCard) ||
+      turn.toolRuns.some(
+        (tool) =>
+          !isCodeModeRequest(tool) && (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+      ),
     { closeWhenSettled: true },
   );
   const counts = new Map<string, number>();
@@ -221,6 +249,7 @@ export function ChatTurnDetails({
               const target = toolRunTarget(tool);
               const changes = toolRunLineChanges(tool);
               const duration = toolRunDuration(tool);
+              const requestError = failedRequestError(tool);
               return (
                 <li key={key} data-tool-run-id={tool.toolRunId} className="flex flex-wrap justify-between gap-2 py-2">
                   <span className="min-w-0 text-fg-secondary">
@@ -252,6 +281,13 @@ export function ChatTurnDetails({
                   {tool.error ? (
                     <div className="w-full">
                       <RecordedErrorDetails error={tool.error} />
+                    </div>
+                  ) : null}
+                  {requestError && requestError !== tool.error && requestError !== failureLine(requestError) ? (
+                    <div className="w-full">
+                      <TechnicalDetails label="Recorded error">
+                        <p className="break-all font-mono text-xs">{requestError}</p>
+                      </TechnicalDetails>
                     </div>
                   ) : null}
                   {effect ? <p className="w-full">{effect.plainSummary}</p> : null}

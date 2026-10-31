@@ -55,6 +55,9 @@ test("native manifest covers cockpit destinations and binds fixture, theme and e
     COCKPIT_VISUAL_MANIFEST.map((route) => route.slug),
     [
       "cockpit-chat",
+      "cockpit-chat-code-mode-card-pending",
+      "cockpit-chat-code-mode-card-enable",
+      "cockpit-chat-code-mode-card-done",
       "cockpit-inbox",
       "cockpit-work-board",
       "cockpit-work-history",
@@ -108,8 +111,39 @@ test("native manifest covers cockpit destinations and binds fixture, theme and e
   assert.equal(gallery.href, "/__gallery");
   assert.equal(gallery.readySelector, '[data-cockpit-gallery="true"]');
   assert.equal(gallery.readyText, "Cockpit components");
-  assert.equal(COCKPIT_VISUAL_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 208);
-  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 632);
+  assert.equal(COCKPIT_VISUAL_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 232);
+  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 656);
+});
+
+test("the Code Mode card captures bind each state to its seeded session and pinned readiness", () => {
+  const cards = COCKPIT_VISUAL_MANIFEST.filter((route) => route.slug.startsWith("cockpit-chat-code-mode-card-"));
+  assert.deepEqual(
+    cards.map(({ slug, fixtureSessionKey, visualState }) => ({ slug, fixtureSessionKey, visualState })),
+    [
+      {
+        slug: "cockpit-chat-code-mode-card-pending",
+        fixtureSessionKey: "codeModePending",
+        visualState: "code-mode-pending",
+      },
+      {
+        slug: "cockpit-chat-code-mode-card-enable",
+        fixtureSessionKey: "codeModePending",
+        visualState: "code-mode-enable",
+      },
+      { slug: "cockpit-chat-code-mode-card-done", fixtureSessionKey: "codeModeRan", visualState: "code-mode-done" },
+    ],
+  );
+  const surfaceSlugs = resolveSurfaceRegressionManifest().map((route) => route.slug);
+  for (const card of cards) {
+    assert.ok(!surfaceSlugs.includes(card.slug), `${card.slug} is a visual-only state, not a surface route`);
+    assert.equal(card.readySelector, COCKPIT_VISUAL_MANIFEST[0].readySelector);
+    assert.equal(card.readyAtLatest, true);
+    const href = new URL(
+      resolveReleaseSurfaceHref(card, {}, { sessions: { codeModePending: "pending-1", codeModeRan: "ran-1" } }),
+      "http://test.invalid",
+    );
+    assert.equal(href.searchParams.get("sessionId"), card.fixtureSessionKey === "codeModeRan" ? "ran-1" : "pending-1");
+  }
 });
 
 test("desktop-narrow visual proof renders inside the less-than-1180 compact boundary", () => {

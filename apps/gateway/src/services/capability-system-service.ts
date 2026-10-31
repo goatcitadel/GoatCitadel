@@ -47,7 +47,9 @@ import type {
   CodeModeAiderWorkspacePin,
   CodeModeAutonomousActivationEvidence,
   CodeModeLanguage,
+  CodeModeReadiness,
   CodeModeSandboxMetadata,
+  CodeModeRunApprovalSource,
   CodeModeRunArtifactKind,
   CodeModeRunArtifactPreview,
   CodeModeRunComparisonRecord,
@@ -80,6 +82,7 @@ import {
   classifyToolEffectPotential,
   ConflictError,
   NotFoundError,
+  PolicyViolationError,
   redactStructuredSecrets,
   SemanticValidationError,
   ValidationError,
@@ -156,6 +159,13 @@ import {
 import type { ApprovalResolveResult } from "./approval-types.js";
 import { CodeModeVerificationService } from "./code-mode-verification-service.js";
 import {
+  buildApprovedCodeModeRequestFromTool,
+  codeModeRequestToolFailure,
+  isCodeModeRequestHelper,
+  readCodeModeRequestToolIds,
+  unapprovedCodeModeReadError,
+} from "./code-mode-request-tool.js";
+import {
   CandidateSkillQuarantine,
   describeCandidateQuarantine,
   listWorkspaceCandidateSkills,
@@ -220,7 +230,9 @@ export interface CapabilitySystemServiceOptions {
   rootDir: string;
   runtimeConfig: CapabilityRuntimeConfig;
   storage: Storage;
-  readFeatureFlags: () => Promise<Pick<FeatureFlagsConfig, "codeModeV1Enabled"> & Record<string, boolean>>;
+  readFeatureFlags: () => Promise<
+    Pick<FeatureFlagsConfig, "codeModeV1Enabled" | "codeModeHostSandboxEnabled"> & Record<string, boolean | undefined>
+  >;
   listToolCatalog: () => ToolCatalogEntry[];
   /**
    * HX-408: server-built mesh publication projection. Entries arrive with
@@ -237,6 +249,8 @@ export interface CapabilitySystemServiceOptions {
   resolveApproval: (approvalId: string, input: ApprovalResolveInput) => Promise<ApprovalResolveResult>;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<void>;
   readPolicySnapshot: () => Promise<Record<string, unknown>>;
+  /** The session path resolution chat tool calls get; a Chat request run's helper reads are matched after it. */
+  resolveToolRequestPaths?: (request: ToolInvokeRequest) => Promise<ToolInvokeRequest>;
   resolveSandboxMetadata?: (config: CapabilityRuntimeConfig["codeModeSandbox"]) => CodeModeSandboxMetadata;
   resolvePolicyContext?: (input: {
     operatorId?: string;
@@ -282,6 +296,67 @@ interface CodeModeWrapperManifest {
     codeModeAllowed: true;
   }>;
 }
+
+/** The approval kind of a Chat tool call that asks to run Code Mode inside the turn. */
+export const CODE_MODE_REQUEST_APPROVAL_KIND = "code_mode.request";
+/** Serialized size above which a Chat Code Mode request's return value is replaced by a preview. */
+export const CODE_MODE_REQUEST_RESULT_MAX_BYTES = 64 * 1024;
+/** What the turn sees when the guest's return value is over the 128 KB Code Mode IPC message bound. */
+export const CODE_MODE_REQUEST_RESULT_TOO_LARGE_ERROR =
+  "The code's result is too large to return (over 128 KB). Return a shorter result.";
+
+/** A Chat `code_mode.request` that the operator already approved. It never creates a second approval. */
+export interface ApprovedCodeModeRequest {
+  /** The `code_mode.request` tool approval. */
+  approvalId: string;
+  /** sha256 of `args.source` as stored in the approval's pending action. */
+  approvedSourceSha256: string;
+  goal: string;
+  language: CodeModeLanguage;
+  source: string;
+  input?: Record<string, unknown>;
+  /** The paths and attachment IDs the operator approved; the run's helpers may read only these. */
+  reads?: string[];
+  sessionId: string;
+  turnId: string;
+  workspaceId?: string;
+  policyContext: ToolPolicyActorContext;
+}
+
+export interface ApprovedCodeModeResult {
+  runId: string;
+  status: "completed" | "failed";
+  /** The guest return value, or `{ truncated: true, preview }` when it serializes above 64 KB. */
+  result?: unknown;
+  stdoutPreview?: string;
+  stderrPreview?: string;
+  error?: string;
+  /** Set when the run was interrupted after its dispatch boundary, so the approval keeps its reconciliation gate. */
+  manualReconciliationRequired?: true;
+  durationMs: number;
+}
+
+type CodeModeRunExecutionOutcome =
+  /** Another worker holds the claim, or the run left approval_pending first. */
+  | { kind: "not_claimed" }
+  /** The claim moved before the terminal update; the loss is already recorded. */
+  | { kind: "claim_lost" }
+  /** Interrupted or refused before dispatch; the run is retryable and not terminal. */
+  | { kind: "deferred"; run: CodeModeRunRecord; sandbox: CodeModeSandboxMetadata; reason: string }
+  /** Interrupted after dispatch; the run is terminal and needs manual reconciliation. */
+  | { kind: "interrupted_failed"; run: CodeModeRunRecord; sandbox: CodeModeSandboxMetadata }
+  /** Refused or failed outside the guest; the run is terminal. */
+  | { kind: "failed"; run: CodeModeRunRecord; sandbox: CodeModeSandboxMetadata }
+  | {
+      kind: "finished";
+      run: CodeModeRunRecord;
+      sandbox: CodeModeSandboxMetadata;
+      executionFailed: boolean;
+      guestResult?: Record<string, unknown>;
+      source: string;
+      wrapperManifest: CodeModeWrapperManifest;
+      runInput: Record<string, unknown>;
+    };
 
 export interface CodeModeApprovalQueueItem {
   approvalId: string;
@@ -487,8 +562,55 @@ export class CapabilitySystemService {
 
   private skillLifecycleBackfill?: { fingerprint: string; done: Promise<void> };
 
-  private resolveCurrentSandboxMetadata(): CodeModeSandboxMetadata {
-    return this.resolveSandboxMetadata(this.options.runtimeConfig.codeModeSandbox);
+  /**
+   * The sandbox config in force right now: the file/env config with
+   * bestEffortHostEnabled replaced by the live runtime flag, so the operator can switch the
+   * host sandbox from Chat or Settings without a restart.
+   */
+  private async readEffectiveSandboxConfig(): Promise<CapabilityRuntimeConfig["codeModeSandbox"]> {
+    return (await this.readCodeModeSwitches()).config;
+  }
+
+  /** The live feature flags and the sandbox config they put in force, from one flag read. */
+  private async readCodeModeSwitches(): Promise<{
+    flags: Awaited<ReturnType<CapabilitySystemServiceOptions["readFeatureFlags"]>>;
+    config: CapabilityRuntimeConfig["codeModeSandbox"];
+  }> {
+    const configured = this.options.runtimeConfig.codeModeSandbox;
+    const flags = await this.options.readFeatureFlags();
+    const stored = flags.codeModeHostSandboxEnabled;
+    return {
+      flags,
+      config: typeof stored === "boolean" ? { ...configured, bestEffortHostEnabled: stored } : configured,
+    };
+  }
+
+  private async resolveCurrentSandboxMetadata(): Promise<CodeModeSandboxMetadata> {
+    return this.resolveSandboxMetadata(await this.readEffectiveSandboxConfig());
+  }
+
+  public async getCodeModeReadiness(): Promise<CodeModeReadiness> {
+    const { flags, config } = await this.readCodeModeSwitches();
+    const enabled = flags.codeModeV1Enabled === true;
+    const sandboxEnabled = config.bestEffortHostEnabled === true;
+    // Probe with the host sandbox forced on so support reflects the machine, not the switch.
+    const probe = this.resolveSandboxMetadata({ ...config, bestEffortHostEnabled: true });
+    const sandboxSupported = probe.available === true;
+    // Unsupported comes first: it is a fact about the machine that no switch changes.
+    const reason: CodeModeReadiness["reason"] = !sandboxSupported
+      ? "sandbox_unsupported"
+      : !enabled
+        ? "code_mode_off"
+        : !sandboxEnabled
+          ? "sandbox_off"
+          : undefined;
+    return {
+      enabled,
+      sandboxEnabled,
+      sandboxSupported,
+      canRun: reason === undefined,
+      ...(reason ? { reason } : {}),
+    };
   }
 
   /**
@@ -714,7 +836,7 @@ export class CapabilitySystemService {
   public async listCodeModeExecutionBackends() {
     return buildCodeModeExecutionBackends({
       codeModeEnabled: (await this.options.readFeatureFlags()).codeModeV1Enabled,
-      sandbox: this.resolveCurrentSandboxMetadata(),
+      sandbox: await this.resolveCurrentSandboxMetadata(),
       dockerBackend: this.options.runtimeConfig.codeModeDockerBackend,
       aiderAdapter: this.options.runtimeConfig.codeModeAiderAdapter,
     });
@@ -1867,7 +1989,7 @@ export class CapabilitySystemService {
 
     const runId = `code-run-${randomUUID()}`;
     const runInput = request.input ?? {};
-    const sandbox = this.resolveCurrentSandboxMetadata();
+    const sandbox = await this.resolveCurrentSandboxMetadata();
     let executionBackend: CodeModeRunExecutionBackendRef;
     try {
       executionBackend = buildCodeModeRunExecutionBackendRef(sandbox, {
@@ -1899,26 +2021,7 @@ export class CapabilitySystemService {
     const originSurface = normalizeCodeModeOriginSurface(request.originSurface);
     const sessionId = request.sessionId?.trim() || undefined;
     const turnId = request.turnId?.trim() || undefined;
-    const chatSessionMeta = sessionId ? await this.options.storage.chatSessionMeta.get(sessionId) : undefined;
-    if (sessionId && !chatSessionMeta) {
-      throw new ValidationError({ message: `Code Mode session ${sessionId} was not found.` });
-    }
-    if (turnId) {
-      if (!sessionId) {
-        throw new ValidationError({ message: "Code Mode turnId requires a sessionId." });
-      }
-      let turnTrace: ChatTurnTraceRecord;
-      try {
-        turnTrace = await this.options.storage.chatTurnTraces.get(turnId);
-      } catch {
-        throw new ValidationError({ message: `Code Mode turn ${turnId} was not found.` });
-      }
-      if (turnTrace.sessionId !== sessionId) {
-        throw new ValidationError({
-          message: `Code Mode turn ${turnId} does not belong to session ${sessionId}.`,
-        });
-      }
-    }
+    const chatSessionMeta = await this.requireCodeModeSessionAndTurn(sessionId, turnId);
     const aiderWorkspacePin =
       normalizedAiderRequest && sessionId
         ? await captureAiderWorkspacePinOrNone(this.options, { sessionId, runId })
@@ -2290,6 +2393,35 @@ export class CapabilitySystemService {
     return await this.hydrateCodeModeRunForRead(stored);
   }
 
+  /** Loads the run's chat session and checks that the turn, when given, belongs to it. */
+  private async requireCodeModeSessionAndTurn(
+    sessionId: string | undefined,
+    turnId: string | undefined,
+  ): Promise<Awaited<ReturnType<Storage["chatSessionMeta"]["get"]>>> {
+    const storage = this.options.storage;
+    const chatSessionMeta = sessionId ? await storage.chatSessionMeta.get(sessionId) : undefined;
+    if (sessionId && !chatSessionMeta) {
+      throw new ValidationError({ message: `Code Mode session ${sessionId} was not found.` });
+    }
+    if (turnId) {
+      if (!sessionId) {
+        throw new ValidationError({ message: "Code Mode turnId requires a sessionId." });
+      }
+      let turnTrace: ChatTurnTraceRecord;
+      try {
+        turnTrace = await storage.chatTurnTraces.get(turnId);
+      } catch {
+        throw new ValidationError({ message: `Code Mode turn ${turnId} was not found.` });
+      }
+      if (turnTrace.sessionId !== sessionId) {
+        throw new ValidationError({
+          message: `Code Mode turn ${turnId} does not belong to session ${sessionId}.`,
+        });
+      }
+    }
+    return chatSessionMeta;
+  }
+
   private recordCodeModeCapabilityProfileDecision(input: {
     run: CodeModeRunRecord;
     snapshot: CapabilityCatalogSnapshotRecord;
@@ -2453,6 +2585,435 @@ export class CapabilitySystemService {
     // its reservation (conservative — it over-restricts, never over-permits).
     await this.autonomousActivationGrants.recordGrantUse(result.matchedGrantId, input.estimatedCostUsd ?? 0);
     return evidence;
+  }
+
+  /**
+   * The policy engine's `code_mode.request` hook. It re-reads the approval the engine stamped, requires the
+   * operator's decision, and binds the run to the source stored with the approval's pending action. A run refused
+   * because Code Mode cannot run here comes back as a failed result, so the waiting turn resumes and can explain it.
+   */
+  public async runCodeModeRequestTool(request: ToolInvokeRequest): Promise<Record<string, unknown>> {
+    const storage = this.options.storage;
+    const { approvalId } = readCodeModeRequestToolIds(request);
+    const approval = await storage.approvals.get(approvalId);
+    if (
+      approval.kind !== CODE_MODE_REQUEST_APPROVAL_KIND ||
+      approval.status !== "approved" ||
+      !approval.resolvedBy?.trim()
+    ) {
+      throw new PolicyViolationError({ message: "code_mode.request needs the operator's approval decision to run." });
+    }
+    const pending = await storage.pendingApprovalActions.find(approvalId);
+    const approved = buildApprovedCodeModeRequestFromTool(
+      request,
+      pending?.actionType === "tool.invoke" ? pending.request : undefined,
+    );
+    try {
+      return { ...(await this.runApprovedCodeModeRequest(approved, request.signal)) };
+    } catch (error) {
+      const failure = codeModeRequestToolFailure(error);
+      if (failure) {
+        return failure;
+      }
+      throw error;
+    }
+  }
+
+  /**
+   * Runs a Chat `code_mode.request` the operator already approved, for the turn that is waiting on it. The run is
+   * bound to that tool approval (no second approval), keeps the hashed artifacts and the execution-time hash checks,
+   * and returns the guest result to the turn. It stages no candidate and posts no separate transcript message.
+   * A repeated delivery of the same approval returns the recorded outcome instead of running the code again.
+   */
+  public async runApprovedCodeModeRequest(
+    request: ApprovedCodeModeRequest,
+    signal?: AbortSignal,
+  ): Promise<ApprovedCodeModeResult> {
+    const startedAtMs = Date.now();
+    const storage = this.options.storage;
+    const runId = codeModeRequestRunId(request.approvalId);
+    // A run already recorded for this approval is answered from its record even when Code Mode is now off: code that
+    // crossed its dispatch boundary may have run, so "Code Mode is off" would misreport it. Readiness is then checked
+    // only before the run would execute.
+    const recorded = await storage.codeModeRuns.find(runId);
+    if (!recorded) {
+      await this.requireCodeModeReadyToRun();
+    }
+    if (!request.source.trim()) {
+      throw new ValidationError({ message: "Code Mode source is required." });
+    }
+    if (sha256Text(request.source) !== request.approvedSourceSha256) {
+      throw new ConflictError({
+        message: "The code to run does not match the approved code. Ask for approval again.",
+      });
+    }
+    validateGuestSource(request.source);
+    const approval = this.requireApprovedCodeModeRequestApproval(
+      request,
+      await storage.approvals.get(request.approvalId).catch(() => undefined),
+    );
+    this.requireSourceMatchesApprovedCodeModeRequest(
+      approval,
+      request,
+      await storage.pendingApprovalActions.find(approval.approvalId),
+    );
+    let existing = recorded ?? (await this.registerApprovedCodeModeRequestRun(runId, request));
+    if (existing.codeHash !== request.approvedSourceSha256 || existing.approvalId !== approval.approvalId) {
+      throw new ConflictError({ message: `Code Mode run ${runId} is bound to different approved code.` });
+    }
+    if (existing.status === "running") {
+      // A stale claim means the gateway lost this run's owner: one that never dispatched is released and runs now if
+      // Code Mode can run; one that crossed the dispatch boundary is marked interrupted (failed) and needs manual
+      // reconciliation, so the turn does not resume on it. A claim that is not stale yet is refused below.
+      existing =
+        (await recoverStaleCodeModeExecutionClaim(
+          storage.codeModeRuns,
+          existing,
+          approval.approvalId,
+          new Date().toISOString(),
+        )) ?? existing;
+    }
+    if (existing.status === "completed" || existing.status === "failed") {
+      return summarizeApprovedCodeModeRequestRun(existing, stripTrustedCodeWriteVerification(existing.result), {
+        startedAtMs,
+      });
+    }
+    if (existing.status !== "approval_pending") {
+      throw new ConflictError({ message: `Code Mode run ${runId} is ${existing.status} and cannot run now.` });
+    }
+    if (recorded) {
+      await this.requireCodeModeReadyToRun();
+    }
+
+    const outcome = await this.executeClaimedCodeModeRun({
+      runId,
+      approvalId: approval.approvalId,
+      existing,
+      pendingRequest: {},
+      signal,
+    });
+    if (outcome.kind === "not_claimed" || outcome.kind === "claim_lost") {
+      throw new ConflictError({ message: `Code Mode run ${runId} is already running.` });
+    }
+    let finalRun = outcome.run;
+    if (outcome.kind === "deferred") {
+      // No pending action re-drives this run, so a deferred start is recorded as a failure the turn can see.
+      finalRun = await storage.codeModeRuns.upsert({
+        ...outcome.run,
+        status: "failed",
+        error: `Code Mode could not start: ${outcome.reason}`,
+        errorCode: "code_mode_request_not_started",
+        finishedAt: new Date().toISOString(),
+      });
+    }
+    await this.settleCodeModeRequestTranscript(finalRun);
+    await this.options.publishRealtime(
+      finalRun.status === "completed" ? "code_mode_run_completed" : "code_mode_run_failed",
+      "capabilities",
+      {
+        runId: finalRun.runId,
+        approvalId: approval.approvalId,
+        approvalSource: { kind: CODE_MODE_REQUEST_APPROVAL_KIND, approvalId: approval.approvalId },
+        status: finalRun.status,
+        error: finalRun.error,
+        errorCode: finalRun.errorCode,
+        sandbox: outcome.sandbox,
+      },
+    );
+    return summarizeApprovedCodeModeRequestRun(
+      finalRun,
+      outcome.kind === "finished" ? outcome.guestResult : undefined,
+      { startedAtMs },
+    );
+  }
+
+  private async requireCodeModeReadyToRun(): Promise<void> {
+    const readiness = await this.getCodeModeReadiness();
+    if (readiness.canRun) {
+      return;
+    }
+    const message =
+      readiness.reason === "code_mode_off"
+        ? "Code Mode is off. Turn it on to run code."
+        : readiness.reason === "sandbox_off"
+          ? "The Code Mode sandbox is off. Turn it on to run code."
+          : "This computer does not support the Code Mode sandbox, so code cannot run here.";
+    throw new ConflictError({ message, details: { reason: readiness.reason } });
+  }
+
+  /**
+   * What the operator approved is what the run can touch: every helper call in a Chat request run must name a path
+   * (or, for docs.*, an attachment) from the approved `reads`, and helpers that search across the read roots are
+   * refused. Paths are compared after the session path resolution chat tools get.
+   */
+  private async assertCodeModeReadApproved(
+    request: ToolInvokeRequest,
+    approvedReads: readonly string[],
+  ): Promise<void> {
+    const resolveRequest = this.options.resolveToolRequestPaths ?? (async (unresolved) => unresolved);
+    const resolvePath = async (value: unknown): Promise<string | undefined> => {
+      if (typeof value !== "string" || !value.trim()) {
+        return undefined;
+      }
+      try {
+        const resolved = (await resolveRequest({ ...request, args: { path: value } })).args.path;
+        return typeof resolved === "string" ? path.resolve(resolved) : undefined;
+      } catch {
+        return undefined;
+      }
+    };
+    const approvedPaths = new Set<string>();
+    for (const entry of approvedReads) {
+      const resolved = await resolvePath(entry);
+      if (resolved) {
+        approvedPaths.add(resolved);
+      }
+    }
+    const refusal = unapprovedCodeModeReadError({
+      wrapperName: request.toolName,
+      args: request.args,
+      approvedReads,
+      resolvedPath: await resolvePath(request.args.path),
+      approvedPaths,
+    });
+    if (refusal) {
+      throw new PolicyViolationError({ message: refusal });
+    }
+  }
+
+  private requireApprovedCodeModeRequestApproval(
+    request: ApprovedCodeModeRequest,
+    approval: ApprovalRequest | undefined,
+  ): ApprovalRequest {
+    if (!approval) {
+      throw new NotFoundError({ entity: "approval", id: request.approvalId });
+    }
+    if (approval.kind !== CODE_MODE_REQUEST_APPROVAL_KIND) {
+      throw new ConflictError({
+        message: `Approval ${approval.approvalId} is a ${approval.kind} approval and cannot run a Code Mode request.`,
+      });
+    }
+    if (approval.status !== "approved") {
+      throw new ConflictError({ message: `Approval ${approval.approvalId} is ${approval.status}, not approved.` });
+    }
+    const linkedSessionId = asOptionalString(approval.linkage?.sessionId);
+    const linkedTurnId = asOptionalString(approval.linkage?.turnId);
+    if (
+      (linkedSessionId && linkedSessionId !== request.sessionId) ||
+      (linkedTurnId && linkedTurnId !== request.turnId)
+    ) {
+      throw new ConflictError({
+        message: `Approval ${approval.approvalId} belongs to a different chat turn.`,
+      });
+    }
+    return approval;
+  }
+
+  /**
+   * Binds the run to the code the operator actually approved. The approval payload (immutable once created) and,
+   * when the policy engine registered one, the tool.invoke pending action each hold the approved `source`. Both must
+   * hash to `approvedSourceSha256`, which the caller already proved equals sha256(request.source).
+   */
+  private requireSourceMatchesApprovedCodeModeRequest(
+    approval: ApprovalRequest,
+    request: ApprovedCodeModeRequest,
+    pending: PendingApprovalAction | undefined,
+  ): void {
+    const mismatch = (): ConflictError =>
+      new ConflictError({
+        message: "The code to run does not match the approved code. Ask for approval again.",
+      });
+    const approvedSource = approval.payload?.source;
+    if (typeof approvedSource !== "string" || sha256Text(approvedSource) !== request.approvedSourceSha256) {
+      throw mismatch();
+    }
+    if (!pending) {
+      return;
+    }
+    const pendingArgs = pending.request.args;
+    const pendingSource =
+      pendingArgs && typeof pendingArgs === "object" && !Array.isArray(pendingArgs)
+        ? (pendingArgs as Record<string, unknown>).source
+        : undefined;
+    if (
+      pending.actionType !== "tool.invoke" ||
+      pending.request.toolName !== CODE_MODE_REQUEST_APPROVAL_KIND ||
+      typeof pendingSource !== "string" ||
+      sha256Text(pendingSource) !== request.approvedSourceSha256
+    ) {
+      throw mismatch();
+    }
+  }
+
+  /** Freezes the catalog, wrapper manifest and policy snapshot and records the run as approval_pending. */
+  private async registerApprovedCodeModeRequestRun(
+    runId: string,
+    request: ApprovedCodeModeRequest,
+  ): Promise<CodeModeRunRecord> {
+    await this.ensureSkillLifecycleBackfill();
+    const sessionId = request.sessionId.trim();
+    const turnId = request.turnId.trim();
+    const chatSessionMeta = await this.requireCodeModeSessionAndTurn(sessionId, turnId);
+    const sandbox = await this.resolveCurrentSandboxMetadata();
+    let executionBackend: CodeModeRunExecutionBackendRef;
+    try {
+      const { codeModeDockerBackend, codeModeAiderAdapter } = this.options.runtimeConfig;
+      executionBackend = buildCodeModeRunExecutionBackendRef(sandbox, {
+        dockerBackend: codeModeDockerBackend,
+        aiderAdapter: codeModeAiderAdapter,
+      });
+    } catch (error) {
+      throw new ValidationError({ message: error instanceof Error ? error.message : String(error) });
+    }
+    if (executionBackend.backendId === CODE_MODE_AIDER_ADAPTER_ID) {
+      throw new ValidationError({ message: "A Chat Code Mode request cannot run on the Aider adapter." });
+    }
+    const workspaceId = resolveCodeModeWorkspaceId({
+      sessionId,
+      requestWorkspaceId: request.workspaceId,
+      sessionWorkspaceId: chatSessionMeta?.workspaceId,
+    });
+    const policyContext: ToolPolicyActorContext = {
+      ...request.policyContext,
+      workspaceId: request.policyContext.workspaceId ?? workspaceId,
+      sessionId: request.policyContext.sessionId ?? sessionId,
+      surface: request.policyContext.surface ?? "chat",
+    };
+    const snapshot = await this.freezeCatalogSnapshot();
+    const createdAt = new Date().toISOString();
+    const catalogManifest = this.buildWrapperManifest(snapshot, createdAt);
+    // The script sees only the helpers a request run can call, and the hash binds that narrower manifest.
+    const wrapperManifest: CodeModeWrapperManifest = {
+      ...catalogManifest,
+      wrappers: catalogManifest.wrappers.filter((wrapper) => isCodeModeRequestHelper(wrapper.name)),
+    };
+    const runInput = request.input ?? {};
+    const runInputHash = hashCodeModeInputBinding(runInput, undefined, undefined, undefined);
+    const approvalSource = { kind: CODE_MODE_REQUEST_APPROVAL_KIND, approvalId: request.approvalId } as const;
+    const policySnapshot = {
+      ...(await this.options.readPolicySnapshot()),
+      codeModePermissionContext: serializePolicyContext(policyContext),
+      codeModeInput: runInput,
+      codeModeInputHash: runInputHash,
+      codeModeApprovalSource: { ...approvalSource, approvedSourceSha256: request.approvedSourceSha256 },
+      codeModeReads: request.reads ?? [],
+    };
+    const extension = request.language === "typescript" ? "ts" : "js";
+    // The run id is fixed by the approval, but each registration freezes a new snapshot (new manifest bytes), so its
+    // artifacts go under that snapshot's own folder. A retry after a crash, or a concurrent delivery, never collides
+    // with an earlier attempt's files; the record that wins points at its own.
+    const artifactSegments = [runId, snapshot.snapshotId];
+    const codeArtifact = await this.persistManagedTextArtifact(
+      this.artifactRoot,
+      artifactSegments,
+      `source.${extension}`,
+      request.source,
+      request.language === "typescript" ? "text/typescript" : "text/javascript",
+    );
+    const wrapperManifestArtifact = await this.persistManagedJsonArtifact(
+      this.artifactRoot,
+      artifactSegments,
+      "wrapper-manifest.json",
+      wrapperManifest,
+    );
+    const policySnapshotArtifact = await this.persistManagedJsonArtifact(
+      this.artifactRoot,
+      artifactSegments,
+      "policy-snapshot.json",
+      policySnapshot,
+    );
+    const record: CodeModeRunRecord = {
+      runId,
+      status: "approval_pending",
+      language: request.language,
+      originSurface: "chat",
+      workspaceId,
+      operatorId: policyContext.operatorId,
+      permissionProfileId: policyContext.permissionProfileId,
+      permissionProfileLabel: policyContext.permissionProfile?.label,
+      localOperatorOverrideId: policyContext.localOperatorOverrideId,
+      requestedOutputIntent: request.goal,
+      saveCandidateOnSuccess: false,
+      capabilitySnapshotId: snapshot.snapshotId,
+      codeModeInputHash: runInputHash,
+      wrapperManifestHash: sha256Text(JSON.stringify(wrapperManifest)),
+      policySnapshotHash: sha256Text(JSON.stringify(policySnapshot)),
+      codeHash: sha256Text(request.source),
+      approvalId: request.approvalId,
+      sessionId,
+      turnId,
+      sandbox,
+      executionBackend,
+      executionRecovery: { generation: 0, phase: "not_started", disposition: "none" },
+      codeArtifact,
+      wrapperManifestArtifact,
+      policySnapshotArtifact,
+      stdoutTruncated: false,
+      stderrTruncated: false,
+      verification: { status: "not_applicable", updatedAt: createdAt },
+      createdAt,
+    };
+    const storage = this.options.storage;
+    // Insert only when absent: a repeated or concurrent delivery of the same approval keeps the first record, and
+    // the later attempt's artifacts stay unreferenced in their own folder.
+    const stored = await storage.runImmediateTransaction(
+      async () => (await storage.codeModeRuns.find(runId)) ?? (await storage.codeModeRuns.upsert(record)),
+    );
+    this.recordCodeModeCapabilityProfileDecision({ run: stored, snapshot, sandbox, executionBackend, createdAt });
+    await this.options.publishRealtime("code_mode_run_created", "capabilities", {
+      runId: stored.runId,
+      approvalId: stored.approvalId,
+      approvalSource,
+      capabilitySnapshotId: stored.capabilitySnapshotId,
+      codeHash: stored.codeHash,
+      originSurface: "chat",
+      sandbox,
+      executionBackend,
+    });
+    return stored;
+  }
+
+  /**
+   * The turn's reply carries a Chat request's result, so its separate final transcript message is settled as
+   * delivered without posting one; the boot reconciler then never posts it either.
+   */
+  private async settleCodeModeRequestTranscript(run: CodeModeRunRecord): Promise<void> {
+    const eventId = run.executionRecovery.finalTranscriptEventId;
+    if (!eventId || run.executionRecovery.finalTranscriptEnqueuedAt) {
+      return;
+    }
+    await this.options.storage.codeModeRuns.markFinalTranscriptEnqueued({
+      runId: run.runId,
+      executionGeneration: run.executionRecovery.generation,
+      eventId,
+      enqueuedAt: new Date().toISOString(),
+    });
+  }
+
+  /** The approval a run executed under when it is a Chat `code_mode.request`; computed, never stored. */
+  private async resolveCodeModeRunApprovalSource(
+    run: CodeModeRunRecord,
+  ): Promise<CodeModeRunApprovalSource | undefined> {
+    if (!run.approvalId) {
+      return undefined;
+    }
+    try {
+      const approval = await this.options.storage.approvals.get(run.approvalId);
+      return approval.kind === CODE_MODE_REQUEST_APPROVAL_KIND
+        ? { kind: CODE_MODE_REQUEST_APPROVAL_KIND, approvalId: approval.approvalId }
+        : undefined;
+    } catch {
+      return undefined;
+    }
+  }
+
+  /** Replaces any stored `approvalSource` with the one computed from the run's approval. */
+  private async withCodeModeRunApprovalSource(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
+    const { approvalSource: storedApprovalSource, ...withoutStored } = run;
+    void storedApprovalSource;
+    const stored: CodeModeRunRecord = run.approvalSource === undefined ? run : withoutStored;
+    const approvalSource = await this.resolveCodeModeRunApprovalSource(stored);
+    return approvalSource ? { ...stored, approvalSource } : stored;
   }
 
   public async executeApprovedCodeModeRun(
@@ -2638,7 +3199,7 @@ export class CapabilitySystemService {
         ...existing,
         status: "failed",
         error: reason,
-        sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
+        sandbox: existing.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
         finishedAt: refusedAt,
       });
       await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
@@ -2669,7 +3230,7 @@ export class CapabilitySystemService {
         ...existing,
         status: "expired",
         error: reason,
-        sandbox: existing.sandbox ?? this.resolveCurrentSandboxMetadata(),
+        sandbox: existing.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
         finishedAt: refusedAt,
       });
       await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", { reason });
@@ -2695,503 +3256,30 @@ export class CapabilitySystemService {
       });
       throw new ConflictError({ message: `Code Mode run ${runId} refused: ${reason}.` });
     }
-    let sandbox = this.resolveCurrentSandboxMetadata();
-    let finalRun = existing;
-    let claimStartedAt: string | undefined;
-    let claimGeneration: number | undefined;
-
-    try {
-      assertApprovedSandboxPostureStillCurrent(existing.sandbox, sandbox);
-      if (existing.approvalId && existing.approvalId !== approvalId) {
-        throw new ConflictError({
-          message: `Code Mode approval ${approvalId} is not linked to run ${runId}.`,
-        });
-      }
-      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution claim.`);
-      if (!sandbox.available) {
-        await this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
-          runId,
-          approvalId,
-          sandbox,
-          failClosedReason: sandbox.failClosedReason,
-        });
-      }
-      assertCodeModeSandboxAvailable(sandbox);
-      claimStartedAt = new Date().toISOString();
-      const claimedRun = await this.options.storage.codeModeRuns.claimForExecution({
+    const outcome = await this.executeClaimedCodeModeRun({
+      runId,
+      approvalId,
+      existing,
+      pendingRequest: pending.request,
+      signal,
+    });
+    if (outcome.kind === "not_claimed" || outcome.kind === "claim_lost" || outcome.kind === "deferred") {
+      return undefined;
+    }
+    let finalRun = outcome.run;
+    const sandbox = outcome.sandbox;
+    if (outcome.kind === "interrupted_failed") {
+      await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
         runId,
-        approvalId,
-        sandbox,
-        startedAt: claimStartedAt,
+        error: finalRun.error,
+        errorCode: finalRun.errorCode,
+        manualReconciliationRequired: true,
       });
-      if (!claimedRun) {
-        const currentRun = await this.options.storage.codeModeRuns.find(runId);
-        await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
-          runId,
-          approvalId,
-          status: currentRun?.status ?? "missing",
-          error: `Code Mode run ${runId} was already claimed or is no longer approval_pending.`,
-          sandbox: currentRun?.sandbox ?? existing.sandbox,
-        });
-        return undefined;
-      }
-      finalRun = claimedRun;
-      claimGeneration = claimedRun.executionRecovery.generation;
-      const activeClaimStartedAt = claimStartedAt;
-      const activeClaimGeneration = claimGeneration;
-      await this.options.publishRealtime("code_mode_run_started", "capabilities", {
-        runId,
-        approvalId,
-        startedAt: claimStartedAt,
-        executionGeneration: claimGeneration,
-        sandbox,
-      });
-      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution claim.`);
-      const source = await this.readVerifiedManagedArtifactText(finalRun.codeArtifact, {
-        label: "Code Mode source artifact",
-        expectedSha256: finalRun.codeHash,
-      });
-      const wrapperManifestRaw = await this.readVerifiedManagedArtifactText(finalRun.wrapperManifestArtifact, {
-        label: "Code Mode wrapper manifest artifact",
-      });
-      const policySnapshotRaw = await this.readVerifiedManagedArtifactText(finalRun.policySnapshotArtifact, {
-        label: "Code Mode policy snapshot artifact",
-      });
-      const wrapperManifest = JSON.parse(wrapperManifestRaw) as CodeModeWrapperManifest;
-      const policySnapshot = JSON.parse(policySnapshotRaw) as Record<string, unknown>;
-      assertJsonValueHash(wrapperManifest, finalRun.wrapperManifestHash, "Code Mode wrapper manifest artifact");
-      assertJsonValueHash(policySnapshot, finalRun.policySnapshotHash, "Code Mode policy snapshot artifact");
-      const runPolicyContext = buildCodeModeRunPolicyContext({
-        run: finalRun,
-        pendingRequest: pending.request,
-        policySnapshot,
-      });
-      assertCodeModeRunPolicyContextMatchesStoredRun(finalRun, runPolicyContext);
-      const livePolicyContext = await this.options.resolvePolicyContext?.({
-        operatorId: finalRun.operatorId,
-        workspaceId: finalRun.workspaceId,
-        sessionId: finalRun.sessionId,
-        runId: finalRun.runId,
-        surface: normalizeCodeModeOriginSurface(finalRun.originSurface),
-        permissionProfileId: finalRun.permissionProfileId,
-        localOperatorOverrideId: finalRun.localOperatorOverrideId,
-      });
-      assertLiveCodeModePolicyContextMatchesStoredRun(finalRun, livePolicyContext);
-      const inputBinding = readFrozenCodeModeInputBinding(
-        policySnapshot,
-        pending.request.input,
-        pending.request.aider,
-        finalRun.codeModeInputHash,
-        finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID,
-      );
-      const runInput = inputBinding.input;
-      const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
-      const compiledSource = transpileGuestSource(finalRun.language, source);
-      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
-      const beforeExecutionDispatch = async () => {
-        throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
-        const boundaryCrossedAt = new Date().toISOString();
-        const boundaryRun = await this.options.storage.codeModeRuns.markExecutionBoundaryCrossed({
-          runId,
-          approvalId,
-          startedAt: activeClaimStartedAt,
-          executionGeneration: activeClaimGeneration,
-          boundaryCrossedAt,
-        });
-        if (!boundaryRun) {
-          throw new ConflictError({ message: `Code Mode run ${runId} execution claim moved before dispatch.` });
-        }
-        finalRun = boundaryRun;
-        await this.options.publishRealtime("code_mode_execution_boundary_crossed", "capabilities", {
-          runId,
-          approvalId,
-          startedAt: claimStartedAt,
-          executionGeneration: claimGeneration,
-          boundaryCrossedAt,
-        });
-      };
-      const onExecutionDispatchFailed = async () => {
-        const resetRun = await this.options.storage.codeModeRuns.resetExecutionBoundaryBeforeDispatch({
-          runId,
-          approvalId,
-          startedAt: activeClaimStartedAt,
-          executionGeneration: activeClaimGeneration,
-        });
-        if (resetRun) {
-          finalRun = resetRun;
-        }
-      };
-      const execution =
-        finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID
-          ? await this.executeAiderAdapterRun({
-              runId,
-              sandbox,
-              executionBackend: finalRun.executionBackend,
-              language: finalRun.language,
-              source,
-              pendingAiderRequest: inputBinding.aiderRequest,
-              frozenAiderExecution: inputBinding.aiderExecution,
-              aiderWorkspacePin: inputBinding.aiderWorkspacePin,
-              sessionId: finalRun.sessionId,
-              beforeExecutionDispatch,
-              onExecutionDispatchFailed,
-              signal,
-            })
-          : await this.executeGovernedChildHarness({
-              runId,
-              sandbox,
-              executionBackend: finalRun.executionBackend,
-              source: compiledSource,
-              input: runInput,
-              requestedOutputIntent: finalRun.requestedOutputIntent,
-              wrapperManifest,
-              policyContext: wrapperPolicyContext,
-              workspaceId: finalRun.workspaceId,
-              parentSessionId: finalRun.sessionId,
-              beforeExecutionDispatch,
-              onExecutionDispatchFailed,
-              signal,
-            });
-
-      let stdoutArtifact: CapabilityArtifactRecord | undefined;
-      let stderrArtifact: CapabilityArtifactRecord | undefined;
-      if (execution.stdout.text.length > 0) {
-        stdoutArtifact = await this.persistManagedTextArtifact(
-          this.artifactRoot,
-          [runId],
-          "stdout.log",
-          execution.stdout.text,
-          "text/plain",
-        );
-      }
-      if (execution.stderr.text.length > 0) {
-        stderrArtifact = await this.persistManagedTextArtifact(
-          this.artifactRoot,
-          [runId],
-          "stderr.log",
-          execution.stderr.text,
-          "text/plain",
-        );
-      }
-
-      const finishedAt = new Date().toISOString();
-      const trustedCodeWriteVerification = buildTrustedCodeWriteVerification({
-        verifiedAt: finishedAt,
-        source: { artifact: finalRun.codeArtifact, expectedSha256: finalRun.codeHash, content: source },
-        wrapperManifest: {
-          artifact: finalRun.wrapperManifestArtifact,
-          content: wrapperManifestRaw,
-        },
-        policySnapshot: {
-          artifact: finalRun.policySnapshotArtifact,
-          content: policySnapshotRaw,
-        },
-        stdout: stdoutArtifact ? { artifact: stdoutArtifact, content: execution.stdout.text } : undefined,
-        stderr: stderrArtifact ? { artifact: stderrArtifact, content: execution.stderr.text } : undefined,
-      });
-      const executionResult = attachTrustedCodeWriteVerification(execution.result, trustedCodeWriteVerification);
-      const outputRun = await this.options.storage.codeModeRuns.recordExecutionOutput({
-        ...finalRun,
-        sandbox,
-        stdoutArtifact,
-        stderrArtifact,
-        stdoutPreview: toPreview(execution.stdout.text),
-        stderrPreview: toPreview(execution.stderr.text),
-        stdoutTruncated: execution.stdout.truncated,
-        stderrTruncated: execution.stderr.truncated,
-        trustedCodeWriteVerification,
-        verification: execution.failed
-          ? { status: "not_applicable", updatedAt: finishedAt }
-          : {
-              status: "completed_unverified",
-              reason: "Execution completed; no fresh named semantic proof has been recorded.",
-              updatedAt: finishedAt,
-            },
-        result: executionResult,
-        error: execution.error,
-        errorCode: execution.errorCode,
-        errorDetails: execution.errorDetails,
-        approvalId,
-        startedAt: claimStartedAt,
-        executionGeneration: claimGeneration,
-        executionPhase: execution.failed ? "output_captured_failed" : "output_captured_completed",
-      });
-      if (!outputRun) {
-        return await this.handleLostCodeModeExecutionClaim({
-          runId,
-          approvalId,
-          claimStartedAt,
-          claimGeneration,
-          sandbox,
-        });
-      }
-      finalRun = outputRun;
-      const interruptionReason = signal?.aborted
-        ? signal.reason instanceof Error
-          ? signal.reason.message
-          : typeof signal.reason === "string"
-            ? signal.reason
-            : `Code mode run ${runId} was interrupted after execution started.`
-        : execution.manualReconciliationReason;
-      const terminalRun = interruptionReason
-        ? await this.options.storage.codeModeRuns.markExecutionInterrupted({
-            runId,
-            approvalId,
-            startedAt: claimStartedAt,
-            executionGeneration: claimGeneration,
-            interruptedAt: finishedAt,
-            interruptionReason,
-            errorDetails: {
-              phase: "after_execution_boundary",
-              completedOutputPrefixPersisted: true,
-              ...(execution.errorCode ? { childErrorCode: execution.errorCode } : {}),
-              ...(execution.errorDetails ? { childErrorDetails: execution.errorDetails } : {}),
-            },
-          })
-        : await this.options.storage.codeModeRuns.finishExecutionClaim({
-            ...finalRun,
-            status: execution.failed ? "failed" : "completed",
-            verification: execution.failed
-              ? { status: "not_applicable", updatedAt: finishedAt }
-              : {
-                  status: "completed_unverified",
-                  reason: "Execution completed; no fresh named semantic proof has been recorded.",
-                  updatedAt: finishedAt,
-                },
-            approvalId,
-            startedAt: claimStartedAt,
-            finishedAt,
-          });
-      if (!terminalRun) {
-        return await this.handleLostCodeModeExecutionClaim({
-          runId,
-          approvalId,
-          claimStartedAt,
-          claimGeneration,
-          sandbox,
-        });
-      }
-      finalRun = terminalRun;
-      if (finalRun.executionRecovery.disposition === "manual_reconciliation") {
-        await this.options.publishRealtime("code_mode_run_interrupted", "capabilities", {
-          runId: finalRun.runId,
-          approvalId,
-          status: finalRun.status,
-          error: finalRun.error,
-          errorCode: finalRun.errorCode,
-          executionRecovery: finalRun.executionRecovery,
-          sandbox,
-        });
-      }
-
-      if (
-        finalRun.status === "completed" &&
-        finalRun.executionRecovery.phase === "terminal" &&
-        finalRun.executionRecovery.disposition !== "manual_reconciliation" &&
-        !execution.failed &&
-        finalRun.saveCandidateOnSuccess &&
-        finalRun.executionBackend?.backendId !== CODE_MODE_AIDER_ADAPTER_ID
-      ) {
-        try {
-          await this.stageCandidateBundle(finalRun, source, wrapperManifest, runInput);
-        } catch (candidateError) {
-          const message = candidateError instanceof Error ? candidateError.message : String(candidateError);
-          finalRun = await this.options.storage.codeModeRuns.upsert({
-            ...finalRun,
-            status: "failed",
-            error: message,
-            errorCode: "candidate_stage_failed",
-            errorDetails: {
-              phase: "candidate_stage",
-              approvalId,
-            },
-            finishedAt: new Date().toISOString(),
-          });
-          await this.options.publishRealtime("candidate_skill_stage_failed", "capabilities", {
-            runId: finalRun.runId,
-            approvalId,
-            error: message,
-          });
-        }
-      }
-
-      await this.options.storage.pendingApprovalActions.markResolved(
-        approvalId,
-        finalRun.status === "completed" ? "executed" : "failed",
-        {
-          outcome: finalRun.status,
-          runId: finalRun.runId,
-          executionRecovery: finalRun.executionRecovery,
-          ...(finalRun.executionRecovery.disposition === "manual_reconciliation"
-            ? { manualReconciliationRequired: true }
-            : {}),
-          ...(finalRun.error ? { error: finalRun.error } : {}),
-          ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
-          ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
-        },
-      );
-      await this.options.storage.approvalEvents.append({
-        approvalId,
-        eventType: "approved_action_executed",
-        actorId: "system",
-        payload: {
-          actionType: "code_mode.run",
-          runId: finalRun.runId,
-          status: finalRun.status,
-        },
-      });
-      await this.options.publishRealtime(
-        finalRun.status === "completed" ? "code_mode_run_completed" : "code_mode_run_failed",
-        "capabilities",
-        {
-          runId: finalRun.runId,
-          approvalId,
-          status: finalRun.status,
-          error: finalRun.error,
-          errorCode: finalRun.errorCode,
-          errorDetails: finalRun.errorDetails,
-          trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
-          verification: finalRun.verification,
-          sandbox,
-        },
-      );
       await this.enqueueCodeModeFinalTranscriptSafely(finalRun);
       await this.flushCodeModeFinalTranscriptOutbox();
-
-      return {
-        outcome: "executed",
-        policyReason: `code_mode_run:${finalRun.status}`,
-        auditEventId: `code-mode-${finalRun.runId}`,
-        result: {
-          runId: finalRun.runId,
-          status: finalRun.status,
-          codeHash: finalRun.codeHash,
-          trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
-          verification: finalRun.verification,
-          ...(finalRun.error ? { error: finalRun.error } : {}),
-          ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
-          ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
-          sandbox,
-        },
-      };
-    } catch (error) {
-      if (error instanceof CodeModeSandboxLaunchFailure) {
-        sandbox = error.sandbox;
-      }
-      const interrupted = isCodeModeExecutionInterrupted(error, signal);
-      const retryablePreDispatchFailure =
-        error instanceof CodeModeSandboxLaunchFailure ||
-        error instanceof CodeModeExecutionPreDispatchFailure ||
-        error instanceof CodeModeExecutionBackendUnavailableError;
-      if (interrupted || retryablePreDispatchFailure) {
-        const interruptedAt = new Date().toISOString();
-        const interruptionReason = error instanceof Error ? error.message : String(error);
-        if (claimStartedAt && claimGeneration !== undefined) {
-          if (finalRun.executionRecovery.phase === "claimed") {
-            finalRun =
-              (await this.options.storage.codeModeRuns.releaseExecutionClaim({
-                runId,
-                approvalId,
-                startedAt: claimStartedAt,
-                executionGeneration: claimGeneration,
-                interruptedAt,
-                interruptionReason,
-                sandbox,
-              })) ?? finalRun;
-          } else {
-            finalRun =
-              (await this.options.storage.codeModeRuns.markExecutionInterrupted({
-                runId,
-                approvalId,
-                startedAt: claimStartedAt,
-                executionGeneration: claimGeneration,
-                interruptedAt,
-                interruptionReason,
-                errorDetails: {
-                  phase: "after_execution_boundary",
-                  completedOutputPrefixPersisted: Boolean(finalRun.stdoutArtifact || finalRun.stderrArtifact),
-                },
-              })) ?? finalRun;
-          }
-        }
-        await this.options.publishRealtime(
-          retryablePreDispatchFailure && finalRun.status === "approval_pending"
-            ? "code_mode_run_dispatch_deferred"
-            : "code_mode_run_interrupted",
-          "capabilities",
-          {
-            runId,
-            approvalId,
-            status: finalRun.status,
-            error: interruptionReason,
-            executionRecovery: finalRun.executionRecovery,
-            sandbox,
-          },
-        );
-        if (finalRun.status === "failed") {
-          await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
-            runId,
-            error: finalRun.error,
-            errorCode: finalRun.errorCode,
-            manualReconciliationRequired: true,
-          });
-          await this.enqueueCodeModeFinalTranscriptSafely(finalRun);
-          await this.flushCodeModeFinalTranscriptOutbox();
-          return buildCodeModeToolInvokeResult(finalRun);
-        }
-        return undefined;
-      }
-      const normalizedError = normalizeCodeModeIpcError(error);
-      const failedAt = new Date().toISOString();
-      if (claimStartedAt && claimGeneration !== undefined) {
-        const terminalRun =
-          finalRun.executionRecovery.phase === "claimed"
-            ? await this.options.storage.codeModeRuns.failExecutionClaimBeforeDispatch({
-                runId,
-                approvalId,
-                startedAt: claimStartedAt,
-                executionGeneration: claimGeneration,
-                finishedAt: failedAt,
-                error: normalizedError.message,
-                errorCode: normalizedError.code,
-                errorDetails: normalizedError.details,
-              })
-            : await this.options.storage.codeModeRuns.markExecutionInterrupted({
-                runId,
-                approvalId,
-                startedAt: claimStartedAt,
-                executionGeneration: claimGeneration,
-                interruptedAt: failedAt,
-                interruptionReason: normalizedError.message,
-                errorDetails: {
-                  phase: "after_execution_boundary",
-                  completedOutputPrefixPersisted: Boolean(finalRun.stdoutArtifact || finalRun.stderrArtifact),
-                  childErrorCode: normalizedError.code,
-                  childErrorDetails: normalizedError.details,
-                },
-              });
-        if (!terminalRun) {
-          return await this.handleLostCodeModeExecutionClaim({
-            runId,
-            approvalId,
-            claimStartedAt,
-            claimGeneration,
-            sandbox,
-          });
-        }
-        finalRun = terminalRun;
-      } else {
-        finalRun = await this.options.storage.codeModeRuns.upsert({
-          ...finalRun,
-          status: "failed",
-          sandbox,
-          error: normalizedError.message,
-          errorCode: normalizedError.code,
-          errorDetails: normalizedError.details,
-          startedAt: finalRun.startedAt,
-          finishedAt: failedAt,
-        });
-      }
+      return buildCodeModeToolInvokeResult(finalRun);
+    }
+    if (outcome.kind === "failed") {
       await this.options.storage.pendingApprovalActions.markResolved(approvalId, "failed", {
         runId: finalRun.runId,
         error: finalRun.error,
@@ -3234,6 +3322,526 @@ export class CapabilitySystemService {
           sandbox,
         },
       };
+    }
+    const { executionFailed: failedExecution, source, wrapperManifest, runInput } = outcome;
+    if (
+      finalRun.status === "completed" &&
+      finalRun.executionRecovery.phase === "terminal" &&
+      finalRun.executionRecovery.disposition !== "manual_reconciliation" &&
+      !failedExecution &&
+      finalRun.saveCandidateOnSuccess &&
+      finalRun.executionBackend?.backendId !== CODE_MODE_AIDER_ADAPTER_ID
+    ) {
+      try {
+        await this.stageCandidateBundle(finalRun, source, wrapperManifest, runInput);
+      } catch (candidateError) {
+        const message = candidateError instanceof Error ? candidateError.message : String(candidateError);
+        finalRun = await this.options.storage.codeModeRuns.upsert({
+          ...finalRun,
+          status: "failed",
+          error: message,
+          errorCode: "candidate_stage_failed",
+          errorDetails: {
+            phase: "candidate_stage",
+            approvalId,
+          },
+          finishedAt: new Date().toISOString(),
+        });
+        await this.options.publishRealtime("candidate_skill_stage_failed", "capabilities", {
+          runId: finalRun.runId,
+          approvalId,
+          error: message,
+        });
+      }
+    }
+
+    await this.options.storage.pendingApprovalActions.markResolved(
+      approvalId,
+      finalRun.status === "completed" ? "executed" : "failed",
+      {
+        outcome: finalRun.status,
+        runId: finalRun.runId,
+        executionRecovery: finalRun.executionRecovery,
+        ...(finalRun.executionRecovery.disposition === "manual_reconciliation"
+          ? { manualReconciliationRequired: true }
+          : {}),
+        ...(finalRun.error ? { error: finalRun.error } : {}),
+        ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
+        ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
+      },
+    );
+    await this.options.storage.approvalEvents.append({
+      approvalId,
+      eventType: "approved_action_executed",
+      actorId: "system",
+      payload: {
+        actionType: "code_mode.run",
+        runId: finalRun.runId,
+        status: finalRun.status,
+      },
+    });
+    await this.options.publishRealtime(
+      finalRun.status === "completed" ? "code_mode_run_completed" : "code_mode_run_failed",
+      "capabilities",
+      {
+        runId: finalRun.runId,
+        approvalId,
+        status: finalRun.status,
+        error: finalRun.error,
+        errorCode: finalRun.errorCode,
+        errorDetails: finalRun.errorDetails,
+        trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
+        verification: finalRun.verification,
+        sandbox,
+      },
+    );
+    await this.enqueueCodeModeFinalTranscriptSafely(finalRun);
+    await this.flushCodeModeFinalTranscriptOutbox();
+
+    return {
+      outcome: "executed",
+      policyReason: `code_mode_run:${finalRun.status}`,
+      auditEventId: `code-mode-${finalRun.runId}`,
+      result: {
+        runId: finalRun.runId,
+        status: finalRun.status,
+        codeHash: finalRun.codeHash,
+        trustedCodeWriteVerification: finalRun.trustedCodeWriteVerification,
+        verification: finalRun.verification,
+        ...(finalRun.error ? { error: finalRun.error } : {}),
+        ...(finalRun.errorCode ? { errorCode: finalRun.errorCode } : {}),
+        ...(finalRun.errorDetails ? { errorDetails: finalRun.errorDetails } : {}),
+        sandbox,
+      },
+    };
+  }
+
+  /**
+   * Claims an approval_pending run, re-checks its hashed artifacts and policy binding, executes it and records
+   * the terminal claim transition. Shared by the `code_mode.run` approval path and the Chat `code_mode.request`
+   * path; each caller owns pending-action resolution, approval events, candidate staging and transcripts.
+   */
+  private async executeClaimedCodeModeRun(input: {
+    runId: string;
+    approvalId: string;
+    existing: CodeModeRunRecord;
+    pendingRequest: Record<string, unknown>;
+    signal?: AbortSignal;
+  }): Promise<CodeModeRunExecutionOutcome> {
+    const { runId, approvalId, existing, pendingRequest, signal } = input;
+    const storage = this.options.storage;
+    let sandbox = await this.resolveCurrentSandboxMetadata();
+    let finalRun = existing;
+    let claimStartedAt: string | undefined;
+    let claimGeneration: number | undefined;
+
+    try {
+      assertApprovedSandboxPostureStillCurrent(existing.sandbox, sandbox);
+      if (existing.approvalId && existing.approvalId !== approvalId) {
+        throw new ConflictError({
+          message: `Code Mode approval ${approvalId} is not linked to run ${runId}.`,
+        });
+      }
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution claim.`);
+      if (!sandbox.available) {
+        await this.options.publishRealtime("code_mode_sandbox_unavailable", "capabilities", {
+          runId,
+          approvalId,
+          sandbox,
+          failClosedReason: sandbox.failClosedReason,
+        });
+      }
+      assertCodeModeSandboxAvailable(sandbox);
+      claimStartedAt = new Date().toISOString();
+      const claimedRun = await storage.codeModeRuns.claimForExecution({
+        runId,
+        approvalId,
+        sandbox,
+        startedAt: claimStartedAt,
+      });
+      if (!claimedRun) {
+        const currentRun = await storage.codeModeRuns.find(runId);
+        await this.options.publishRealtime("code_mode_run_refused", "capabilities", {
+          runId,
+          approvalId,
+          status: currentRun?.status ?? "missing",
+          error: `Code Mode run ${runId} was already claimed or is no longer approval_pending.`,
+          sandbox: currentRun?.sandbox ?? existing.sandbox,
+        });
+        return { kind: "not_claimed" };
+      }
+      finalRun = claimedRun;
+      claimGeneration = claimedRun.executionRecovery.generation;
+      const activeClaimStartedAt = claimStartedAt;
+      const activeClaimGeneration = claimGeneration;
+      await this.options.publishRealtime("code_mode_run_started", "capabilities", {
+        runId,
+        approvalId,
+        startedAt: claimStartedAt,
+        executionGeneration: claimGeneration,
+        sandbox,
+      });
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted after execution claim.`);
+      const source = await this.readVerifiedManagedArtifactText(finalRun.codeArtifact, {
+        label: "Code Mode source artifact",
+        expectedSha256: finalRun.codeHash,
+      });
+      const wrapperManifestRaw = await this.readVerifiedManagedArtifactText(finalRun.wrapperManifestArtifact, {
+        label: "Code Mode wrapper manifest artifact",
+      });
+      const policySnapshotRaw = await this.readVerifiedManagedArtifactText(finalRun.policySnapshotArtifact, {
+        label: "Code Mode policy snapshot artifact",
+      });
+      const wrapperManifest = JSON.parse(wrapperManifestRaw) as CodeModeWrapperManifest;
+      const policySnapshot = JSON.parse(policySnapshotRaw) as Record<string, unknown>;
+      assertJsonValueHash(wrapperManifest, finalRun.wrapperManifestHash, "Code Mode wrapper manifest artifact");
+      assertJsonValueHash(policySnapshot, finalRun.policySnapshotHash, "Code Mode policy snapshot artifact");
+      const runPolicyContext = buildCodeModeRunPolicyContext({
+        run: finalRun,
+        pendingRequest: pendingRequest,
+        policySnapshot,
+      });
+      assertCodeModeRunPolicyContextMatchesStoredRun(finalRun, runPolicyContext);
+      const livePolicyContext = await this.options.resolvePolicyContext?.({
+        operatorId: finalRun.operatorId,
+        workspaceId: finalRun.workspaceId,
+        sessionId: finalRun.sessionId,
+        runId: finalRun.runId,
+        surface: normalizeCodeModeOriginSurface(finalRun.originSurface),
+        permissionProfileId: finalRun.permissionProfileId,
+        localOperatorOverrideId: finalRun.localOperatorOverrideId,
+      });
+      assertLiveCodeModePolicyContextMatchesStoredRun(finalRun, livePolicyContext);
+      const inputBinding = readFrozenCodeModeInputBinding(
+        policySnapshot,
+        pendingRequest.input,
+        pendingRequest.aider,
+        finalRun.codeModeInputHash,
+        finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID,
+      );
+      const runInput = inputBinding.input;
+      const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
+      const compiledSource = transpileGuestSource(finalRun.language, source);
+      throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
+      const beforeExecutionDispatch = async () => {
+        throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
+        const boundaryCrossedAt = new Date().toISOString();
+        const boundaryRun = await storage.codeModeRuns.markExecutionBoundaryCrossed({
+          runId,
+          approvalId,
+          startedAt: activeClaimStartedAt,
+          executionGeneration: activeClaimGeneration,
+          boundaryCrossedAt,
+        });
+        if (!boundaryRun) {
+          throw new ConflictError({ message: `Code Mode run ${runId} execution claim moved before dispatch.` });
+        }
+        finalRun = boundaryRun;
+        await this.options.publishRealtime("code_mode_execution_boundary_crossed", "capabilities", {
+          runId,
+          approvalId,
+          startedAt: claimStartedAt,
+          executionGeneration: claimGeneration,
+          boundaryCrossedAt,
+        });
+      };
+      const onExecutionDispatchFailed = async () => {
+        const resetRun = await storage.codeModeRuns.resetExecutionBoundaryBeforeDispatch({
+          runId,
+          approvalId,
+          startedAt: activeClaimStartedAt,
+          executionGeneration: activeClaimGeneration,
+        });
+        if (resetRun) {
+          finalRun = resetRun;
+        }
+      };
+      const execution =
+        finalRun.executionBackend?.backendId === CODE_MODE_AIDER_ADAPTER_ID
+          ? await this.executeAiderAdapterRun({
+              runId,
+              sandbox,
+              executionBackend: finalRun.executionBackend,
+              language: finalRun.language,
+              source,
+              pendingAiderRequest: inputBinding.aiderRequest,
+              frozenAiderExecution: inputBinding.aiderExecution,
+              aiderWorkspacePin: inputBinding.aiderWorkspacePin,
+              sessionId: finalRun.sessionId,
+              beforeExecutionDispatch,
+              onExecutionDispatchFailed,
+              signal,
+            })
+          : await this.executeGovernedChildHarness({
+              runId,
+              sandbox,
+              executionBackend: finalRun.executionBackend,
+              source: compiledSource,
+              input: runInput,
+              requestedOutputIntent: finalRun.requestedOutputIntent,
+              wrapperManifest,
+              policyContext: wrapperPolicyContext,
+              workspaceId: finalRun.workspaceId,
+              parentSessionId: finalRun.sessionId,
+              approvedReads: readFrozenCodeModeRequestReads(policySnapshot),
+              beforeExecutionDispatch,
+              onExecutionDispatchFailed,
+              signal,
+            });
+
+      let stdoutArtifact: CapabilityArtifactRecord | undefined;
+      let stderrArtifact: CapabilityArtifactRecord | undefined;
+      if (execution.stdout.text.length > 0) {
+        stdoutArtifact = await this.persistManagedTextArtifact(
+          this.artifactRoot,
+          [runId],
+          "stdout.log",
+          execution.stdout.text,
+          "text/plain",
+        );
+      }
+      if (execution.stderr.text.length > 0) {
+        stderrArtifact = await this.persistManagedTextArtifact(
+          this.artifactRoot,
+          [runId],
+          "stderr.log",
+          execution.stderr.text,
+          "text/plain",
+        );
+      }
+
+      const finishedAt = new Date().toISOString();
+      const trustedCodeWriteVerification = buildTrustedCodeWriteVerification({
+        verifiedAt: finishedAt,
+        source: { artifact: finalRun.codeArtifact, expectedSha256: finalRun.codeHash, content: source },
+        wrapperManifest: {
+          artifact: finalRun.wrapperManifestArtifact,
+          content: wrapperManifestRaw,
+        },
+        policySnapshot: {
+          artifact: finalRun.policySnapshotArtifact,
+          content: policySnapshotRaw,
+        },
+        stdout: stdoutArtifact ? { artifact: stdoutArtifact, content: execution.stdout.text } : undefined,
+        stderr: stderrArtifact ? { artifact: stderrArtifact, content: execution.stderr.text } : undefined,
+      });
+      const executionResult = attachTrustedCodeWriteVerification(execution.result, trustedCodeWriteVerification);
+      const outputRun = await storage.codeModeRuns.recordExecutionOutput({
+        ...finalRun,
+        sandbox,
+        stdoutArtifact,
+        stderrArtifact,
+        stdoutPreview: toPreview(execution.stdout.text),
+        stderrPreview: toPreview(execution.stderr.text),
+        stdoutTruncated: execution.stdout.truncated,
+        stderrTruncated: execution.stderr.truncated,
+        trustedCodeWriteVerification,
+        verification: execution.failed
+          ? { status: "not_applicable", updatedAt: finishedAt }
+          : {
+              status: "completed_unverified",
+              reason: "Execution completed; no fresh named semantic proof has been recorded.",
+              updatedAt: finishedAt,
+            },
+        result: executionResult,
+        error: execution.error,
+        errorCode: execution.errorCode,
+        errorDetails: execution.errorDetails,
+        approvalId,
+        startedAt: claimStartedAt,
+        executionGeneration: claimGeneration,
+        executionPhase: execution.failed ? "output_captured_failed" : "output_captured_completed",
+      });
+      if (!outputRun) {
+        await this.handleLostCodeModeExecutionClaim({
+          runId,
+          approvalId,
+          claimStartedAt,
+          claimGeneration,
+          sandbox,
+        });
+        return { kind: "claim_lost" };
+      }
+      finalRun = outputRun;
+      const interruptionReason = signal?.aborted
+        ? signal.reason instanceof Error
+          ? signal.reason.message
+          : typeof signal.reason === "string"
+            ? signal.reason
+            : `Code mode run ${runId} was interrupted after execution started.`
+        : execution.manualReconciliationReason;
+      const terminalRun = interruptionReason
+        ? await storage.codeModeRuns.markExecutionInterrupted({
+            runId,
+            approvalId,
+            startedAt: claimStartedAt,
+            executionGeneration: claimGeneration,
+            interruptedAt: finishedAt,
+            interruptionReason,
+            errorDetails: {
+              phase: "after_execution_boundary",
+              completedOutputPrefixPersisted: true,
+              ...(execution.errorCode ? { childErrorCode: execution.errorCode } : {}),
+              ...(execution.errorDetails ? { childErrorDetails: execution.errorDetails } : {}),
+            },
+          })
+        : await storage.codeModeRuns.finishExecutionClaim({
+            ...finalRun,
+            status: execution.failed ? "failed" : "completed",
+            verification: execution.failed
+              ? { status: "not_applicable", updatedAt: finishedAt }
+              : {
+                  status: "completed_unverified",
+                  reason: "Execution completed; no fresh named semantic proof has been recorded.",
+                  updatedAt: finishedAt,
+                },
+            approvalId,
+            startedAt: claimStartedAt,
+            finishedAt,
+          });
+      if (!terminalRun) {
+        await this.handleLostCodeModeExecutionClaim({
+          runId,
+          approvalId,
+          claimStartedAt,
+          claimGeneration,
+          sandbox,
+        });
+        return { kind: "claim_lost" };
+      }
+      finalRun = terminalRun;
+      if (finalRun.executionRecovery.disposition === "manual_reconciliation") {
+        await this.options.publishRealtime("code_mode_run_interrupted", "capabilities", {
+          runId: finalRun.runId,
+          approvalId,
+          status: finalRun.status,
+          error: finalRun.error,
+          errorCode: finalRun.errorCode,
+          executionRecovery: finalRun.executionRecovery,
+          sandbox,
+        });
+      }
+      return {
+        kind: "finished",
+        run: finalRun,
+        sandbox,
+        executionFailed: execution.failed,
+        guestResult: execution.result,
+        source,
+        wrapperManifest,
+        runInput,
+      };
+    } catch (error) {
+      if (error instanceof CodeModeSandboxLaunchFailure) {
+        sandbox = error.sandbox;
+      }
+      const interrupted = isCodeModeExecutionInterrupted(error, signal);
+      const retryablePreDispatchFailure =
+        error instanceof CodeModeSandboxLaunchFailure ||
+        error instanceof CodeModeExecutionPreDispatchFailure ||
+        error instanceof CodeModeExecutionBackendUnavailableError;
+      if (interrupted || retryablePreDispatchFailure) {
+        const interruptedAt = new Date().toISOString();
+        const interruptionReason = error instanceof Error ? error.message : String(error);
+        if (claimStartedAt && claimGeneration !== undefined) {
+          if (finalRun.executionRecovery.phase === "claimed") {
+            finalRun =
+              (await storage.codeModeRuns.releaseExecutionClaim({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                interruptedAt,
+                interruptionReason,
+                sandbox,
+              })) ?? finalRun;
+          } else {
+            finalRun =
+              (await storage.codeModeRuns.markExecutionInterrupted({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                interruptedAt,
+                interruptionReason,
+                errorDetails: {
+                  phase: "after_execution_boundary",
+                  completedOutputPrefixPersisted: Boolean(finalRun.stdoutArtifact || finalRun.stderrArtifact),
+                },
+              })) ?? finalRun;
+          }
+        }
+        await this.options.publishRealtime(
+          retryablePreDispatchFailure && finalRun.status === "approval_pending"
+            ? "code_mode_run_dispatch_deferred"
+            : "code_mode_run_interrupted",
+          "capabilities",
+          {
+            runId,
+            approvalId,
+            status: finalRun.status,
+            error: interruptionReason,
+            executionRecovery: finalRun.executionRecovery,
+            sandbox,
+          },
+        );
+        return finalRun.status === "failed"
+          ? { kind: "interrupted_failed", run: finalRun, sandbox }
+          : { kind: "deferred", run: finalRun, sandbox, reason: interruptionReason };
+      }
+      const normalizedError = normalizeCodeModeIpcError(error);
+      const failedAt = new Date().toISOString();
+      if (claimStartedAt && claimGeneration !== undefined) {
+        const terminalRun =
+          finalRun.executionRecovery.phase === "claimed"
+            ? await storage.codeModeRuns.failExecutionClaimBeforeDispatch({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                finishedAt: failedAt,
+                error: normalizedError.message,
+                errorCode: normalizedError.code,
+                errorDetails: normalizedError.details,
+              })
+            : await storage.codeModeRuns.markExecutionInterrupted({
+                runId,
+                approvalId,
+                startedAt: claimStartedAt,
+                executionGeneration: claimGeneration,
+                interruptedAt: failedAt,
+                interruptionReason: normalizedError.message,
+                errorDetails: {
+                  phase: "after_execution_boundary",
+                  completedOutputPrefixPersisted: Boolean(finalRun.stdoutArtifact || finalRun.stderrArtifact),
+                  childErrorCode: normalizedError.code,
+                  childErrorDetails: normalizedError.details,
+                },
+              });
+        if (!terminalRun) {
+          await this.handleLostCodeModeExecutionClaim({
+            runId,
+            approvalId,
+            claimStartedAt,
+            claimGeneration,
+            sandbox,
+          });
+          return { kind: "claim_lost" };
+        }
+        finalRun = terminalRun;
+      } else {
+        finalRun = await storage.codeModeRuns.upsert({
+          ...finalRun,
+          status: "failed",
+          sandbox,
+          error: normalizedError.message,
+          errorCode: normalizedError.code,
+          errorDetails: normalizedError.details,
+          startedAt: finalRun.startedAt,
+          finishedAt: failedAt,
+        });
+      }
+      return { kind: "failed", run: finalRun, sandbox };
     }
   }
 
@@ -3319,6 +3927,10 @@ export class CapabilitySystemService {
       run.executionRecovery.finalTranscriptEnqueuedAt ||
       (run.status !== "completed" && run.status !== "failed")
     ) {
+      return false;
+    }
+    if (await this.resolveCodeModeRunApprovalSource(run)) {
+      await this.settleCodeModeRequestTranscript(run);
       return false;
     }
     if (
@@ -3476,10 +4088,54 @@ export class CapabilitySystemService {
   }
 
   private async hydrateCodeModeRunForRead(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
-    const hydrated = await this.hydrateCodeModeRunLinkage(
-      await this.terminalizeExpiredCodeModeRun(await this.terminalizeResolvedCodeModeRunWithMissingPendingAction(run)),
-    );
-    return (await this.codeModeVerification?.refreshRun(hydrated)) ?? hydrated;
+    const projected = await this.withCodeModeRunApprovalSource(run);
+    const { approvalSource } = projected;
+    // A Chat code_mode.request run has a tool.invoke pending action, not a code_mode.run one, so the
+    // code_mode.run read-path terminalizers do not apply to it.
+    const terminalized = approvalSource
+      ? await this.terminalizeOrphanedCodeModeRequestRun(projected)
+      : await this.terminalizeExpiredCodeModeRun(
+          await this.terminalizeResolvedCodeModeRunWithMissingPendingAction(projected),
+        );
+    const hydrated = await this.hydrateCodeModeRunLinkage(terminalized);
+    const refreshed = (await this.codeModeVerification?.refreshRun(hydrated)) ?? hydrated;
+    return approvalSource ? { ...refreshed, approvalSource } : refreshed;
+  }
+
+  /**
+   * A Chat request run whose owner was lost (a gateway restart mid-run) never stays `running` or `approval_pending`
+   * on reads: a stale claim goes through the claim-aware recovery, and a run that never started fails once its
+   * tool.invoke pending action is resolved, because nothing will deliver that approval again.
+   */
+  private async terminalizeOrphanedCodeModeRequestRun(run: CodeModeRunRecord): Promise<CodeModeRunRecord> {
+    const approvalId = run.approvalId;
+    if (!approvalId || (run.status !== "running" && run.status !== "approval_pending")) {
+      return run;
+    }
+    const storage = this.options.storage;
+    const current =
+      run.status === "running"
+        ? ((await recoverStaleCodeModeExecutionClaim(
+            storage.codeModeRuns,
+            run,
+            approvalId,
+            new Date().toISOString(),
+          )) ?? run)
+        : run;
+    const pendingStatus =
+      current.status === "approval_pending"
+        ? (await storage.pendingApprovalActions.find(approvalId))?.resolutionStatus
+        : undefined;
+    if (pendingStatus === undefined || pendingStatus === "pending") {
+      return current;
+    }
+    return await storage.codeModeRuns.upsert({
+      ...current,
+      status: "failed",
+      error: "Code Mode could not start: the gateway restarted before the run started.",
+      errorCode: "code_mode_request_not_started",
+      finishedAt: new Date().toISOString(),
+    });
   }
 
   private async terminalizeCodeModeRunForMissingPendingAction(
@@ -3667,7 +4323,7 @@ export class CapabilitySystemService {
         approvalResolvedAt: approval.resolvedAt,
         ...(options?.pendingRunId !== undefined ? { pendingRunId: options.pendingRunId } : {}),
       },
-      sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
+      sandbox: run.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
       finishedAt: run.finishedAt ?? new Date().toISOString(),
     });
     await this.appendCodeModeMissingPendingActionEvent(approval, terminal, {
@@ -3730,7 +4386,7 @@ export class CapabilitySystemService {
       ...run,
       status: "expired",
       error: reason,
-      sandbox: run.sandbox ?? this.resolveCurrentSandboxMetadata(),
+      sandbox: run.sandbox ?? (await this.resolveCurrentSandboxMetadata()),
       finishedAt: run.finishedAt ?? new Date().toISOString(),
     });
     try {
@@ -3792,8 +4448,11 @@ export class CapabilitySystemService {
       (proposal) => proposal.candidateId === candidateId || proposal.activationTargetId === candidateId,
     );
     const originatingRunId = activeVersion?.originatingRunId ?? latestVersion?.originatingRunId;
-    const originatingRun = originatingRunId
+    const storedOriginatingRun = originatingRunId
       ? await this.options.storage.codeModeRuns.find(originatingRunId)
+      : undefined;
+    const originatingRun = storedOriginatingRun
+      ? await this.withCodeModeRunApprovalSource(storedOriginatingRun)
       : undefined;
     const activationBlockers = activeVersion
       ? []
@@ -3993,6 +4652,8 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
+    /** A Chat request run's approved reads; every helper call must name one of these. Unset for other runs. */
+    approvedReads?: readonly string[];
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -4056,7 +4717,7 @@ export class CapabilitySystemService {
     const frozenAiderAdapter: CodeModeAiderAdapterConfig = { ...frozenAiderExecution.aiderAdapter };
     const backendRunner = createCodeModeExecutionBackendRunner({
       sandbox: input.sandbox,
-      sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
+      sandboxConfig: await this.readEffectiveSandboxConfig(),
       executionBackend: input.executionBackend,
       dockerLaunch: buildCodeModeDockerLaunchOptions(frozenDockerBackend),
       dockerBackendConfig: frozenDockerBackend,
@@ -4131,6 +4792,8 @@ export class CapabilitySystemService {
     policyContext?: ToolPolicyActorContext;
     workspaceId?: string;
     parentSessionId?: string;
+    /** A Chat request run's approved reads; every helper call must name one of these. Unset for other runs. */
+    approvedReads?: readonly string[];
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -4147,7 +4810,7 @@ export class CapabilitySystemService {
     const runTempRoot = path.join(this.tempRoot, input.runId);
     const backendRunner = createCodeModeExecutionBackendRunner({
       sandbox: input.sandbox,
-      sandboxConfig: this.options.runtimeConfig.codeModeSandbox,
+      sandboxConfig: await this.readEffectiveSandboxConfig(),
       executionBackend: input.executionBackend,
       dockerLaunch: buildCodeModeDockerLaunchOptions(this.options.runtimeConfig.codeModeDockerBackend),
     });
@@ -4376,12 +5039,7 @@ export class CapabilitySystemService {
           if (deadlineAt && Date.now() > deadlineAt) {
             throw new ConflictError({ message: `Wrapper ${wrapperName} missed its execution deadline.` });
           }
-          await this.options.publishRealtime("code_mode_wrapper_call_started", "capabilities", {
-            runId: input.runId,
-            wrapperName,
-            requestId: message.id,
-          });
-          const invocationResult = await this.options.invokeTool({
+          const wrapperRequest: ToolInvokeRequest = {
             toolName: wrapperName,
             args: isRecord(params.args) ? params.args : {},
             agentId: `code-mode:${input.runId}`,
@@ -4395,7 +5053,16 @@ export class CapabilitySystemService {
               reason: `code-mode:${input.runId}`,
             },
             policyContext: input.policyContext,
+          };
+          if (input.approvedReads) {
+            await this.assertCodeModeReadApproved(wrapperRequest, input.approvedReads);
+          }
+          await this.options.publishRealtime("code_mode_wrapper_call_started", "capabilities", {
+            runId: input.runId,
+            wrapperName,
+            requestId: message.id,
           });
+          const invocationResult = await this.options.invokeTool(wrapperRequest);
           if (invocationResult.outcome !== "executed") {
             throw new ConflictError({
               message: `Wrapper ${wrapperName} did not execute: ${invocationResult.policyReason}`,
@@ -4635,6 +5302,45 @@ export class CapabilitySystemService {
       await fs.writeFile(runHarnessPath, CODE_MODE_CHILD_SOURCE, "utf8");
     }
     return runHarnessPath;
+  }
+
+  /**
+   * Keeps a finished chat Code Mode run as a reusable tool: stages a candidate from the run's stored, hash-checked
+   * source. The candidate stays inactive until the operator promotes it through the normal lifecycle.
+   */
+  public async keepCodeModeRunAsCandidate(
+    runId: string,
+    input: { name: string; summary: string },
+  ): Promise<{ candidateId: string; versionId: string; revision: number }> {
+    const run = await this.getCodeModeRun(runId);
+    if (run.status !== "completed" || run.approvalSource?.kind !== CODE_MODE_REQUEST_APPROVAL_KIND) {
+      throw new ConflictError({ message: "Only a finished Code Mode run from Chat can be kept." });
+    }
+    const name = input.name.trim();
+    const summary = input.summary.trim();
+    if (!name || !summary) {
+      throw new SemanticValidationError("A kept tool needs a name and a summary.");
+    }
+    const source = await this.readVerifiedManagedArtifactText(run.codeArtifact, {
+      label: "Code Mode source artifact",
+      expectedSha256: run.codeHash,
+    });
+    const wrapperManifestRaw = await this.readVerifiedManagedArtifactText(run.wrapperManifestArtifact, {
+      label: "Code Mode wrapper manifest artifact",
+    });
+    const wrapperManifest = JSON.parse(wrapperManifestRaw) as CodeModeWrapperManifest;
+    assertJsonValueHash(wrapperManifest, run.wrapperManifestHash, "Code Mode wrapper manifest artifact");
+    await this.stageCandidateBundle({ ...run, requestedOutputIntent: summary }, source, wrapperManifest, {
+      skillName: name,
+      capabilityProposal: { title: name, summary },
+    });
+    const candidateId = normalizeCandidateId(undefined, run.codeHash);
+    const versionId = `version-${sha256Text(`code-mode-candidate\u0000${run.runId}`).slice(0, 32)}`;
+    const revision = await this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId);
+    if (!revision) {
+      throw new ConflictError({ message: `Candidate skill ${candidateId} has no canonical aggregate revision.` });
+    }
+    return { candidateId, versionId, revision: revision.revision };
   }
 
   private async stageCandidateBundle(
@@ -5992,6 +6698,18 @@ function readFrozenCodeModeInputBinding(
   return { input: runInput, aiderRequest, aiderExecution, ...(aiderWorkspacePin ? { aiderWorkspacePin } : {}) };
 }
 
+/**
+ * A Chat request run's approved reads from its hashed policy snapshot; a request run without them reads nothing.
+ * Undefined for every other run, whose helpers stay governed by the read roots alone.
+ */
+function readFrozenCodeModeRequestReads(policySnapshot: Record<string, unknown>): string[] | undefined {
+  if (!isRecord(policySnapshot.codeModeApprovalSource)) {
+    return undefined;
+  }
+  const reads = policySnapshot.codeModeReads;
+  return Array.isArray(reads) ? reads.filter((entry): entry is string => typeof entry === "string") : [];
+}
+
 function readFrozenCodeModeAiderWorkspacePin(value: unknown): CodeModeAiderWorkspacePin {
   try {
     return parseCodeModeAiderWorkspacePin(value);
@@ -6809,6 +7527,81 @@ function buildCodeModeRunAuditReference(run: CodeModeRunRecord): CapabilityAudit
     createdAt: run.createdAt,
     ...(run.finishedAt ? { finishedAt: run.finishedAt } : {}),
   };
+}
+
+/** One run per approved Chat request, so a repeated delivery of the same approval finds the run it already made. */
+function codeModeRequestRunId(approvalId: string): string {
+  return `code-run-request-${sha256Text(`${CODE_MODE_REQUEST_APPROVAL_KIND}:${approvalId}`).slice(0, 32)}`;
+}
+
+function stripTrustedCodeWriteVerification(
+  result: Record<string, unknown> | undefined,
+): Record<string, unknown> | undefined {
+  if (!result) {
+    return undefined;
+  }
+  const { trustedCodeWriteVerification, ...guestResult } = result;
+  void trustedCodeWriteVerification;
+  return guestResult;
+}
+
+/** The guest return value, or a preview of its JSON when it is larger than the turn should carry. */
+function capCodeModeRequestResult(result: Record<string, unknown>): unknown {
+  const serialized = JSON.stringify(result);
+  if (Buffer.byteLength(serialized, "utf8") <= CODE_MODE_REQUEST_RESULT_MAX_BYTES) {
+    return result;
+  }
+  return { truncated: true, preview: truncateUtf8(serialized, CODE_MODE_REQUEST_RESULT_MAX_BYTES) };
+}
+
+function truncateUtf8(value: string, maxBytes: number): string {
+  const bytes = Buffer.from(value, "utf8");
+  if (bytes.length <= maxBytes) {
+    return value;
+  }
+  // Drop a trailing partial character instead of emitting a replacement character.
+  return bytes.subarray(0, maxBytes).toString("utf8").replace(/�$/u, "");
+}
+
+function summarizeApprovedCodeModeRequestRun(
+  run: CodeModeRunRecord,
+  guestResult: Record<string, unknown> | undefined,
+  timing: { startedAtMs: number },
+): ApprovedCodeModeResult {
+  const completed = run.status === "completed";
+  const startedMs = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
+  const finishedMs = run.finishedAt ? Date.parse(run.finishedAt) : Number.NaN;
+  const durationMs =
+    Number.isFinite(startedMs) && Number.isFinite(finishedMs)
+      ? Math.max(0, finishedMs - startedMs)
+      : Math.max(0, Date.now() - timing.startedAtMs);
+  return {
+    runId: run.runId,
+    status: completed ? "completed" : "failed",
+    ...(completed && guestResult !== undefined ? { result: capCodeModeRequestResult(guestResult) } : {}),
+    ...(run.stdoutPreview ? { stdoutPreview: run.stdoutPreview } : {}),
+    ...(run.stderrPreview ? { stderrPreview: run.stderrPreview } : {}),
+    ...(completed ? {} : { error: describeApprovedCodeModeRequestError(run) }),
+    ...(run.executionRecovery.disposition === "manual_reconciliation" ? { manualReconciliationRequired: true } : {}),
+    durationMs,
+  };
+}
+
+/**
+ * The child refuses to send a run.execute reply over the IPC bound and answers with MESSAGE_TOO_LARGE, flagged
+ * child_to_parent with no method. A too-large wrapper call (method set) or wrapper reply (no direction) keeps the
+ * recorded error, so only an oversized guest return gets the plain message.
+ */
+function describeApprovedCodeModeRequestError(run: CodeModeRunRecord): string {
+  const details = run.errorDetails;
+  if (
+    run.errorCode === "MESSAGE_TOO_LARGE" &&
+    details?.direction === "child_to_parent" &&
+    details.method === undefined
+  ) {
+    return CODE_MODE_REQUEST_RESULT_TOO_LARGE_ERROR;
+  }
+  return run.error ?? "Code Mode run failed.";
 }
 
 function buildCodeModeToolInvokeResult(run: CodeModeRunRecord): ToolInvokeResult {

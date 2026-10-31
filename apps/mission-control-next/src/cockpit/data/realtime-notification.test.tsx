@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   navigate: vi.fn(),
   sound: vi.fn(),
   desktop: vi.fn(),
+  dismiss: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
@@ -30,7 +31,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOrig
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({ connectEventStream: mocks.connect }));
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({ fetchOperatorInbox: mocks.read }));
-vi.mock("sonner", () => ({ toast: Object.assign(mocks.show, { warning: mocks.warning, error: mocks.error }) }));
+vi.mock("sonner", () => ({
+  toast: Object.assign(mocks.show, { warning: mocks.warning, error: mocks.error, dismiss: mocks.dismiss }),
+}));
 vi.mock("../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: mocks.navigate }) }));
 vi.mock("@goatcitadel/mission-control-shared/state/operator-attention", () => ({
   playOperatorAttentionSound: mocks.sound,
@@ -498,5 +501,30 @@ describe("cockpit owner-backed notifications", () => {
     expect(mocks.warning).not.toHaveBeenCalled();
     expect(mocks.sound).not.toHaveBeenCalled();
     expect(mocks.desktop).not.toHaveBeenCalled();
+  });
+});
+describe("approval notifications settled in place", () => {
+  const resolved: RealtimeEvent = { ...event, eventId: "resolved", sequence: 2, eventType: "approval_resolved" };
+  it("dismisses an approval's notification once the approval is decided", async () => {
+    await render();
+    await emit();
+    expect(mocks.warning).toHaveBeenCalledOnce();
+    expect(mocks.warning.mock.calls[0]![1].id).toBe("inbox:w:approval:a");
+    await emit(resolved);
+    expect(mocks.dismiss).toHaveBeenCalledWith("inbox:w:approval:a");
+  });
+  it("does not show a notification for an approval decided while its Inbox read was in flight", async () => {
+    let finish!: (value: OperatorInboxResponse) => void;
+    mocks.read.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finish = resolve;
+        }),
+    );
+    await render();
+    await emit();
+    await emit(resolved);
+    await act(async () => finish(projection));
+    expect(mocks.warning).not.toHaveBeenCalled();
   });
 });

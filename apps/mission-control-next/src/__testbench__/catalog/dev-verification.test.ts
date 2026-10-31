@@ -4,6 +4,7 @@ import {
   fetchDevStatus,
   fetchRouteManifest,
   seedChatApprovalScenario,
+  seedChatCodeModeRequestScenario,
   seedChatUserInputScenario,
   seedDurableRecovery,
   seedMemoryItem,
@@ -55,6 +56,12 @@ describe("dev verification client", () => {
     const scope = { sessionId: "s-1", workspaceId: "ws-1" };
     await seedChatApprovalScenario(scope);
     expect(lastPost()).toMatchObject({ path: "/api/v1/dev/verification/chat-approval-scenario", body: scope });
+    await seedChatCodeModeRequestScenario(scope);
+    expect(lastPost()).toEqual({
+      path: "/api/v1/dev/verification/chat-approval-scenario",
+      method: "POST",
+      body: { ...scope, tool: "code_mode.request" },
+    });
     await seedChatUserInputScenario(scope);
     expect(lastPost()).toMatchObject({ path: "/api/v1/dev/verification/chat-user-input-scenario", body: scope });
     await seedMemoryItem({ workspaceId: "ws-1", namespace: "testbench", title: "Note", content: "Body" });

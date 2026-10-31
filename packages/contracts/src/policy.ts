@@ -442,6 +442,11 @@ export interface ToolInvokeRequest {
   turnId?: string;
   /** Server-authored canonical tool-run identity for idempotent durable aggregates. */
   toolRunId?: string;
+  /**
+   * Engine-owned: the operator approval this execution runs under. The policy engine strips any caller-supplied
+   * value on invoke and sets it only when it executes an approved pending action.
+   */
+  approvedByApprovalId?: string;
   /** Server-authored immutable routed-context binding for context.* tools. */
   routedContextSnapshotId?: string;
   /** Server-authored hash paired with routedContextSnapshotId. */

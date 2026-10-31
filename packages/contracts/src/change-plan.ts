@@ -153,6 +153,7 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAGS = [
   "cronReviewQueueV1Enabled",
   "replayRegressionV1Enabled",
   "codeModeV1Enabled",
+  "codeModeHostSandboxEnabled",
   "improvementLedgerV1Enabled",
   "improvementActivationV1Enabled",
   "promptRetuneCampaignV1Enabled",

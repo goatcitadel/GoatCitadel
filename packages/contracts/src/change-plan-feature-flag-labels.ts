@@ -17,6 +17,16 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS: Partial<
     description:
       "When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one.",
   },
+  codeModeV1Enabled: {
+    label: "Code Mode",
+    description:
+      "When on, Chat can ask to run code on this computer for a step no tool can do. Every run still needs your approval.",
+  },
+  codeModeHostSandboxEnabled: {
+    label: "Code Mode restricted sandbox",
+    description:
+      "When on, approved Code Mode runs execute on this computer in a restricted sandbox. When off, runs are refused.",
+  },
   chatThinkingStreamV1Enabled: {
     label: "Model reasoning in Chat",
     description:

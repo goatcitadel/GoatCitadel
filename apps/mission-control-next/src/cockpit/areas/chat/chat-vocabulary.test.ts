@@ -20,6 +20,15 @@ describe("chat vocabulary", () => {
     );
   });
 
+  it("shows a Code Mode request whose code failed as Failed, not Done", () => {
+    const request = { toolName: "code_mode.request", status: "executed" } as ChatToolRunRecord;
+    expect(presentToolRunStatus({ ...request, result: { status: "failed", error: "Code Mode is off." } })).toEqual({
+      label: "Failed",
+      tone: "failed",
+    });
+    expect(presentToolRunStatus({ ...request, result: { status: "completed" } }).label).toBe("Done");
+  });
+
   it("keeps a cancelled step neutral rather than a red failure", () => {
     expect(presentDelegationStepStatus("cancelled")).toEqual({ label: "Cancelled", tone: "neutral" });
     expect(presentDelegationRunStatus("waiting_for_approval" as never).label).toBe("Waiting on you");

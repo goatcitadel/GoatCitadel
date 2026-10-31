@@ -653,6 +653,10 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
     });
   });
 
+  fastify.get("/api/v1/code-mode/readiness", async (_request, reply) => {
+    return reply.send(await fastify.services.capabilities.getCodeModeReadiness());
+  });
+
   fastify.get("/api/v1/code-mode/execution-backends", async (_request, reply) => {
     return reply.send(await fastify.services.capabilities.listCodeModeExecutionBackends());
   });
@@ -767,6 +771,33 @@ export const capabilitiesRoutes: FastifyPluginAsync = async (fastify) => {
           ),
         ),
       );
+    } catch (error) {
+      if (error instanceof ConflictError) {
+        return reply.code(409).send({ error: error.message, details: error.details });
+      }
+      return sendRouteError(reply, error, request.log);
+    }
+  });
+
+  // Keeps a finished chat Code Mode run as an inactive candidate tool; the source comes from the stored artifact.
+  fastify.post("/api/v1/code-mode/runs/:runId/keep", async (request, reply) => {
+    const params = runParamsSchema.safeParse(request.params);
+    const body = z
+      .object({ name: z.string().trim().min(1).max(60), summary: z.string().trim().min(1).max(200) })
+      .strict()
+      .safeParse(request.body ?? {});
+    if (!params.success || !body.success) {
+      return reply.code(400).send({
+        error: {
+          params: params.success ? undefined : params.error.flatten(),
+          body: body.success ? undefined : body.error.flatten(),
+        },
+      });
+    }
+    try {
+      return reply
+        .code(201)
+        .send(await fastify.services.capabilities.keepCodeModeRunAsCandidate(params.data.runId, body.data));
     } catch (error) {
       if (error instanceof ConflictError) {
         return reply.code(409).send({ error: error.message, details: error.details });

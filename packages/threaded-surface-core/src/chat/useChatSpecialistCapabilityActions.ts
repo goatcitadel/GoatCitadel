@@ -515,6 +515,7 @@ export function useChatSpecialistCapabilityActions(input: {
     handleActivateCatalogSpecialist,
     handleSpecialistCandidatePatch,
     handleCapabilitySuggestionAction,
+    dismissCapabilitySuggestion,
     confirmCapabilitySuggestionAction,
   };
 }

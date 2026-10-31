@@ -88,7 +88,7 @@ export async function buildAttachmentPromptContext(
       return `${descriptor}\n  Preview: sent directly to a vision-capable model.`;
     }
     if (!attachment.extractPreview?.trim()) {
-      return `${descriptor}\n  Preview: unavailable for this file type in current pipeline.`;
+      return `${descriptor}\n  Preview: not extracted. attachmentId: ${attachment.attachmentId}. Code Mode can read it with docs.extract_text({ attachmentId }).`;
     }
     const preview = attachment.extractPreview
       .replace(/\r\n/g, "\n")
