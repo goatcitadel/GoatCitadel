@@ -7,9 +7,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:agentic-skill-architect",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "04fa7a30e4d83dc9e2f9f7fb661c1be5337ef2392ec7308fd398e8f7a9054c56",
+    treeSha256: "a1059eda3fdaeb428b67e7edf25b4e2551ab7ee9baccd7e714dab3a6f58220f0",
     fileCount: 3,
-    totalBytes: 12996,
+    totalBytes: 13001,
   },
   {
     skillId: "bundled:codebase-design",
@@ -105,9 +105,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:ponytail",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "e280480bc460779017a29832db1a273108308a7c27cc337d62a583a5071699c9",
+    treeSha256: "5d7ec2bb3d84e10af923c6cfee7f41f610d85c4ecc2133ace8c85300ea91f42e",
     fileCount: 3,
-    totalBytes: 5674,
+    totalBytes: 5708,
   },
   {
     skillId: "bundled:qa",
@@ -119,9 +119,9 @@ export const GENERATED_BUNDLED_SKILL_LOCK: readonly BundledSkillLockEntry[] = [
   {
     skillId: "bundled:receiving-code-review",
     manifestVersion: "goatcitadel.skill-tree.v1",
-    treeSha256: "60801e0893aae702f3c7017b892b91938391984ef5d672a5ead2fc0a825bfc3c",
+    treeSha256: "04c16a3492064bfdcb6552e912c092351c40fc21ceb93cf4090706dd42b950c9",
     fileCount: 3,
-    totalBytes: 5638,
+    totalBytes: 5732,
   },
   {
     skillId: "bundled:research",
