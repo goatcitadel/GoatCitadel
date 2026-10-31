@@ -77,6 +77,19 @@ describe("CapabilitySystemService.keepCodeModeRunAsCandidate", { timeout: RUN_TI
     expect(kept.revision).toBeGreaterThanOrEqual(1);
   });
 
+  it("keeping the same run again returns the same candidate", async () => {
+    // After a reload the card offers Keep as a tool again; a second keep must not stage a second candidate.
+    const fx = createFixture();
+    const { runId } = await fx.service.runApprovedCodeModeRequest(fx.approvedRequest("return { pages: 2 };"));
+    const input = { name: "Count Pages", summary: "Counts pages." };
+
+    const first = await fx.service.keepCodeModeRunAsCandidate(runId, input);
+    const second = await fx.service.keepCodeModeRunAsCandidate(runId, input);
+
+    expect(second).toEqual(first);
+    expect(await fx.asyncStorage.candidateSkillVersions.listByCandidateId(first.candidateId, 10)).toHaveLength(1);
+  });
+
   it("refuses a failed run", async () => {
     const fx = createFixture();
     const { runId } = await fx.service.runApprovedCodeModeRequest(fx.approvedRequest("throw new Error('boom');"));
