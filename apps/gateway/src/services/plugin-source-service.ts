@@ -16,7 +16,6 @@ import {
   listPluginTree,
   readPluginFileBounded,
   type PluginSnapshot,
-  type PluginSnapshotStore,
 } from "./plugin-snapshot-store.js";
 
 // Plugin sources: where a plugin can come from, and how it becomes a snapshot.
@@ -34,8 +33,10 @@ export interface FetchedPluginSource {
   sourceDisplay: string;
 }
 
-export interface FetchPluginSourceDeps {
-  store: PluginSnapshotStore;
+/** What a fetch needs, as plain values and one function, the way `composeCapabilitySkills` takes its owners. */
+export interface PluginSourceInputs {
+  /** Hashes a temp copy and moves it into place as a snapshot: the snapshot store's `importDirectory`. */
+  importSnapshot: (dir: string) => Promise<PluginSnapshot>;
   /** `<rootDir>/plugins`, the folder of plugins that ship with GoatCitadel. */
   builtInRoot: string;
   deploymentProfile: DeploymentProfile;
@@ -75,37 +76,29 @@ const UNTRUSTED_GIT_HOST_MESSAGE = "GoatCitadel installs plugins only from GitHu
 const FOLDER_REFUSED_MESSAGE = "Folder installs work only when GoatCitadel runs on this computer.";
 const WORK_DIR_REMOVAL = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
 
-/** What the readers below need, as plain values and one function. Nothing past the entry point reaches into `deps`. */
-interface SourceReaders {
-  importDirectory: (dir: string) => Promise<PluginSnapshot>;
-  builtInRoot: string;
-  deploymentProfile: DeploymentProfile;
+/** Where a copy is made and how it becomes a snapshot: what every source needs once it has files to keep. */
+interface SnapshotTarget {
+  importSnapshot: (dir: string) => Promise<PluginSnapshot>;
   tempRoot: string;
 }
-
-export type FetchPluginSource = (source: PluginSource, deps: FetchPluginSourceDeps) => Promise<FetchedPluginSource>;
 
 /**
  * Fetches a plugin source into a snapshot. Throws `PluginSourceError` for anything the source did wrong or the host
  * refused; an error that is GoatCitadel's own (a disk that can't be written) passes through unchanged.
  */
-export const fetchPluginSource: FetchPluginSource = (source, deps) =>
-  fetchFromReaders(source, {
-    importDirectory: (dir) => deps.store.importDirectory(dir),
-    builtInRoot: deps.builtInRoot,
-    deploymentProfile: deps.deploymentProfile,
-    tempRoot: deps.tempRoot,
-  });
-
-async function fetchFromReaders(source: PluginSource, readers: SourceReaders): Promise<FetchedPluginSource> {
+export async function fetchPluginSource(
+  source: PluginSource,
+  { importSnapshot, builtInRoot, deploymentProfile, tempRoot }: PluginSourceInputs,
+): Promise<FetchedPluginSource> {
+  const target: SnapshotTarget = { importSnapshot, tempRoot };
   try {
     switch (source.kind) {
       case "git":
-        return await fetchGitSource(source, readers);
+        return await fetchGitSource(source, target);
       case "folder":
-        return await fetchFolderSource(source, readers);
+        return await fetchFolderSource(source, deploymentProfile, target);
       case "built_in":
-        return await fetchBuiltInSource(source, readers);
+        return await fetchBuiltInSource(source, builtInRoot, target);
       default:
         throw new PluginSourceError(400, "INVALID_SOURCE", "That isn't a kind of plugin source GoatCitadel knows.");
     }
@@ -120,10 +113,10 @@ async function fetchFromReaders(source: PluginSource, readers: SourceReaders): P
 
 async function fetchGitSource(
   source: Extract<PluginSource, { kind: "git" }>,
-  readers: SourceReaders,
+  target: SnapshotTarget,
 ): Promise<FetchedPluginSource> {
   const url = admitGitUrl(source.url);
-  return withWorkDir(readers, "git-", async (workDir) => {
+  return withWorkDir(target, "git-", async (workDir) => {
     const treeDir = path.join(workDir, "tree");
     let commit: string;
     try {
@@ -140,7 +133,7 @@ async function fetchGitSource(
     } catch (error) {
       throw asGitFailure(error);
     }
-    const snapshot = await readers.importDirectory(treeDir);
+    const snapshot = await target.importSnapshot(treeDir);
     return { snapshot, pin: { kind: "commit", commit }, trust: "unverified", sourceDisplay: describeGitSource(url) };
   });
 }
@@ -223,13 +216,14 @@ function describeGitFailure(error: unknown): string {
 
 async function fetchFolderSource(
   source: Extract<PluginSource, { kind: "folder" }>,
-  readers: SourceReaders,
+  deploymentProfile: DeploymentProfile,
+  target: SnapshotTarget,
 ): Promise<FetchedPluginSource> {
-  if (readers.deploymentProfile === "remote_hardened") {
+  if (deploymentProfile === "remote_hardened") {
     throw new PluginSourceError(403, "FOLDER_INSTALL_NOT_ALLOWED", FOLDER_REFUSED_MESSAGE);
   }
   const folder = await requireAbsoluteFolder(source.path);
-  const snapshot = await copyIntoSnapshot(folder, readers);
+  const snapshot = await copyIntoSnapshot(folder, target);
   return {
     snapshot,
     pin: { kind: "content", treeSha256: snapshot.treeSha256 },
@@ -238,8 +232,21 @@ async function fetchFolderSource(
   };
 }
 
+/**
+ * A Windows network share (`\\server\share`), a `\\?\` or `\\.\` device path, or an NT `\??\` path. Opening one would
+ * make this computer contact another, or reach a device, so none of them is a folder on this computer. This reads the
+ * text only, and runs before any file system call.
+ */
+const NETWORK_OR_DEVICE_PATH = /^(?:[\\/]{2}|[\\/]\?\?[\\/])/u;
+
 async function requireAbsoluteFolder(raw: unknown): Promise<string> {
-  if (typeof raw !== "string" || !raw.trim() || raw.includes("\u0000") || !path.isAbsolute(raw)) {
+  if (typeof raw !== "string" || !raw.trim() || raw.includes("\u0000")) {
+    throw new PluginSourceError(400, "INVALID_FOLDER", "Give the full path of a folder on this computer.");
+  }
+  if (NETWORK_OR_DEVICE_PATH.test(raw.trimStart())) {
+    throw new PluginSourceError(400, "INVALID_FOLDER", "Use a folder on this computer.");
+  }
+  if (!path.isAbsolute(raw)) {
     throw new PluginSourceError(400, "INVALID_FOLDER", "Give the full path of a folder on this computer.");
   }
   const folder = path.resolve(raw);
@@ -265,7 +272,8 @@ async function requireAbsoluteFolder(raw: unknown): Promise<string> {
 
 async function fetchBuiltInSource(
   source: Extract<PluginSource, { kind: "built_in" }>,
-  readers: SourceReaders,
+  builtInRoot: string,
+  target: SnapshotTarget,
 ): Promise<FetchedPluginSource> {
   // The id is checked before any path is built, so no caller text ever reaches the file system.
   if (!isPluginId(source.pluginId)) {
@@ -275,7 +283,7 @@ async function fetchBuiltInSource(
       "That isn't the id of a plugin that ships with GoatCitadel.",
     );
   }
-  const folder = path.join(path.resolve(readers.builtInRoot), source.pluginId);
+  const folder = path.join(path.resolve(builtInRoot), source.pluginId);
   let info;
   try {
     info = await fs.lstat(folder);
@@ -284,7 +292,7 @@ async function fetchBuiltInSource(
     throw error;
   }
   if (!info.isDirectory() && !info.isSymbolicLink()) throw notShipped();
-  const snapshot = await copyIntoSnapshot(folder, readers);
+  const snapshot = await copyIntoSnapshot(folder, target);
   return {
     snapshot,
     pin: { kind: "content", treeSha256: snapshot.treeSha256 },
@@ -308,12 +316,14 @@ function isPluginId(value: unknown): value is string {
 
 /**
  * Copies a folder into a temp copy under `tempRoot` and imports that copy. The folder is checked and measured before a
- * byte is copied, and the store hashes the copy, not the folder: what is hashed is what was kept.
+ * byte is copied, and the store hashes the copy, not the folder: what is hashed is what was kept. Anything named `.git`
+ * is left out without being opened, so a snapshot never holds version-control metadata, and a plugin folder that is a
+ * checkout gets the same snapshot as the same files without it.
  */
-function copyIntoSnapshot(sourceRoot: string, readers: SourceReaders): Promise<PluginSnapshot> {
-  return withWorkDir(readers, "copy-", async (workDir) => {
+function copyIntoSnapshot(sourceRoot: string, target: SnapshotTarget): Promise<PluginSnapshot> {
+  return withWorkDir(target, "copy-", async (workDir) => {
     const copyDir = path.join(workDir, "tree");
-    const files = await listPluginTree(sourceRoot);
+    const files = await listPluginTree(sourceRoot, { skipVcsMetadata: true });
     await fs.mkdir(copyDir);
     for (const file of files) {
       const content = await readPluginFileBounded(file);
@@ -321,18 +331,18 @@ function copyIntoSnapshot(sourceRoot: string, readers: SourceReaders): Promise<P
       await fs.mkdir(path.dirname(destination), { recursive: true });
       await fs.writeFile(destination, content, { flag: "wx" });
     }
-    return readers.importDirectory(copyDir);
+    return target.importSnapshot(copyDir);
   });
 }
 
 /** Runs `work` in a new folder under `tempRoot` and removes the folder afterwards, whatever happened. */
 async function withWorkDir<T>(
-  readers: SourceReaders,
+  target: SnapshotTarget,
   prefix: string,
   work: (workDir: string) => Promise<T>,
 ): Promise<T> {
-  await fs.mkdir(readers.tempRoot, { recursive: true });
-  const workDir = await fs.mkdtemp(path.join(path.resolve(readers.tempRoot), prefix));
+  await fs.mkdir(target.tempRoot, { recursive: true });
+  const workDir = await fs.mkdtemp(path.join(path.resolve(target.tempRoot), prefix));
   try {
     return await work(workDir);
   } finally {

@@ -146,6 +146,16 @@ describe("PluginSnapshotStore.importDirectory", () => {
     }
   });
 
+  it("leaves out .git only when asked, and refuses it otherwise", async () => {
+    const source = makeFolder({ "a.md": "a", ".git/HEAD": "x", "docs/.GIT": "gitdir: x" });
+
+    await expect(listPluginTree(source)).rejects.toMatchObject({ reason: "UNSAFE_TREE" });
+    await expect(store.importDirectory(source)).rejects.toMatchObject({ reason: "UNSAFE_TREE" });
+
+    const listed = await listPluginTree(source, { skipVcsMetadata: true });
+    expect(listed.map((file) => file.relativePath)).toEqual(["a.md"]);
+  });
+
   it("refuses two names a case-insensitive disk would merge", async (context) => {
     const source = makeFolder({ "Readme.md": "a" });
     fs.writeFileSync(path.join(source, "README.md"), "b");

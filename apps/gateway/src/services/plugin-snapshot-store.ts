@@ -64,8 +64,15 @@ export interface PluginTreeFile {
  * case-insensitive disk. Files, bytes and entries are counted against `PLUGIN_LIMITS` as the walk goes, so a huge
  * folder is refused after a few hundred entries, not after reading it. Folders that hold no file are not part of a
  * plugin's files.
+ *
+ * With `skipVcsMetadata`, anything named `.git` (any case, file or folder, at any depth) is left out without being
+ * opened, counted or followed, instead of being refused as a name that can't be used. Only a copy of a folder on this
+ * computer asks for that; a fetched Git tree can't hold one, and the store never skips it.
  */
-export async function listPluginTree(rootDir: string): Promise<PluginTreeFile[]> {
+export async function listPluginTree(
+  rootDir: string,
+  options: { skipVcsMetadata?: boolean } = {},
+): Promise<PluginTreeFile[]> {
   const root = path.resolve(rootDir);
   const rootInfo = await fs.lstat(root);
   if (rootInfo.isSymbolicLink() || !rootInfo.isDirectory()) {
@@ -79,6 +86,7 @@ export async function listPluginTree(rootDir: string): Promise<PluginTreeFile[]>
 
   for (let next = pending.pop(); next; next = pending.pop()) {
     for (const name of (await fs.readdir(next.dir)).sort()) {
+      if (options.skipVcsMetadata && name.toLowerCase() === ".git") continue;
       entries += 1;
       if (entries > MAX_TREE_ENTRIES) {
         throw new PluginTreeLimitError(`A plugin can hold at most ${MAX_TREE_ENTRIES} files and folders.`);

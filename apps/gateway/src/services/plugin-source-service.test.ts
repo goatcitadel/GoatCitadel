@@ -23,9 +23,12 @@ const PLUGIN_FILES = {
 let scratchRoot: string;
 let counter = 0;
 
-function deps(deploymentProfile: DeploymentProfile = "trusted_local") {
+function inputs(deploymentProfile: DeploymentProfile = "trusted_local") {
+  const store = new PluginSnapshotStore(path.join(scratchRoot, "snapshots"));
   return {
-    store: new PluginSnapshotStore(path.join(scratchRoot, "snapshots")),
+    // Not an input: the tests read it to look inside what was stored.
+    store,
+    importSnapshot: (dir: string) => store.importDirectory(dir),
     builtInRoot: path.join(scratchRoot, "shipped"),
     deploymentProfile,
     tempRoot: path.join(scratchRoot, "tmp"),
@@ -42,6 +45,13 @@ function makeFolder(files: Record<string, string | Buffer>, parent = scratchRoot
     fs.writeFileSync(target, content);
   }
   return root;
+}
+
+/** Every file and folder name at any depth below `root`. */
+function namesBelow(root: string): string[] {
+  return fs
+    .readdirSync(root, { withFileTypes: true })
+    .flatMap((entry) => [entry.name, ...(entry.isDirectory() ? namesBelow(path.join(root, entry.name)) : [])]);
 }
 
 function tempLeftovers(): string[] {
@@ -81,18 +91,18 @@ describe("fetchPluginSource: Git", () => {
       writeTree(input.destDir, PLUGIN_FILES);
       return { commit: COMMIT };
     });
-    const sourceDeps = deps();
+    const sourceInputs = inputs();
 
     const result = await fetchPluginSource(
       { kind: "git", url: "https://github.com/Octo/Plugin.git", ref: COMMIT },
-      sourceDeps,
+      sourceInputs,
     );
 
     expect(result.pin).toEqual({ kind: "commit", commit: COMMIT });
     expect(result.trust).toBe("unverified");
     expect(result.sourceDisplay).toBe("github.com/Octo/Plugin");
     expect(fs.readFileSync(path.join(result.snapshot.dir, "skills", "one", "SKILL.md"), "utf8")).toBe("# One");
-    expect(sourceDeps.store.resolve(result.snapshot.treeSha256)).toBe(result.snapshot.dir);
+    expect(sourceInputs.store.resolve(result.snapshot.treeSha256)).toBe(result.snapshot.dir);
     expect(fetchGitTreeMock).toHaveBeenCalledTimes(1);
     const call = fetchGitTreeMock.mock.calls[0]![0];
     expect(call).toMatchObject({
@@ -105,7 +115,7 @@ describe("fetchPluginSource: Git", () => {
       },
     });
     // The tree is written under the temp root, which is left empty afterwards.
-    expect(path.resolve(call.destDir).startsWith(path.resolve(sourceDeps.tempRoot) + path.sep)).toBe(true);
+    expect(path.resolve(call.destDir).startsWith(path.resolve(sourceInputs.tempRoot) + path.sep)).toBe(true);
     expect(tempLeftovers()).toEqual([]);
   });
 
@@ -114,8 +124,8 @@ describe("fetchPluginSource: Git", () => {
       writeTree(input.destDir, PLUGIN_FILES);
       return { commit: COMMIT };
     });
-    await fetchPluginSource({ kind: "git", url: "https://gitlab.com/group/sub/repo" }, deps());
-    await fetchPluginSource({ kind: "git", url: "https://codeberg.org/o/r", ref: "v1.2.0" }, deps());
+    await fetchPluginSource({ kind: "git", url: "https://gitlab.com/group/sub/repo" }, inputs());
+    await fetchPluginSource({ kind: "git", url: "https://codeberg.org/o/r", ref: "v1.2.0" }, inputs());
 
     expect(fetchGitTreeMock.mock.calls.map(([input]) => input.ref)).toEqual([undefined, "v1.2.0"]);
   });
@@ -126,8 +136,8 @@ describe("fetchPluginSource: Git", () => {
       return { commit: COMMIT };
     });
     const results = await Promise.all([
-      fetchPluginSource({ kind: "git", url: "https://bitbucket.org/team/tool.git" }, deps()),
-      fetchPluginSource({ kind: "git", url: "https://GitLab.com/group/sub/repo/" }, deps()),
+      fetchPluginSource({ kind: "git", url: "https://bitbucket.org/team/tool.git" }, inputs()),
+      fetchPluginSource({ kind: "git", url: "https://GitLab.com/group/sub/repo/" }, inputs()),
     ]);
     expect(results.map((result) => result.sourceDisplay)).toEqual([
       "bitbucket.org/team/tool",
@@ -136,7 +146,7 @@ describe("fetchPluginSource: Git", () => {
   });
 
   it("refuses a host that isn't a trusted forge", async () => {
-    const sourceDeps = deps();
+    const sourceInputs = inputs();
     for (const url of [
       "https://evil.example/o/r",
       "https://github.com.evil.example/o/r",
@@ -145,7 +155,7 @@ describe("fetchPluginSource: Git", () => {
       "https://127.0.0.1/o/r",
       "https://localhost/o/r",
     ]) {
-      const failure = await failureOf(fetchPluginSource({ kind: "git", url }, sourceDeps));
+      const failure = await failureOf(fetchPluginSource({ kind: "git", url }, sourceInputs));
       expect(failure, url).toMatchObject({
         statusCode: 400,
         reason: "UNTRUSTED_GIT_HOST",
@@ -153,7 +163,7 @@ describe("fetchPluginSource: Git", () => {
       });
     }
     expect(fetchGitTreeMock).not.toHaveBeenCalled();
-    expect(fs.existsSync(sourceDeps.tempRoot)).toBe(false);
+    expect(fs.existsSync(sourceInputs.tempRoot)).toBe(false);
   });
 
   it("refuses an address that isn't a plain https address for a repository", async () => {
@@ -170,7 +180,7 @@ describe("fetchPluginSource: Git", () => {
       "not a url",
       "",
     ]) {
-      const failure = await failureOf(fetchPluginSource({ kind: "git", url }, deps()));
+      const failure = await failureOf(fetchPluginSource({ kind: "git", url }, inputs()));
       expect(failure.reason, url).toMatch(/^(INVALID_GIT_SOURCE|UNTRUSTED_GIT_HOST)$/u);
       expect(failure.statusCode, url).toBe(400);
       expect(failure.message, url).not.toContain("secret");
@@ -180,10 +190,10 @@ describe("fetchPluginSource: Git", () => {
 
   it("says plainly when the host won't fetch that exact commit", async () => {
     fetchGitTreeMock.mockRejectedValue(new GitCommitFetchRefusedError());
-    const sourceDeps = deps();
+    const sourceInputs = inputs();
 
     const failure = await failureOf(
-      fetchPluginSource({ kind: "git", url: "https://github.com/o/r", ref: COMMIT }, sourceDeps),
+      fetchPluginSource({ kind: "git", url: "https://github.com/o/r", ref: COMMIT }, sourceInputs),
     );
 
     expect(failure).toMatchObject({
@@ -196,7 +206,7 @@ describe("fetchPluginSource: Git", () => {
 
   it("maps the other Git failures without leaking paths", async () => {
     fetchGitTreeMock.mockRejectedValueOnce(new GitTreeLimitError("Git plugin tree exceeds 256 files."));
-    expect(await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, deps()))).toMatchObject({
+    expect(await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()))).toMatchObject({
       statusCode: 413,
       reason: "TREE_OVER_LIMITS",
       message: "Git plugin tree exceeds 256 files.",
@@ -206,7 +216,7 @@ describe("fetchPluginSource: Git", () => {
       new GitFetchInputError("Git ref must be a full commit, or a branch or tag name."),
     );
     expect(
-      await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r", ref: "a..b" }, deps())),
+      await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r", ref: "a..b" }, inputs())),
     ).toMatchObject({ statusCode: 400, reason: "INVALID_GIT_SOURCE" });
 
     const gitFailure = Object.assign(
@@ -216,7 +226,7 @@ describe("fetchPluginSource: Git", () => {
       { stderr: "Cloning...\nfatal: repository 'https://github.com/o/r/' not found\n" },
     );
     fetchGitTreeMock.mockRejectedValueOnce(gitFailure);
-    const failed = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, deps()));
+    const failed = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
     expect(failed).toMatchObject({ statusCode: 502, reason: "GIT_FETCH_FAILED" });
     expect(failed.message).toContain("repository 'https://github.com/o/r/' not found");
     expect(failed.message).not.toContain(scratchRoot);
@@ -225,7 +235,7 @@ describe("fetchPluginSource: Git", () => {
     fetchGitTreeMock.mockRejectedValueOnce(
       Object.assign(new Error("The operation was aborted"), { name: "AbortError" }),
     );
-    expect(await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, deps()))).toMatchObject({
+    expect(await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()))).toMatchObject({
       statusCode: 502,
       reason: "GIT_FETCH_FAILED",
       message: expect.stringContaining("too long"),
@@ -240,7 +250,7 @@ describe("fetchPluginSource: Git", () => {
       fs.symlinkSync(outside, path.join(input.destDir, "linked"), process.platform === "win32" ? "junction" : "dir");
       return { commit: COMMIT };
     });
-    const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, deps()));
+    const failure = await failureOf(fetchPluginSource({ kind: "git", url: "https://github.com/o/r" }, inputs()));
     expect(failure).toMatchObject({ statusCode: 422, reason: "UNSAFE_TREE" });
     expect(tempLeftovers()).toEqual([]);
   });
@@ -249,9 +259,9 @@ describe("fetchPluginSource: Git", () => {
 describe("fetchPluginSource: folder", () => {
   it("copies a folder into a snapshot pinned by its content", async () => {
     const folder = makeFolder(PLUGIN_FILES, scratchRoot, "My Plugin");
-    const sourceDeps = deps();
+    const sourceInputs = inputs();
 
-    const result = await fetchPluginSource({ kind: "folder", path: folder }, sourceDeps);
+    const result = await fetchPluginSource({ kind: "folder", path: folder }, sourceInputs);
 
     expect(result.trust).toBe("unverified");
     expect(result.sourceDisplay).toBe("My Plugin");
@@ -265,9 +275,9 @@ describe("fetchPluginSource: folder", () => {
   });
 
   it("gives two copies of the same folder one snapshot", async () => {
-    const sourceDeps = deps();
-    const first = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, sourceDeps);
-    const second = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, sourceDeps);
+    const sourceInputs = inputs();
+    const first = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, sourceInputs);
+    const second = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, sourceInputs);
 
     expect(second.snapshot).toEqual(first.snapshot);
     expect(second.pin).toEqual(first.pin);
@@ -277,9 +287,9 @@ describe("fetchPluginSource: folder", () => {
 
   it("refuses a folder install on remote_hardened", async () => {
     const folder = makeFolder(PLUGIN_FILES);
-    const sourceDeps = deps("remote_hardened");
+    const sourceInputs = inputs("remote_hardened");
 
-    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, sourceDeps));
+    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, sourceInputs));
 
     expect(failure).toMatchObject({
       statusCode: 403,
@@ -287,13 +297,13 @@ describe("fetchPluginSource: folder", () => {
       message: "Folder installs work only when GoatCitadel runs on this computer.",
     });
     // It was refused before anything was read or written.
-    expect(fs.existsSync(sourceDeps.tempRoot)).toBe(false);
+    expect(fs.existsSync(sourceInputs.tempRoot)).toBe(false);
     expect(fs.existsSync(path.join(scratchRoot, "snapshots"))).toBe(false);
   });
 
   it("allows a folder install on the local profiles", async () => {
     for (const profile of ["local_dev", "trusted_local"] as const) {
-      const result = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, deps(profile));
+      const result = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, inputs(profile));
       expect(result.pin.kind, profile).toBe("content");
     }
   });
@@ -309,7 +319,7 @@ describe("fetchPluginSource: folder", () => {
       ["a file", aFile, 400],
     ];
     for (const [name, folderPath, statusCode] of cases) {
-      const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folderPath }, deps()));
+      const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folderPath }, inputs()));
       expect(failure.statusCode, name).toBe(statusCode);
     }
   });
@@ -319,7 +329,7 @@ describe("fetchPluginSource: folder", () => {
     const folder = makeFolder(PLUGIN_FILES);
     fs.symlinkSync(outside, path.join(folder, "linked"), process.platform === "win32" ? "junction" : "dir");
 
-    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, deps()));
+    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, inputs()));
 
     expect(failure).toMatchObject({ statusCode: 422, reason: "UNSAFE_TREE" });
     expect(failure.message).toContain("linked");
@@ -330,24 +340,93 @@ describe("fetchPluginSource: folder", () => {
     const real = makeFolder(PLUGIN_FILES);
     const link = path.join(scratchRoot, "folder-link");
     fs.symlinkSync(real, link, process.platform === "win32" ? "junction" : "dir");
-    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: link }, deps()));
+    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: link }, inputs()));
     expect(failure).toMatchObject({ statusCode: 422, reason: "UNSAFE_TREE" });
   });
 
   it("refuses a file with a second hard link", async () => {
     const folder = makeFolder(PLUGIN_FILES);
     fs.linkSync(path.join(folder, "goatcitadel-plugin.json"), path.join(scratchRoot, "twin.json"));
-    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, deps()));
+    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, inputs()));
     expect(failure).toMatchObject({ statusCode: 422, reason: "UNSAFE_TREE" });
+  });
+
+  it("skips a .git folder in a folder source", async () => {
+    const plain = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, inputs());
+
+    const checkout = makeFolder({
+      ...PLUGIN_FILES,
+      ".git/HEAD": "ref: refs/heads/main",
+      ".git/objects/ab/cdef": "object",
+      "skills/one/.GIT/config": "nested, upper case",
+    });
+    // A `.git` file, as a linked work tree has.
+    fs.writeFileSync(path.join(checkout, "skills", ".Git"), "gitdir: ../elsewhere");
+    const withGit = await fetchPluginSource({ kind: "folder", path: checkout }, inputs());
+
+    expect(withGit.snapshot.treeSha256).toBe(plain.snapshot.treeSha256);
+    expect(withGit.pin).toEqual(plain.pin);
+    expect(namesBelow(withGit.snapshot.dir).filter((name) => name.toLowerCase() === ".git")).toEqual([]);
+    expect(tempLeftovers()).toEqual([]);
+  });
+
+  it("does not follow or refuse a .git link", async () => {
+    const outside = makeFolder({ "secret.txt": "do not read" });
+    const plain = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, inputs());
+    const checkout = makeFolder(PLUGIN_FILES);
+    fs.symlinkSync(outside, path.join(checkout, ".git"), process.platform === "win32" ? "junction" : "dir");
+
+    const withLink = await fetchPluginSource({ kind: "folder", path: checkout }, inputs());
+
+    expect(withLink.snapshot.treeSha256).toBe(plain.snapshot.treeSha256);
+    expect(namesBelow(withLink.snapshot.dir)).not.toContain("secret.txt");
+  });
+
+  it("still refuses a link that isn't named .git", async () => {
+    const outside = makeFolder({ "secret.txt": "do not read" });
+    const folder = makeFolder(PLUGIN_FILES);
+    fs.symlinkSync(outside, path.join(folder, ".github"), process.platform === "win32" ? "junction" : "dir");
+    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, inputs()));
+    expect(failure).toMatchObject({ statusCode: 422, reason: "UNSAFE_TREE" });
+  });
+
+  it("refuses a network or device folder path", async () => {
+    // Text only: none of these may reach the file system, so none of its calls may be made.
+    const fileSystemCalls = (["lstat", "readdir", "mkdir", "mkdtemp"] as const).map((name) =>
+      vi.spyOn(fs.promises, name),
+    );
+    try {
+      for (const folderPath of [
+        "\\\\server\\share\\plugin",
+        "\\\\?\\C:\\plugin",
+        "\\\\?\\UNC\\server\\share\\plugin",
+        "\\\\.\\C:\\plugin",
+        "\\\\.\\COM1",
+        "//server/share/plugin",
+        "\\/server/share",
+        "\\??\\C:\\plugin",
+        "  \\\\server\\share\\plugin",
+      ]) {
+        const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folderPath }, inputs()));
+        expect(failure, folderPath).toMatchObject({
+          statusCode: 400,
+          reason: "INVALID_FOLDER",
+          message: "Use a folder on this computer.",
+        });
+      }
+      for (const spy of fileSystemCalls) expect(spy).not.toHaveBeenCalled();
+    } finally {
+      for (const spy of fileSystemCalls) spy.mockRestore();
+    }
   });
 
   it("refuses a tree over the limits before copying it", async () => {
     const folder = makeFolder(
       Object.fromEntries(Array.from({ length: PLUGIN_LIMITS.maxFiles + 1 }, (_, index) => [`f${index}.md`, "x"])),
     );
-    const sourceDeps = deps();
+    const sourceInputs = inputs();
 
-    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, sourceDeps));
+    const failure = await failureOf(fetchPluginSource({ kind: "folder", path: folder }, sourceInputs));
 
     expect(failure).toMatchObject({ statusCode: 413, reason: "TREE_OVER_LIMITS" });
     expect(tempLeftovers()).toEqual([]);
@@ -367,9 +446,9 @@ describe("fetchPluginSource: built in", () => {
   it("resolves a built-in plugin only from the shipped folder", async () => {
     const root = shippedRoot();
     const outside = makeFolder({ "goatcitadel-plugin.json": "outside" }, scratchRoot, "outside-plugin");
-    const sourceDeps = deps();
+    const sourceInputs = inputs();
 
-    const result = await fetchPluginSource({ kind: "built_in", pluginId: "demo-plugin" }, sourceDeps);
+    const result = await fetchPluginSource({ kind: "built_in", pluginId: "demo-plugin" }, sourceInputs);
 
     expect(result.trust).toBe("built_in");
     expect(result.sourceDisplay).toBe("Ships with GoatCitadel");
@@ -396,14 +475,25 @@ describe("fetchPluginSource: built in", () => {
       "C:\\Windows",
       "demo-plugin\u0000",
     ]) {
-      const failure = await failureOf(fetchPluginSource({ kind: "built_in", pluginId }, sourceDeps));
+      const failure = await failureOf(fetchPluginSource({ kind: "built_in", pluginId }, sourceInputs));
       expect(failure, JSON.stringify(pluginId)).toMatchObject({ statusCode: 400, reason: "INVALID_BUILT_IN_ID" });
     }
     for (const pluginId of ["missing-plugin", "not-a-folder", "readme"]) {
-      const failure = await failureOf(fetchPluginSource({ kind: "built_in", pluginId }, sourceDeps));
+      const failure = await failureOf(fetchPluginSource({ kind: "built_in", pluginId }, sourceInputs));
       expect(failure, pluginId).toMatchObject({ statusCode: 404, reason: "BUILT_IN_NOT_FOUND" });
     }
     expect(tempLeftovers()).toEqual([]);
+  });
+
+  it("skips a .git folder in a built-in plugin", async () => {
+    const root = shippedRoot();
+    const plain = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, inputs());
+    makeFolder({ ".git/config": "[core]" }, root, "demo-plugin");
+
+    const result = await fetchPluginSource({ kind: "built_in", pluginId: "demo-plugin" }, inputs());
+
+    expect(result.snapshot.treeSha256).toBe(plain.snapshot.treeSha256);
+    expect(namesBelow(result.snapshot.dir)).not.toContain(".git");
   });
 
   it("refuses a shipped folder that has been swapped for a link", async () => {
@@ -411,14 +501,14 @@ describe("fetchPluginSource: built in", () => {
     const outside = makeFolder({ "goatcitadel-plugin.json": "outside" }, scratchRoot, "outside-plugin");
     fs.symlinkSync(outside, path.join(root, "linked-plugin"), process.platform === "win32" ? "junction" : "dir");
 
-    const failure = await failureOf(fetchPluginSource({ kind: "built_in", pluginId: "linked-plugin" }, deps()));
+    const failure = await failureOf(fetchPluginSource({ kind: "built_in", pluginId: "linked-plugin" }, inputs()));
 
     expect(failure).toMatchObject({ statusCode: 422, reason: "UNSAFE_TREE" });
   });
 
   it("is not held back by the folder rule on remote_hardened", async () => {
     shippedRoot();
-    const result = await fetchPluginSource({ kind: "built_in", pluginId: "demo-plugin" }, deps("remote_hardened"));
+    const result = await fetchPluginSource({ kind: "built_in", pluginId: "demo-plugin" }, inputs("remote_hardened"));
     expect(result.trust).toBe("built_in");
   });
 });
@@ -426,7 +516,7 @@ describe("fetchPluginSource: built in", () => {
 describe("fetchPluginSource: anything else", () => {
   it("refuses a source of a kind it doesn't know", async () => {
     const failure = await failureOf(
-      fetchPluginSource({ kind: "zip", url: "https://github.com/o/r.zip" } as unknown as PluginSource, deps()),
+      fetchPluginSource({ kind: "zip", url: "https://github.com/o/r.zip" } as unknown as PluginSource, inputs()),
     );
     expect(failure).toMatchObject({ statusCode: 400, reason: "INVALID_SOURCE" });
   });
