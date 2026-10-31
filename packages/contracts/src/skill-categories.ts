@@ -88,6 +88,7 @@ export const SKILL_CATEGORIES: readonly SkillCategoryDefinition[] = [
  */
 export const SHIPPED_SKILL_CATEGORIES: Readonly<Record<string, SkillCategoryId>> = {
   "bundled:coding": "coding",
+  "bundled:debugging": "coding",
   "bundled:opencode": "coding",
   "bundled:qa": "coding",
   "extra:github-cli": "coding",

@@ -17,6 +17,14 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not use for pure product strategy or documentation-only work."],
     confidenceBoost: 0.1,
   },
+  debugging: {
+    phrases: ["find the root cause", "why is this failing", "track down the bug"],
+    keywords: ["flaky", "stack trace", "root cause"],
+    surfaces: ["code", "chat"],
+    whenToUse: ["Find a defect's cause with a reproduction before changing code."],
+    whenNotToUse: ["Do not use for planned features or refactors with no failure."],
+    confidenceBoost: 0.1,
+  },
   impeccable: {
     phrases: [
       "design review",

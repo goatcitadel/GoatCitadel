@@ -21,6 +21,22 @@ GoatCitadel is licensed under the Apache License 2.0 (see `LICENSE`). This file 
 - Modifications: listed in each pack's `UPSTREAM.md`; each pack carries the upstream `LICENSE`.
 - These packs are not loaded as skills. An operator brings one in through Skill Hub review, then installs and activates it through approvals.
 
+## superpowers
+
+- Repository: https://github.com/obra/superpowers
+- License: MIT, Copyright (c) 2025 Jesse Vincent
+- Adapted at commit: `2ce8aa15d05bd57213e6f746f953aafb7ded7a8b`
+- Vendored path: `skills/bundled/debugging/` (SKILL.md rewritten for GoatCitadel from `systematic-debugging` and its technique files; no scripts, hooks, or plugin manifests)
+- Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
+
+## Matt Pocock skills
+
+- Repository: https://github.com/mattpocock/skills
+- License: MIT, Copyright (c) 2026 Matt Pocock
+- Adapted at commit: `4ae2317ddb22b046e26455e4f9c9b3aaaf62212d`
+- Vendored path: `skills/bundled/debugging/` (SKILL.md rewritten for GoatCitadel from `diagnosing-bugs`; no scripts or hooks)
+- Modifications: listed in each skill's `UPSTREAM.md`; each skill carries the upstream `LICENSE`.
+
 ## Hermes Agent MCP catalog (optional-mcps)
 
 - Repository: https://github.com/nousresearch/hermes-agent
