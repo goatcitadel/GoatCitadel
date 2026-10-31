@@ -1,6 +1,53 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { seedMissionControlNextFixture, settleApprovedSettingsChangePlan } from "./fixture-seeding.mjs";
+import {
+  seedCodeModeRequestSessions,
+  seedMissionControlNextFixture,
+  settleApprovedSettingsChangePlan,
+} from "./fixture-seeding.mjs";
+
+function codeModeSeedDeps(requests) {
+  return {
+    assertOk(response, label) {
+      assert.equal(response.ok, true, label);
+    },
+    requestJson: async (_gatewayUrl, path, options) => {
+      requests.push({ path, body: options?.body });
+      return { ok: true, body: {} };
+    },
+  };
+}
+
+test("seeds the Code Mode card's pending and ran sessions on spare sessions", async () => {
+  const requests = [];
+  const sessions = await seedCodeModeRequestSessions(
+    "http://gateway.test",
+    "workspace-1",
+    ["session-3", "session-4", "session-5"],
+    codeModeSeedDeps(requests),
+  );
+
+  assert.deepEqual(sessions, { codeModePending: "session-3", codeModeRan: "session-4" });
+  assert.deepEqual(requests, [
+    {
+      path: "/api/v1/dev/verification/chat-approval-scenario",
+      body: { sessionId: "session-3", workspaceId: "workspace-1", tool: "code_mode.request" },
+    },
+    {
+      path: "/api/v1/dev/verification/chat-code-mode-ran-scenario",
+      body: { sessionId: "session-4", workspaceId: "workspace-1" },
+    },
+  ]);
+});
+
+test("fails the Code Mode card seed without two spare sessions", async () => {
+  const requests = [];
+  await assert.rejects(
+    seedCodeModeRequestSessions("http://gateway.test", "workspace-1", ["session-3"], codeModeSeedDeps(requests)),
+    /need two spare seeded sessions/,
+  );
+  assert.deepEqual(requests, []);
+});
 
 test("fails when the seeded thread has no artifact turn", async () => {
   const requests = [];
@@ -249,6 +296,9 @@ test("seeds the complete fixture and returns its identifiers", async () => {
     ],
   );
   assert.ok(requests.includes("/api/v1/prompt-packs/import"));
+  // The Code Mode card sessions are opt-in, so the default fixture seeds only the shell approval.
+  assert.equal(requests.filter((path) => path === "/api/v1/dev/verification/chat-approval-scenario").length, 1);
+  assert.ok(!requests.includes("/api/v1/dev/verification/chat-code-mode-ran-scenario"));
   assert.deepEqual(agenticTaskSeedRequest, {
     method: "POST",
     body: {

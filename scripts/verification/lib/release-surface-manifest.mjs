@@ -761,7 +761,8 @@ export function resolveSurfaceRegressionManifest() {
   return [
     // Exercise the shipped default without a query override or saved shell preference.
     { ...COCKPIT_VISUAL_MANIFEST[0], slug: "cockpit-default-chat", shell: undefined },
-    ...COCKPIT_VISUAL_MANIFEST,
+    // A capture with a visualState is a visual-only state of a route already listed here, like the classic scenarios.
+    ...COCKPIT_VISUAL_MANIFEST.filter((route) => !route.visualState),
     ...NEXT_RELEASE_SURFACE_MANIFEST.map((route) => ({ ...route, shell: "classic" })),
   ];
 }
