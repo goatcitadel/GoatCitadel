@@ -30,6 +30,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     config: {
       rootDir: "F:/tmp/gc-loop22",
       assistant: {
+        dataDir: "./data",
         mesh: { nodeId: "node-loop22" },
       },
     },
