@@ -276,3 +276,13 @@ export async function compareCodeModeRuns(
     `/api/v1/code-mode/runs/${encodeURIComponent(runId)}/compare/${encodeURIComponent(baselineRunId)}${suffix}`,
   );
 }
+
+export async function keepCodeModeRun(
+  runId: string,
+  input: { name: string; summary: string },
+): Promise<{ candidateId: string; versionId: string; revision: number }> {
+  return request(`/api/v1/code-mode/runs/${encodeURIComponent(runId)}/keep`, {
+    method: "POST",
+    body: JSON.stringify(input),
+  });
+}

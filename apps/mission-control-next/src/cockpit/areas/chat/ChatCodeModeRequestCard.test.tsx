@@ -16,6 +16,8 @@ const api = vi.hoisted(() => ({
   fetchCodeModeReadiness: vi.fn(),
   fetchCodeModeRun: vi.fn(),
   approvePlanInPlace: vi.fn(),
+  keepCodeModeRun: vi.fn(),
+  promoteCapabilityCandidate: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: api.fetchApproval,
@@ -27,6 +29,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   patchSettings: api.patchSettings,
   fetchCodeModeReadiness: api.fetchCodeModeReadiness,
   fetchCodeModeRun: api.fetchCodeModeRun,
+  keepCodeModeRun: api.keepCodeModeRun,
+  promoteCapabilityCandidate: api.promoteCapabilityCandidate,
 }));
 vi.mock("./channel-setup/approve-plan-in-place", () => ({ approvePlanInPlace: api.approvePlanInPlace }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
@@ -247,5 +251,36 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     await render(turnWith({ status: "failed", error: "Code Mode is off. Turn it on from the card in Chat." }));
     expect(container.textContent).toContain("Code Mode is off.");
     expect(container.textContent).not.toContain("from the card");
+  });
+
+  const doneTurn = () =>
+    turnWith({ status: "executed", result: { status: "completed", durationMs: 1200, runId: "r1" } });
+  const staged = { candidateId: "candidate-1", versionId: "version-1", revision: 1 };
+
+  it("Keep as a tool stages, then promotes in one click", async () => {
+    api.keepCodeModeRun.mockResolvedValue(staged);
+    api.promoteCapabilityCandidate.mockResolvedValue({
+      pendingApproval: { approvalId: "approval-life", kind: "capability.lifecycle" },
+    });
+    await render(doneTurn());
+    await act(async () => button("Keep as a tool")!.click());
+    await waitFor(() => expect(container.textContent).toContain("Saved as a tool for review"));
+    expect(api.keepCodeModeRun).toHaveBeenCalledWith("r1", expect.objectContaining({ summary: GOAL }));
+    expect(api.keepCodeModeRun.mock.calls[0]![1].name).toBe("Read The Text Of Saturday-Plan.Pdf");
+    expect(api.promoteCapabilityCandidate).toHaveBeenCalledWith("candidate-1", 1, "version-1");
+    expect(api.resolveApproval).toHaveBeenCalledWith("approval-life", "approve");
+  });
+
+  it("shows Saved as a tool for review when promote returns a change plan", async () => {
+    api.keepCodeModeRun.mockResolvedValue(staged);
+    api.promoteCapabilityCandidate.mockResolvedValue({
+      pendingApproval: null,
+      noMutationRequired: false,
+      changePlan: {},
+    });
+    await render(doneTurn());
+    await act(async () => button("Keep as a tool")!.click());
+    await waitFor(() => expect(container.textContent).toContain("Saved as a tool for review"));
+    expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 });

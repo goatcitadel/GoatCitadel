@@ -89,6 +89,7 @@ export {
   fetchCodeModeExecutionBackends,
   fetchCodeModeReadiness,
   fetchCodeModeRun,
+  keepCodeModeRun,
   fetchCodeModeRunVerificationEvidence,
   verifyCodeModeRun,
   fetchCodeModeRunArtifact,

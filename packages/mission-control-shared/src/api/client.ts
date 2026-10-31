@@ -654,6 +654,7 @@ export {
   fetchCodeModeExecutionBackends,
   fetchCodeModeReadiness,
   fetchCodeModeRun,
+  keepCodeModeRun,
   fetchCodeModeRuns,
   promoteCapabilityCandidate,
   revokeCapabilityCandidate,

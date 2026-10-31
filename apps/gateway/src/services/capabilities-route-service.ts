@@ -24,6 +24,7 @@ export type CapabilitiesRoutePort = Pick<
   | "listCodeModeRunVerificationEvidence"
   | "verifyCodeModeRun"
   | "requestCodeModeAiderPromotion"
+  | "keepCodeModeRunAsCandidate"
   | "replayCodeModeAiderRun"
   | "compareCodeModeRuns"
   | "createAutonomousActivationGrant"
@@ -199,6 +200,10 @@ export class CapabilitiesRouteService {
     operatorId?: string,
   ) {
     return this.capabilities.verifyCodeModeRun(runId, input, scope, operatorId);
+  }
+
+  public keepCodeModeRunAsCandidate(runId: string, input: { name: string; summary: string }) {
+    return this.capabilities.keepCodeModeRunAsCandidate(runId, input);
   }
 
   public requestCodeModeAiderPromotion(

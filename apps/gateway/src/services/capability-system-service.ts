@@ -5121,6 +5121,45 @@ export class CapabilitySystemService {
     return runHarnessPath;
   }
 
+  /**
+   * Keeps a finished chat Code Mode run as a reusable tool: stages a candidate from the run's stored, hash-checked
+   * source. The candidate stays inactive until the operator promotes it through the normal lifecycle.
+   */
+  public async keepCodeModeRunAsCandidate(
+    runId: string,
+    input: { name: string; summary: string },
+  ): Promise<{ candidateId: string; versionId: string; revision: number }> {
+    const run = await this.getCodeModeRun(runId);
+    if (run.status !== "completed" || run.approvalSource?.kind !== CODE_MODE_REQUEST_APPROVAL_KIND) {
+      throw new ConflictError({ message: "Only a finished Code Mode run from Chat can be kept." });
+    }
+    const name = input.name.trim();
+    const summary = input.summary.trim();
+    if (!name || !summary) {
+      throw new SemanticValidationError("A kept tool needs a name and a summary.");
+    }
+    const source = await this.readVerifiedManagedArtifactText(run.codeArtifact, {
+      label: "Code Mode source artifact",
+      expectedSha256: run.codeHash,
+    });
+    const wrapperManifestRaw = await this.readVerifiedManagedArtifactText(run.wrapperManifestArtifact, {
+      label: "Code Mode wrapper manifest artifact",
+    });
+    const wrapperManifest = JSON.parse(wrapperManifestRaw) as CodeModeWrapperManifest;
+    assertJsonValueHash(wrapperManifest, run.wrapperManifestHash, "Code Mode wrapper manifest artifact");
+    await this.stageCandidateBundle({ ...run, requestedOutputIntent: summary }, source, wrapperManifest, {
+      skillName: name,
+      capabilityProposal: { title: name, summary },
+    });
+    const candidateId = normalizeCandidateId(undefined, run.codeHash);
+    const versionId = `version-${sha256Text(`code-mode-candidate\u0000${run.runId}`).slice(0, 32)}`;
+    const revision = await this.options.storage.skillAggregateRevisions.get("candidate_skill", candidateId);
+    if (!revision) {
+      throw new ConflictError({ message: `Candidate skill ${candidateId} has no canonical aggregate revision.` });
+    }
+    return { candidateId, versionId, revision: revision.revision };
+  }
+
   private async stageCandidateBundle(
     run: CodeModeRunRecord,
     source: string,
