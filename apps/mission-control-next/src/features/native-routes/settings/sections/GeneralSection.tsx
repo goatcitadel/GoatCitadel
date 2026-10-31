@@ -3,7 +3,6 @@
 import { useCallback } from "react";
 import { Bell, Volume2 } from "lucide-react";
 import {
-  fetchInstalledAddons,
   fetchIntegrationConnections,
   fetchMcpServers,
   fetchMeshReadiness,
@@ -230,7 +229,7 @@ export function GeneralSection(props: SettingsSectionProps) {
 
 function GeneralSetupStatus({ activeCitadelId, activeWorkspaceName, route, navigate }: SettingsSectionProps) {
   const load = useCallback(async () => {
-    const [settings, workspaces, integrations, mcpServers, tools, addons, meshReadiness] = await Promise.all([
+    const [settings, workspaces, integrations, mcpServers, tools, meshReadiness] = await Promise.all([
       nativeLoad("Settings", fetchSettings(), null),
       nativeLoad(
         "Workspaces",
@@ -240,17 +239,15 @@ function GeneralSetupStatus({ activeCitadelId, activeWorkspaceName, route, navig
       nativeLoad("Integrations", fetchIntegrationConnections(), { items: [] }),
       nativeLoad("MCP servers", fetchMcpServers(), { items: [] }),
       nativeLoad("Tools", fetchToolCatalog(), { items: [] }),
-      nativeLoad("Add-ons", fetchInstalledAddons(), { items: [] }),
       nativeLoad("Mesh readiness", fetchMeshReadiness(), null),
     ]);
     return {
-      issues: nativeLoadIssues([settings, workspaces, integrations, mcpServers, tools, addons, meshReadiness]),
+      issues: nativeLoadIssues([settings, workspaces, integrations, mcpServers, tools, meshReadiness]),
       settings: settings.data,
       workspaces: workspaces.data.items,
       integrations: integrations.data.items,
       mcpServers: mcpServers.data.items,
       tools: tools.data.items,
-      addons: addons.data.items,
       meshReadiness: meshReadiness.data,
     };
   }, [activeCitadelId]);
@@ -293,7 +290,6 @@ function GeneralSetupStatus({ activeCitadelId, activeWorkspaceName, route, navig
                     : "diagnostics unavailable",
                 },
                 { label: "Tools", value: String(data.tools?.length ?? 0), meta: "Catalog entries with policy posture" },
-                { label: "Add-ons", value: String(data.addons?.length ?? 0), meta: "Installed extensions" },
                 {
                   label: "Active model",
                   value: data.settings?.llm?.activeModel ?? "n/a",
@@ -328,7 +324,7 @@ function GeneralSetupStatus({ activeCitadelId, activeWorkspaceName, route, navig
                 },
                 {
                   label: "Advanced controls",
-                  description: "Permission profiles, tool grants, MCP servers, channels, add-ons, and runtime tuning.",
+                  description: "Permission profiles, tool grants, MCP servers, channels, and runtime tuning.",
                   actionLabel: "Open permissions",
                   onClick: () => navigate({ area: "settings", section: "permissions", theme: route.theme }),
                 },
@@ -403,11 +399,6 @@ function GeneralSetupStatus({ activeCitadelId, activeWorkspaceName, route, navig
                   label: "Trust & Policy",
                   description: "Review capability, tool, and source posture before opening editor surfaces.",
                   onClick: () => navigate({ area: "settings", section: "trust-policy", theme: route.theme }),
-                },
-                {
-                  label: "Add-ons",
-                  description: "Install and control optional add-on runtimes.",
-                  onClick: () => navigate({ area: "settings", section: "addons", theme: route.theme }),
                 },
               ]}
             />

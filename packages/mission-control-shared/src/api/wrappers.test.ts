@@ -771,31 +771,6 @@ describe("shared API wrappers", () => {
   });
 
   it("routes platform runtime wrappers and clamps query limits", async () => {
-    await expectCall(platform.fetchAddonsCatalog(), "/api/v1/addons/catalog");
-    await expectCall(platform.fetchInstalledAddons(), "/api/v1/addons/installed");
-    await expectCall(platform.fetchAddonStatus("addon/1"), "/api/v1/addons/addon%2F1/status");
-    await expectCall(platform.fetchAddonSlots(), "/api/v1/addons/slots");
-    await expectCall(
-      platform.fetchAddonSlots({ route: "/ops/approvals", slot: "ops.approvals.actions" }),
-      "/api/v1/addons/slots?route=%2Fops%2Fapprovals&slot=ops.approvals.actions",
-    );
-    await expectCall(
-      platform.fetchAddonSlots({ route: "/ops/approvals" }),
-      "/api/v1/addons/slots?route=%2Fops%2Fapprovals",
-    );
-    await expectCall(
-      platform.fetchAddonSlots({ slot: "library.skills.cards" }),
-      "/api/v1/addons/slots?slot=library.skills.cards",
-    );
-    await expectCall(platform.installAddon("addon/1", {} as never), "/api/v1/addons/addon%2F1/install", {
-      method: "POST",
-    });
-    await expectCall(platform.updateAddon("addon/1"), "/api/v1/addons/addon%2F1/update", { method: "POST" });
-    await expectCall(platform.enableAddon("addon/1"), "/api/v1/addons/addon%2F1/enable", { method: "POST" });
-    await expectCall(platform.disableAddon("addon/1"), "/api/v1/addons/addon%2F1/disable", { method: "POST" });
-    await expectCall(platform.launchAddon("addon/1"), "/api/v1/addons/addon%2F1/launch", { method: "POST" });
-    await expectCall(platform.stopAddon("addon/1"), "/api/v1/addons/addon%2F1/stop", { method: "POST" });
-    await expectCall(platform.uninstallAddon("addon/1"), "/api/v1/addons/addon%2F1/uninstall", { method: "DELETE" });
     await expectCall(platform.fetchCapabilityPacks(), "/api/v1/capability-packs");
     await expectCall(platform.fetchStagedCapabilityPacks(), "/api/v1/capability-packs/staged");
     await expectCall(platform.fetchCapabilityPackPreview("pack/1"), "/api/v1/capability-packs/pack%2F1/preview");

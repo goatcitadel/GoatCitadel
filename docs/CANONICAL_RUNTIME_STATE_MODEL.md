@@ -640,7 +640,7 @@ Controlled built-application process restarts now prove discovery reconstruction
 one MCP effect and final Chat materialization, before dispatch and across an
 approval wait. The fixture supplies synthetic resolvers through `buildApp` and
 the runtime factory to the service constructor. Stock startup keeps the default
-empty registry; no environment, route, skill or add-on can register a resolver.
+empty registry; no environment, route or skill can register a resolver.
 Installed-service custody and physical/live acceptance remain unfinished. See
 `docs/testing/COMPARISON_IMPLEMENTATION_STATUS.md` for the exact process and
 transport boundaries.

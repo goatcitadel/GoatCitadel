@@ -30,7 +30,6 @@ const OWNER_LINKS: Record<string, string> = {
   "Settings / Permissions": "/settings/safety#permission-profile",
   "Settings / Tools": "/settings/safety#approval-mode",
   "Settings / MCP": "/capabilities/connectors/advanced#mcp-servers",
-  "Settings / Add-ons": "/settings/advanced#addons",
   "Library / Candidates and mesh": "/library?shell=cockpit",
   "Capabilities / Skills": "/capabilities/skills?shell=cockpit",
   "Ops / Approvals": "/inbox?view=history&shell=cockpit",

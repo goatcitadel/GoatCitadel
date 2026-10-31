@@ -7,7 +7,6 @@ type TrustPolicyPosture =
   | "blocked"
   | "quarantined"
   | "disabled"
-  | "not_installed"
   | "unavailable"
   | "medium_trust_unverified";
 
@@ -34,7 +33,6 @@ interface TrustPolicySnapshot {
   };
   mcpServers: Array<Record<string, unknown>>;
   skills: Array<Record<string, unknown>>;
-  addons: Array<Record<string, unknown>>;
   lastUseEvidence: Array<Record<string, unknown>>;
 }
 
@@ -58,7 +56,6 @@ export const trustRoutes: FastifyPluginAsync = async (fastify) => {
     const capabilities = readService(services, "capabilities");
     const mcp = readService(services, "mcp");
     const skills = readService(services, "skills");
-    const addons = readService(services, "addons");
 
     const permissionProfiles = await readSource("permissionProfiles", "tools.permissionProfiles", () =>
       callListMethod(tools, "listPermissionProfiles", true),
@@ -77,12 +74,6 @@ export const trustRoutes: FastifyPluginAsync = async (fastify) => {
     );
     const mcpServers = await readSource("mcpServers", "mcp.servers", () => callListMethod(mcp, "listMcpServers"));
     const skillsSource = await readSource("skills", "skills.lifecycle", () => callListMethod(skills, "listSkills"));
-    const addonsCatalog = await readSource("addons.catalog", "addons.catalog", () =>
-      callListMethod(addons, "listAddonsCatalog"),
-    );
-    const installedAddons = await readSource("addons.installed", "addons.installed", () =>
-      callListMethod(addons, "listInstalledAddons"),
-    );
 
     const mcpToolSources = await Promise.all(
       mcpServers.items.map((server) =>
@@ -112,8 +103,6 @@ export const trustRoutes: FastifyPluginAsync = async (fastify) => {
         "mcp.servers",
         "mcp.tools",
         "skills.lifecycle",
-        "addons.catalog",
-        "addons.installed",
       ],
       sources: [
         permissionProfiles.source,
@@ -124,8 +113,6 @@ export const trustRoutes: FastifyPluginAsync = async (fastify) => {
         mcpServers.source,
         ...mcpToolSources.map((source) => source.source),
         skillsSource.source,
-        addonsCatalog.source,
-        installedAddons.source,
       ],
       permissionProfiles: permissionProfiles.items.map(projectPermissionProfile),
       toolGrants: toolGrants.items.map(projectToolGrant),
@@ -136,11 +123,9 @@ export const trustRoutes: FastifyPluginAsync = async (fastify) => {
       },
       mcpServers: mcpToolSources.map(({ server, tools }) => projectMcpServer(server, tools)),
       skills: enrichedSkills.map(projectSkill),
-      addons: projectAddons(addonsCatalog.items, installedAddons.items),
       lastUseEvidence: [
         ...enrichedSkills.map(projectSkillLastUseEvidence).filter(isRecord),
         ...mcpToolSources.map(({ server, tools }) => projectMcpLastUseEvidence(server, tools)).filter(isRecord),
-        ...installedAddons.items.map(projectAddonLastUseEvidence).filter(isRecord),
       ],
     };
 
@@ -423,59 +408,6 @@ function readGovernanceRecords(
   return (Array.isArray(value) ? value : []).map(readRecord).filter(isRecord).map(project).filter(isRecord);
 }
 
-function projectAddons(catalog: unknown[], installed: unknown[]): Array<Record<string, unknown>> {
-  const installedById = new Map(
-    installed
-      .map((item) => [readString(readRecord(item)?.addonId), readRecord(item)] as const)
-      .filter((entry): entry is readonly [string, Record<string, unknown>] => Boolean(entry[0] && entry[1])),
-  );
-  const catalogIds = new Set<string>();
-  const catalogRows = catalog.map((addon) => {
-    const record = readRecord(addon);
-    const addonId = readString(record?.addonId);
-    if (addonId) {
-      catalogIds.add(addonId);
-    }
-    const installedRecord = addonId ? installedById.get(addonId) : undefined;
-    return compactRecord({
-      addonId,
-      label: readString(record?.label),
-      trustTier: readString(installedRecord?.trustTier) ?? readString(record?.trustTier),
-      category: readString(record?.category),
-      runtimeType: readString(record?.runtimeType),
-      webEntryMode: readString(installedRecord?.webEntryMode) ?? readString(record?.webEntryMode),
-      sameOwnerAsGoatCitadel: installedRecord?.sameOwnerAsGoatCitadel ?? record?.sameOwnerAsGoatCitadel,
-      status: readString(installedRecord?.runtimeStatus) ?? "not_installed",
-      posture: readAddonPosture(installedRecord),
-      enabled: installedRecord?.enabled,
-      source: installedRecord ? "addons.installed" : "addons.catalog",
-      installedAt: readString(installedRecord?.installedAt),
-      updatedAt: readString(installedRecord?.updatedAt) ?? readString(record?.updatedAt),
-      lastError: readString(installedRecord?.lastError),
-    });
-  });
-  const installedOnlyRows = [...installedById.entries()]
-    .filter(([addonId]) => !catalogIds.has(addonId))
-    .map(([addonId, installedRecord]) =>
-      compactRecord({
-        addonId,
-        label: addonId,
-        trustTier: readString(installedRecord.trustTier),
-        runtimeType: readString(installedRecord.runtimeType),
-        webEntryMode: readString(installedRecord.webEntryMode),
-        sameOwnerAsGoatCitadel: installedRecord.sameOwnerAsGoatCitadel,
-        status: readString(installedRecord.runtimeStatus) ?? "installed",
-        posture: readAddonPosture(installedRecord),
-        enabled: installedRecord.enabled,
-        source: "addons.installed",
-        installedAt: readString(installedRecord.installedAt),
-        updatedAt: readString(installedRecord.updatedAt),
-        lastError: readString(installedRecord.lastError),
-      }),
-    );
-  return [...catalogRows, ...installedOnlyRows];
-}
-
 function projectSkillLastUseEvidence(skill: unknown): Record<string, unknown> | undefined {
   const record = readRecord(skill);
   const lastUsedAt = readString(record?.lastUsedAt);
@@ -512,24 +444,6 @@ function projectMcpLastUseEvidence(server: unknown, tools: unknown[]): Record<st
     subjectId: readString(record?.serverId),
     lastConnectedAt,
     latestToolUpdatedAt,
-    runId: readString(record?.runId) ?? readString(record?.lastRunId),
-    approvalId: readString(record?.approvalId) ?? readString(record?.lastApprovalId),
-    evidenceRef: readString(record?.evidenceRef) ?? readString(record?.lastEvidenceRef),
-  });
-}
-
-function projectAddonLastUseEvidence(addon: unknown): Record<string, unknown> | undefined {
-  const record = readRecord(addon);
-  const updatedAt = readString(record?.updatedAt);
-  if (!updatedAt) {
-    return undefined;
-  }
-  return compactRecord({
-    source: "addons.installed",
-    subjectType: "addon",
-    subjectId: readString(record?.addonId),
-    updatedAt,
-    status: readString(record?.runtimeStatus),
     runId: readString(record?.runId) ?? readString(record?.lastRunId),
     approvalId: readString(record?.approvalId) ?? readString(record?.lastApprovalId),
     evidenceRef: readString(record?.evidenceRef) ?? readString(record?.lastEvidenceRef),
@@ -629,20 +543,6 @@ function computeMissingRequiredEnv(
     .filter((entry) => entry.required !== false)
     .map((entry) => entry.name.trim())
     .filter((name) => !env[name]?.trim());
-}
-
-function readAddonPosture(installed: Record<string, unknown> | undefined): TrustPolicyPosture {
-  if (!installed) {
-    return "not_installed";
-  }
-  const status = readString(installed.runtimeStatus);
-  if (status === "error") {
-    return "blocked";
-  }
-  if (status === "disabled" || installed.enabled === false) {
-    return "disabled";
-  }
-  return status === "running" || status === "installed" || status === "stopped" ? "callable" : "non_callable";
 }
 
 function readService(services: Record<string, unknown>, key: string): Record<string, unknown> | undefined {

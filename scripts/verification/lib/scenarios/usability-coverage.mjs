@@ -133,7 +133,7 @@ export const ROUTE_ACTIONS_BY_SLUG = Object.freeze({
   "settings-local-ai": ["hardware-readiness-and-not-configured-reason"],
   "settings-workspaces": ["workspace-create-select-archive-restore", "workspace-isolation"],
   "settings-budget": ["budget-mode-update-and-conflict"],
-  "settings-addons": ["addon-inspection", "experimental-label-and-safe-failure"],
+  "settings-addons": ["experimental-label-and-safe-failure"],
   "settings-integrations": ["integration-validation-and-diagnostics", "sandbox-destination"],
   "settings-channels": ["channel-validation-and-diagnostics", "sandbox-destination"],
   "settings-mcp": ["mcp-server-tool-grant-lifecycle", "unsupported-transport-truth"],

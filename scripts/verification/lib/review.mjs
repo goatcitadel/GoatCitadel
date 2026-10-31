@@ -180,9 +180,6 @@ function classifyFailureFamily(item) {
   if (/install|bootstrap|onboard|launcher/.test(haystack)) {
     return "install_failure";
   }
-  if (/addon|arena|launchurl|display-ready/.test(haystack)) {
-    return "addon_readiness";
-  }
   if (/voice|whisper|ffmpeg|transcribe|model/.test(haystack)) {
     return "voice_runtime_failure";
   }
@@ -205,7 +202,7 @@ function classifySeverity(item, family) {
   if (family === "accessibility") {
     return "high";
   }
-  if (["provider_auth", "voice_runtime_failure", "addon_readiness", "orchestration_route_mismatch"].includes(family)) {
+  if (["provider_auth", "voice_runtime_failure", "orchestration_route_mismatch"].includes(family)) {
     return "high";
   }
   if (["provider_outage", "visual_perf_regression"].includes(family)) {
@@ -250,9 +247,6 @@ function deriveLikelySurfaces(item, family) {
   if (family === "voice_runtime_failure") {
     surfaces.add("apps/gateway/src/voice-runtime");
   }
-  if (family === "addon_readiness") {
-    surfaces.add("apps/gateway/src/services/addons-service.ts");
-  }
   return [...surfaces];
 }
 
@@ -295,9 +289,6 @@ function buildChecklist(item, family) {
   }
   if (family === "voice_runtime_failure") {
     checklist.push("Verify managed voice runtime state, selected model, and helper binaries.");
-  }
-  if (family === "addon_readiness") {
-    checklist.push("Check add-on installation state, launch health, and external URL readiness.");
   }
   if (family === "visual_perf_regression") {
     checklist.push("Review performance artifacts for long tasks, effects mode, and scroll jank.");
@@ -379,11 +370,7 @@ function deriveRecommendedReruns(items) {
       reruns.add("pnpm verify:fast");
     } else if (item.subsystem === "core-browser" || item.subsystem === "chat" || item.subsystem === "shell") {
       reruns.add("pnpm verify:deep:core");
-    } else if (
-      item.subsystem === "ecosystem" ||
-      item.family === "voice_runtime_failure" ||
-      item.family === "addon_readiness"
-    ) {
+    } else if (item.subsystem === "ecosystem" || item.family === "voice_runtime_failure") {
       reruns.add("pnpm verify:deep:ecosystem");
     } else if (item.family === "visual_perf_regression") {
       reruns.add("pnpm verify:deep:core");

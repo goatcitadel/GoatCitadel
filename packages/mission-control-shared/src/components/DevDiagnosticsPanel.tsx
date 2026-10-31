@@ -20,7 +20,6 @@ const CATEGORY_OPTIONS: Array<{ value: string; label: string }> = [
   { value: "startup", label: "Startup" },
   { value: "tools", label: "Tools" },
   { value: "voice", label: "Voice" },
-  { value: "addons", label: "Add-ons" },
   { value: "office", label: "Office" },
 ];
 

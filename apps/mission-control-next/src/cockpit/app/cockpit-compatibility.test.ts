@@ -261,7 +261,7 @@ describe("the retired Settings › Connections addresses", () => {
     ["/settings/connections#web-search", "/capabilities/connectors/advanced#web-search"],
     ["/settings/connections#channels", "/chat/messaging/advanced"],
     ["/settings/connections#addons", "/settings/advanced#addons"],
-    // The section paths follow their sections; Add-ons & packs is still a Settings section and stays put.
+    // The section paths follow their sections; Capability packs is still a Settings section and stays put.
     ["/settings/mcp", "/capabilities/connectors/advanced#mcp-servers"],
     ["/settings/integrations", "/capabilities/connectors/advanced#integration-connections"],
     ["/settings/web-search", "/capabilities/connectors/advanced#web-search"],

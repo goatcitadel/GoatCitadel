@@ -85,7 +85,6 @@ const ROUTE_ACCESS_POLICIES: Array<{ prefix: string; accessClass: RouteAccessCla
   { prefix: "/api/v1/tools", accessClass: "operator" },
   { prefix: "/api/v1/mcp/oauth/callback", accessClass: "public" },
   { prefix: "/api/v1/mcp", accessClass: "operator" },
-  { prefix: "/api/v1/addons", accessClass: "operator" },
   { prefix: "/api/v1/capability-packs", accessClass: "operator" },
   { prefix: "/api/v1/evidence", accessClass: "operator" },
   { prefix: "/api/v1/compliance", accessClass: "operator" },

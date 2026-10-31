@@ -36,7 +36,8 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 906: the Skills tab's Discover view announces the one outcome that replaces its list, a read or search that failed.
 // 907: Library's skill-packs panel went (-1, its notice callout); a skill's install panel announces its progress line
 // and why a check or step stopped (+2). The Git address field's refusal uses Field's own alert.
-export const LIVE_REGION_BUDGET = 907;
+// 900: the add-on screens went (-7): AddonsSettings had six live regions and AddonEvidence one. Capability packs stay.
+export const LIVE_REGION_BUDGET = 900;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

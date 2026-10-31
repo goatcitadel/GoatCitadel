@@ -211,7 +211,6 @@ const SOURCE_RULES = new Map<string, Rule>([
     "system",
     (e) => {
       const kind = realtimeEventKind(e);
-      if (kind.startsWith("addon_")) return effect([queryKeys.capabilities()], ["skills"]);
       return SYSTEM_SOURCE_TYPES.get(kind) ?? SYSTEM_SOURCE_TYPES.get(e.eventType);
     },
   ],

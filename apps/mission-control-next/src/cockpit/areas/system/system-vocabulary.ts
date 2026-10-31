@@ -120,7 +120,6 @@ const DIAGNOSTIC_CATEGORY: Readonly<Record<DevDiagnosticsCategory, string>> = {
   voice: "Voice",
   meet: "Meetings",
   mcp: "MCP",
-  addons: "Add-ons",
   office: "Office",
   dependency: "Dependency",
 };

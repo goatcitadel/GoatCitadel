@@ -75,7 +75,7 @@ export const appCopy = {
     notAvailable: "n/a",
   },
   navItems: [
-    { id: "addons", label: "Add-ons", code: "ADD" },
+    { id: "addons", label: "Capability packs", code: "PCK" },
     { id: "onboarding", label: "Launch Wizard", code: "NEW" },
     { id: "dashboard", label: "Work", code: "SUM" },
     { id: "system", label: "System", code: "ENG" },
@@ -124,7 +124,7 @@ export const appCopy = {
     { label: "Admin", items: ["skills", "mcp"] },
   ] satisfies NavSectionCopy[],
   nextStepByTab: {
-    addons: "Install optional extras only after reviewing trust, source, and runtime notes.",
+    addons: "Preview bundled capability packs. Plugins replace them soon.",
     onboarding: "Finish setup once, then move into Summit or Chat.",
     dashboard: "Start in Work when you want the fastest path into Chat.",
     system: "If anything feels slow, check vitals here first.",
@@ -178,26 +178,24 @@ export const pageCopy: Record<PageId, PageCopy> = {
     },
   },
   addons: {
-    title: "Add-ons",
-    subtitle: "Optional extras that live outside the GoatCitadel core app checkout.",
+    title: "Capability packs",
+    subtitle: "Preview bundled capability packs. Plugins replace them soon.",
     guide: {
-      what: "Use Add-ons to review, install, update, and supervise optional extras like Arena without mixing them into the core GoatCitadel repo.",
-      when: "Use this when you want something beyond the core agentic/control-plane feature set and you are comfortable reviewing a separate repository first.",
+      what: "Use Capability packs to preview what a bundled pack would set up before anything is staged.",
+      when: "Use this to look over a bundled pack or a portable pack manifest. Plugins will replace capability packs soon.",
       actions: [
-        "Review trust and provenance before every install.",
-        "Install the add-on into the dedicated GoatCitadel add-ons root.",
-        "Use readiness checks to confirm whether the add-on is display-ready and safe to open.",
+        "Preview a pack to see what it adds.",
+        "Import a portable pack manifest to preview it.",
+        "Stage a pack to keep it for review. Staging does not install anything.",
       ],
       terms: [
         {
-          term: "Same owner",
-          meaning:
-            "Configured metadata that says the add-on repository is published by the same owner as GoatCitadel. It is still separate code that you should review.",
+          term: "Preview",
+          meaning: "A look at what a pack would add. Previewing does not install, turn on or connect anything.",
         },
         {
-          term: "Display-ready",
-          meaning:
-            "The add-on exposes a stable web entry path that GoatCitadel can open externally or embed. Arena currently uses an external local URL instead of an embedded surface.",
+          term: "Staged",
+          meaning: "A pack saved for review. Staging does not install, turn on or connect anything.",
         },
       ],
     },

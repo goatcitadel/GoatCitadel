@@ -90,10 +90,6 @@ describe("trust routes", () => {
       skills: {
         listSkills: vi.fn(() => []),
       },
-      addons: {
-        listAddonsCatalog: vi.fn(() => []),
-        listInstalledAddons: vi.fn(async () => []),
-      },
     });
 
     const response = await app!.inject({
@@ -171,10 +167,6 @@ describe("trust routes", () => {
       skills: {
         listSkills: vi.fn(() => []),
       },
-      addons: {
-        listAddonsCatalog: vi.fn(() => []),
-        listInstalledAddons: vi.fn(async () => []),
-      },
     });
 
     const response = await app!.inject({
@@ -227,7 +219,6 @@ describe("trust routes", () => {
       },
       mcpServers: [],
       skills: [],
-      addons: [],
       lastUseEvidence: [],
     });
     expect(response.json().sources).toEqual(
@@ -249,6 +240,48 @@ describe("trust routes", () => {
         }),
       ]),
     );
+  });
+
+  it("reads no add-on sources", async () => {
+    const listAddonsCatalog = vi.fn(() => []);
+    const listInstalledAddons = vi.fn(async () => []);
+    await registerTrustServices({
+      tools: {
+        listPermissionProfiles: vi.fn(() => []),
+        listToolGrants: vi.fn(() => []),
+        listActiveLocalOperatorOverrides: vi.fn(() => []),
+      },
+      capabilities: {
+        listCapabilityCatalog: vi.fn(() => []),
+      },
+      mcp: {
+        listMcpServers: vi.fn(() => []),
+      },
+      skills: {
+        listSkills: vi.fn(() => []),
+      },
+      // A service left behind under the old key must never be consulted.
+      addons: { listAddonsCatalog, listInstalledAddons },
+    });
+
+    const response = await app!.inject({
+      method: "GET",
+      url: "/api/v1/trust/policy-snapshot",
+    });
+
+    expect(response.statusCode).toBe(200);
+    const snapshot = response.json();
+    expect(snapshot).not.toHaveProperty("addons");
+    expect(snapshot.enforcementSources.filter((source: string) => source.startsWith("addons."))).toEqual([]);
+    expect(
+      snapshot.sources.filter(
+        (source: { key: string; owner: string }) =>
+          source.key.startsWith("addons.") || source.owner.startsWith("addons."),
+      ),
+    ).toEqual([]);
+    expect(snapshot.lastUseEvidence.filter((row: { subjectType?: string }) => row.subjectType === "addon")).toEqual([]);
+    expect(listAddonsCatalog).not.toHaveBeenCalled();
+    expect(listInstalledAddons).not.toHaveBeenCalled();
   });
 
   it("keeps concrete last-use evidence references when sources provide them", async () => {
@@ -277,10 +310,6 @@ describe("trust routes", () => {
             lastEvidenceRef: "evidence-skill-1",
           },
         ]),
-      },
-      addons: {
-        listAddonsCatalog: vi.fn(() => []),
-        listInstalledAddons: vi.fn(async () => []),
       },
     });
 
@@ -327,10 +356,6 @@ describe("trust routes", () => {
           },
         ]),
       },
-      addons: {
-        listAddonsCatalog: vi.fn(() => []),
-        listInstalledAddons: vi.fn(async () => []),
-      },
     });
 
     const response = await app!.inject({ method: "GET", url: "/api/v1/trust/policy-snapshot" });
@@ -364,10 +389,6 @@ describe("trust routes", () => {
             },
           },
         ]),
-      },
-      addons: {
-        listAddonsCatalog: vi.fn(() => []),
-        listInstalledAddons: vi.fn(async () => []),
       },
     });
 
@@ -407,10 +428,6 @@ describe("trust routes", () => {
           { skillId: "skill-bundle", name: "Bundle Skill", state: "enabled", callable: true, dir },
         ]),
       },
-      addons: {
-        listAddonsCatalog: vi.fn(() => []),
-        listInstalledAddons: vi.fn(async () => []),
-      },
     });
 
     const response = await app!.inject({ method: "GET", url: "/api/v1/trust/policy-snapshot" });
@@ -441,10 +458,6 @@ describe("trust routes", () => {
         listSkills: vi.fn(() => [
           { skillId: "skill-invalid-bundle", name: "Invalid Bundle Skill", state: "enabled", callable: true, dir },
         ]),
-      },
-      addons: {
-        listAddonsCatalog: vi.fn(() => []),
-        listInstalledAddons: vi.fn(async () => []),
       },
     });
 

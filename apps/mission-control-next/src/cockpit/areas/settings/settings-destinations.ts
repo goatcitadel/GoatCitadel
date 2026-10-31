@@ -64,7 +64,7 @@ export const CONNECTOR_SETUP_SECTIONS: readonly ConnectorSetupSection[] = ["mcp"
 /**
  * The Cockpit's Settings pages. Settings › Connections was retired (2026-10-30): MCP servers, Integrations and Web &
  * Search moved to Capabilities › Connectors › Advanced setup, Channels to Chat › Messaging › Advanced channel setup,
- * and Add-ons & packs to Settings › Advanced until the Plugins tab replaces it. Classic keeps the shared rail groups.
+ * and Capability packs to Settings › Advanced until the Plugins tab replaces them. Classic keeps the shared rail groups.
  */
 function cockpitSettingsGroups(): RailGroup[] {
   return (RAIL_GROUPS.settings ?? []).flatMap((group) =>

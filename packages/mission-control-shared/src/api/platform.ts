@@ -1,6 +1,4 @@
 import type {
-  AddonDashboardSlot,
-  AddonDashboardSlotDeclaration,
   LlmModelDiscoverySource,
   LlmModelPreviewResponse,
   LlmModelRecord,
@@ -14,15 +12,6 @@ import type {
 } from "@goatcitadel/contracts";
 import type { RuntimeSettingsResponse } from "./types.js";
 import { request } from "./client-core.js";
-
-export interface AddonSlotRegistration extends AddonDashboardSlotDeclaration {
-  addonId: string;
-}
-
-export interface FetchAddonSlotsParams {
-  route?: string;
-  slot?: AddonDashboardSlot;
-}
 
 export type LlmRuntimeConfigResponse = RuntimeSettingsResponse["llm"] & {
   revision: number;
@@ -172,17 +161,6 @@ export async function fetchLlamaCppStatus(): Promise<LlamaCppRuntimeStatus> {
 
 // Optional destination operations retain their public bindings and shared request owner.
 export {
-  fetchAddonsCatalog,
-  fetchInstalledAddons,
-  fetchAddonStatus,
-  fetchAddonSlots,
-  installAddon,
-  updateAddon,
-  enableAddon,
-  disableAddon,
-  launchAddon,
-  stopAddon,
-  uninstallAddon,
   fetchCapabilityPacks,
   fetchStagedCapabilityPacks,
   fetchCapabilityPackPreview,

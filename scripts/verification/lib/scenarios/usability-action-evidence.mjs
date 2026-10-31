@@ -526,12 +526,6 @@ const ACTION_ASSERTIONS = Object.freeze({
       "preserves the local budget draft when a stale revision is rejected",
     ),
   ],
-  "route.settings-addons.addon-inspection": [
-    a(
-      "apps/mission-control-next/src/features/native-routes/SettingsNativePage.coverage.test.tsx",
-      "renders the add-ons section when catalog and pack payloads are empty",
-    ),
-  ],
   "route.settings-integrations.integration-validation-and-diagnostics": [
     a(
       "apps/gateway/src/routes/integrations.control.test.ts",

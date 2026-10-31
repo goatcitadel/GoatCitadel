@@ -136,7 +136,6 @@ describe("route access manifest", () => {
     app.get("/api/v1/llm/providers", async () => ({ ok: true }));
     app.get("/api/v1/tools/catalog", async () => ({ ok: true }));
     app.get("/api/v1/mcp/servers", async () => ({ ok: true }));
-    app.get("/api/v1/addons/catalog", async () => ({ ok: true }));
     app.get("/api/v1/capabilities/catalog", async () => ({ ok: true }));
     app.get("/api/v1/mobile/capabilities", async () => ({ ok: true }));
     app.get("/api/v1/ops/quality", async () => ({ ok: true }));
@@ -160,7 +159,6 @@ describe("route access manifest", () => {
       "/api/v1/llm/providers",
       "/api/v1/tools/catalog",
       "/api/v1/mcp/servers",
-      "/api/v1/addons/catalog",
       "/api/v1/capabilities/catalog",
       "/api/v1/mobile/capabilities",
       "/api/v1/ops/quality",
@@ -222,6 +220,26 @@ describe("route access manifest", () => {
       classificationSource: "default",
       tracked: true,
     });
+  });
+
+  it("has no add-ons route family", async () => {
+    app = Fastify();
+    installRouteAccessTracking(app);
+    app.decorate("gatewayConfig", {
+      assistant: { auth: { mode: "token", allowLoopbackBypass: false } },
+    } as never);
+    app.decorate("requireOperatorAuth", async () => undefined);
+
+    app.get("/api/v1/addons/catalog", async () => ({ ok: true }));
+    await app.ready();
+
+    // The add-ons family was retired, so no prefix rule claims the path any more: a route mounted
+    // there would fall through to the unclassified default instead of an explicit policy.
+    expect(app.routeAccessManifest.find((entry) => entry.url === "/api/v1/addons/catalog")).toMatchObject({
+      classificationSource: "default",
+      tracked: true,
+    });
+    expect(listMissingTrackedRouteAccessClasses(app).map((entry) => entry.url)).toEqual(["/api/v1/addons/catalog"]);
   });
 
   it("classifies every notification route as operator-only and rejects non-operator principals", async () => {

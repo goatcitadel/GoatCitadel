@@ -33,7 +33,7 @@ export const RULES = [
   {
     id: "manual-humanize",
     pattern: /\.replace(?:All)?\(\s*(?:["'`]_["'`]|\/_\/g)\s*,\s*["'`] ["'`]\s*\)/g,
-    budget: 13,
+    budget: 10,
     help: "underscore-stripping is humanizeToken by hand; use a typed presenter",
   },
   {
@@ -99,8 +99,8 @@ export const ROOT_BUDGETS = {
     "optional-plural": 3,
     "inline-plural": 11,
     "jsx-raw-id": 16,
-    "raw-iso-time": 8,
-    "raw-error-text": 7,
+    "raw-iso-time": 7,
+    "raw-error-text": 6,
   },
   "native-ops": {
     "humanize-token": 0,

@@ -634,7 +634,7 @@ export function labelForSettingsSection(section: string) {
     case "hooks":
       return "Hooks";
     case "addons":
-      return "Add-ons";
+      return "Capability packs";
     default:
       return "Unknown";
   }
@@ -677,7 +677,7 @@ export function descriptionForSettingsSection(section: string) {
     case "hooks":
       return "Configure governed lifecycle hooks, data scope, and durable delivery evidence.";
     case "addons":
-      return "Inspect experimental local add-ons, lifecycle truth, trust posture, and the 1.0 graduation bar.";
+      return "Preview bundled capability packs. Plugins replace them soon.";
     default:
       return "This settings deep link is not registered.";
   }

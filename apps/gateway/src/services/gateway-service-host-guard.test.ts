@@ -92,8 +92,6 @@ const EXTRACTED_GATEWAY_SERVICE_SYMBOLS = [
 
 const ROUTE_COMPOSITION_PRIVATE_DEPENDENCY_NAMES = [
   "mcpAdministration",
-  "addonsService",
-  "addonSlotService",
   "approvalRuntime",
   "assemblyService",
   "backupRetentionService",
@@ -498,7 +496,6 @@ describe("gateway service host guard", () => {
       /\bgateway\.(?:listGlobalGuidance|listWorkspaceGuidance|updateGlobalGuidance|updateWorkspaceGuidance)\b/,
     );
     for (const dependencyName of [
-      "addonsService",
       "approvalRuntime",
       "assemblyService",
       "backupRetentionService",

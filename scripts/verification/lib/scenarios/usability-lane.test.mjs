@@ -121,7 +121,7 @@ test("usability inventory follows current implementation truth and covers every 
   assert.ok(inventory.rows.length > 100);
   const requiredRows = inventory.rows.filter((row) => row.required);
   const optionalRows = inventory.rows.filter((row) => !row.required);
-  assert.equal(requiredRows.length, 158);
+  assert.equal(requiredRows.length, 157);
   assert.ok(requiredRows.every((row) => row.proofBindings.length > 0 && row.expectedResult));
   assert.ok(
     requiredRows.every(
@@ -134,7 +134,7 @@ test("usability inventory follows current implementation truth and covers every 
     ),
   );
   const actionRows = requiredRows.filter((row) => row.kind === "route-action");
-  assert.equal(actionRows.length, 85);
+  assert.equal(actionRows.length, 84);
   assert.ok(
     actionRows.every((row) =>
       row.proofBindings.every((binding) =>
@@ -381,7 +381,7 @@ test("restart, recovery, auth, and realtime rows require Chromium plus their iso
 test("every route action has an exact Chromium owner contract and requested bundle count", () => {
   const inventory = buildUsabilityRouteActionInventory("1".repeat(40));
   assert.deepEqual(listBrowserActionProofGaps(), []);
-  assert.equal(Object.keys(BROWSER_ACTION_STEP_REGISTRY).length, 76);
+  assert.equal(Object.keys(BROWSER_ACTION_STEP_REGISTRY).length, 75);
   assert.deepEqual(
     Object.fromEntries(Object.entries(BROWSER_ACTION_BUNDLES).map(([bundleId, steps]) => [bundleId, steps.length])),
     EXPECTED_BROWSER_ACTION_BUNDLE_COUNTS,

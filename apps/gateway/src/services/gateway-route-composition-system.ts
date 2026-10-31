@@ -1,4 +1,3 @@
-import { createAddonsRoutePort } from "./addons-route-service.js";
 import { createCostsRoutePort } from "./costs-route-service.js";
 import { createDaemonRouteService } from "./daemon-route-service.js";
 import { createPersonalOpsRouteService } from "./personal-ops-route-service.js";
@@ -20,7 +19,6 @@ export function composeSystemRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
   | "a2a"
-  | "addons"
   | "assembly"
   | "autonomyControl"
   | "costs"
@@ -55,12 +53,6 @@ export function composeSystemRouteDependencies(
       createApproval: (input) => gateway.createApproval(input),
       citadelWardRequests: buildCitadelWardRequestVaultForGateway(gateway),
     },
-    addons: createAddonsRoutePort({
-      addonsService: gateway.addonsService,
-      slotService: gateway.addonSlotService,
-      publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload ?? {}),
-      recordDevDiagnostic: (input) => gateway.recordDevDiagnostic(input),
-    }),
     assembly: {
       createAssemblyRun: (input) => assemblyService.createRun(input),
       getAssemblyRunDetail: (runId) => assemblyService.getRunDetail(runId),

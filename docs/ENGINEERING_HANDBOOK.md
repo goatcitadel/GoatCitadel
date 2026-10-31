@@ -156,7 +156,7 @@ Mission Control is an API client, not a backend extension. It:
 - `@goatcitadel/skills`: skill loading and activation.
 - `@goatcitadel/orchestration`: orchestration run state transitions.
 
-Settings Add-ons is an experimental local/operator-reviewed extension surface for `1.0`, not a public marketplace. Keep claims conservative until permission grants, durable logs, rollback/version proof, runtime health, and local-vs-marketplace boundaries are implemented.
+Arena and the add-on machinery were removed; plugins replace add-ons in a later release. Settings › Advanced keeps capability packs as an experimental local/operator-reviewed surface for `1.0`, not a public marketplace. Keep claims conservative until permission grants, durable logs, rollback/version proof, runtime health, and local-vs-marketplace boundaries are implemented.
 
 Desktop/mobile continuity must stay gateway-owned: signed device grants, install-token/device-request flows, desktop daemon/runtime state, and session/project/artifact/approval handoffs are the source of truth. Do not imply companion apps can bypass auth, policy, approvals, or the desktop runtime boundary.
 
@@ -579,7 +579,7 @@ Operator-facing mutating JSON endpoints require `Idempotency-Key` and block dupl
 - `POST /api/v1/tools/grants/:grantId/revoke`
 - `GET /api/v1/trust/policy-snapshot`
   - Read-only Trust & Policy projection for operator dashboards. It explains current capability, grant, MCP, skill,
-    add-on, override, and last-use posture without creating policy mutation semantics.
+    override, and last-use posture without creating policy mutation semantics.
 
 ### Approvals
 

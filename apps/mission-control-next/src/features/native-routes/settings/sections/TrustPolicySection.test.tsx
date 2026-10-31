@@ -81,7 +81,6 @@ describe("TrustPolicySection", () => {
           source: "skills.lifecycle",
         },
       ],
-      addons: [],
       lastUseEvidence: [],
     });
   });
@@ -127,7 +126,6 @@ describe("TrustPolicySection", () => {
           source: "skills.lifecycle",
         },
       ],
-      addons: [],
       lastUseEvidence: [],
     });
 
@@ -168,7 +166,6 @@ describe("TrustPolicySection", () => {
           source: "skills.lifecycle",
         },
       ],
-      addons: [],
       lastUseEvidence: [],
     });
 

@@ -126,24 +126,6 @@ export function buildTrustPolicyRows(snapshot: TrustPolicySnapshot | null | unde
       },
     });
   }
-  for (const addon of snapshot.addons) {
-    const evidence = findLastUseEvidence(snapshot.lastUseEvidence, "addon", addon.addonId);
-    rows.push({
-      id: `addon:${addon.addonId ?? addon.label ?? rows.length}`,
-      kind: "source",
-      label: addon.label ?? addon.addonId ?? "Add-on",
-      source: addon.source,
-      status: addon.enabled === false ? "blocked" : statusForPosture(addon.posture),
-      trustState: addon.trustTier ?? addon.status,
-      callable: addon.enabled !== false && addon.posture === "callable",
-      callableState: addon.enabled !== false && addon.posture === "callable" ? "callable" : "blocked",
-      grants: [addon.category, addon.runtimeType].filter((item): item is string => Boolean(item)),
-      blockers: [addon.lastError, addon.enabled === false ? "Disabled" : undefined].filter((item): item is string =>
-        Boolean(item),
-      ),
-      lastUse: evidenceToLastUse(evidence),
-    });
-  }
   for (const profile of snapshot.permissionProfiles) {
     const profileCallable = profile.posture === "callable";
     const profileCallableState = profileCallable
@@ -238,9 +220,6 @@ function ownerForTrustPolicyRow(row: TrustPolicyMatrixRow): string {
       return "Settings / MCP";
     case "skills.lifecycle":
       return "Capabilities / Skills";
-    case "addons.catalog":
-    case "addons.installed":
-      return "Settings / Add-ons";
     default:
       return row.kind === "tool"
         ? "Settings / Tools"

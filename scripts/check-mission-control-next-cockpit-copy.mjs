@@ -96,10 +96,10 @@ export const COPY_RATCHETS = [
 export const ROOT_BUDGETS = {
   cockpit: { "glossary-terms": 0 },
   "native-routes": {
-    "internal-terms": 304,
+    "internal-terms": 297,
     "dead-end-pointer": 1,
     "aria-label-id": 10,
-    "glossary-terms": 1109,
+    "glossary-terms": 1079,
     "plural-template": 39,
   },
   "shared-components": { "internal-terms": 23, "aria-label-id": 11, "glossary-terms": 55, "plural-template": 5 },

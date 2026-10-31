@@ -525,7 +525,7 @@ no current implementation. `unverified` is an acceptance evidence gap.
 | Proactive heartbeat work | paused/historical | Heartbeat occurrences / autonomous turn owner | New-admission pause; Inbox fallback remains | Quiet decisions, preemption, restart, delivery-only retry |
 | Configured MCP connections | conditional | MCP Settings, manager, policy and approvals | Saved/connected/discovered are different from callable | Guided setup through real governed sample task |
 | Requester-scoped Chat MCP | paused/historical | Requester resolver / connection registry | Frozen profile/process-local authority; default resolver empty | Admitted actor, generation/schema drift and restart refusal |
-| Extension SDK packaging | usable | SDK validators, manifests and starter packs | Optional guided form metadata absent | Old manifests valid; actionable author preflight |
+| Extension SDK packaging | usable | SDK validators and manifests | Optional guided form metadata absent | Old manifests valid; actionable author preflight |
 | Native remote execution | unverified | Existing C5 worker/admission owners | Requires fresh physical Windows-to-Windows evidence | Admission, approval, cancel, artifact, worker death/recovery |
 | Hosted comparison | conditional | Existing C6 comparison harness | Old pinned adapters; live config/revision preflight required | 45 trials under shared $25/450 ceiling |
 | Local comparison | missing | Existing C6 transport/accounting | Hosted-only transport and positive-price assumptions | Loopback HTTP, zero dollars, bounded requests/deadline/tokens |

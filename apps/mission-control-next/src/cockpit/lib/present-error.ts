@@ -7,7 +7,7 @@ export interface PresentedError {
   detail?: string;
 }
 
-/** Neutral: technical details may be switched off, and the site may be a run, a step, a delivery or an add-on. */
+/** Neutral: technical details may be switched off, and the site may be a run, a step or a delivery. */
 const UNREADABLE_SUMMARY = "The recorded error isn't in a readable form.";
 
 /*

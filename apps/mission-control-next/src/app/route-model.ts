@@ -641,8 +641,8 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
     },
     {
       id: "settings-addons",
-      label: "Add-ons & packs",
-      description: "Installed extensions and workspace add-ons.",
+      label: "Capability packs",
+      description: "Preview bundled capability packs. Plugins replace them soon.",
       area: "settings",
       section: "addons",
     },

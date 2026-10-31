@@ -215,7 +215,6 @@ const mocks = vi.hoisted(() => ({
       },
     ],
     skills: [],
-    addons: [],
     lastUseEvidence: [
       {
         source: "mcp.servers",
@@ -236,41 +235,43 @@ const mocks = vi.hoisted(() => ({
     ...input,
   })),
   revokeToolGrant: vi.fn(async (grantId: string) => ({ revoked: true, grantId, revokedBy: "operator" })),
-  fetchPermissionProfiles: vi.fn(async (): Promise<{ items: PermissionProfileSnapshotRecord[] }> => ({
-    items: [
-      {
-        revision: "a".repeat(64),
-        profileId: "safe",
-        label: "Safe",
-        scope: "global",
-        status: "active",
-        builtin: true,
-        approvalMode: "approve_all",
-        toolPatterns: ["*"],
-        allow: [],
-        deny: [],
-        createdBy: "system",
-        createdAt: "2026-05-02T18:00:00.000Z",
-        updatedAt: "2026-05-02T18:00:00.000Z",
-      },
-      {
-        revision: "a".repeat(64),
-        profileId: "trusted_local_power",
-        label: "Trusted Local Power",
-        description: "Run allowed local tools without normal prompts.",
-        scope: "global",
-        status: "active",
-        builtin: true,
-        approvalMode: "bypass",
-        toolPatterns: ["*"],
-        allow: ["*"],
-        deny: [],
-        createdBy: "system",
-        createdAt: "2026-05-02T18:00:00.000Z",
-        updatedAt: "2026-05-02T18:00:00.000Z",
-      },
-    ],
-  })),
+  fetchPermissionProfiles: vi.fn(
+    async (): Promise<{ items: PermissionProfileSnapshotRecord[] }> => ({
+      items: [
+        {
+          revision: "a".repeat(64),
+          profileId: "safe",
+          label: "Safe",
+          scope: "global",
+          status: "active",
+          builtin: true,
+          approvalMode: "approve_all",
+          toolPatterns: ["*"],
+          allow: [],
+          deny: [],
+          createdBy: "system",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+        {
+          revision: "a".repeat(64),
+          profileId: "trusted_local_power",
+          label: "Trusted Local Power",
+          description: "Run allowed local tools without normal prompts.",
+          scope: "global",
+          status: "active",
+          builtin: true,
+          approvalMode: "bypass",
+          toolPatterns: ["*"],
+          allow: ["*"],
+          deny: [],
+          createdBy: "system",
+          createdAt: "2026-05-02T18:00:00.000Z",
+          updatedAt: "2026-05-02T18:00:00.000Z",
+        },
+      ],
+    }),
+  ),
   fetchActiveLocalOperatorOverrides: vi.fn(
     async (): Promise<{ items: LocalOperatorOverrideRecord[] }> => ({ items: [] }),
   ),
@@ -280,72 +281,88 @@ const mocks = vi.hoisted(() => ({
     permissionProfileLabel: "Safe",
     permissionProfileApprovalMode: "approve_all",
   })),
-  createLocalOperatorOverride: vi.fn(async (): Promise<LocalOperatorOverrideRecord> => ({
-    overrideId: "override-session-1",
-    operatorId: "operator",
-    scope: "session",
-    scopeRef: "session-1",
-    reason: "Run local tools for this session",
-    status: "active",
-    createdBy: "operator",
-    createdAt: "2026-05-02T18:00:00.000Z",
-    expiresAt: "2099-05-02T18:10:00.000Z",
-  })),
-  createPermissionProfile: vi.fn(async (input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createPermissionProfile>[0]): Promise<PermissionProfileSnapshotRecord> => ({
-    revision: "a".repeat(64),
-    profileId: "profile-created",
-    scope: "workspace",
-    scopeRef: "default",
-    builtin: false,
-    createdBy: "operator",
-    createdAt: "2026-05-02T18:00:00.000Z",
-    updatedAt: "2026-05-02T18:00:00.000Z",
-    ...input,
-    status: "active",
-    toolPatterns: input.toolPatterns ?? [],
-    allow: input.allow ?? [],
-    deny: input.deny ?? [],
-  })),
-  updatePermissionProfile: vi.fn(async (profileId: string, input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").updatePermissionProfile>[1]): Promise<PermissionProfileSnapshotRecord> => ({
-    revision: "a".repeat(64),
-    profileId,
-    label: input.label ?? "Updated profile",
-    scope: "workspace",
-    scopeRef: "default",
-    builtin: false,
-    approvalMode: input.approvalMode ?? "approve_all",
-    toolPatterns: input.toolPatterns ?? ["session.status"],
-    allow: input.allow ?? [],
-    deny: input.deny ?? [],
-    status: "active",
-    createdBy: "operator",
-    createdAt: "2026-05-02T18:00:00.000Z",
-    updatedAt: "2026-05-02T18:10:00.000Z",
-  })),
-  reviewPermissionProfileSelection: vi.fn(async (input: PermissionProfileSelectionReviewRequest): Promise<PermissionProfileSelectionReview> => ({
-    revision: "d".repeat(64),
-    input,
-    target: { workspaceId: input.operation === "activate" ? input.workspaceId : input.scopeRef, operatorId: input.operation === "activate" ? "operator" : undefined },
-    activeProfiles: [],
-    profile:
-      input.operation === "activate"
-        ? {
-            profileId: input.profileId,
-            label: "Safe",
-            revision: "a".repeat(64),
-            builtin: true,
-            status: "active",
-            scope: "global",
-            approvalMode: "approve_all",
-            toolPatterns: ["*"],
-            allow: [],
-            deny: [],
-            createdBy: "system",
-            createdAt: "2026-09-13T00:00:00.000Z",
-            updatedAt: "2026-09-13T00:00:00.000Z",
-          }
-        : undefined,
-  })),
+  createLocalOperatorOverride: vi.fn(
+    async (): Promise<LocalOperatorOverrideRecord> => ({
+      overrideId: "override-session-1",
+      operatorId: "operator",
+      scope: "session",
+      scopeRef: "session-1",
+      reason: "Run local tools for this session",
+      status: "active",
+      createdBy: "operator",
+      createdAt: "2026-05-02T18:00:00.000Z",
+      expiresAt: "2099-05-02T18:10:00.000Z",
+    }),
+  ),
+  createPermissionProfile: vi.fn(
+    async (
+      input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createPermissionProfile>[0],
+    ): Promise<PermissionProfileSnapshotRecord> => ({
+      revision: "a".repeat(64),
+      profileId: "profile-created",
+      scope: "workspace",
+      scopeRef: "default",
+      builtin: false,
+      createdBy: "operator",
+      createdAt: "2026-05-02T18:00:00.000Z",
+      updatedAt: "2026-05-02T18:00:00.000Z",
+      ...input,
+      status: "active",
+      toolPatterns: input.toolPatterns ?? [],
+      allow: input.allow ?? [],
+      deny: input.deny ?? [],
+    }),
+  ),
+  updatePermissionProfile: vi.fn(
+    async (
+      profileId: string,
+      input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").updatePermissionProfile>[1],
+    ): Promise<PermissionProfileSnapshotRecord> => ({
+      revision: "a".repeat(64),
+      profileId,
+      label: input.label ?? "Updated profile",
+      scope: "workspace",
+      scopeRef: "default",
+      builtin: false,
+      approvalMode: input.approvalMode ?? "approve_all",
+      toolPatterns: input.toolPatterns ?? ["session.status"],
+      allow: input.allow ?? [],
+      deny: input.deny ?? [],
+      status: "active",
+      createdBy: "operator",
+      createdAt: "2026-05-02T18:00:00.000Z",
+      updatedAt: "2026-05-02T18:10:00.000Z",
+    }),
+  ),
+  reviewPermissionProfileSelection: vi.fn(
+    async (input: PermissionProfileSelectionReviewRequest): Promise<PermissionProfileSelectionReview> => ({
+      revision: "d".repeat(64),
+      input,
+      target: {
+        workspaceId: input.operation === "activate" ? input.workspaceId : input.scopeRef,
+        operatorId: input.operation === "activate" ? "operator" : undefined,
+      },
+      activeProfiles: [],
+      profile:
+        input.operation === "activate"
+          ? {
+              profileId: input.profileId,
+              label: "Safe",
+              revision: "a".repeat(64),
+              builtin: true,
+              status: "active",
+              scope: "global",
+              approvalMode: "approve_all",
+              toolPatterns: ["*"],
+              allow: [],
+              deny: [],
+              createdBy: "system",
+              createdAt: "2026-09-13T00:00:00.000Z",
+              updatedAt: "2026-09-13T00:00:00.000Z",
+            }
+          : undefined,
+    }),
+  ),
   activatePermissionProfile: vi.fn(async (input) => ({
     activationId: "activation-1",
     active: true,
@@ -369,21 +386,23 @@ const mocks = vi.hoisted(() => ({
     revokedAt: "2026-05-02T18:05:00.000Z",
     ...input,
   })),
-  revokeDeviceAccessGrant: vi.fn(async (grantId: string): Promise<DeviceAccessGrantRevokeResponse> => ({
-    grant: {
-      grantId,
-      requestId: "request-1",
-      actorId: "operator",
-      deviceLabel: "Android phone",
-      deviceType: "mobile",
-      platform: "Android",
-      grantedBy: "operator",
-      createdAt: "2026-05-02T18:00:00.000Z",
-      metadata: {},
-      revokedAt: "2026-05-02T19:00:00.000Z",
-      principalPurpose: "general_companion",
-    },
-  })),
+  revokeDeviceAccessGrant: vi.fn(
+    async (grantId: string): Promise<DeviceAccessGrantRevokeResponse> => ({
+      grant: {
+        grantId,
+        requestId: "request-1",
+        actorId: "operator",
+        deviceLabel: "Android phone",
+        deviceType: "mobile",
+        platform: "Android",
+        grantedBy: "operator",
+        createdAt: "2026-05-02T18:00:00.000Z",
+        metadata: {},
+        revokedAt: "2026-05-02T19:00:00.000Z",
+        principalPurpose: "general_companion",
+      },
+    }),
+  ),
   resolveGatewayInstallToken: vi.fn(async () => ({
     token: "install-token-1",
     source: "generated",
@@ -531,15 +550,21 @@ const mocks = vi.hoisted(() => ({
     status: "staged",
     proposalId: "proposal-1",
   })),
-  createExternalSideEffectReplayAuditRun: vi.fn(async (_input: Parameters<typeof import("@goatcitadel/mission-control-shared/api/client").createExternalSideEffectReplayAuditRun>[0]) => ({
-    runId: "durable-replay-audit-1",
-    workflowKey: "external_side_effect.replay",
-    status: "queued",
-    attemptCount: 0,
-    maxAttempts: 3,
-    createdAt: "2026-05-31T20:00:00.000Z",
-    updatedAt: "2026-05-31T20:00:00.000Z",
-  })),
+  createExternalSideEffectReplayAuditRun: vi.fn(
+    async (
+      _input: Parameters<
+        typeof import("@goatcitadel/mission-control-shared/api/client").createExternalSideEffectReplayAuditRun
+      >[0],
+    ) => ({
+      runId: "durable-replay-audit-1",
+      workflowKey: "external_side_effect.replay",
+      status: "queued",
+      attemptCount: 0,
+      maxAttempts: 3,
+      createdAt: "2026-05-31T20:00:00.000Z",
+      updatedAt: "2026-05-31T20:00:00.000Z",
+    }),
+  ),
   fetchDurableRun: vi.fn(),
   fetchIntegrationFormSchema: vi.fn(async () => ({
     catalogId: "github",
@@ -1027,142 +1052,122 @@ const mocks = vi.hoisted(() => ({
       catalogSnapshot: [{ capabilityId: "tool:fs.read", kind: "tool", callable: true }],
     },
   })),
-  fetchMcpElicitations: vi.fn(async (): Promise<{ items: McpElicitationRequest[] }> => ({
-    items: [
-      {
-        elicitationId: "mcp-elicit-1",
-        method: "elicitation/create",
-        status: "pending",
-        prompt: {
-          text: "Choose the repository to inspect.",
-          charLength: 33,
-          maxChars: 4000,
-          truncated: false,
-          redactedSecretCount: 0,
-        },
-        requestedSchema: {
-          value: {
-            type: "object",
-            properties: { repository: { type: "string" } },
-            required: ["repository"],
-          },
-          byteLength: 92,
-          maxBytes: 8192,
-          truncated: false,
-          redactedSecretCount: 0,
-        },
-        protocol: {
+  fetchMcpElicitations: vi.fn(
+    async (): Promise<{ items: McpElicitationRequest[] }> => ({
+      items: [
+        {
+          elicitationId: "mcp-elicit-1",
           method: "elicitation/create",
-          message: "Choose the repository to inspect.",
-          requestedSchema: { type: "object" },
-        },
-        owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
-        source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
-        policy: {
-          redactionMode: "basic",
-          sensitiveInformationAllowed: false,
-          requiresOperatorResponse: true,
-          transportBoundary: "gateway_local_mcp",
-          remoteTransportSupport: "unchanged",
-          limits: {
-            promptMaxChars: 4096,
-            requestedSchemaMaxBytes: 8192,
-            responseContentMaxBytes: 16384,
-            listMaxItems: 200,
+          status: "pending",
+          prompt: {
+            text: "Choose the repository to inspect.",
+            charLength: 33,
+            maxChars: 4000,
+            truncated: false,
+            redactedSecretCount: 0,
           },
-          governance: ["MCP elicitation is recorded at the Gateway route boundary before operator response."],
-        },
-        audit: {
-          auditEventIds: ["gateway:mcp:elicitation:mcp-elicit-1:created"],
-          createdBy: "operator",
-          createdAt: "2026-05-30T00:00:00.000Z",
-          updatedAt: "2026-05-30T00:00:00.000Z",
-          reasonCodes: ["mcp_elicitation_created"],
-        },
-        evidence: {
+          requestedSchema: {
+            value: {
+              type: "object",
+              properties: { repository: { type: "string" } },
+              required: ["repository"],
+            },
+            byteLength: 92,
+            maxBytes: 8192,
+            truncated: false,
+            redactedSecretCount: 0,
+          },
+          protocol: {
+            method: "elicitation/create",
+            message: "Choose the repository to inspect.",
+            requestedSchema: { type: "object" },
+          },
           owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
           source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
-          status: "pending",
+          policy: {
+            redactionMode: "basic",
+            sensitiveInformationAllowed: false,
+            requiresOperatorResponse: true,
+            transportBoundary: "gateway_local_mcp",
+            remoteTransportSupport: "unchanged",
+            limits: {
+              promptMaxChars: 4096,
+              requestedSchemaMaxBytes: 8192,
+              responseContentMaxBytes: 16384,
+              listMaxItems: 200,
+            },
+            governance: ["MCP elicitation is recorded at the Gateway route boundary before operator response."],
+          },
+          audit: {
+            auditEventIds: ["gateway:mcp:elicitation:mcp-elicit-1:created"],
+            createdBy: "operator",
+            createdAt: "2026-05-30T00:00:00.000Z",
+            updatedAt: "2026-05-30T00:00:00.000Z",
+            reasonCodes: ["mcp_elicitation_created"],
+          },
+          evidence: {
+            owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
+            source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
+            status: "pending",
+            createdAt: "2026-05-30T00:00:00.000Z",
+            updatedAt: "2026-05-30T00:00:00.000Z",
+            statusHistory: [
+              {
+                status: "pending",
+                reason: "MCP elicitation request recorded by the Gateway route before operator response.",
+                recordedAt: "2026-05-30T00:00:00.000Z",
+                auditEventId: "gateway:mcp:elicitation:mcp-elicit-1:created",
+              },
+            ],
+            prompt: { charLength: 33, maxChars: 4000, truncated: false, redactedSecretCount: 0 },
+            requestedSchema: { byteLength: 92, maxBytes: 8192, truncated: false, redactedSecretCount: 0 },
+          },
           createdAt: "2026-05-30T00:00:00.000Z",
           updatedAt: "2026-05-30T00:00:00.000Z",
-          statusHistory: [
-            {
-              status: "pending",
-              reason: "MCP elicitation request recorded by the Gateway route before operator response.",
-              recordedAt: "2026-05-30T00:00:00.000Z",
-              auditEventId: "gateway:mcp:elicitation:mcp-elicit-1:created",
-            },
-          ],
-          prompt: { charLength: 33, maxChars: 4000, truncated: false, redactedSecretCount: 0 },
-          requestedSchema: { byteLength: 92, maxBytes: 8192, truncated: false, redactedSecretCount: 0 },
         },
-        createdAt: "2026-05-30T00:00:00.000Z",
-        updatedAt: "2026-05-30T00:00:00.000Z",
-      },
-    ],
-  })),
-  respondMcpElicitation: vi.fn(async (elicitationId: string, input: any): Promise<McpElicitationRequest> => ({
-    elicitationId,
-    method: "elicitation/create",
-    status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
-    prompt: {
-      text: "Choose the repository to inspect.",
-      charLength: 33,
-      maxChars: 4000,
-      truncated: false,
-      redactedSecretCount: 0,
-    },
-    requestedSchema: {
-      value: { type: "object" },
-      byteLength: 92,
-      maxBytes: 8192,
-      truncated: false,
-      redactedSecretCount: 0,
-    },
-    protocol: {
+      ],
+    }),
+  ),
+  respondMcpElicitation: vi.fn(
+    async (elicitationId: string, input: any): Promise<McpElicitationRequest> => ({
+      elicitationId,
       method: "elicitation/create",
-      message: "Choose the repository to inspect.",
-      requestedSchema: { type: "object" },
-    },
-    owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
-    source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
-    policy: {
-      redactionMode: "basic",
-      sensitiveInformationAllowed: false,
-      requiresOperatorResponse: true,
-      transportBoundary: "gateway_local_mcp",
-      remoteTransportSupport: "unchanged",
-      limits: {
-        promptMaxChars: 4096,
-        requestedSchemaMaxBytes: 8192,
-        responseContentMaxBytes: 16384,
-        listMaxItems: 200,
+      status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
+      prompt: {
+        text: "Choose the repository to inspect.",
+        charLength: 33,
+        maxChars: 4000,
+        truncated: false,
+        redactedSecretCount: 0,
       },
-      governance: [],
-    },
-    audit: {
-      auditEventIds: [`gateway:mcp:elicitation:${elicitationId}:${input.action}`],
-      createdAt: "2026-05-30T00:00:00.000Z",
-      updatedAt: "2026-05-30T00:01:00.000Z",
-      reasonCodes: ["mcp_elicitation_responded"],
-    },
-    evidence: {
+      requestedSchema: {
+        value: { type: "object" },
+        byteLength: 92,
+        maxBytes: 8192,
+        truncated: false,
+        redactedSecretCount: 0,
+      },
+      protocol: {
+        method: "elicitation/create",
+        message: "Choose the repository to inspect.",
+        requestedSchema: { type: "object" },
+      },
       owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
       source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
-      status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
-      createdAt: "2026-05-30T00:00:00.000Z",
-      updatedAt: "2026-05-30T00:01:00.000Z",
-      statusHistory: [],
-      prompt: { charLength: 33, maxChars: 4000, truncated: false, redactedSecretCount: 0 },
-      requestedSchema: { byteLength: 92, maxBytes: 8192, truncated: false, redactedSecretCount: 0 },
-    },
-    response: {
-      action: input.action,
-      content: input.content
-        ? { value: input.content, byteLength: 30, maxBytes: 16384, truncated: false, redactedSecretCount: 0 }
-        : undefined,
-      owner: input.owner,
-      respondedAt: "2026-05-30T00:01:00.000Z",
+      policy: {
+        redactionMode: "basic",
+        sensitiveInformationAllowed: false,
+        requiresOperatorResponse: true,
+        transportBoundary: "gateway_local_mcp",
+        remoteTransportSupport: "unchanged",
+        limits: {
+          promptMaxChars: 4096,
+          requestedSchemaMaxBytes: 8192,
+          responseContentMaxBytes: 16384,
+          listMaxItems: 200,
+        },
+        governance: [],
+      },
       audit: {
         auditEventIds: [`gateway:mcp:elicitation:${elicitationId}:${input.action}`],
         createdAt: "2026-05-30T00:00:00.000Z",
@@ -1170,16 +1175,40 @@ const mocks = vi.hoisted(() => ({
         reasonCodes: ["mcp_elicitation_responded"],
       },
       evidence: {
+        owner: { workspaceId: "default", sessionId: "session-1", surface: "mcp" },
+        source: { sourceType: "mcp_server", serverId: "srv-http", toolName: "repo.inspect", transport: "http" },
         status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
-        previousStatus: "pending",
-        reason: `MCP elicitation ${input.action} response recorded by Gateway route storage.`,
-        recordedAt: "2026-05-30T00:01:00.000Z",
-        auditEventId: `gateway:mcp:elicitation:${elicitationId}:${input.action}`,
+        createdAt: "2026-05-30T00:00:00.000Z",
+        updatedAt: "2026-05-30T00:01:00.000Z",
+        statusHistory: [],
+        prompt: { charLength: 33, maxChars: 4000, truncated: false, redactedSecretCount: 0 },
+        requestedSchema: { byteLength: 92, maxBytes: 8192, truncated: false, redactedSecretCount: 0 },
       },
-    },
-    createdAt: "2026-05-30T00:00:00.000Z",
-    updatedAt: "2026-05-30T00:01:00.000Z",
-  })),
+      response: {
+        action: input.action,
+        content: input.content
+          ? { value: input.content, byteLength: 30, maxBytes: 16384, truncated: false, redactedSecretCount: 0 }
+          : undefined,
+        owner: input.owner,
+        respondedAt: "2026-05-30T00:01:00.000Z",
+        audit: {
+          auditEventIds: [`gateway:mcp:elicitation:${elicitationId}:${input.action}`],
+          createdAt: "2026-05-30T00:00:00.000Z",
+          updatedAt: "2026-05-30T00:01:00.000Z",
+          reasonCodes: ["mcp_elicitation_responded"],
+        },
+        evidence: {
+          status: input.action === "accept" ? "accepted" : input.action === "decline" ? "declined" : "cancelled",
+          previousStatus: "pending",
+          reason: `MCP elicitation ${input.action} response recorded by Gateway route storage.`,
+          recordedAt: "2026-05-30T00:01:00.000Z",
+          auditEventId: `gateway:mcp:elicitation:${elicitationId}:${input.action}`,
+        },
+      },
+      createdAt: "2026-05-30T00:00:00.000Z",
+      updatedAt: "2026-05-30T00:01:00.000Z",
+    }),
+  ),
   fetchMcpTools: vi.fn(async () => ({ items: [] })),
   createMcpServer: vi.fn(async () => ({
     serverId: "srv-stdio",
@@ -1681,25 +1710,53 @@ beforeEach(async () => {
   let personalityRevision = 0;
   const saveCatalog = (catalog: PersonalityCatalogResponse) => {
     const saved = { ...catalog, revision: String(++personalityRevision).padStart(64, "0") };
-    mocks.fetchPersonalities.mockResolvedValue(saved); return saved;
+    mocks.fetchPersonalities.mockResolvedValue(saved);
+    return saved;
   };
   mocks.createPersonality.mockImplementation(async (input) => {
     const catalog = await mocks.fetchPersonalities();
-    return saveCatalog({ ...catalog, items: [...catalog.items, { ...input, id: input.id ?? input.label ?? "custom-personality", label: input.label ?? "Custom personality",
-      category: input.category ?? "core", description: input.description ?? "", tone: input.tone ?? "", style: input.style ?? "",
-      systemOverlay: input.systemOverlay ?? "", safetyNotes: input.safetyNotes ?? [], soulFile: "", builtin: false, visibility: "custom", editable: true, modified: true }] });
+    return saveCatalog({
+      ...catalog,
+      items: [
+        ...catalog.items,
+        {
+          ...input,
+          id: input.id ?? input.label ?? "custom-personality",
+          label: input.label ?? "Custom personality",
+          category: input.category ?? "core",
+          description: input.description ?? "",
+          tone: input.tone ?? "",
+          style: input.style ?? "",
+          systemOverlay: input.systemOverlay ?? "",
+          safetyNotes: input.safetyNotes ?? [],
+          soulFile: "",
+          builtin: false,
+          visibility: "custom",
+          editable: true,
+          modified: true,
+        },
+      ],
+    });
   });
   mocks.updatePersonality.mockImplementation(async (id, input) => {
     const catalog = await mocks.fetchPersonalities();
-    return saveCatalog({ ...catalog, items: catalog.items.map((item) => item.id === id ? { ...item, ...input } : item) });
+    return saveCatalog({
+      ...catalog,
+      items: catalog.items.map((item) => (item.id === id ? { ...item, ...input } : item)),
+    });
   });
   mocks.deletePersonality.mockImplementation(async (id) => {
     const catalog = await mocks.fetchPersonalities();
-    return saveCatalog({ ...catalog, defaultPersonalityId: catalog.defaultPersonalityId === id ? "default" : catalog.defaultPersonalityId,
-      items: catalog.items.filter((item) => item.id !== id || item.builtin).map((item) => item.id === id ? { ...item, modified: false } : item) });
+    return saveCatalog({
+      ...catalog,
+      defaultPersonalityId: catalog.defaultPersonalityId === id ? "default" : catalog.defaultPersonalityId,
+      items: catalog.items
+        .filter((item) => item.id !== id || item.builtin)
+        .map((item) => (item.id === id ? { ...item, modified: false } : item)),
+    });
   });
   mocks.setDefaultPersonality.mockImplementation(async (personalityId: string) => ({
-    ...await mocks.fetchPersonalities(),
+    ...(await mocks.fetchPersonalities()),
     revision: "f".repeat(64),
     defaultPersonalityId: personalityId,
   }));
@@ -2009,7 +2066,10 @@ describe("SettingsNativePage personalities", () => {
       await act(async () => {
         name().props.onChange({ target: { value: "Newer typing" } });
       });
-      const submitted = operation === "creation" ? mocks.createPersonality.mock.calls[0]![0] : mocks.updatePersonality.mock.calls[0]![1];
+      const submitted =
+        operation === "creation"
+          ? mocks.createPersonality.mock.calls[0]![0]
+          : mocks.updatePersonality.mock.calls[0]![1];
       const savedPreset = { ...custom, ...submitted, id: "retained-key", label: "Submitted name" };
       const saved = { ...before, revision: "f".repeat(64), items: [...catalog.items, savedPreset] };
       mocks.fetchPersonalities.mockResolvedValue(saved);
@@ -2635,7 +2695,12 @@ describe("SettingsNativePage permissions", () => {
       revision: "a".repeat(64),
     };
     mocks.fetchPermissionProfiles.mockResolvedValue({ items: [before] } as any);
-    mocks.updatePermissionProfile.mockRejectedValueOnce(Object.assign(new Error("Profile changed"), { status: 409, body: { code: "WRITE_CONFLICT", details: { reason: "PERMISSION_PROFILE_REVISION_CONFLICT" } } }));
+    mocks.updatePermissionProfile.mockRejectedValueOnce(
+      Object.assign(new Error("Profile changed"), {
+        status: 409,
+        body: { code: "WRITE_CONFLICT", details: { reason: "PERMISSION_PROFILE_REVISION_CONFLICT" } },
+      }),
+    );
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = renderPage("permissions");
@@ -2656,7 +2721,9 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Save profile").props.onClick();
     });
     await flushAsyncUpdates();
-    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await act(async () => {
+      await findButton(renderer!.root, "Apply reviewed permission change").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.updatePermissionProfile).toHaveBeenCalledWith(
       "revision-profile",
@@ -2695,7 +2762,9 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Save profile").props.onClick();
     });
     await flushAsyncUpdates();
-    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await act(async () => {
+      await findButton(renderer!.root, "Apply reviewed permission change").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.updatePermissionProfile).toHaveBeenLastCalledWith(
       "revision-profile",
@@ -2712,31 +2781,60 @@ describe("SettingsNativePage permissions", () => {
     const settings = await mocks.fetchSettings();
     mocks.fetchSettings.mockImplementation(async () => ({ ...settings, deploymentProfile: "local_dev" }));
     const base: PermissionProfileSnapshotRecord = {
-      revision: "a".repeat(64), profileId: "profile-review", label: "Review profile", description: "Initial profile",
-      scope: "workspace", scopeRef: "default", builtin: false, status: "active", approvalMode: "approve_risky",
-      toolPatterns: ["session.status", "browser.search"], allow: ["browser.search"], deny: ["shell.exec"],
-      readAccessMode: "roots_only", defaultForSurfaces: ["code"], createdBy: "operator",
-      createdAt: "2026-05-02T18:00:00.000Z", updatedAt: "2026-05-02T18:00:00.000Z",
+      revision: "a".repeat(64),
+      profileId: "profile-review",
+      label: "Review profile",
+      description: "Initial profile",
+      scope: "workspace",
+      scopeRef: "default",
+      builtin: false,
+      status: "active",
+      approvalMode: "approve_risky",
+      toolPatterns: ["session.status", "browser.search"],
+      allow: ["browser.search"],
+      deny: ["shell.exec"],
+      readAccessMode: "roots_only",
+      defaultForSurfaces: ["code"],
+      createdBy: "operator",
+      createdAt: "2026-05-02T18:00:00.000Z",
+      updatedAt: "2026-05-02T18:00:00.000Z",
     };
     let ownerProfiles = [base];
     mocks.fetchPermissionProfiles.mockImplementation(async () => ({ items: ownerProfiles }));
     mocks.reviewPermissionProfileSelection.mockImplementation(async (input) => {
       const profile = ownerProfiles.find((item) => item.profileId === input.profileId);
-      return { revision: "d".repeat(64), input: { ...input, scope: "workspace", scopeRef: "default" },
-        profile, target: { workspaceId: "default", operatorId: undefined }, activeProfiles: [] };
+      return {
+        revision: "d".repeat(64),
+        input: { ...input, scope: "workspace", scopeRef: "default" },
+        profile,
+        target: { workspaceId: "default", operatorId: undefined },
+        activeProfiles: [],
+      };
     });
     mocks.createPermissionProfile.mockImplementation(async (input) => {
       const { expectedSelectionRevision: _selection, ...fields } = input;
       const created = { ...base, ...fields, profileId: "profile-created", revision: "c".repeat(64) };
-      ownerProfiles = [...ownerProfiles, created]; return created;
+      ownerProfiles = [...ownerProfiles, created];
+      return created;
     });
     mocks.updatePermissionProfile.mockImplementation(async (profileId, input) => {
       const { expectedSelectionRevision: _selection, expectedRevision: _revision, ...fields } = input;
       const updated = { ...base, ...fields, profileId, revision: "b".repeat(64) };
-      ownerProfiles = ownerProfiles.map((item) => item.profileId === profileId ? updated : item); return updated;
+      ownerProfiles = ownerProfiles.map((item) => (item.profileId === profileId ? updated : item));
+      return updated;
     });
     mocks.archivePermissionProfile.mockImplementation(async (profileId) => {
-      ownerProfiles = ownerProfiles.map((item) => item.profileId === profileId ? { ...item, status: "archived", revision: "e".repeat(64), archivedAt: "2026-09-30T00:00:00.000Z", updatedAt: "2026-09-30T00:00:00.000Z" } : item);
+      ownerProfiles = ownerProfiles.map((item) =>
+        item.profileId === profileId
+          ? {
+              ...item,
+              status: "archived",
+              revision: "e".repeat(64),
+              archivedAt: "2026-09-30T00:00:00.000Z",
+              updatedAt: "2026-09-30T00:00:00.000Z",
+            }
+          : item,
+      );
       return { archived: true, profileId };
     });
     let renderer: ReactTestRenderer | undefined;
@@ -2781,7 +2879,9 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Create profile").props.onClick();
     });
     await flushAsyncUpdates();
-    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await act(async () => {
+      await findButton(renderer!.root, "Apply reviewed permission change").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.createPermissionProfile).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -2851,7 +2951,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
-    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await act(async () => {
+      await findButton(renderer!.root, "Apply reviewed permission change").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.updatePermissionProfile).toHaveBeenCalledWith(
       "profile-review",
@@ -2870,14 +2972,18 @@ describe("SettingsNativePage permissions", () => {
       findButton(renderer!.root, "Archive profile").props.onClick();
     });
     await flushAsyncUpdates();
-    await act(async () => { findButton(renderer!.root, "Cancel permission change").props.onClick(); });
+    await act(async () => {
+      findButton(renderer!.root, "Cancel permission change").props.onClick();
+    });
     expect(mocks.archivePermissionProfile).not.toHaveBeenCalled();
 
     await act(async () => {
       findButton(renderer!.root, "Archive profile").props.onClick();
     });
     await flushAsyncUpdates();
-    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await act(async () => {
+      await findButton(renderer!.root, "Apply reviewed permission change").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.archivePermissionProfile).toHaveBeenCalledWith("profile-review", { expectedRevision: "b".repeat(64) });
   });
@@ -3046,12 +3152,22 @@ describe("SettingsNativePage permissions", () => {
     const settings = await mocks.fetchSettings();
     mocks.fetchSettings.mockImplementation(async () => ({ ...settings, deploymentProfile: "local_dev" }));
     const savedOverride: LocalOperatorOverrideRecord = {
-      overrideId: "override-session-1", operatorId: "operator", createdBy: "operator", scope: "session", scopeRef: "session-1",
-      reason: "Run local tools for this session", status: "active", createdAt: "2099-05-02T18:00:00.000Z", expiresAt: "2099-05-02T18:10:00.000Z",
+      overrideId: "override-session-1",
+      operatorId: "operator",
+      createdBy: "operator",
+      scope: "session",
+      scopeRef: "session-1",
+      reason: "Run local tools for this session",
+      status: "active",
+      createdAt: "2099-05-02T18:00:00.000Z",
+      expiresAt: "2099-05-02T18:10:00.000Z",
     };
     let canonicalOverrides: LocalOperatorOverrideRecord[] = [];
     mocks.fetchActiveLocalOperatorOverrides.mockImplementation(async () => ({ items: canonicalOverrides }));
-    mocks.createLocalOperatorOverride.mockImplementation(async () => { canonicalOverrides = [savedOverride]; return savedOverride; });
+    mocks.createLocalOperatorOverride.mockImplementation(async () => {
+      canonicalOverrides = [savedOverride];
+      return savedOverride;
+    });
     let renderer: ReactTestRenderer | undefined;
     await act(async () => {
       renderer = renderPage("permissions");
@@ -3091,7 +3207,9 @@ describe("SettingsNativePage permissions", () => {
     });
     await flushAsyncUpdates();
 
-    await act(async () => { await findButton(renderer!.root, "Apply reviewed permission change").props.onClick(); });
+    await act(async () => {
+      await findButton(renderer!.root, "Apply reviewed permission change").props.onClick();
+    });
     await flushAsyncUpdates();
     expect(mocks.createLocalOperatorOverride).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -3342,9 +3460,7 @@ describe("SettingsNativePage tools", () => {
     });
     await flushAsyncUpdates();
 
-    const grantTypeSelect = renderer!.root.findAll(
-      (node) => node.type === "select" && node.props?.value === "ttl",
-    )[0];
+    const grantTypeSelect = renderer!.root.findAll((node) => node.type === "select" && node.props?.value === "ttl")[0];
     await act(async () => {
       grantTypeSelect!.props.onChange({ target: { value: "ttl" } });
     });
@@ -3407,7 +3523,11 @@ describe("SettingsNativePage tools", () => {
     await act(async () => {
       findButton(renderer!.root, "Create grant").props.onClick();
     });
-    expect(renderer!.root.findAllByType(ConfirmModal).some((modal) => modal.props.open && modal.props.title === "Confirm tool grant")).toBe(false);
+    expect(
+      renderer!.root
+        .findAllByType(ConfirmModal)
+        .some((modal) => modal.props.open && modal.props.title === "Confirm tool grant"),
+    ).toBe(false);
     await flushAsyncUpdates();
     expect(mocks.createToolGrant).not.toHaveBeenCalled();
     expect(collectText(renderer!.root)).toContain("Add the exact session ID.");
@@ -3477,9 +3597,17 @@ describe("SettingsNativePage providers", () => {
       llm: { ...runtime.llm, ...onboarding.settings.llm },
     }));
     mocks.bootstrapOnboarding.mockImplementation(async (input) => {
-      onboarding = { ...onboarding, settings: { ...onboarding.settings, revision: input.expectedRevision + 1,
-        toolApprovalMode: input.toolApprovalMode!, budgetMode: input.budgetMode!, networkAllowlist: input.networkAllowlist!,
-        auth: { ...onboarding.settings.auth, allowLoopbackBypass: false } } };
+      onboarding = {
+        ...onboarding,
+        settings: {
+          ...onboarding.settings,
+          revision: input.expectedRevision + 1,
+          toolApprovalMode: input.toolApprovalMode!,
+          budgetMode: input.budgetMode!,
+          networkAllowlist: input.networkAllowlist!,
+          auth: { ...onboarding.settings.auth, allowLoopbackBypass: false },
+        },
+      };
       return { state: structuredClone(onboarding), appliedAt: "2026-09-30T00:00:00.000Z" };
     });
     mocks.completeOnboarding.mockImplementation(async () => {
@@ -3537,9 +3665,13 @@ describe("SettingsNativePage providers", () => {
       findButton(renderer!.root, "Review defaults").props.onClick();
     });
     expect(mocks.bootstrapOnboarding).not.toHaveBeenCalled();
-    const defaultsReview = renderer!.root.findAllByType(GCModal).find((modal) => modal.props.open && modal.props.title === "Apply first-run defaults");
+    const defaultsReview = renderer!.root
+      .findAllByType(GCModal)
+      .find((modal) => modal.props.open && modal.props.title === "Apply first-run defaults");
     expect(defaultsReview).toBeDefined();
-    await act(async () => { await defaultsReview!.props.onConfirm!(); });
+    await act(async () => {
+      await defaultsReview!.props.onConfirm!();
+    });
     expect(mocks.bootstrapOnboarding).toHaveBeenCalledWith({
       expectedRevision: 41,
       toolApprovalMode: "approve_risky",
@@ -3927,9 +4059,7 @@ describe("SettingsNativePage providers", () => {
     await flushAsyncUpdates();
 
     expect(mocks.bootstrapOnboarding).not.toHaveBeenCalled();
-    expect(collectText(renderer!.root)).toContain(
-      "This deployment keeps prompt-skipping defaults unavailable.",
-    );
+    expect(collectText(renderer!.root)).toContain("This deployment keeps prompt-skipping defaults unavailable.");
   });
 
   it("renders repeated device access grants without duplicate row keys", async () => {
@@ -5091,13 +5221,31 @@ describe("SettingsNativePage access", () => {
       ],
     });
     const baseSettings = await mocks.fetchSettings();
-    let authOwner = { ...baseSettings, revision: 41, auth: { mode: "token", allowLoopbackBypass: false, tokenConfigured: true, basicConfigured: false } };
+    let authOwner = {
+      ...baseSettings,
+      revision: 41,
+      auth: { mode: "token", allowLoopbackBypass: false, tokenConfigured: true, basicConfigured: false },
+    };
     mocks.fetchSettings.mockImplementation(async () => authOwner);
     mocks.patchGatewayAuthSettings.mockImplementation(async (input: any) => {
-      authOwner = { ...authOwner, revision: authOwner.revision + 1, auth: { ...authOwner.auth, mode: input.mode, allowLoopbackBypass: input.allowLoopbackBypass, basicConfigured: Boolean(input.basicPassword) || authOwner.auth.basicConfigured } };
+      authOwner = {
+        ...authOwner,
+        revision: authOwner.revision + 1,
+        auth: {
+          ...authOwner.auth,
+          mode: input.mode,
+          allowLoopbackBypass: input.allowLoopbackBypass,
+          basicConfigured: Boolean(input.basicPassword) || authOwner.auth.basicConfigured,
+        },
+      };
       return { ...authOwner.auth, revision: authOwner.revision };
     });
-    mocks.resolveGatewayInstallToken.mockResolvedValue({ token: "install-token-1", source: "generated", persistedToEnv: false, warnings: [] });
+    mocks.resolveGatewayInstallToken.mockResolvedValue({
+      token: "install-token-1",
+      source: "generated",
+      persistedToEnv: false,
+      warnings: [],
+    });
     let renderer: ReactTestRenderer | null = null;
 
     try {
@@ -5110,25 +5258,60 @@ describe("SettingsNativePage access", () => {
       expect(collectText(renderer!.root)).toContain("Desktop runtime anchor");
       expect(collectText(renderer!.root)).toContain("Operator tablet");
 
-      await act(async () => { findFirstSelect(renderer!.root).props.onChange({ target: { value: "basic" } }); });
       await act(async () => {
-        findInputByPlaceholder(renderer!.root, "Leave blank to keep the current username").props.onChange({ target: { value: "goat-admin" } });
-        findInputByPlaceholder(renderer!.root, "New credential (only when replacing)").props.onChange({ target: { value: "basic-secret" } });
+        findFirstSelect(renderer!.root).props.onChange({ target: { value: "basic" } });
       });
-      await act(async () => { findButton(renderer!.root, "Save access settings").props.onClick(); });
+      await act(async () => {
+        findInputByPlaceholder(renderer!.root, "Leave blank to keep the current username").props.onChange({
+          target: { value: "goat-admin" },
+        });
+        findInputByPlaceholder(renderer!.root, "New credential (only when replacing)").props.onChange({
+          target: { value: "basic-secret" },
+        });
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Save access settings").props.onClick();
+      });
       expect(mocks.patchGatewayAuthSettings).not.toHaveBeenCalled();
-      await act(async () => { renderer!.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Apply Gateway authentication changes?")!.props.onConfirm(); });
+      await act(async () => {
+        renderer!.root
+          .findAllByType(ConfirmModal)
+          .find((modal) => modal.props.title === "Apply Gateway authentication changes?")!
+          .props.onConfirm();
+      });
       await flushAsyncUpdates();
-      expect(mocks.patchGatewayAuthSettings).toHaveBeenCalledWith({ expectedRevision: 41, mode: "basic", allowLoopbackBypass: false, basicUsername: "goat-admin", basicPassword: "basic-secret" });
+      expect(mocks.patchGatewayAuthSettings).toHaveBeenCalledWith({
+        expectedRevision: 41,
+        mode: "basic",
+        allowLoopbackBypass: false,
+        basicUsername: "goat-admin",
+        basicPassword: "basic-secret",
+      });
       expect(collectText(renderer!.root)).toContain("Authentication posture saved and confirmed.");
       expect(findButton(renderer!.root, "Generate install token").props.disabled).toBe(true);
-      await act(async () => { findFirstSelect(renderer!.root).props.onChange({ target: { value: "token" } }); });
-      await act(async () => { findButton(renderer!.root, "Save access settings").props.onClick(); });
-      await act(async () => { renderer!.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Apply Gateway authentication changes?")!.props.onConfirm(); });
+      await act(async () => {
+        findFirstSelect(renderer!.root).props.onChange({ target: { value: "token" } });
+      });
+      await act(async () => {
+        findButton(renderer!.root, "Save access settings").props.onClick();
+      });
+      await act(async () => {
+        renderer!.root
+          .findAllByType(ConfirmModal)
+          .find((modal) => modal.props.title === "Apply Gateway authentication changes?")!
+          .props.onConfirm();
+      });
       await flushAsyncUpdates();
-      await act(async () => { findButton(renderer!.root, "Generate install token").props.onClick(); });
+      await act(async () => {
+        findButton(renderer!.root, "Generate install token").props.onClick();
+      });
       expect(mocks.resolveGatewayInstallToken).not.toHaveBeenCalled();
-      await act(async () => { renderer!.root.findAllByType(ConfirmModal).find(modal => modal.props.title === "Resolve Gateway install token?")!.props.onConfirm(); });
+      await act(async () => {
+        renderer!.root
+          .findAllByType(ConfirmModal)
+          .find((modal) => modal.props.title === "Resolve Gateway install token?")!
+          .props.onConfirm();
+      });
       await flushAsyncUpdates();
       expect(mocks.resolveGatewayInstallToken).toHaveBeenCalledWith({ generateWhenMissing: true, persistToEnv: false });
       expect(renderer!.root.findByProps({ readOnly: true, type: "text" }).props.value).toBe("install-token-1");
@@ -5357,8 +5540,19 @@ describe("SettingsNativePage integrations", () => {
     const navigate = vi.fn();
     let audit: import("@goatcitadel/contracts").DurableRunRecord;
     mocks.createExternalSideEffectReplayAuditRun.mockImplementationOnce(async (input) => {
-      audit = { runId: "durable-replay-audit-1", workflowKey: "external_side_effect.replay", status: "queued", version: 1, attemptCount: 0, maxAttempts: 3,
-        payload: { version: "external_side_effect.replay.v1", ...input }, metadata: { posture: "replay_audit", sideEffectPosture: "eligibility_check" }, createdAt: "2026-05-31T20:00:00.000Z", updatedAt: "2026-05-31T20:00:00.000Z" }; return audit;
+      audit = {
+        runId: "durable-replay-audit-1",
+        workflowKey: "external_side_effect.replay",
+        status: "queued",
+        version: 1,
+        attemptCount: 0,
+        maxAttempts: 3,
+        payload: { version: "external_side_effect.replay.v1", ...input },
+        metadata: { posture: "replay_audit", sideEffectPosture: "eligibility_check" },
+        createdAt: "2026-05-31T20:00:00.000Z",
+        updatedAt: "2026-05-31T20:00:00.000Z",
+      };
+      return audit;
     });
     mocks.fetchDurableRun.mockImplementation(async () => audit);
     mocks.fetchIntegrationConnections.mockResolvedValueOnce({
@@ -5420,7 +5614,12 @@ describe("SettingsNativePage integrations", () => {
     await flushAsyncUpdates();
 
     expect(mocks.createExternalSideEffectReplayAuditRun).not.toHaveBeenCalled();
-    await act(async () => renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Create replay eligibility audit?")!.props.onConfirm());
+    await act(async () =>
+      renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Create replay eligibility audit?")!
+        .props.onConfirm(),
+    );
     await flushAsyncUpdates();
     expect(mocks.createExternalSideEffectReplayAuditRun).toHaveBeenCalledWith({
       workspaceId: "default",
@@ -5544,7 +5743,10 @@ describe("SettingsNativePage integrations", () => {
         },
       ],
     } as any;
-    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog);
+    mocks.fetchIntegrationCatalog
+      .mockResolvedValueOnce(activepiecesCatalog)
+      .mockResolvedValueOnce(activepiecesCatalog)
+      .mockResolvedValueOnce(activepiecesCatalog);
     const activepiecesConnections = {
       items: [
         {
@@ -5630,7 +5832,12 @@ describe("SettingsNativePage integrations", () => {
     await flushAsyncUpdates();
 
     expect(mocks.invokeIntegrationConnectionAction).not.toHaveBeenCalled();
-    await act(async () => renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Run reviewed integration action?")!.props.onConfirm());
+    await act(async () =>
+      renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Run reviewed integration action?")!
+        .props.onConfirm(),
+    );
     await flushAsyncUpdates();
     expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "trigger_webhook", {
       input: {
@@ -5675,7 +5882,10 @@ describe("SettingsNativePage integrations", () => {
         },
       ],
     } as any;
-    mocks.fetchIntegrationCatalog.mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog).mockResolvedValueOnce(activepiecesCatalog);
+    mocks.fetchIntegrationCatalog
+      .mockResolvedValueOnce(activepiecesCatalog)
+      .mockResolvedValueOnce(activepiecesCatalog)
+      .mockResolvedValueOnce(activepiecesCatalog);
     const activepiecesConnections = {
       items: [
         {
@@ -5741,7 +5951,12 @@ describe("SettingsNativePage integrations", () => {
     await flushAsyncUpdates();
 
     expect(mocks.invokeIntegrationConnectionAction).not.toHaveBeenCalled();
-    await act(async () => renderer!.root.findAllByType(ConfirmModal).find((modal) => modal.props.title === "Run reviewed integration action?")!.props.onConfirm());
+    await act(async () =>
+      renderer!.root
+        .findAllByType(ConfirmModal)
+        .find((modal) => modal.props.title === "Run reviewed integration action?")!
+        .props.onConfirm(),
+    );
     await flushAsyncUpdates();
     expect(mocks.invokeIntegrationConnectionAction).toHaveBeenCalledWith("conn-activepieces", "check_run_status", {
       input: {
@@ -5812,7 +6027,8 @@ describe("SettingsNativePage MCP", () => {
     await act(async () => findButton(renderer!.root, "Back to list").props.onClick());
     await act(async () => findButton(renderer!.root, "Remote HTTP").props.onClick());
     expect(
-      renderer!.root.findAllByType("button").find((node) => collectText(node).trim() === "Review connection")!.props.disabled,
+      renderer!.root.findAllByType("button").find((node) => collectText(node).trim() === "Review connection")!.props
+        .disabled,
     ).toBe(false);
     expect(findButton(renderer!.root, "Configuration report").props.disabled).toBeUndefined();
     await act(async () => findButton(renderer!.root, "Edit server").props.onClick());

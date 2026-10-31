@@ -98,7 +98,7 @@ export const EXPECTED_BROWSER_ACTION_BUNDLE_COUNTS = Object.freeze({
   "ops-work": 6,
   "ops-governance-reliability": 11,
   "settings-core-auth-provider": 8,
-  "settings-governance-runtime-integrations": 14,
+  "settings-governance-runtime-integrations": 13,
 });
 
 const STEPS = [
@@ -980,13 +980,6 @@ const STEPS = [
     "settings-local-ai",
     [click("Refresh readiness"), text("No Local AI job endpoint is registered here")],
   ),
-  step("settings-governance-runtime-integrations", "route.settings-addons.addon-inspection", "settings-addons", [
-    fill("Find add-ons", "Arena"),
-    click("Inspect"),
-    text("Trust"),
-    click("Repository, commands and installation evidence"),
-    text("Repository"),
-  ]),
   step(
     "settings-governance-runtime-integrations",
     "route.settings-integrations.integration-validation-and-diagnostics",

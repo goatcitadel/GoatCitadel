@@ -165,9 +165,6 @@ describe("client-core", () => {
       "x-goatcitadel-browser-intent": "mutation",
       "x-goatcitadel-origin-surface": "mcp",
     });
-    expect(buildGatewayHeaders("/api/v1/addons/catalog", "PUT", "corr-3")).toMatchObject({
-      "x-goatcitadel-origin-surface": "addons",
-    });
     expect(buildGatewayHeaders("/api/v1/voice/status", "DELETE", "corr-4")).toMatchObject({
       "x-goatcitadel-origin-surface": "voice",
     });

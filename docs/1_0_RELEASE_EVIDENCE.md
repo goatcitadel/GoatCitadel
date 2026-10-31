@@ -71,7 +71,7 @@ Current shell posture for this map:
 - The capability-token remote resolution path remains separate from the operator-only control routes in [apps/gateway/src/routes/approvals.test.ts](../apps/gateway/src/routes/approvals.test.ts).
 - Remote approval creation is no longer naked public ingress: remote or proxy-marked callers need a scoped approval-create token, idempotency key, source connector ID, and source trace ID before the route accepts the request.
 - Stack-backed operator-proof denial coverage for device and companion principals now includes the approval control plane in [scripts/verification/lib/scenarios.mjs](../scripts/verification/lib/scenarios.mjs).
-- `pnpm verify:auth:matrix` is the named privileged-route auth proof lane. It derives representative endpoints from the route-access manifest, requires every `/api/v1/**` route to be explicitly classified, probes representative non-webhook endpoints by access class, and directly probes high-risk MCP/tools/LLM/integration/addon/capability/Code Mode families. Webhook routes are classified in the same manifest and covered by focused webhook signature/idempotency/rate-limit tests rather than generic auth probes.
+- `pnpm verify:auth:matrix` is the named privileged-route auth proof lane. It derives representative endpoints from the route-access manifest, requires every `/api/v1/**` route to be explicitly classified, probes representative non-webhook endpoints by access class, and directly probes high-risk MCP/tools/LLM/integration/capability/Code Mode families. Webhook routes are classified in the same manifest and covered by focused webhook signature/idempotency/rate-limit tests rather than generic auth probes.
 
 ## Permission Profiles and Override Evidence
 
@@ -158,8 +158,8 @@ Current shell posture for this map:
 - The published author boundary is the `@goatcitadel/extensions-sdk` package under [packages/extensions-sdk](../packages/extensions-sdk).
 - Package-level evidence for manifest and file-loading helpers lives in [packages/extensions-sdk/src/addons.test.ts](../packages/extensions-sdk/src/addons.test.ts) and [packages/extensions-sdk/src/integration-plugins.test.ts](../packages/extensions-sdk/src/integration-plugins.test.ts).
 - Package artifact evidence for the reference integration-plugin manifest lives in `pnpm verify:extensions:package` and [scripts/verify-extension-package-artifacts.mjs](../scripts/verify-extension-package-artifacts.mjs); the lane builds `@goatcitadel/extensions-sdk`, packs it, extracts the tarball, and validates the packaged manifest against the repo reference scaffold.
-- Starter-pack export and gateway-side author-contract evidence live in [apps/gateway/src/services/extension-starter-pack.test.ts](../apps/gateway/src/services/extension-starter-pack.test.ts) and [apps/gateway/src/services/integration-plugin-author-contract.test.ts](../apps/gateway/src/services/integration-plugin-author-contract.test.ts).
-- The current `1.0` claim is the published package contract plus tested reference scaffolds/export path, not a broader live install/enable/disable smoke guarantee for every extension shape.
+- Gateway-side author-contract evidence lives in [apps/gateway/src/services/integration-plugin-author-contract.test.ts](../apps/gateway/src/services/integration-plugin-author-contract.test.ts).
+- The current `1.0` claim is the published package contract plus tested reference scaffolds, not a broader live install/enable/disable smoke guarantee for every extension shape.
 
 ## Release Metadata and Governance Evidence
 

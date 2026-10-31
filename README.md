@@ -132,7 +132,7 @@ The hero image above is Chat. Conversation, planning, research, supervised agent
 - **Models**: guided provider setup, model catalog and routing, ChatGPT sign-in for OpenAI Codex, and Local AI.
 - **Safety**: Chat permission profiles, tool approval mode and grants, trust and policy, lifecycle hooks, and budgets.
 - **Citadel**: overview, workspaces, guided setup with the Mason, Wards, Council, Vault, and Blueprint.
-- **Access and Advanced**: device access and gateway auth, managed runtime, daemon diagnostics, voice runtime, llama.cpp setup, and the experimental Add-ons & packs.
+- **Access and Advanced**: device access and gateway auth, managed runtime, daemon diagnostics, voice runtime, llama.cpp setup, and the experimental Capability packs.
 
 MCP servers, integration connections, and web search keys are set up in **Capabilities › Connectors › Advanced setup**, and every channel's full settings and the public web address are in **Chat › Messaging › Advanced channel setup**.
 

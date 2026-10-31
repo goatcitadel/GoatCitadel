@@ -83,7 +83,6 @@ vi.mock("./PermissionProfileSettings", () => ({
 vi.mock("./HooksSettings", () => ({
   HooksSettings: ({ workspaceId }: { workspaceId: string }) => <OwnerProbe name={`Hooks ${workspaceId}`} />,
 }));
-vi.mock("./AddonsSettings", () => ({ AddonsSettings: () => <OwnerProbe name="Add-ons owner" /> }));
 vi.mock("./PortablePacksSettings", () => ({ PortablePacksSettings: () => <OwnerProbe name="Packs owner" /> }));
 vi.mock("./TrustPolicySettings", () => ({ TrustPolicySettings: () => <OwnerProbe name="Trust owner" /> }));
 vi.mock("./FirstRunArea", () => ({ FirstRunArea: () => <p>First run owner</p> }));
@@ -238,10 +237,10 @@ describe("Settings section tabs", () => {
     expect(container.querySelector('a[href="/settings/models#local-ai"]')?.textContent).toBe("Models › Local AI");
     expect(owner.mounted.mock.calls.filter(([name]) => name === "Llama owner")).toHaveLength(1);
   });
-  it("has no Connections page, and keeps Add-ons & packs on Advanced, reached by its link", async () => {
+  it("shows capability packs on Advanced and no add-ons", async () => {
     await render("/settings/advanced?shell=cockpit#addons");
-    await vi.waitFor(() => expect(container.textContent).toContain("Add-ons owner"));
-    expect(container.textContent).toContain("Packs owner");
+    await vi.waitFor(() => expect(container.textContent).toContain("Packs owner"));
+    expect(container.textContent).not.toContain("Add-ons owner");
     // Experimental, so it is no tab: Advanced shows one section at a time, as Connections did with it.
     expect(container.querySelector('[role="tablist"][aria-label$=" sections"]')).toBeNull();
     expect(container.textContent).not.toContain("Runtime owner");
