@@ -66,12 +66,42 @@ describe("enableCodeMode", () => {
     ]);
   });
 
-  it("stops at the first change that cannot finish here", async () => {
+  it("stops at the first change that cannot finish here, and links to where it is finished", async () => {
     api.fetchSettings.mockResolvedValue(settings("r1", {}));
     api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "p1", status: "awaiting_approval" } });
-    api.approvePlanInPlace.mockResolvedValue({ kind: "elsewhere" });
+    api.approvePlanInPlace.mockResolvedValue({ kind: "elsewhere", plan: { planId: "p1" } });
 
-    await expect(enableCodeMode()).rejects.toThrow("Turning on Code Mode needs an approval in Settings or Inbox.");
+    const error = await enableCodeMode().catch((cause: unknown) => cause);
+    expect(error).toMatchObject({
+      message: "Turning on Code Mode needs one more step in Inbox. Finish it there, then run the code.",
+      linkLabel: "Review it in Inbox",
+      href: "/inbox?item=change_plan%3Ap1&workspaceId=default",
+    });
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("links to the change's own approval when this sign-in could not give it", async () => {
+    api.fetchSettings.mockResolvedValue(settings("r1", {}));
+    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "p1", status: "awaiting_approval" } });
+    api.approvePlanInPlace.mockResolvedValue({ kind: "elsewhere", plan: { planId: "p1" }, approvalId: "a/1" });
+
+    await expect(enableCodeMode()).rejects.toMatchObject({
+      linkLabel: "Approve it in Inbox",
+      href: "/inbox?approvalId=a%2F1&workspaceId=default",
+    });
+  });
+
+  it("says once that it is turning Code Mode on, and nothing when it is already on", async () => {
+    api.fetchSettings.mockResolvedValue(settings("r1", {}));
+    api.patchSettings.mockResolvedValue({ changePlanReceipt: { planId: "p", status: "completed" } });
+    const steps: string[] = [];
+
+    await enableCodeMode((message) => steps.push(message));
+    expect(steps).toEqual(["Turning on Code Mode…"]);
+
+    steps.length = 0;
+    api.fetchSettings.mockResolvedValue(settings("r1", { codeModeV1Enabled: true, codeModeHostSandboxEnabled: true }));
+    await enableCodeMode((message) => steps.push(message));
+    expect(steps).toEqual([]);
   });
 });

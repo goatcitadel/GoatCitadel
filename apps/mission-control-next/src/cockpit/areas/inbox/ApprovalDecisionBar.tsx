@@ -8,7 +8,7 @@ import {
 import { SpecialistApprovalReview } from "./SpecialistApprovalReview";
 import { connectorSetupHref } from "../../app/routes";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
 import { resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
@@ -25,6 +25,7 @@ import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
 import { splitApprovalExplanation } from "./approval-preview";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { nullWhenMissing } from "./inbox-record-read";
+import { runPrepareApprove, type PrepareApprove } from "./prepare-approve";
 import {
   beginInboxApprovalAttempt,
   releaseInboxApprovalCheck,
@@ -75,11 +76,13 @@ interface ApprovalDecisionBarProps {
   /** Leaves out the approve button, so only Deny is offered (the action cannot run here). */
   withholdApprove?: boolean;
   /**
-   * Runs after the record is re-read and before the approval is sent. If it throws, nothing is approved and the
-   * error is shown beside the buttons.
+   * Runs after the record is re-read and before the approval is sent (see PrepareApprove). If it throws, nothing is
+   * approved and the error is shown beside the buttons. It may change things the operator asked for, so a click it
+   * outlives (the review remounted for a changed record) goes to `onInvalidated`, never silence.
    */
-  prepareApprove?: () => Promise<void>;
+  prepareApprove?: PrepareApprove;
   onResolved: (message: string) => void;
+  /** The click was not sent. `message` says why when it is not that the record changed. */
   onInvalidated: (message?: string) => void;
 }
 
@@ -139,7 +142,7 @@ function ApprovalDecisionReview({
   const access = useProjectAccess(workspaceId);
   const queryClient = useQueryClient();
   const attempt = useInboxApprovalAttempt(workspaceId, approval.approvalId);
-  const [error, setError] = useState("");
+  const [error, setError] = useState<ReactNode>("");
   const [notice, setNotice] = useState("");
   const [rechecking, setRechecking] = useState(false);
   const current = useRef(true);
@@ -238,13 +241,13 @@ function ApprovalDecisionReview({
         }
       }
       if (decision === "approve" && prepareApprove) {
-        try {
-          await prepareApprove();
-        } catch (cause) {
-          if (current.current) setError(describeApiError(cause).summary);
-          return;
-        }
-        if (!current.current || !access.current()) return;
+        const failure = await runPrepareApprove(prepareApprove, workspaceId, approval.approvalId, token);
+        // The preparation may already have changed something (Code Mode is on). A review that remounted meanwhile
+        // does not send this click, and its owner says so (choose again, or why it stopped) instead of dropping it.
+        const outlived = !current.current || !access.current();
+        if (outlived) onInvalidated(failure?.summary);
+        else if (failure) setError(failure.line);
+        if (outlived || failure) return;
       }
       updateInboxApprovalAttempt(
         workspaceId,

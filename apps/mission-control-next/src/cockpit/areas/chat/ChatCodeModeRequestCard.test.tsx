@@ -276,6 +276,73 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(api.resolveApproval).not.toHaveBeenCalled();
   });
 
+  const codeModeOff = {
+    enabled: false,
+    sandboxEnabled: false,
+    sandboxSupported: true,
+    canRun: false,
+    reason: "code_mode_off",
+  };
+  const codeModeOn = { enabled: true, sandboxEnabled: true, sandboxSupported: true, canRun: true };
+
+  it("says it is turning Code Mode on, and links to Inbox when a step must be finished there", async () => {
+    api.fetchCodeModeReadiness.mockResolvedValue(codeModeOff);
+    api.fetchSettings.mockResolvedValue({ revision: 7, features: {} });
+    api.patchSettings.mockResolvedValue({
+      revision: 8,
+      changePlanReceipt: { planId: "plan-1", status: "awaiting_approval", revision: 1 },
+    });
+    let finishPlan!: (value: unknown) => void;
+    api.approvePlanInPlace.mockReturnValue(new Promise((resolve) => (finishPlan = resolve)));
+    await render(turnWith({}));
+    await waitForButton("Turn on Code Mode and run");
+    await act(async () => button("Turn on Code Mode and run")!.click());
+    await waitFor(() => expect(container.textContent).toContain("Turning on Code Mode…"));
+    await act(async () => finishPlan({ kind: "elsewhere", plan: { planId: "plan-1" }, approvalId: "settings-1" }));
+    await waitFor(() => expect(container.querySelector(`[role="alert"]`)).not.toBeNull());
+    const alert = container.querySelector(`[role="alert"]`)!;
+    expect(alert.textContent).toContain("needs one more step in Inbox");
+    const link = alert.querySelector("a")!;
+    expect(link.textContent).toBe("Approve it in Inbox");
+    expect(link.getAttribute("href")).toContain("approvalId=settings-1");
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+    // Readiness is read again, whatever the outcome.
+    expect(api.fetchCodeModeReadiness.mock.calls.length).toBeGreaterThan(1);
+  });
+
+  it("asks to choose again when the request changed while Code Mode was being turned on", async () => {
+    // The click is checked against the record first; the model's explanation lands while the switches are applied.
+    api.fetchCodeModeReadiness.mockResolvedValue(codeModeOff);
+    api.fetchSettings.mockResolvedValue({ revision: 7, features: {} });
+    api.patchSettings.mockResolvedValue({
+      revision: 8,
+      changePlanReceipt: { planId: "plan-1", status: "awaiting_approval", revision: 1 },
+    });
+    let finishPlan!: (value: unknown) => void;
+    api.approvePlanInPlace.mockReturnValueOnce(new Promise((resolve) => (finishPlan = resolve)));
+    api.approvePlanInPlace.mockResolvedValue({ kind: "completed", plan: {} });
+    await render(turnWith({}));
+    await waitForButton("Turn on Code Mode and run");
+    await act(async () => button("Turn on Code Mode and run")!.click());
+    await waitFor(() => expect(api.approvePlanInPlace).toHaveBeenCalledTimes(1));
+    api.fetchApproval.mockResolvedValue({ ...approval(), explanationStatus: "completed" });
+    await act(async () => client.invalidateQueries({ queryKey: ["approvals"] }));
+    await waitFor(() =>
+      expect(client.getQueryData(["approvals", "record", "default", "approval-1"])).toMatchObject({
+        explanationStatus: "completed",
+      }),
+    );
+    // Let the buttons remount for the updated record before the switches finish.
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    // Both switches are now on.
+    api.fetchCodeModeReadiness.mockResolvedValue(codeModeOn);
+    await act(async () => finishPlan({ kind: "completed", plan: {} }));
+    await waitFor(() => expect(container.textContent).toContain("This request was updated. Choose again."));
+    await waitForButton("Run it");
+    expect(button("Turn on Code Mode and run")).toBeUndefined();
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  });
+
   it("unsupported sandbox offers only Deny", async () => {
     api.fetchCodeModeReadiness.mockResolvedValue({
       enabled: true,

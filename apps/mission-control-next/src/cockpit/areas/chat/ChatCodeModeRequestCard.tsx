@@ -28,6 +28,7 @@ const ApprovalDecisionBar = lazy(async () => ({
 
 const CODE_MODE_REQUEST = "code_mode.request";
 const NOT_RUN = "Not run";
+const CHANGED_NOTE = "This request was updated. Choose again.";
 
 type Args = { goal?: unknown; source?: unknown; reads?: unknown; input?: unknown };
 const text = (value: unknown): string => (typeof value === "string" ? value.trim() : "");
@@ -144,8 +145,18 @@ function RequestRow({
     refreshThread.current();
   }, [queryClient, settledStatus]);
   // A click checked against a record that changed meanwhile (the model's explanation lands a few seconds after the
-  // request) is not sent, and the buttons remount for the new record, which clears their error. The row keeps the note.
-  const [changed, setChanged] = useState(false);
+  // request, perhaps while Code Mode is being turned on) is not sent, and the buttons remount for the new record, which
+  // clears their error. The row keeps the note.
+  const [note, setNote] = useState("");
+  // Turning Code Mode on changes what the row offers, so readiness is read again whatever the outcome: the button
+  // turns to "Run it" once both switches are on, and the row still says Code Mode is off when only one went on.
+  const turnOnCodeMode = async (progress: (message: string) => void) => {
+    try {
+      await enableCodeMode(progress);
+    } finally {
+      void queryClient.invalidateQueries({ queryKey: CODE_MODE_READINESS_KEY });
+    }
+  };
 
   let body: ReactElement;
   let live = false;
@@ -202,15 +213,16 @@ function RequestRow({
         sessionId={run.sessionId}
         readiness={readinessState(readiness)}
         onRetryReadiness={() => void readiness.refetch()}
-        changed={changed}
+        turnOnCodeMode={turnOnCodeMode}
+        note={note}
         onSettled={() => {
-          setChanged(false);
+          setNote("");
           void queryClient.invalidateQueries({ queryKey: CODE_MODE_READINESS_KEY });
           void recordQuery.refetch();
           onRefreshThread();
         }}
-        onInvalidated={() => {
-          setChanged(true);
+        onInvalidated={(message) => {
+          setNote(message ?? CHANGED_NOTE);
           void recordQuery.refetch();
           onRefreshThread();
         }}
@@ -310,9 +322,11 @@ function PendingRow(props: {
   sessionId: string;
   readiness: ReadinessState;
   onRetryReadiness(): void;
-  changed: boolean;
+  turnOnCodeMode(progress: (message: string) => void): Promise<void>;
+  /** Why the last click was not sent, kept while the buttons remount; empty when there is nothing to say. */
+  note: string;
   onSettled(): void;
-  onInvalidated(): void;
+  onInvalidated(message?: string): void;
 }) {
   const { goal, record, readiness } = props;
   const off = readiness === "off";
@@ -352,15 +366,15 @@ function PendingRow(props: {
             approveLabel={off ? "Turn on Code Mode and run" : "Run it"}
             approveDanger={off}
             withholdApprove={unsupported || readiness === "failed"}
-            prepareApprove={off ? enableCodeMode : undefined}
+            prepareApprove={off ? props.turnOnCodeMode : undefined}
             onResolved={props.onSettled}
             onInvalidated={props.onInvalidated}
           />
         </Suspense>
       )}
-      {props.changed && record ? (
+      {props.note && record ? (
         <p role="status" className="text-fg-muted">
-          This request was updated. Choose again.
+          {props.note}
         </p>
       ) : null}
     </div>
