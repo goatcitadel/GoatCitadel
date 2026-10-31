@@ -756,6 +756,32 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
       ]);
     });
 
+    it("evidence alone never runs the skill, source or MCP lanes", async () => {
+      const turn = SATURDAY_SESSION_TURNS[2]!;
+      const boom = vi.fn(async () => {
+        throw new Error("lane must not run");
+      });
+      const deps = {
+        ...emptyDeps(),
+        listSkills: boom,
+        resolveSkillActivation: boom,
+        listSkillSources: boom,
+        lookupSkillSources: boom,
+        listMcpTemplates: boom,
+        listMcpTemplateDiscovery: boom,
+      } as unknown as ReturnType<typeof emptyDeps>;
+      const suggestions = await scoutCapabilityUpgradeSuggestions({
+        content: "hello there",
+        assistantText: "Here you go.",
+        sessionId: "session-1",
+        trace: { ...createTrace(), toolRuns: withRuns([...turn.toolRuns]) },
+        unreadableAttachments: turn.unreadableAttachments,
+        deps,
+      });
+      expect(boom).not.toHaveBeenCalled();
+      expect(suggestions.map((item) => item.kind)).toEqual(["code_mode_build"]);
+    });
+
     it("no Code Mode suggestion when the turn already ran code_mode.request", async () => {
       const turn = SATURDAY_SESSION_TURNS[2]!;
       const suggestions = await scoutCapabilityUpgradeSuggestions({

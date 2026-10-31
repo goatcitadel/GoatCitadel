@@ -123,21 +123,15 @@ export async function scoutCapabilityUpgradeSuggestions(
   const gapEvidence = collectGapEvidence(input);
   const presentationArtifactIntent = detectPresentationArtifactIntent(input.content);
   const documentArtifactIntent = !presentationArtifactIntent && detectDocumentArtifactIntent(input.content);
-  if (
-    !gapEvidence &&
-    !looksToolOrientedRequest(input.content) &&
-    !presentationArtifactIntent &&
-    !documentArtifactIntent
-  ) {
-    return [];
-  }
-  if (
-    !gapEvidence &&
-    !looksLikeCapabilityGap(input.assistantText, input.trace) &&
-    !looksLikeMissingRequestedPresentationArtifact(input, presentationArtifactIntent) &&
-    !looksLikeMissingRequestedDocumentArtifact(input, documentArtifactIntent)
-  ) {
-    return [];
+  const legacyGate =
+    (looksToolOrientedRequest(input.content) || presentationArtifactIntent || documentArtifactIntent) &&
+    (looksLikeCapabilityGap(input.assistantText, input.trace) ||
+      looksLikeMissingRequestedPresentationArtifact(input, presentationArtifactIntent) ||
+      looksLikeMissingRequestedDocumentArtifact(input, documentArtifactIntent));
+  if (!legacyGate) {
+    // Evidence only moves the Code Mode build; the skill, source and MCP lanes keep their original gate.
+    const ranCodeMode = (input.trace?.toolRuns ?? []).some((run) => run.toolName === "code_mode.request");
+    return gapEvidence && !ranCodeMode ? [buildCodeModeCapabilityBuildSuggestion(input, gapEvidence)] : [];
   }
 
   const ranked: RankedSuggestion[] = [];
