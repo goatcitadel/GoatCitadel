@@ -195,7 +195,7 @@ function decodeUtf8Text(bytes: Buffer, filePath: string): string {
   return bytes.toString("utf8");
 }
 
-function looksBinary(bytes: Buffer): boolean {
+export function looksBinary(bytes: Buffer): boolean {
   const sampleLength = Math.min(bytes.length, 4096);
   if (sampleLength === 0) {
     return false;

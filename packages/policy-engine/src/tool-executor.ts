@@ -70,6 +70,7 @@ import {
 } from "./tool-executor/context-executor.js";
 import { executeFilesystemTool, isFilesystemToolName } from "./tool-executor/filesystem-executor.js";
 import { executeKnowledgeTool, isKnowledgeToolName } from "./tool-executor/knowledge-executor.js";
+import { executeDocumentHelperTool, isDocumentHelperToolName } from "./tool-executor/document-helpers-executor.js";
 import {
   executeScheduleManage,
   executeSubagentFanout,
@@ -136,6 +137,11 @@ export function setShellOutputRetentionBytesForTesting(
 export type { ChannelEnvSecretRequest, ChannelEnvSecretResolution };
 
 export interface ToolExecutorRuntimeHooks {
+  /** Gateway-owned, session-scoped read of a chat attachment's stored bytes for the document helpers. */
+  readAttachmentBytes?: (
+    request: ToolInvokeRequest,
+    attachmentId: string,
+  ) => Promise<{ fileName: string; mimeType: string; bytes: Buffer }>;
   /**
    * Gateway-owned eligibility for writes outside every write root (an ordinary
    * interactive session, not a delegated child, A2A peer, or mesh node). Absent
@@ -370,6 +376,14 @@ export async function executeTool(
     return finalizeToolResult(
       await executeFilesystemTool(request, writeConfig, storage, {
         assertReadPathAllowedForRequest,
+      }),
+    );
+  }
+  if (isDocumentHelperToolName(request.toolName)) {
+    return finalizeToolResult(
+      await executeDocumentHelperTool(request, config, storage, {
+        assertReadPathAllowedForRequest,
+        ...(runtimeHooks.readAttachmentBytes ? { readAttachmentBytes: runtimeHooks.readAttachmentBytes } : {}),
       }),
     );
   }

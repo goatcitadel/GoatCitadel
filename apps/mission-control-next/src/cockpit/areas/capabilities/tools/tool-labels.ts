@@ -87,6 +87,9 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
 
   // Documents
   "docs.ingest": "Add a document for searching",
+  "docs.read_bytes": "Read a file as raw bytes",
+  "docs.extract_text": "Extract text from a PDF or document",
+  "docs.decompress": "Decompress data",
   "docs.search": "Search your documents",
   "embeddings.index": "Index documents by meaning",
   "embeddings.query": "Search documents by meaning",

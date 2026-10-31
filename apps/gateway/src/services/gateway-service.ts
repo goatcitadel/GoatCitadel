@@ -1476,6 +1476,14 @@ export class GatewayService {
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
+      readAttachmentBytes: async (request, attachmentId) => {
+        const loaded = await this.readChatAttachmentContent(attachmentId);
+        // Session-scoped: a run can read only attachments uploaded to the session it runs in.
+        if (loaded.record.sessionId !== request.sessionId) {
+          throw new Error("Attachment is not part of this session.");
+        }
+        return { fileName: loaded.record.fileName, mimeType: loaded.record.mimeType, bytes: loaded.bytes };
+      },
       resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
       resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
       // Live Settings value: a tool call that names another Firecrawl endpoint or key variable is blocked.

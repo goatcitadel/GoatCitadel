@@ -143,6 +143,7 @@ import {
 } from "./prompt-pack-harness-normalization.js";
 import { resolveChatReasoningEffort, resolvePromptLabReasoningEffort } from "./chat-reasoning-controls.js";
 import {
+  CODE_MODE_ONLY_TOOL_NAMES,
   LOCAL_PATH_TOOL_NAMES,
   LOCAL_QUERY_TOOL_NAMES,
   MCP_BROWSER_FALLBACK_TOOL_NAMES,
@@ -6910,6 +6911,7 @@ export class ChatTurnAgentRunner {
       !restrictedAutonomousProfile &&
       (await this.isOptionalUserInputEnabled());
     for (const tool of catalog) {
+      if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
       if ((tool.toolName === "capabilities.search" || tool.toolName === "skills.read") && !boundedExposure) continue;
       if (tool.toolName === "user_input.request" && !optionalInputToolEligible) continue;
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {

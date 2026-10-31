@@ -143,6 +143,9 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
     switchable: true,
     toolNames: [
       "docs.ingest",
+      "docs.read_bytes",
+      "docs.extract_text",
+      "docs.decompress",
       "docs.search",
       "embeddings.index",
       "embeddings.query",

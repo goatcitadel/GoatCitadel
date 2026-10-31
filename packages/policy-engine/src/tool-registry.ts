@@ -1919,6 +1919,73 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "docs.read_bytes",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Read a file or chat attachment as base64 bytes (capped at 8 MB) for Code Mode runs. Provide exactly one of path or attachmentId.",
+    pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        attachmentId: { type: "string" },
+        maxBytes: { type: "integer", minimum: 1, maximum: 8 * 1024 * 1024 },
+      },
+      additionalProperties: false,
+    },
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
+    recommendedContexts: [],
+  },
+  {
+    name: "docs.extract_text",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Extract plain text from a PDF, DOCX or text file or chat attachment for Code Mode runs. Provide exactly one of path or attachmentId.",
+    pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        attachmentId: { type: "string" },
+        maxChars: { type: "integer", minimum: 1, maximum: 200_000 },
+      },
+      additionalProperties: false,
+    },
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
+    recommendedContexts: [],
+  },
+  {
+    name: "docs.decompress",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Decompress base64 gzip, deflate, raw-deflate or brotli data with a hard output cap, for Code Mode runs.",
+    pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        base64: { type: "string", minLength: 1 },
+        format: { type: "string", enum: ["gzip", "deflate", "raw-deflate", "brotli"] },
+        maxOutputBytes: { type: "integer", minimum: 1, maximum: 16 * 1024 * 1024 },
+      },
+      required: ["base64", "format"],
+      additionalProperties: false,
+    },
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
+    recommendedContexts: [],
+  },
+  {
     name: "docs.search",
     category: "knowledge",
     riskLevel: "safe",
