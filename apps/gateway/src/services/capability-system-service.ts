@@ -2881,22 +2881,26 @@ export class CapabilitySystemService {
       codeModeReads: request.reads ?? [],
     };
     const extension = request.language === "typescript" ? "ts" : "js";
+    // The run id is fixed by the approval, but each registration freezes a new snapshot (new manifest bytes), so its
+    // artifacts go under that snapshot's own folder. A retry after a crash, or a concurrent delivery, never collides
+    // with an earlier attempt's files; the record that wins points at its own.
+    const artifactSegments = [runId, snapshot.snapshotId];
     const codeArtifact = await this.persistManagedTextArtifact(
       this.artifactRoot,
-      [runId],
+      artifactSegments,
       `source.${extension}`,
       request.source,
       request.language === "typescript" ? "text/typescript" : "text/javascript",
     );
     const wrapperManifestArtifact = await this.persistManagedJsonArtifact(
       this.artifactRoot,
-      [runId],
+      artifactSegments,
       "wrapper-manifest.json",
       wrapperManifest,
     );
     const policySnapshotArtifact = await this.persistManagedJsonArtifact(
       this.artifactRoot,
-      [runId],
+      artifactSegments,
       "policy-snapshot.json",
       policySnapshot,
     );
@@ -2932,7 +2936,8 @@ export class CapabilitySystemService {
       createdAt,
     };
     const storage = this.options.storage;
-    // Insert only when absent: a concurrent delivery of the same approval keeps the first record.
+    // Insert only when absent: a repeated or concurrent delivery of the same approval keeps the first record, and
+    // the later attempt's artifacts stay unreferenced in their own folder.
     const stored = await storage.runImmediateTransaction(
       async () => (await storage.codeModeRuns.find(runId)) ?? (await storage.codeModeRuns.upsert(record)),
     );

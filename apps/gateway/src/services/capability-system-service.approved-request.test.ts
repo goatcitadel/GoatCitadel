@@ -403,6 +403,26 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     );
   });
 
+  it("a second registration of the same approval keeps the first record instead of failing on its artifacts", async () => {
+    const fx = createFixture();
+    const request = fx.approvedRequest("return { pages: 3 };");
+    const internals = fx.service as unknown as {
+      registerApprovedCodeModeRequestRun(runId: string, request: ApprovedCodeModeRequest): Promise<CodeModeRunRecord>;
+    };
+    const runId = `code-run-request-${sha256(`code_mode.request:${request.approvalId}`).slice(0, 32)}`;
+
+    // A redelivery after a crash, or a concurrent one, freezes a new snapshot with new bytes for the same run id.
+    const first = await internals.registerApprovedCodeModeRequestRun(runId, request);
+    const second = await internals.registerApprovedCodeModeRequestRun(runId, request);
+
+    expect(second).toEqual(first);
+    await expect(fx.service.runApprovedCodeModeRequest(request)).resolves.toMatchObject({
+      runId,
+      status: "completed",
+      result: { pages: 3 },
+    });
+  });
+
   it("fails a request run whose owner was lost after dispatch when the approval is delivered again", async () => {
     const fx = createFixture();
     const request = fx.approvedRequest("return { pages: 3 };");
