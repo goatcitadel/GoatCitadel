@@ -291,6 +291,58 @@ describe("ChatCodeModeRequestCard", { timeout: 30_000 }, () => {
     expect(button("Turn on Code Mode and run")).toBeUndefined();
   });
 
+  it("never offers to turn Code Mode on for a computer that can't run its sandbox", async () => {
+    // An older Gateway reports Code Mode off first, even on a host whose sandbox probe failed.
+    api.fetchCodeModeReadiness.mockResolvedValue({
+      enabled: false,
+      sandboxEnabled: false,
+      sandboxSupported: false,
+      canRun: false,
+      reason: "code_mode_off",
+    });
+    await render(turnWith({}));
+    await waitForButton("Deny");
+    expect(container.textContent).toContain("This computer can't run Code Mode");
+    expect(container.textContent).not.toContain("Code Mode is off");
+    expect(button("Turn on Code Mode and run")).toBeUndefined();
+    expect(button("Run it")).toBeUndefined();
+  });
+
+  it("does not offer Run it when Code Mode can't be checked, and checks again on Try again", async () => {
+    api.fetchCodeModeReadiness.mockRejectedValueOnce(new Error("Gateway unavailable"));
+    await render(turnWith({}));
+    await waitForButton("Try again");
+    expect(container.textContent).toContain("Couldn't check Code Mode.");
+    expect(button("Deny")).toBeDefined();
+    expect(button("Run it")).toBeUndefined();
+    expect(button("Turn on Code Mode and run")).toBeUndefined();
+    await act(async () => button("Try again")!.click());
+    await waitForButton("Run it");
+    expect(container.textContent).not.toContain("Couldn't check Code Mode");
+  });
+
+  it("does not decide the buttons from a readiness answer cached before this request", async () => {
+    // An earlier request saw Code Mode off; it has been turned on since.
+    client.setQueryData(["code-mode", "readiness"], {
+      enabled: false,
+      sandboxEnabled: false,
+      sandboxSupported: true,
+      canRun: false,
+      reason: "code_mode_off",
+    });
+    let answer!: (value: unknown) => void;
+    api.fetchCodeModeReadiness.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    await render(turnWith({}));
+    await waitFor(() => expect(api.fetchCodeModeReadiness).toHaveBeenCalled());
+    await act(async () => new Promise((resolve) => setTimeout(resolve, 0)));
+    expect(container.textContent).toContain("Checking the request…");
+    expect(container.textContent).not.toContain("Code Mode is off");
+    expect(button("Turn on Code Mode and run")).toBeUndefined();
+    await act(async () => answer({ enabled: true, sandboxEnabled: true, sandboxSupported: true, canRun: true }));
+    await waitForButton("Run it");
+    expect(container.textContent).not.toContain("Checking Code Mode…");
+  });
+
   it("running then done", async () => {
     api.fetchApproval.mockResolvedValue(approval("approved"));
     await render(turnWith({}));

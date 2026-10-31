@@ -1,7 +1,12 @@
 import { lazy, Suspense, useEffect, useRef, useState, type ReactElement } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
+import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { LoaderCircle } from "lucide-react";
-import type { ApprovalRequest, ChatThreadTurnRecord, ChatToolRunRecord } from "@goatcitadel/contracts";
+import type {
+  ApprovalRequest,
+  ChatThreadTurnRecord,
+  ChatToolRunRecord,
+  CodeModeReadiness,
+} from "@goatcitadel/contracts";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import {
   fetchCodeModeRun,
@@ -121,8 +126,8 @@ function RequestRow({
     staleTime: 0,
   });
   const record: ApprovalRequest | undefined = recordQuery.data ?? undefined;
-  const pending = open && record?.status === "pending";
-  const readiness = useCodeModeReadiness(pending);
+  // Read beside the record, so a request shows one loading line, and only while it may still be asked.
+  const readiness = useCodeModeReadiness(open && Boolean(approvalId) && (!record || record.status === "pending"));
 
   // A request whose record is gone (404, expired) or never existed can never be decided: report it, don't wait.
   const recordMissing = open && (!approvalId || (recordQuery.isSuccess && recordQuery.data === null));
@@ -195,8 +200,8 @@ function RequestRow({
         record={record}
         workspaceId={workspaceId}
         sessionId={run.sessionId}
-        reason={readiness.data?.reason}
-        readinessKnown={!readiness.isPending}
+        readiness={readinessState(readiness)}
+        onRetryReadiness={() => void readiness.refetch()}
         changed={changed}
         onSettled={() => {
           setChanged(false);
@@ -280,6 +285,22 @@ function KeepAsTool({ runId, goal, workspaceId }: { runId: string; goal: string;
   );
 }
 
+/** What the row may offer: run, turn Code Mode on and run, Deny only, or nothing until it knows. */
+type ReadinessState = "checking" | "failed" | "ready" | "off" | "unsupported";
+
+/**
+ * Code Mode readiness for the buttons. Only an answer read since this row mounted counts: a cached one from an earlier
+ * request may predate Code Mode being turned on or off. A failed read offers no run (the server would only refuse it
+ * and spend the approval), and a host that can't run the sandbox is never offered the switch.
+ */
+function readinessState(query: UseQueryResult<CodeModeReadiness>): ReadinessState {
+  if (query.isError) return query.isFetching ? "checking" : "failed";
+  if (!query.isFetchedAfterMount || !query.data) return "checking";
+  const { reason, sandboxSupported } = query.data;
+  if (reason === "sandbox_unsupported" || sandboxSupported === false) return "unsupported";
+  return reason === "code_mode_off" || reason === "sandbox_off" ? "off" : "ready";
+}
+
 function PendingRow(props: {
   goal: string;
   /** The files the code may read, by name; empty when it reads none. */
@@ -287,15 +308,15 @@ function PendingRow(props: {
   record: ApprovalRequest | undefined;
   workspaceId: string;
   sessionId: string;
-  reason: "code_mode_off" | "sandbox_off" | "sandbox_unsupported" | undefined;
-  readinessKnown: boolean;
+  readiness: ReadinessState;
+  onRetryReadiness(): void;
   changed: boolean;
   onSettled(): void;
   onInvalidated(): void;
 }) {
-  const { goal, record, reason } = props;
-  const off = reason === "code_mode_off" || reason === "sandbox_off";
-  const unsupported = reason === "sandbox_unsupported";
+  const { goal, record, readiness } = props;
+  const off = readiness === "off";
+  const unsupported = readiness === "unsupported";
   return (
     <div className="space-y-2">
       <p className="text-fg">
@@ -304,16 +325,24 @@ function PendingRow(props: {
         {unsupported ? <span className="text-fg-muted"> · This computer can&apos;t run Code Mode</span> : null}
       </p>
       {props.reads ? <p className="text-fg-muted wrap-anywhere">Reads {props.reads}</p> : null}
-      {!record ? (
+      {!record || readiness === "checking" ? (
         <p role="status" className="text-fg-muted">
           Checking the request…
         </p>
-      ) : !props.readinessKnown ? (
-        <p role="status" className="text-fg-muted">
-          Checking Code Mode…
-        </p>
       ) : (
         <Suspense fallback={<p role="status">Loading approval controls…</p>}>
+          {readiness === "failed" ? (
+            <p role="status" className="text-fg-muted">
+              Couldn&apos;t check Code Mode.{" "}
+              <button
+                type="button"
+                className="font-medium text-accent hover:underline"
+                onClick={props.onRetryReadiness}
+              >
+                Try again
+              </button>
+            </p>
+          ) : null}
           <ApprovalDecisionBar
             approval={record}
             workspaceId={props.workspaceId}
@@ -322,7 +351,7 @@ function PendingRow(props: {
             reviewedInPlace
             approveLabel={off ? "Turn on Code Mode and run" : "Run it"}
             approveDanger={off}
-            withholdApprove={unsupported}
+            withholdApprove={unsupported || readiness === "failed"}
             prepareApprove={off ? enableCodeMode : undefined}
             onResolved={props.onSettled}
             onInvalidated={props.onInvalidated}
