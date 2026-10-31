@@ -72,7 +72,15 @@ type Input = {
     | "thread"
     | "settings"
   >;
-  contextActions: Pick<ReturnType<typeof useChatContextActions>, "delegationSuggestion" | "setDelegationSuggestion" | "handleAcceptDelegation">;
+  contextActions: Pick<
+    ReturnType<typeof useChatContextActions>,
+    | "delegationSuggestion"
+    | "setDelegationSuggestion"
+    | "handleAcceptDelegation"
+    | "capabilitySuggestions"
+    | "handleCapabilitySuggestionAction"
+    | "dismissCapabilitySuggestion"
+  >;
   sessionStatus: Pick<ReturnType<typeof useChatSessionStatus>, "panel" | "refresh" | "stopFanout" | "close">;
   outbound: Pick<
     ReturnType<typeof useChatOutboundExecution>,
@@ -211,6 +219,9 @@ export function createChatTranscriptProps({
   | "onAcceptDelegation"
   | "supervisedDelegationAvailable"
   | "onDismissDelegationSuggestion"
+  | "capabilitySuggestions"
+  | "onCapabilitySuggestionAction"
+  | "onDismissCapabilitySuggestion"
   | "onApprovePending"
   | "onDenyPending"
   | "onOpenApprovals"
@@ -224,7 +235,7 @@ export function createChatTranscriptProps({
   const { handleBeginEditTurn } = orchestration;
   const { handleOpenGeneratedArtifactFromTurn } = artifactActions;
   const { handleCreateGeneratedArtifactFromTurn } = artifactActions;
-  const { setDelegationSuggestion } = contextActions;
+  const { setDelegationSuggestion, handleCapabilitySuggestionAction, dismissCapabilitySuggestion } = contextActions;
   const { handleApprovePending } = outbound;
   const { handleDenyPending } = outbound;
   const { handleSubmitUserInput } = outbound;
@@ -339,12 +350,21 @@ export function createChatTranscriptProps({
     onAcceptDelegation: async () => {
       if (blockHistoricalMutation()) return;
       if (sessionData.settings?.chatFeatureAvailability?.supervisedDelegation !== true) {
-        pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning"); return;
+        pushLocalNotice("Subagent delegation is temporarily unavailable.", "warning");
+        return;
       }
       await contextActions.handleAcceptDelegation();
     },
-    supervisedDelegationAvailable: sessionData.settings?.chatFeatureAvailability?.supervisedDelegation === true && !historicalModeActive,
+    supervisedDelegationAvailable:
+      sessionData.settings?.chatFeatureAvailability?.supervisedDelegation === true && !historicalModeActive,
     onDismissDelegationSuggestion: () => setDelegationSuggestion(null),
+    capabilitySuggestions: contextActions.capabilitySuggestions,
+    onCapabilitySuggestionAction: (suggestion) => {
+      if (!blockHistoricalMutation()) handleCapabilitySuggestionAction(suggestion);
+    },
+    onDismissCapabilitySuggestion: (suggestion) => {
+      if (!blockHistoricalMutation()) dismissCapabilitySuggestion(suggestion);
+    },
     // Historical transcript reads are mutation-locked. Only stop/cancel
     // controls remain live as safety escapes; approvals and input do not.
     onApprovePending: (allowScope) => {

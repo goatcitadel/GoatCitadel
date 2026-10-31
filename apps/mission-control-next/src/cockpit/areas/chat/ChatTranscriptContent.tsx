@@ -27,6 +27,7 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
+import { ChatCapabilitySuggestionLine, selectTurnCapabilitySuggestions } from "./ChatCapabilitySuggestionLine";
 import { ChatCodeModeRequestCard } from "./ChatCodeModeRequestCard";
 import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
 import { ChatContinueAction } from "./ChatContinueAction";
@@ -212,6 +213,13 @@ export const Turn = memo(function Turn({
         workspaceId={actions.workspaceId}
         onRefreshThread={actions.onRefreshThread}
       />
+      {actions.onCapabilitySuggestionAction && actions.onDismissCapabilitySuggestion ? (
+        <ChatCapabilitySuggestionLine
+          suggestions={selectTurnCapabilitySuggestions(actions, turn.turnId, isLatest)}
+          onAction={actions.onCapabilitySuggestionAction}
+          onDismiss={actions.onDismissCapabilitySuggestion}
+        />
+      ) : null}
       {turn.assistantMessage ||
       turn.toolRuns.length ||
       turn.citations.length ||
