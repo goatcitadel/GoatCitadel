@@ -684,17 +684,17 @@ describe("ChatTurnAgentRunner loop 24 coverage", () => {
     );
     expect(providerRequests[0]).toMatchObject({
       timeoutMs: 300_000,
-      max_tokens: 2_400,
+      max_tokens: 4_096,
     });
     expect(result.turnTrace.routing.executionBudget).toMatchObject({
       profile: "research_artifact",
       promotionReason: "explicit_research_artifact",
       turnBudgetMs: 600_000,
       completionTimeoutMs: 300_000,
-      maxToolLoops: 6,
-      maxToolRunsPerTurn: 12,
-      searchMaxResults: 6,
-      maxTokens: 2_400,
+      maxToolLoops: 8,
+      maxToolRunsPerTurn: 16,
+      searchMaxResults: 8,
+      maxTokens: 4_096,
     });
     expect(result.turnTrace.completion?.firstProviderRequestUsage?.effectiveInputTokens).toBeLessThan(12_000);
     expect(result.turnTrace.status).toBe("failed");

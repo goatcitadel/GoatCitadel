@@ -80,9 +80,9 @@ describe("chat-agent-budget", () => {
       expect.objectContaining({
         turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deep,
         completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deep,
-        maxToolLoops: 8,
+        maxToolLoops: 12,
         loopLimitBehavior: "checkpoint_continue",
-        maxToolRunsPerTurn: 16,
+        maxToolRunsPerTurn: 24,
         searchMaxResults: 8,
         maxTokens: 2600,
       }),
@@ -128,14 +128,40 @@ describe("chat-agent-budget", () => {
         promotionReason: "explicit_research_artifact",
         turnBudgetMs: 600_000,
         completionTimeoutMs: 300_000,
-        maxToolLoops: 6,
-        maxToolRunsPerTurn: 12,
-        searchMaxResults: 6,
-        maxTokens: 2400,
+        maxToolLoops: 8,
+        maxToolRunsPerTurn: 16,
+        searchMaxResults: 8,
+        maxTokens: 4096,
         minSynthesisReserveMs: 30_000,
         expensiveToolMinimumRemainingMs: 45_000,
       }),
     );
+
+    // Deep keeps the research-artifact profile but never gets less breadth than plain Deep.
+    const deepArtifact = resolveChatExecutionBudget({
+      mode: "chat",
+      webMode: "deep",
+      thinkingLevel: "standard",
+      webLookupIntent: true,
+      artifactIntent: true,
+    });
+    const deepOnly = resolveChatExecutionBudget({ mode: "chat", webMode: "deep", thinkingLevel: "standard" });
+    expect(deepArtifact).toEqual(
+      expect.objectContaining({
+        profile: "research_artifact",
+        promotionReason: "explicit_research_artifact",
+        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.deepResearchArtifact,
+        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deepResearchArtifact,
+        maxToolLoops: 14,
+        maxToolRunsPerTurn: 32,
+        searchMaxResults: 10,
+        maxTokens: 4096,
+      }),
+    );
+    expect(deepArtifact.maxToolLoops).toBeGreaterThanOrEqual(deepOnly.maxToolLoops);
+    expect(deepArtifact.maxToolRunsPerTurn).toBeGreaterThanOrEqual(deepOnly.maxToolRunsPerTurn);
+    expect(deepArtifact.searchMaxResults).toBeGreaterThanOrEqual(deepOnly.searchMaxResults);
+    expect(deepArtifact.turnBudgetMs).toBeGreaterThanOrEqual(deepOnly.turnBudgetMs);
 
     expect(
       resolveChatExecutionBudget({
@@ -279,7 +305,7 @@ describe("chat-agent-budget", () => {
         webMode: "deep",
         thinkingLevel: "standard",
       }),
-    ).toEqual(expect.objectContaining({ maxToolLoops: 8, loopLimitBehavior: "checkpoint_continue" }));
+    ).toEqual(expect.objectContaining({ maxToolLoops: 12, loopLimitBehavior: "checkpoint_continue" }));
   });
 
   it("never gives Deep fewer tool runs than Auto for the same research list", () => {
