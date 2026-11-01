@@ -399,10 +399,12 @@ function looksLikeHtml(content: string): boolean {
 //     present, `stripHtmlNoise` distributes over the cut. When one appears,
 //     finalization simply stops until the segment completes — equivalence is
 //     preserved and only the perf win degrades to the from-scratch cost.
-//   * A text prefix is cut only at the start of a non-blank line indented
-//     0-3 spaces with no tab. A line indented further reads as indented code
-//     or as a list/paragraph continuation depending on the line above it, so
-//     it always stays in the tail together with that line.
+//   * A text prefix is cut only at the start of a non-blank line at column 0
+//     whose previous line is blank (or which opens its text segment). Any
+//     other line can still continue a list item or a paragraph above it (an
+//     indented continuation, a lazy line), and cut there the re-normalized
+//     tail would lose that context; a container-opening line (`- `, `1. `,
+//     `>`) carries its own context into the tail.
 //   * The trailing `\n{3,}` collapse is per-maximal-run, so collapsing within
 //     each finalized piece and again across each seam (including the final
 //     assembly seam) reproduces the global collapse; `.trim()` and the
@@ -412,8 +414,10 @@ function looksLikeHtml(content: string): boolean {
 // and rescans from scratch, so it can never diverge.
 // ---------------------------------------------------------------------------
 
-/** A non-blank line indented 0-3 spaces with no tab: never indented code or a continuation by indentation. */
-const STARTS_OWN_TEXT_LINE_RE = /^ {0,3}[^ \t]/;
+/** A non-blank line at column 0: after a blank line it cannot continue a list item or a paragraph. */
+const STARTS_AT_COLUMN_ZERO_RE = /^\S/;
+
+const BLANK_LINE_RE = /^\s*$/;
 
 const TEXT_FINALIZE_BLOCKER_RE = /<(?:script|style|svg|math|canvas)\b|<!--/i;
 
@@ -514,12 +518,14 @@ export interface IncrementalDisplayTextState {
   /** True when the growing text segment contains a construct that blocks prefix finalization. */
   textBlocked: boolean;
   /**
-   * Start of the latest completed, unblocked text line indented 0-3 spaces
-   * with no tab. Text finalizes only up to here: a line indented further is
-   * code or a list/paragraph continuation depending on the line above it, so
-   * it must stay in the tail with that line.
+   * Start of the latest completed, unblocked text line at column 0 that
+   * follows a blank line (or opens its text segment). Text finalizes only up
+   * to here: any other line may continue a list item or paragraph above it,
+   * so it must stay in the tail with that context.
    */
   safeTextCut: number;
+  /** True when the previous walked text line was blank, or the walk sits at a text segment's start. */
+  previousTextLineBlank: boolean;
   /**
    * True when the blocked region ends in a `</name` closer still awaiting its
    * terminating `>` (which RAW_HTML_BLOCK_RE allows on a later line): the
@@ -555,6 +561,7 @@ export function createIncrementalDisplayTextState(): IncrementalDisplayTextState
     fenceLength: 0,
     textBlocked: false,
     safeTextCut: 0,
+    previousTextLineBlank: true,
     pendingTagClose: false,
     completedOut: "",
     seenCommentOpen: false,
@@ -573,6 +580,7 @@ function resetIncrementalDisplayTextState(state: IncrementalDisplayTextState): v
   state.fenceLength = 0;
   state.textBlocked = false;
   state.safeTextCut = 0;
+  state.previousTextLineBlank = true;
   state.pendingTagClose = false;
   state.completedOut = "";
   state.seenCommentOpen = false;
@@ -683,6 +691,7 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
         state.pendingTagClose = false;
         if (hasSameLineFenceClose(line, opening.char, opening.length, opening.start + opening.length)) {
           consumePiece(state, decoded, lineEnd, "code");
+          state.previousTextLineBlank = true;
         } else {
           state.inFence = true;
           state.fenceChar = opening.char;
@@ -690,10 +699,11 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
         }
       } else {
         // Everything before an unblocked line is unblocked text, so its start
-        // is a safe cut when the line itself cannot continue the line above.
-        if (!state.textBlocked && STARTS_OWN_TEXT_LINE_RE.test(line)) {
+        // is a safe cut when the line cannot continue anything above it.
+        if (!state.textBlocked && state.previousTextLineBlank && STARTS_AT_COLUMN_ZERO_RE.test(line)) {
           state.safeTextCut = lineStart;
         }
+        state.previousTextLineBlank = BLANK_LINE_RE.test(line);
         if (!state.textBlocked && lineBlocksTextFinalization(line)) {
           state.textBlocked = true;
         }
@@ -717,6 +727,8 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
       }
     } else if (state.fenceChar && matchMarkdownFenceClosing(line, state.fenceChar, state.fenceLength)) {
       consumePiece(state, decoded, lineEnd, "code");
+      // The next line opens a new text segment, normalized on its own on both paths.
+      state.previousTextLineBlank = true;
       state.inFence = false;
       state.fenceChar = null;
       state.fenceLength = 0;
