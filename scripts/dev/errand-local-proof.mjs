@@ -210,10 +210,15 @@ async function driveErrand() {
     );
   }
   if (expected.handedOver && !handedOver) failures.push("the errand was never seen waiting on you to sign in");
+  if (errandRun && !errandRun.result?.finalScreenshotAttachmentId) {
+    failures.push("the errand result has no final screenshot");
+  }
   if (failures.length > 0) {
     console.error(`\nProof FAILED (${scenario}): ${failures.join("; ")}.`);
     process.exitCode = 1;
   } else {
-    console.log(`\nProof passed (${scenario}): the errand ended ${outcome}. Check the final screenshot in Chat.`);
+    console.log(
+      `\nProof passed (${scenario}): the errand ended ${outcome} with a final screenshot (open it in Chat to confirm what it shows).`,
+    );
   }
 }
