@@ -33,7 +33,27 @@ const TEXT_RULES: ReadonlyArray<{ category: ErrandRiskCategory; pattern: RegExp 
 ];
 
 const RISKY_PAGE_PATH = /checkout|payment|billing|\/buy\/|placeorder/i;
-const ENTER_KEY = /^(enter|return)$/i;
+const ADD_TO_CART = /add to (cart|basket|bag)/i;
+const SUBMIT_KEYS = new Set(["enter", "return", "numpadenter"]);
+const SPACE_KEYS = new Set([" ", "space", "spacebar"]);
+const NAVIGATION_KEYS = new Set([
+  "tab",
+  "shift",
+  "escape",
+  "esc",
+  "arrowup",
+  "arrowdown",
+  "arrowleft",
+  "arrowright",
+  "up",
+  "down",
+  "left",
+  "right",
+  "pageup",
+  "pagedown",
+  "home",
+  "end",
+]);
 
 const OPAQUE_REASON = "GoatCitadel can't see inside this part of the page";
 const UNREADABLE_REASON = "GoatCitadel couldn't read this part of the page";
@@ -42,8 +62,31 @@ function isSensitiveField(info: ErrandTargetInfo | null): boolean {
   return info !== null && (info.isPasswordLike || info.isOneTimeCode);
 }
 
-function isEnter(action: ComputerAction): boolean {
-  return action.type === "keypress" && action.keys.some((key) => ENTER_KEY.test(key));
+/** Splits "Ctrl+Enter" style combos into lower-cased key tokens; a lone " " or "+" is kept as typed. */
+function keyTokens(action: ComputerAction): string[] {
+  if (action.type !== "keypress") {
+    return [];
+  }
+  return action.keys
+    .flatMap((key) => (key.length > 1 && key.includes("+") ? key.split("+").filter((part) => part !== "") : [key]))
+    .map((token) => (token === " " ? token : token.trim().toLowerCase()));
+}
+
+function isActivatable(info: ErrandTargetInfo): boolean {
+  return info.role === "button" || info.role === "link";
+}
+
+/** Enter-like keys submit; Space activates a focused button or link. */
+function isSubmitKeypress(tokens: string[], focused: ErrandTargetInfo): boolean {
+  return (
+    tokens.some((token) => SUBMIT_KEYS.has(token)) ||
+    (isActivatable(focused) && tokens.some((token) => SPACE_KEYS.has(token)))
+  );
+}
+
+/** With no readable focus, only plain navigation keys are harmless. */
+function isNavigationOnly(tokens: string[]): boolean {
+  return tokens.length > 0 && tokens.every((token) => NAVIGATION_KEYS.has(token));
 }
 
 function matchText(text: string): ErrandRiskCategory | null {
@@ -90,7 +133,11 @@ export function classifyErrandAction(input: ClassifyErrandActionInput): ErrandAc
     return { kind: "go" };
   }
 
-  // Unknown or unreadable surfaces are never treated as safe.
+  // Unknown or unreadable surfaces are never treated as safe (plain navigation keys excepted).
+  const tokens = keyTokens(action);
+  if (action.type === "keypress" && (focused === null || focused.isOpaque) && isNavigationOnly(tokens)) {
+    return { kind: "go" };
+  }
   const subject = isKeyboard ? focused : target;
   if (subject === null) {
     return { kind: "ask", category: "send", reason: UNREADABLE_REASON };
@@ -100,14 +147,19 @@ export function classifyErrandAction(input: ClassifyErrandActionInput): ErrandAc
   }
 
   // Rule 4: judge by the element's own text or role, or the form's submit text for Enter.
-  const enter = isEnter(action);
-  if (isPointer || enter) {
+  const submit = action.type === "keypress" && isSubmitKeypress(tokens, subject);
+  if (isPointer || submit) {
     const text = isPointer
       ? `${subject.text} ${subject.role}`
-      : `${subject.formSubmitText ?? ""} ${subject.role === "button" || subject.role === "link" ? subject.text : ""}`;
+      : `${subject.formSubmitText ?? ""} ${isActivatable(subject) ? subject.text : ""}`;
     const category = matchText(text);
     if (category) {
       return { kind: "ask", category, reason: `This looks like a ${category} action` };
+    }
+
+    // Adding to a cart is never a spend, even on cart or checkout pages.
+    if (ADD_TO_CART.test(text)) {
+      return { kind: "go" };
     }
 
     // Rule 5: risky page paths.
