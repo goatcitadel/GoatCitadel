@@ -42,7 +42,7 @@ What that buys, measured on the 69-plugin sample:
 | Plugins that would import with nothing left out | 12 of 69 |
 | Plugins with no skill and no MCP server (nothing to take) | 25 of 69 (commands, agents, hooks, LSP or output styles only) |
 | Skills whose frontmatter passes the Skill Hub review today, unchanged | 41 of 179 |
-| Skills that pass once the review ignores Claude Code's harmless keys | 172 of 179 (175 if extra `metadata` strings are ignored too, as proposed below) |
+| Skills that pass once the review ignores Claude Code's harmless keys | 172 of 179 (174 with the `metadata` keys proposed below) |
 | Of those 172, skills that would behave the same as in Claude Code | 52 (no shell lines, no placeholders, no supporting files) |
 | Distinct remote MCP addresses that match a shipped template exactly | 16 of 60 (44 of 123 remote entries) |
 | stdio MCP servers that could be imported | 0 of 10 |
@@ -123,9 +123,10 @@ Claude Code-format plugin. Each key falls into one of three groups:
 
 | Group | Keys | Why |
 |---|---|---|
-| Ignore, and record that it was ignored | `allowed-tools`, `argument-hint`, `user-invocable`, `license`, `compatibility`, `version`, `model`, `effort`, `when_to_use`, string-valued `metadata` keys | Leaving these out tightens or changes nothing. GoatCitadel's own tool rules, approvals and model selection apply. `allowed-tools` is a pre-approval in Claude Code, and GoatCitadel never grants from it. `when_to_use` loses its routing hints, and the panel says so. |
+| Ignore, and record that it was ignored | `allowed-tools`, `argument-hint`, `license`, `compatibility`, `version`, `model`, `effort`, `when_to_use`, and these `metadata` keys only: `author`, `organization`, `date`, `abstract` | Leaving these out never widens what the model may do. GoatCitadel's own tool rules, approvals and model selection apply. `allowed-tools` is a pre-approval in Claude Code, and GoatCitadel never grants from it. `when_to_use` loses its routing hints, and the panel says so. |
+| Ignore, with a visible warning on the piece | `user-invocable` | `user-invocable: false` hides a skill from Claude Code's `/` menu, so only the model starts it. GoatCitadel has no such flag: once the skill is on, the operator can still start it by name (`use <name>`). This widens what the operator can start, never what the model may do. The warning says so. |
 | Refuse, with a named code | `disable-model-invocation`, `disallowed-tools`, `paths`, `hooks`, `context`, `agent`, `background` | Leaving these out would loosen the skill or change where it runs. A skill the author kept out of automatic use would become routable, a removed tool would come back, activation limited to some files would widen, or a guard hook would vanish. |
-| Refuse, with a named code | Any other unknown key | Same rule as today. |
+| Refuse, as `UNKNOWN_FRONTMATTER_DIMENSION` | Any other key, top-level or under `metadata` | Same rule as today, so a key Claude Code or an author adds later fails closed until it is reviewed. |
 
 Body features that execute or substitute are a separate check:
 
@@ -293,8 +294,9 @@ PR 5c, the panel (after the Plugins tab, PR 4e):
 
 Throughout:
 
-10. Docs: the Plugins section of `CANONICAL_RUNTIME_STATE_MODEL.md`, `docs/1_0_CONTRACT.md` wording, and the hub
-    design's Phase 5 status.
+10. Docs: the Plugins section of `CANONICAL_RUNTIME_STATE_MODEL.md`, `docs/1_0_CONTRACT.md` wording, the plugin and
+    extension claims in `README.md` and `AGENTS.md` (scope and experimental status, per risk 8), and the hub design's
+    Phase 5 status.
 11. Tests on synthetic fixtures for each component kind and each refusal. Live proof: inspect and install a public
     Claude Code plugin pinned to a commit. superpowers is a good candidate: its 15 skills all pass the dialect, and its
     `receiving-code-review` shares a name with a bundled skill, the unverified case above.
