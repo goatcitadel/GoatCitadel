@@ -178,6 +178,21 @@ export function buildBrowserFallbackArguments(
   };
 }
 
+/**
+ * The engine that actually served a built-in browser call. The policy engine reports
+ * `backend: "firecrawl"` only when Firecrawl answered (a native fallback reports "native"),
+ * so that result is labelled Firecrawl instead of the caller's built-in default.
+ */
+function resolveBrowserEngineIdentity(
+  result: Record<string, unknown> | undefined,
+  fallback: { engineTier: string; engineLabel: string },
+): { engineTier: string; engineLabel: string } {
+  if (result?.backend === "firecrawl") {
+    return { engineTier: "firecrawl", engineLabel: "Firecrawl" };
+  }
+  return { engineTier: fallback.engineTier, engineLabel: fallback.engineLabel };
+}
+
 export function buildBrowserFallbackChainEntry(input: {
   toolName: string;
   engineTier: string;
@@ -187,10 +202,11 @@ export function buildBrowserFallbackChainEntry(input: {
   browserFailureClass?: string;
   status: "executed" | "failed";
 }): Record<string, unknown> {
+  const engine = resolveBrowserEngineIdentity(input.result, input);
   return {
     toolName: input.toolName,
-    engineTier: input.engineTier,
-    engineLabel: input.engineLabel,
+    engineTier: engine.engineTier,
+    engineLabel: engine.engineLabel,
     status: input.status,
     url: extractBrowserToolUrl(input.result),
     finalUrl: readFirstString(input.result?.finalUrl, input.result?.url),
@@ -210,8 +226,7 @@ export function normalizeBrowserToolResult(
 ): Record<string, unknown> {
   const normalized: Record<string, unknown> = {
     ...result,
-    engineTier: metadata.engineTier,
-    engineLabel: metadata.engineLabel,
+    ...resolveBrowserEngineIdentity(result, metadata),
   };
   if (toolName === "browser.search" && Array.isArray(result.results)) {
     normalized.results = result.results;

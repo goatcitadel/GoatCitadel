@@ -13,6 +13,7 @@ import {
   type DocumentArtifactFormat,
   type DocumentArtifactSection,
 } from "../document-artifacts.js";
+import { formatLocalDate } from "../document-pdf.js";
 import { analyzePresentationDeckQuality, type PresentationDeckQualitySummary } from "../presentation-layout.js";
 import {
   normalizePresentationResearch,
@@ -97,7 +98,7 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
     `# ${title}`,
     "",
     `Template: ${template}`,
-    `Date: ${new Date().toISOString().slice(0, 10)}`,
+    `Date: ${formatLocalDate(new Date())}`,
     "",
     body || "_No content provided._",
     "",

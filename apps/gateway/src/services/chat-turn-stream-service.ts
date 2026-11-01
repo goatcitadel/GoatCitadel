@@ -2499,6 +2499,13 @@ export async function* streamPreparedAgentChatTurn(
     // Admit only the terminal state emitted by this execution; cancellation,
     // a competing terminal state, and stale durable generations still win.
     const settledTrace = await readFanoutCompletionTrace(host, turnId);
+    // The runner's terminal trace holds the turn's citations: the answer-narrowed set, including
+    // sources from segments before an approval resume, which this invocation never streamed.
+    // Streamed citations remain the fallback for executions that persist none (remote workers).
+    const resolveTurnCitations = (): ChatCitationRecord[] =>
+      settledTrace.citations && settledTrace.citations.length > 0
+        ? dedupeChatCitations([...(prepared.threadKnowledgeCitations ?? []), ...settledTrace.citations])
+        : dedupeChatCitations(streamCitations);
     const fanoutWaiting =
       deferGeneralPostCommit &&
       Boolean(options?.canonicalDurableRunId) &&
@@ -2565,7 +2572,7 @@ export async function* streamPreparedAgentChatTurn(
             workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
             truncated: prepared.resolvedGuidance.truncated,
           },
-          citations: dedupeChatCitations(streamCitations),
+          citations: resolveTurnCitations(),
         });
         await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
         return trace;
@@ -2677,7 +2684,7 @@ export async function* streamPreparedAgentChatTurn(
             workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
             truncated: prepared.resolvedGuidance.truncated,
           },
-          citations: dedupeChatCitations(streamCitations),
+          citations: resolveTurnCitations(),
         });
         await host.updateActiveLeafOrThrow(sessionId, prepared.parentTurnId, turnId);
         return trace;
@@ -2783,7 +2790,7 @@ export async function* streamPreparedAgentChatTurn(
           workspaceFilesUsed: prepared.resolvedGuidance.workspaceFilesUsed,
           truncated: prepared.resolvedGuidance.truncated,
         },
-        citations: dedupeChatCitations(streamCitations),
+        citations: resolveTurnCitations(),
         ...(await streamReasoning.tracePatch(async () => currentTraceBeforeWrite.reasoning)),
       };
       let committedTrace: ChatTurnTraceRecord | undefined;

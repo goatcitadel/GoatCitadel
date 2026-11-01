@@ -117,4 +117,24 @@ describe("live data detection", () => {
       ),
     ).toBe("the best things to include in an agentic harness");
   });
+
+  it("keeps file output instructions that name what to put out of the research subject", () => {
+    expect(
+      extractExternalResearchSubject(
+        "Can you do some research on some of the reasons that american culture is degrading. Put the results into a well designed pdf",
+      ),
+    ).toBe("some of the reasons that american culture is degrading");
+    expect(extractExternalResearchSubject("Research the history of tea, then save the findings as a docx.")).toBe(
+      "the history of tea",
+    );
+    expect(
+      extractExternalResearchSubject(
+        "Do some research on remote work trends. Export these research notes into a deck.",
+      ),
+    ).toBe("remote work trends");
+    // A subject that only mentions putting things somewhere, with no delivery delimiter, stays whole.
+    expect(extractExternalResearchSubject("Research how to put the dishes into a dishwasher")).toBe(
+      "how to put the dishes into a dishwasher",
+    );
+  });
 });

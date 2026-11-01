@@ -760,6 +760,40 @@ describe("streamPreparedAgentChatTurn", () => {
     ]);
   });
 
+  it("keeps the runner's saved citations when an approval-resumed segment streams none", async () => {
+    const host = createHost();
+    const earlierSource = {
+      citationId: "search-run-0",
+      url: "https://www.pewresearch.org/2025/05/08/americans-trust-in-one-another/",
+      title: "Americans' Declining Trust in Each Other",
+      sourceType: "web" as const,
+    };
+    // The resumed segment only ran documents.create; the runner re-derived the earlier search
+    // sources from persisted tool runs and saved them on its terminal trace without streaming them.
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      host.storage.chatTurnTraces.patch("turn-1", { citations: [earlierSource] });
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "Here is the PDF.",
+      };
+    }) as never;
+
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "Research it and put the results into a pdf", mode: "chat" } as never,
+      createPreparedTurn(),
+      "chat_thread_turn_appended",
+    )) {
+      // drain
+    }
+
+    expect(host.storage.chatTurnTraces.get("turn-1").citations).toEqual([earlierSource]);
+  });
+
   it("persists linked assistant output after an earlier retry branch was selected before dispatch", async () => {
     const host = createHost();
     let activeLeafTurnId = "turn-1";
