@@ -256,6 +256,29 @@ describe("buildGovernanceBlockGuidance", () => {
     }
   });
 
+  it("sends the operator to Capabilities › Plugins for a group a plugin holds, from the runner's own re-check (F9)", () => {
+    // The runner's re-check writes its own error and keeps only the engine's reason codes, which say it is a hold.
+    const result = {
+      policyRevalidation: { status: "blocked", reasonCodes: ["tool_group_off", "plugin_tool_group_hold"] },
+    };
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.write",
+      status: "blocked",
+      error: "Current deny-wins policy blocks fs.write.",
+      result,
+    });
+
+    expect(guidance).toContain("fs.write is switched off: a plugin keeps its tool group off.");
+    expect(guidance).toContain("uninstall that plugin in Capabilities › Plugins");
+    expect(guidance).not.toContain("Capabilities › Tools");
+
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "fs.write", error: "Current deny-wins policy blocks fs.write.", result }),
+    ]);
+    expect(text).toContain("uninstall the plugin that keeps a group off in Capabilities › Plugins");
+    expect(text).not.toContain("Capabilities › Tools");
+  });
+
   it("keeps the tools.deny wording when the tool is denied as well as switched off", () => {
     // The engine reports policy_deny first for a denied tool, because switching the group on would not run it.
     const denied = buildGovernanceBlockGuidance({

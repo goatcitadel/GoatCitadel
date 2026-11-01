@@ -239,6 +239,41 @@ describe("CapabilityPluginStore", () => {
   });
 });
 
+describe("listReferencedSnapshots", () => {
+  // The startup sweep keeps only these snapshots; an installed plugin's uninstall and detail read its own (F18).
+  it("keeps every installing, installed and uninstalling plugin's snapshot and every kept inspection's, never a removed one's", async () => {
+    const rows = new SettingRows();
+    let now = NOW;
+    const store = new CapabilityPluginStore(rows, () => new Date(now));
+    const snapshot = (letter: string) => letter.repeat(64);
+    await store.update("installing", () =>
+      plugin("installing", { state: "installing", snapshotTreeSha256: snapshot("1") }),
+    );
+    await store.update("installed", () =>
+      plugin("installed", { state: "installed", snapshotTreeSha256: snapshot("2") }),
+    );
+    await store.update("uninstalling", () =>
+      plugin("uninstalling", { state: "uninstalling", snapshotTreeSha256: snapshot("3") }),
+    );
+    await store.update("removed", () => plugin("removed", { snapshotTreeSha256: snapshot("4") }));
+    await store.saveInspection(inspection(1, { pluginId: "checked" }), snapshot("5"));
+    await store.remove("removed", (current) => ({
+      pluginId: current!.pluginId,
+      name: current!.name,
+      skillIds: [],
+      removedAt: new Date(NOW).toISOString(),
+    }));
+    // The inspection runs out of time, but no write has dropped it yet, so its snapshot is still kept.
+    now = Date.parse(inspection(1).expiresAt) + 1;
+    await expect(store.getInspection(inspection(1).inspectionId)).resolves.toBeUndefined();
+
+    const kept = await store.listReferencedSnapshots();
+
+    expect([...kept].sort()).toEqual([snapshot("1"), snapshot("2"), snapshot("3"), snapshot("5")]);
+    expect(kept.has(snapshot("4"))).toBe(false);
+  });
+});
+
 describe("findPluginOwning", () => {
   it("finds the plugin that added a piece, never one that only kept it", () => {
     const adding = plugin("adding", {

@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { FeatureDisabledError, type ChangePlanRecord } from "@goatcitadel/contracts";
+import { ConflictError, FeatureDisabledError, type ChangePlanRecord } from "@goatcitadel/contracts";
 import { pluginToolGroupHolds } from "./capability-plugin-store.js";
 import { builtinDefinitionRevision } from "./prompt-pack/builtin-definition.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
@@ -130,7 +130,14 @@ describe("installing a plugin through one Change Plan", () => {
       ].join(" "),
     );
     expect(plan.requiredAction).toMatchObject({ kind: "confirmation", confirmationText: plan.summary });
-    expect(plan.impact).toContain("Any tool can reach an allowed host, not only this plugin's connectors.");
+    // The uninstall never takes a host off an allowlist, so a plan that adds one says the hosts stay (F1).
+    expect(plan.impact).toBe(
+      [
+        "Any tool can reach an allowed host, not only this plugin's connectors.",
+        "Uninstalling the plugin removes the pieces this install adds, and keeps what was already there.",
+        "Hosts it allowed stay in your allowlist.",
+      ].join(" "),
+    );
 
     const settled = await h.confirm(plan);
     expect(settled.result?.summary).toBe(
@@ -375,10 +382,225 @@ describe("installing a plugin through one Change Plan", () => {
       expect(restricted.state.settings.hookAllowlist).toEqual(["alerts.example.org", "hooks.example.com"]);
 
       const covered = harness({ hookAllowlist: ["*.example.com"], allowlist: ["mcp.issues.test"] });
-      await covered.confirm(await planFor(covered));
+      const coveredPlan = await planFor(covered);
+      // Nothing is allowed, so the plan doesn't speak of hosts staying.
+      expect(coveredPlan.impact).toBe(
+        "Uninstalling the plugin removes the pieces this install adds, and keeps what was already there.",
+      );
+      await covered.confirm(coveredPlan);
       expect(covered.sources.updateSettings).not.toHaveBeenCalled();
       expect(covered.state.settings.hookAllowlist).toEqual(["*.example.com"]);
     });
+
+    it("adds no host the plan didn't list, when the hooks list was restricted after the plan was made (F4)", async () => {
+      // Empty at the plan, so it lists no host for hooks.
+      const h = harness();
+      const plan = await planFor(h);
+      expect(plan.summary).not.toContain("for hooks");
+      // The operator restricts hooks to one host before approving.
+      h.state.settings.hookAllowlist = ["internal.corp"];
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toMatchObject({
+        summary: "This plugin changed since it was checked. Check it again.",
+        failureCode: "plugin_install_changed",
+      });
+      expect(h.state.order).toEqual([]);
+      expect(h.state.settings.hookAllowlist).toEqual(["internal.corp"]);
+      expect(await h.store.get(PLUGIN_ID)).toBeUndefined();
+      expect(h.state.deletedSecrets).toEqual([HOOK_REF]);
+    });
+
+    it("makes its additive write again when another settings save lands first (F13)", async () => {
+      const h = harness();
+      const plan = await planFor(h);
+      const write = h.sources.updateSettings.getMockImplementation()!;
+      // A Settings save lands just before this install's write, so its revision is stale.
+      h.sources.updateSettings.mockImplementationOnce(async (update) => {
+        h.state.settings = {
+          ...h.state.settings,
+          revision: h.state.settings.revision + 1,
+          networkAllowlist: ["api.openai.com"],
+        };
+        return await write(update);
+      });
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status, settled.result?.summary).toBe("completed");
+      expect(h.state.order.filter((item) => item === "settings")).toHaveLength(2);
+      // Made again on the newer settings, keeping what the other save wrote.
+      expect(h.state.settings.networkAllowlist).toEqual(["api.openai.com", "mcp.issues.test"]);
+    });
+
+    it("stops at its hosts when the write made again would add a host the plan didn't list (F13 with F4)", async () => {
+      const h = harness();
+      const plan = await planFor(h);
+      const write = h.sources.updateSettings.getMockImplementation()!;
+      // The other save restricts hooks, so the retried lists would need the hook's host, which the plan never named.
+      h.sources.updateSettings.mockImplementationOnce(async (update) => {
+        h.state.settings = {
+          ...h.state.settings,
+          revision: h.state.settings.revision + 1,
+          hookAllowlist: ["internal.corp"],
+        };
+        return await write(update);
+      });
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).toBe("manual_required");
+      expect(settled.result).toMatchObject({
+        failureCode: "plugin_install_hosts_failed",
+        summary:
+          "Couldn't allow the hosts it needs. Uninstall Meeting tools to remove what it added, then install it again.",
+      });
+      expect(h.state.settings.hookAllowlist).toEqual(["internal.corp"]);
+      expect(h.state.settings.networkAllowlist).toEqual([]);
+    });
+
+    it("stops after two writes made again, as a conflict that keeps coming isn't a race", async () => {
+      const h = harness();
+      const plan = await planFor(h);
+      h.sources.updateSettings.mockImplementation(async () => {
+        h.state.order.push("settings");
+        throw new ConflictError({ code: "STATE_CONFLICT", message: "Settings changed after this client loaded them." });
+      });
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).toBe("manual_required");
+      expect(settled.result?.failureCode).toBe("plugin_install_hosts_failed");
+      expect(h.state.order).toEqual(["settings", "settings", "settings"]);
+    });
+  });
+
+  describe("a piece the check found already there", () => {
+    const savedIssues = {
+      serverId: "saved-issues",
+      label: "Issues",
+      transport: "http" as const,
+      url: "https://mcp.issues.test/mcp",
+      authType: "oauth2" as const,
+      enabled: true,
+      category: "data" as const,
+      trustTier: "restricted" as const,
+      costTier: "unknown" as const,
+      policy: {
+        requireFirstToolApproval: true,
+        redactionMode: "basic" as const,
+        allowedToolPatterns: [],
+        blockedToolPatterns: [],
+      },
+      status: "connected" as const,
+      createdAt: "2026-10-01T00:00:00.000Z",
+      updatedAt: "2026-10-01T00:00:00.000Z",
+    };
+    const keptView = (pieceId: string) =>
+      fullViews().map((view) =>
+        view.pieceId === pieceId ? { ...view, check: { status: "already_there" as const }, hosts: undefined } : view,
+      );
+
+    it("stops the install when a connector it would keep was deleted since the check (F3)", async () => {
+      const h = harness({ servers: [savedIssues], views: keptView("issues") });
+      const plan = await planFor(h);
+      expect(plan.summary).toContain("Keep Issues, which is already saved.");
+      h.state.servers = [];
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toMatchObject({ failureCode: "plugin_install_changed" });
+      expect(h.state.order).toEqual([]);
+      expect(await h.store.get(PLUGIN_ID)).toBeUndefined();
+      // Deleted before the plan is made, it can't be made either.
+      await expect(planFor(harness({ views: keptView("issues") }))).rejects.toMatchObject({
+        httpStatus: 409,
+        message: "This plugin changed since it was checked. Check it again.",
+      });
+    });
+
+    it("stops the install when a group it would keep off was switched back on since the check (F3)", async () => {
+      const h = harness({ views: keptView("no-browser"), operatorOff: ["browser"] });
+      const plan = await planFor(h);
+      expect(plan.summary).toContain("Browser is already off, and stays your own switch.");
+      h.state.operatorOff = [];
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toMatchObject({ failureCode: "plugin_install_changed" });
+      expect(h.state.order).toEqual([]);
+      expect(pluginToolGroupHolds(await h.store.list())).toEqual([]);
+      await expect(planFor(harness({ views: keptView("no-browser") }))).rejects.toMatchObject({ httpStatus: 409 });
+    });
+  });
+
+  it("takes control and bidi characters out of the labels it shows (F5)", async () => {
+    const views = fullViews().map((view) =>
+      view.pieceId === "checks" ? { ...view, label: "Meeting ‮checks\u0000" } : view,
+    );
+    const h = harness({ views });
+    const plan = await planFor(h);
+
+    expect(plan.summary).toContain("Add the prompt pack Meeting checks  to Library › Prompt packs.");
+    for (const text of [plan.summary, plan.title, plan.impact]) {
+      expect(text).not.toMatch(/[\p{Cc}؜‎‏‪-‮⁦-⁩]/u);
+    }
+  });
+
+  it("keeps the secret of a hook its owner saved before failing, so the hook can still sign (F10)", async () => {
+    const h = harness();
+    const plan = await planFor(h);
+    // The hooks owner commits the hook, then its audit line fails.
+    h.sources.createHook.mockImplementationOnce(async (hook) => {
+      h.state.order.push("hook");
+      h.state.hooks.push(structuredClone(hook));
+      throw new Error("The audit line couldn't be written.");
+    });
+
+    const settled = await h.confirm(plan);
+
+    expect(settled.status).toBe("manual_required");
+    expect(settled.result?.failureCode).toBe("plugin_install_hooks_failed");
+    expect(h.state.hooks).toHaveLength(1);
+    expect(h.state.deletedSecrets).toEqual([]);
+    expect(h.state.keychain.get(HOOK_REF)).toBe("signing-secret");
+  });
+
+  it("deletes the secrets of an install that stopped before its record, and says installing again is safe (F11)", async () => {
+    const h = harness();
+    const plan = await planFor(h);
+
+    // As if the Gateway stopped while the plan applied, before the record was written.
+    const reconciled = await h.adapter.reconcile({ origin: plan.origin, actions: undefined as never }, plan);
+
+    expect(reconciled).toMatchObject({
+      effectObserved: false,
+      status: "manual_required",
+      result: {
+        summary: "The install stopped before it finished. Nothing was installed, so installing it again is safe.",
+        failureCode: "plugin_install_interrupted",
+      },
+    });
+    expect(h.state.deletedSecrets).toEqual([HOOK_REF]);
+    expect(h.state.keychain.has(HOOK_REF)).toBe(false);
+
+    // One whose record was written keeps them: its hooks may hold them, and its uninstall removes them.
+    const stopped = harness();
+    const stoppedPlan = await planFor(stopped);
+    stopped.state.failAt = "prompt_pack";
+    const manual = await stopped.confirm(stoppedPlan);
+    const again = await stopped.adapter.reconcile({ origin: manual.origin, actions: undefined as never }, manual);
+    expect(again).toMatchObject({
+      result: {
+        summary:
+          "The install stopped before it finished. Uninstall Meeting tools to remove what it added, then install it again.",
+      },
+    });
+    expect(stopped.state.deletedSecrets).toEqual([]);
   });
 
   it("gives two prompt packs that share a name a name each", async () => {

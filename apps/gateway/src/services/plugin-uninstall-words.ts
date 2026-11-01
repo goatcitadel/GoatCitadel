@@ -2,13 +2,14 @@ import { isGoatError } from "@goatcitadel/contracts";
 import type { PluginPieceLabel } from "./capability-plugin-detail.js";
 import type { StoredPlugin, StoredPluginPiece } from "./capability-plugin-store.js";
 import type { EvolutionControlPlaneAdapterOutcome } from "./evolution-control-plane-adapter.js";
-import { boundedSentences, failureDetail, groupLabel } from "./plugin-plan-support.js";
+import { HOSTS_STAY, boundedSentences, failureDetail, groupLabel } from "./plugin-plan-support.js";
 import type { ConnectorDecision, HolderDecision, UninstallScope } from "./plugin-uninstall-scope.js";
 import type { SkillWaitReason } from "./plugin-uninstall-skills.js";
 
 // The words a plugin uninstall shows: its plan, its summaries, and why a step stopped, with what to do next.
 
-export const HOSTS_STAY = "Hosts it allowed stay in your allowlist.";
+/** The step a skill's removal waits on: its revoke, or one of its own install steps. */
+type WaitingOperation = NonNullable<StoredPluginPiece["waiting"]>["operation"];
 
 /** The uninstall's steps, in reverse install order; a failure's `failureCode` names the one it stopped at. */
 export type UninstallStep = "record" | "hooks" | "prompt_packs" | "tool_groups" | "connectors" | "skills" | "finish";
@@ -20,8 +21,8 @@ export interface UninstallProgress {
   current?: StoredPluginPiece;
   /** Connectors left to the operator because another installed plugin uses them. */
   readonly handedOver: string[];
-  /** The skills whose removal still waits, by label. */
-  readonly waiting: Array<{ label: string; reason: SkillWaitReason }>;
+  /** The skills whose removal still waits, by label, with the own step a decision waits on. */
+  readonly waiting: Array<{ label: string; reason: SkillWaitReason; operation?: WaitingOperation }>;
 }
 
 /** A step that stops with its own plain words and, when retrying alone won't help, its own next step. */
@@ -81,6 +82,12 @@ export function plannedSentences(
   for (const piece of owned("prompt_pack")) {
     sentences.push(`Delete the prompt pack ${labelOf(piece, labels)}, with its runs and scores.`);
   }
+  // A pack its unfinished install made before its record named it: deleted only when it is this plugin's (F7).
+  for (const piece of record.pieces.filter((item) => isUnrecordedPack(item))) {
+    sentences.push(
+      `Delete the prompt pack ${labelOf(piece, labels)} if its unfinished install left it, with its runs and scores.`,
+    );
+  }
   for (const piece of owned("tool_group_off")) sentences.push(`Stop holding ${labelOf(piece, labels)} off.`);
   if (scope.connectors) {
     for (const decision of scope.connectors) {
@@ -103,6 +110,11 @@ export function plannedSentences(
     );
   }
   return [...sentences, HOSTS_STAY];
+}
+
+/** A prompt pack the plugin owns that its record never named and the uninstall hasn't settled yet. */
+export function isUnrecordedPack(piece: StoredPluginPiece): boolean {
+  return piece.kind === "prompt_pack" && piece.owned && piece.ref === undefined && piece.removed === undefined;
 }
 
 function connectorSentence(decision: ConnectorDecision): string | undefined {
@@ -132,27 +144,43 @@ export function completedSummary(progress: UninstallProgress): string {
   return boundedSentences([`Removed ${piecesCount(progress.removed)}.`, ...progress.handedOver, HOSTS_STAY]);
 }
 
-/** Everything else is removed; a skill still waits for its revoke, for that revoke to apply, or for its own step. */
+/**
+ * Everything else is removed; a skill still waits for its revoke, for that revoke to apply, for the operator's decision
+ * on its own step, or for its own step under way. A decision never settles by itself, so the summary says to decline it.
+ */
 export function waitingSummary(record: StoredPlugin, progress: UninstallProgress): string {
-  const removing = progress.waiting.filter((item) => item.reason === "removing").length;
+  const count = (reason: SkillWaitReason) => progress.waiting.filter((item) => item.reason === reason).length;
+  const removing = count("removing");
+  const decisions = count("decision");
   const then =
     removing === progress.waiting.length
       ? `Once ${removing === 1 ? "it's" : "they're"} off, uninstall ${record.name} again to finish.`
-      : `Then uninstall ${record.name} again to finish.`;
+      : decisions === progress.waiting.length
+        ? `Decline ${decisions === 1 ? "it" : "them"}, then uninstall ${record.name} again to finish.`
+        : decisions > 0
+          ? `Decline each step that waits for your decision, then uninstall ${record.name} again to finish.`
+          : `Then uninstall ${record.name} again to finish.`;
   return boundedSentences([
     `Removed ${piecesCount(progress.removed)}.`,
     ...progress.handedOver,
     HOSTS_STAY,
-    ...progress.waiting.map(({ label, reason }) => WAITING_WORDS[reason](label)),
+    ...progress.waiting.map(waitingWords),
     then,
   ]);
 }
 
-const WAITING_WORDS: Readonly<Record<SkillWaitReason, (label: string) => string>> = {
+const WAITING_WORDS: Readonly<Record<SkillWaitReason, (label: string, operation?: WaitingOperation) => string>> = {
   revoke: (label) => `Removing the skill ${label} waits for your approval.`,
   removing: (label) => `The skill ${label} is being removed.`,
+  decision: (label, operation) =>
+    `${operation === "install_inactive" ? "Installing" : "Switching on"} the skill ${label} waits for your decision in ` +
+    "the Inbox.",
   own_step: (label) => `The skill ${label} is still taking one of its own steps.`,
 };
+
+function waitingWords({ label, reason, operation }: UninstallProgress["waiting"][number]): string {
+  return WAITING_WORDS[reason](label, operation);
+}
 
 /** The hooks couldn't be read in full, so no stored secret was deleted. */
 export function undecidedSecretsStop(error: unknown): UninstallStepStopped {
@@ -209,11 +237,7 @@ export function skillsStop(
 ): UninstallStepStopped {
   const [first, ...others] = stops;
   return new UninstallStepStopped(
-    [
-      first!.what,
-      ...others.map((stop) => stop.what),
-      ...waiting.map(({ label, reason }) => WAITING_WORDS[reason](label)),
-    ].join(" "),
+    [first!.what, ...others.map((stop) => stop.what), ...waiting.map(waitingWords)].join(" "),
     first!.message,
     first!.next,
   );

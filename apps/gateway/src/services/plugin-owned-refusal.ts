@@ -37,6 +37,12 @@ const UNNAMED_MESSAGES: Record<UnnamedPluginPiece["kind"], string> = {
   prompt_pack: "This prompt pack came with a plugin that isn't installed.",
 };
 const SKILL_NEEDS_INSTALL_MESSAGE = "This skill came with a plugin. Install the plugin to use it.";
+/**
+ * The note on a plugin skill's step that is declined for the operator: its plugin was uninstalled, or began
+ * uninstalling, while the step was asked for, so the step could switch on a skill no plugin lists.
+ */
+export const PLUGIN_SKILL_STEP_DECLINED_NOTE =
+  "Declined for you: the plugin this skill came with was being uninstalled when this step was asked for.";
 /** What a Skill Hub review records as the source of a plugin's skill (the review's own `PLUGIN_SOURCE_PROVIDER`). */
 const PLUGIN_SOURCE_PROVIDER: SkillSourceProvider = "goatcitadel_plugin";
 /** A plugin skill's source: `plugin:<pluginId>/<pieceId>@<pin>`. */

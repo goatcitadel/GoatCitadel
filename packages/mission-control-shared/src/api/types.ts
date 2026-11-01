@@ -444,6 +444,8 @@ export interface RuntimeSettingsResponse {
    * holds off. Core is never listed.
    */
   switchedOffToolGroups?: import("@goatcitadel/contracts").ToolGroupId[];
+  /** Only the groups the operator switched off themselves, never a plugin's hold. */
+  operatorSwitchedOffToolGroups?: import("@goatcitadel/contracts").ToolGroupId[];
   /** Each plugin that holds a group off, in the group map's order. A hold never writes the operator's own switch. */
   pluginToolGroupHolds?: Array<{
     groupId: import("@goatcitadel/contracts").ToolGroupId;

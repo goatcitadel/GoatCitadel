@@ -1589,6 +1589,53 @@ describe("GatewayService Loop 13 channel, lifecycle, and runtime facade behavior
     expect(gateway.storage.close).toHaveBeenCalled();
     expect(gateway.closing).toBe(true);
   });
+
+  it("goes on with startup only once the plugin holds have loaded, so no chat or resumed plan runs without them (F19)", async () => {
+    let finishLoading: () => void = () => undefined;
+    const loading = new Promise<void>((resolve) => {
+      finishLoading = resolve;
+    });
+    const { gateway } = createGatewayHarness({
+      applyStoredFeatureFlags: vi.fn(),
+      evolutionControlPlaneService: { reconcileActive: vi.fn(async () => []) },
+      improvementService: { initialize: vi.fn(async () => undefined) },
+      loadOnboardingMarker: vi.fn(async () => undefined),
+      recordDevDiagnostic: vi.fn(),
+      skillsService: { reload: vi.fn(async () => []) },
+      skillStateService: { ensureSkillStates: vi.fn() },
+      routeServices: { capabilityPlugins: { loadToolGroupHolds: vi.fn(() => loading) } },
+      storage: {
+        ...createGatewayHarness().gateway.storage,
+        agentProfiles: { seedBuiltins: vi.fn() },
+        channelSetupDrafts: { listByCatalog: vi.fn(async () => []) },
+        changePlans: { backfillLegacyChatPlans: vi.fn(async () => 0) },
+        waitUntilReady: vi.fn(async () => undefined),
+      },
+    });
+    gateway.routeCompositionPort = {
+      ...gateway.routeCompositionPort,
+      storage: gateway.storage,
+      recentChannelSetupTests: new Map(),
+      secretStore: gateway.secretStore,
+    };
+
+    const started = GatewayService.prototype.initCritical.call(gateway);
+    // Every step that could run a chat or resume a plan waits while the holds load.
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(gateway.routeServices.capabilityPlugins.loadToolGroupHolds).toHaveBeenCalledOnce();
+    expect(gateway.improvementService.initialize).not.toHaveBeenCalled();
+    expect(gateway.evolutionControlPlaneService.reconcileActive).not.toHaveBeenCalled();
+    expect(gateway.skillsService.reload).not.toHaveBeenCalled();
+    expect(gateway.criticalInitComplete).not.toBe(true);
+
+    finishLoading();
+    await started;
+
+    expect(gateway.improvementService.initialize).toHaveBeenCalledOnce();
+    expect(gateway.evolutionControlPlaneService.reconcileActive).toHaveBeenCalledOnce();
+    expect(gateway.skillsService.reload).toHaveBeenCalledOnce();
+    expect(gateway.criticalInitComplete).toBe(true);
+  });
 });
 
 describe("GatewayService Loop 13 workspace and runtime helpers", () => {

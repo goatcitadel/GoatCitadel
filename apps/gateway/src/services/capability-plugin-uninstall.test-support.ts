@@ -147,6 +147,9 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
       if (found) removal.deletedPacks.push(packId);
       return found;
     }),
+    readPromptPackSourceLabel: vi.fn(
+      async (packId: string) => h.state.packs.find((pack) => pack.packId === packId)?.sourceLabel,
+    ),
     listSavedConnectors: vi.fn(async () => [...h.state.servers]),
     connectorTemplates: () => [ISSUES_TEMPLATE],
     disconnectConnector: vi.fn(async (serverId: string) => {

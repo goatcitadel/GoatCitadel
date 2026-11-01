@@ -19,7 +19,11 @@ import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import { buildCapabilitySkillInstall, SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
-import { PluginSkillNeedsInstallError, pluginSkillSource } from "./plugin-owned-refusal.js";
+import {
+  PLUGIN_SKILL_STEP_DECLINED_NOTE,
+  PluginSkillNeedsInstallError,
+  pluginSkillSource,
+} from "./plugin-owned-refusal.js";
 import type {
   CreateSkillHubOperatorApprovalInput,
   SkillHubOperatorApprovalSummary,
@@ -142,7 +146,7 @@ export interface PluginUninstallRevokeOutcome {
 /** A plugin whose skills may take their steps: its install is under way, or done. Never while it is uninstalled. */
 const PLUGIN_STATES_TAKING_SKILL_STEPS: ReadonlySet<StoredPlugin["state"]> = new Set(["installing", "installed"]);
 
-export type CapabilitySkillActionStep = "approval_skip" | "current_state" | "resolve" | "audit";
+export type CapabilitySkillActionStep = "approval_skip" | "current_state" | "resolve" | "audit" | "plugin_records";
 
 /** Called with the real error of a failed step, so the answer can stay plain. */
 export type CapabilitySkillActionFailureReporter = (step: CapabilitySkillActionStep, error: unknown) => void;
@@ -233,6 +237,8 @@ export class CapabilitySkillActionsService {
    * answers only `approved` or `waiting`. A step the guard refuses passes the owner's 409 through. A check that came
    * with a plugin takes its steps only while that plugin's record, in this workspace, is installing or installed and
    * lists it: then, and only then, the plugin's pass goes to Skill Hub's owner. Otherwise it is a 409 `PLUGIN_OWNED`.
+   * The record is read again once the approval exists, before any skip: an uninstall that began meanwhile gets the step
+   * declined as the operator, and the same 409, so no skill is switched on that no plugin lists.
    */
   public async requestStep(
     input: CapabilitySkillOperationRequest & { actorId: string },
@@ -250,6 +256,10 @@ export class CapabilitySkillActionsService {
     const { approvalId } = approval;
     // The same request hands back the approval it already made; an approved one is never resolved again.
     if (approval.status === "approved") return { status: "approved", approvalId };
+    if (pluginPass) {
+      const declined = await this.declineIfPluginLeft(input, pluginPass.pluginId, approvalId);
+      if (declined) return declined;
+    }
     if (!(await allowsOperatorApprovalSkip(this.sources.deploymentProfile(), () => this.readSkipSetting()))) {
       return { status: "waiting", approvalId };
     }
@@ -321,6 +331,37 @@ export class CapabilitySkillActionsService {
     return { status: "approved", approvalId };
   }
 
+  /**
+   * Reads the plugin's record again after the step's approval was made (F6). While it still takes its skills' steps,
+   * this answers undefined. Otherwise the approval is declined as the operator and the step refused with `PLUGIN_OWNED`;
+   * when the record can't be read, or the decline fails, the approval is left waiting for the operator.
+   */
+  private async declineIfPluginLeft(
+    input: CapabilitySkillOperationRequest & { actorId: string },
+    pluginId: string,
+    approvalId: string,
+  ): Promise<CapabilitySkillActionOutcome | undefined> {
+    try {
+      const listings = await this.sources.listPluginRecords();
+      if (listings.some((plugin) => plugin.pluginId === pluginId && listsSkillStep(plugin, input))) return undefined;
+    } catch (error) {
+      this.reportFailure?.("plugin_records", error);
+      return { status: "waiting", approvalId };
+    }
+    try {
+      await this.sources.resolveApproval(approvalId, {
+        decision: "reject",
+        resolvedBy: input.actorId,
+        resolutionNote: PLUGIN_SKILL_STEP_DECLINED_NOTE,
+      });
+    } catch (error) {
+      // Nothing was declined, so the step still waits for the operator's decision.
+      this.reportFailure?.("resolve", error);
+      return { status: "waiting", approvalId };
+    }
+    throw new PluginSkillNeedsInstallError(pluginId);
+  }
+
   /** A revoke asked for before, while it still waits; undefined once it was decided or is gone. */
   private async readKnownRevoke(approvalId: string): Promise<{ approvalId: string; status: "pending" } | undefined> {
     let status: ApprovalRequest["status"];
@@ -346,11 +387,7 @@ export class CapabilitySkillActionsService {
     const source = pluginSkillSource(snapshot);
     if (!source) return undefined;
     const listing = (await this.sources.listPluginRecords()).find(
-      (plugin) =>
-        plugin.pluginId === source.pluginId &&
-        plugin.workspaceId === input.workspaceId &&
-        PLUGIN_STATES_TAKING_SKILL_STEPS.has(plugin.state) &&
-        plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === input.snapshotId),
+      (plugin) => plugin.pluginId === source.pluginId && listsSkillStep(plugin, input),
     );
     if (!listing) throw new PluginSkillNeedsInstallError(source.pluginId);
     return { pluginId: listing.pluginId };
@@ -413,6 +450,18 @@ export class CapabilitySkillActionsService {
       this.reportFailure?.("audit", error);
     }
   }
+}
+
+/** Whether a plugin record lets this check take its steps: in this workspace, installing or installed, and listing it. */
+function listsSkillStep(
+  plugin: PluginSkillListing,
+  input: Pick<CapabilitySkillOperationRequest, "workspaceId" | "snapshotId">,
+): boolean {
+  return (
+    plugin.workspaceId === input.workspaceId &&
+    PLUGIN_STATES_TAKING_SKILL_STEPS.has(plugin.state) &&
+    plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === input.snapshotId)
+  );
 }
 
 /**

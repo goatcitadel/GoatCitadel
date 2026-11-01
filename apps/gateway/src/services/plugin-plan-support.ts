@@ -1,8 +1,10 @@
+import { createHash } from "node:crypto";
 import {
   ConflictError,
   NotFoundError,
   PolicyViolationError,
   TOOL_GROUPS,
+  canonicalJsonString,
   redactSecretText,
   type CapabilityPluginInspection,
   type ChangePlanOrigin,
@@ -22,9 +24,45 @@ export const PLUGIN_CHANGED_MESSAGE = "This plugin changed since it was checked.
 export const PLUGIN_INSPECTION_GONE_MESSAGE =
   "That plugin check wasn't found, or it ran out of time. Check the plugin again.";
 export const OTHER_WORKSPACE_MESSAGE = "This plugin was checked for another workspace. Check it again here.";
+/** Neither plan ever removes a host from either allowlist: an install says so when it adds one, an uninstall always. */
+export const HOSTS_STAY = "Hosts it allowed stay in your allowlist.";
 const NOT_INSTALLABLE_MESSAGE = "This plugin has pieces that can't be installed. Check it again once they're fixed.";
 const MAX_SUMMARY_LENGTH = 2_000;
 const MAX_TITLE_LENGTH = 180;
+/** C0 and C1 controls, such as a line break or a NUL, that a label read from a plugin's own files may carry. */
+const CONTROL_CHARACTERS = /\p{Cc}+/gu;
+/** Bidi marks, embeddings, overrides and isolates, which can make approval text read in another order than it runs. */
+const BIDI_CONTROLS = /[؜‎‏‪-‮⁦-⁩]/gu;
+
+/**
+ * Text a plugin plan shows, with every control character a label brought along taken out: bidi controls are dropped
+ * and each run of C0 or C1 controls becomes one space. Every title and summary both plans build goes through it.
+ */
+export function withoutControls(text: string): string {
+  return text.replace(BIDI_CONTROLS, "").replace(CONTROL_CHARACTERS, " ");
+}
+
+/** The hosts an install adds: its connectors' to the network allowlist, its hooks' to the hooks allowlist. */
+export interface PluginInstallHosts {
+  readonly network: readonly string[];
+  readonly hooks: readonly string[];
+}
+
+/** The hosts an install plan lists, as the evidence reference its apply checks the hosts it would add against. */
+export function pluginInstallHostsRef(hosts: PluginInstallHosts): string {
+  const digest = createHash("sha256")
+    .update(canonicalJsonString({ network: hosts.network, hooks: hosts.hooks }))
+    .digest("hex");
+  return `plugin_install_hosts:${digest}`;
+}
+
+/** Whether every host in `hosts` is one `planned` lists, so a retried write adds no host the plan didn't name. */
+export function hostsWithin(hosts: PluginInstallHosts, planned: PluginInstallHosts): boolean {
+  return (
+    hosts.network.every((host) => planned.network.includes(host)) &&
+    hosts.hooks.every((host) => planned.hooks.includes(host))
+  );
+}
 
 /** A kept inspection, with the snapshot it read. */
 export interface KeptPluginInspection {
@@ -53,7 +91,7 @@ export function requireInstallableInspection(
 export function pluginAlreadyInstalled(installed: Pick<StoredPlugin, "pluginId" | "name">): ConflictError {
   return new ConflictError({
     code: "ALREADY_EXISTS",
-    message: `${installed.name} is already installed.`,
+    message: withoutControls(`${installed.name} is already installed.`),
     details: { pluginId: installed.pluginId },
   });
 }
@@ -63,10 +101,10 @@ export function pluginChanged(): ConflictError {
   return new ConflictError({ message: PLUGIN_CHANGED_MESSAGE });
 }
 
-/** Sentences joined, kept within a plan summary's bound: past it, the rest are counted, not listed. */
+/** Sentences joined, without controls, kept within a plan summary's bound: past it, the rest are counted, not listed. */
 export function boundedSentences(sentences: readonly string[]): string {
   const kept: string[] = [];
-  for (const [index, sentence] of sentences.entries()) {
+  for (const [index, sentence] of sentences.map(withoutControls).entries()) {
     const rest = sentences.length - index;
     const tail = ` And ${rest} more ${rest === 1 ? "step" : "steps"}.`;
     if ([...kept, sentence].join(" ").length + tail.length > MAX_SUMMARY_LENGTH) {
@@ -77,9 +115,10 @@ export function boundedSentences(sentences: readonly string[]): string {
   return kept.join(" ");
 }
 
-/** A title within a plan title's bound. */
+/** A title without controls, within a plan title's bound. */
 export function boundedTitle(title: string): string {
-  return title.length <= MAX_TITLE_LENGTH ? title : `${title.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`;
+  const plain = withoutControls(title);
+  return plain.length <= MAX_TITLE_LENGTH ? plain : `${plain.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`;
 }
 
 /**

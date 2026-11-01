@@ -401,6 +401,12 @@ export class ToolExecutionPreconditionError extends Error {
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
+/**
+ * The reason code added next to `tool_group_off` when only a plugin's hold keeps the tool's group off, not the
+ * operator's own switch: the remedy is uninstalling that plugin, never the Tools switch.
+ */
+export const PLUGIN_TOOL_GROUP_HOLD_REASON_CODE = "plugin_tool_group_hold";
+
 export class ToolPolicyEngine {
   private readonly approvals: ApprovalGate;
   private readonly registry: ToolRegistry;
@@ -1332,16 +1338,19 @@ export class ToolPolicyEngine {
     for (const name of isOwnDeliveryMarker(options.ownDelivery) ? [] : toolNames) {
       if (policy.switchedOffTools?.has(name)) {
         const label = toolGroupForTool(name)?.label;
-        // A group only a plugin holds off names that plugin, so the operator isn't told it was their own switch.
-        const switchedBy = toolNamesSwitchedOff(this.config.tools.disabledGroups).has(name)
-          ? "the operator"
-          : this.pluginHoldingTool(name);
+        // A group only a plugin holds off names that plugin, so the operator isn't told it was their own switch, and
+        // adds `plugin_tool_group_hold`, so a reader that keeps only the codes can say so too.
+        const byOperator = toolNamesSwitchedOff(this.config.tools.disabledGroups).has(name);
+        const switchedBy = byOperator ? "the operator" : this.pluginHoldingTool(name);
+        const evaluation = deny(
+          riskLevel,
+          "tool_group_off",
+          `tool ${request.toolName} is in a tool group switched off by ${switchedBy}${label ? ` (${label})` : ""}`,
+        );
         return withPolicy(
-          deny(
-            riskLevel,
-            "tool_group_off",
-            `tool ${request.toolName} is in a tool group switched off by ${switchedBy}${label ? ` (${label})` : ""}`,
-          ),
+          byOperator
+            ? evaluation
+            : { ...evaluation, reasonCodes: [...evaluation.reasonCodes, PLUGIN_TOOL_GROUP_HOLD_REASON_CODE] },
         );
       }
     }

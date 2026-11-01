@@ -1786,12 +1786,14 @@ describe("settings-auth-service operator write access", () => {
       { groupId: "git", pluginId: "repo-rules", pluginName: "Repo rules" },
       { groupId: "browser", pluginId: "web-guard", pluginName: "Web guard" },
     ]);
-    // A hold never writes the operator's own switch.
+    // A hold never writes the operator's own switch, and the operator's own switch is read apart from the holds (F8).
     expect(host.config.toolPolicy.tools.disabledGroups).toBeUndefined();
+    expect(held.operatorSwitchedOffToolGroups).toEqual([]);
 
     // The operator switches a held group off too; releasing the holds then leaves only the operator's switch.
     const switched = await updateSettings(deps, { toolGroupChange: { groupId: "git", enabled: false } });
     expect(switched.switchedOffToolGroups).toEqual(["git", "browser"]);
+    expect(switched.operatorSwitchedOffToolGroups).toEqual(["git"]);
     expect(host.config.toolPolicy.tools.disabledGroups).toEqual(["git"]);
     holds = [];
     const released = await getSettings(deps);

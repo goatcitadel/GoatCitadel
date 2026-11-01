@@ -387,6 +387,37 @@ describe("parsePluginManifest", () => {
         code: "MANIFEST_INVALID",
         field: "name",
       },
+      // A control or format character in text that reaches the approval text (F5).
+      {
+        name: "a name of one control character",
+        manifest: { ...validManifest(), name: "\u0001" },
+        code: "MANIFEST_INVALID",
+        field: "name",
+      },
+      {
+        name: "a name ending in NUL",
+        manifest: { ...validManifest(), name: "Acme\u0000" },
+        code: "MANIFEST_INVALID",
+        field: "name",
+      },
+      {
+        name: "a name with a right-to-left override",
+        manifest: { ...validManifest(), name: "Acme ‮slooc" },
+        code: "MANIFEST_INVALID",
+        field: "name",
+      },
+      {
+        name: "a description with a line break",
+        manifest: { ...validManifest(), description: "Notes.\nAnd more." },
+        code: "MANIFEST_INVALID",
+        field: "description",
+      },
+      {
+        name: "an author with a bidi isolate",
+        manifest: { ...validManifest(), author: "Fixture ⁦Author⁩" },
+        code: "MANIFEST_INVALID",
+        field: "author",
+      },
       {
         name: "a version with a space",
         manifest: { ...validManifest(), version: "1.0 beta" },
@@ -453,6 +484,17 @@ describe("parsePluginManifest", () => {
         ok: true,
         manifest: { name: " Meeting tools " },
       });
+    });
+
+    it("says a name with a control character must not hold one", () => {
+      for (const name of ["\u0001", "Acme\u0000", "Acme ‮slooc"]) {
+        expect(refusalOf({ ...validManifest(), name })).toEqual({
+          ok: false,
+          code: "MANIFEST_INVALID",
+          message: "The manifest isn't valid at name: must not hold control characters.",
+          field: "name",
+        });
+      }
     });
 
     it("refuses more pieces than the limit", () => {

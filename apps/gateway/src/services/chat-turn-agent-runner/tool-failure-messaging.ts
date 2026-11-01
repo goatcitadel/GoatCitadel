@@ -1,4 +1,5 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import { PLUGIN_TOOL_GROUP_HOLD_REASON_CODE } from "@goatcitadel/policy-engine";
 import { readLongestPageTextLength } from "../chat-agent-browser-results.js";
 
 const PATH_BRIDGE_POLICY_REASON = "workspace path was not freshly verified for execution";
@@ -154,17 +155,23 @@ const UNNAMED_PLUGIN = "a plugin";
 
 /**
  * The plugin the engine named for a hold ("a plugin" when it gave no name), or undefined when the operator's switch (or
- * no reason) stopped the tool.
+ * no reason) stopped the tool. The runner's own re-check writes an error of its own, so there a hold is read from the
+ * re-check's `plugin_tool_group_hold` reason code, which names no plugin.
  */
-function pluginHoldingGroup(error: string | undefined): string | undefined {
+function pluginHoldingGroup(
+  error: string | undefined,
+  result: Record<string, unknown> | undefined,
+): string | undefined {
   const match = PLUGIN_HOLD_PATTERN.exec(error ?? "");
-  if (!match) return undefined;
-  return match[1]?.trim() || UNNAMED_PLUGIN;
+  if (match) return match[1]?.trim() || UNNAMED_PLUGIN;
+  return readPolicyRevalidationReasonCodes(result).includes(PLUGIN_TOOL_GROUP_HOLD_REASON_CODE)
+    ? UNNAMED_PLUGIN
+    : undefined;
 }
 
 /** Where the operator lifts switched-off groups: the Tools switch, uninstalling the plugin that holds one, or both. */
 function switchedOffClosing(runs: readonly ChatToolRunRecord[]): string {
-  const held = runs.filter((run) => pluginHoldingGroup(run.error) !== undefined).length;
+  const held = runs.filter((run) => pluginHoldingGroup(run.error, run.result) !== undefined).length;
   if (held === runs.length) {
     return "The operator can uninstall the plugin that keeps a group off in Capabilities › Plugins. Once the group is on, ask again and I'll retry.";
   }
@@ -202,7 +209,7 @@ export function buildGovernanceBlockGuidance(input: {
   // Before the tools.deny branch: the remedy is the operator's switch, and nothing in tools.deny needs editing.
   if (isSwitchedOffGroupBlock(error, input.result)) {
     // A plugin's hold is lifted only by uninstalling that plugin, never by the Tools switch.
-    const plugin = pluginHoldingGroup(input.error);
+    const plugin = pluginHoldingGroup(input.error, input.result);
     if (plugin === UNNAMED_PLUGIN) {
       return `${tool} is switched off: a plugin keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can uninstall that plugin in Capabilities › Plugins to switch that group back on; tell them which tool you needed.`;
     }

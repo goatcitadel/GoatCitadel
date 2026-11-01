@@ -306,6 +306,27 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).not.toContain("tool policy file");
   });
 
+  it("sends the operator to Capabilities › Plugins for a group a plugin holds off, never the Tools switch (F9)", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: {
+          toolNames: ["fs.read"],
+          policyDeniedToolNames: ["fs.write", "shell.exec"],
+          switchedOffToolNames: ["fs.write", "shell.exec"],
+          // Only Files is held by a plugin; Shell and code is the operator's own switch.
+          pluginHeldToolNames: ["fs.write"],
+        },
+      }),
+    ).volatileTail;
+    expect(tail).toContain(
+      "To allow file writes, the operator uninstalls the plugin that keeps the Files tools off, in Capabilities › Plugins.",
+    );
+    expect(tail).not.toContain("switches the Files tools back on");
+    expect(tail).toContain(
+      "To allow shell commands, the operator switches the Shell and code tools back on in Capabilities › Tools.",
+    );
+  });
+
   it("words each write-and-run tool by why it is off: the switch for one, the policy for the other", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({

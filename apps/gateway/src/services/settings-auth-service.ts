@@ -212,6 +212,7 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
   const toolPolicy = config.toolPolicy;
   const assistant = config.assistant;
   const pluginToolGroupHolds = projectPluginToolGroupHolds(deps.readPluginToolGroupHolds?.() ?? []);
+  const operatorSwitchedOffToolGroups = projectSwitchedOffToolGroups(toolPolicy);
   return {
     chatFeatureAvailability: projectChatFeatureAvailability(
       assistant.durable ?? { enabled: false, executionEnabled: false },
@@ -228,7 +229,8 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     readOnlyRoots: toolPolicy.sandbox.readOnlyRoots,
     operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
     globalToolAccess: projectGlobalToolAccess(toolPolicy),
-    switchedOffToolGroups: unionSwitchedOffToolGroups(projectSwitchedOffToolGroups(toolPolicy), pluginToolGroupHolds),
+    switchedOffToolGroups: unionSwitchedOffToolGroups(operatorSwitchedOffToolGroups, pluginToolGroupHolds),
+    operatorSwitchedOffToolGroups,
     pluginToolGroupHolds,
     readAccessMode: toolPolicy.sandbox.readAccessMode ?? "roots_only",
     outsideRootWriteMode: toolPolicy.sandbox.outsideRootWriteMode ?? "deny",

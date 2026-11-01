@@ -100,6 +100,11 @@ const REFERENCE_ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,63}$/u;
 const MAX_PATH_LENGTH = 512;
 const MAX_URL_LENGTH = 2048;
 
+/** Control and format characters (NUL, line breaks, bidi overrides): text holding one could read otherwise than it is. */
+const CONTROL_OR_FORMAT_CHARACTER = /[\p{Cc}\p{Cf}]/u;
+const CONTROL_CHARACTERS_MESSAGE = "must not hold control characters";
+const withoutControlCharacters = (value: string) => !CONTROL_OR_FORMAT_CHARACTER.test(value);
+
 const pieceId = z.string().regex(PLUGIN_PIECE_ID_PATTERN, "must be 1 to 48 lowercase letters, digits or hyphens");
 const referenceId = z.string().regex(REFERENCE_ID_PATTERN, "must be a plain lowercase id");
 const piecePath = z.string().min(1).max(MAX_PATH_LENGTH);
@@ -141,15 +146,17 @@ export const pluginManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
     pluginId: z.string().regex(PLUGIN_ID_PATTERN, "must be 2 to 48 lowercase letters, digits or hyphens"),
-    // A name only of spaces would leave every "From <name>" refusal and hold reason with nothing to say.
+    // A name only of spaces would leave every "From <name>" refusal and hold reason with nothing to say. The name, the
+    // description and the author reach approval text, where a control or bidi character could hide what is approved.
     name: z
       .string()
       .min(1)
       .max(80)
-      .refine((value) => value.trim().length > 0, "must not be blank"),
-    description: z.string().min(1).max(500),
+      .refine((value) => value.trim().length > 0, "must not be blank")
+      .refine(withoutControlCharacters, CONTROL_CHARACTERS_MESSAGE),
+    description: z.string().min(1).max(500).refine(withoutControlCharacters, CONTROL_CHARACTERS_MESSAGE),
     version: z.string().min(1).max(32).regex(VERSION_PATTERN, "may hold only letters, digits and . + -"),
-    author: z.string().max(120).optional(),
+    author: z.string().max(120).refine(withoutControlCharacters, CONTROL_CHARACTERS_MESSAGE).optional(),
     homepage: httpsUrl.optional(),
     pieces: z.array(pluginPieceSchema).min(1).max(PLUGIN_LIMITS.maxPieces),
   })

@@ -153,36 +153,46 @@ describe("CapabilityPluginActionsService.install", () => {
     expect(h.state.keychain.size).toBe(0);
   });
 
-  it("refuses an expired or changed inspection", async () => {
-    const expired = harness();
-    expired.state.inspection = { ...expired.state.inspection, expiresAt: new Date(Date.now() - 1).toISOString() };
-    await expect(expired.actions.install(installInput())).rejects.toMatchObject({
-      httpStatus: 404,
-      message: "That plugin check wasn't found, or it ran out of time. Check the plugin again.",
-    });
+  // One migrated database per case (F20): four in one test came close to the 15 s timeout on a loaded machine.
+  it.each([
+    [
+      "an expired inspection",
+      (h: ReturnType<typeof harness>) => {
+        h.state.inspection = { ...h.state.inspection, expiresAt: new Date(Date.now() - 1).toISOString() };
+      },
+      { httpStatus: 404, message: "That plugin check wasn't found, or it ran out of time. Check the plugin again." },
+    ],
+    [
+      "files changed on disk",
+      (h: ReturnType<typeof harness>) => {
+        h.state.tampered = true;
+      },
+      {
+        httpStatus: 409,
+        message: "This plugin's files changed on this computer since it was checked. Check it again.",
+      },
+    ],
+    [
+      "an edited manifest",
+      (h: ReturnType<typeof harness>) => {
+        h.state.manifestText = h.state.manifestText.replace("Meeting tools", "Meeting tools 2");
+      },
+      { httpStatus: 409, message: "This plugin changed since it was checked. Check it again." },
+    ],
+    [
+      "an inspection that isn't installable",
+      (h: ReturnType<typeof harness>) => {
+        h.state.inspection = { ...h.state.inspection, installable: false };
+      },
+      { httpStatus: 409 },
+    ],
+  ])("refuses %s, storing no secret and making no plan", async (_case, change, refusal) => {
+    const h = harness();
+    change(h);
 
-    const tampered = harness();
-    tampered.state.tampered = true;
-    await expect(tampered.actions.install(installInput())).rejects.toMatchObject({
-      httpStatus: 409,
-      message: "This plugin's files changed on this computer since it was checked. Check it again.",
-    });
-
-    const edited = harness();
-    edited.state.manifestText = edited.state.manifestText.replace("Meeting tools", "Meeting tools 2");
-    await expect(edited.actions.install(installInput())).rejects.toMatchObject({
-      httpStatus: 409,
-      message: "This plugin changed since it was checked. Check it again.",
-    });
-
-    const blocked = harness();
-    blocked.state.inspection = { ...blocked.state.inspection, installable: false };
-    await expect(blocked.actions.install(installInput())).rejects.toMatchObject({ httpStatus: 409 });
-
-    for (const h of [expired, tampered, edited, blocked]) {
-      expect(h.state.keychain.size).toBe(0);
-      expect(await h.sync.list({ workspaceId: WORKSPACE_ID })).toEqual([]);
-    }
+    await expect(h.actions.install(installInput())).rejects.toMatchObject(refusal);
+    expect(h.state.keychain.size).toBe(0);
+    expect(await h.sync.list({ workspaceId: WORKSPACE_ID })).toEqual([]);
   });
 
   it("refuses a plugin that is already installed, or another workspace's check", async () => {

@@ -20,7 +20,8 @@ import type {
   EvolutionControlPlaneAdapterContext,
 } from "./evolution-control-plane-adapter.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
-import { boundedSentences, boundedTitle, requireCapabilitiesOrigin } from "./plugin-plan-support.js";
+import { HOSTS_STAY, boundedSentences, boundedTitle, requireCapabilitiesOrigin } from "./plugin-plan-support.js";
+import { pluginPromptPackId, pluginPromptPackSourceLabel } from "./plugin-prompt-packs.js";
 import type { ApprovalReading, PluginSkillCheck } from "./plugin-skill-checks.js";
 import {
   readUninstallScope,
@@ -37,12 +38,12 @@ import {
   type SkillRemovalDecision,
 } from "./plugin-uninstall-skills.js";
 import {
-  HOSTS_STAY,
   completedSummary,
   connectorUnknownStop,
   holderKeptStop,
   holderWords,
   hookWords,
+  isUnrecordedPack,
   keptConnectorWords,
   labelOf,
   plannedSentences,
@@ -111,6 +112,8 @@ export interface PluginUninstallSources {
   deleteHookSecret(secretRef: string): void;
   /** Deletes a prompt pack with every run, score and benchmark, and its export file: true when it was there. */
   deletePromptPack(packId: string): Promise<boolean>;
+  /** A saved prompt pack's source label, or undefined when no pack has that id. */
+  readPromptPackSourceLabel(packId: string): Promise<string | undefined>;
   /** The saved connectors. */
   listSavedConnectors(): Promise<readonly McpServerRecord[]>;
   /** The shipped connector catalog: what a kept connector piece is saved under. */
@@ -227,6 +230,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
         words: `the prompt pack ${labelOf(piece, labels)}`,
         remove: (ref) => this.sources.deletePromptPack(ref),
       }));
+      await this.removeUnrecordedPacks(record, request, labels, progress);
       step = "tool_groups";
       await this.releaseHolds(record, request, progress);
       step = "connectors";
@@ -381,6 +385,37 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
     }
   }
 
+  /**
+   * After the recorded packs: a pack the install created before its record named it, found under the id the install
+   * gives it (F7). It is deleted only when its source label is this plugin's and no other plugin's record lists that id,
+   * as two plugins' ids can make the same pack id; one that fails either test is left as it is. One that isn't there is
+   * settled, as nothing of it is left.
+   */
+  private async removeUnrecordedPacks(
+    record: StoredPlugin,
+    request: ChangePlanPluginUninstallRequest,
+    labels: ReadonlyMap<string, PluginPieceLabel>,
+    progress: UninstallProgress,
+  ): Promise<void> {
+    const pieces = record.pieces.filter(isUnrecordedPack);
+    if (pieces.length === 0) return;
+    const others = (await this.sources.listPlugins()).filter((other) => other.pluginId !== record.pluginId);
+    for (const piece of pieces) {
+      progress.current = piece;
+      const packId = pluginPromptPackId(record.pluginId, piece.pieceId);
+      const sourceLabel = await this.sources.readPromptPackSourceLabel(packId);
+      if (sourceLabel !== undefined) {
+        const ours =
+          sourceLabel === pluginPromptPackSourceLabel(record.name) &&
+          !others.some((other) => listsPromptPack(other, packId));
+        if (!ours) continue;
+        if (await this.sources.deletePromptPack(packId)) progress.removed += 1;
+      }
+      await this.recordRemoved(request, piece, `the prompt pack ${labelOf(piece, labels)}`);
+    }
+    progress.current = undefined;
+  }
+
   /** Step 3: every tool group the plugin holds off is released at once. The operator's own switch is never written. */
   private async releaseHolds(
     record: StoredPlugin,
@@ -490,6 +525,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
           ])
         : [new Map<string, PluginSkillCheck>(), new Map<string, PendingSkillStep>()];
     const stops: UninstallStepStopped[] = [];
+    const counted = new Set<string>();
     for (const piece of open) {
       progress.current = piece;
       const id = piece.skillSnapshotId;
@@ -511,18 +547,55 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
           removed: outcome.skillId ? { skillId: outcome.skillId } : {},
         }));
         if (outcome.skillId) skillIds.push(outcome.skillId);
-        if (outcome.counted) progress.removed += 1;
+        if (outcome.counted) {
+          progress.removed += 1;
+          counted.add(piece.pieceId);
+        }
       } else if (outcome.kind === "waiting") {
         await this.savePiece(request, piece.pieceId, ({ waiting: _waiting, ...rest }) => ({
           ...rest,
           ...(outcome.waiting ? { waiting: outcome.waiting } : {}),
         }));
-        progress.waiting.push({ label: skill.label, reason: outcome.reason });
+        progress.waiting.push({
+          label: skill.label,
+          reason: outcome.reason,
+          ...(outcome.waiting ? { operation: outcome.waiting.operation } : {}),
+        });
       }
     }
     progress.current = undefined;
     if (stops.length > 0) throw skillsStop(stops, progress.waiting);
+    if (progress.waiting.length === 0) {
+      const labelFor = (piece: StoredPluginPiece) =>
+        checks.get(piece.skillSnapshotId ?? "")?.title ?? labelOf(piece, labels);
+      await this.waitForStepsAskedMeanwhile(record, request, labelFor, progress, counted);
+    }
     return skillIds;
+  }
+
+  /**
+   * The skills' own waiting steps, read again once every skill is settled, just before the record goes (F6): a step
+   * asked for after the first read could switch a skill on once no plugin lists it. Its skill is unsettled again and
+   * waits for the operator's decision on that step, so the record stays `uninstalling`.
+   */
+  private async waitForStepsAskedMeanwhile(
+    record: StoredPlugin,
+    request: ChangePlanPluginUninstallRequest,
+    labelFor: (piece: StoredPluginPiece) => string,
+    progress: UninstallProgress,
+    countedNow: ReadonlySet<string>,
+  ): Promise<void> {
+    const skills = ownedPieces(record, "skill").filter((piece) => piece.skillSnapshotId !== undefined);
+    if (skills.length === 0) return;
+    const ids = skills.map((piece) => piece.skillSnapshotId!);
+    const steps = await this.sources.listPendingSkillSteps(record.workspaceId, ids);
+    for (const piece of skills) {
+      const waiting = steps.get(piece.skillSnapshotId!);
+      if (!waiting) continue;
+      await this.savePiece(request, piece.pieceId, ({ removed: _removed, ...rest }) => ({ ...rest, waiting }));
+      if (countedNow.has(piece.pieceId)) progress.removed -= 1;
+      progress.waiting.push({ label: labelFor(piece), reason: "decision", operation: waiting.operation });
+    }
   }
 
   /**
@@ -654,6 +727,15 @@ function uninstallChanged(): ConflictError {
 /** The plan's binding: the plugin's record as it was when the plan was made, checked again when it applies. */
 function recordHash(record: StoredPlugin): string {
   return createHash("sha256").update(canonicalJsonString({ record })).digest("hex");
+}
+
+/** Whether another plugin's record lists this prompt pack id, as a recorded pack or one its install would name so. */
+function listsPromptPack(other: StoredPlugin, packId: string): boolean {
+  return other.pieces.some(
+    (piece) =>
+      piece.kind === "prompt_pack" &&
+      (piece.ref === packId || pluginPromptPackId(other.pluginId, piece.pieceId) === packId),
+  );
 }
 
 function ownedPieces(record: StoredPlugin, kind: PluginPieceKind): StoredPluginPiece[] {

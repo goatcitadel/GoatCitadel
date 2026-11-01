@@ -42,6 +42,11 @@ export interface RuntimeSettings {
    * plugin holds off. Core is never listed.
    */
   switchedOffToolGroups: readonly ToolGroupId[];
+  /**
+   * Only the groups the operator switched off themselves, in the group map's order, never a plugin's hold. A tool group
+   * Change Plan is checked against this, since a hold never writes the operator's switch.
+   */
+  operatorSwitchedOffToolGroups: readonly ToolGroupId[];
   /** Each plugin that holds a group off, in the group map's order. A hold never writes the operator's own switch. */
   pluginToolGroupHolds: readonly PluginToolGroupHoldSummary[];
   readAccessMode: FilesystemReadAccessMode;

@@ -118,6 +118,14 @@ export function pluginUninstallSources(
       await records.promptPacks.deletePackCascade(packId);
       return true;
     },
+    readPromptPackSourceLabel: async (packId) => {
+      try {
+        return (await records.promptPacks.getPack(packId)).sourceLabel ?? "";
+      } catch (error) {
+        if (error instanceof NotFoundError) return undefined;
+        throw error;
+      }
+    },
     listSavedConnectors: () => mcp.listMcpServers(),
     connectorTemplates: () => shared.connectorTemplates(),
     disconnectConnector: async (serverId) => {

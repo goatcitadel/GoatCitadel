@@ -860,6 +860,41 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(blocked?.failureGuidance).not.toContain("tools.deny");
   });
 
+  it("tells the model a group a plugin holds off is lifted by uninstalling the plugin, never the Tools switch (F9)", async () => {
+    // The call-time probe reports the engine's second code for a hold; the runner keeps the codes, not the sentence.
+    const createChatCompletion = vi
+      .fn()
+      .mockResolvedValueOnce(namedToolCallCompletion("browser.search", { query: "release notes" }))
+      .mockResolvedValueOnce({
+        model: "model-a",
+        choices: [{ index: 0, message: { role: "assistant", content: "The search was blocked." } }],
+      });
+    const profile = buildProfile();
+    const runner = new ChatTurnAgentRunner({
+      storage: createProfileStorage(profile) as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      listCapabilityCatalog: () => liveCallableCatalog(profile),
+      createChatCompletion,
+      invokeTool: vi.fn(),
+      evaluateToolAccess: vi.fn(() => ({
+        allowed: false,
+        requiresApproval: false,
+        reasonCodes: ["tool_group_off", "plugin_tool_group_hold"],
+      })),
+    });
+
+    const result = await runner.run(buildInput(profile));
+
+    const blocked = result.turnTrace.toolRuns.find((run) => run.toolName === "browser.search");
+    expect(blocked).toMatchObject({
+      status: "blocked",
+      result: { policyRevalidation: { reasonCodes: ["tool_group_off", "plugin_tool_group_hold"] } },
+    });
+    expect(blocked?.failureGuidance).toContain("browser.search is switched off: a plugin keeps its tool group off.");
+    expect(blocked?.failureGuidance).toContain("Capabilities › Plugins");
+    expect(blocked?.failureGuidance).not.toContain("Capabilities › Tools");
+  });
+
   it("never drops a frozen approval requirement when current policy becomes broader", async () => {
     const createChatCompletion = vi
       .fn()

@@ -9,7 +9,7 @@ import {
   type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage, type AsyncStorage } from "@goatcitadel/storage";
-import { ToolPolicyEngine } from "./engine.js";
+import { PLUGIN_TOOL_GROUP_HOLD_REASON_CODE, ToolPolicyEngine } from "./engine.js";
 import { createMcpToolPolicyBinding } from "./mcp-tool-policy-binding.js";
 import { createMeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
 import { isToolAllowed, resolveEffectivePolicy, withHeldToolGroups } from "./policy-resolver.js";
@@ -275,7 +275,8 @@ describe("switched-off tool groups in the policy engine", () => {
       for (const sessionId of ["chat-one", "chat-two"]) {
         const held = await engine.inspectAccess({ ...request("git.status"), sessionId });
         expect(held.allowed).toBe(false);
-        expect(held.reasonCodes).toEqual(["tool_group_off"]);
+        // The second code says it is a plugin's hold, for a reader that keeps only the codes (F9).
+        expect(held.reasonCodes).toEqual(["tool_group_off", PLUGIN_TOOL_GROUP_HOLD_REASON_CODE]);
         const blocked = await engine.invoke({ ...request("git.status"), sessionId });
         expect(blocked.outcome).toBe("blocked");
         expect(blocked.policyReason).toContain("tool group switched off by the plugin Meeting tools (Git)");
@@ -285,7 +286,7 @@ describe("switched-off tool groups in the policy engine", () => {
         ...request("git.status"),
         policyContext: { localOperatorOverride: activeOverride() },
       });
-      expect(overridden.reasonCodes).toEqual(["tool_group_off"]);
+      expect(overridden.reasonCodes).toEqual(["tool_group_off", "plugin_tool_group_hold"]);
       expect(engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
       expect(engine.listPluginToolGroupHolds()).toEqual([meetingTools]);
       // The resolver reads the same union, so isToolAllowed agrees with the engine.
@@ -332,6 +333,8 @@ describe("switched-off tool groups in the policy engine", () => {
       expect((await engine.invoke(request("git.status"))).policyReason).toContain(
         "tool group switched off by the operator (Git)",
       );
+      // The operator set the switch, so it isn't read as only a plugin's hold.
+      expect((await engine.inspectAccess(request("git.status"))).reasonCodes).toEqual(["tool_group_off"]);
     });
 
     it("ignores a hold on Core or an unknown group, and a hand-edited switch beside a hold", async () => {

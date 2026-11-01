@@ -1,9 +1,7 @@
-import { createHash } from "node:crypto";
 import {
   ConflictError,
   HOOK_TRIGGER_LABELS,
   SemanticValidationError,
-  canonicalJsonString,
   isGoatError,
   type CapabilityPluginInspection,
   type CapabilityPluginPieceView,
@@ -20,16 +18,22 @@ import {
   type PluginPiece,
 } from "@goatcitadel/contracts";
 import type { StoredPlugin, StoredPluginPiece } from "./capability-plugin-store.js";
-import { isHostAllowlistedInList } from "./connection-url-helpers.js";
-import { findInstallableConnectorTemplate, missingHosts } from "./connector-install-change-plan-adapter.js";
 import type {
   EvolutionControlPlaneAdapter,
   EvolutionControlPlaneAdapterContext,
   EvolutionControlPlaneAdapterOutcome,
 } from "./evolution-control-plane-adapter.js";
 import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
+import {
+  installHostsToAdd,
+  keptPiecesStillThere,
+  pluginConnectorInput,
+  pluginInstallBindingHash,
+  requireInstallTemplate,
+} from "./plugin-install-pieces.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
 import {
+  HOSTS_STAY,
   OTHER_WORKSPACE_MESSAGE,
   PLUGIN_CHANGED_MESSAGE,
   boundedSentences,
@@ -37,14 +41,16 @@ import {
   failureDetail,
   groupLabel,
   hookHost,
-  isConnectorLabelSaved,
+  hostsWithin,
   planPluginId,
   pluginAlreadyInstalled,
   pluginChanged,
+  pluginInstallHostsRef,
   requireCapabilitiesOrigin,
   requireInstallableInspection,
   saveConnectorUnlessSaved,
   type KeptPluginInspection,
+  type PluginInstallHosts,
 } from "./plugin-plan-support.js";
 import {
   distinctPluginPromptPackNames,
@@ -63,6 +69,8 @@ const ORIGIN_REFUSAL = {
   message: "Plugins are installed from Capabilities.",
   diagnosticCode: "plugin_install_untrusted_origin",
 } as const;
+/** How many times the hosts write is made again after another settings save landed first. */
+const HOSTS_WRITE_RETRIES = 2;
 /** A plan in one of these never reached apply, so no hook holds a secret it names. */
 const NOT_YET_APPLIED: ReadonlySet<ChangePlanStatus> = new Set([
   "draft",
@@ -181,20 +189,22 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     if (request.workspaceId !== context.origin.workspaceId) throw conflict(OTHER_WORKSPACE_MESSAGE);
     const binding = await this.bind(request);
     const settings = await this.sources.readSettings();
-    const hosts = await this.hostsToAllow(binding, settings.networkAllowlist);
+    const hosts = await this.hostsToAllow(binding, settings.networkAllowlist, false);
     const { manifest } = binding;
     const summary = boundedSentences(this.plannedSentences(binding, settings, hosts));
     return {
       target: {
         ownerId: "capability_plugins",
         resourceId: `plugin:${manifest.pluginId}`,
-        expectedHash: bindingHash(undefined, request),
+        expectedHash: pluginInstallBindingHash(undefined, request),
       },
       title: boundedTitle(`Install ${manifest.name}`),
       summary,
       impact: boundedSentences([
         ...(hosts.network.length > 0 ? ["Any tool can reach an allowed host, not only this plugin's connectors."] : []),
-        "Uninstalling the plugin removes what this install adds, and keeps what was already there.",
+        "Uninstalling the plugin removes the pieces this install adds, and keeps what was already there.",
+        // The uninstall never takes a host off either allowlist, so the plan that adds one says so (F1).
+        ...(hosts.network.length > 0 || hosts.hooks.length > 0 ? [HOSTS_STAY] : []),
         ...(binding.inspection.trust === "unverified"
           ? ["GoatCitadel checked each piece, not who wrote the plugin."]
           : []),
@@ -205,22 +215,28 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
         title: boundedTitle(`Install ${manifest.name}`),
         confirmationText: summary,
       }),
-      evidenceRefs: [`plugin_inspection:${request.inspectionId}`],
+      // The hosts the plan lists: apply refuses to add any it didn't (F4).
+      evidenceRefs: [`plugin_inspection:${request.inspectionId}`, pluginInstallHostsRef(hosts)],
     };
   }
 
   async apply(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord) {
     const request = requireRequest(plan);
     let binding: InstallBinding;
+    let settings: PluginInstallSettings;
+    let planned: PluginInstallHosts;
     try {
       // The bytes on disk, the kept check and the manifest: all as they were when the plan was made.
       await this.sources.verifySnapshot(request.snapshotTreeSha256);
       binding = await this.bind(request);
       // Kept as the plan's own binding (carry 8). `bind` has already refused any record, so the record part is null by
       // construction: what catches a change is `verifySnapshot` and `bind`, and this only catches a tampered target.
-      if (bindingHash(await this.sources.readPlugin(binding.manifest.pluginId), request) !== plan.target.expectedHash) {
-        throw pluginChanged();
-      }
+      const record = await this.sources.readPlugin(binding.manifest.pluginId);
+      if (pluginInstallBindingHash(record, request) !== plan.target.expectedHash) throw pluginChanged();
+      // The hosts the plan lists, read again against the allowlists now: when they changed, no host is added (F4).
+      settings = await this.sources.readSettings();
+      planned = await this.hostsToAllow(binding, settings.networkAllowlist, false);
+      if (!plan.evidenceRefs.includes(pluginInstallHostsRef(planned))) throw pluginChanged();
     } catch (error) {
       // Nothing was written, so no hook holds a secret yet: each one is this install's to delete.
       this.deleteUnheldSecrets(request, new Set());
@@ -246,7 +262,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       await this.writeRecord(binding, request, plan);
       progress.recordWritten = true;
       step = "hosts";
-      await this.allowHosts(binding, progress);
+      await this.allowHosts(binding, progress, settings, planned);
       step = "connectors";
       await this.saveConnectors(binding, plan, progress);
       step = "tool_groups";
@@ -263,15 +279,19 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
         result: { summary: boundedSentences(finishedSentences(binding, progress, true)) },
       };
     } catch (error) {
-      // A secret no hook holds yet is this install's to delete; one a hook holds goes with that hook.
-      this.deleteUnheldSecrets(request, progress.attached);
+      // A secret no hook holds yet is this install's to delete; one a hook holds goes with that hook. The hook the step
+      // stopped on may exist already (its owner can fail after saving it), so its secret is kept too: the uninstall
+      // deletes it if no hook holds it.
+      const held = new Set(progress.attached);
+      if (step === "hooks" && progress.current?.kind === "hook") held.add(progress.current.id);
+      this.deleteUnheldSecrets(request, held);
       return stopped(binding, progress, step, error);
     }
   }
 
   /** Reports what the plugin's record holds after an interruption. It never writes, so nothing is applied twice. */
   async reconcile(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord) {
-    requireRequest(plan);
+    const request = requireRequest(plan);
     const pluginId = planPluginId(plan);
     const record = pluginId ? await this.sources.readPlugin(pluginId) : undefined;
     const own = record?.installPlanId === plan.planId ? record : undefined;
@@ -280,16 +300,21 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
         effectObserved: true,
         status: "completed" as const,
         evidenceRefs: [...plan.evidenceRefs, `plugin:${own.pluginId}`],
-        result: { summary: `Installed ${own.name}.` },
+        result: { summary: boundedSentences([`Installed ${own.name}.`]) },
       };
     }
+    // No record of this install: it stopped before writing anything, so no hook holds a secret it stored.
+    if (!own) this.deleteUnheldSecrets(request, new Set());
     return {
       effectObserved: false,
       status: "manual_required" as const,
       result: {
         summary: own
-          ? `The install stopped before it finished. Uninstall ${own.name} to remove what it added, then install it again.`
-          : "The install stopped before it finished.",
+          ? boundedSentences([
+              "The install stopped before it finished.",
+              `Uninstall ${own.name} to remove what it added, then install it again.`,
+            ])
+          : "The install stopped before it finished. Nothing was installed, so installing it again is safe.",
         failureCode: "plugin_install_interrupted",
       },
     };
@@ -349,6 +374,15 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     const { manifest } = parsed;
     const views = new Map(inspection.pieces.map((view) => [view.pieceId, view]));
     if (manifest.pieces.some((piece) => views.get(piece.id)?.kind !== piece.kind)) throw pluginChanged();
+    // A piece the check found already there must still be there now (F3), or the plan would keep what is gone.
+    const keptPieces = manifest.pieces.filter((piece) => views.get(piece.id)?.check.status === "already_there");
+    const saved = keptPieces.some((piece) => piece.kind === "connector")
+      ? await this.sources.listSavedConnectors()
+      : [];
+    const operatorOff = new Set(this.sources.operatorSwitchedOffToolGroups());
+    if (!keptPiecesStillThere(keptPieces, views, this.sources.connectorTemplates(), saved, operatorOff)) {
+      throw pluginChanged();
+    }
     const hookIds = manifest.pieces.filter((piece) => piece.kind === "hook").map((piece) => piece.id);
     const refIds = Object.keys(request.hookSecretRefs ?? {});
     if (refIds.length !== hookIds.length || hookIds.some((id) => !refIds.includes(id))) {
@@ -393,20 +427,38 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     });
   }
 
-  /** Step 2: one settings write for the hosts the connectors it saves and its hooks need. */
-  private async allowHosts(binding: InstallBinding, progress: InstallProgress): Promise<void> {
-    const settings = await this.sources.readSettings();
-    const hosts = await this.hostsToAllow(binding, settings.networkAllowlist);
-    if (hosts.network.length === 0 && hosts.hooks.length === 0) return;
-    await this.sources.updateSettings({
-      expectedRevision: settings.revision,
-      ...(hosts.network.length > 0 ? { networkAllowlist: [...settings.networkAllowlist, ...hosts.network] } : {}),
-      ...(hosts.hooks.length > 0
-        ? { hookNetworkAllowlist: [...this.sources.readHookAllowlist(), ...hosts.hooks] }
-        : {}),
-    });
-    progress.allowed = hosts.network;
-    progress.hookHostsAllowed = hosts.hooks;
+  /**
+   * Step 2: one settings write for the hosts the connectors it saves and its hooks need, within the ones the plan
+   * listed. The write only adds hosts, so when another save lands first it is made again on the newer settings (F13),
+   * with the hosts read again: still only ones the plan listed, or it stops.
+   */
+  private async allowHosts(
+    binding: InstallBinding,
+    progress: InstallProgress,
+    read: PluginInstallSettings,
+    planned: PluginInstallHosts,
+  ): Promise<void> {
+    let settings = read;
+    let hosts = await this.hostsToAllow(binding, settings.networkAllowlist, true);
+    for (let retry = 0; hosts.network.length > 0 || hosts.hooks.length > 0; retry += 1) {
+      try {
+        await this.sources.updateSettings({
+          expectedRevision: settings.revision,
+          ...(hosts.network.length > 0 ? { networkAllowlist: [...settings.networkAllowlist, ...hosts.network] } : {}),
+          ...(hosts.hooks.length > 0
+            ? { hookNetworkAllowlist: [...this.sources.readHookAllowlist(), ...hosts.hooks] }
+            : {}),
+        });
+        break;
+      } catch (error) {
+        if (retry >= HOSTS_WRITE_RETRIES || !isGoatError(error) || error.httpStatus !== 409) throw error;
+        settings = await this.sources.readSettings();
+        hosts = await this.hostsToAllow(binding, settings.networkAllowlist, true);
+        if (!hostsWithin(hosts, planned)) throw pluginChanged();
+      }
+    }
+    progress.allowed = [...hosts.network];
+    progress.hookHostsAllowed = [...hosts.hooks];
   }
 
   /** Step 3: each connector, saved switched off and marked as the plugin's, unless its label is already saved. */
@@ -419,11 +471,11 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
         continue;
       }
       progress.current = piece;
-      const template = requireTemplate(this.sources.connectorTemplates(), piece.templateId);
+      const template = requireInstallTemplate(this.sources.connectorTemplates(), piece.templateId);
       const created = await saveConnectorUnlessSaved(
         template,
         () => this.sources.listSavedConnectors(),
-        (options) => this.sources.createConnector(connectorInput(template), owner, options),
+        (options) => this.sources.createConnector(pluginConnectorInput(template), owner, options),
       );
       if (!created) {
         // Saved since the check, or during this save: the operator's own, which this install keeps and never changes.
@@ -535,33 +587,34 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     progress.current = undefined;
   }
 
-  /** The hosts the install adds: its connectors' missing hosts, and its hooks' hosts when the hooks list restricts. */
-  private async hostsToAllow(binding: InstallBinding, networkAllowlist: readonly string[]) {
-    const network: string[] = [];
-    for (const piece of binding.manifest.pieces) {
-      if (piece.kind !== "connector" || !this.isOwned(binding, piece)) continue;
-      const template = requireTemplate(this.sources.connectorTemplates(), piece.templateId);
-      if (await this.isLabelSaved(template)) continue;
-      for (const host of missingHosts(template, [...networkAllowlist, ...network])) network.push(host);
-    }
-    // An empty hooks list already allows every public https host; adding one would block every other hook.
-    const hookAllowlist = [...this.sources.readHookAllowlist()];
-    const hooks: string[] = [];
-    if (hookAllowlist.length > 0) {
-      for (const piece of binding.manifest.pieces) {
-        if (piece.kind !== "hook") continue;
-        const host = hookHost(piece.url);
-        if (!isHostAllowlistedInList(host, [...hookAllowlist, ...hooks])) hooks.push(host);
-      }
-    }
-    return { network, hooks };
+  /**
+   * The hosts the install adds: its connectors' missing hosts, and its hooks' hosts when the hooks list restricts. With
+   * `skipSaved`, a connector saved since the check, which the install keeps rather than saves, needs none. That only
+   * takes hosts away, so the plan lists (and binds) the hosts without it, and what is written stays within them.
+   */
+  private async hostsToAllow(
+    binding: InstallBinding,
+    networkAllowlist: readonly string[],
+    skipSaved: boolean,
+  ): Promise<PluginInstallHosts> {
+    const connectors = binding.manifest.pieces.filter(
+      (piece): piece is Extract<PluginPiece, { kind: "connector" }> =>
+        piece.kind === "connector" && this.isOwned(binding, piece),
+    );
+    const hooks = binding.manifest.pieces.filter(
+      (piece): piece is Extract<PluginPiece, { kind: "hook" }> => piece.kind === "hook",
+    );
+    const saved = skipSaved && connectors.length > 0 ? await this.sources.listSavedConnectors() : [];
+    const templates = this.sources.connectorTemplates();
+    const hookAllowlist = this.sources.readHookAllowlist();
+    return installHostsToAdd(connectors, hooks, templates, saved, networkAllowlist, hookAllowlist);
   }
 
   /** The plain steps the plan will take, in order, for its summary and its confirmation. */
   private plannedSentences(
     binding: InstallBinding,
     settings: PluginInstallSettings,
-    hosts: { readonly network: readonly string[]; readonly hooks: readonly string[] },
+    hosts: PluginInstallHosts,
   ): string[] {
     const { manifest } = binding;
     const sentences = [
@@ -617,10 +670,6 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     return binding.views.get(piece.id)?.check.status !== "already_there";
   }
 
-  private async isLabelSaved(template: McpServerTemplateRecord): Promise<boolean> {
-    return isConnectorLabelSaved(await this.sources.listSavedConnectors(), template);
-  }
-
   /** Saves what one piece became in this install's own record. */
   private async savePiece(
     binding: InstallBinding,
@@ -662,48 +711,6 @@ function requireRequest(plan: ChangePlanRecord): ChangePlanPluginInstallRequest 
 
 function conflict(message: string): ConflictError {
   return new ConflictError({ message });
-}
-
-/**
- * The plan's binding: the plugin's record now (none, before an install), the inspection and the manifest and snapshot
- * it checked. Taken when the plan is made and again at apply, so a change in between stops the install plainly.
- */
-function bindingHash(record: StoredPlugin | undefined, request: ChangePlanPluginInstallRequest): string {
-  return createHash("sha256")
-    .update(
-      canonicalJsonString({
-        record: record ?? null,
-        inspectionId: request.inspectionId,
-        manifestSha256: request.manifestSha256,
-        snapshotTreeSha256: request.snapshotTreeSha256,
-      }),
-    )
-    .digest("hex");
-}
-
-/** The shipped template a connector piece names, by the connector install's own rule, or the rule's plain refusal. */
-function requireTemplate(templates: readonly McpServerTemplateRecord[], templateId: string): McpServerTemplateRecord {
-  const found = findInstallableConnectorTemplate(templates, templateId);
-  if (!found.ok) throw conflict(found.message);
-  return found.template;
-}
-
-/** The template's own configuration and policy, switched off. The approval setting is the audited write after. */
-function connectorInput(template: McpServerTemplateRecord): McpServerCreateInput {
-  return {
-    label: template.label,
-    transport: template.transport,
-    command: template.command,
-    args: template.args,
-    url: template.url,
-    authType: template.authType,
-    oauth: template.oauth,
-    category: template.category,
-    trustTier: template.trustTier,
-    costTier: template.costTier,
-    policy: template.policy,
-    enabled: false,
-  };
 }
 
 function savedConnectorSentence(label: string, approval: "reads_free" | "everything_asks"): string {

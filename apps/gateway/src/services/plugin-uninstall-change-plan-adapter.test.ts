@@ -721,7 +721,15 @@ describe("uninstalling a plugin through one Change Plan", () => {
     const waiting = await h.uninstall();
 
     expect(waiting).toMatchObject({ outcome: "waiting", approvalId: "approval-activate" });
-    expect(waiting.summary).toContain("The skill Meeting notes is still taking one of its own steps.");
+    // A waiting step never settles by itself, so the operator is told it is their decision, and what to do (F12).
+    expect(waiting.summary).toBe(
+      [
+        "Removed 4 pieces.",
+        "Hosts it allowed stay in your allowlist.",
+        "Switching on the skill Meeting notes waits for your decision in the Inbox.",
+        "Decline it, then uninstall Meeting tools again to finish.",
+      ].join(" "),
+    );
     expect(h.revokeSkill).not.toHaveBeenCalled();
     expect((await h.store.get(PLUGIN_ID))?.pieces[0]).toMatchObject({
       waiting: { approvalId: "approval-activate", operation: "activate" },
@@ -746,6 +754,144 @@ describe("uninstalling a plugin through one Change Plan", () => {
     });
     expect(h.revokeSkill).not.toHaveBeenCalled();
     await expect(h.store.listRemoved()).resolves.toMatchObject([{ skillIds: [SKILL_ID] }]);
+  });
+
+  it("keeps its words for a skill whose own step is already under way, as nothing waits on the operator", async () => {
+    const h = harness();
+    await installed(h);
+    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ version: "installed_off", step: "switching_on" }));
+
+    const waiting = await h.uninstall();
+
+    expect(waiting).toMatchObject({
+      outcome: "waiting",
+      summary: [
+        "Removed 4 pieces.",
+        "Hosts it allowed stay in your allowlist.",
+        "The skill Meeting notes is still taking one of its own steps.",
+        "Then uninstall Meeting tools again to finish.",
+      ].join(" "),
+    });
+  });
+
+  it("reads the skills' waiting steps again just before the record goes, and keeps it for one asked for meanwhile (F6)", async () => {
+    const h = harness();
+    await installed(h);
+    // Installed and never switched on: inert, so the skills step settles it.
+    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ version: "installed_off", step: "installed_off" }));
+    h.state.approvalStatuses.set("approval-activate", "pending");
+    const step = { approvalId: "approval-activate", operation: "activate" as const };
+    let readsAfterConnectors = 0;
+    // The operator asks, in another tab, for its switch-on just after the skills step read the waiting steps.
+    h.uninstallSources.listPendingSkillSteps.mockImplementation(async () => {
+      if (!h.removal.order.includes("connector_delete")) return new Map();
+      readsAfterConnectors += 1;
+      return readsAfterConnectors === 1 ? new Map() : new Map([[SKILL_CHECK_ID, step]]);
+    });
+
+    const waiting = await h.uninstall();
+
+    expect(waiting).toEqual({
+      planId: expect.any(String),
+      outcome: "waiting",
+      approvalId: "approval-activate",
+      summary: [
+        "Removed 4 pieces.",
+        "Hosts it allowed stay in your allowlist.",
+        "Switching on the skill Meeting notes waits for your decision in the Inbox.",
+        "Decline it, then uninstall Meeting tools again to finish.",
+      ].join(" "),
+    });
+    expect(h.removal.order).not.toContain("remove_record");
+    const left = await h.store.get(PLUGIN_ID);
+    expect(left?.state).toBe("uninstalling");
+    // Unsettled again, so the next pass decides it afresh.
+    expect(left?.pieces.find((piece) => piece.pieceId === "meeting-notes")).toEqual({
+      pieceId: "meeting-notes",
+      kind: "skill",
+      owned: true,
+      skillSnapshotId: SKILL_CHECK_ID,
+      waiting: step,
+    });
+
+    // Declined, the next pass settles it and finishes.
+    h.uninstallSources.listPendingSkillSteps.mockImplementation(async () => new Map());
+    h.state.approvalStatuses.set("approval-activate", "rejected");
+    await expect(h.uninstall(OPERATOR, "again")).resolves.toMatchObject({
+      outcome: "applied",
+      summary: "Removed 1 piece. Hosts it allowed stay in your allowlist.",
+    });
+    await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
+  });
+
+  describe("a prompt pack its install made before its record named it (F7)", () => {
+    const PACK_ID = `plugin-${PLUGIN_ID}-checks`;
+
+    async function unrecordedPack(h: ReturnType<typeof harness>) {
+      await installed(h);
+      await h.store.update(PLUGIN_ID, (current) => current && withoutRef(current, "checks"));
+      expect(h.state.packs.map((pack) => pack.packId)).toEqual([PACK_ID]);
+    }
+
+    it("is found under the id the install gives it, and deleted", async () => {
+      const h = harness();
+      await unrecordedPack(h);
+
+      const outcome = await h.uninstall();
+
+      expect(outcome).toMatchObject({
+        outcome: "applied",
+        summary: "Removed 5 pieces. Hosts it allowed stay in your allowlist.",
+      });
+      expect((await h.plans.get(OPERATOR, outcome.planId)).summary).toContain(
+        "Delete the prompt pack Meeting checks if its unfinished install left it, with its runs and scores.",
+      );
+      expect(h.removal.deletedPacks).toEqual([PACK_ID]);
+      expect(h.state.packs).toEqual([]);
+      await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
+    });
+
+    it("is left as it is when its source label is another's, or another plugin's record lists that id", async () => {
+      // Another plugin's label: a pack this plugin's install never made.
+      const relabelled = harness();
+      await unrecordedPack(relabelled);
+      relabelled.state.packs = relabelled.state.packs.map((pack) => ({ ...pack, sourceLabel: "Plugin Meeting" }));
+
+      // `meeting` + `tools-checks` makes the same id as `meeting-tools` + `checks`.
+      const collided = harness();
+      await unrecordedPack(collided);
+      const record = (await collided.store.get(PLUGIN_ID))!;
+      await collided.store.update("meeting", () => ({
+        ...record,
+        pluginId: "meeting",
+        name: "Meeting",
+        installPlanId: "plan-meeting",
+        pieces: [{ pieceId: "tools-checks", kind: "prompt_pack", owned: true }],
+      }));
+
+      for (const h of [relabelled, collided]) {
+        const outcome = await h.uninstall();
+
+        expect(outcome).toMatchObject({
+          outcome: "applied",
+          summary: "Removed 4 pieces. Hosts it allowed stay in your allowlist.",
+        });
+        expect(h.uninstallSources.deletePromptPack).not.toHaveBeenCalled();
+        expect(h.state.packs.map((pack) => pack.packId)).toEqual([PACK_ID]);
+        await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
+      }
+    });
+  });
+
+  it("takes control and bidi characters out of a skill's name in what it shows (F5)", async () => {
+    const { h } = withSkillsTab("remote_hardened");
+    await installed(h);
+    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ title: "Meeting ‮notes\n" }));
+
+    const waiting = await uninstalled(h, "bidi");
+
+    expect(waiting.summary).toContain("Removing the skill Meeting notes  waits for your approval.");
+    expect(waiting.summary).not.toMatch(/[\p{Cc}؜‎‏‪-‮⁦-⁩]/u);
   });
 
   it("names a skill whose own install step waits in the plan, as it may be installed by the time the plan applies", async () => {

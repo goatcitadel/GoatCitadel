@@ -10,13 +10,16 @@ export interface PendingSkillStep {
   operation: "install_inactive" | "activate";
 }
 
-/** Why a skill's removal isn't done yet. */
-export type SkillWaitReason = "revoke" | "removing" | "own_step";
+/**
+ * Why a skill's removal isn't done yet: its revoke waits for approval, its approved revoke is still being applied, its
+ * own step waits for the operator's decision (only declining it lets the uninstall finish), or its own step is under way.
+ */
+export type SkillWaitReason = "revoke" | "removing" | "decision" | "own_step";
 
 export type SkillRemovalDecision =
   /** Done with: revoked, or never switched on. `counted` when something of it was installed. */
   | { kind: "removed"; counted: boolean; skillId?: string }
-  /** Not done: its revoke waits for approval, its approved revoke is still being applied, or its own step is under way. */
+  /** Not done yet, for the reason given (`SkillWaitReason`). */
   | { kind: "waiting"; reason: SkillWaitReason; waiting?: NonNullable<StoredPluginPiece["waiting"]> }
   /**
    * Switched on: ask for its revoke. `knownApprovalId` is a revoke already asked for that may still wait; `staleApprovalId`
@@ -39,9 +42,10 @@ export function decideSkillRemoval(
   // A check that can't be read is never taken as removed.
   if (!check) throw new Error("Its check can't be read right now.");
   if (check.revoked) return { kind: "removed", counted: true, ...(check.skillId ? { skillId: check.skillId } : {}) };
-  // An approved step still applying, or one waiting for its approval, could switch it on after the record is gone.
+  // A step waiting for its approval, or an approved one still applying, could switch it on after the record is gone. A
+  // waiting one never settles by itself (R61: the uninstall never declines it), so it is the operator's decision.
   const ownStep = pendingStep ?? pendingOwnStep(check);
-  if (ownStep) return { kind: "waiting", reason: "own_step", waiting: ownStep };
+  if (ownStep) return { kind: "waiting", reason: "decision", waiting: ownStep };
   if (check.step === "installing" || check.step === "switching_on") return { kind: "waiting", reason: "own_step" };
   if (check.version === "switched_on" && check.skillId) return revokeDecision(piece, check, revokeEffects);
   // Installed and never switched on: inert, as nothing can switch it on once no plugin lists it.
