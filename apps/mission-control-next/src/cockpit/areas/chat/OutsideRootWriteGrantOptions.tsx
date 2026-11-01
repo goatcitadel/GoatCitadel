@@ -51,13 +51,15 @@ interface OutsideRootWriteGrantOptionsProps {
  */
 export function OutsideRootWriteGrantOptions(props: OutsideRootWriteGrantOptionsProps) {
   const { activeWorkspaceId } = useUiPreferences();
-  // Keyed like the decision bar's review: a changed record, chat or workspace remounts the grant, so an open danger
-  // or nuclear review closes and its typed word is cleared, and the changed record needs its own review.
+  const scope = activeWorkspaceId ?? "default";
+  const access = useProjectAccess(scope);
+  // Keyed like the decision bar's review: a changed record, chat, workspace or access identity remounts the grant,
+  // so an open danger or nuclear review closes and its typed word is cleared, and the change needs its own review.
   return (
     <OutsideRootWriteGrantReview
-      key={canonicalJsonString([props.approval, props.workspaceId, props.sessionId, activeWorkspaceId ?? "default"])}
+      key={canonicalJsonString([props.approval, props.workspaceId, props.sessionId, scope, access.identity])}
       {...props}
-      activeWorkspaceId={activeWorkspaceId ?? "default"}
+      activeWorkspaceId={scope}
     />
   );
 }

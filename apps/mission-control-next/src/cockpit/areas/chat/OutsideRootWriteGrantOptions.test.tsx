@@ -8,6 +8,7 @@ import { __resetInboxApprovalAttemptsForTests } from "../inbox/inbox-approval-at
 import { __resetMinuteClockForTests } from "../inbox/use-minute-clock";
 import { OutsideRootWriteGrantOptions } from "./OutsideRootWriteGrantOptions";
 import { refuseNetwork } from "../../../test/refuse-network";
+import { getGatewayCallerScope, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
 const api = vi.hoisted(() => ({ approveChatTool: vi.fn(), fetchApproval: vi.fn() }));
 // The decision bar locks when the active workspace is not the approval's; the grant follows the same preference.
@@ -289,6 +290,23 @@ describe("OutsideRootWriteGrantOptions", () => {
     expect(dialog()!.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(dialogButton("Approve and open folder")!.disabled).toBe(true);
     expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it("closes the review and clears the typed word when the access identity changes while the review is open", async () => {
+    const previousCaller = getGatewayCallerScope();
+    try {
+      await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "nuclear" }));
+      await click(button("Review nuclear approval"));
+      await typeConfirmation("approve");
+      expect(dialogButton("Approve and open folder")!.disabled).toBe(false);
+      await act(async () => setGatewayCallerScope("other-caller"));
+      await vi.waitFor(() => expect(dialog()).toBeNull());
+      await click(button("Review nuclear approval"));
+      expect(dialog()!.querySelector<HTMLInputElement>("input")!.value).toBe("");
+      expect(api.approveChatTool).not.toHaveBeenCalled();
+    } finally {
+      await act(async () => setGatewayCallerScope(previousCaller));
+    }
   });
 
   it("does not approve when the active workspace is not the approval's", async () => {
