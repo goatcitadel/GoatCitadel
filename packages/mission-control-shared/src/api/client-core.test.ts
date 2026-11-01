@@ -944,10 +944,7 @@ describe("request without AbortSignal.any", () => {
     caller.abort(reason);
     const add = vi.spyOn(caller.signal, "addEventListener");
     const remove = vi.spyOn(caller.signal, "removeEventListener");
-    await expect(request("/api/v1/any-free-preaborted", { signal: caller.signal })).rejects.toMatchObject({
-      name: "AbortError",
-      message: "The caller gave up.",
-    });
+    await expect(request("/api/v1/any-free-preaborted", { signal: caller.signal })).rejects.toBe(reason);
     const sent = fetchMock.mock.calls[0]?.[1]?.signal;
     if (sent) expect(sent.reason).toBe(reason);
     expect(add).not.toHaveBeenCalled();

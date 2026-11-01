@@ -74,7 +74,7 @@ function createGateway(
       permissionProfiles: { resolveContext: counters.resolveContext },
     },
   });
-  return { gateway, counters };
+  return { gateway, counters, inspectAccess };
 }
 
 describe("resolveBasePromptCapabilityCatalog policy scope", () => {
@@ -91,7 +91,7 @@ describe("resolveBasePromptCapabilityCatalog policy scope", () => {
   });
 
   it("reads a workspace without a Citadel once for the whole catalog and keeps the verdicts", async () => {
-    const { gateway, counters } = createGateway(profile, {});
+    const { gateway, counters, inspectAccess } = createGateway(profile, {});
     const catalog = await gateway.resolveBasePromptCapabilityCatalog(SCOPE);
     const { gateway: perToolGateway } = createGateway(profile, {});
     const perTool = await filterBasePromptToolsetByPolicy(
@@ -106,6 +106,11 @@ describe("resolveBasePromptCapabilityCatalog policy scope", () => {
     expect(catalog.toolNames).toEqual(perTool.toolNames);
     expect(catalog.policyDeniedToolNames).toEqual(perTool.policyDeniedToolNames);
     expect(catalog.approvalRequiredToolNames).toEqual(perTool.approvalRequiredToolNames);
+    // A workspace without a Citadel must not gain one in the shared scope: every probe carries none.
+    expect(inspectAccess).toHaveBeenCalledTimes(TOOL_NAMES.length);
+    for (const [probe] of inspectAccess.mock.calls) {
+      expect(probe.citadelId).toBeUndefined();
+    }
   });
 
   it("keeps one session project read per probe outside a catalog build", async () => {
