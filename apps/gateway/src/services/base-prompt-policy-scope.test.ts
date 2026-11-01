@@ -7,7 +7,11 @@ vi.mock("node:sqlite", () => ({
 }));
 
 import { filterBasePromptToolsetByPolicy } from "./base-prompt-capability-catalog.js";
-import { resolveBasePromptPolicyScope, withBasePromptPolicyScope } from "./base-prompt-policy-scope.js";
+import {
+  WORKSPACE_HAS_NO_CITADEL,
+  resolveBasePromptPolicyScope,
+  withBasePromptPolicyScope,
+} from "./base-prompt-policy-scope.js";
 import { GatewayService } from "./gateway-service.js";
 
 const SCOPE = { sessionId: "session-1", workspaceId: "workspace-1", mode: "chat" } as const;
@@ -26,11 +30,14 @@ const TOOL_NAMES = [
   "user_input.request",
 ];
 
-function createGateway(profile: { profileId: string; deny: string[]; askFirst: string[] }) {
+function createGateway(
+  profile: { profileId: string; deny: string[]; askFirst: string[] },
+  workspace: { citadelId?: string } = { citadelId: "personal" },
+) {
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, unknown>;
   const counters = {
     resolveContext: vi.fn(async () => ({ permissionProfile: profile })),
-    findWorkspace: vi.fn(async () => ({ citadelId: "personal" })),
+    findWorkspace: vi.fn(async () => workspace),
     sessionProject: vi.fn(async () => undefined),
   };
   // The decision reads the probe request's resolved permission profile, so a probe that lost its policy context
@@ -81,6 +88,24 @@ describe("resolveBasePromptCapabilityCatalog policy scope", () => {
     expect(counters.resolveContext).toHaveBeenCalledTimes(1);
     expect(counters.findWorkspace).toHaveBeenCalledTimes(1);
     expect(counters.sessionProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads a workspace without a Citadel once for the whole catalog and keeps the verdicts", async () => {
+    const { gateway, counters } = createGateway(profile, {});
+    const catalog = await gateway.resolveBasePromptCapabilityCatalog(SCOPE);
+    const { gateway: perToolGateway } = createGateway(profile, {});
+    const perTool = await filterBasePromptToolsetByPolicy(
+      { toolNames: TOOL_NAMES, skills: [] },
+      SCOPE,
+      (request) => perToolGateway.inspectToolAccess(request),
+      "/repo/workspace/goatcitadel_out",
+    );
+
+    expect(counters.findWorkspace).toHaveBeenCalledTimes(1);
+    expect(counters.resolveContext).toHaveBeenCalledTimes(1);
+    expect(catalog.toolNames).toEqual(perTool.toolNames);
+    expect(catalog.policyDeniedToolNames).toEqual(perTool.policyDeniedToolNames);
+    expect(catalog.approvalRequiredToolNames).toEqual(perTool.approvalRequiredToolNames);
   });
 
   it("keeps one session project read per probe outside a catalog build", async () => {
@@ -162,9 +187,10 @@ describe("resolveBasePromptPolicyScope", () => {
     await expect(
       resolveBasePromptPolicyScope(resolveToolPolicyContext, async () => ({ citadelId: "c1" }), SCOPE),
     ).resolves.toEqual({ workspaceId: "workspace-1", citadelId: "c1", policyContext });
-    await expect(resolveBasePromptPolicyScope(resolveToolPolicyContext, async () => undefined, SCOPE)).resolves.toEqual(
-      { workspaceId: "workspace-1", policyContext },
-    );
+    const withoutCitadel = await resolveBasePromptPolicyScope(resolveToolPolicyContext, async () => undefined, SCOPE);
+    expect(withoutCitadel).toMatchObject({ workspaceId: "workspace-1", policyContext });
+    expect(withoutCitadel).not.toHaveProperty("citadelId");
+    expect(WORKSPACE_HAS_NO_CITADEL in withoutCitadel).toBe(true);
   });
 });
 
