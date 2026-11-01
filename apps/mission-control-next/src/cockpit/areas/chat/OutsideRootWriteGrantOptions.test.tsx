@@ -10,6 +10,9 @@ import { OutsideRootWriteGrantOptions } from "./OutsideRootWriteGrantOptions";
 import { refuseNetwork } from "../../../test/refuse-network";
 
 const api = vi.hoisted(() => ({ approveChatTool: vi.fn(), fetchApproval: vi.fn() }));
+// The decision bar locks when the active workspace is not the approval's; the grant follows the same preference.
+const preferences = vi.hoisted(() => ({ activeWorkspaceId: "workspace-1" as string | undefined }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ approveChatTool: api.approveChatTool }));
 // Every approve re-reads the current record first, as the decision bar does.
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
@@ -112,6 +115,7 @@ afterEach(async () => {
   __resetMinuteClockForTests();
   vi.useRealTimers();
   vi.resetAllMocks();
+  preferences.activeWorkspaceId = "workspace-1";
 });
 
 describe("OutsideRootWriteGrantOptions", () => {
@@ -255,13 +259,55 @@ describe("OutsideRootWriteGrantOptions", () => {
     expect(api.approveChatTool).not.toHaveBeenCalled();
   });
 
-  it("keeps a danger approval off when its kind has no exact action preview", async () => {
-    // A well-formed folder preview always lists its targets, which count as evidence; a kind with its own review
-    // model (here a Change Plan request without its request summary) is the case with nothing exact to approve.
-    await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { kind: "change.request" }));
-    await click(button("Review and open folder"));
-    expect(dialog()?.textContent).toContain("current action preview is unavailable");
+  it.each(["caution", "danger"])(
+    "offers no folder approve for a %s approval whose kind has no exact action preview",
+    async (riskLevel) => {
+      // A well-formed folder preview always lists its targets, which count as evidence; a kind with its own review
+      // model (here a Change Plan request without its request summary) is the case with nothing exact to approve.
+      // The decision bar then offers only Deny and says why, so the grant offers no approve at all.
+      await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel, kind: "change.request" }));
+      expect(button("Approve and open folder")).toBeUndefined();
+      expect(button("Review and open folder")).toBeUndefined();
+      expect(api.fetchApproval).not.toHaveBeenCalled();
+      expect(api.approveChatTool).not.toHaveBeenCalled();
+    },
+  );
+
+  it("closes the review and clears the typed word when the record changes while the review is open", async () => {
+    api.approveChatTool.mockResolvedValue({ ok: true, approvalId: "approval-1", grant: { grantId: "grant-1" } });
+    const reviewed = approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "nuclear" });
+    await render(reviewed);
+    await click(button("Review nuclear approval"));
+    await typeConfirmation("approve");
+    expect(dialogButton("Approve and open folder")!.disabled).toBe(false);
+    const changed = { ...reviewed, preview: { ...OUTSIDE_ROOT_PREVIEW, note: "changed" } } as ApprovalRequest;
+    api.fetchApproval.mockResolvedValue(changed);
+    await render(changed);
+    // The changed record needs its own review: the open one closed and its typed word is gone.
+    await vi.waitFor(() => expect(dialog()).toBeNull());
+    await click(button("Review nuclear approval"));
+    expect(dialog()!.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(dialogButton("Approve and open folder")!.disabled).toBe(true);
+    expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it("does not approve when the active workspace is not the approval's", async () => {
+    preferences.activeWorkspaceId = "workspace-2";
+    await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "caution" }));
+    expect(button("Approve and open folder").disabled).toBe(true);
+    await click(button("Approve and open folder"));
+    expect(api.fetchApproval).not.toHaveBeenCalled();
+    expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it("locks the approve control when the active workspace changes while the card stays mounted", async () => {
+    const approval = approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "caution" });
+    await render(approval);
+    expect(button("Approve and open folder").disabled).toBe(false);
+    preferences.activeWorkspaceId = "workspace-2";
+    await render(approval);
+    expect(button("Approve and open folder").disabled).toBe(true);
+    await click(button("Approve and open folder"));
     expect(api.approveChatTool).not.toHaveBeenCalled();
   });
 

@@ -1,6 +1,7 @@
 import { useId, useLayoutEffect, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  canonicalJsonString,
   OUTSIDE_ROOT_WRITE_GRANT_DURATIONS,
   readOutsideRootWriteApprovalDetails,
   type ApprovalRequest,
@@ -9,6 +10,8 @@ import {
 import { approveChatTool } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
+import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../data/query-keys";
 import { cockpitInputClass } from "../../ui/input-class";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
@@ -46,12 +49,26 @@ interface OutsideRootWriteGrantOptionsProps {
  * same risk tiers as the decision bar's Approve once: danger opens the review, nuclear also needs the typed word.
  * Like the decision bar, a click re-reads the record first and sends nothing unless it is the same pending record.
  */
-export function OutsideRootWriteGrantOptions({
+export function OutsideRootWriteGrantOptions(props: OutsideRootWriteGrantOptionsProps) {
+  const { activeWorkspaceId } = useUiPreferences();
+  // Keyed like the decision bar's review: a changed record, chat or workspace remounts the grant, so an open danger
+  // or nuclear review closes and its typed word is cleared, and the changed record needs its own review.
+  return (
+    <OutsideRootWriteGrantReview
+      key={canonicalJsonString([props.approval, props.workspaceId, props.sessionId, activeWorkspaceId ?? "default"])}
+      {...props}
+      activeWorkspaceId={activeWorkspaceId ?? "default"}
+    />
+  );
+}
+
+function OutsideRootWriteGrantReview({
   approval,
   workspaceId,
   sessionId,
   onResolved,
-}: OutsideRootWriteGrantOptionsProps) {
+  activeWorkspaceId,
+}: OutsideRootWriteGrantOptionsProps & { activeWorkspaceId: string }) {
   const details = readOutsideRootWriteApprovalDetails(approval.preview?.outsideRootWrite);
   const queryClient = useQueryClient();
   const access = useProjectAccess(workspaceId);
@@ -77,13 +94,18 @@ export function OutsideRootWriteGrantOptions({
   const chosen = details.candidates.find((candidate) => candidate.rootId === rootId);
   const expired = hasExpired(approval.expiresAt, now);
   const otherChat = Boolean(approval.linkage?.sessionId && approval.linkage.sessionId !== sessionId);
+  // The same scope check as the decision bar, which then says the selected workspace changed.
+  const scopeChanged = activeWorkspaceId !== workspaceId || otherChat;
+  // Without the exact action preview the decision bar offers only Deny and says why; nothing here can approve either.
+  const hasPreview = Boolean(buildApprovalRequestReviewEvidenceModel(approval));
 
   async function approveAndOpen() {
     if (
       !chosen ||
       !current.current ||
       !access.current() ||
-      otherChat ||
+      !hasPreview ||
+      scopeChanged ||
       !canResolveInboxApproval(undefined, approval, approval, workspaceId, Date.now())
     )
       return;
@@ -196,8 +218,8 @@ export function OutsideRootWriteGrantOptions({
           ))}
         </fieldset>
       </div>
-      {/* Without a risk level the decision bar above already says why nothing can be approved. */}
-      {approval.riskLevel ? (
+      {/* Without a risk level or an exact preview the decision bar above already says why nothing can be approved. */}
+      {approval.riskLevel && hasPreview ? (
         <RiskApprovalAction
           workspaceId={workspaceId}
           approval={{
@@ -210,7 +232,7 @@ export function OutsideRootWriteGrantOptions({
             expiresAt: approval.expiresAt,
           }}
           reviewedApproval={approval}
-          pending={busy || !chosen || expired || otherChat}
+          pending={busy || !chosen || expired || scopeChanged}
           // Approve once in the decision bar is the primary choice; also opening a folder stays secondary.
           approveVariant="secondary"
           loading={attempt?.phase === "submitted"}
