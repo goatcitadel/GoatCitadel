@@ -140,12 +140,13 @@ describe("ChatBrowserErrandCard", () => {
     expect(container.textContent).not.toContain("taken_over");
   });
 
-  it("announces the step text politely", async () => {
+  it("keeps the polled step text out of live regions", async () => {
     api.fetchBrowserErrandStatus.mockResolvedValue(running);
     await mount();
     await vi.waitFor(() => expect(container.textContent).toContain("Searching for flights"));
     const step = [...container.querySelectorAll("p")].find((p) => p.textContent === "Searching for flights");
-    expect(step?.getAttribute("aria-live")).toBe("polite");
+    expect(step).toBeDefined();
+    expect(container.querySelector("[aria-live], [role=status], [role=alert]")).toBeNull();
   });
 
   it("backs off while reads fail and stops once the tool run has closed", () => {
@@ -167,7 +168,7 @@ describe("ChatBrowserErrandCard", () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     api.fetchBrowserErrandStatus.mockRejectedValue(new Error("Gateway unavailable"));
     await mount();
-    await vi.waitFor(() => expect(container.querySelector("[role=alert]")).not.toBeNull());
+    await vi.waitFor(() => expect(container.querySelector("p.text-status-failed")).not.toBeNull());
     const calls = api.fetchBrowserErrandStatus.mock.calls.length;
     await act(async () => {
       await vi.advanceTimersByTimeAsync(60_000);

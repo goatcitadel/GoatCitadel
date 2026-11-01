@@ -77,7 +77,8 @@ function statusFromResult(toolRunId: string, result: Record<string, unknown>): B
 /**
  * A `browser.errand` run inside a reply: the live step, the latest picture of the browser window and a Stop button
  * while the errand runs, then its answer, final picture and request count once it has finished. The Gateway's status
- * is the truth while it holds the errand; the tool run's own result stands in once it does not.
+ * is the truth while it holds the errand; the tool run's own result stands in once it does not. The card is polled every
+ * 2 s, so none of its text is a live region: a screen reader would hear every step.
  */
 export function ChatBrowserErrandCard(props: {
   toolRunId: string;
@@ -108,16 +109,10 @@ export function ChatBrowserErrandCard(props: {
   const view = query.data ?? fromResult;
   if (!view) {
     if (query.isError) {
-      return (
-        <p role="alert" className="mt-3 text-sm text-status-failed">
-          {describeApiError(query.error).summary}
-        </p>
-      );
+      return <p className="mt-3 text-sm text-status-failed">{describeApiError(query.error).summary}</p>;
     }
     return query.isPending || toolRunOpen ? (
-      <p role="status" className="mt-3 text-xs text-fg-muted">
-        Starting the browser errand…
-      </p>
+      <p className="mt-3 text-xs text-fg-muted">Starting the browser errand…</p>
     ) : null;
   }
 
@@ -152,7 +147,7 @@ export function ChatBrowserErrandCard(props: {
         ) : null
       ) : (
         <>
-          <p aria-live="polite" className="mt-2 text-fg-secondary">
+          <p className="mt-2 text-fg-secondary">
             {view.state === "waiting_on_you"
               ? "Waiting for your decision before the next step."
               : view.state === "taken_over"
@@ -172,11 +167,7 @@ export function ChatBrowserErrandCard(props: {
       {finished && requests > 0 ? (
         <p className="mt-2 text-xs text-fg-muted">{plural(requests, "model request")}</p>
       ) : null}
-      {stopError ? (
-        <p role="alert" className="mt-2 text-xs text-status-failed">
-          {stopError}
-        </p>
-      ) : null}
+      {stopError ? <p className="mt-2 text-xs text-status-failed">{stopError}</p> : null}
     </section>
   );
 }
