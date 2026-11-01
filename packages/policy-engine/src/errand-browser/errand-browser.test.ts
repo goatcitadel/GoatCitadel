@@ -72,6 +72,43 @@ describe("errand browser launcher", () => {
     await expect(browser.page().goto("http://10.0.0.1/", { timeout: 10_000 })).rejects.toThrow();
   }, 60_000);
 
+  it("blocks private addresses by policy even with a wildcard allowlist", async () => {
+    const browser = await launchErrandBrowser({
+      profileDir: makeProfileDir(),
+      headless: HEADLESS,
+      networkAllowlist: ["*"],
+    });
+    openBrowsers.push(browser);
+    for (const target of ["http://10.0.0.1/", baseUrl]) {
+      const failure = await browser
+        .page()
+        .goto(target, { timeout: 8_000 })
+        .then(
+          () => undefined,
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        );
+      expect(failure, `${target} should be refused`).toBeDefined();
+      expect(failure).not.toMatch(/timeout/i);
+    }
+  }, 60_000);
+
+  it("reclaims a stale lock whose pid is alive but was not refreshed", async () => {
+    const profileDir = makeProfileDir();
+    const lockPath = path.join(profileDir, ".goatcitadel-errand.lock");
+    fs.writeFileSync(lockPath, JSON.stringify({ pid: process.pid, token: "someone-else" }));
+    const old = new Date(Date.now() - 60 * 60 * 1000);
+    fs.utimesSync(lockPath, old, old);
+    const browser = await launch(profileDir);
+    expect(browser.isClosed()).toBe(false);
+  }, 60_000);
+
+  it("allows an immediate relaunch after close", async () => {
+    const profileDir = makeProfileDir();
+    const first = await launch(profileDir);
+    await first.close();
+    await launch(profileDir);
+  }, 60_000);
+
   it("reports profile_locked when the profile is already open", async () => {
     const profileDir = makeProfileDir();
     await launch(profileDir);

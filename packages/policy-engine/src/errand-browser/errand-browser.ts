@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import type { BrowserContext, CDPSession, Page } from "playwright";
@@ -87,21 +88,44 @@ export async function launchErrandBrowser(options: ErrandBrowserLaunchOptions): 
 }
 
 const PROFILE_LOCK_FILE = ".goatcitadel-errand.lock";
+const LOCK_HEARTBEAT_MS = 3_000;
+const LOCK_STALE_AFTER_MS = 15_000;
+
+interface ProfileLockRecord {
+  pid: number;
+  token: string;
+}
 
 /**
  * Chrome only guards a profile while a headed process holds it, and the bundled headless shell does not guard it at
- * all, so the launcher keeps its own pid lock beside the profile. A lock whose process is gone is stale and reclaimed.
+ * all, so the launcher keeps its own lock beside the profile. The lock names the owner's pid and a random token, and
+ * the owner touches the file while it lives. A lock is live only when its pid exists AND it was touched recently, so a
+ * recycled pid after a crash or reboot never keeps a dead lock alive. Anything unconfirmed is treated as stale.
  */
 function acquireProfileLock(profileDir: string): () => void {
   fs.mkdirSync(profileDir, { recursive: true });
   const lockPath = path.join(profileDir, PROFILE_LOCK_FILE);
+  const record: ProfileLockRecord = { pid: process.pid, token: randomUUID() };
   for (let attempt = 0; attempt < 2; attempt += 1) {
     try {
-      fs.writeFileSync(lockPath, String(process.pid), { flag: "wx" });
+      fs.writeFileSync(lockPath, JSON.stringify(record), { flag: "wx" });
+      const heartbeat = setInterval(() => {
+        try {
+          const now = new Date();
+          fs.utimesSync(lockPath, now, now);
+        } catch {
+          // The lock file vanished; nothing to refresh.
+        }
+      }, LOCK_HEARTBEAT_MS);
+      heartbeat.unref();
       let released = false;
       return () => {
-        if (!released) {
-          released = true;
+        if (released) {
+          return;
+        }
+        released = true;
+        clearInterval(heartbeat);
+        if (readLockRecord(lockPath)?.token === record.token) {
           fs.rmSync(lockPath, { force: true });
         }
       };
@@ -111,7 +135,7 @@ function acquireProfileLock(profileDir: string): () => void {
           cause: error,
         });
       }
-      if (isLockHolderAlive(lockPath)) {
+      if (isLockHolderLive(lockPath)) {
         throw new ErrandBrowserLaunchError(
           "profile_locked",
           "The errand browser profile is already open in another window. Close that window and try again.",
@@ -123,13 +147,28 @@ function acquireProfileLock(profileDir: string): () => void {
   throw new ErrandBrowserLaunchError("profile_locked", "The errand browser profile is already open.");
 }
 
-function isLockHolderAlive(lockPath: string): boolean {
+function readLockRecord(lockPath: string): ProfileLockRecord | undefined {
   try {
-    const pid = Number.parseInt(fs.readFileSync(lockPath, "utf8").trim(), 10);
-    if (!Number.isInteger(pid) || pid <= 0) {
+    const parsed = JSON.parse(fs.readFileSync(lockPath, "utf8")) as Partial<ProfileLockRecord>;
+    if (Number.isInteger(parsed.pid) && (parsed.pid as number) > 0 && typeof parsed.token === "string") {
+      return { pid: parsed.pid as number, token: parsed.token };
+    }
+  } catch {
+    // Unreadable or malformed locks are stale.
+  }
+  return undefined;
+}
+
+function isLockHolderLive(lockPath: string): boolean {
+  const record = readLockRecord(lockPath);
+  if (!record) {
+    return false;
+  }
+  try {
+    if (Date.now() - fs.statSync(lockPath).mtimeMs > LOCK_STALE_AFTER_MS) {
       return false;
     }
-    process.kill(pid, 0);
+    process.kill(record.pid, 0);
     return true;
   } catch (error) {
     // EPERM means the process exists but belongs to someone else.
@@ -173,7 +212,7 @@ function createErrandBrowser(
   let closed = false;
   const listeners = new Set<() => void>();
 
-  const markClosed = (): void => {
+  const finalize = (): void => {
     if (closed) {
       return;
     }
@@ -190,7 +229,7 @@ function createErrandBrowser(
     listeners.clear();
   };
 
-  context.on("close", markClosed);
+  context.on("close", finalize);
   context.on("page", (page) => {
     activePage = page;
   });
@@ -202,8 +241,7 @@ function createErrandBrowser(
   function onPageClosed(page: Page): void {
     const remaining = context.pages().filter((candidate) => candidate !== page && !candidate.isClosed());
     if (remaining.length === 0) {
-      // Closing the only page ends the errand session.
-      markClosed();
+      // Closing the only page ends the errand session; the lock and proxy are released once the context is gone.
       void context.close().catch(() => undefined);
       return;
     }
@@ -249,8 +287,8 @@ function createErrandBrowser(
       };
     },
     async close() {
-      markClosed();
       await context.close().catch(() => undefined);
+      finalize();
     },
   };
 }
