@@ -20,6 +20,7 @@ vi.mock("./connectors/ConnectorSetupPage", () => ({
 }));
 vi.mock("./tools/ToolsTab", () => ({ ToolsTab: () => <div data-testid="tools-tab" /> }));
 vi.mock("./skills/SkillsTab", () => ({ SkillsTab: () => <div data-testid="skills-tab" /> }));
+vi.mock("./plugins/PluginsTab", () => ({ PluginsTab: () => <div data-testid="plugins-tab" /> }));
 
 const LAST_TAB_KEY = "goatcitadel.cockpit.capabilities.last-tab.v1";
 
@@ -144,6 +145,7 @@ describe("Capabilities page", () => {
     route.rest = ["plugins"];
     await render();
     expect(tabLink("Plugins")?.getAttribute("aria-current")).toBe("page");
+    expect(shown("plugins-tab")).toBe(true);
     // No other tab's body shows under Plugins, and none of their queries start.
     expect(connectorsRendered).not.toHaveBeenCalled();
     for (const id of ["skills-tab", "connectors-tab", "tools-tab", "connector-setup"])
@@ -154,11 +156,13 @@ describe("Capabilities page", () => {
     route.rest = [];
     await render();
     expect(tabLink("Plugins")?.getAttribute("aria-current")).toBe("page");
+    expect(shown("plugins-tab")).toBe(true);
     expect(route.navigate).toHaveBeenCalledExactlyOnceWith("/capabilities/plugins", { replace: true });
   });
 
   it.each([
     ["skills", "Skills", "skills-tab"],
+    ["plugins", "Plugins", "plugins-tab"],
     ["connectors", "Connectors", "connectors-tab"],
     ["tools", "Tools", "tools-tab"],
   ])("opens %s for its address and remembers it", async (id, label, testId) => {
@@ -166,6 +170,11 @@ describe("Capabilities page", () => {
     await render();
     expect(tabLink(label)?.getAttribute("aria-current")).toBe("page");
     expect(shown(testId)).toBe(true);
+    // Only that tab's body shows.
+    for (const other of ["skills-tab", "plugins-tab", "connectors-tab", "tools-tab"].filter(
+      (entry) => entry !== testId,
+    ))
+      expect(shown(other), other).toBe(false);
     expect(window.localStorage.getItem(LAST_TAB_KEY)).toBe(id);
     // The address already names the tab, so it is not rewritten.
     expect(route.navigate).not.toHaveBeenCalled();

@@ -41,7 +41,8 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 904: Chat's Code Mode request row announces its one status line (Running code…, then the outcome), why a read it
 // needs failed (the request, Code Mode readiness), why a click was not sent, and why Keep as a tool did not save (+5);
 // its loading lines are not announced. A code_mode.run approval in Chat says why Approve waits, as Inbox does (+1).
-export const LIVE_REGION_BUDGET = 904;
+// 905: the Capabilities Plugins tab announces the one outcome that replaces its whole page, a first read that failed.
+export const LIVE_REGION_BUDGET = 905;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

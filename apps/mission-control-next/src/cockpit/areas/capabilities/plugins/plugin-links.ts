@@ -37,6 +37,23 @@ export function pluginInspectionIdFromSearch(search: string | undefined): string
   return itemFromSearch(search, INSTALL_ITEM_PREFIX);
 }
 
+/** Where the Plugins tab's source buttons add a plugin from: a Git repository, or a folder on this computer. */
+export type PluginSourceFormKind = "git" | "folder";
+
+/** The part of `?item=` that names a source button's form: `plugin-source:git` or `plugin-source:folder`. */
+const SOURCE_ITEM_PREFIX = "plugin-source:";
+
+/** The address a source button moves to: the form that asks where to add a plugin from, before anything is checked. */
+export function pluginSourceItemHref(kind: PluginSourceFormKind): string {
+  return `${PLUGINS_HREF}?item=${encodeURIComponent(`${SOURCE_ITEM_PREFIX}${kind}`)}`;
+}
+
+/** The form an address names with `?item=plugin-source:<git|folder>`, or undefined for anything else. */
+export function pluginSourceFromSearch(search: string | undefined): PluginSourceFormKind | undefined {
+  const kind = itemFromSearch(search, SOURCE_ITEM_PREFIX);
+  return kind === "git" || kind === "folder" ? kind : undefined;
+}
+
 /**
  * The inspector source of a plugin's panel. It must never start with the Connectors panel's `capabilities:`: the
  * Connectors tab reads every source that does as one of its connectors, and a Plugins panel would be taken for one.

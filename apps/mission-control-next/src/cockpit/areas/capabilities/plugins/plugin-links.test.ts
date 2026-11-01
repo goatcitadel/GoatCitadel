@@ -24,6 +24,8 @@ import {
   pluginInstallSource,
   pluginItemHref,
   pluginPanelSource,
+  pluginSourceFromSearch,
+  pluginSourceItemHref,
 } from "./plugin-links";
 
 const searchOf = (href: string) => href.slice(href.indexOf("?"));
@@ -87,13 +89,38 @@ describe("plugin addresses", () => {
     expect(pluginInspectionIdFromSearch(searchOf(pluginInstallItemHref("x&y")))).toBe("x&y");
   });
 
-  it.each([[undefined], [""], ["?item="], ["?item=plugin%3A"], ["?item=plugin-install%3A"], ["?view=x"]])(
-    "reads no item from %j",
-    (search) => {
-      expect(pluginIdFromSearch(search)).toBeUndefined();
-      expect(pluginInspectionIdFromSearch(search)).toBeUndefined();
-    },
-  );
+  it("names the form each source button opens, and never reads it as a plugin or an install", () => {
+    expect(pluginSourceItemHref("git")).toBe("/capabilities/plugins?item=plugin-source%3Agit");
+    expect(pluginSourceItemHref("folder")).toBe("/capabilities/plugins?item=plugin-source%3Afolder");
+    expect(pluginSourceFromSearch(searchOf(pluginSourceItemHref("git")))).toBe("git");
+    expect(pluginSourceFromSearch("?workspaceId=w&item=plugin-source:folder")).toBe("folder");
+    for (const kind of ["git", "folder"] as const) {
+      const search = searchOf(pluginSourceItemHref(kind));
+      expect(pluginIdFromSearch(search), kind).toBeUndefined();
+      expect(pluginInspectionIdFromSearch(search), kind).toBeUndefined();
+      expect(skillIdFromSearch(search), kind).toBeUndefined();
+      expect(installIdFromSearch(search), kind).toBeUndefined();
+      expect(toolGroupIdFromSearch(search), kind).toBeUndefined();
+    }
+    // Only the two forms there are; a plugin's or an install's item is neither.
+    expect(pluginSourceFromSearch("?item=plugin-source%3Azip")).toBeUndefined();
+    expect(pluginSourceFromSearch(searchOf(pluginItemHref("git")))).toBeUndefined();
+    expect(pluginSourceFromSearch(searchOf(pluginInstallItemHref("git")))).toBeUndefined();
+  });
+
+  it.each([
+    [undefined],
+    [""],
+    ["?item="],
+    ["?item=plugin%3A"],
+    ["?item=plugin-install%3A"],
+    ["?item=plugin-source%3A"],
+    ["?view=x"],
+  ])("reads no item from %j", (search) => {
+    expect(pluginIdFromSearch(search)).toBeUndefined();
+    expect(pluginInspectionIdFromSearch(search)).toBeUndefined();
+    expect(pluginSourceFromSearch(search)).toBeUndefined();
+  });
 
   it("names each panel behind its prefix and reads it back", () => {
     expect(pluginPanelSource("browser-checks")).toBe("capabilities-plugins:browser-checks");
