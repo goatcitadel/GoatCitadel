@@ -227,3 +227,57 @@ describe("Classic guided setup provider sign-in polling", () => {
     expect(mocks.complete).not.toHaveBeenCalled();
   });
 });
+
+describe("guided setup sign-in completion across a workspace switch", () => {
+  const revised = {
+    ...oauthPlan,
+    revision: 2,
+    requiredAction: { kind: "confirmation", actionId: "confirm-1", actionNonce: "nonce-2", title: "Confirm" },
+  };
+  /** Starts a sign-in whose completion stays in flight; the Gateway serves the old revision until it settles. */
+  const startCompletion = async () => {
+    let settle!: (plan: unknown) => void;
+    let settled = false;
+    mocks.complete.mockReturnValue(new Promise((resolve) => (settle = resolve)));
+    mocks.plans.mockImplementation(async ({ workspaceId }: { workspaceId: string }) => ({
+      items: workspaceId === "default" ? [settled ? revised : oauthPlan] : [],
+    }));
+    mocks.poll.mockResolvedValue({ flowId: "flow-1", providerId: "openai-codex", status: "connected" });
+    await render();
+    await act(async () => button("Verify provider connection")!.click());
+    await act(async () => button("Continue sign-in")!.click());
+    await advance(1_000);
+    expect(mocks.complete).toHaveBeenCalledOnce();
+    return () =>
+      act(async () => {
+        settled = true;
+        settle(revised);
+      });
+  };
+
+  it("leaves the new workspace untouched and shows the completed plan back in its own workspace", async () => {
+    const settle = await startCompletion();
+    await render("other");
+    expect(dialog()).toBeNull();
+    await settle();
+    expect(dialog()).toBeNull();
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector("select")?.disabled).toBe(false);
+    await render("default");
+    await act(async () => button("Verify provider connection")!.click());
+    expect(dialog()?.getAttribute("data-revision")).toBe("2");
+  });
+  it("re-reads its workspace's plans when completion settles after a switch away and back", async () => {
+    const settle = await startCompletion();
+    await render("other");
+    // Back before completion settles: this read still returns the pre-completion revision.
+    await render("default");
+    const readsBeforeSettle = mocks.plans.mock.calls.length;
+    await settle();
+    expect(mocks.plans.mock.calls.length).toBeGreaterThan(readsBeforeSettle);
+    expect(mocks.plans).toHaveBeenLastCalledWith({ workspaceId: "default" }, { limit: 25 });
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+    await act(async () => button("Verify provider connection")!.click());
+    expect(dialog()?.getAttribute("data-revision")).toBe("2");
+  });
+});

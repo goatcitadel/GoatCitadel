@@ -478,3 +478,22 @@ export function localRuntimeSetupGuide(
   const build = LOCAL_RUNTIME_GUIDES[provider.providerId.trim().toLowerCase()];
   return build ? build({ baseUrl: provider.baseUrl, model }) : null;
 }
+
+export const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
+  "completed",
+  "applied",
+  "manual_required",
+  "failed",
+  "cancelled",
+  "rolled_back",
+  "rollback_failed",
+]);
+
+/** The Settings-origin provider connection and default-model plans that are still in progress. */
+export const activeGuidedSetupPlans = (items: readonly ChangePlanRecord[]) =>
+  items.filter(
+    (plan) =>
+      plan.origin.surface === "settings" &&
+      ["provider_connection", "installation_default_model"].includes(plan.kind) &&
+      !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
+  );

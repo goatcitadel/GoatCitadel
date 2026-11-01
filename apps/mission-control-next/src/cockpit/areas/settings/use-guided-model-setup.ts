@@ -6,6 +6,7 @@ import { deriveSetupProgress } from "@goatcitadel/mission-control-shared/content
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
+  activeGuidedSetupPlans,
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
@@ -16,19 +17,12 @@ import {
   resolveGuidedProviderReadiness,
   submittedGuidedSelection,
   supportedGuidedThinkingLevels,
+  TERMINAL_CHANGE_PLAN_STATUSES,
   withAddableBuiltinProviders,
 } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 import { runProviderSignIn } from "./guided-provider-sign-in";
 
-export const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
-  "completed",
-  "applied",
-  "manual_required",
-  "failed",
-  "cancelled",
-  "rolled_back",
-  "rollback_failed",
-]);
+export { TERMINAL_CHANGE_PLAN_STATUSES };
 
 const errorText = (error: unknown) => describeApiError(error).summary;
 
@@ -88,6 +82,9 @@ export function useGuidedModelSetup({
   const planLoadGeneration = useRef(0);
   // The running provider sign-in poll, if any; aborted on close, unmount and workspace change.
   const signInRef = useRef<AbortController | null>(null);
+  // Counts workspace changes, so a settled sign-in completion can tell it outlived the visit it started in.
+  const workspaceVisit = useRef(0);
+  const workspaceRef = useRef(workspaceId);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
   const [activePlans, setActivePlans] = useState<ChangePlanRecord[]>([]);
@@ -162,9 +159,27 @@ export function useGuidedModelSetup({
     };
   }, [providers, loadModelsForProvider, activeModel, activeProviderId, providerId]);
 
+  /** Reads the workspace's active guided plans; the result applies only while `generation` is still current. */
+  const readPlans = useCallback((targetWorkspaceId: string, generation: number) => {
+    void fetchChangePlans({ workspaceId: targetWorkspaceId }, { limit: 25 })
+      .then(({ items }) => {
+        if (generation !== planLoadGeneration.current) return;
+        const pending = activeGuidedSetupPlans(items);
+        // Keep every active plan so Connect can resume the one for the selected provider.
+        setActivePlans(pending);
+        // A re-read drops a live plan it no longer lists, but keeps a finished one this visit recorded.
+        setLatestPlan(
+          (current) => pending[0] ?? (current && TERMINAL_CHANGE_PLAN_STATUSES.has(current.status) ? current : null),
+        );
+      })
+      .catch((error: unknown) => {
+        if (generation === planLoadGeneration.current) setActionError(errorText(error));
+      });
+  }, []);
+
   useEffect(() => {
-    let cancelled = false;
-    const generation = ++planLoadGeneration.current;
+    workspaceVisit.current += 1;
+    workspaceRef.current = workspaceId;
     busyRef.current = false;
     setBusy(false);
     setSigningIn(false);
@@ -172,30 +187,13 @@ export function useGuidedModelSetup({
     setLatestPlan(null);
     setActivePlans([]);
     setDialogPlan(null);
-    void fetchChangePlans({ workspaceId }, { limit: 25 })
-      .then(({ items }) => {
-        if (cancelled) return;
-        const pending = items.filter(
-          (plan) =>
-            plan.origin.surface === "settings" &&
-            ["provider_connection", "installation_default_model"].includes(plan.kind) &&
-            !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
-        );
-        if (generation !== planLoadGeneration.current) return;
-        // Keep every active plan so Connect can resume the one for the selected provider.
-        setActivePlans(pending);
-        if (pending[0]) setLatestPlan(pending[0]);
-      })
-      .catch((error: unknown) => {
-        if (!cancelled && generation === planLoadGeneration.current) setActionError(errorText(error));
-      });
+    readPlans(workspaceId, ++planLoadGeneration.current);
     return () => {
-      cancelled = true;
       planLoadGeneration.current += 1;
       signInRef.current?.abort();
       signInRef.current = null;
     };
-  }, [workspaceId]);
+  }, [workspaceId, readPlans]);
 
   const recordPlan = useCallback(
     async (updated: ChangePlanRecord) => {
@@ -257,6 +255,8 @@ export function useGuidedModelSetup({
         setActionError("This sign-in action changed. Reopen the setup request.");
         return;
       }
+      const visit = workspaceVisit.current;
+      let completing = false;
       await runAction(async () => {
         const controller = new AbortController();
         signInRef.current = controller;
@@ -265,6 +265,7 @@ export function useGuidedModelSetup({
           return await runProviderSignIn(plan, workspaceId, controller.signal, {
             // Past this point the Gateway consumes the sign-in, so closing the dialog must no longer cancel the run.
             onCompleting: () => {
+              completing = true;
               if (signInRef.current === controller) signInRef.current = null;
               setSigningIn(false);
             },
@@ -274,10 +275,20 @@ export function useGuidedModelSetup({
             signInRef.current = null;
             setSigningIn(false);
           }
+          // The workspace changed while completion ran, so runAction discards the record. A plan read made
+          // meanwhile may hold the old revision: re-read it if the operator is back in this workspace (a later
+          // visit reads it fresh), and refresh the install-wide provider readiness either way.
+          if (completing && workspaceVisit.current !== visit) {
+            if (workspaceRef.current === workspaceId) {
+              // An action running in this visit keeps its generation; it already invalidated older reads.
+              readPlans(workspaceId, busyRef.current ? planLoadGeneration.current : ++planLoadGeneration.current);
+            }
+            void catalog.reload();
+          }
         }
       });
     },
-    [runAction, workspaceId],
+    [catalog, readPlans, runAction, workspaceId],
   );
   /** Stops a running sign-in poll and releases the busy state it held; a no-op when none runs. */
   const cancelProviderSignIn = useCallback(() => {
