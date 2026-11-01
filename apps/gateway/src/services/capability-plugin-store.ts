@@ -142,6 +142,15 @@ export class CapabilityPluginStore {
     });
   }
 
+  /** Every snapshot an installed plugin or a kept inspection (expired or not) still points at. */
+  public async listReferencedSnapshots(): Promise<Set<string>> {
+    const { plugins, inspections } = (await this.read()).value;
+    return new Set([
+      ...plugins.map((plugin) => plugin.snapshotTreeSha256),
+      ...inspections.map((kept) => kept.snapshotTreeSha256),
+    ]);
+  }
+
   /** An inspection and the snapshot it read, unless it isn't kept or has run out of time. */
   public async getInspection(inspectionId: string): Promise<KeptInspection | undefined> {
     const kept = (await this.read()).value.inspections.find((item) => item.inspection.inspectionId === inspectionId);

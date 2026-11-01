@@ -438,3 +438,34 @@ describe("readPluginFileBounded", () => {
     await expect(readPluginFileBounded(file!)).rejects.toMatchObject({ reason: "UNSAFE_TREE", message: swapped });
   });
 });
+
+describe("PluginSnapshotStore.sweep", () => {
+  it("removes every snapshot outside the keep set, and a removed one no longer resolves", async () => {
+    const first = await store.importDirectory(makeFolder({ "a.txt": "one" }));
+    const second = await store.importDirectory(makeFolder({ "a.txt": "two" }));
+    const third = await store.importDirectory(makeFolder({ "a.txt": "three" }));
+    fs.mkdirSync(path.join(storeRoot, "not-a-snapshot"));
+
+    const { removed } = await store.sweep(new Set([first.treeSha256]), { olderThanMs: 0 });
+
+    expect(removed.sort()).toEqual([second.treeSha256, third.treeSha256].sort());
+    expect(store.resolve(first.treeSha256)).toBe(first.dir);
+    expect(() => store.resolve(second.treeSha256)).toThrow(PluginSnapshotPathError);
+    expect(fs.existsSync(path.join(storeRoot, "not-a-snapshot"))).toBe(true);
+  });
+
+  it("keeps a snapshot newer than the grace window even when nothing keeps it", async () => {
+    const fresh = await store.importDirectory(makeFolder({ "a.txt": "fresh" }));
+    const hour = 60 * 60 * 1000;
+
+    expect((await store.sweep(new Set(), { olderThanMs: hour })).removed).toEqual([]);
+    expect(store.resolve(fresh.treeSha256)).toBe(fresh.dir);
+
+    const later = await store.sweep(new Set(), { olderThanMs: hour, now: Date.now() + 2 * hour });
+    expect(later.removed).toEqual([fresh.treeSha256]);
+  });
+
+  it("answers nothing removed when the store folder doesn't exist yet", async () => {
+    await expect(store.sweep(new Set(), { olderThanMs: 0 })).resolves.toEqual({ removed: [] });
+  });
+});

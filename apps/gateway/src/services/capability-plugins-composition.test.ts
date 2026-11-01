@@ -1,7 +1,12 @@
-import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import fs, { readFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
+import type { CapabilityPluginStore } from "./capability-plugin-store.js";
+import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import {
   gatewayVersionForReviewKeys,
+  reclaimPluginStorage,
   readGatewayVersion,
   UNVERSIONED_REVIEW_KEY_LABEL,
 } from "./capability-plugins-composition.js";
@@ -46,5 +51,57 @@ describe("gatewayVersionForReviewKeys", () => {
     });
     expect(label).toBe(UNVERSIONED_REVIEW_KEY_LABEL);
     expect(readGatewayVersion(() => ({ version: label }))).toBe(label);
+  });
+});
+
+describe("reclaimPluginStorage", () => {
+  const scratch: string[] = [];
+  afterEach(() => {
+    for (const dir of scratch.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  function makeSource(root: string, name: string): string {
+    const dir = path.join(root, "src", name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "a.txt"), name);
+    return dir;
+  }
+
+  it("clears temp copies and orphan snapshots but keeps one an installed plugin references", async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "goat-plugin-reclaim-"));
+    scratch.push(root);
+    const snapshots = new PluginSnapshotStore(path.join(root, "snapshots"));
+    const tempRoot = path.join(root, "tmp");
+    fs.mkdirSync(path.join(tempRoot, "git-abc"), { recursive: true });
+    fs.mkdirSync(path.join(tempRoot, "copy-def"), { recursive: true });
+    fs.writeFileSync(path.join(tempRoot, "copy-def", "x.txt"), "x");
+    const kept = await snapshots.importDirectory(makeSource(root, "kept"));
+    const orphan = await snapshots.importDirectory(makeSource(root, "orphan"));
+    const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
+    fs.utimesSync(kept.dir, old, old);
+    fs.utimesSync(orphan.dir, old, old);
+    const store = {
+      listReferencedSnapshots: async () => new Set([kept.treeSha256]),
+    } as unknown as CapabilityPluginStore;
+
+    await reclaimPluginStorage({ snapshots, store, tempRoot });
+
+    expect(fs.readdirSync(tempRoot)).toEqual([]);
+    expect(snapshots.resolve(kept.treeSha256)).toBe(kept.dir);
+    expect(() => snapshots.resolve(orphan.treeSha256)).toThrow();
+  });
+
+  it("logs and swallows a failure instead of blocking boot", async () => {
+    await expect(
+      reclaimPluginStorage({
+        snapshots: { sweep: async () => ({ removed: [] }) },
+        store: {
+          listReferencedSnapshots: async () => {
+            throw new Error("settings unreadable");
+          },
+        },
+        tempRoot: path.join(os.tmpdir(), "goat-plugin-reclaim-missing"),
+      }),
+    ).resolves.toBeUndefined();
   });
 });
