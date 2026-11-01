@@ -89,7 +89,8 @@ test("real PostgreSQL upgraded installs keep their plans and match a fresh insta
     freshChecks = await planChecks(admin, schema);
   });
 
-  // An install already at the connector-install head (v222) gets only the kind CHECK widened.
+  // An install already at the connector-install head (v222) gets the kind CHECK widened (v223), then the data-only
+  // review-depth reset (v224), which leaves change_plans alone.
   await withSchema("plan_plugin_upgrade", async ({ admin, schema, migrations }) => {
     await runPostgresMigrations(migrations, upTo(222));
     await insertPlan(admin, schema, "plan-legacy-pack", "settings", "capability_pack");
@@ -98,7 +99,7 @@ test("real PostgreSQL upgraded installs keep their plans and match a fresh insta
     const before = await admin.query(`SELECT * FROM ${schema}.change_plans ORDER BY plan_id`);
 
     const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-    assert.deepEqual(migrated.appliedVersions, [223]);
+    assert.deepEqual(migrated.appliedVersions, [223, 224]);
     assert.equal(migrated.latestVersion, 224);
     assert.deepEqual(await planChecks(admin, schema), freshChecks);
     assert.deepEqual((await admin.query(`SELECT * FROM ${schema}.change_plans ORDER BY plan_id`)).rows, before.rows);
