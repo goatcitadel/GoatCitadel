@@ -199,6 +199,26 @@ export function revokeDidntTakeStop(
   );
 }
 
+/**
+ * The skills step's stop once every skill was tried: the first skill that stopped, then each other one that stopped or
+ * still waits, so none goes unnamed. Its next step and detail are the first stop's.
+ */
+export function skillsStop(
+  stops: readonly UninstallStepStopped[],
+  waiting: UninstallProgress["waiting"],
+): UninstallStepStopped {
+  const [first, ...others] = stops;
+  return new UninstallStepStopped(
+    [
+      first!.what,
+      ...others.map((stop) => stop.what),
+      ...waiting.map(({ label, reason }) => WAITING_WORDS[reason](label)),
+    ].join(" "),
+    first!.message,
+    first!.next,
+  );
+}
+
 /** A piece its owner removed, whose record write then failed. */
 export function recordedStop(what: string, error: unknown): UninstallStepStopped {
   return new UninstallStepStopped(

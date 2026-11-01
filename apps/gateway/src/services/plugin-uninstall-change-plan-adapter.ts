@@ -46,8 +46,10 @@ import {
   keptConnectorWords,
   labelOf,
   plannedSentences,
+  UninstallStepStopped,
   recordedStop,
   revokeDidntTakeStop,
+  skillsStop,
   stopped,
   undecidedSecretsStop,
   waitingSummary,
@@ -464,7 +466,9 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
   /**
    * Step 5: each skill the plugin added that isn't removed yet, read by its check's id. A switched-on skill is revoked,
    * and counts as removed only once its check reads revoked; one installed and never switched on is left inert; one
-   * still in the middle of its own step waits for that step. Answers every removed skill's id, for the tombstone.
+   * still in the middle of its own step waits for that step. A skill whose removal can't take effect doesn't keep the
+   * others from being revoked: every skill is tried, then the step stops naming each one left. Answers every removed
+   * skill's id, for the tombstone.
    */
   private async removeSkills(
     record: StoredPlugin,
@@ -485,14 +489,22 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
             this.sources.listPendingSkillSteps(record.workspaceId, ids),
           ])
         : [new Map<string, PluginSkillCheck>(), new Map<string, PendingSkillStep>()];
+    const stops: UninstallStepStopped[] = [];
     for (const piece of open) {
       progress.current = piece;
       const id = piece.skillSnapshotId;
       const check = id ? checks.get(id) : undefined;
       const skill = { piece, check, label: check?.title ?? labelOf(piece, labels) };
-      const outcome = await this.removeSkill(record, actorId, skill, id ? pendingSteps.get(id) : undefined, {
-        readRevokeAgain,
-      });
+      let outcome: SkillRemovalDecision;
+      try {
+        outcome = await this.removeSkill(record, actorId, skill, id ? pendingSteps.get(id) : undefined, {
+          readRevokeAgain,
+        });
+      } catch (error) {
+        if (!(error instanceof UninstallStepStopped)) throw error;
+        stops.push(error);
+        continue;
+      }
       if (outcome.kind === "removed") {
         await this.savePiece(request, piece.pieceId, ({ waiting: _waiting, ...rest }) => ({
           ...rest,
@@ -509,6 +521,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       }
     }
     progress.current = undefined;
+    if (stops.length > 0) throw skillsStop(stops, progress.waiting);
     return skillIds;
   }
 
@@ -525,8 +538,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
     options: { readRevokeAgain: boolean },
   ): Promise<SkillRemovalDecision> {
     const { piece, label } = skill;
-    let check = skill.check;
-    let effects = await this.unsettledRevokeEffects(check);
+    let { check, effects } = await this.readUnsettledRevoke(record.workspaceId, skill.check);
     let decision = decideSkillRemoval(piece, check, pendingStep, effects);
     for (let ask = 0; decision.kind === "revoke"; ask += 1) {
       const revoked = await this.sources.revokeSkill({
@@ -556,13 +568,22 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
     return decision;
   }
 
-  /** For an approved revoke the check shows unsettled: whether its work still runs. */
-  private async unsettledRevokeEffects(
+  /**
+   * For an approved revoke the check shows unsettled: whether its work still runs, and then the check again, in the
+   * order `readAfterRevoke` reads them. A revoke that applied in between then reads as revoked, never as done against
+   * the stale check read at the step's start.
+   */
+  private async readUnsettledRevoke(
+    workspaceId: string,
     check: PluginSkillCheck | undefined,
-  ): Promise<ApprovalReading["effects"] | undefined> {
+  ): Promise<{ check: PluginSkillCheck | undefined; effects: ApprovalReading["effects"] | undefined }> {
     const latest = check?.revokeApproval;
-    if (check?.revoked || latest?.status !== "approved" || latest.settled !== undefined) return undefined;
-    return (await this.sources.readApproval(latest.approvalId))?.effects;
+    if (!check || check.revoked || latest?.status !== "approved" || latest.settled !== undefined) {
+      return { check, effects: undefined };
+    }
+    const effects = (await this.sources.readApproval(latest.approvalId))?.effects;
+    const fresh = (await this.sources.readSkillChecks(workspaceId, [check.snapshotId])).get(check.snapshotId);
+    return { check: fresh, effects };
   }
 
   /**

@@ -523,6 +523,105 @@ describe("uninstalling a plugin through one Change Plan", () => {
     },
   );
 
+  it.each([
+    [
+      "revokes the next one in the same pass",
+      "revoked" as const,
+      "Removed 5 pieces.",
+      [] as string[],
+      { removed: { skillId: "extra:agenda" } },
+    ],
+    [
+      "names the next one still waiting",
+      "waiting" as const,
+      "Removed 4 pieces.",
+      ["Removing the skill Agenda waits for your approval."],
+      { waiting: { approvalId: "approval-revoke-agenda", operation: "revoke" } },
+    ],
+  ])(
+    "goes on to a plugin's other skills when one skill's removal can't take effect, and %s",
+    async (_case, second, removed, alsoNamed, secondPiece) => {
+      const asked = new Map<string, number>();
+      // Skill Hub as the real owner answers: the first skill's revoke settles blocked and asking again hands back that
+      // same approved revoke; the second skill's revoke takes at once, or waits for its approval.
+      const h = harness({
+        revokeSkill: async ({ snapshotId }) => {
+          asked.set(snapshotId, (asked.get(snapshotId) ?? 0) + 1);
+          if (snapshotId === SKILL_CHECK_ID) {
+            blocks(h, "approval-revoke-1");
+            return { status: "approved", approvalId: "approval-revoke-1" };
+          }
+          if (second === "waiting") return { status: "waiting", approvalId: "approval-revoke-agenda" };
+          h.removal.skillChecks.set(snapshotId, REVOKED({ snapshotId, title: "Agenda", skillId: "extra:agenda" }));
+          return { status: "approved", approvalId: "approval-revoke-agenda" };
+        },
+      });
+      await installed(h);
+      // A second switched-on skill, after the first in the record.
+      await h.store.update(
+        PLUGIN_ID,
+        (current) =>
+          current && {
+            ...current,
+            pieces: [
+              ...current.pieces,
+              { pieceId: "agenda", kind: "skill", owned: true, skillSnapshotId: "snapshot-skill-2" },
+            ],
+          },
+      );
+      h.removal.skillChecks.set(
+        "snapshot-skill-2",
+        skillCheck({ snapshotId: "snapshot-skill-2", title: "Agenda", skillId: "extra:agenda" }),
+      );
+
+      const stopped = await h.uninstall();
+
+      expect(stopped).toMatchObject({
+        outcome: "failed",
+        summary: [
+          removed,
+          "Couldn't remove the skill Meeting notes: its removal was approved, but it didn't take effect.",
+          ...alsoNamed,
+          "Uninstalling again won't change that until the skill changes.",
+          "Switch it off in Skills so the AI can't use it, then uninstall Meeting tools again.",
+        ].join(" "),
+      });
+      expect(await h.plans.get(OPERATOR, stopped.planId)).toMatchObject({
+        status: "manual_required",
+        result: {
+          failureCode: "plugin_uninstall_skills_failed",
+          failureDetail: "Revoke approval approval-revoke-1 settled blocked.",
+        },
+      });
+      // Both skills were tried in this pass: the first twice (its handback), the second once.
+      expect(Object.fromEntries(asked)).toEqual({ [SKILL_CHECK_ID]: 2, "snapshot-skill-2": 1 });
+      const left = await h.store.get(PLUGIN_ID);
+      expect(left?.state).toBe("uninstalling");
+      expect(left?.pieces.find((piece) => piece.pieceId === "agenda")).toMatchObject(secondPiece);
+      expect(left?.pieces.find((piece) => piece.pieceId === "meeting-notes")).not.toHaveProperty("removed");
+      await expect(h.store.listRemoved()).resolves.toEqual([]);
+    },
+  );
+
+  it("reads a revoke's work before its check again, so one that applied meanwhile reads as revoked", async () => {
+    const h = harness();
+    await installed(h);
+    // At the step's start the check shows an approved revoke still running.
+    inFlight(h, "approval-revoke-earlier");
+    // It applies just as its work is read.
+    h.uninstallSources.readApproval.mockImplementationOnce(async (approvalId) => {
+      revokes(h, approvalId);
+      return { status: "approved", effects: "done" };
+    });
+
+    await expect(h.uninstall()).resolves.toMatchObject({
+      outcome: "applied",
+      summary: "Removed 5 pieces. Hosts it allowed stay in your allowlist.",
+    });
+    // Read against the fresh check, it was already revoked: no second revoke was asked for.
+    expect(h.revokeSkill).not.toHaveBeenCalled();
+  });
+
   it("reads the check again while an approved revoke's work runs, and keeps the plugin if it never lands", async () => {
     // The work lands a moment after the approval resolved: the uninstall still finishes in one pass.
     const { h, tab } = withSkillsTab("trusted_local");
