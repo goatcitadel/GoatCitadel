@@ -9,7 +9,14 @@ import {
   isMissingPlaywrightBrowserError,
   loadPlaywright,
 } from "../playwright-runtime.js";
+import type { ComputerAction, ErrandTargetInfo } from "./computer-actions.js";
+import { dispatchComputerAction, pointOf } from "./computer-dispatch.js";
 import { createErrandOverlay, type ErrandOverlay } from "./errand-overlay.js";
+import {
+  buildDescribeFocusedExpression,
+  buildDescribePointExpression,
+  ERRAND_TARGET_WORLD,
+} from "./errand-target-script.js";
 
 export type ErrandBrowserLaunchErrorCode = "profile_locked" | "chrome_missing" | "launch_failed";
 
@@ -48,9 +55,23 @@ export interface ErrandBrowser {
   close(): Promise<void>;
   /** The banner, cursor and approval card GoatCitadel draws over the page, out of the page's reach. */
   overlay: ErrandOverlay;
+  /** Describes the interactive element at a viewport point, read in an isolated world; null when nothing is there. */
+  describeTarget(x: number, y: number): Promise<ErrandTargetInfo | null>;
+  /** Describes the focused element, read in an isolated world; null when nothing is focused. */
+  describeFocused(): Promise<ErrandTargetInfo | null>;
+  /**
+   * Runs the actions in order, moving the overlay cursor to each action's point first. `beforeAction` is asked before
+   * every action and may halt the batch. Never call this while an approval is pending.
+   */
+  runActions(
+    actions: ComputerAction[],
+    beforeAction: (action: ComputerAction, index: number) => Promise<"proceed" | "halt">,
+  ): Promise<{ ran: number; halted: boolean }>;
 }
 
 const VIEWPORT = { width: 1280, height: 800 } as const;
+/** The pause after an action batch so the page can react before the next screenshot. */
+const ACTION_SETTLE_MS = 300;
 const PROFILE_LOCKED_PATTERN =
   /user data directory is already in use|processsingleton|existing browser session|profile.{0,40}(in use|locked)/iu;
 const CHROME_MISSING_PATTERN = /executable doesn't exist|distribution '?chrome'? is not found|chromium distribution/iu;
@@ -276,10 +297,74 @@ async function createErrandBrowser(
     return activePage.screenshot({ type: "png" });
   }
 
+  /** Evaluates `expression` in a GoatCitadel-only isolated world, so page script cannot intercept or spoof it. */
+  async function inspect(expression: string): Promise<ErrandTargetInfo | null> {
+    const page = activePage;
+    let session: CDPSession | undefined;
+    try {
+      session = await context.newCDPSession(page);
+      const frameId = (await session.send("Page.getFrameTree")).frameTree.frame.id;
+      const { executionContextId } = await session.send("Page.createIsolatedWorld", {
+        frameId,
+        worldName: ERRAND_TARGET_WORLD,
+        grantUniveralAccess: false,
+      });
+      const response = await session.send("Runtime.evaluate", {
+        contextId: executionContextId,
+        expression,
+        returnByValue: true,
+      });
+      if (response.exceptionDetails) {
+        return null;
+      }
+      return (response.result.value as ErrandTargetInfo | null | undefined) ?? null;
+    } catch {
+      return null;
+    } finally {
+      await session?.detach().catch(() => undefined);
+    }
+  }
+
+  /** Moves the drawn cursor; purely cosmetic, so overlay failures never stop an action. */
+  async function moveCursor(point: { x: number; y: number }): Promise<void> {
+    try {
+      const snapshot = await overlay.snapshot();
+      if (snapshot.mode === "driving") {
+        await overlay.render({ mode: "driving", bannerText: snapshot.bannerText ?? "", cursor: point });
+      }
+    } catch {
+      // A slow or missing overlay must not block the errand.
+    }
+  }
+
+  async function settle(ran: number, halted: boolean): Promise<{ ran: number; halted: boolean }> {
+    await new Promise((resolve) => setTimeout(resolve, ACTION_SETTLE_MS));
+    return { ran, halted };
+  }
+
   await overlay.attach(firstPage);
 
   return {
     overlay,
+    describeTarget: (x, y) => inspect(buildDescribePointExpression(x, y)),
+    describeFocused: () => inspect(buildDescribeFocusedExpression()),
+    async runActions(actions, beforeAction) {
+      let ran = 0;
+      for (const [index, action] of actions.entries()) {
+        if ((await beforeAction(action, index)) === "halt") {
+          return await settle(ran, true);
+        }
+        const point = pointOf(action);
+        if (point) {
+          await moveCursor(point);
+        }
+        // Every mouse and keyboard action goes through the overlay's automation guard so Esc and the overlay's own
+        // controls never mistake it for the operator.
+        await overlay.withAutomationInput(() => dispatchComputerAction(activePage, action));
+        ran += 1;
+      }
+      return await settle(ran, false);
+    },
     page: () => activePage,
     currentUrl: () => (activePage.isClosed() ? "" : activePage.url()),
     async captureForModel() {

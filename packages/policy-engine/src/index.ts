@@ -39,6 +39,7 @@ export {
   type BrowserEgressProxy,
   type BrowserEgressProxyOptions,
 } from "./browser-egress-proxy.js";
+export * from "./errand-browser/computer-actions.js";
 export * from "./errand-browser/errand-browser.js";
 export * from "./errand-browser/errand-overlay.js";
 export * from "./tool-patterns.js";
