@@ -252,13 +252,21 @@ function describeGitFailure(error: unknown): string {
 // Folder
 // ---------------------------------------------------------------------------
 
+/**
+ * Whether a plugin may be read from a folder on this computer: never on `remote_hardened`. The fetch refuses by this
+ * rule, and the Plugins list answers it, so the two never disagree.
+ */
+export function folderSourcesAllowed(deploymentProfile: DeploymentProfile): boolean {
+  return deploymentProfile !== "remote_hardened";
+}
+
 async function fetchFolderSource(
   source: Extract<PluginSource, { kind: "folder" }>,
   deploymentProfile: DeploymentProfile,
   importSnapshot: PluginSourceInputs["importSnapshot"],
   tempRoot: string,
 ): Promise<FetchedPluginSource> {
-  if (deploymentProfile === "remote_hardened") {
+  if (!folderSourcesAllowed(deploymentProfile)) {
     throw new PluginSourceError(403, "FOLDER_INSTALL_NOT_ALLOWED", FOLDER_REFUSED_MESSAGE);
   }
   const folder = await requireAbsoluteFolder(source.path);

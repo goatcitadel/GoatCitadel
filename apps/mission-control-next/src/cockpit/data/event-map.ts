@@ -50,6 +50,11 @@ function changesRuntimeSettings(event: RealtimeEvent): boolean {
   return typeof owner === "string" && (owner === "runtime_settings" || owner.startsWith("runtime_settings."));
 }
 
+/** A plugin's install and uninstall move through change plans on `capability_plugins`; no plugin event exists. */
+function changesPlugins(event: RealtimeEvent): boolean {
+  return event.payload?.targetOwnerId === "capability_plugins";
+}
+
 const DIRECTORY_KEYS: readonly QueryKey[] = [
   queryKeys.directory(),
   ["settings", "workspaces"],
@@ -104,6 +109,20 @@ const CAPABILITY_KEYS: readonly QueryKey[] = [
   ["capability"],
   queryKeys.inboxAll(),
 ];
+// The Capabilities plugin list and a plugin's detail; the prefixes cover every workspace's list and every plugin's
+// detail. A kept inspection never changes, so no event names it.
+const CAPABILITY_PLUGIN_KEYS: readonly QueryKey[] = [
+  ["plugins", "capability-plugins"],
+  ["plugins", "capability-plugin-detail"],
+];
+// A plugin plan moving changes the plugin, and the marks the other tabs show for its pieces ("From <plugin>",
+// "Removed with <plugin>", "held by"), which no event of their own refreshes.
+const PLUGIN_PLAN_KEYS: readonly QueryKey[] = [
+  ...CAPABILITY_PLUGIN_KEYS,
+  ...CAPABILITY_SKILL_KEYS,
+  ...CAPABILITY_CONNECTOR_KEYS,
+  ...TOOL_KEYS,
+];
 
 const SYSTEM_SOURCE_TYPES = new Map<string, EventEffect | "ignore">([
   ["workspace_created", effect(DIRECTORY_KEYS, ["system"])],
@@ -146,20 +165,30 @@ const SOURCE_RULES = new Map<string, Rule>([
   [
     "evolution_control_plane",
     (e) =>
-      effect(
-        [queryKeys.inboxAll(), ["change-plan"], ...(changesRuntimeSettings(e) ? SETTINGS_READER_KEYS : [])],
-        ["approvals"],
-      ),
+      changesPlugins(e)
+        ? // The prompt-pack workbench re-reads on `quality`, and a plugin adds or removes its prompt packs.
+          effect([queryKeys.inboxAll(), ["change-plan"], ...PLUGIN_PLAN_KEYS], ["approvals", "plugins", "quality"])
+        : effect(
+            [queryKeys.inboxAll(), ["change-plan"], ...(changesRuntimeSettings(e) ? SETTINGS_READER_KEYS : [])],
+            ["approvals"],
+          ),
   ],
   ["capabilities", () => effect(CAPABILITY_KEYS, ["skills"])],
   // A switch asking for approval and a change applying both publish here, so they refresh the list and the details,
-  // and the Inbox, where a skill approval waits in every workspace (its creation publishes no `approvals` event).
+  // and the Inbox, where a skill approval waits in every workspace (its creation publishes no `approvals` event). A
+  // plugin reads installed only once each of its skills is switched on, so the plugin readers refresh too.
   [
     "skills",
     () =>
       effect(
-        [queryKeys.capabilities(), ...CAPABILITY_SKILL_KEYS, ...CAPABILITY_SKILL_INSTALL_KEYS, queryKeys.inboxAll()],
-        ["skills"],
+        [
+          queryKeys.capabilities(),
+          ...CAPABILITY_SKILL_KEYS,
+          ...CAPABILITY_SKILL_INSTALL_KEYS,
+          ...CAPABILITY_PLUGIN_KEYS,
+          queryKeys.inboxAll(),
+        ],
+        ["skills", "plugins"],
       ),
   ],
   // A tool call inside a turn changes no catalog or grant; the turn's own chat events carry it.
@@ -225,6 +254,7 @@ const REPLAY_GAP_TOPICS: readonly RefreshTopic[] = [
   "tasks",
   "system",
   "skills",
+  "plugins",
   "memory",
   "improvement",
   "integrations",

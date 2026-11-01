@@ -56,6 +56,24 @@ export const queryKeys = {
     workspaceId,
     snapshotId,
   ],
+  /**
+   * The Capabilities plugins (install-wide, though the route takes a workspace). Plugin plans, skill events and Settings
+   * change plans refresh it: no plugin event of its own exists.
+   */
+  capabilityPlugins: (workspaceId: string): TopicKey => ["plugins", "capability-plugins", workspaceId],
+  /** One installed plugin and its pieces. Every plugin's detail shares the prefix, so the same events refresh it. */
+  capabilityPluginDetail: (workspaceId: string, pluginId: string): TopicKey => [
+    "plugins",
+    "capability-plugin-detail",
+    workspaceId,
+    pluginId,
+  ],
+  /** A kept inspection. It never changes once made, so no event refreshes it; only a replay gap re-reads it. */
+  capabilityPluginInspection: (inspectionId: string): TopicKey => [
+    "plugins",
+    "capability-plugin-inspection",
+    inspectionId,
+  ],
   pendingApprovals: (): TopicKey => ["approvals", "pending"],
   inboxAll: (): TopicKey => ["approvals", "operator-inbox"],
   inbox: (workspaceId: string): TopicKey => [
@@ -141,4 +159,6 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["skills", "capability-skills"],
   // The installs list carries `operatorApprovalSkip` too, which decides whether an install step asks the operator.
   ["skills", "capability-skill-installs"],
+  // The plugin list carries `operatorApprovalSkip`, which decides whether a plugin's install and uninstall ask first.
+  ["plugins", "capability-plugins"],
 ];

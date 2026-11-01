@@ -10,6 +10,7 @@ export type RefreshTopic =
   | "memory"
   | "agents"
   | "skills"
+  | "plugins"
   | "mcp"
   | "tasks"
   | "improvement"

@@ -48,7 +48,7 @@ import {
   PluginSnapshotStore,
   SNAPSHOT_SWEEP_GRACE_MS,
 } from "./plugin-snapshot-store.js";
-import { fetchPluginSource } from "./plugin-source-service.js";
+import { fetchPluginSource, folderSourcesAllowed } from "./plugin-source-service.js";
 import { PluginUninstallChangePlanAdapter } from "./plugin-uninstall-change-plan-adapter.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
 import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.js";
@@ -113,6 +113,11 @@ export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
    * page by page, where a skill's own step left waiting is found.
    */
   approvals: CapabilitySkillsOwners["approvals"];
+  /**
+   * Whether the operator's skip applies on this install, as a plain function over the one rule every skip follows
+   * (`allowsOperatorApprovalSkip`): what the Plugins list answers. It decides nothing here.
+   */
+  readOperatorApprovalSkip(): Promise<boolean>;
 }
 
 /**
@@ -288,6 +293,9 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     install: (input) => actions.install(input),
     uninstall: (input) => actions.uninstall(input),
     loadToolGroupHolds: () => holds.load(),
+    readOperatorApprovalSkip: () => owners.readOperatorApprovalSkip(),
+    // The live profile, by the fetch's own folder rule.
+    folderSourcesAllowed: () => folderSourcesAllowed(config.assistant.deploymentProfile),
     reportFailure: reportFailedRead,
   });
   return { routes, readPlugins: () => store.list(), readRemovedPlugins: () => store.listRemoved() };

@@ -309,6 +309,73 @@ describe("resolveRealtimeEvent", () => {
     });
   });
 
+  it("refreshes plugin lists on plugin plan events", () => {
+    const listPrefix = ["plugins", "capability-plugins"];
+    const detailPrefix = ["plugins", "capability-plugin-detail"];
+    // The prefixes cover every workspace's list and every plugin's detail, so a change refreshes whichever is open.
+    expect(queryKeys.capabilityPlugins("ws-1").slice(0, 2)).toEqual(listPrefix);
+    expect(queryKeys.capabilityPluginDetail("ws-1", "p-1").slice(0, 2)).toEqual(detailPrefix);
+    // No plugin event exists: an install or an uninstall moves through its Change Plan, which the Plugins owner owns.
+    for (const [type, kind] of [
+      ["change_plan.created", "plugin_install"],
+      ["change_plan.awaiting_approval", "plugin_install"],
+      ["change_plan.completed", "plugin_install"],
+      ["change_plan.applying", "plugin_uninstall"],
+      ["change_plan.manual_required", "plugin_uninstall"],
+      ["change_plan.completed", "plugin_uninstall"],
+    ] as const) {
+      const result = resolveRealtimeEvent(
+        event(type, "evolution_control_plane", {
+          payload: {
+            kind,
+            targetOwnerId: "capability_plugins",
+            targetResourceId: "plugin:browser-checks",
+            planId: "p-1",
+            workspaceId: "lab",
+          },
+        }),
+      );
+      expect(result.kind, type).toBe("mapped");
+      const effect = result.kind === "mapped" ? result.effect : { keys: [], refresh: [] };
+      // The plan's own readers, as for any plan, and the plugin's list and detail.
+      for (const key of [queryKeys.inboxAll(), ["change-plan"], listPrefix, detailPrefix])
+        expect(effect.keys, `${type} ${JSON.stringify(key)}`).toContainEqual(key);
+      // A plugin's pieces are marked in the other tabs ("From <plugin>", "Removed with <plugin>", "held by"), and no
+      // event of their own says when that changes, so those lists refresh too.
+      for (const key of [
+        ["skills", "capability-skills"],
+        ["skills", "capability-skill-detail"],
+        ["mcp", "capability-connectors"],
+        ["tools", "capability-tools"],
+      ])
+        expect(effect.keys, `${type} ${JSON.stringify(key)}`).toContainEqual(key);
+      expect(effect.refresh).toEqual(expect.arrayContaining(["approvals", "plugins"]));
+      // A kept inspection never changes with a plan, and no plugin plan is a settings save.
+      expect(effect.keys).not.toContainEqual(["plugins", "capability-plugin-inspection"]);
+      expect(effect.keys).not.toContainEqual(["system", "managed-runtime-settings"]);
+    }
+    // A plugin reads installed only once each of its skills is switched on, and a skill switch publishes on `skills`.
+    const skill = resolveRealtimeEvent(event("skill_state_mutation_applied", "skills"));
+    const skillKeys = skill.kind === "mapped" ? skill.effect.keys : [];
+    expect(skillKeys).toContainEqual(listPrefix);
+    expect(skillKeys).toContainEqual(detailPrefix);
+    // The list carries `operatorApprovalSkip`, so a settings save re-reads it.
+    expect(SETTINGS_READER_KEYS).toContainEqual(listPrefix);
+    // A replay gap re-reads the whole `plugins` topic.
+    const gap = resolveRealtimeEvent(event("replay_gap", "gateway", { payload: { kind: "replay_gap" } }));
+    const gapEffect = gap.kind === "mapped" ? gap.effect : { keys: [], refresh: [] };
+    expect(gapEffect.keys).toContainEqual(["plugins"]);
+    expect(gapEffect.refresh).toContain("plugins");
+    // Other plans leave every plugin reader alone.
+    const other = resolveRealtimeEvent(
+      event("change_plan.completed", "evolution_control_plane", { payload: { targetOwnerId: "workspace_config" } }),
+    );
+    expect(other).toEqual({
+      kind: "mapped",
+      effect: { keys: [queryKeys.inboxAll(), ["change-plan"]], refresh: ["approvals"] },
+    });
+  });
+
   it("refreshes the saved-board list and detail readers when a board changes elsewhere", () => {
     expect(
       resolveRealtimeEvent(event("ops_saved_board_changed", "ops_saved_boards", { eventClass: "operational_signal" })),

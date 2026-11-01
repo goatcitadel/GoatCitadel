@@ -28,7 +28,7 @@ describe("last Capabilities tab", () => {
     expect(readLastCapabilitiesTab()).toBeUndefined();
   });
 
-  it.each(["skills", "connectors", "tools"] as const)("remembers %s", (tab) => {
+  it.each(["skills", "plugins", "connectors", "tools"] as const)("remembers %s", (tab) => {
     writeLastCapabilitiesTab(tab);
     expect(window.localStorage.getItem(KEY)).toBe(tab);
     expect(readLastCapabilitiesTab()).toBe(tab);
@@ -40,7 +40,7 @@ describe("last Capabilities tab", () => {
     expect(readLastCapabilitiesTab()).toBe("connectors");
   });
 
-  it.each(["plugins", "", "Tools", "Skills", "tools ", "constructor", "__proto__", '{"tab":"tools"}'])(
+  it.each(["extensions", "", "Tools", "Plugins", "plugins ", "constructor", "__proto__", '{"tab":"tools"}'])(
     "ignores the stored value %j because it names no tab",
     (stored) => {
       window.localStorage.setItem(KEY, stored);

@@ -103,11 +103,17 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
       summary: "Removed 1 piece.",
     })),
     loadToolGroupHolds: vi.fn(async () => undefined),
+    readOperatorApprovalSkip: vi.fn(async () => false),
+    folderSourcesAllowed: vi.fn(() => true),
     reportFailure: vi.fn(),
     ...overrides,
   };
   return { service: new CapabilityPluginsRouteService(sources), sources };
 }
+
+const UNREADABLE_SKILL_CHECKS =
+  "Whether plugins' skills are switched on couldn't be read right now, so plugins with skills show as not finished.";
+const UNREADABLE_BUILT_IN = "The plugins that ship with GoatCitadel couldn't be read right now.";
 
 function stored(pluginId: string, overrides: Partial<StoredPlugin> = {}): StoredPlugin {
   return {
@@ -340,6 +346,9 @@ describe("capability plugin routes", () => {
           sourceDisplay: "github.com/example/browser-checks",
           state: "installed",
           pieceCounts: {},
+          // The workspace it was installed in, where its uninstall and its skills' steps go, and where it came from.
+          workspaceId: "default",
+          sourceKind: "git",
         },
       ],
       builtIn: [
@@ -354,12 +363,46 @@ describe("capability plugin routes", () => {
           pieceCounts: { skill: 2, tool_group_off: 1 },
         },
       ],
+      operatorApprovalSkip: false,
+      folderSourcesAllowed: true,
+      issues: [],
     });
     // Listing reads manifests only: nothing is fetched, checked or kept, and no Skill Hub check is read.
     expect(inspect).not.toHaveBeenCalled();
     expect(readInspection).not.toHaveBeenCalled();
     expect(sources.readSkillChecks).not.toHaveBeenCalled();
     expect(sources.reportFailure).not.toHaveBeenCalled();
+  });
+
+  it("says whether the operator's skip applies and whether a folder can be added, from their own readers", async () => {
+    const { service, sources } = routeService({
+      readOperatorApprovalSkip: vi.fn(async () => true),
+      folderSourcesAllowed: vi.fn(() => false),
+    });
+    const { server } = await build(service);
+
+    const response = await server.inject({ method: "GET", url: LIST_URL });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json<CapabilityPluginListResponse>()).toMatchObject({
+      operatorApprovalSkip: true,
+      folderSourcesAllowed: false,
+      issues: [],
+    });
+    expect(sources.readOperatorApprovalSkip).toHaveBeenCalledOnce();
+    expect(sources.folderSourcesAllowed).toHaveBeenCalledOnce();
+
+    // A skip setting that can't be read asks, as the Skills tab's does: it reads off, and the failure is logged.
+    const failure = new Error("settings are locked");
+    const unreadable = routeService({
+      readOperatorApprovalSkip: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+    const listed = await unreadable.service.list();
+    expect(listed.operatorApprovalSkip).toBe(false);
+    expect(listed.issues).toEqual([]);
+    expect(unreadable.sources.reportFailure).toHaveBeenCalledWith("approval_skip", failure);
   });
 
   it("reads an installed plugin as not finished until every skill is switched on", async () => {
@@ -433,8 +476,29 @@ describe("capability plugin routes", () => {
 
     expect(listed.installed.map((item) => item.state)).toEqual(["install_not_finished"]);
     expect(listed.builtIn).toEqual([]);
+    // Each part that couldn't be read says so in one plain line, so neither "not finished" nor an empty built-in list
+    // reads as the truth.
+    expect(listed.issues).toEqual([UNREADABLE_SKILL_CHECKS, UNREADABLE_BUILT_IN]);
     expect(sources.reportFailure).toHaveBeenCalledWith("skill_hub", failure);
     expect(sources.reportFailure).toHaveBeenCalledWith("built_in", expect.objectContaining({ message: "EACCES" }));
+  });
+
+  it("says nothing about skill checks it had no need to read", async () => {
+    const { service, sources } = routeService({
+      // Neither is installed with a skill, so no check is read and none can fail.
+      listInstalled: vi.fn(async () => [
+        stored("no-skills", { pieces: [{ pieceId: "c", kind: "connector", owned: true, ref: "server-1" }] }),
+        stored("removing", { state: "uninstalling", pieces: [skillPiece("a", "check-done")] }),
+      ]),
+      readSkillChecks: vi.fn(async () => {
+        throw new Error("never read");
+      }),
+    });
+
+    const listed = await service.list();
+
+    expect(listed.issues).toEqual([]);
+    expect(sources.readSkillChecks).not.toHaveBeenCalled();
   });
 
   it("answers a refused source with its own status, plain words and its code", async () => {
@@ -789,6 +853,10 @@ describe("capability plugin routes", () => {
         pluginId: "browser-checks",
         state: "installed",
         installPlanId: "plan-browser-checks",
+        // Where it was installed, where it came from and the manifest it was installed from.
+        workspaceId: "default",
+        sourceKind: "git",
+        manifestSha256: "d".repeat(64),
       });
       expect(detail.pieces.map((piece) => [piece.pieceId, piece.state, piece.href])).toEqual([
         ["browser-qa", "added", "/capabilities/skills?item=skill:extra:himalaya"],

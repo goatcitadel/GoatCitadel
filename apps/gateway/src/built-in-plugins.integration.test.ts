@@ -111,6 +111,10 @@ describe("the plugins that ship with GoatCitadel, over the real Gateway", { time
           pieceCounts: { connector: 1, skill: 1 },
         },
       ],
+      // The example config keeps the skip off, and a local install may add a folder.
+      operatorApprovalSkip: false,
+      folderSourcesAllowed: true,
+      issues: [],
     });
 
     const created = await inject("POST", INSPECTIONS_URL, {

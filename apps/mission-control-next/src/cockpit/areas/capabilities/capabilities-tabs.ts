@@ -1,8 +1,11 @@
-/** The Capabilities tabs. A later phase adds Plugins here and widens the id type with it. */
-export type CapabilitiesTabId = "skills" | "connectors" | "tools";
+import { PLUGINS_HREF } from "./plugins/plugin-links";
+
+/** The Capabilities tabs, in the order they show. */
+export type CapabilitiesTabId = "skills" | "plugins" | "connectors" | "tools";
 
 export const CAPABILITIES_TABS: readonly { id: CapabilitiesTabId; label: string; href: string }[] = [
   { id: "skills", label: "Skills", href: "/capabilities/skills" },
+  { id: "plugins", label: "Plugins", href: PLUGINS_HREF },
   { id: "connectors", label: "Connectors", href: "/capabilities/connectors" },
   { id: "tools", label: "Tools", href: "/capabilities/tools" },
 ];

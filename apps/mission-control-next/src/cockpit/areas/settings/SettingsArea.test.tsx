@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsArea } from "./SettingsArea";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { buildSettingsIndex } from "./settings-index";
 import { selectedSettingsSection } from "./SettingsSectionTabs";
 import type { CapabilityToolBlock } from "@goatcitadel/contracts";
@@ -237,15 +238,17 @@ describe("Settings section tabs", () => {
     expect(container.querySelector('a[href="/settings/models#local-ai"]')?.textContent).toBe("Models › Local AI");
     expect(owner.mounted.mock.calls.filter(([name]) => name === "Llama owner")).toHaveLength(1);
   });
-  it("shows capability packs on Advanced and no add-ons", async () => {
+  it("shows no capability packs or add-ons: their old address opens Capabilities › Plugins", async () => {
+    // The cockpit routes the address to the Plugins tab, so Settings never mounts the packs section for it.
+    expect(resolveCockpitCompatibility("/settings/advanced?shell=cockpit#addons")).toEqual({
+      kind: "native",
+      href: "/capabilities/plugins?shell=cockpit",
+    });
     await render("/settings/advanced?shell=cockpit#addons");
-    await vi.waitFor(() => expect(container.textContent).toContain("Packs owner"));
+    expect(container.textContent).not.toContain("Packs owner");
     expect(container.textContent).not.toContain("Add-ons owner");
-    // Experimental, so it is no tab: Advanced shows one section at a time, as Connections did with it.
-    expect(container.querySelector('[role="tablist"][aria-label$=" sections"]')).toBeNull();
     expect(container.textContent).not.toContain("Runtime owner");
     expect(container.querySelector('a[href^="/settings/connections"]')).toBeNull();
-    expect(container.textContent).not.toContain("does not match");
   });
   it("links Trust & policy to the one explanation of how rules combine", async () => {
     await render("/settings/safety?shell=cockpit#trust-policy");

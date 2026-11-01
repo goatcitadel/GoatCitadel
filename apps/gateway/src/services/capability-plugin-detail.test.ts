@@ -165,6 +165,8 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
       throw new Error("reading never uninstalls");
     }),
     loadToolGroupHolds: vi.fn(async () => undefined),
+    readOperatorApprovalSkip: vi.fn(async () => false),
+    folderSourcesAllowed: vi.fn(() => true),
     reportFailure: vi.fn(),
     ...overrides,
   };
