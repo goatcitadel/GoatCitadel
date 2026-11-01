@@ -115,14 +115,21 @@ const CAPABILITY_PLUGIN_KEYS: readonly QueryKey[] = [
   ["plugins", "capability-plugins"],
   ["plugins", "capability-plugin-detail"],
 ];
+/** Each key once, in first-seen order. */
+function uniqueKeys(keys: readonly QueryKey[]): readonly QueryKey[] {
+  return [...new Map(keys.map((key) => [JSON.stringify(key), key])).values()];
+}
 // A plugin plan moving changes the plugin, and the marks the other tabs show for its pieces ("From <plugin>",
-// "Removed with <plugin>", "held by"), which no event of their own refreshes.
-const PLUGIN_PLAN_KEYS: readonly QueryKey[] = [
+// "Removed with <plugin>", "held by"), which no event of their own refreshes. An install also saves settings (the
+// network and hooks allowlists), and its holds change which tool groups read as off, with no settings event either, so
+// every settings reader refreshes as for a settings save.
+const PLUGIN_PLAN_KEYS: readonly QueryKey[] = uniqueKeys([
   ...CAPABILITY_PLUGIN_KEYS,
   ...CAPABILITY_SKILL_KEYS,
   ...CAPABILITY_CONNECTOR_KEYS,
   ...TOOL_KEYS,
-];
+  ...SETTINGS_READER_KEYS,
+]);
 
 const SYSTEM_SOURCE_TYPES = new Map<string, EventEffect | "ignore">([
   ["workspace_created", effect(DIRECTORY_KEYS, ["system"])],

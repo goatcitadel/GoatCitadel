@@ -36,9 +36,11 @@ const PLUGIN_NOT_INSTALLED_MESSAGE = "This plugin isn't installed.";
 const MANIFEST_NOT_INSTALLED_ONE = "The plugin's stored copy doesn't hold the manifest it was installed from.";
 /** The list's plain lines, in this order, for a part that couldn't be read. */
 const ISSUE_MESSAGES = {
+  // Only the plugins installed in a workspace whose checks failed read as not finished; the others read as they are.
   skillChecks:
-    "Whether plugins' skills are switched on couldn't be read right now, so plugins with skills show as not finished.",
+    "Whether some plugins' skills are switched on couldn't be read right now, so those plugins show as not finished.",
   builtIn: "The plugins that ship with GoatCitadel couldn't be read right now.",
+  builtInUnavailable: "Built-in plugins can't be read on this install.",
 } as const;
 
 /**
@@ -65,6 +67,11 @@ export interface CapabilityPluginsRouteSources {
    * otherwise).
    */
   listBuiltIn(): Promise<readonly PluginManifest[]>;
+  /**
+   * True when this install has no built-in plugins folder it may read (a packaged install whose app folder can't be
+   * verified), so `listBuiltIn` lists none. Fixed when plugins are wired, which logged it once; listing logs nothing.
+   */
+  builtInUnavailable(): boolean;
   /**
    * A workspace's Skill Hub checks by their ids, whatever their place among its newest checks: what a plugin's skill
    * pieces are read from. A check that isn't there is left out.
@@ -108,9 +115,9 @@ export class CapabilityPluginsRouteService {
    * Installed records come from the store, which must be readable. A plugin reads `installed` only when its install
    * finished and every piece is added or kept, its skills switched on (`pluginPublicState`, the detail's own rule).
    * Each skill is read by its check's id; a check that can't be read reads as not finished. `builtIn` lists every
-   * shipped plugin that isn't installed, from its manifest alone: nothing is fetched or checked. Unreadable checks and
-   * an unreadable built-in folder each add a plain line to `issues`, so neither "not finished" nor an empty built-in list
-   * is taken for the truth.
+   * shipped plugin that isn't installed, from its manifest alone: nothing is fetched or checked. Unreadable checks, a
+   * built-in folder whose read failed, and an install with no built-in folder it may read each add a plain line to
+   * `issues`, so neither "not finished" nor an empty built-in list is taken for the truth.
    */
   public async list(): Promise<CapabilityPluginListResponse> {
     const [installed, builtIn, operatorApprovalSkip] = await Promise.all([
@@ -148,6 +155,7 @@ export class CapabilityPluginsRouteService {
       issues: [
         ...(unreadable ? [ISSUE_MESSAGES.skillChecks] : []),
         ...(builtIn === undefined ? [ISSUE_MESSAGES.builtIn] : []),
+        ...(this.sources.builtInUnavailable() ? [ISSUE_MESSAGES.builtInUnavailable] : []),
       ],
     };
   }

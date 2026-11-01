@@ -87,6 +87,7 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
   const sources: CapabilityPluginsRouteSources = {
     listInstalled: vi.fn(async () => []),
     listBuiltIn: vi.fn(async () => []),
+    builtInUnavailable: vi.fn(() => false),
     readSkillChecks: vi.fn(async () => new Map()),
     readInstallPlanStatus: vi.fn(async (): Promise<ChangePlanStatus> => "completed"),
     readApproval: vi.fn(async () => ({ status: "pending" as const, effects: "done" as const })),
@@ -112,8 +113,9 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
 }
 
 const UNREADABLE_SKILL_CHECKS =
-  "Whether plugins' skills are switched on couldn't be read right now, so plugins with skills show as not finished.";
+  "Whether some plugins' skills are switched on couldn't be read right now, so those plugins show as not finished.";
 const UNREADABLE_BUILT_IN = "The plugins that ship with GoatCitadel couldn't be read right now.";
+const BUILT_IN_UNAVAILABLE = "Built-in plugins can't be read on this install.";
 
 function stored(pluginId: string, overrides: Partial<StoredPlugin> = {}): StoredPlugin {
   return {
@@ -481,6 +483,55 @@ describe("capability plugin routes", () => {
     expect(listed.issues).toEqual([UNREADABLE_SKILL_CHECKS, UNREADABLE_BUILT_IN]);
     expect(sources.reportFailure).toHaveBeenCalledWith("skill_hub", failure);
     expect(sources.reportFailure).toHaveBeenCalledWith("built_in", expect.objectContaining({ message: "EACCES" }));
+  });
+
+  it("names only the plugins whose workspace's checks couldn't be read as not finished", async () => {
+    const failure = new Error("database is locked");
+    const switchedOn = hubItem({
+      snapshotId: "check-done",
+      approvals: { activate: hubApproval("activate", "approved", "applied") },
+    });
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [
+        stored("in-default", { pieces: [skillPiece("a", "check-done")] }),
+        stored("in-lab", { workspaceId: "lab", pieces: [skillPiece("a", "check-lab")] }),
+      ]),
+      readSkillChecks: vi.fn(async (workspaceId: string) => {
+        if (workspaceId === "lab") throw failure;
+        return new Map([["check-done", pluginSkillCheck(switchedOn)]]);
+      }),
+    });
+
+    const listed = await service.list();
+
+    // The workspace that read still shows its plugin installed, so the line says "some", never every plugin.
+    expect(Object.fromEntries(listed.installed.map((item) => [item.pluginId, item.state]))).toEqual({
+      "in-default": "installed",
+      "in-lab": "install_not_finished",
+    });
+    expect(listed.issues).toEqual([UNREADABLE_SKILL_CHECKS]);
+  });
+
+  it("says built-in plugins can't be read on an install with no built-in folder it may read, without logging", async () => {
+    const { service, sources } = routeService({ builtInUnavailable: vi.fn(() => true) });
+
+    for (const attempt of [1, 2]) {
+      const listed = await service.list();
+      expect(listed.builtIn, String(attempt)).toEqual([]);
+      expect(listed.issues, String(attempt)).toEqual([BUILT_IN_UNAVAILABLE]);
+    }
+    // The wiring logged it once when it found no folder; a list never logs it again.
+    expect(sources.reportFailure).not.toHaveBeenCalled();
+    expect(sources.builtInUnavailable).toHaveBeenCalledTimes(2);
+
+    // A read that fails is its own line, after the checks' and before this one, whatever order the reads finish in.
+    const both = routeService({
+      builtInUnavailable: vi.fn(() => true),
+      listBuiltIn: vi.fn(async () => {
+        throw new Error("EACCES");
+      }),
+    });
+    expect((await both.service.list()).issues).toEqual([UNREADABLE_BUILT_IN, BUILT_IN_UNAVAILABLE]);
   });
 
   it("says nothing about skill checks it had no need to read", async () => {

@@ -245,6 +245,9 @@ describe("Settings section tabs", () => {
       href: "/capabilities/plugins?shell=cockpit",
     });
     await render("/settings/advanced?shell=cockpit#addons");
+    // Settings is handed the Plugins address, which is no Settings page (the shell opens Capabilities for it).
+    await vi.waitFor(() => expect(container.textContent).toContain("Settings destination unavailable"));
+    expect(container.textContent).toContain("This link does not match a settings page.");
     expect(container.textContent).not.toContain("Packs owner");
     expect(container.textContent).not.toContain("Add-ons owner");
     expect(container.textContent).not.toContain("Runtime owner");

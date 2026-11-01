@@ -350,9 +350,21 @@ describe("resolveRealtimeEvent", () => {
       ])
         expect(effect.keys, `${type} ${JSON.stringify(key)}`).toContainEqual(key);
       expect(effect.refresh).toEqual(expect.arrayContaining(["approvals", "plugins"]));
-      // A kept inspection never changes with a plan, and no plugin plan is a settings save.
+      // An install saves settings (it adds its hosts to the network and hooks allowlists), its holds change which tool
+      // groups read as off, and neither publishes a settings event, so every settings reader refreshes, as for a
+      // settings save: the allowlists, the skip, the Files tools note and the first-run defaults among them.
+      for (const key of SETTINGS_READER_KEYS) expect(effect.keys, `${type} ${JSON.stringify(key)}`).toContainEqual(key);
+      for (const key of [
+        ["settings", "mcp-template-allowlist"],
+        ["system", "settings-web-search"],
+        ["system", "settings-approval-skip"],
+        ["system", "settings-filesystem-write-access"],
+        ["system", "first-run-defaults"],
+      ])
+        expect(effect.keys, `${type} ${JSON.stringify(key)}`).toContainEqual(key);
+      // Each reader once, and never a kept inspection, which a plan doesn't change.
+      expect(new Set(effect.keys.map((key) => JSON.stringify(key))).size).toBe(effect.keys.length);
       expect(effect.keys).not.toContainEqual(["plugins", "capability-plugin-inspection"]);
-      expect(effect.keys).not.toContainEqual(["system", "managed-runtime-settings"]);
     }
     // A plugin reads installed only once each of its skills is switched on, and a skill switch publishes on `skills`.
     const skill = resolveRealtimeEvent(event("skill_state_mutation_applied", "skills"));

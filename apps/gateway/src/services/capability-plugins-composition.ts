@@ -282,6 +282,8 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
   const routes = new CapabilityPluginsRouteService({
     listInstalled: () => store.list(),
     listBuiltIn: () => listBuiltInPluginManifests(builtInRoot),
+    // Found once above, which logged it; the list says it on every read without logging again.
+    builtInUnavailable: () => builtInRoot === undefined,
     readSkillChecks,
     readInstallPlanStatus: async (workspaceId, planId, actorId) =>
       (await plans.get({ workspaceId, actorId, surface: "capabilities" }, planId)).status,

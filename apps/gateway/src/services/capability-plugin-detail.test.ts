@@ -147,6 +147,7 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
   const sources: CapabilityPluginsRouteSources = {
     listInstalled: vi.fn(async () => [record()]),
     listBuiltIn: vi.fn(async () => []),
+    builtInUnavailable: vi.fn(() => false),
     readSkillChecks: vi.fn(async () => checksOf(SWITCHED_ON)),
     readInstallPlanStatus: vi.fn(async (): Promise<ChangePlanStatus> => "completed"),
     readApproval: vi.fn(async (): Promise<ApprovalReading | undefined> => ({ status: "pending", effects: "done" })),
