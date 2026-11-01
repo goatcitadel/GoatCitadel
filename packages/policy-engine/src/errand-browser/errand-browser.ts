@@ -57,6 +57,11 @@ export interface ErrandBrowser {
    */
   describeTarget(x: number, y: number): Promise<ErrandTargetInfo | null>;
   /**
+   * Like describeTarget, but with GoatCitadel's overlay verified hidden for the read, so an approval card covering the
+   * page is not mistaken for the target. Null when the overlay could not be hidden or the point could not be inspected.
+   */
+  describeTargetBeneathOverlay(x: number, y: number): Promise<ErrandTargetInfo | null>;
+  /**
    * Describes the focused element, read in an isolated world. Null means nothing is focused or GoatCitadel could not
    * inspect it; callers must treat it as unknown, never as safe.
    */
@@ -77,6 +82,14 @@ const ACTION_SETTLE_MS = 300;
 const PROFILE_LOCKED_PATTERN =
   /user data directory is already in use|processsingleton|existing browser session|profile.{0,40}(in use|locked)/iu;
 const CHROME_MISSING_PATTERN = /executable doesn't exist|distribution '?chrome'? is not found|chromium distribution/iu;
+
+/**
+ * Only web pages (and a blank page that is about to load one) become the page an errand looks at and acts on;
+ * extension pages (a password manager's popup, say) and browser-internal pages never do.
+ */
+export function isErrandFollowablePageUrl(url: string): boolean {
+  return url === "" || url === "about:blank" || /^https?:\/\//iu.test(url);
+}
 
 export async function launchErrandBrowser(options: ErrandBrowserLaunchOptions): Promise<ErrandBrowser> {
   if (options.signal?.aborted) {
@@ -140,7 +153,8 @@ function acquireProfileLock(profileDir: string): () => void {
           const now = new Date();
           fs.utimesSync(lockPath, now, now);
         } catch {
-          // The lock file vanished; nothing to refresh.
+          // Ignore: the lock file is gone, so there is nothing left to refresh; stop the heartbeat.
+          clearInterval(heartbeat);
         }
       }, LOCK_HEARTBEAT_MS);
       heartbeat.unref();
@@ -180,7 +194,7 @@ function readLockRecord(lockPath: string): ProfileLockRecord | undefined {
       return { pid: parsed.pid as number, token: parsed.token };
     }
   } catch {
-    // Unreadable or malformed locks are stale.
+    // Fall back to stale: unreadable or malformed locks are treated as stale.
   }
   return undefined;
 }
@@ -250,7 +264,7 @@ async function createErrandBrowser(
       try {
         listener();
       } catch {
-        // A faulty listener must not stop the others or the teardown.
+        // Ignore a faulty listener (non-fatal) so the others and cleanup still run.
       }
     }
     listeners.clear();
@@ -258,13 +272,31 @@ async function createErrandBrowser(
 
   context.on("close", finalize);
   context.on("page", (page) => {
-    activePage = page;
+    if (isErrandFollowablePageUrl(page.url())) {
+      activePage = page;
+    }
   });
   context.on("page", (page) => {
-    page.on("close", () => onPageClosed(page));
+    watchPage(page);
     void overlay.attach(page).catch(() => undefined);
   });
-  firstPage.on("close", () => onPageClosed(firstPage));
+  watchPage(firstPage);
+
+  function watchPage(page: Page): void {
+    page.on("close", () => onPageClosed(page));
+    page.on("framenavigated", (frame) => {
+      // A followed page that turns into an extension or browser page hands the errand back to a web page.
+      if (frame === page.mainFrame() && activePage === page && !isErrandFollowablePageUrl(page.url())) {
+        activePage = pickActivePage(page) ?? page;
+      }
+    });
+  }
+
+  /** The most recent open web page other than `excluded`, if any. */
+  function pickActivePage(excluded: Page): Page | undefined {
+    const open = context.pages().filter((candidate) => candidate !== excluded && !candidate.isClosed());
+    return open.filter((candidate) => isErrandFollowablePageUrl(candidate.url())).at(-1);
+  }
 
   function onPageClosed(page: Page): void {
     const remaining = context.pages().filter((candidate) => candidate !== page && !candidate.isClosed());
@@ -274,29 +306,30 @@ async function createErrandBrowser(
       return;
     }
     if (activePage === page) {
-      activePage = remaining[remaining.length - 1]!;
+      activePage = pickActivePage(page) ?? remaining[remaining.length - 1]!;
     }
   }
 
-  async function ensureWindowVisible(): Promise<void> {
+  async function ensureWindowVisible(page: Page): Promise<void> {
     let session: CDPSession | undefined;
     try {
-      session = await context.newCDPSession(activePage);
+      session = await context.newCDPSession(page);
       const { windowId, bounds } = await session.send("Browser.getWindowForTarget");
       if (bounds.windowState === "minimized") {
         await session.send("Browser.setWindowBounds", { windowId, bounds: { windowState: "normal" } });
       }
-      await activePage.bringToFront();
+      await page.bringToFront();
     } catch {
-      // Headless contexts have no real window; the screenshot below still works.
+      // Best-effort: headless contexts have no real window; the screenshot below still works.
     } finally {
       await session?.detach().catch(() => undefined);
     }
   }
 
   async function screenshot(): Promise<Buffer> {
-    await ensureWindowVisible();
-    return activePage.screenshot({ type: "png" });
+    const page = activePage;
+    await ensureWindowVisible(page);
+    return page.screenshot({ type: "png" });
   }
 
   /** Moves the drawn cursor; purely cosmetic, so overlay failures never stop an action. */
@@ -307,7 +340,7 @@ async function createErrandBrowser(
         await overlay.render({ mode: "driving", bannerText: snapshot.bannerText ?? "", cursor: point });
       }
     } catch {
-      // A slow or missing overlay must not block the errand.
+      // Best-effort, non-fatal: cursor drawing never blocks the errand.
     }
   }
 
@@ -325,6 +358,11 @@ async function createErrandBrowser(
   return {
     overlay,
     describeTarget: (x, y) => describePointOverCdp(context, activePage, x, y),
+    describeTargetBeneathOverlay: (x, y) =>
+      overlay
+        .withOverlayHidden((page) => describePointOverCdp(context, page, x, y))
+        // Fallback: an overlay that cannot be hidden leaves the target unknown, which callers never treat as safe.
+        .catch(() => null),
     describeFocused: () => describeFocusedOverCdp(context, activePage),
     async runActions(actions, beforeAction) {
       let ran = 0;
@@ -351,8 +389,11 @@ async function createErrandBrowser(
     page: () => activePage,
     currentUrl: () => (activePage.isClosed() ? "" : activePage.url()),
     async captureForModel() {
-      await ensureWindowVisible();
-      return overlay.withOverlayHidden(() => activePage.screenshot({ type: "png" }));
+      // The overlay is hidden on, and the screenshot taken of, the same page, even if another tab opens meanwhile.
+      return overlay.withOverlayHidden(async (page) => {
+        await ensureWindowVisible(page);
+        return page.screenshot({ type: "png" });
+      });
     },
     captureForPeople: () => screenshot(),
     isClosed: () => closed,

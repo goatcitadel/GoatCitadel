@@ -70,8 +70,11 @@ export interface ErrandOverlay {
 /** The launcher-side controls: attaching pages and hiding the overlay around a model capture. */
 export interface ErrandOverlayController extends ErrandOverlay {
   attach(page: Page): Promise<void>;
-  /** Runs `capture` with the overlay verified hidden on the active page, then restores it; refuses otherwise. */
-  withOverlayHidden<T>(capture: () => Promise<T>): Promise<T>;
+  /**
+   * Runs `capture` with the overlay verified hidden on the active page, then restores it; refuses otherwise. The page
+   * is read once and passed to `capture`, so the capture never lands on a different tab than the one hidden.
+   */
+  withOverlayHidden<T>(capture: (page: Page) => Promise<T>): Promise<T>;
 }
 
 export class ErrandOverlayError extends Error {
@@ -130,7 +133,7 @@ export function createErrandOverlay(activePage: () => Page): ErrandOverlayContro
       try {
         listener(event);
       } catch {
-        // A faulty listener must not stop the others.
+        // Ignore a faulty listener (non-fatal) so the others still run.
       }
     }
   };
@@ -223,13 +226,15 @@ export function createErrandOverlay(activePage: () => Page): ErrandOverlayContro
       }
     },
     async withOverlayHidden(capture) {
-      const overlay = await current();
+      const page = activePage();
+      const overlay = pages.get(page);
+      await overlay?.ready.catch(() => undefined);
       if (!overlay) {
-        return capture();
+        return capture(page);
       }
       try {
         await hideVerified(overlay);
-        return await capture();
+        return await capture(page);
       } finally {
         await overlay.setSuspended(false).catch(() => undefined);
       }

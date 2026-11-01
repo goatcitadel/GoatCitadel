@@ -75,7 +75,9 @@ export async function describePointOverCdp(
         x,
         y,
         includeUserAgentShadowDOM: false,
-        ignorePointerEventsNone: true,
+        // Hit-test like a real click: pointer-events:none layers (GoatCitadel's own overlay, or a page's decoy laid
+        // over a button) are passed through, so the element described is the one the click would reach.
+        ignorePointerEventsNone: false,
       });
       let contextId = world.contextId;
       if (frameId && frameId !== world.frameId) {

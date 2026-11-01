@@ -32,6 +32,8 @@ export interface ErrandTargetInfo {
   /** The target is a cross-origin frame or an unreadable shadow host; only the host element is described. */
   isOpaque: boolean;
   formSubmitText?: string;
+  /** The element is editable rich text (contenteditable, including its descendants), such as a chat message box. */
+  isContentEditable?: boolean;
   rect: { x: number; y: number; width: number; height: number };
 }
 
@@ -157,6 +159,9 @@ function normalizeOne(entry: unknown, label: string): ComputerAction | string {
     case "type":
       if (typeof record.text !== "string") return `${label} has no text to type.`;
       if (record.text.length > MAX_TEXT_LENGTH) return `${label} types more than ${MAX_TEXT_LENGTH} characters.`;
+      if (hasControlCharacter(record.text)) {
+        return `${label} types a control character (such as a new line or tab); type plain text only and use a keypress action for Enter or Tab.`;
+      }
       return { type: "type", text: record.text };
     case "keypress": {
       const keys = Array.isArray(record.keys) ? record.keys : [];
@@ -185,6 +190,18 @@ function normalizeOne(entry: unknown, label: string): ComputerAction | string {
     default:
       return `${label} has an unknown type.`;
   }
+}
+
+/**
+ * Keyboard typing turns new lines into Enter and tabs into Tab, which would submit forms or move focus without the
+ * ask-first and hand-over checks a keypress gets, so typed text must be free of control characters.
+ */
+function hasControlCharacter(text: string): boolean {
+  for (let index = 0; index < text.length; index += 1) {
+    const code = text.charCodeAt(index);
+    if (code < 0x20 || (code >= 0x7f && code <= 0x9f)) return true;
+  }
+  return false;
 }
 
 function readPoint(record: Record<string, unknown>, label: string): ComputerPoint | string {

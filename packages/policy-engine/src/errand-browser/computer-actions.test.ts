@@ -18,10 +18,18 @@ const PAGE = `<html><body style="margin:0">
   <input id="plain" style="width:200px;height:30px"><button id="buy" type="submit" style="width:200px;height:40px">Place your order</button>
 </form>
 <input id="keys" style="position:absolute;left:20px;top:250px;width:200px;height:30px">
+<div id="msg" contenteditable="true" style="position:absolute;left:20px;top:300px;width:200px;height:30px"><p id="msgp">hi</p></div>
 <script>
 window.__keys = [];
 document.addEventListener("keydown", function (e) { window.__keys.push(e.key); }, true);
 </script>
+</body></html>`;
+
+const DECOY_PAGE = `<html><body style="margin:0">
+<button id="buy" style="position:absolute;left:20px;top:20px;width:200px;height:40px">Place your order</button>
+<div style="position:absolute;left:0;top:0;width:400px;height:200px;pointer-events:none;background:transparent">
+  <button style="width:300px;height:100px">Add to cart</button>
+</div>
 </body></html>`;
 
 const SHADOW_PAGE = `<html><body style="margin:0">
@@ -95,6 +103,21 @@ describe("normalizeComputerActions", () => {
       { type: "scroll", x: 5, y: 6, scrollX: 0, scrollY: 300 },
     ]);
   });
+
+  it("rejects typed text with new lines, tabs or other control characters", () => {
+    const result = normalizeComputerActions([
+      { type: "type", text: "Hi\n" },
+      { type: "type", text: "user\tsecret" },
+      { type: "type", text: "line\r" },
+      { type: "type", text: `bell${String.fromCharCode(7)}` },
+      { type: "type", text: "plain text, ok" },
+    ]);
+    expect(result.actions).toEqual([{ type: "type", text: "plain text, ok" }]);
+    expect(result.errors).toHaveLength(4);
+    expect(result.errors[0]).toContain("action 1");
+    expect(result.errors[0]).toContain("keypress");
+    expect(result.errors[1]).toContain("action 2");
+  });
 });
 
 describe("errand browser computer actions", () => {
@@ -119,6 +142,7 @@ describe("errand browser computer actions", () => {
       else if (route.startsWith("/framec")) res.end(FRAME_CLOSED_PAGE);
       else if (route.startsWith("/closed")) res.end(CLOSED_PAGE);
       else if (route.startsWith("/shadow")) res.end(SHADOW_PAGE);
+      else if (route.startsWith("/decoy")) res.end(DECOY_PAGE);
       else if (route.startsWith("/inner")) res.end(INNER_PAGE);
       else if (route.startsWith("/frame")) res.end(FRAME_PAGE);
       else if (route.startsWith("/xorigin")) res.end(crossOriginPage(otherUrl));
@@ -190,6 +214,41 @@ describe("errand browser computer actions", () => {
     expect(field?.formSubmitText).toBe("Place your order");
   }, 60_000);
 
+  it("describeTarget sees through pointer-events:none layers to the element a click would reach", async () => {
+    const browser = await launch("decoy");
+    const info = await browser.describeTarget(100, 40);
+    expect(info?.text).toBe("Place your order");
+  }, 60_000);
+
+  it("describeTargetBeneathOverlay reads the real target while the approval card covers the page", async () => {
+    const browser = await launch();
+    await browser.overlay.render({
+      mode: "driving",
+      bannerText: "GoatCitadel is using this browser",
+      cursor: { x: 640, y: 400 },
+    });
+    const before = await browser.describeTarget(320, 140);
+    expect(before?.text).toBe("Place your order");
+    await browser.overlay.render({
+      mode: "approval",
+      bannerText: "Waiting for your OK",
+      cursor: { x: 320, y: 140 },
+      requestId: "r1",
+      title: 'Click "Place your order"',
+      body: "Place the order",
+      targetRect: before!.rect,
+    });
+    // The card's blocker covers the viewport, so a plain read hits GoatCitadel's own overlay, not the page.
+    const covered = await browser.describeTarget(320, 140);
+    expect(covered?.text).not.toBe("Place your order");
+    const beneath = await browser.describeTargetBeneathOverlay(320, 140);
+    expect(beneath).toMatchObject({ tagName: "button", role: before!.role, text: "Place your order" });
+    expect(beneath!.rect).toEqual(before!.rect);
+    // The card is back once the read is done.
+    expect((await browser.overlay.snapshot()).mode).toBe("approval");
+    expect((await browser.overlay.snapshot()).displayed).toBe(true);
+  }, 60_000);
+
   it("describeTarget is not fooled by page script overriding elementFromPoint", async () => {
     const browser = await launch();
     await browser.page().evaluate(() => {
@@ -204,6 +263,17 @@ describe("errand browser computer actions", () => {
     await browser.page().focus("#pw");
     const info = await browser.describeFocused();
     expect(info?.isPasswordLike).toBe(true);
+  }, 60_000);
+
+  it("describeFocused and describeTarget mark contenteditable message boxes, and plain inputs are not", async () => {
+    const browser = await launch();
+    await browser.page().focus("#msg");
+    const focused = await browser.describeFocused();
+    expect(focused?.isContentEditable).toBe(true);
+    const target = await browser.describeTarget(40, 310);
+    expect(target?.isContentEditable).toBe(true);
+    await browser.page().focus("#keys");
+    expect((await browser.describeFocused())?.isContentEditable).toBeUndefined();
   }, 60_000);
 
   it("describeTarget and describeFocused see a password field inside an open shadow root", async () => {

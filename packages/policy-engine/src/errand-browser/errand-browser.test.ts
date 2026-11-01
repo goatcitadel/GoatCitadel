@@ -4,10 +4,43 @@ import type { AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
-import { launchErrandBrowser, ErrandBrowserLaunchError, type ErrandBrowser } from "./errand-browser.js";
+import type { Page } from "playwright";
+import {
+  isErrandFollowablePageUrl,
+  launchErrandBrowser,
+  ErrandBrowserLaunchError,
+  type ErrandBrowser,
+} from "./errand-browser.js";
+import { createErrandOverlay } from "./errand-overlay.js";
 
 const HEADLESS = process.env.ERRAND_BROWSER_HEADED !== "1";
 const PNG_MAGIC = Buffer.from([0x89, 0x50, 0x4e, 0x47]);
+
+describe("errand page following", () => {
+  it("follows web pages and a blank page only, never extension or browser pages", () => {
+    expect(isErrandFollowablePageUrl("https://shop.example/cart")).toBe(true);
+    expect(isErrandFollowablePageUrl("http://127.0.0.1:3000/")).toBe(true);
+    expect(isErrandFollowablePageUrl("about:blank")).toBe(true);
+    expect(isErrandFollowablePageUrl("")).toBe(true);
+    expect(isErrandFollowablePageUrl("chrome-extension://hdokiejnpimakedhajhdlcegeplioahd/popup.html")).toBe(false);
+    expect(isErrandFollowablePageUrl("chrome://settings/")).toBe(false);
+    expect(isErrandFollowablePageUrl("devtools://devtools/bundled/inspector.html")).toBe(false);
+    expect(isErrandFollowablePageUrl("file:///C:/secret.txt")).toBe(false);
+  });
+
+  it("withOverlayHidden reads the active page once and hands that page to the capture", async () => {
+    const first = { isClosed: () => false } as unknown as Page;
+    const second = { isClosed: () => false } as unknown as Page;
+    let reads = 0;
+    const overlay = createErrandOverlay(() => {
+      reads += 1;
+      return reads === 1 ? first : second;
+    });
+    const captured = await overlay.withOverlayHidden(async (page) => page);
+    expect(captured).toBe(first);
+    expect(reads).toBe(1);
+  });
+});
 
 describe("errand browser launcher", () => {
   let server: http.Server;
@@ -137,6 +170,20 @@ describe("errand browser launcher", () => {
     const forPeople = await browser.captureForPeople();
     expect(forModel.subarray(0, 4).equals(PNG_MAGIC)).toBe(true);
     expect(forPeople.subarray(0, 4).equals(PNG_MAGIC)).toBe(true);
+  }, 60_000);
+
+  it("follows a new web tab, and falls back to a web page when the followed tab leaves the web", async () => {
+    const browser = await launch(makeProfileDir());
+    const first = browser.page();
+    await first.goto(baseUrl);
+    const second = await first.context().newPage();
+    expect(browser.page()).toBe(second);
+    await second.goto("data:text/html,<p>not a web page</p>");
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(browser.page()).toBe(first);
+    expect(browser.currentUrl()).toBe(baseUrl);
+    const png = await browser.captureForModel();
+    expect(png.subarray(0, 4).equals(PNG_MAGIC)).toBe(true);
   }, 60_000);
 
   it.skipIf(HEADLESS)(

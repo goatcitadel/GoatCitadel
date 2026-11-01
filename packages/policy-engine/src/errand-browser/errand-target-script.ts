@@ -121,6 +121,7 @@ const TARGET_SCRIPT_BODY = String.raw`
     if (autocomplete !== undefined) info.autocomplete = autocomplete;
     var submitText = submitTextFor(el);
     if (submitText !== undefined) info.formSubmitText = submitText;
+    if (el.isContentEditable) info.isContentEditable = true;
     return info;
   }
 `;
