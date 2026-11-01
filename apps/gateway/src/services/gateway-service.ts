@@ -871,6 +871,7 @@ import { MeshCapabilityInvocationService } from "./mesh-capability-invocation-se
 import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { filterBasePromptToolsetByPolicy, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
+import { withBasePromptPolicyScope } from "./base-prompt-policy-scope.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
@@ -10649,9 +10650,7 @@ export class GatewayService {
       const skills: BaseAgentPromptSkill[] = [];
       for (const entry of catalog) {
         if (entry.kind === "tool") {
-          if (entry.toolName) {
-            toolNames.push(entry.toolName);
-          }
+          if (entry.toolName) toolNames.push(entry.toolName);
           continue;
         }
         if (entry.kind === "skill") {
@@ -10660,10 +10659,9 @@ export class GatewayService {
         }
       }
       const safeWriteDir = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out");
-      const probe = (request: ToolAccessEvaluateRequest) => this.inspectToolAccess(request);
-      return scope
-        ? await filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir)
-        : { toolNames, skills };
+      if (!scope) return { toolNames, skills };
+      const probe = withBasePromptPolicyScope(scope, this, async (id) => await this.storage.workspaces?.find(id));
+      return await filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir);
     } catch (error) {
       log.warn("resolveBasePromptCapabilityCatalog failed", {
         error: error instanceof Error ? error.message : String(error),
