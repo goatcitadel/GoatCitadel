@@ -15,6 +15,7 @@ import {
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import { mcpServerLabelKey } from "./mcp-money-moving.js";
 import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
+import { withoutControls } from "./plugin-plain-text.js";
 
 // What the plugin plans (install and uninstall) and the Capabilities plugin actions share: the checks an install is
 // bound by, the origin rule both plans keep, and the plain-copy helpers their summaries use. One copy, so the refusal
@@ -29,18 +30,8 @@ export const HOSTS_STAY = "Hosts it allowed stay in your allowlist.";
 const NOT_INSTALLABLE_MESSAGE = "This plugin has pieces that can't be installed. Check it again once they're fixed.";
 const MAX_SUMMARY_LENGTH = 2_000;
 const MAX_TITLE_LENGTH = 180;
-/** C0 and C1 controls, such as a line break or a NUL, that a label read from a plugin's own files may carry. */
-const CONTROL_CHARACTERS = /\p{Cc}+/gu;
-/** Bidi marks, embeddings, overrides and isolates, which can make approval text read in another order than it runs. */
-const BIDI_CONTROLS = /[؜‎‏‪-‮⁦-⁩]/gu;
-
-/**
- * Text a plugin plan shows, with every control character a label brought along taken out: bidi controls are dropped
- * and each run of C0 or C1 controls becomes one space. Every title and summary both plans build goes through it.
- */
-export function withoutControls(text: string): string {
-  return text.replace(BIDI_CONTROLS, "").replace(CONTROL_CHARACTERS, " ");
-}
+/** Every title and summary both plans build goes through it (`plugin-plain-text.ts`). */
+export { withoutControls };
 
 /** The hosts an install adds: its connectors' to the network allowlist, its hooks' to the hooks allowlist. */
 export interface PluginInstallHosts {

@@ -851,6 +851,20 @@ describe("uninstalling a plugin through one Change Plan", () => {
       await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
     });
 
+    it("is found when the plugin's name ends in a space, as the pack's label is saved trimmed (Q3)", async () => {
+      const h = harness({ manifest: { ...FULL_MANIFEST, name: "Meeting tools " } });
+      await unrecordedPack(h);
+      // The prompt-pack owner saves the source label trimmed.
+      h.state.packs = h.state.packs.map((pack) => ({ ...pack, sourceLabel: pack.sourceLabel.trim() }));
+      expect(h.state.packs[0]?.sourceLabel).toBe("Plugin Meeting tools");
+
+      const outcome = await h.uninstall();
+
+      expect(outcome).toMatchObject({ outcome: "applied" });
+      expect(h.removal.deletedPacks).toEqual([PACK_ID]);
+      expect(h.state.packs).toEqual([]);
+    });
+
     it("is left as it is when its source label is another's, or another plugin's record lists that id", async () => {
       // Another plugin's label: a pack this plugin's install never made.
       const relabelled = harness();
@@ -886,12 +900,12 @@ describe("uninstalling a plugin through one Change Plan", () => {
   it("takes control and bidi characters out of a skill's name in what it shows (F5)", async () => {
     const { h } = withSkillsTab("remote_hardened");
     await installed(h);
-    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ title: "Meeting ‮notes\n" }));
+    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ title: "Meeting \u202Enotes\n" }));
 
     const waiting = await uninstalled(h, "bidi");
 
-    expect(waiting.summary).toContain("Removing the skill Meeting notes  waits for your approval.");
-    expect(waiting.summary).not.toMatch(/[\p{Cc}؜‎‏‪-‮⁦-⁩]/u);
+    expect(waiting.summary).toContain("Removing the skill Meeting notes waits for your approval.");
+    expect(waiting.summary).not.toMatch(/[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u);
   });
 
   it("names a skill whose own install step waits in the plan, as it may be installed by the time the plan applies", async () => {

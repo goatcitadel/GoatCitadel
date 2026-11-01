@@ -115,7 +115,7 @@ const POLICY_ACCESS_DENIAL_REASONS = new Set([
  */
 function describeAccessDenial(reasonCodes: readonly string[]): string {
   if (reasonCodes.includes("tool_group_off") && reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLD_REASON_CODE)) {
-    return "A plugin keeps this tool's group off. Uninstall it in Capabilities › Plugins to switch the group back on.";
+    return "A plugin keeps this tool's group off. Uninstalling that plugin turns the group back on.";
   }
   if (reasonCodes.includes("tool_group_off")) return "This tool's group is switched off in Capabilities › Tools.";
   return reasonCodes.length > 0

@@ -3,8 +3,6 @@ import {
   HOOK_TRIGGER_LABELS,
   SemanticValidationError,
   isGoatError,
-  type CapabilityPluginInspection,
-  type CapabilityPluginPieceView,
   type ChangePlanPluginInstallRequest,
   type ChangePlanRecord,
   type ChangePlanStatus,
@@ -13,7 +11,6 @@ import {
   type McpServerCreateInput,
   type McpServerRecord,
   type McpServerTemplateRecord,
-  type PluginManifest,
   type PluginManifestParse,
   type PluginPiece,
 } from "@goatcitadel/contracts";
@@ -21,7 +18,6 @@ import type { StoredPlugin, StoredPluginPiece } from "./capability-plugin-store.
 import type {
   EvolutionControlPlaneAdapter,
   EvolutionControlPlaneAdapterContext,
-  EvolutionControlPlaneAdapterOutcome,
 } from "./evolution-control-plane-adapter.js";
 import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
 import {
@@ -31,6 +27,17 @@ import {
   pluginInstallBindingHash,
   requireInstallTemplate,
 } from "./plugin-install-pieces.js";
+import {
+  SETTINGS_BUSY_MESSAGE,
+  SettingsBusyError,
+  finishedSentences,
+  plannedSummary,
+  savedConnectorSentence,
+  stopped,
+  type InstallBinding,
+  type InstallProgress,
+  type InstallStep,
+} from "./plugin-install-words.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
 import {
   HOSTS_STAY,
@@ -38,7 +45,6 @@ import {
   PLUGIN_CHANGED_MESSAGE,
   boundedSentences,
   boundedTitle,
-  failureDetail,
   groupLabel,
   hookHost,
   hostsWithin,
@@ -147,29 +153,6 @@ export interface PluginInstallSources {
   reportSecretsKept(error: unknown): void;
 }
 
-/** The install's steps in order; a failure's `failureCode` names the one it stopped at. */
-type InstallStep = "record" | "hosts" | "connectors" | "tool_groups" | "hooks" | "prompt_packs" | "finish";
-
-/** What one install binds: the kept inspection, its manifest read from the snapshot, and each piece's view. */
-interface InstallBinding {
-  readonly inspection: CapabilityPluginInspection;
-  readonly manifest: PluginManifest;
-  readonly treeSha256: string;
-  readonly views: ReadonlyMap<string, CapabilityPluginPieceView>;
-}
-
-/** What an apply has done so far, read by the summary of a finished or a stopped install. */
-interface InstallProgress {
-  allowed: string[];
-  hookHostsAllowed: string[];
-  readonly done: string[];
-  /** Hook pieces whose hook now holds its secret. */
-  readonly attached: Set<string>;
-  recordWritten: boolean;
-  /** The piece a step was working on when it stopped. */
-  current?: PluginPiece;
-}
-
 /**
  * Installs a plugin as the operator's own Capabilities action: it writes the plugin's record, allows the hosts its
  * connectors and hooks need, saves each connector switched off, holds its tool groups off, adds its hooks (observe
@@ -188,10 +171,10 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     requireCapabilitiesOrigin(context.origin, ORIGIN_REFUSAL);
     if (request.workspaceId !== context.origin.workspaceId) throw conflict(OTHER_WORKSPACE_MESSAGE);
     const binding = await this.bind(request);
-    const settings = await this.sources.readSettings();
+    const settings = await this.readSettings();
     const hosts = await this.hostsToAllow(binding, settings.networkAllowlist, false);
     const { manifest } = binding;
-    const summary = boundedSentences(this.plannedSentences(binding, settings, hosts));
+    const summary = plannedSummary(binding, settings, hosts);
     return {
       target: {
         ownerId: "capability_plugins",
@@ -234,12 +217,13 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       const record = await this.sources.readPlugin(binding.manifest.pluginId);
       if (pluginInstallBindingHash(record, request) !== plan.target.expectedHash) throw pluginChanged();
       // The hosts the plan lists, read again against the allowlists now: when they changed, no host is added (F4).
-      settings = await this.sources.readSettings();
+      settings = await this.readSettings();
       planned = await this.hostsToAllow(binding, settings.networkAllowlist, false);
       if (!plan.evidenceRefs.includes(pluginInstallHostsRef(planned))) throw pluginChanged();
     } catch (error) {
       // Nothing was written, so no hook holds a secret yet: each one is this install's to delete.
       this.deleteUnheldSecrets(request, new Set());
+      if (error instanceof SettingsBusyError) return settingsBusy();
       if (!isGoatError(error) || error.httpStatus >= 500) throw error;
       const changed = error instanceof ConflictError && error.code !== "ALREADY_EXISTS";
       return {
@@ -285,11 +269,20 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       const held = new Set(progress.attached);
       if (step === "hooks" && progress.current?.kind === "hook") held.add(progress.current.id);
       this.deleteUnheldSecrets(request, held);
+      // Only the record was written when the hosts step meets a settings save that keeps going: it goes too, so
+      // installing again is safe (Q1).
+      if (step === "hosts" && error instanceof SettingsBusyError && (await this.dropOwnRecord(binding, plan))) {
+        return settingsBusy();
+      }
       return stopped(binding, progress, step, error);
     }
   }
 
-  /** Reports what the plugin's record holds after an interruption. It never writes, so nothing is applied twice. */
+  /**
+   * Reports what the plugin's record holds after an interruption, and never applies a step again. The one thing it
+   * writes is the key store: with no record of this install, nothing was installed, so the signing secrets it stored are
+   * deleted (Q16).
+   */
   async reconcile(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord) {
     const request = requireRequest(plan);
     const pluginId = planPluginId(plan);
@@ -440,25 +433,60 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
   ): Promise<void> {
     let settings = read;
     let hosts = await this.hostsToAllow(binding, settings.networkAllowlist, true);
-    for (let retry = 0; hosts.network.length > 0 || hosts.hooks.length > 0; retry += 1) {
+    for (let retry = 0; ; retry += 1) {
       try {
-        await this.sources.updateSettings({
-          expectedRevision: settings.revision,
-          ...(hosts.network.length > 0 ? { networkAllowlist: [...settings.networkAllowlist, ...hosts.network] } : {}),
-          ...(hosts.hooks.length > 0
-            ? { hookNetworkAllowlist: [...this.sources.readHookAllowlist(), ...hosts.hooks] }
-            : {}),
-        });
+        // A write made again reads the settings again first, in the same try, so a busy read is retried too (Q1).
+        if (retry > 0) {
+          settings = await this.readSettings();
+          hosts = await this.hostsToAllow(binding, settings.networkAllowlist, true);
+          if (!hostsWithin(hosts, planned)) throw pluginChanged();
+        }
+        if (hosts.network.length > 0 || hosts.hooks.length > 0) await this.writeHosts(settings, hosts);
         break;
       } catch (error) {
-        if (retry >= HOSTS_WRITE_RETRIES || !isGoatError(error) || error.httpStatus !== 409) throw error;
-        settings = await this.sources.readSettings();
-        hosts = await this.hostsToAllow(binding, settings.networkAllowlist, true);
-        if (!hostsWithin(hosts, planned)) throw pluginChanged();
+        if (!(error instanceof SettingsBusyError) || retry >= HOSTS_WRITE_RETRIES) throw error;
       }
     }
     progress.allowed = [...hosts.network];
     progress.hookHostsAllowed = [...hosts.hooks];
+  }
+
+  /** The one additive settings write, under the revision fence; the owner's 409 reads as another save under way. */
+  private async writeHosts(settings: PluginInstallSettings, hosts: PluginInstallHosts): Promise<void> {
+    try {
+      await this.sources.updateSettings({
+        expectedRevision: settings.revision,
+        ...(hosts.network.length > 0 ? { networkAllowlist: [...settings.networkAllowlist, ...hosts.network] } : {}),
+        ...(hosts.hooks.length > 0
+          ? { hookNetworkAllowlist: [...this.sources.readHookAllowlist(), ...hosts.hooks] }
+          : {}),
+      });
+    } catch (error) {
+      throw asSettingsBusy(error);
+    }
+  }
+
+  /** The settings, or `SettingsBusyError` while another settings change is being saved (the owner's 409). */
+  private async readSettings(): Promise<PluginInstallSettings> {
+    try {
+      return await this.sources.readSettings();
+    } catch (error) {
+      throw asSettingsBusy(error);
+    }
+  }
+
+  /** Removes this install's record when nothing else of it was written; false when that can't be done. */
+  private async dropOwnRecord(binding: InstallBinding, plan: ChangePlanRecord): Promise<boolean> {
+    try {
+      await this.sources.updatePlugin(binding.manifest.pluginId, (current) => {
+        if (current?.installPlanId !== plan.planId) throw pluginChanged();
+        return undefined;
+      });
+      return true;
+    } catch {
+      // The record stays, so the stop names the uninstall as the way back.
+      return false;
+    }
   }
 
   /** Step 3: each connector, saved switched off and marked as the plugin's, unless its label is already saved. */
@@ -610,62 +638,6 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     return installHostsToAdd(connectors, hooks, templates, saved, networkAllowlist, hookAllowlist);
   }
 
-  /** The plain steps the plan will take, in order, for its summary and its confirmation. */
-  private plannedSentences(
-    binding: InstallBinding,
-    settings: PluginInstallSettings,
-    hosts: PluginInstallHosts,
-  ): string[] {
-    const { manifest } = binding;
-    const sentences = [
-      ...(hosts.network.length > 0 ? [`Allow ${hosts.network.join(", ")}.`] : []),
-      ...(hosts.hooks.length > 0 ? [`Allow ${hosts.hooks.join(", ")} for hooks.`] : []),
-    ];
-    // Skills come last: each is added in its own steps once this plan has finished.
-    const skills: string[] = [];
-    for (const piece of manifest.pieces) {
-      const view = binding.views.get(piece.id);
-      const kept = view?.check.status === "already_there";
-      switch (piece.kind) {
-        case "connector": {
-          const label = view?.label ?? piece.templateId;
-          sentences.push(
-            kept
-              ? `Keep ${label}, which is already saved.`
-              : settings.deploymentProfile === "remote_hardened"
-                ? `Save ${label}, switched off. On this install every action it takes asks you first.`
-                : piece.asksFirst === "everything"
-                  ? `Save ${label}, switched off, and everything it does asks you first.`
-                  : `Save ${label}, switched off, set to Reading is free.`,
-          );
-          break;
-        }
-        case "tool_group_off": {
-          const label = groupLabel(piece.groupId);
-          sentences.push(
-            kept
-              ? `${label} is already off, and stays your own switch.`
-              : `Turn ${label} off in every chat while ${manifest.name} is installed.`,
-          );
-          break;
-        }
-        case "hook":
-          sentences.push(
-            `Add a hook that sends event details, never message text, to ${hookHost(piece.url)}: ` +
-              `${HOOK_TRIGGER_LABELS[piece.trigger] ?? piece.trigger}.`,
-          );
-          break;
-        case "prompt_pack":
-          sentences.push(`Add the prompt pack ${view?.label ?? piece.id} to Library › Prompt packs.`);
-          break;
-        case "skill":
-          skills.push(`List the skill ${view?.label ?? piece.id}, which is added in its own steps after this.`);
-          break;
-      }
-    }
-    return [...sentences, ...skills];
-  }
-
   private isOwned(binding: InstallBinding, piece: PluginPiece): boolean {
     return binding.views.get(piece.id)?.check.status !== "already_there";
   }
@@ -713,80 +685,15 @@ function conflict(message: string): ConflictError {
   return new ConflictError({ message });
 }
 
-function savedConnectorSentence(label: string, approval: "reads_free" | "everything_asks"): string {
-  return approval === "reads_free"
-    ? `Saved ${label}, switched off, set to Reading is free.`
-    : `Saved ${label}, switched off, and everything it does asks you first.`;
+/** The settings owner's 409 (a revision fence, or a save under way) as `SettingsBusyError`; anything else as it is. */
+function asSettingsBusy(error: unknown): unknown {
+  return isGoatError(error) && error.httpStatus === 409 ? new SettingsBusyError() : error;
 }
 
-/** One plain sentence per finished step, then a skill's own steps (R66). */
-function finishedSentences(binding: InstallBinding, progress: InstallProgress, finished: boolean): string[] {
-  const skills = binding.manifest.pieces.filter((piece) => piece.kind === "skill");
-  return [
-    ...(finished ? [`Installed ${binding.manifest.name}.`] : []),
-    ...(progress.allowed.length > 0 ? [`Allowed ${progress.allowed.join(", ")}.`] : []),
-    ...(progress.hookHostsAllowed.length > 0 ? [`Allowed ${progress.hookHostsAllowed.join(", ")} for hooks.`] : []),
-    ...progress.done,
-    ...(finished
-      ? skills.map((piece) => `The skill ${binding.views.get(piece.id)?.label ?? piece.id} still needs its own steps.`)
-      : []),
-  ];
-}
-
-/**
- * The outcome when a step fails (R79): plain sentences for what was added, what didn't happen and what to do next. The
- * record keeps listing what was added, so uninstalling the plugin removes it. The owner's own words go to
- * `failureDetail`, for technical details only.
- */
-function stopped(
-  binding: InstallBinding,
-  progress: InstallProgress,
-  step: InstallStep,
-  error: unknown,
-): EvolutionControlPlaneAdapterOutcome {
-  const name = binding.manifest.name;
-  // Another install's record landed first: the plain refusal says so, and nothing of this install was written.
-  if (step === "record" && isGoatError(error) && error.httpStatus < 500) {
-    return { status: "failed", result: { summary: error.message, failureCode: "plugin_install_refused" } };
-  }
-  const detail = failureDetail(error);
-  const next = progress.recordWritten
-    ? `Uninstall ${name} to remove what it added, then install it again.`
-    : "Nothing was changed, so trying again is safe.";
+/** Nothing of the install stays, so installing again in a moment is safe. */
+function settingsBusy() {
   return {
-    status: progress.recordWritten ? "manual_required" : "failed",
-    result: {
-      summary: boundedSentences([
-        ...finishedSentences(binding, progress, false),
-        whatFailed(binding, progress, step),
-        next,
-      ]),
-      failureCode: `plugin_install_${step}_failed`,
-      ...(detail ? { failureDetail: detail } : {}),
-    },
+    status: "failed" as const,
+    result: { summary: SETTINGS_BUSY_MESSAGE, failureCode: "plugin_install_settings_busy" },
   };
-}
-
-/** What didn't happen, naming the piece the step was working on. */
-function whatFailed(binding: InstallBinding, progress: InstallProgress, step: InstallStep): string {
-  const piece = progress.current;
-  const label = piece ? (binding.views.get(piece.id)?.label ?? piece.id) : undefined;
-  switch (step) {
-    case "record":
-      return `Couldn't start installing ${binding.manifest.name}.`;
-    case "hosts":
-      return "Couldn't allow the hosts it needs.";
-    case "connectors":
-      return label ? `Couldn't save ${label}.` : "Couldn't save its connectors.";
-    case "tool_groups":
-      return "Couldn't turn its tool groups off.";
-    case "hooks":
-      return piece?.kind === "hook"
-        ? `Couldn't add the hook that sends event details to ${hookHost(piece.url)}.`
-        : "Couldn't add its hooks.";
-    case "prompt_packs":
-      return label ? `Couldn't add the prompt pack ${label}.` : "Couldn't add its prompt packs.";
-    case "finish":
-      return "Couldn't mark the install as finished.";
-  }
 }

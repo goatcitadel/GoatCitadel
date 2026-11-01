@@ -152,14 +152,18 @@ export function waitingSummary(record: StoredPlugin, progress: UninstallProgress
   const count = (reason: SkillWaitReason) => progress.waiting.filter((item) => item.reason === reason).length;
   const removing = count("removing");
   const decisions = count("decision");
+  const revokes = count("revoke");
   const then =
     removing === progress.waiting.length
       ? `Once ${removing === 1 ? "it's" : "they're"} off, uninstall ${record.name} again to finish.`
       : decisions === progress.waiting.length
         ? `Decline ${decisions === 1 ? "it" : "them"}, then uninstall ${record.name} again to finish.`
-        : decisions > 0
-          ? `Decline each step that waits for your decision, then uninstall ${record.name} again to finish.`
-          : `Then uninstall ${record.name} again to finish.`;
+        : decisions > 0 && revokes > 0
+          ? `Decline each step that waits for your decision and approve each removal that waits for your approval, ` +
+            `then uninstall ${record.name} again to finish.`
+          : decisions > 0
+            ? `Decline each step that waits for your decision, then uninstall ${record.name} again to finish.`
+            : `Then uninstall ${record.name} again to finish.`;
   return boundedSentences([
     `Removed ${piecesCount(progress.removed)}.`,
     ...progress.handedOver,

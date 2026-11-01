@@ -223,6 +223,7 @@ describe("glossary and plurals (GL-R02)", () => {
       "apps/gateway/src/services/capability-plugins-route-service.ts",
       "apps/gateway/src/services/plugin-owned-refusal.ts",
       "apps/gateway/src/services/plugin-install-change-plan-adapter.ts",
+      "apps/gateway/src/services/plugin-install-words.ts",
       "apps/gateway/src/services/plugin-plan-support.ts",
       "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts",
       "apps/gateway/src/services/plugin-uninstall-scope.ts",
@@ -231,6 +232,7 @@ describe("glossary and plurals (GL-R02)", () => {
       "apps/gateway/src/services/plugin-snapshot-store.ts",
       "apps/gateway/src/services/plugin-git-messages.ts",
       "apps/gateway/src/services/skill-hub-plugin-skill-source.ts",
+      "apps/gateway/src/services/chat-capability-scout.ts",
     ]);
     // The skill import's Git words stay out: only a plugin fetch's own file is read.
     for (const skillWords of ["hardened-git.ts", "hardened-git-wording.ts"]) {

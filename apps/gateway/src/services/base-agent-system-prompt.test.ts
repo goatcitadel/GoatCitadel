@@ -306,7 +306,7 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).not.toContain("tool policy file");
   });
 
-  it("sends the operator to Capabilities › Plugins for a group a plugin holds off, never the Tools switch (F9)", () => {
+  it("says uninstalling the plugin turns a group it holds off back on, never the Tools switch (F9, Q11)", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({
         toolset: {
@@ -319,9 +319,11 @@ describe("buildBaseAgentSystemPrompt", () => {
       }),
     ).volatileTail;
     expect(tail).toContain(
-      "To allow file writes, the operator uninstalls the plugin that keeps the Files tools off, in Capabilities › Plugins.",
+      "To allow file writes, the operator uninstalls the plugin that keeps the Files tools off, which turns them back on.",
     );
     expect(tail).not.toContain("switches the Files tools back on");
+    // Capabilities › Plugins arrives with the Plugins tab, so Chat doesn't point at it yet (Q11).
+    expect(tail).not.toContain("Capabilities › Plugins");
     expect(tail).toContain(
       "To allow shell commands, the operator switches the Shell and code tools back on in Capabilities › Tools.",
     );

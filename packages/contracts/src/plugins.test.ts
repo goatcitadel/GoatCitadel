@@ -402,19 +402,31 @@ describe("parsePluginManifest", () => {
       },
       {
         name: "a name with a right-to-left override",
-        manifest: { ...validManifest(), name: "Acme ‮slooc" },
+        manifest: { ...validManifest(), name: "Acme \u202Eslooc" },
         code: "MANIFEST_INVALID",
         field: "name",
       },
       {
-        name: "a description with a line break",
-        manifest: { ...validManifest(), description: "Notes.\nAnd more." },
+        name: "a name with a line separator",
+        manifest: { ...validManifest(), name: "Acme\u2028tools" },
+        code: "MANIFEST_INVALID",
+        field: "name",
+      },
+      {
+        name: "a description with a NUL",
+        manifest: { ...validManifest(), description: "Notes.\u0000" },
+        code: "MANIFEST_INVALID",
+        field: "description",
+      },
+      {
+        name: "a description with a right-to-left override",
+        manifest: { ...validManifest(), description: "Notes \u202Eexif" },
         code: "MANIFEST_INVALID",
         field: "description",
       },
       {
         name: "an author with a bidi isolate",
-        manifest: { ...validManifest(), author: "Fixture ⁦Author⁩" },
+        manifest: { ...validManifest(), author: "Fixture \u2066Author\u2069" },
         code: "MANIFEST_INVALID",
         field: "author",
       },
@@ -486,8 +498,21 @@ describe("parsePluginManifest", () => {
       });
     });
 
+    it("keeps line breaks and tabs in a description, and an emoji's joiner or a soft hyphen in a name (R77)", () => {
+      const manifest = {
+        ...validManifest(),
+        name: "Dev \uD83D\uDC69\u200D\uD83D\uDCBB tools",
+        description: "Notes for meetings.\n\n\tChecks them too.\r\n",
+        author: "Fixture Au\u00ADthor",
+      };
+      expect(parsePluginManifest(JSON.stringify(manifest))).toMatchObject({
+        ok: true,
+        manifest: { name: manifest.name, description: manifest.description, author: manifest.author },
+      });
+    });
+
     it("says a name with a control character must not hold one", () => {
-      for (const name of ["\u0001", "Acme\u0000", "Acme ‮slooc"]) {
+      for (const name of ["\u0001", "Acme\u0000", "Acme \u202Eslooc", "Acme\u2028tools"]) {
         expect(refusalOf({ ...validManifest(), name })).toEqual({
           ok: false,
           code: "MANIFEST_INVALID",

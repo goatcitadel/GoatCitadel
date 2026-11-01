@@ -173,10 +173,10 @@ function pluginHoldingGroup(
 function switchedOffClosing(runs: readonly ChatToolRunRecord[]): string {
   const held = runs.filter((run) => pluginHoldingGroup(run.error, run.result) !== undefined).length;
   if (held === runs.length) {
-    return "The operator can uninstall the plugin that keeps a group off in Capabilities › Plugins. Once the group is on, ask again and I'll retry.";
+    return "The operator can uninstall the plugin that keeps a group off, which turns that group back on. Once the group is on, ask again and I'll retry.";
   }
   if (held > 0) {
-    return "The operator can switch tool groups back on in Capabilities › Tools, and uninstall the plugin that keeps a group off in Capabilities › Plugins. Once the group is on, ask again and I'll retry.";
+    return "The operator can switch tool groups back on in Capabilities › Tools, and uninstall the plugin that keeps a group off, which turns that group back on. Once the group is on, ask again and I'll retry.";
   }
   return "The operator can switch tool groups back on in Capabilities › Tools. Once the group is on, ask again and I'll retry.";
 }
@@ -211,10 +211,10 @@ export function buildGovernanceBlockGuidance(input: {
     // A plugin's hold is lifted only by uninstalling that plugin, never by the Tools switch.
     const plugin = pluginHoldingGroup(input.error, input.result);
     if (plugin === UNNAMED_PLUGIN) {
-      return `${tool} is switched off: a plugin keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can uninstall that plugin in Capabilities › Plugins to switch that group back on; tell them which tool you needed.`;
+      return `${tool} is switched off: a plugin keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Uninstalling that plugin turns the group back on, and only the operator can do that; tell them which tool you needed.`;
     }
     if (plugin) {
-      return `${tool} is switched off: the plugin ${plugin} keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can uninstall ${plugin} in Capabilities › Plugins to switch that group back on; tell them which tool you needed.`;
+      return `${tool} is switched off: the plugin ${plugin} keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Uninstalling ${plugin} turns the group back on, and only the operator can do that; tell them which tool you needed.`;
     }
     return `${tool} is switched off: the operator turned off its tool group in Capabilities › Tools. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can switch that group back on; tell them which tool you needed.`;
   }

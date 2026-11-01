@@ -461,7 +461,7 @@ describe("installing a plugin through one Change Plan", () => {
       expect(h.state.settings.networkAllowlist).toEqual([]);
     });
 
-    it("stops after two writes made again, as a conflict that keeps coming isn't a race", async () => {
+    it("says another settings save is under way, and leaves nothing installed, when the conflict outlasts two writes made again (Q1)", async () => {
       const h = harness();
       const plan = await planFor(h);
       h.sources.updateSettings.mockImplementation(async () => {
@@ -471,9 +471,89 @@ describe("installing a plugin through one Change Plan", () => {
 
       const settled = await h.confirm(plan);
 
-      expect(settled.status).toBe("manual_required");
-      expect(settled.result?.failureCode).toBe("plugin_install_hosts_failed");
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toMatchObject({
+        summary: "GoatCitadel is saving another settings change. Install the plugin again in a moment.",
+        failureCode: "plugin_install_settings_busy",
+      });
+      expect(settled.result?.summary).not.toContain("changed since it was checked");
       expect(h.state.order).toEqual(["settings", "settings", "settings"]);
+      // Only the record had been written, so it goes too: installing again is safe.
+      expect(await h.store.get(PLUGIN_ID)).toBeUndefined();
+      expect(h.state.deletedSecrets).toEqual([HOOK_REF]);
+    });
+
+    it("says another settings save is under way, and writes nothing, when the settings can't be read at apply (Q1)", async () => {
+      const h = harness();
+      const plan = await planFor(h);
+      // The settings owner refuses reads while a settings change it queued is being saved.
+      h.sources.readSettings.mockRejectedValueOnce(
+        new ConflictError({
+          code: "STATE_CONFLICT",
+          message: "Settings are temporarily unavailable while runtime owners reconcile a config generation.",
+        }),
+      );
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).toBe("failed");
+      expect(settled.result).toMatchObject({
+        summary: "GoatCitadel is saving another settings change. Install the plugin again in a moment.",
+        failureCode: "plugin_install_settings_busy",
+      });
+      expect(h.state.order).toEqual([]);
+      expect(await h.store.get(PLUGIN_ID)).toBeUndefined();
+    });
+
+    it("reads the settings again inside the write it makes again, so a read refused meanwhile is tried once more (Q1)", async () => {
+      const h = harness();
+      const plan = await planFor(h);
+      const write = h.sources.updateSettings.getMockImplementation()!;
+      h.sources.updateSettings.mockImplementationOnce(async (update) => {
+        // Another save lands first, and the next read of the settings is refused while it is being saved.
+        h.state.settings = { ...h.state.settings, revision: h.state.settings.revision + 1 };
+        h.sources.readSettings.mockRejectedValueOnce(
+          new ConflictError({ code: "STATE_CONFLICT", message: "Settings are temporarily unavailable." }),
+        );
+        return await write(update);
+      });
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status, settled.result?.summary).toBe("completed");
+      expect(h.state.settings.networkAllowlist).toEqual(["mcp.issues.test"]);
+    });
+
+    it("is refused before any plan when the hosts it would allow don't fit in the text the operator approves (Q2)", async () => {
+      const hooks = Array.from({ length: 30 }, (_unused, index) => ({
+        kind: "hook",
+        id: `watch-${index}`,
+        trigger: "tool.call.after",
+        url: `https://h${index}-${"x".repeat(56)}.example.com/goat`,
+      }));
+      const views = hooks.map((hook) => ({
+        pieceId: hook.id,
+        kind: "hook" as const,
+        label: "After a tool call",
+        asksFirst: "Sends event details.",
+        check: { status: "ready" as const },
+        hosts: [new URL(hook.url).hostname],
+        needsSecret: true,
+      }));
+      const h = harness({
+        manifest: { ...FULL_MANIFEST, pieces: hooks },
+        views,
+        hookAllowlist: ["alerts.example.org"],
+      });
+      const refs = Object.fromEntries(
+        hooks.map((hook, index) => [hook.id, `${HOOK_REF.slice(0, -2)}${String(index).padStart(2, "0")}`]),
+      );
+
+      await expect(planFor(h, refs)).rejects.toMatchObject({
+        message: "This plugin asks to allow more hosts than one approval can list, so GoatCitadel can't install it.",
+      });
+      expect(await h.sync.list({ workspaceId: WORKSPACE_ID })).toEqual([]);
+      expect(h.state.order).toEqual([]);
     });
   });
 
@@ -540,14 +620,14 @@ describe("installing a plugin through one Change Plan", () => {
 
   it("takes control and bidi characters out of the labels it shows (F5)", async () => {
     const views = fullViews().map((view) =>
-      view.pieceId === "checks" ? { ...view, label: "Meeting ‮checks\u0000" } : view,
+      view.pieceId === "checks" ? { ...view, label: "Meeting \u202Echecks\u0000" } : view,
     );
     const h = harness({ views });
     const plan = await planFor(h);
 
-    expect(plan.summary).toContain("Add the prompt pack Meeting checks  to Library › Prompt packs.");
+    expect(plan.summary).toContain("Add the prompt pack Meeting checks to Library › Prompt packs.");
     for (const text of [plan.summary, plan.title, plan.impact]) {
-      expect(text).not.toMatch(/[\p{Cc}؜‎‏‪-‮⁦-⁩]/u);
+      expect(text).not.toMatch(/[\p{Cc}\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u);
     }
   });
 

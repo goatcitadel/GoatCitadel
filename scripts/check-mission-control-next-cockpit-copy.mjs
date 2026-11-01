@@ -18,8 +18,9 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
  * Every tree that renders operator copy in the cockpit: its own areas, the native routes and shared components. A root
  * with `files` reads just those files (relative to `dir`): copy written outside the cockpit that the cockpit shows as
  * written, such as the hook trigger labels, the plugin checks' lines, the plugin source refusals, the plugin install
- * and uninstall refusals, a plugin install's plan and summaries (its adapter and the shared plan support), and a
- * plugin uninstall's plan and summaries (its adapter, scope and words). A plugin
+ * and uninstall refusals, a plugin install's plan and summaries (its adapter, words and the shared plan support), a
+ * plugin uninstall's plan and summaries (its adapter, scope and words), and the reasons Chat's capability scout gives
+ * under Why? for a blocked tool. A plugin
  * fetch's Git words sit in `plugin-git-messages.ts`, apart from `hardened-git.ts` and `hardened-git-wording.ts`, which
  * hold the skill import's.
  */
@@ -39,6 +40,7 @@ export const COPY_ROOTS = [
       "apps/gateway/src/services/capability-plugins-route-service.ts",
       "apps/gateway/src/services/plugin-owned-refusal.ts",
       "apps/gateway/src/services/plugin-install-change-plan-adapter.ts",
+      "apps/gateway/src/services/plugin-install-words.ts",
       "apps/gateway/src/services/plugin-plan-support.ts",
       "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts",
       "apps/gateway/src/services/plugin-uninstall-scope.ts",
@@ -47,6 +49,7 @@ export const COPY_ROOTS = [
       "apps/gateway/src/services/plugin-snapshot-store.ts",
       "apps/gateway/src/services/plugin-git-messages.ts",
       "apps/gateway/src/services/skill-hub-plugin-skill-source.ts",
+      "apps/gateway/src/services/chat-capability-scout.ts",
     ],
   },
 ];

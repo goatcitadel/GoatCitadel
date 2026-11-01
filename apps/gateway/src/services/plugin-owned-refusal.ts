@@ -6,6 +6,7 @@ import {
   type SkillSourceProvider,
 } from "@goatcitadel/contracts";
 import { findPluginOwning, type StoredPlugin } from "./capability-plugin-store.js";
+import { withoutControls } from "./plugin-plain-text.js";
 
 // A plugin's pieces are read-only to every other editor: the operator can switch them, connect them and sign them in,
 // and only the plugin's own install and uninstall change or remove them. Each owner refuses with the error here, decided
@@ -62,7 +63,8 @@ export class PluginOwnedError extends GoatError {
   public constructor(owner: PluginPieceOwner | UnnamedPluginPiece) {
     const named = "name" in owner;
     super(
-      named ? `From ${owner.name}. Uninstall it to remove this.` : UNNAMED_MESSAGES[owner.kind],
+      // An old or hand-edited record's name may carry controls; the refusal reaches plan summaries as it is (Q7).
+      named ? withoutControls(`From ${owner.name}. Uninstall it to remove this.`) : UNNAMED_MESSAGES[owner.kind],
       owner.pluginId ? { pluginId: owner.pluginId } : undefined,
     );
     this.unnamedPiece = named ? undefined : { ...owner };

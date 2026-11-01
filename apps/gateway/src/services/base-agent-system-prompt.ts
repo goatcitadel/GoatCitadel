@@ -208,7 +208,7 @@ function switchedOffGroupLabel(toolName: string): string {
 function switchedOffRemedy(toolName: string, held: ReadonlySet<string>): string {
   const label = switchedOffGroupLabel(toolName);
   return held.has(toolName)
-    ? `the operator uninstalls the plugin that keeps the ${label} tools off, in Capabilities › Plugins.`
+    ? `the operator uninstalls the plugin that keeps the ${label} tools off, which turns them back on.`
     : `the operator switches the ${label} tools back on in Capabilities › Tools.`;
 }
 

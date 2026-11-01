@@ -891,7 +891,8 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
       result: { policyRevalidation: { reasonCodes: ["tool_group_off", "plugin_tool_group_hold"] } },
     });
     expect(blocked?.failureGuidance).toContain("browser.search is switched off: a plugin keeps its tool group off.");
-    expect(blocked?.failureGuidance).toContain("Capabilities › Plugins");
+    expect(blocked?.failureGuidance).toContain("Uninstalling that plugin turns the group back on");
+    expect(blocked?.failureGuidance).not.toContain("Capabilities › Plugins");
     expect(blocked?.failureGuidance).not.toContain("Capabilities › Tools");
   });
 

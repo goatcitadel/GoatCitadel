@@ -271,7 +271,10 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       effectObserved: false,
       status: "manual_required" as const,
       result: {
-        summary: `The uninstall stopped before it finished. Uninstall ${record.name} again to finish.`,
+        summary: boundedSentences([
+          "The uninstall stopped before it finished.",
+          `Uninstall ${record.name} again to finish.`,
+        ]),
         failureCode: "plugin_uninstall_interrupted",
       },
     };
@@ -405,8 +408,9 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       const packId = pluginPromptPackId(record.pluginId, piece.pieceId);
       const sourceLabel = await this.sources.readPromptPackSourceLabel(packId);
       if (sourceLabel !== undefined) {
+        // The import saves the label trimmed, so a name with a space (or U+00A0, or U+FEFF) at an end still matches (Q3).
         const ours =
-          sourceLabel === pluginPromptPackSourceLabel(record.name) &&
+          sourceLabel.trim() === pluginPromptPackSourceLabel(record.name).trim() &&
           !others.some((other) => listsPromptPack(other, packId));
         if (!ours) continue;
         if (await this.sources.deletePromptPack(packId)) progress.removed += 1;

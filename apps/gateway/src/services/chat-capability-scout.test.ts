@@ -213,7 +213,7 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     expect(await reviewReason(["tool_group_off"])).toBe("This tool's group is switched off in Capabilities › Tools.");
     // A plugin's hold is lifted by uninstalling the plugin, never by the Tools switch (F9).
     expect(await reviewReason(["tool_group_off", "plugin_tool_group_hold"])).toBe(
-      "A plugin keeps this tool's group off. Uninstall it in Capabilities › Plugins to switch the group back on.",
+      "A plugin keeps this tool's group off. Uninstalling that plugin turns the group back on.",
     );
     expect(await reviewReason(["policy_deny", "tool_group_off"])).toBe(
       "This tool's group is switched off in Capabilities › Tools.",
