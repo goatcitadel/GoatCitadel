@@ -728,4 +728,58 @@ describe("materializeBoundedGitTree (through a local repository)", () => {
       gitRuns().mockImplementation(runAsync);
     }
   });
+
+  describe("a --batch-check answer that is not exactly what was asked", () => {
+    /** Runs the materialization with `--batch-check` stdout rewritten line by line (or by whole output). */
+    async function withBatchCheck(rewrite: (lines: string[]) => string[]): Promise<unknown> {
+      const runAsync = gitRuns().getMockImplementation()!;
+      gitRuns().mockImplementation((...call: unknown[]) => {
+        const pending = runAsync(...call) as Promise<{ stdout: Buffer }> & { child: unknown };
+        if (!(call[1] as string[]).includes("--batch-check")) return pending;
+        const changed = pending.then((result) => {
+          const lines = result.stdout.toString("utf8").split("\n");
+          if (lines.at(-1) === "") lines.pop();
+          return { ...result, stdout: Buffer.from(`${rewrite(lines).join("\n")}\n`, "utf8") };
+        });
+        return Object.assign(changed, { child: pending.child });
+      });
+      try {
+        return await materializeBoundedGitTree(treeRepo, new AbortController().signal, treeOptions, freshDest()).catch(
+          (error: unknown) => error,
+        );
+      } finally {
+        gitRuns().mockImplementation(runAsync);
+      }
+    }
+    const withFirst = (change: (fields: string[]) => string[]) => (lines: string[]) => [
+      change(lines[0]!.split(" ")).join(" "),
+      ...lines.slice(1),
+    ];
+
+    it.each([
+      ["another object id", (f: string[]) => ["b".repeat(40), f[1]!, f[2]!]],
+      ["a tree", (f: string[]) => [f[0]!, "tree", f[2]!]],
+      ["a commit", (f: string[]) => [f[0]!, "commit", f[2]!]],
+      ["an extra field", (f: string[]) => [...f, "extra"]],
+      ["a leading-zero size", (f: string[]) => [f[0]!, f[1]!, `0${f[2]!}`]],
+      ["a negative size", (f: string[]) => [f[0]!, f[1]!, "-1"]],
+    ])("refuses %s as an unavailable blob", async (_name, change) => {
+      const thrown = await withBatchCheck(withFirst(change));
+
+      expect(thrown).toBeInstanceOf(GitTreeLimitError);
+      expect((thrown as Error).message).toMatch(
+        /^Git skill blob .+ is unavailable inside the bounded partial clone\.$/u,
+      );
+    });
+
+    it("refuses a line count that differs from the files asked for", async () => {
+      const missing = await withBatchCheck((lines) => lines.slice(0, -1));
+      const extra = await withBatchCheck((lines) => [...lines, lines[0]!]);
+
+      for (const thrown of [missing, extra]) {
+        expect(thrown).toBeInstanceOf(GitFetchFailedError);
+        expect((thrown as Error).message).not.toMatch(/changed during/u);
+      }
+    });
+  });
 });
