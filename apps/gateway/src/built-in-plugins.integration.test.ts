@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -8,8 +9,8 @@ import type { CapabilityPluginInspection, CapabilityPluginListResponse } from "@
 import { buildApp } from "./app.js";
 
 /**
- * The plugins that ship with GoatCitadel, on a fresh install over the real Gateway: the repository's own `plugins/`
- * and `skills/` folders are copied into a scratch root beside the example config, as a new install starts, and Browser
+ * The plugins that ship with GoatCitadel, on a fresh install over the real Gateway: the repository's git-tracked
+ * `plugins/` and `skills/` files are copied into a scratch root beside the example config, as a new install starts, and Browser
  * checks is listed and inspected through the same routes the Plugins tab uses. Every piece goes through its owner's
  * own check (the skill through the Skill Hub's real review). On Windows the Skill Hub's artifact store sets owner-only
  * ACLs through PowerShell, so the waits here are generous.
@@ -51,12 +52,14 @@ describe("the plugins that ship with GoatCitadel, over the real Gateway", { time
     root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-built-in-plugins-"));
     writeConfig(path.join(root, "config"));
     // A fresh install's shipped folders: the plugins that ship, and the skills that ship beside them.
-    fs.cpSync(path.join(REPO_ROOT, "plugins"), path.join(root, "plugins"), { recursive: true });
-    fs.cpSync(path.join(REPO_ROOT, "skills"), path.join(root, "skills"), { recursive: true });
+    copyTrackedFiles(["plugins", "skills"], root);
     for (const [key, value] of Object.entries({ ...ENV, GOATCITADEL_ROOT_DIR: root })) {
       originalEnv.set(key, process.env[key]);
       process.env[key] = value;
     }
+    // A checkout reads <rootDir>/plugins; an app folder named by the shell would make this a packaged install.
+    originalEnv.set("GOATCITADEL_APP_DIR", process.env.GOATCITADEL_APP_DIR);
+    delete process.env.GOATCITADEL_APP_DIR;
     app = await buildApp();
     await app.ready();
   }, 300_000);
@@ -157,6 +160,24 @@ describe("the plugins that ship with GoatCitadel, over the real Gateway", { time
     expect(created.body).not.toContain(root.replaceAll("\\", "\\\\"));
   });
 });
+
+/**
+ * The git-tracked files under `folders`, copied to the same paths under `root`, as the test bench copies them: no local
+ * untracked plugin or skill changes what a fresh install holds. A tracked file deleted from the working tree is skipped.
+ */
+function copyTrackedFiles(folders: readonly string[], root: string): void {
+  const listed = execFileSync("git", ["-C", REPO_ROOT, "ls-files", "-z", "--", ...folders], {
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+  });
+  for (const relativeFile of listed.split("\0").filter(Boolean)) {
+    const source = path.join(REPO_ROOT, ...relativeFile.split("/"));
+    if (!fs.existsSync(source)) continue;
+    const target = path.join(root, ...relativeFile.split("/"));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.copyFileSync(source, target);
+  }
+}
 
 function writeConfig(configDir: string): void {
   fs.mkdirSync(configDir, { recursive: true });

@@ -48,8 +48,12 @@ export interface FetchedPluginSource {
 export interface PluginSourceInputs {
   /** Hashes a temp copy and moves it into place as a snapshot: the snapshot store's `importDirectory`. */
   importSnapshot: (dir: string) => Promise<PluginSnapshot>;
-  /** `<rootDir>/plugins`, the folder of plugins that ship with GoatCitadel. */
-  builtInRoot: string;
+  /**
+   * The built-in plugins folder (`builtInPluginsRoot`: the release's `app/templates/plugins` on a packaged install,
+   * `<rootDir>/plugins` otherwise). Undefined when a packaged install's app folder can't be verified: then no plugin
+   * is fetched as built in.
+   */
+  builtInRoot: string | undefined;
   deploymentProfile: DeploymentProfile;
   /** Where temp copies are made. It should be on the same volume as the store, since the store renames into place. */
   tempRoot: string;
@@ -317,7 +321,7 @@ function isGitFolderName(name: string): boolean {
 
 async function fetchBuiltInSource(
   source: Extract<PluginSource, { kind: "built_in" }>,
-  builtInRoot: string,
+  builtInRoot: string | undefined,
   importSnapshot: PluginSourceInputs["importSnapshot"],
   tempRoot: string,
 ): Promise<FetchedPluginSource> {
@@ -329,6 +333,8 @@ async function fetchBuiltInSource(
       "That isn't the id of a plugin that ships with GoatCitadel.",
     );
   }
+  // No folder may be read as built in, so none is shipped, as the list says.
+  if (builtInRoot === undefined) throw notShipped();
   const folder = path.join(path.resolve(builtInRoot), source.pluginId);
   let info;
   try {

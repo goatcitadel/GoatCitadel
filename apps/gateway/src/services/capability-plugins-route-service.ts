@@ -50,7 +50,11 @@ export type CapabilityPluginsSource =
 export interface CapabilityPluginsRouteSources {
   /** The plugin store's records. */
   listInstalled(): Promise<readonly StoredPlugin[]>;
-  /** The manifests of the plugins shipped under `<rootDir>/plugins`. */
+  /**
+   * The manifests of the plugins in the built-in plugins folder (`builtInPluginsRoot`: the release's
+   * `app/templates/plugins` on a packaged install, none when that folder can't be verified, `<rootDir>/plugins`
+   * otherwise).
+   */
   listBuiltIn(): Promise<readonly PluginManifest[]>;
   /**
    * A workspace's Skill Hub checks by their ids, whatever their place among its newest checks: what a plugin's skill

@@ -169,7 +169,8 @@ export function buildPluginDetailPieces(
       pieceId: piece.pieceId,
       kind: piece.kind,
       label: piece.kind === "skill" && check ? check.title : described.label,
-      asksFirst: described.asksFirst,
+      // A connector it kept (or handed over) keeps its own approval setting, whatever the manifest asked for.
+      asksFirst: piece.kind === "connector" && !piece.owned ? ASKS_FIRST.connectorKept : described.asksFirst,
       check: piece.owned ? READY : ALREADY_THERE,
       ...(described.hosts ? { hosts: [...described.hosts] } : {}),
       ...(piece.skillSnapshotId ? { skillSnapshotId: piece.skillSnapshotId } : {}),

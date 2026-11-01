@@ -28,7 +28,7 @@ Each release bundle installs to a mutable GoatCitadel home with this split:
   - embedded Node runtime
   - packaged launcher helpers
   - runtime templates
-  - the plugins that ship with GoatCitadel (`templates/plugins`), which the packaged Gateway reads in place. They are never copied into the mutable runtime state, so a folder placed in `runtime-root/plugins` is never read as built in, and a new release's plugins arrive with its `app/`
+  - the plugins that ship with GoatCitadel (`templates/plugins`), which the packaged Gateway reads in place and never writes (installing or updating a release replaces them). They are never seeded into `runtime-root/plugins`, and a folder placed there is never read as built in: when the release's app folder can't be verified (it must hold `release-manifest.json` and the running Gateway's own files), no built-in plugins are listed at all, and the server log says so. Inspecting one copies it into a content-addressed snapshot under `data/plugins`, as with any plugin source. A new release's plugins arrive with its `app/`
   - `release-manifest.json`
 - `config/`, `skills/`, `workspaces/`, `data/`
   Mutable runtime state created or seeded on first `goatcitadel launch`

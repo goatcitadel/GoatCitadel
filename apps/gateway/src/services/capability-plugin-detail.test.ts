@@ -424,6 +424,8 @@ describe("a plugin's detail", () => {
       ["issues", "kept", { status: "already_there" }, undefined],
       ["no-git", "kept", { status: "already_there" }, "/capabilities/tools?item=group:git"],
     ]);
+    // The manifest asks for everything to ask first, but a kept server keeps its own setting.
+    expect(detail.pieces[1]?.asksFirst).toBe("Already saved. It keeps its own setting for what asks first.");
     expect(detail.state).toBe("installed");
   });
 

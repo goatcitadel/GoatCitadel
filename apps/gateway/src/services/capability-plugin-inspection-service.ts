@@ -53,6 +53,8 @@ export const ASKS_FIRST = {
   skill: "Follows your tool rules. Added after GoatCitadel's checks, then switched on.",
   connectorChanges: "Reading runs freely; creating or changing something asks first in Chat.",
   connectorEverything: "Everything it does asks first in Chat.",
+  /** A connector already saved, which the install keeps as it is and never changes. */
+  connectorKept: "Already saved. It keeps its own setting for what asks first.",
   toolGroupOff: (groupLabel: string) => `Turns ${groupLabel} off in every chat while installed.`,
   hook: (host: string, triggerLabel: string) => `Sends event details, never message text, to ${host}: ${triggerLabel}.`,
   promptPack: (tests: number) =>
@@ -413,7 +415,8 @@ export class CapabilityPluginInspectionService {
     }
     const { template } = found;
     if ((await context.savedConnectorLabels()).has(mcpServerLabelKey(template.label))) {
-      return { ...view, label: template.label, check: ALREADY_THERE };
+      // The install keeps the saved server's own approval setting, so the manifest's line would promise what it isn't.
+      return { ...view, label: template.label, asksFirst: ASKS_FIRST.connectorKept, check: ALREADY_THERE };
     }
     const hosts = missingHosts(template, (await context.settings()).networkAllowlist);
     return { ...view, label: template.label, check: READY, ...(hosts.length > 0 ? { hosts } : {}) };

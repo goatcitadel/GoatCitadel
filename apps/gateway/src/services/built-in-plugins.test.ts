@@ -2,16 +2,21 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { skillCategoryFor } from "@goatcitadel/contracts";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
-import { builtInPluginsRoot, PACKAGED_BUILT_IN_PLUGINS_FOLDER } from "./built-in-plugins-root.js";
+import {
+  builtInPluginsRoot,
+  PACKAGED_BUILT_IN_PLUGINS_FOLDER,
+  UNVERIFIED_APP_FOLDER_MESSAGE,
+} from "./built-in-plugins-root.js";
 import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-manifest-file.js";
+import { fetchPluginSource } from "./plugin-source-service.js";
 
 /**
  * The plugins that ship with GoatCitadel: every folder under the repository's `plugins/` is a manifest GoatCitadel
  * reads, the release bundle and every fresh-install fixture carry the folder, and a packaged install reads it from its
- * own app folder, never from the writable runtime root.
+ * own app folder, or reads none when that folder can't be verified, never from the writable runtime root.
  */
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..", "..", "..");
@@ -23,8 +28,14 @@ function readRepoFile(relativePath: string): string {
 
 describe("the plugins that ship with GoatCitadel", () => {
   it("parses every shipped plugin manifest", async () => {
-    const folders = fs
-      .readdirSync(PLUGINS_ROOT, { withFileTypes: true })
+    const entries = fs.readdirSync(PLUGINS_ROOT, { withFileTypes: true });
+    // Only plain folders ship, beside the README: the list skips a link, though a built-in fetch would follow one.
+    expect(
+      entries
+        .filter((entry) => entry.name !== "README.md" && (entry.isSymbolicLink() || !entry.isDirectory()))
+        .map((entry) => entry.name),
+    ).toEqual([]);
+    const folders = entries
       .filter((entry) => entry.isDirectory())
       .map((entry) => entry.name)
       .sort();
@@ -45,7 +56,7 @@ describe("the plugins that ship with GoatCitadel", () => {
         }
       }
     }
-    // Every shipped folder is listed: none is a link, and none is left out for a manifest the list can't read.
+    // Every shipped folder is listed: none is left out for a manifest the list can't read.
     expect((await listBuiltInPluginManifests(PLUGINS_ROOT)).map((manifest) => manifest.pluginId)).toEqual(folders);
   });
 
@@ -124,10 +135,18 @@ describe("where the Gateway reads the plugins that ship", () => {
     for (const dir of tempDirs.splice(0)) fs.rmSync(dir, { recursive: true, force: true });
   });
 
-  /** A release bundle's layout, as `resolvePackagedRuntimeAppDir` accepts it, plus a writable runtime root beside it. */
+  function tempDir(prefix: string): string {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+    tempDirs.push(dir);
+    return dir;
+  }
+
+  /**
+   * A release bundle's layout, as `resolvePackagedRuntimeAppDir` accepts it, and the writable runtime root beside it
+   * with a plugin folder dropped in, which must never read as built in.
+   */
   function packagedInstall() {
-    const home = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-built-in-plugins-"));
-    tempDirs.push(home);
+    const home = tempDir("goatcitadel-built-in-plugins-");
     const appDir = path.join(home, "app");
     const files = {
       manifest: path.join(appDir, "release-manifest.json"),
@@ -142,48 +161,109 @@ describe("where the Gateway reads the plugins that ship", () => {
     const runtimeRoot = path.join(home, "runtime-root");
     fs.mkdirSync(path.join(runtimeRoot, "plugins", "dropped-here"), { recursive: true });
     const runtimePaths = { gatewayModulePath: files.module, entryPath: files.entry, executablePath: files.node };
-    return { appDir, runtimeRoot, runtimePaths };
+    return { home, appDir, runtimeRoot, runtimePaths };
   }
 
-  it("reads a packaged release's own app folder, never the writable runtime root", () => {
-    const { appDir, runtimeRoot, runtimePaths } = packagedInstall();
-
-    expect(builtInPluginsRoot(runtimeRoot, { candidates: [appDir], runtimePaths })).toBe(
-      path.join(appDir, "templates", "plugins"),
-    );
-    // The launcher starts the packaged Gateway in `app/gateway`, so the app folder is found without the variable too.
-    expect(
-      builtInPluginsRoot(runtimeRoot, {
-        candidates: [undefined, path.join(appDir, "gateway"), appDir],
-        runtimePaths,
-      }),
-    ).toBe(path.join(appDir, "templates", "plugins"));
-  });
-
-  it("reads <rootDir>/plugins in a checkout, and when the named app folder isn't this Gateway's release", () => {
-    const { appDir, runtimeRoot, runtimePaths } = packagedInstall();
-    const checkout = path.join(os.tmpdir(), "goatcitadel-checkout");
-    const elsewhere = {
+  /** A Gateway run from a source checkout (with a system Node), as `pnpm dev:gateway` runs one. */
+  function sourceCheckout() {
+    const checkout = tempDir("goatcitadel-checkout-");
+    fs.writeFileSync(path.join(checkout, "pnpm-workspace.yaml"), "packages: []\n");
+    fs.mkdirSync(path.join(checkout, "bin"));
+    fs.writeFileSync(path.join(checkout, "bin", "goatcitadel.mjs"), "\n");
+    const runtimePaths = {
       gatewayModulePath: path.join(checkout, "apps", "gateway", "src", "services", "built-in-plugins-root.ts"),
       entryPath: path.join(checkout, "apps", "gateway", "src", "main.ts"),
       executablePath: process.execPath,
     };
+    return { checkout, runtimePaths };
+  }
 
-    expect(builtInPluginsRoot(checkout, { candidates: [undefined], runtimePaths: elsewhere })).toBe(
+  it("reads a packaged release's own app folder, never the writable runtime root", () => {
+    const { appDir, runtimeRoot, runtimePaths } = packagedInstall();
+    const report = vi.fn();
+
+    expect(builtInPluginsRoot(runtimeRoot, { appDirVariable: appDir, otherCandidates: [], runtimePaths }, report)).toBe(
+      path.join(appDir, "templates", "plugins"),
+    );
+    // The launcher starts the packaged Gateway in `app/gateway`, so the app folder is found without the variable too.
+    expect(
+      builtInPluginsRoot(
+        runtimeRoot,
+        { appDirVariable: undefined, otherCandidates: [path.join(appDir, "gateway"), appDir], runtimePaths },
+        report,
+      ),
+    ).toBe(path.join(appDir, "templates", "plugins"));
+    expect(report).not.toHaveBeenCalled();
+  });
+
+  it("reads no built-ins when a packaged install's app folder can't be verified, never the runtime root", async () => {
+    const { home, appDir, runtimeRoot, runtimePaths } = packagedInstall();
+    const systemNode = sourceCheckout().runtimePaths;
+    const report = vi.fn();
+    const unverified = [
+      // The launcher names the release, but this Gateway runs on another Node, outside it.
+      { appDirVariable: appDir, otherCandidates: [], runtimePaths: systemNode },
+      // The Gateway's working folder sits in a release it doesn't run from.
+      { appDirVariable: undefined, otherCandidates: [path.join(appDir, "gateway"), appDir], runtimePaths: systemNode },
+    ];
+    for (const discovery of unverified) expect(builtInPluginsRoot(runtimeRoot, discovery, report)).toBeUndefined();
+    // The launcher names a folder that holds this Gateway but no release manifest, and isn't a source checkout.
+    fs.rmSync(path.join(appDir, "release-manifest.json"));
+    expect(
+      builtInPluginsRoot(runtimeRoot, { appDirVariable: appDir, otherCandidates: [], runtimePaths }, report),
+    ).toBeUndefined();
+
+    expect(fs.existsSync(path.join(runtimeRoot, "plugins", "dropped-here"))).toBe(true);
+    // One plain line each time, naming no folder.
+    expect(report.mock.calls).toEqual([
+      [UNVERIFIED_APP_FOLDER_MESSAGE],
+      [UNVERIFIED_APP_FOLDER_MESSAGE],
+      [UNVERIFIED_APP_FOLDER_MESSAGE],
+    ]);
+    expect(UNVERIFIED_APP_FOLDER_MESSAGE).not.toMatch(/[\\/]/u);
+    expect(UNVERIFIED_APP_FOLDER_MESSAGE).not.toContain(home);
+
+    // With no folder, nothing is listed and a built-in fetch is the usual "not shipped", with nothing copied.
+    expect(await listBuiltInPluginManifests(undefined)).toEqual([]);
+    const importSnapshot = vi.fn();
+    await expect(
+      fetchPluginSource(
+        { kind: "built_in", pluginId: "dropped-here" },
+        { importSnapshot, builtInRoot: undefined, deploymentProfile: "trusted_local", tempRoot: home },
+      ),
+    ).rejects.toMatchObject({ statusCode: 404, reason: "BUILT_IN_NOT_FOUND" });
+    expect(importSnapshot).not.toHaveBeenCalled();
+  });
+
+  it("reads <rootDir>/plugins in a checkout or the Docker image, even when the variable names the checkout", () => {
+    const { checkout, runtimePaths } = sourceCheckout();
+    const report = vi.fn();
+
+    expect(
+      builtInPluginsRoot(
+        checkout,
+        {
+          appDirVariable: undefined,
+          otherCandidates: [path.join(checkout, "apps", "gateway"), checkout],
+          runtimePaths,
+        },
+        report,
+      ),
+    ).toBe(path.join(checkout, "plugins"));
+    // `verify:desktop` runs the launcher with GOATCITADEL_APP_DIR set to the checkout itself.
+    expect(builtInPluginsRoot(checkout, { appDirVariable: checkout, otherCandidates: [], runtimePaths }, report)).toBe(
       path.join(checkout, "plugins"),
     );
-    // A release folder that doesn't hold the running Gateway lends it nothing.
-    expect(builtInPluginsRoot(runtimeRoot, { candidates: [appDir], runtimePaths: elsewhere })).toBe(
-      path.join(runtimeRoot, "plugins"),
-    );
-    // So does a folder that holds the running Gateway but no release manifest.
-    fs.rmSync(path.join(appDir, "release-manifest.json"));
-    expect(builtInPluginsRoot(runtimeRoot, { candidates: [appDir], runtimePaths })).toBe(
-      path.join(runtimeRoot, "plugins"),
-    );
+    expect(report).not.toHaveBeenCalled();
   });
 
   it("reads this repository's plugins folder from this checkout", () => {
-    expect(builtInPluginsRoot(REPO_ROOT)).toBe(PLUGINS_ROOT);
+    const named = process.env.GOATCITADEL_APP_DIR;
+    delete process.env.GOATCITADEL_APP_DIR;
+    try {
+      expect(builtInPluginsRoot(REPO_ROOT)).toBe(PLUGINS_ROOT);
+    } finally {
+      if (named !== undefined) process.env.GOATCITADEL_APP_DIR = named;
+    }
   });
 });

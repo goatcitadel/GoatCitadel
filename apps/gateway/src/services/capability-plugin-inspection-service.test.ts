@@ -497,9 +497,9 @@ describe("CapabilityPluginInspectionService", () => {
     );
   });
 
-  it("marks an already saved connector as already there", async () => {
+  it("marks an already saved connector as already there, keeping its own approval setting", async () => {
     const pieces: Pieces = [
-      { kind: "connector", id: "notes", templateId: "notes-app" },
+      { kind: "connector", id: "notes", templateId: "notes-app", asksFirst: "everything" },
       { kind: "connector", id: "keyed", templateId: "keyed" },
       { kind: "connector", id: "unknown", templateId: "unknown-app" },
     ];
@@ -514,7 +514,8 @@ describe("CapabilityPluginInspectionService", () => {
       pieceId: "notes",
       kind: "connector",
       label: "Notes App",
-      asksFirst: "Reading runs freely; creating or changing something asks first in Chat.",
+      // Not the manifest's "Everything it does asks first in Chat.": the install never changes a server it keeps.
+      asksFirst: "Already saved. It keeps its own setting for what asks first.",
       check: { status: "already_there" },
     });
     // The install's own template rule, word for word.

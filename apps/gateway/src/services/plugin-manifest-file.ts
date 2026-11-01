@@ -21,9 +21,10 @@ export function readPluginManifestFile(dir: string): Promise<PluginManifestParse
  * The manifests of the plugins that ship with GoatCitadel: each plain folder under `builtInRoot` whose name is a plugin
  * id and whose manifest names that same id (the id a built-in install asks for), the first 64 by name. A folder whose
  * manifest is missing, too large or refused is left out. Nothing is copied, fetched or checked, and a missing root
- * lists nothing.
+ * lists nothing, as does no root at all (a packaged install whose app folder can't be verified).
  */
-export async function listBuiltInPluginManifests(builtInRoot: string): Promise<PluginManifest[]> {
+export async function listBuiltInPluginManifests(builtInRoot: string | undefined): Promise<PluginManifest[]> {
+  if (builtInRoot === undefined) return [];
   let dir;
   try {
     dir = await fs.opendir(builtInRoot);
