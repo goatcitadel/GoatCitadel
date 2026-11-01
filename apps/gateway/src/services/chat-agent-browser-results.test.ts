@@ -61,4 +61,18 @@ describe("remote block detection", () => {
     });
     expect(classifyBrowserToolResult("browser.navigate", titled)).toMatchObject({ failureClass: "remote_blocked" });
   });
+
+  it("counts a challenge page carried in two fields once", () => {
+    // About 900 characters, repeated as contentText and textSnippet as an MCP result carries it.
+    const page = `Checking your browser. Please complete the captcha to continue. ${"Waiting for verification. ".repeat(32)}`;
+    const mcp = {
+      url: "https://example.com/c",
+      title: "example.com",
+      status: 200,
+      contentText: page,
+      textSnippet: page,
+    };
+
+    expect(classifyBrowserToolResult("browser.navigate", mcp)).toMatchObject({ failureClass: "remote_blocked" });
+  });
 });

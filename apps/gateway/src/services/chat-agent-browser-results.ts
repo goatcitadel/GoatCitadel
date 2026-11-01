@@ -354,9 +354,22 @@ function findRemoteBlockMarker(result: Record<string, unknown>, normalizedText: 
   if (markerInTitle) {
     return markerInTitle;
   }
-  return normalizedText.length <= CHALLENGE_PAGE_MAX_TEXT_CHARS
+  return readLongestPageTextLength(result) <= CHALLENGE_PAGE_MAX_TEXT_CHARS
     ? REMOTE_BLOCK_MARKERS.find((marker) => normalizedText.includes(marker))
     : undefined;
+}
+
+/**
+ * The page's own length: its longest text field. A normalized result can carry the same page text in more than
+ * one field (an MCP result's contentText is also its textSnippet), so the fields are not summed.
+ */
+export function readLongestPageTextLength(result: Record<string, unknown>): number {
+  return Math.max(
+    0,
+    ...[result.textSnippet, result.bodySnippet, result.contentText, result.text, result.message].map(
+      (value) => readFirstString(value)?.trim().length ?? 0,
+    ),
+  );
 }
 
 export function buildRemoteBlockedMessage(status?: number, marker?: string): string {

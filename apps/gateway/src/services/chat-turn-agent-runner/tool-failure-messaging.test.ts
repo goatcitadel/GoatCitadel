@@ -573,7 +573,12 @@ describe("buildPolicyBlockedRecoveryText guidance for several blocks", () => {
 describe("isRecoveredWebReadFailure", () => {
   const blockedPage = toolRun({ toolRunId: "gallup", toolName: "browser.navigate", status: "failed" });
   const skippedHost = toolRun({ toolRunId: "skip", toolName: "browser.navigate", status: "blocked" });
-  const readPage = toolRun({ toolRunId: "adp", toolName: "browser.navigate", status: "executed" });
+  const readPage = toolRun({
+    toolRunId: "adp",
+    toolName: "browser.navigate",
+    status: "executed",
+    result: { url: "https://www.adpresearch.com/a", textSnippet: "People are working less. Who and why? ".repeat(4) },
+  });
   const search = toolRun({ toolRunId: "search", toolName: "browser.search", status: "executed" });
 
   it("treats failed web reads as recovered once another page in the turn was read", () => {
@@ -601,5 +606,24 @@ describe("isRecoveredWebReadFailure", () => {
     expect(isRecoveredWebReadFailure(post, [post, readPage])).toBe(false);
     expect(isRecoveredWebReadFailure(click, [click, readPage])).toBe(false);
     expect(isRecoveredWebReadFailure(switchedOff, [switchedOff, readPage])).toBe(false);
+  });
+
+  it("keeps the failure when the only other read returned no page text, or policy denied the lookup", () => {
+    const urlOnly = toolRun({
+      toolRunId: "url-only",
+      toolName: "browser.navigate",
+      status: "executed",
+      result: { url: "https://example.com/empty", finalUrl: "https://example.com/empty" },
+    });
+    const denied = toolRun({
+      toolRunId: "denied",
+      toolName: "browser.navigate",
+      status: "blocked",
+      error: "Current deny-wins policy blocks browser.navigate.",
+      result: { policyRevalidation: { reasonCodes: ["policy_deny"] } },
+    });
+
+    expect(isRecoveredWebReadFailure(blockedPage, [blockedPage, urlOnly])).toBe(false);
+    expect(isRecoveredWebReadFailure(denied, [denied, readPage])).toBe(false);
   });
 });
