@@ -110,6 +110,43 @@ describe("Mattermost typing", () => {
   });
 });
 
+describe("typing over plain HTTP", () => {
+  const cases = [
+    {
+      name: "Matrix",
+      emit: emitMatrixTyping,
+      make: (url: string) => connection("matrix", { homeserverUrl: url, accessToken: "syt_tok" }),
+      target: "!room:example.com",
+      identity: { user_id: "@bot:example.com" },
+    },
+    {
+      name: "Mattermost",
+      emit: emitMattermostTyping,
+      make: (url: string) => connection("mattermost", { serverUrl: url, botToken: "tok" }),
+      target: `channel:${CHANNEL_ID}`,
+      identity: { id: "bot-user" },
+    },
+  ];
+
+  for (const c of cases) {
+    it(`${c.name}: refuses a remote http server without calling fetch`, async () => {
+      const a = args(c.make("http://remote.example.org"), { target: c.target });
+      const result = await c.emit(a);
+      expect(result.status).toBe("unsupported");
+      expect(result.reason).toContain("HTTPS");
+      expect(a.fetch).not.toHaveBeenCalled();
+    });
+
+    for (const url of ["http://localhost:8008", "https://remote.example.org"]) {
+      it(`${c.name}: allows ${url}`, async () => {
+        const a = args(c.make(url), { target: c.target });
+        a.fetch.mockResolvedValueOnce(json(c.identity)).mockResolvedValueOnce(json({}));
+        expect((await c.emit(a)).status).toBe("sent");
+      });
+    }
+  }
+});
+
 describe("Matrix typing", () => {
   const conn = connection("matrix", { homeserverUrl: "https://matrix.example.com/", accessToken: "syt_tok" });
   const ROOM = "!room:example.com";
