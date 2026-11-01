@@ -371,7 +371,15 @@ async function tryAlternateBuiltinSearchEngines(
         }),
       );
       if (!classification.failureClass) {
-        return withBrowserFallbackChain(normalized, input.fallbackChain);
+        // The retry's own result says no fallback; the turn's search did fall back from the first engine.
+        return withBrowserFallbackChain(
+          {
+            ...normalized,
+            fallbackUsed: true,
+            fallbackReason: input.classification.error ?? input.classification.failureClass,
+          },
+          input.fallbackChain,
+        );
       }
     } catch (error) {
       if (isDurableControlError(error)) throw error;

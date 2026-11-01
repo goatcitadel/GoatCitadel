@@ -80,6 +80,60 @@ function toolRunSummaryText(tool: ChatToolRunRecord): string {
   );
 }
 
+const WEB_PAGE_READ_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+// The Gateway's floor for useful page text.
+const MIN_USABLE_PAGE_TEXT_CHARS = 40;
+
+/**
+ * The Gateway records every browser call's effect as uncertain, because a signed-in browser could act on a site,
+ * and that keeps automatic replay off. On a search or page read the line would repeat on every row, so it moves
+ * under technical details there; any other tool's uncertain effect stays on its row.
+ */
+const isQuietWebLookupEffect = (tool: ChatToolRunRecord, tone: "none" | "uncertain" | "concrete"): boolean =>
+  tone === "uncertain" && (tool.toolName === "browser.search" || WEB_PAGE_READ_TOOL_NAMES.has(tool.toolName));
+
+/**
+ * True when operator policy stopped the tool: a switched-off group named in its error, or, when the runner's
+ * policy re-check wrote its own error, a group switch-off or deny in the re-check's reason codes (the codes the
+ * Gateway's switch-off and policy-block checks read).
+ */
+const isOperatorPolicyBlock = (tool: ChatToolRunRecord): boolean => {
+  if (/tool group switched off/i.test(tool.error ?? "")) return true;
+  const revalidation = tool.result?.policyRevalidation;
+  const codes =
+    revalidation && typeof revalidation === "object"
+      ? (revalidation as { reasonCodes?: unknown }).reasonCodes
+      : undefined;
+  return Array.isArray(codes) && (codes.includes("tool_group_off") || codes.includes("policy_deny"));
+};
+
+/** The page text a read brought back; one that returned only a URL read nothing. */
+const readPageTextLength = (run: ChatToolRunRecord): number =>
+  Math.max(
+    0,
+    ...["textSnippet", "bodySnippet", "contentText", "text"].map((key) => {
+      const value = run.result?.[key];
+      return typeof value === "string" ? value.trim().length : 0;
+    }),
+  );
+
+/**
+ * A search or page read that failed, or was skipped, in a turn that still read another page's text. A failed
+ * web action (a post or a click) is not recovered by reading a page, and an operator policy block is the
+ * operator's to lift, so both still open the list.
+ */
+const isRecoveredWebRead = (tool: ChatToolRunRecord, toolRuns: readonly ChatToolRunRecord[]): boolean =>
+  (tool.toolName === "browser.search" || WEB_PAGE_READ_TOOL_NAMES.has(tool.toolName)) &&
+  (tool.status === "failed" || tool.status === "blocked") &&
+  !isOperatorPolicyBlock(tool) &&
+  toolRuns.some(
+    (run) =>
+      run !== tool &&
+      run.status === "executed" &&
+      WEB_PAGE_READ_TOOL_NAMES.has(run.toolName) &&
+      readPageTextLength(run) >= MIN_USABLE_PAGE_TEXT_CHARS,
+  );
+
 /** The failed tries before a tool's latest one: folded under its row, never dropped. */
 /** What a call touched, after its name. The leading space keeps name and target apart for screen readers too. */
 function ToolTarget({ target }: { target: ToolRunTarget }) {
@@ -189,11 +243,16 @@ export function ChatTurnDetails({
       (tool) => isCodeModeRequest(tool) && (tool.status === "approval_required" || tool.status === "started"),
     );
   const onlyCodeModeCard = !streaming && turn.toolRuns.length === 1 && turn.toolRuns.every(isCodeModeRequest);
+  // A completed turn that read other pages already worked around a page it could not open and says so in its
+  // answer, so those rows stay folded below it instead of pushing the answer away from the composer.
+  const turnCompleted = !turnLive && turn.trace.status === "completed";
   const toolDisclosure = useAutoOpenDisclosure(
     (turnLive && !parkedOnCodeModeCard && !onlyCodeModeCard) ||
       turn.toolRuns.some(
         (tool) =>
-          !isCodeModeRequest(tool) && (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+          !isCodeModeRequest(tool) &&
+          (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal) &&
+          !(turnCompleted && isRecoveredWebRead(tool, turn.toolRuns)),
       ),
     { closeWhenSettled: true },
   );
@@ -290,12 +349,17 @@ export function ChatTurnDetails({
                       </TechnicalDetails>
                     </div>
                   ) : null}
-                  {effect ? <p className="w-full">{effect.plainSummary}</p> : null}
+                  {effect && !isQuietWebLookupEffect(tool, effect.tone) ? (
+                    <p className="w-full">{effect.plainSummary}</p>
+                  ) : null}
                   {/* The row names the tool; its registry name stays reachable for technical review. */}
                   {showTechnicalDetails ? (
                     <div className="w-full">
                       <TechnicalDetails>
                         <p className="break-all font-mono text-xs">Tool {tool.toolName}</p>
+                        {effect && isQuietWebLookupEffect(tool, effect.tone) ? (
+                          <p className="text-xs">{effect.plainSummary}</p>
+                        ) : null}
                       </TechnicalDetails>
                     </div>
                   ) : null}

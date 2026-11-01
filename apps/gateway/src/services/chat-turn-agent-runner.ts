@@ -239,6 +239,7 @@ import {
   buildPathBridgeFailureGuidance,
   buildPolicyBlockedRecoveryText,
   buildToolFailureAppendixText,
+  isRecoveredWebReadFailure,
 } from "./chat-turn-agent-runner/tool-failure-messaging.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
@@ -16033,7 +16034,8 @@ function buildToolFailureAppendix(toolRuns: ChatToolRunRecord[]): string | undef
     toolRuns.filter(
       (run) =>
         (run.status === "failed" || run.status === "blocked") &&
-        !isRecoveredMissingLocalPathSearchFailure(run, toolRuns),
+        !isRecoveredMissingLocalPathSearchFailure(run, toolRuns) &&
+        !isRecoveredWebReadFailure(run, toolRuns),
     ),
   );
 }

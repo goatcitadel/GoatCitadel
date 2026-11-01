@@ -11,6 +11,9 @@ const REMOTE_BLOCK_MARKERS = [
   "enable javascript and cookies",
   "sorry, you have been blocked",
 ];
+// A challenge or block page is short. Past this length a marker is page furniture, such as a
+// "This site is protected by reCAPTCHA" footer under a full article, unless it is in the title.
+const CHALLENGE_PAGE_MAX_TEXT_CHARS = 1500;
 
 const SEARCH_RESULT_STOPWORDS = new Set([
   "a",
@@ -311,7 +314,7 @@ export function classifyBrowserToolResult(
       error: buildRemoteBlockedMessage(status, undefined) || "rate limited by remote service",
     };
   }
-  const remoteBlockMarker = REMOTE_BLOCK_MARKERS.find((marker) => normalizedText.includes(marker));
+  const remoteBlockMarker = findRemoteBlockMarker(result, normalizedText);
   if (status === 401 || status === 403 || remoteBlockMarker) {
     return {
       failureClass: "remote_blocked",
@@ -343,6 +346,30 @@ export function classifyBrowserToolResult(
     };
   }
   return {};
+}
+
+function findRemoteBlockMarker(result: Record<string, unknown>, normalizedText: string): string | undefined {
+  const title = (readFirstString(result.title) ?? "").toLowerCase();
+  const markerInTitle = REMOTE_BLOCK_MARKERS.find((marker) => title.includes(marker));
+  if (markerInTitle) {
+    return markerInTitle;
+  }
+  return readLongestPageTextLength(result) <= CHALLENGE_PAGE_MAX_TEXT_CHARS
+    ? REMOTE_BLOCK_MARKERS.find((marker) => normalizedText.includes(marker))
+    : undefined;
+}
+
+/**
+ * The page's own length: its longest text field. A normalized result can carry the same page text in more than
+ * one field (an MCP result's contentText is also its textSnippet), so the fields are not summed.
+ */
+export function readLongestPageTextLength(result: Record<string, unknown>): number {
+  return Math.max(
+    0,
+    ...[result.textSnippet, result.bodySnippet, result.contentText, result.text, result.message].map(
+      (value) => readFirstString(value)?.trim().length ?? 0,
+    ),
+  );
 }
 
 export function buildRemoteBlockedMessage(status?: number, marker?: string): string {
