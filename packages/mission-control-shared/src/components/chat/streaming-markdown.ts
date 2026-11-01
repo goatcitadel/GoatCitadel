@@ -206,17 +206,42 @@ function healedTailTree(
   return holdBackPartialTable(tree, healed);
 }
 
+/**
+ * Only the tail was rewritten (a formula closed and normalized, say): keep the committed blocks and resume parsing at
+ * the last commit point. The last block was committed on the evidence of the tail's finished first line (the opening
+ * of the block after it), so it returns to the tail when the rewrite changed that line. Returns the dropped
+ * definitions (identifier to source) so their dependents re-parse.
+ */
+function rewindToCommitted(state: IncrementalSplitState, content: string): Map<string, string> {
+  const last = state.blocks.at(-1);
+  const evidenceEnd = state.content.indexOf("\n", state.resumeIndex) + 1;
+  if (last && (evidenceEnd === 0 || !content.startsWith(state.content.slice(0, evidenceEnd)))) {
+    state.blocks.pop();
+    state.resumeIndex = last.start;
+  }
+  const dropped = new Map<string, string>();
+  for (const [id, entry] of state.definitionMap) if (entry.start >= state.resumeIndex) dropped.set(id, entry.source);
+  for (const id of dropped.keys()) state.definitionMap.delete(id);
+  state.definitions = [...state.definitionMap.values()].map(({ source }) => source);
+  state.content = state.content.slice(0, state.resumeIndex);
+  return dropped;
+}
+
 export function splitIncremental(state: IncrementalSplitState, content: string): { stable: string; tail: string } {
   if (content === state.content)
     return { stable: content.slice(0, state.resumeIndex), tail: content.slice(state.resumeIndex) };
-  if (!content.startsWith(state.content)) Object.assign(state, createIncrementalSplitState());
+  let dropped = new Map<string, string>();
+  if (!content.startsWith(state.content)) {
+    if (content.startsWith(state.content.slice(0, state.resumeIndex))) dropped = rewindToCommitted(state, content);
+    else Object.assign(state, createIncrementalSplitState());
+  }
   const base = state.resumeIndex;
   state.lastScanStart = base;
   const pending = content.slice(base);
   const lastLineStart = pending.lastIndexOf("\n") + 1;
   let tree = parser.parse(pending + buildDefinitionSuffix(state.definitions, pending));
   let nodes = tree.children.filter((node) => (node.position?.start.offset ?? pending.length) < pending.length);
-  const changedDefinitions = new Set<string>();
+  const changedDefinitions = new Set<string>(dropped.keys());
   for (const node of nodes) {
     if (node.type !== "definition" || (node.position?.end.offset ?? pending.length + 1) > lastLineStart) continue;
     const previous = state.definitionMap.get(node.identifier);
@@ -228,6 +253,10 @@ export function splitIncremental(state: IncrementalSplitState, content: string):
       if (!previous || previous.source !== source) changedDefinitions.add(node.identifier);
       state.definitionMap.set(node.identifier, { node, source, start });
     }
+  }
+  // A rewritten tail that restates a dropped definition unchanged leaves its dependent blocks alone.
+  for (const [id, source] of dropped) {
+    if (state.definitionMap.get(id)?.source === source) changedDefinitions.delete(id);
   }
   state.definitions = [...state.definitionMap.values()].map(({ source }) => source);
 
