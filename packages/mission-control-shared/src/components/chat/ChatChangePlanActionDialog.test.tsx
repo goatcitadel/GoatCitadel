@@ -14,6 +14,9 @@ let latestModalProps: {
   onConfirm?: () => void | Promise<void>;
   confirmDisabled?: boolean;
   confirmLabel?: string;
+  confirmPending?: boolean;
+  dismissDisabled?: boolean;
+  onOpenChange?: (open: boolean) => void;
 } | null = null;
 
 vi.mock("../ui", () => ({
@@ -73,10 +76,18 @@ function callbacks() {
 describe("ChatChangePlanActionDialog", () => {
   it("preserves the Classic approval callback and exact current plan", async () => {
     const handlers = callbacks();
-    const value = plan({ kind: "approval", actionId: "approval-action", actionNonce: "approval-nonce",
-      title: "Review required approval", risk: "danger", approvalId: "exact-approval" });
+    const value = plan({
+      kind: "approval",
+      actionId: "approval-action",
+      actionNonce: "approval-nonce",
+      title: "Review required approval",
+      risk: "danger",
+      approvalId: "exact-approval",
+    });
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} />); });
+    await act(async () => {
+      renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} />);
+    });
     expect(latestModalProps?.onConfirm).toBeTypeOf("function");
     await act(async () => latestModalProps?.onConfirm?.());
     expect(handlers.onOpenApproval).toHaveBeenCalledExactlyOnceWith(value);
@@ -85,12 +96,33 @@ describe("ChatChangePlanActionDialog", () => {
 
   it("uses the optional native owner renderer without retaining a second generic approval callback", async () => {
     const handlers = callbacks();
-    const value = plan({ kind: "approval", actionId: "approval-action", actionNonce: "approval-nonce",
-      title: "Review required approval", risk: "danger", approvalId: "exact-approval" });
-    const renderApprovalAction = vi.fn((current: ChangePlanRecord, pending: boolean) =>
-      <a href={`/ops/approvals?approvalId=${current.requiredAction?.kind === "approval" ? current.requiredAction.approvalId : "missing"}&shell=classic`} aria-disabled={pending}>Guarded owner port</a>);
+    const value = plan({
+      kind: "approval",
+      actionId: "approval-action",
+      actionNonce: "approval-nonce",
+      title: "Review required approval",
+      risk: "danger",
+      approvalId: "exact-approval",
+    });
+    const renderApprovalAction = vi.fn((current: ChangePlanRecord, pending: boolean) => (
+      <a
+        href={`/ops/approvals?approvalId=${current.requiredAction?.kind === "approval" ? current.requiredAction.approvalId : "missing"}&shell=classic`}
+        aria-disabled={pending}
+      >
+        Guarded owner port
+      </a>
+    ));
     let renderer!: ReactTestRenderer;
-    await act(async () => { renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} pending={true} renderApprovalAction={renderApprovalAction} />); });
+    await act(async () => {
+      renderer = create(
+        <ChatChangePlanActionDialog
+          plan={value}
+          {...handlers}
+          pending={true}
+          renderApprovalAction={renderApprovalAction}
+        />,
+      );
+    });
     expect(renderApprovalAction).toHaveBeenLastCalledWith(value, true);
     expect(latestModalProps?.onConfirm).toBeUndefined();
     expect(handlers.onOpenApproval).not.toHaveBeenCalled();
@@ -103,13 +135,41 @@ describe("ChatChangePlanActionDialog", () => {
     vi.clearAllMocks();
   });
 
+  it("shows a waiting action as working while the dialog stays dismissible", async () => {
+    const handlers = callbacks();
+    const value = plan({ kind: "oauth", actionId: "oauth-action", actionNonce: "oauth-nonce", title: "Sign in" });
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(
+        <ChatChangePlanActionDialog plan={value} {...handlers} waiting contextNote="Waiting for your browser." />,
+      );
+    });
+    expect(latestModalProps?.confirmPending).toBe(true);
+    expect(latestModalProps?.dismissDisabled).toBe(false);
+    expect(latestModalProps?.description).toContain("Waiting for your browser.");
+    await act(async () => latestModalProps?.onOpenChange?.(false));
+    expect(handlers.onClose).toHaveBeenCalledOnce();
+    await act(async () => renderer.unmount());
+  });
+
   it("describes rollback without repeating the original forward effect", async () => {
     let renderer!: ReactTestRenderer;
     await act(async () => {
-      renderer = create(<ChatChangePlanActionDialog {...callbacks()} pending={false} error={null} plan={plan({
-        kind: "confirmation", actionId: "rollback", actionNonce: "nonce", purpose: "rollback",
-        title: "Review rollback", confirmationText: "Disable only the owned MCP installation.",
-      })} />);
+      renderer = create(
+        <ChatChangePlanActionDialog
+          {...callbacks()}
+          pending={false}
+          error={null}
+          plan={plan({
+            kind: "confirmation",
+            actionId: "rollback",
+            actionNonce: "nonce",
+            purpose: "rollback",
+            title: "Review rollback",
+            confirmationText: "Disable only the owned MCP installation.",
+          })}
+        />,
+      );
     });
     expect(latestModalProps?.description).toBe("Disable only the owned MCP installation.");
     act(() => renderer.unmount());
@@ -160,7 +220,10 @@ describe("ChatChangePlanActionDialog", () => {
           "aria-label": "Instructions artifact content",
           tabIndex: 0,
         });
-        expect(renderer.root.findByType("ul").props).toMatchObject({ "aria-label": "Immutable evidence references", tabIndex: 0 });
+        expect(renderer.root.findByType("ul").props).toMatchObject({
+          "aria-label": "Immutable evidence references",
+          tabIndex: 0,
+        });
       } else {
         expect(handlers.onReviewArtifacts).not.toHaveBeenCalled();
         expect(JSON.stringify(renderer.toJSON())).toContain("artifacts changed");

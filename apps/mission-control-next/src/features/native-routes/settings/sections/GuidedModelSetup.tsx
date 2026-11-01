@@ -4,13 +4,10 @@ import { Play, PlugZap } from "lucide-react";
 import type { ChatThinkingLevel, ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import {
   cancelChangePlan,
-  completeChangePlanProviderOAuth,
   confirmChangePlan,
   createChangePlan,
   fetchChangePlans,
-  pollChangePlanProviderOAuth,
   respondToChangePlan,
-  startChangePlanProviderOAuth,
   submitChangePlanProviderSecret,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
@@ -18,6 +15,7 @@ import { ChatChangePlanCard } from "@goatcitadel/mission-control-shared/componen
 import { deriveSetupProgress } from "@goatcitadel/mission-control-shared/content/setup-progress";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import type { AppRoute } from "@next/app/route-model";
+import { runProviderSignIn, SIGN_IN_WAITING_NOTE } from "../../../../cockpit/areas/settings/guided-provider-sign-in";
 import {
   getErrorMessage,
   type Notice,
@@ -135,6 +133,9 @@ export function GuidedModelSetup({
   // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
   const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
+  // The running provider sign-in poll, if any; aborted on close, unmount and workspace change.
+  const signInRef = useRef<AbortController | null>(null);
+  const [signingIn, setSigningIn] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
   const [activePlans, setActivePlans] = useState<ChangePlanRecord[]>([]);
@@ -234,6 +235,7 @@ export function GuidedModelSetup({
     const generation = ++planLoadGeneration.current;
     busyRef.current = false;
     setBusy(false);
+    setSigningIn(false);
     setActionError(null);
     setLatestPlan(null);
     setActivePlans([]);
@@ -258,6 +260,8 @@ export function GuidedModelSetup({
     return () => {
       cancelled = true;
       planLoadGeneration.current += 1;
+      signInRef.current?.abort();
+      signInRef.current = null;
     };
   }, [workspaceId]);
 
@@ -318,6 +322,38 @@ export function GuidedModelSetup({
     },
     [recordPlan],
   );
+
+  const continueProviderSignIn = async (plan: ChangePlanRecord) => {
+    if (plan.requiredAction?.kind !== "oauth" || plan.request.kind !== "provider_connection") {
+      setActionError("This sign-in action changed. Reopen the setup request.");
+      return;
+    }
+    await runAction(async () => {
+      const controller = new AbortController();
+      signInRef.current = controller;
+      setSigningIn(true);
+      try {
+        return await runProviderSignIn(plan, workspaceId, controller.signal);
+      } finally {
+        if (signInRef.current === controller) {
+          signInRef.current = null;
+          setSigningIn(false);
+        }
+      }
+    });
+  };
+  /** Stops a running sign-in poll and releases the busy state it held; a no-op when none runs. */
+  const cancelProviderSignIn = () => {
+    const controller = signInRef.current;
+    if (!controller) return;
+    signInRef.current = null;
+    controller.abort();
+    // Discards the cancelled run's late result or error.
+    planLoadGeneration.current += 1;
+    busyRef.current = false;
+    setBusy(false);
+    setSigningIn(false);
+  };
 
   const livePlans = [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
     (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
@@ -633,7 +669,10 @@ export function GuidedModelSetup({
       ) : null}
       <ChatChangePlanActionDialog
         plan={dialogPlan}
-        pending={busy}
+        // A polling sign-in waits on the user's browser, so the dialog stays closable to stop it.
+        pending={busy && !signingIn}
+        waiting={signingIn}
+        contextNote={signingIn ? SIGN_IN_WAITING_NOTE : undefined}
         error={actionError}
         renderApprovalAction={
           renderApprovalAction
@@ -641,10 +680,10 @@ export function GuidedModelSetup({
             : undefined
         }
         onClose={() => {
-          if (!busy) {
-            setDialogPlan(null);
-            setActionError(null);
-          }
+          cancelProviderSignIn();
+          if (busy && !signingIn) return;
+          setDialogPlan(null);
+          setActionError(null);
         }}
         onConfirm={(plan) => {
           const action = plan.requiredAction;
@@ -689,39 +728,7 @@ export function GuidedModelSetup({
             }),
           );
         }}
-        onContinueOAuth={async (plan) => {
-          const action = plan.requiredAction;
-          if (action?.kind !== "oauth" || plan.request.kind !== "provider_connection") {
-            setActionError("This sign-in action changed. Reopen the setup request.");
-            return;
-          }
-          await runAction(async () => {
-            const context = currentActionContext(plan);
-            const exact = {
-              expectedRevision: plan.revision,
-              actionId: action.actionId,
-              actionNonce: action.actionNonce,
-            };
-            const flow = await startChangePlanProviderOAuth(plan.planId, context, exact);
-            globalThis.open?.(flow.verificationUrl, "_blank", "noopener,noreferrer");
-            let pollAfterMs = flow.pollAfterMs;
-            for (;;) {
-              await new Promise((resolve) => globalThis.setTimeout(resolve, Math.max(1_000, pollAfterMs)));
-              const result = await pollChangePlanProviderOAuth(plan.planId, context, {
-                ...exact,
-                flowId: flow.flowId,
-              });
-              if (result.status === "pending") {
-                pollAfterMs = result.retryAfterMs ?? flow.pollAfterMs;
-                continue;
-              }
-              if (result.status !== "connected") {
-                throw new Error(result.error ?? `Provider OAuth ${result.status}. Start it again.`);
-              }
-              return await completeChangePlanProviderOAuth(plan.planId, context, exact);
-            }
-          });
-        }}
+        onContinueOAuth={continueProviderSignIn}
         onOpenApproval={(plan) => {
           const action = plan.requiredAction;
           if (action?.kind !== "approval" || !action.approvalId) {

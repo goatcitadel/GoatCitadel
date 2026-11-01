@@ -7,6 +7,8 @@ import {
 
 const SIGN_IN_MIN_POLL_MS = 1_000;
 export const SIGN_IN_EXPIRED_MESSAGE = "Sign-in expired. Start it again.";
+/** Shown in the review dialog while a sign-in polls, which keeps the dialog closable. */
+export const SIGN_IN_WAITING_NOTE = "Waiting for you to finish signing in in your browser. Close this to stop.";
 
 /** Waits `ms`, resolving early when the sign-in is cancelled. */
 const sleepUnlessAborted = (ms: number, signal: AbortSignal) =>

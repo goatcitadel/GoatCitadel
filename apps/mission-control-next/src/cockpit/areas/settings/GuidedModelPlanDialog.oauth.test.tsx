@@ -6,6 +6,7 @@ import type { ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { CockpitGuidedModelSetup } from "./CockpitGuidedModelSetup";
+import { SIGN_IN_WAITING_NOTE } from "./guided-provider-sign-in";
 
 const mocks = vi.hoisted(() => ({
   catalog: vi.fn(),
@@ -34,12 +35,15 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActio
   ChatChangePlanActionDialog: (props: {
     plan: ChangePlanRecord | null;
     pending: boolean;
+    waiting?: boolean;
+    contextNote?: string;
     error?: string | null;
     onClose: () => void;
     onContinueOAuth: (plan: ChangePlanRecord) => void | Promise<void>;
   }) =>
     props.plan ? (
-      <div role="dialog" data-pending={String(props.pending)}>
+      <div role="dialog" data-pending={String(props.pending)} data-waiting={String(Boolean(props.waiting))}>
+        {props.contextNote ? <p role="note">{props.contextNote}</p> : null}
         {props.error ? <p role="alert">{props.error}</p> : null}
         <button type="button" onClick={() => void props.onContinueOAuth(props.plan!)}>
           Continue sign-in
@@ -147,6 +151,9 @@ describe("guided setup provider sign-in polling", () => {
     await startSignIn();
     // The shared dialog refuses to close while pending, so a polling sign-in leaves it dismissible.
     expect(dialog()?.getAttribute("data-pending")).toBe("false");
+    // ...but still says it waits on the browser, and its confirm action shows as working.
+    expect(dialog()?.getAttribute("data-waiting")).toBe("true");
+    expect(container.querySelector('[role="note"]')?.textContent).toBe(SIGN_IN_WAITING_NOTE);
     expect(container.querySelector("select")?.disabled).toBe(true);
     await act(async () => button("Continue sign-in")!.click());
     expect(mocks.start).toHaveBeenCalledOnce();
@@ -185,6 +192,8 @@ describe("guided setup provider sign-in polling", () => {
     await advance(10_000);
     expect(container.querySelector('[role="alert"]')?.textContent).toBe("Sign-in expired. Start it again.");
     expect(dialog()?.getAttribute("data-pending")).toBe("false");
+    expect(dialog()?.getAttribute("data-waiting")).toBe("false");
+    expect(container.querySelector('[role="note"]')).toBeNull();
     expect(container.querySelector("select")?.disabled).toBe(false);
     const polls = mocks.poll.mock.calls.length;
     await advance(10_000);

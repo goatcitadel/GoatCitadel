@@ -7,6 +7,7 @@ import {
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { buildAppHref } from "../../../app/route-model";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
+import { SIGN_IN_WAITING_NOTE } from "./guided-provider-sign-in";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
 import type { GuidedModelSetupControl } from "./use-guided-model-setup";
 
@@ -32,6 +33,8 @@ export function GuidedModelPlanDialog({
       plan={dialogPlan}
       // A polling sign-in waits on the user's browser, so the dialog stays closable to stop it.
       pending={busy && !signingIn}
+      waiting={signingIn}
+      contextNote={signingIn ? SIGN_IN_WAITING_NOTE : undefined}
       error={actionError}
       renderApprovalAction={(plan, pending) => (
         <SettingsApprovalOwnerAction
