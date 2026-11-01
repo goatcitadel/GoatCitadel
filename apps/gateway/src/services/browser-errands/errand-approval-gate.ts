@@ -10,10 +10,10 @@ import type { ErrandBrowser, ErrandOverlayPoint, ErrandTargetInfo } from "@goatc
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ApprovalCreateCommitHook } from "../approval-lifecycle-service.js";
 import { withCanonicalApprovalOutcome } from "../approval-canonical-outcome.js";
-import { ERRAND_APPROVAL_TTL_MS } from "./errand-constants.js";
+import { ERRAND_APPROVAL_KIND, ERRAND_APPROVAL_TTL_MS } from "./errand-constants.js";
 import type { ErrandApprovalInput, ErrandLoopDeps } from "./errand-loop.js";
 
-export const ERRAND_APPROVAL_KIND = "browser.errand.action";
+export { ERRAND_APPROVAL_KIND };
 export const ERRAND_TOOL_NAME = "browser.errand";
 export const ERRAND_WINDOW_ACTOR_ID = "operator:errand-window";
 export const ERRAND_STOPPED_ACTOR_ID = "system:errand-stopped";
@@ -58,7 +58,7 @@ export interface ErrandApprovalGateDeps {
   durableRunId?: string;
   toolRunId: string;
   workspaceId?: string;
-  browser: Pick<ErrandBrowser, "overlay" | "describeTarget" | "currentUrl" | "captureForPeople">;
+  browser: Pick<ErrandBrowser, "overlay" | "describeTargetBeneathOverlay" | "currentUrl" | "captureForPeople">;
   approvals: ErrandApprovalRuntime;
   /** The authority for decisions (`approvals.get`), plus the event log and Chat's inline approval rows. */
   storage: Pick<AsyncStorage, "approvals" | "approvalEvents" | "chatInlineApprovals">;
@@ -370,7 +370,10 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
     if (!isReadable(asked.input.target)) {
       return { unchanged: true, originChanged: false, target: null };
     }
-    const target = await browser.describeTarget(asked.input.target.x, asked.input.target.y).catch(() => null);
+    // Read beneath the approval card: the card and its blocker cover the page until the driving banner is back.
+    const target = await browser
+      .describeTargetBeneathOverlay(asked.input.target.x, asked.input.target.y)
+      .catch(() => null);
     return { unchanged: sameTarget(asked.input.target, target), originChanged: false, target };
   };
 

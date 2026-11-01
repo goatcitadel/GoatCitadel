@@ -84,6 +84,16 @@ function isSubmitKeypress(tokens: string[], focused: ErrandTargetInfo): boolean 
   );
 }
 
+/** Message boxes (a textarea or contenteditable text) often send on Enter even without a form. */
+function isMessageBox(info: ErrandTargetInfo): boolean {
+  return info.tagName.toLowerCase() === "textarea" || info.isContentEditable === true;
+}
+
+/** Enter without Shift (Shift+Enter is a new line in message boxes). */
+function isUnshiftedEnter(tokens: string[]): boolean {
+  return tokens.some((token) => SUBMIT_KEYS.has(token)) && !tokens.includes("shift");
+}
+
 /** With no readable focus, only plain navigation keys are harmless. */
 function isNavigationOnly(tokens: string[]): boolean {
   return tokens.length > 0 && tokens.every((token) => NAVIGATION_KEYS.has(token));
@@ -165,6 +175,11 @@ export function classifyErrandAction(input: ClassifyErrandActionInput): ErrandAc
     // Rule 5: risky page paths.
     if (RISKY_PAGE_PATH.test(pagePath(pageUrl))) {
       return { kind: "ask", category: "spend", reason: "This is a checkout or payment page" };
+    }
+
+    // Rule 5b: Enter in a message box with no form to judge by may send the message.
+    if (submit && !subject.formSubmitText && isMessageBox(subject) && isUnshiftedEnter(tokens)) {
+      return { kind: "ask", category: "send", reason: "Pressing Enter here may send a message" };
     }
   }
 

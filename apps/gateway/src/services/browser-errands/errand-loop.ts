@@ -99,15 +99,18 @@ function imageContent(text: string, png: Buffer): Array<Record<string, unknown>>
   ];
 }
 
-function readToolCalls(response: ChatCompletionResponse): { text: string; calls: ToolCallRecord[] } {
+/** Reads the reply's tool calls; a call with no id cannot be answered, so it is counted as malformed. */
+function readToolCalls(response: ChatCompletionResponse): { text: string; calls: ToolCallRecord[]; malformed: number } {
   const message = response.choices?.[0]?.message ?? {};
   const content = message.content;
   const text = typeof content === "string" ? content : "";
   const raw = Array.isArray(message.tool_calls) ? (message.tool_calls as unknown[]) : [];
   const calls: ToolCallRecord[] = [];
+  let malformed = 0;
   for (const entry of raw) {
     const record = entry as { id?: unknown; function?: { name?: unknown; arguments?: unknown } } | null;
-    if (!record || typeof record.id !== "string") {
+    if (!record || typeof record.id !== "string" || !record.id) {
+      malformed += 1;
       continue;
     }
     const args = record.function?.arguments;
@@ -117,7 +120,7 @@ function readToolCalls(response: ChatCompletionResponse): { text: string; calls:
       arguments: typeof args === "string" ? args : JSON.stringify(args ?? {}),
     });
   }
-  return { text, calls };
+  return { text, calls, malformed };
 }
 
 function hostOf(url: string): string {
@@ -286,7 +289,19 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
         return await finish("stopped", "The errand was stopped.");
       }
 
-      const { text, calls } = readToolCalls(response);
+      const { text, calls, malformed } = readToolCalls(response);
+      if (malformed > 0) {
+        // Spend the step and run nothing: a call without an id cannot be paired with its result.
+        steps += 1;
+        messages.push({
+          role: "user",
+          content: imageContent(
+            "Nothing was run. A tool call had no id. Send one computer or hand_over call again.",
+            await captureForModel(),
+          ),
+        });
+        continue;
+      }
       if (calls.length === 0) {
         const answer = text.trim();
         if (!answer) {
@@ -365,7 +380,7 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
       }
       message = typeof parsed.message === "string" ? parsed.message : "";
     } catch {
-      // A malformed hand_over still hands over; the operator sees the page.
+      // Intentionally ignored: a malformed hand_over falls back to reason "operator"; the operator sees the page.
     }
     deps.onProgress({ step, text: message || "Waiting for the operator" });
     const answer = await paused(() => deps.waitForHandBack(reason));

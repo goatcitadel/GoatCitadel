@@ -28,6 +28,7 @@ export const BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE = "GoatCitadel is shutting dow
 /** How long Gateway shutdown waits for a running errand to withdraw its approval and settle before closing Chrome. */
 export const ERRAND_DISPOSE_SETTLE_MS = 5_000;
 export const BROWSER_ERRAND_WINDOW_CLOSED_SUMMARY = "The errand window was closed.";
+export const BROWSER_ERRAND_APPROVAL_UNRECORDED_SUMMARY = "GoatCitadel couldn't record the approval, so it stopped.";
 
 export const ERRAND_BANNER_TEXT = "GoatCitadel is using this browser";
 export const ERRAND_SIGN_IN_BANNER_TEXT = "Sign in, then press Hand back";
@@ -94,6 +95,8 @@ interface ActiveErrand {
   takenOverSince?: number;
   takenOverMs: number;
   windowClosed: boolean;
+  /** The gate could not record (or withdraw) an approval, so the errand was stopped without one. */
+  approvalUnrecorded: boolean;
   /** Resolves once the run has finished its cleanup, whatever its outcome. */
   settled?: Promise<void>;
 }
@@ -175,6 +178,7 @@ export class BrowserErrandService {
       handBackWaiters: new Set(),
       takenOverMs: 0,
       windowClosed: false,
+      approvalUnrecorded: false,
     };
     // Claimed before any await, so a second call in the same tick is refused.
     this.active = errand;
@@ -315,8 +319,14 @@ export class BrowserErrandService {
         errand.view.state = "waiting_on_you";
         try {
           return await hooks.requestApproval(input);
-        } catch {
+        } catch (error) {
           // The approval could not be recorded or withdrawn; the errand must not act without one.
+          // eslint-disable-next-line no-console -- bounded diagnostic; the errand stops and says why.
+          console.warn("[goatcitadel] browser errand approval could not be recorded", {
+            errandId: errand.view.errandId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          errand.approvalUnrecorded = true;
           errand.controller.abort();
           return "stopped";
         } finally {
@@ -353,7 +363,9 @@ export class BrowserErrandService {
       const loopOutcome = await (this.deps.runLoop ?? runErrandLoop)(loopDeps, { goal: ids.goal });
       const outcome: ErrandOutcome = errand.windowClosed
         ? { ...loopOutcome, status: "window_closed", summary: BROWSER_ERRAND_WINDOW_CLOSED_SUMMARY }
-        : loopOutcome;
+        : errand.approvalUnrecorded
+          ? { ...loopOutcome, summary: BROWSER_ERRAND_APPROVAL_UNRECORDED_SUMMARY }
+          : loopOutcome;
       await Promise.all(uploads);
       let finalScreenshotAttachmentId: string | undefined;
       if (outcome.finalScreenshotPng && !errand.windowClosed) {
@@ -408,7 +420,14 @@ export class BrowserErrandService {
       },
       runActions: async (actions, beforeAction) => {
         await untilHandedBack();
-        return await browser.runActions(actions, beforeAction);
+        return await browser.runActions(actions, async (action, index) => {
+          // A Take over mid-batch stops the rest of it: wait for Hand back, then let the model look again.
+          if (errand.takenOverSince !== undefined) {
+            await untilHandedBack();
+            return "halt";
+          }
+          return await beforeAction(action, index);
+        });
       },
     };
   }
@@ -424,7 +443,8 @@ export class BrowserErrandService {
           errand.view.state = "taken_over";
           void browser.overlay
             .render({ mode: "taken_over", bannerText: ERRAND_TAKEN_OVER_BANNER_TEXT })
-            .catch(() => {});
+            // Best-effort: the banner is cosmetic; the pause itself is enforced by the Gateway.
+            .catch(() => undefined);
         }
         return;
       case "hand_back":
@@ -475,8 +495,12 @@ export class BrowserErrandService {
     }
   }
 
+  /** Never rejects. */
   private async renderDriving(browser: ErrandBrowser, bannerText: string): Promise<void> {
-    await browser.overlay.render({ mode: "driving", bannerText, cursor: { ...VIEWPORT_CENTER } }).catch(() => {});
+    await browser.overlay
+      .render({ mode: "driving", bannerText, cursor: { ...VIEWPORT_CENTER } })
+      // Best-effort: the banner is cosmetic and never stops the errand.
+      .catch(() => undefined);
   }
 
   private finishView(errand: ActiveErrand, outcome: ErrandOutcome["status"], summary: string): void {

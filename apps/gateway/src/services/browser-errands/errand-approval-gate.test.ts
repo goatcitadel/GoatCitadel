@@ -157,7 +157,7 @@ function createFakeBrowser(url = "https://shop.example/checkout") {
   const state = { url, target: target() as ErrandTargetInfo | null };
   const browser = {
     currentUrl: vi.fn(() => state.url),
-    describeTarget: vi.fn(async () => state.target),
+    describeTargetBeneathOverlay: vi.fn(async () => state.target),
     captureForPeople: vi.fn(async () => BEFORE_PNG),
     overlay: {
       render: vi.fn(async () => undefined),

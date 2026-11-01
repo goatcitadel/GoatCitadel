@@ -212,6 +212,45 @@ describe("runErrandLoop", () => {
     expect(String((toolMessage.content as Array<Record<string, unknown>>)[0]!.text)).toContain("action 1");
   });
 
+  it("refuses typed text with a new line and tells the model to press Enter instead", async () => {
+    const bad = toolReply("computer", { actions: [{ type: "type", text: "Hi\n" }], about_to: "reply" });
+    const { deps, requests, browser } = makeDeps([bad, textReply("fine")]);
+    await runErrandLoop(deps, { goal: "x" });
+    expect(browser.runActions).not.toHaveBeenCalled();
+    const toolMessage = requests[1]!.messages.find((m) => m.role === "tool")!;
+    const text = String((toolMessage.content as Array<Record<string, unknown>>)[0]!.text);
+    expect(text).toContain("Nothing was run.");
+    expect(text).toContain("keypress");
+  });
+
+  it("treats a tool call without an id as malformed: nothing runs and the step is spent", async () => {
+    const noId: ChatCompletionResponse = {
+      choices: [
+        {
+          index: 0,
+          message: {
+            role: "assistant",
+            content: "",
+            tool_calls: [
+              { type: "function", function: { name: "computer", arguments: JSON.stringify({ actions: [] }) } },
+            ],
+          },
+        },
+      ],
+    } as unknown as ChatCompletionResponse;
+    const { deps, requests, browser } = makeDeps([noId, textReply("fine")]);
+    const outcome = await runErrandLoop(deps, { goal: "x" });
+    expect(browser.runActions).not.toHaveBeenCalled();
+    expect(outcome.status).toBe("done");
+    expect(outcome.answer).toBe("fine");
+    expect(outcome.steps).toBe(1);
+    expect(outcome.modelRequests).toBe(2);
+    const last = requests[1]!.messages.at(-1)!;
+    expect(last.role).toBe("user");
+    expect(JSON.stringify(last.content)).toContain("A tool call had no id.");
+    expect(requests[1]!.messages.some((m) => m.role === "assistant")).toBe(false);
+  });
+
   it("stops at 60 steps with status step_limit", async () => {
     const { deps } = makeDeps([click()]);
     const outcome = await runErrandLoop(deps, { goal: "x" });

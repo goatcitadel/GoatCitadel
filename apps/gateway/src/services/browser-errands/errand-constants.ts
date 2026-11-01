@@ -1,3 +1,5 @@
+/** The approval kind for one risky errand action; the errand's gate polls these records itself. */
+export const ERRAND_APPROVAL_KIND = "browser.errand.action";
 export const ERRAND_MAX_STEPS = 60;
 export const ERRAND_MAX_ACTIVE_MS = 20 * 60_000;
 export const ERRAND_APPROVAL_TTL_MS = 10 * 60_000;
