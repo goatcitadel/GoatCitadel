@@ -237,7 +237,7 @@ function OutsideRootWriteGrantReview({
           pending={busy || !chosen || expired || scopeChanged}
           // Approve once in the decision bar is the primary choice; also opening a folder stays secondary.
           approveVariant="secondary"
-          loading={attempt?.phase === "submitted"}
+          loading={attempt?.phase === "checking" || attempt?.phase === "submitted"}
           loadingLabel="Approving…"
           approveLabel="Approve and open folder"
           reviewLabel="Review and open folder"

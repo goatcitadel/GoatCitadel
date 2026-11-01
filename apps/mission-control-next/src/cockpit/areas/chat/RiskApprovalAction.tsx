@@ -258,7 +258,8 @@ export function RiskApprovalAction({
       type="button"
       size="sm"
       variant={approveDanger ? "danger" : approveVariant}
-      disabled={disabled}
+      // A busy button ignores clicks and keeps keyboard focus (aria-disabled); native disabled would drop it.
+      disabled={disabled && !loading}
       loading={loading}
       loadingLabel={loadingLabel}
       onClick={onApprove}

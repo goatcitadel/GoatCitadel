@@ -404,5 +404,16 @@ describe("OutsideRootWriteGrantOptions", () => {
     await click(approve);
     await vi.waitFor(() => expect(api.approveChatTool).toHaveBeenCalledTimes(1));
     await vi.waitFor(() => expect(button("Approving…")?.getAttribute("aria-busy")).toBe("true"));
+    // A busy button keeps keyboard focus: aria-disabled, not the native disabled attribute.
+    expect(button("Approving…").disabled).toBe(false);
+  });
+
+  it("shows Approving… and keeps focus while the click re-reads the record", async () => {
+    api.fetchApproval.mockReturnValue(new Promise(() => {}));
+    await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "caution" }));
+    await click(button("Approve and open folder"));
+    await vi.waitFor(() => expect(button("Approving…")?.getAttribute("aria-busy")).toBe("true"));
+    expect(button("Approving…").disabled).toBe(false);
+    expect(api.approveChatTool).not.toHaveBeenCalled();
   });
 });
