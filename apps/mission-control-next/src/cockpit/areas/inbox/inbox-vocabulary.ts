@@ -35,6 +35,7 @@ export const approvalEventLabels: Readonly<Record<ApprovalReplayEvent["eventType
   explanation_generated: "Explanation ready",
   explanation_failed: "Explanation failed",
   cancellation_lineage_skipped: "Skipped during cancellation (invalid lineage)",
+  errand_after_screenshot: "Screenshot after the action",
 };
 
 export function presentApprovalEvent(value: ApprovalReplayEvent["eventType"]): string {

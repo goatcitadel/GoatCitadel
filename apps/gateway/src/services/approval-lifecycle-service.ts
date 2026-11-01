@@ -1089,6 +1089,31 @@ export async function rejectPendingChatTurnApprovals(
   }
 }
 
+/**
+ * Withdraws one pending approval whose requester no longer needs it (for example a stopped browser errand). Unlike
+ * `rejectPendingChatTurnApprovals`, the turn's other approvals and its tool use stay open. Throws a ConflictError when
+ * the approval is already resolved.
+ */
+export async function withdrawApproval(
+  host: ApprovalLifecycleHost,
+  approvalId: string,
+  actorId: string,
+): Promise<void> {
+  await host.storage.runImmediateTransaction(async () => {
+    await commitStandardApprovalResolution(
+      host,
+      approvalId,
+      {
+        decision: "reject",
+        resolvedBy: actorId,
+        resolutionNote: "Withdrawn by its requester before a decision. The pending action was not authorized.",
+      },
+      { allowExpired: true, outcome: "withdrawn" },
+    );
+  });
+  host.requestApprovalEffectProcessing();
+}
+
 function isApprovalExpiryConflict(error: unknown, approvalId: string): error is ConflictError {
   return (
     error instanceof ConflictError &&
