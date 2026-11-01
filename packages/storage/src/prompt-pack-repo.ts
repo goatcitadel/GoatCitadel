@@ -63,6 +63,28 @@ export interface PromptPackWriteInput {
   runVariableSchema?: RunVariableSchema;
 }
 
+/**
+ * Every table that names a pack, children first: SQLite enforces foreign keys, and a benchmark's items go before its
+ * run. Each table's own children (a comparison's judgments, a campaign's passes, a regression's results) go with it
+ * through their `ON DELETE CASCADE`.
+ */
+const PACK_CASCADE_TABLES = [
+  "prompt_pack_benchmark_items",
+  "prompt_pack_benchmark_runs",
+  "prompt_pack_benchmark_item_dedup_audit",
+  "prompt_pack_human_reviews_v2",
+  "prompt_pack_auto_scores_v2",
+  "prompt_pack_scores",
+  "prompt_pack_runs",
+  "prompt_pack_tests",
+  "model_comparison_runs",
+  "prompt_retune_campaigns",
+  "replay_regression_runs",
+  "prompt_packs",
+] as const;
+/** Made by its own repository on first use, so a pack nobody compared may find it missing. */
+const LAZY_PACK_TABLES: ReadonlySet<string> = new Set(["model_comparison_runs"]);
+
 export class PromptPackRepository {
   private readonly getPackStmt;
   private readonly listPacksStmt;
@@ -208,6 +230,23 @@ export class PromptPackRepository {
     });
   }
 
+  /**
+   * Deletes a pack with everything recorded against it, in one transaction: its tests, runs, scores and reviews, its
+   * benchmarks, comparisons, retune campaigns and regression runs, then the pack. A pack that is already gone deletes
+   * nothing. Answers how many runs went with it.
+   */
+  public deletePackCascade(packId: string): { deletedRuns: number } {
+    return this.db.transaction("immediate", () => {
+      let deletedRuns = 0;
+      for (const table of PACK_CASCADE_TABLES) {
+        if (LAZY_PACK_TABLES.has(table) && !this.hasTable(table)) continue;
+        const { changes } = this.db.prepare(`DELETE FROM ${table} WHERE pack_id = ?`).run(packId);
+        if (table === "prompt_pack_runs") deletedRuns = changes;
+      }
+      return { deletedRuns };
+    });
+  }
+
   public replacePackTests(input: PromptPackWriteInput): {
     pack: PromptPackRecord;
     tests: PromptPackTestRecord[];
@@ -247,6 +286,16 @@ export class PromptPackRepository {
       pack: this.getPack(packId),
       tests: this.listTests(packId, Math.max(1000, input.tests.length + 10)),
     };
+  }
+
+  /** Whether a table exists where this connection looks for it: SQLite's own catalog, or PostgreSQL's search path. */
+  private hasTable(table: string): boolean {
+    const found =
+      this.db.dialect === "postgres"
+        ? this.db.prepare("SELECT to_regclass(CAST(? AS TEXT)) IS NOT NULL AS present").get<{ present: boolean }>(table)
+            ?.present
+        : this.db.prepare("SELECT 1 AS present FROM sqlite_master WHERE type = 'table' AND name = ?").get(table);
+    return Boolean(found);
   }
 
   private insertTests(packId: string, tests: PromptPackWriteInput["tests"], now: string): void {

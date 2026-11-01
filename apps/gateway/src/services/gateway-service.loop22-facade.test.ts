@@ -225,8 +225,11 @@ describe("GatewayService loop 22 route facade composition", () => {
     const changePlanAdapters = new EvolutionControlPlaneAdapterRegistry();
     const routeServices = (GatewayService.prototype as any).buildRouteServices.call(gateway, changePlanAdapters);
     expect(routeServices).toMatchObject({ composed: true });
-    // The plugin install plan joins the Change Plan adapters through the plugins composition.
-    expect(changePlanAdapters.list()).toEqual([{ adapterId: "plugin-install", version: 1, kinds: ["plugin_install"] }]);
+    // The plugin install and uninstall plans join the Change Plan adapters through the plugins composition.
+    expect(changePlanAdapters.list()).toEqual([
+      { adapterId: "plugin-install", version: 1, kinds: ["plugin_install"] },
+      { adapterId: "plugin-uninstall", version: 1, kinds: ["plugin_uninstall"] },
+    ]);
     expect(routeComposition.composeGatewayRouteServices).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "route-port", gateway }),
     );

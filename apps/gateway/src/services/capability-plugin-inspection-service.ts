@@ -30,6 +30,7 @@ import {
   pluginPromptPackId,
   pluginPromptPackSourceLabel,
 } from "./plugin-prompt-packs.js";
+import type { PluginSkillCheck } from "./plugin-skill-checks.js";
 import { PluginSnapshotPathError } from "./plugin-snapshot-store.js";
 import type { FetchedPluginSource } from "./plugin-source-service.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
@@ -62,6 +63,12 @@ export const ASKS_FIRST = {
 
 const SKILL_BLOCKED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
+const SKILL_REMOVED_EARLIER_MESSAGE =
+  "This skill was removed with an earlier install. It can't come back until skills can be removed.";
+const SKILL_NAME_TAKEN_MESSAGE = "A skill with this name is already installed.";
+/** What GoatCitadel's checks say when this copy's skill is already installed, or was installed and removed. */
+const LEFT_OVER_BLOCKERS: ReadonlySet<string> = new Set(["SOURCE_ALREADY_INSTALLED", "CANDIDATE_ALREADY_EXISTS"]);
+const NAME_TAKEN_BLOCKER = "RUNTIME_ALREADY_EXISTS";
 const KEY_REUSED_MESSAGE = "This request's key was already used for a different plugin check. Check it with a new key.";
 const ANSWER_GONE_MESSAGE =
   "This plugin check is no longer kept, so its answer can't be sent again. Check the plugin again.";
@@ -135,6 +142,11 @@ export interface CapabilityPluginInspectionSources {
   promptPackExists(packId: string): Promise<boolean>;
   /** Every address a host name resolves to. */
   lookupHost(hostname: string): Promise<Array<{ address: string }>>;
+  /**
+   * One Skill Hub check by its id, as a plugin's skill piece reads it: whether installing it would be refused, and why.
+   * Undefined when the workspace has no check with that id.
+   */
+  readSkillCheck(workspaceId: string, snapshotId: string): Promise<PluginSkillCheck | undefined>;
   /** The plugin store's record of an installed plugin. */
   findInstalled(pluginId: string): Promise<StoredPlugin | undefined>;
   /** The kept inspection that answered this key in this scope, with its request's fingerprint. */
@@ -338,12 +350,46 @@ export class CapabilityPluginInspectionService {
     }
     const skillName = reviewed.snapshot.provenance.skillName;
     const blocker = reviewed.snapshot.blockerCodes[0];
+    const snapshotId = reviewed.snapshot.snapshotId;
     return {
       ...view,
       label: typeof skillName === "string" && skillName ? skillName : piece.id,
-      check: blocker ? blocked(blocker, SKILL_BLOCKED_MESSAGE) : READY,
-      skillSnapshotId: reviewed.snapshot.snapshotId,
+      check: blocker
+        ? blocked(blocker, SKILL_BLOCKED_MESSAGE)
+        : await this.installableSkill(snapshotId, piece.id, input),
+      skillSnapshotId: snapshotId,
     };
+  }
+
+  /**
+   * Whether the reviewed skill can be installed now, read from its check by id. Checking the same copy again replays
+   * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused: it
+   * can't come back until skills can be removed. Another installed skill of that name refuses it too. A check that
+   * can't be read is never taken as installable.
+   */
+  private async installableSkill(
+    snapshotId: string,
+    pieceId: string,
+    input: CapabilityPluginInspectInput,
+  ): Promise<CapabilityPluginPieceCheck> {
+    let check: PluginSkillCheck | undefined;
+    try {
+      check = await this.sources.readSkillCheck(input.workspaceId, snapshotId);
+    } catch (error) {
+      warn(input.log, pieceId, error, "a plugin skill's check couldn't be read");
+      return blocked("SKILL_CHECK_UNREADABLE", SKILL_UNREADABLE_MESSAGE);
+    }
+    if (!check) return blocked("SKILL_CHECK_UNREADABLE", SKILL_UNREADABLE_MESSAGE);
+    const { allowed, blockers } = check.installInactive;
+    if (allowed) return READY;
+    const leftOver = blockers.find((code) => LEFT_OVER_BLOCKERS.has(code));
+    if (leftOver) return blocked(leftOver, SKILL_REMOVED_EARLIER_MESSAGE);
+    if (blockers.includes(NAME_TAKEN_BLOCKER)) {
+      return check.revoked
+        ? blocked(NAME_TAKEN_BLOCKER, SKILL_REMOVED_EARLIER_MESSAGE)
+        : blocked(NAME_TAKEN_BLOCKER, SKILL_NAME_TAKEN_MESSAGE);
+    }
+    return blocked(blockers[0] ?? "SKILL_CHECK_BLOCKED", SKILL_BLOCKED_MESSAGE);
   }
 
   /**

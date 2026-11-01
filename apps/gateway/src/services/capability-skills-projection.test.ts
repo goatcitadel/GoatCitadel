@@ -255,6 +255,30 @@ describe("buildCapabilitySkillItems", () => {
     expect(items.filter((item) => "fromPlugin" in item)).toHaveLength(1);
   });
 
+  it("reads a skill an uninstall removed as removed with its plugin, once the AI can't use it", () => {
+    const items = buildCapabilitySkillItems({
+      ...ITEMS_INPUT,
+      skills: [
+        // Revoked by the uninstall: the AI can't use it, and it stays until skills can be removed.
+        skill({ skillId: "extra:notes", name: "notes", callable: false, lifecycleState: "revoked" }),
+        // Its revoke hasn't applied yet: the AI can still use it, so it isn't marked.
+        skill({ skillId: "extra:digest", name: "digest", callable: true }),
+        skill({ skillId: "extra:other", name: "other", callable: false }),
+      ],
+      removedPluginSkills: new Map([
+        ["extra:notes", { name: "Meeting tools" }],
+        ["extra:digest", { name: "Meeting tools" }],
+      ]),
+    });
+
+    expect(items.map((item) => [item.skillId, item.removedWithPlugin])).toEqual([
+      ["extra:digest", undefined],
+      ["extra:notes", { name: "Meeting tools" }],
+      ["extra:other", undefined],
+    ]);
+    expect(items.filter((item) => "removedWithPlugin" in item)).toHaveLength(1);
+  });
+
   it("keeps callable false for an enabled skill that isn't reviewed", () => {
     const items = buildCapabilitySkillItems({
       ...ITEMS_INPUT,

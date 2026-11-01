@@ -78,6 +78,8 @@ const CAPABILITY_PLUGIN_INSPECTIONS_ROUTE = "/api/v1/capabilities/plugins/inspec
  * from the attempt's fingerprint, so a retry is told apart only by everything else it sends.
  */
 const CAPABILITY_PLUGIN_INSTALL_ROUTE = "/api/v1/capabilities/plugins/install";
+/** A plugin uninstall answers a retry from the Change Plan its key made, so the retry gets the same answer. */
+const CAPABILITY_PLUGIN_UNINSTALL_ROUTE = "/api/v1/capabilities/plugins/uninstall";
 /** Per upload route, the query fields that describe a streamed upload; nothing else from the query reaches its fingerprint. */
 const STREAMED_UPLOAD_QUERY_FIELDS: Readonly<Record<string, readonly string[]>> = {
   "/api/v1/files/upload": ["relativePath", "expectAbsent"],
@@ -88,6 +90,7 @@ const CANONICAL_REPLAY_ROUTES = new Set([
   CONNECTOR_INSTALL_ROUTE,
   CAPABILITY_PLUGIN_INSPECTIONS_ROUTE,
   CAPABILITY_PLUGIN_INSTALL_ROUTE,
+  CAPABILITY_PLUGIN_UNINSTALL_ROUTE,
 ]);
 const CANONICAL_IDEMPOTENCY_OWNER_ROUTES = new Set([
   REMOTE_WORKER_BOOTSTRAP_ROUTE,

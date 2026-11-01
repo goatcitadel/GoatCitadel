@@ -19,8 +19,15 @@ import {
   type PluginInstallShared,
 } from "./capability-plugin-install-composition.js";
 import { CapabilityPluginInspectionService } from "./capability-plugin-inspection-service.js";
-import { CapabilityPluginStore, pluginToolGroupHolds, type StoredPlugin } from "./capability-plugin-store.js";
+import {
+  CapabilityPluginStore,
+  pluginToolGroupHolds,
+  type RemovedPlugin,
+  type StoredPlugin,
+} from "./capability-plugin-store.js";
+import { pluginUninstallSources } from "./capability-plugin-uninstall-composition.js";
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
+import type { PluginUninstallRevokeInput, PluginUninstallRevokeOutcome } from "./capability-skill-actions-service.js";
 import { lookUpHostAddresses } from "./hardened-git.js";
 import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
@@ -29,6 +36,7 @@ import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-man
 import { readPluginSkillChecks, type FindSkillHubChecks } from "./plugin-skill-checks.js";
 import { PluginSnapshotChangedError, PluginSnapshotPathError, PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { fetchPluginSource } from "./plugin-source-service.js";
+import { PluginUninstallChangePlanAdapter } from "./plugin-uninstall-change-plan-adapter.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
 import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
@@ -53,9 +61,10 @@ export interface PluginToolGroupHoldsTarget {
 }
 
 /**
- * The existing owner of each source the Plugins tab and its inspections read, and of each piece an install adds.
- * Inspecting writes only through the snapshot store, the Skill Hub's own review and the plugin store; installing writes
- * only through a Change Plan, whose adapter this composition adds to the Change Plan adapters.
+ * The existing owner of each source the Plugins tab and its inspections read, and of each piece an install adds and an
+ * uninstall removes. Inspecting writes only through the snapshot store, the Skill Hub's own review and the plugin
+ * store; installing and uninstalling write only through Change Plans, whose adapters this composition adds to the
+ * Change Plan adapters.
  */
 export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
   /** `<rootDir>/plugins` holds the plugins that ship; `<data>/plugins` holds the snapshots and their temp copies. */
@@ -67,6 +76,11 @@ export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
   };
   /** Takes the groups plugins hold off, loaded at startup and again after every write to the plugin store. */
   policy: PluginToolGroupHoldsTarget;
+  /**
+   * The Skills tab's one revoke for a plugin's skill, as a plain function: the uninstall plan asks it for each skill
+   * the plugin switched on, and never asks Skill Hub or approves anything itself.
+   */
+  revokeSkill(input: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome>;
 }
 
 /** Where plugins live on this install. Snapshots and their temp copies share a volume, since a snapshot is renamed in. */
@@ -96,11 +110,13 @@ export interface CapabilityPlugins {
   routes: CapabilityPluginsRouteService;
   /** Every plugin record, read through the one plugin store. It writes nothing. */
   readPlugins(): Promise<readonly StoredPlugin[]>;
+  /** The uninstalled plugins the store remembers, newest first, read through the same store. It writes nothing. */
+  readRemovedPlugins(): Promise<readonly RemovedPlugin[]>;
 }
 
 /**
- * Wires the Plugins tab and the plugin install plan to their owners. Both share one plugin store, so every write the
- * install makes reaches the tool-group holds as an inspection's does.
+ * Wires the Plugins tab and the plugin install and uninstall plans to their owners. All share one plugin store, so
+ * every write either plan makes reaches the tool-group holds as an inspection's does.
  */
 export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): CapabilityPlugins {
   const { config, mcp, settings, skillHub, records, policy, plans, keychain, changePlanAdapters } = owners;
@@ -140,6 +156,20 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     reportSecretsKept: reportKeptSecrets,
   };
   changePlanAdapters.register(new PluginInstallChangePlanAdapter(pluginInstallSources(shared, owners)));
+  changePlanAdapters.register(
+    new PluginUninstallChangePlanAdapter(
+      pluginUninstallSources(
+        {
+          ...shared,
+          removePlugin: (pluginId, remember) => store.remove(pluginId, remember),
+          readSkillChecks,
+          revokeSkill: (input) => owners.revokeSkill(input),
+          reportExportFileKept: reportKeptExportFile,
+        },
+        { ...owners, rootDir: config.rootDir },
+      ),
+    ),
+  );
   const actions = new CapabilityPluginActionsService(pluginActionSources(shared, owners));
   const inspection = new CapabilityPluginInspectionService({
     fetchSource: (source) =>
@@ -172,6 +202,8 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
       }
     },
     lookupHost: (hostname) => lookUpHostAddresses(hostname),
+    readSkillCheck: async (workspaceId, snapshotId) =>
+      (await readSkillChecks(workspaceId, [snapshotId])).get(snapshotId),
     findInstalled: (pluginId) => store.get(pluginId),
     findKeptInspection: (actorScope, idempotencyKey) => store.findInspectionByRequest(actorScope, idempotencyKey),
     saveInspection: (kept, snapshotTreeSha256, request) => store.saveInspection(kept, snapshotTreeSha256, request),
@@ -190,10 +222,11 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     inspect: (input) => inspection.inspect(input),
     readInspection: async (inspectionId) => (await store.getInspection(inspectionId))?.inspection,
     install: (input) => actions.install(input),
+    uninstall: (input) => actions.uninstall(input),
     loadToolGroupHolds: () => holds.load(),
     reportFailure: reportFailedRead,
   });
-  return { routes, readPlugins: () => store.list() };
+  return { routes, readPlugins: () => store.list(), readRemovedPlugins: () => store.listRemoved() };
 }
 
 /**
@@ -338,15 +371,21 @@ function reportFirstHoldsReadFailure(error: unknown): void {
   );
 }
 
+/** A prompt pack's export file an uninstall couldn't remove: inert, and logged by its pack so it can be found. */
+function reportKeptExportFile(packId: string, error: unknown): void {
+  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+  log.error("an uninstalled plugin's prompt pack export file couldn't be removed", {
+    packId,
+    err: redactStructuredSecrets(diagnostic).value,
+  });
+}
+
 /** A signing secret that couldn't be deleted is logged by its reference, so it can be found and removed. */
 function reportKeptSecrets(error: unknown): void {
   const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
-  log.error(
-    "a plugin install plan ended unapplied, and its stored signing secrets were kept: its record can't be read",
-    {
-      err: redactStructuredSecrets(diagnostic).value,
-    },
-  );
+  log.error("a plugin plan kept stored signing secrets, as it couldn't tell whether a hook still uses them", {
+    err: redactStructuredSecrets(diagnostic).value,
+  });
 }
 
 function reportFailedSecretDelete(secretRef: string, error: unknown): void {

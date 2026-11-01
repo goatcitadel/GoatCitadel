@@ -7,14 +7,15 @@ import {
 } from "./capability-skills-composition.js";
 
 // The Skills tab and the Plugins tab, wired together. A plugin's skills take the Skills tab's own install steps, which
-// read the plugin records, and the Skills tab marks a skill a plugin brought; the plugin's detail reads its skills'
-// checks. The Plugins composition creates the one plugin store, so the Skills tab reads the records through it.
+// read the plugin records, and the Skills tab marks a skill a plugin brought (or an uninstall removed); the plugin's
+// detail reads its skills' checks, and its uninstall revokes them through the Skills tab's one bound revoke. The
+// Plugins composition creates the one plugin store, so the Skills tab reads the records through it.
 
 /** Each tab's owners, once: the install's folders and profile come from its config, and Skill Hub serves both tabs. */
 export interface CapabilitySkillsAndPluginsOwners
   extends
     Omit<CapabilitySkillsOwners, "deploymentProfile" | "rootDir" | "pluginRecords" | "skillHub">,
-    Omit<CapabilityPluginsOwners, "skillHub"> {
+    Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill"> {
   skillHub: CapabilitySkillsOwners["skillHub"] & CapabilityPluginsOwners["skillHub"];
 }
 
@@ -26,13 +27,22 @@ export interface CapabilitySkillsAndPlugins {
 export function composeCapabilitySkillsAndPlugins(
   owners: CapabilitySkillsAndPluginsOwners,
 ): CapabilitySkillsAndPlugins {
-  const plugins = composeCapabilityPlugins(owners);
+  // The Skills tab is wired just below the Plugins tab; only an uninstall plan's apply revokes, long after both are.
+  const wired: { skills?: CapabilitySkills } = {};
+  const plugins = composeCapabilityPlugins({
+    ...owners,
+    revokeSkill: (input) => {
+      if (!wired.skills) throw new Error("The Skills tab isn't wired yet, so a plugin's skill can't be revoked.");
+      return wired.skills.revokeSkillForPluginUninstall(input);
+    },
+  });
   const capabilitySkills = composeCapabilitySkills({
     ...owners,
     // The live config: a deployment profile is read on every list and step, never kept.
     deploymentProfile: () => owners.config.assistant.deploymentProfile,
     rootDir: owners.config.rootDir,
-    pluginRecords: { list: () => plugins.readPlugins() },
+    pluginRecords: { list: () => plugins.readPlugins(), listRemoved: () => plugins.readRemovedPlugins() },
   });
+  wired.skills = capabilitySkills;
   return { capabilitySkills, capabilityPlugins: plugins.routes };
 }

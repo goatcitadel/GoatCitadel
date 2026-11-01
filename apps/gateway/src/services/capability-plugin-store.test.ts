@@ -6,6 +6,7 @@ import {
   findPluginOwning,
   pluginToolGroupHolds,
   readPluginPieceOwner,
+  removedPluginSkills,
   type CapabilityPluginSettingRecord,
   type CapabilityPluginSettingRows,
   type StoredPlugin,
@@ -327,5 +328,91 @@ describe("pluginToolGroupHolds", () => {
       { groupId: "files", pluginId: "installing", pluginName: "Installing" },
     ]);
     expect(pluginToolGroupHolds([])).toEqual([]);
+  });
+});
+
+describe("removed plugins", () => {
+  const removedAt = (index: number) => new Date(NOW + index * 1_000).toISOString();
+
+  it("deletes a record and keeps its tombstone in the same write", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    await store.update("first", () => plugin("first"));
+    await store.update("second", () => plugin("second"));
+    const writes = rows.writes;
+
+    await store.remove("first", (current) => ({
+      pluginId: current!.pluginId,
+      name: current!.name,
+      skillIds: ["extra:notes"],
+      removedAt: removedAt(1),
+    }));
+
+    expect(rows.writes).toBe(writes + 1);
+    await expect(store.get("first")).resolves.toBeUndefined();
+    await expect(store.get("second")).resolves.toEqual(plugin("second"));
+    await expect(store.listRemoved()).resolves.toEqual([
+      { pluginId: "first", name: "Plugin first", skillIds: ["extra:notes"], removedAt: removedAt(1) },
+    ]);
+    // A refused removal writes nothing: the record stays and no tombstone is kept.
+    await expect(
+      store.remove("second", () => {
+        throw new Error("Not this install's record.");
+      }),
+    ).rejects.toThrow("Not this install's record.");
+    expect(rows.writes).toBe(writes + 1);
+    await expect(store.get("second")).resolves.toEqual(plugin("second"));
+  });
+
+  it("keeps the newest 100 tombstones, and reads a row without any as none", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    await store.update("first", () => plugin("first"));
+    // A row written before tombstones existed holds none.
+    await expect(store.listRemoved()).resolves.toEqual([]);
+
+    for (let index = 1; index <= 101; index += 1) {
+      await store.update(`plugin-${index}`, () => plugin(`plugin-${index}`));
+      await store.remove(`plugin-${index}`, () => ({
+        pluginId: `plugin-${index}`,
+        name: `Plugin ${index}`,
+        skillIds: [],
+        removedAt: removedAt(index),
+      }));
+    }
+
+    const removed = await store.listRemoved();
+    expect(removed).toHaveLength(100);
+    expect(removed[0]?.pluginId).toBe("plugin-101");
+    expect(removed.at(-1)?.pluginId).toBe("plugin-2");
+    // Records and inspections are kept as they were.
+    await expect(store.get("first")).resolves.toEqual(plugin("first"));
+  });
+
+  it("refuses a tombstone list it doesn't recognise, rather than reading it as none", async () => {
+    const rows = new SettingRows();
+    rows.record = {
+      key: CAPABILITY_PLUGINS_SETTING_KEY,
+      value: { version: 1, plugins: [], inspections: [], removed: [{ pluginId: 7 }] },
+      updatedAt: "x",
+    };
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+
+    await expect(store.listRemoved()).rejects.toThrow("The saved plugin records can't be read.");
+    await expect(store.list()).rejects.toThrow("The saved plugin records can't be read.");
+  });
+
+  it("names the skills each uninstalled plugin removed, the newest uninstall first", () => {
+    expect(
+      removedPluginSkills([
+        { pluginId: "second", name: "Second", skillIds: ["extra:notes"], removedAt: removedAt(2) },
+        { pluginId: "first", name: "First", skillIds: ["extra:notes", "extra:digest"], removedAt: removedAt(1) },
+      ]),
+    ).toEqual(
+      new Map([
+        ["extra:notes", { name: "Second" }],
+        ["extra:digest", { name: "First" }],
+      ]),
+    );
   });
 });

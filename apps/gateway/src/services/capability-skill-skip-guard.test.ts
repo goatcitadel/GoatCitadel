@@ -50,6 +50,14 @@ const SWITCH_COMPOSITION = "apps/gateway/src/services/capability-skills-composit
  */
 const SWITCH_CALL = /\bactions\??\.(?:setState|checkSource|requestStep)\(|\bcapabilitySkills\??\.actions\b/u;
 const SWITCH_CONSTRUCTION = /\bnew\s+CapabilitySkillActionsService\b/u;
+/**
+ * A plugin's uninstall revokes its skills through one bound function the Skills composition makes over the switch's
+ * own `revokeForPluginUninstall`. Only that composition may name the method, and only the composition that wires the
+ * Skills and Plugins tabs together may take the bound function, so the uninstall plan only ever gets a plain function.
+ */
+const PLUGIN_REVOKE_METHOD = /\brevokeForPluginUninstall\b/u;
+const PLUGIN_REVOKE_FUNCTION = /\brevokeSkillForPluginUninstall\b/u;
+const PLUGIN_REVOKE_CALLER = "apps/gateway/src/services/capability-skills-plugins-composition.ts";
 const SKIPPED_DIRECTORIES = new Set(["node_modules", "dist", "build", "coverage", "out", "artifacts"]);
 const SOURCE_EXTENSIONS = [".ts", ".tsx", ".mts", ".cts"];
 
@@ -100,6 +108,44 @@ describe("Capabilities skill switch skip guard", () => {
     expect(inventory.find((file) => file.relativePath === SWITCH_COMPOSITION)?.content).toMatch(SWITCH_CONSTRUCTION);
     expect(() => assertOnlyRouteCallsSwitch(inventory)).not.toThrow();
     expect(() => assertOnlyCompositionBuildsSwitch(inventory)).not.toThrow();
+  });
+
+  it("lets a plugin's uninstall revoke its skills only through the one bound function, from the one composition", () => {
+    const inventory = readInventory();
+    const contentOf = (path: string) => inventory.find((file) => file.relativePath === path)?.content;
+    // The walk really reached each file, and each really does its one job.
+    expect(contentOf(SKIP_SERVICE)).toMatch(/\bpublic async revokeForPluginUninstall\(/u);
+    expect(contentOf(SWITCH_COMPOSITION)).toMatch(/\.revokeForPluginUninstall\(/u);
+    expect(contentOf(SWITCH_COMPOSITION)).toMatch(PLUGIN_REVOKE_FUNCTION);
+    expect(contentOf(PLUGIN_REVOKE_CALLER)).toMatch(/\.revokeSkillForPluginUninstall\(/u);
+    expect(() => assertOnlyCompositionRevokesForPlugins(inventory)).not.toThrow();
+  });
+
+  it("names the offending file when anything else revokes a plugin's skill", () => {
+    expect(() =>
+      assertOnlyCompositionRevokesForPlugins([
+        { relativePath: SKIP_SERVICE, content: "public async revokeForPluginUninstall(input) {}" },
+        {
+          relativePath: SWITCH_COMPOSITION,
+          content: "revokeSkillForPluginUninstall: (input) => actions.revokeForPluginUninstall(input),",
+        },
+        {
+          relativePath: PLUGIN_REVOKE_CALLER,
+          content: "revokeSkill: (input) => skills.revokeSkillForPluginUninstall(input),",
+        },
+        // The uninstall plan reaching the switch itself, or the bound function, would choose when to revoke.
+        {
+          relativePath: "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts",
+          content: "await this.actions.revokeForPluginUninstall({ snapshotId });",
+        },
+        {
+          relativePath: "apps/gateway/src/services/gateway-service.ts",
+          content: "const { revokeSkillForPluginUninstall } = composed.capabilitySkills;",
+        },
+      ]),
+    ).toThrow(
+      "A plugin's skill is revoked outside its one composition: apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts, apps/gateway/src/services/gateway-service.ts",
+    );
   });
 
   it("names the offending file when anything else calls the switch", () => {
@@ -237,6 +283,24 @@ function assertOnlyCompositionBuildsSwitch(inventory: readonly SourceFile[]): vo
     .map((file) => file.relativePath);
   if (offenders.length > 0) {
     throw new Error(`The Capabilities skill switch is built outside its composition: ${offenders.join(", ")}`);
+  }
+}
+
+/**
+ * The switch's `revokeForPluginUninstall` is named only where it is defined and bound, and the bound function only
+ * there and in the one composition that hands it to the plugins as a plain function.
+ */
+function assertOnlyCompositionRevokesForPlugins(inventory: readonly SourceFile[]): void {
+  const offenders = inventory
+    .filter(
+      (file) =>
+        (PLUGIN_REVOKE_METHOD.test(file.content) && ![SKIP_SERVICE, SWITCH_COMPOSITION].includes(file.relativePath)) ||
+        (PLUGIN_REVOKE_FUNCTION.test(file.content) &&
+          ![SWITCH_COMPOSITION, PLUGIN_REVOKE_CALLER].includes(file.relativePath)),
+    )
+    .map((file) => file.relativePath);
+  if (offenders.length > 0) {
+    throw new Error(`A plugin's skill is revoked outside its one composition: ${offenders.join(", ")}`);
   }
 }
 

@@ -317,12 +317,19 @@ export interface GatewayRouteServices {
     discover: Pick<CapabilitySkillDiscoverService, "list">;
   };
   /**
-   * The Capabilities Plugins tab and its install. Composed by the gateway service over the plugin store and each
-   * piece's owner; startup awaits `loadToolGroupHolds` before any chat runs.
+   * The Capabilities Plugins tab, its install and its uninstall. Composed by the gateway service over the plugin store
+   * and each piece's owner; startup awaits `loadToolGroupHolds` before any chat runs.
    */
   capabilityPlugins?: Pick<
     CapabilityPluginsRouteService,
-    "list" | "detail" | "inspect" | "inspection" | "namePluginOwnedError" | "install" | "loadToolGroupHolds"
+    | "list"
+    | "detail"
+    | "inspect"
+    | "inspection"
+    | "namePluginOwnedError"
+    | "install"
+    | "uninstall"
+    | "loadToolGroupHolds"
   >;
   /** The Capabilities Tools tab's tool groups. Composed by the gateway service over the policy probe and the switches. */
   capabilityTools?: Pick<CapabilityToolsService, "list">;

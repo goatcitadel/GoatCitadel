@@ -1,14 +1,18 @@
 import {
   ConflictError,
   NotFoundError,
+  PolicyViolationError,
+  TOOL_GROUPS,
   redactSecretText,
   type CapabilityPluginInspection,
+  type ChangePlanOrigin,
+  type ChangePlanRecord,
 } from "@goatcitadel/contracts";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 
-// What the plugin plans (install, and Task 18's uninstall) and the Capabilities plugin actions share: the checks an
-// install is bound by, and the plain-copy helpers their summaries use. One copy, so the refusal before a plan is made
-// and the same check when the plan applies can't drift apart.
+// What the plugin plans (install and uninstall) and the Capabilities plugin actions share: the checks an install is
+// bound by, the origin rule both plans keep, and the plain-copy helpers their summaries use. One copy, so the refusal
+// before a plan is made and the same check when the plan applies can't drift apart.
 
 export const PLUGIN_CHANGED_MESSAGE = "This plugin changed since it was checked. Check it again.";
 export const PLUGIN_INSPECTION_GONE_MESSAGE =
@@ -72,6 +76,37 @@ export function boundedSentences(sentences: readonly string[]): string {
 /** A title within a plan title's bound. */
 export function boundedTitle(title: string): string {
   return title.length <= MAX_TITLE_LENGTH ? title : `${title.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`;
+}
+
+/**
+ * Only the operator's own Capabilities route makes a plugin plan; Chat, a model or the generic API can't. A refusal
+ * names the plan's kind in its code, such as `plugin_install_untrusted_origin`.
+ */
+export function requireCapabilitiesOrigin(
+  origin: ChangePlanOrigin,
+  refusal: { message: string; diagnosticCode: string },
+): void {
+  if (origin.surface !== "capabilities" || origin.sessionId || origin.turnId) {
+    throw new PolicyViolationError({
+      message: refusal.message,
+      details: { diagnosticCode: refusal.diagnosticCode },
+    });
+  }
+}
+
+/** The plugin a plan's target names (`plugin:<id>`), so nothing depends on an inspection still being kept. */
+export function planPluginId(plan: Pick<ChangePlanRecord, "target">): string {
+  return plan.target.resourceId.startsWith("plugin:") ? plan.target.resourceId.slice("plugin:".length) : "";
+}
+
+/** A tool group's own label, or its id when GoatCitadel has no group by that id. */
+export function groupLabel(groupId: string): string {
+  return TOOL_GROUPS.find((group) => group.id === groupId)?.label ?? groupId;
+}
+
+/** The host a hook's address sends to. */
+export function hookHost(url: string): string {
+  return new URL(url).hostname;
 }
 
 /** An owner's error message on one line, redacted and bounded, or nothing when it carries none. */

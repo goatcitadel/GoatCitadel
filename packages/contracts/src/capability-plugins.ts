@@ -142,9 +142,19 @@ export interface CapabilityPluginInstallRequest {
 }
 
 /**
- * The answer to a plugin install or uninstall (202). `applied`: the plan finished. `waiting`: it waits, for its approval
- * in the Inbox (`approvalId`) or for a step still under way. `failed`: it stopped, and `summary` says what was added
- * and what to do next. `summary` is the plan's plain summary.
+ * `POST /api/v1/capabilities/plugins/uninstall`: remove exactly the pieces the plugin added, from one confirmation.
+ * What was already there stays, and so do the hosts it allowed.
+ */
+export interface CapabilityPluginUninstallRequest {
+  workspaceId: string;
+  pluginId: string;
+}
+
+/**
+ * The answer to a plugin install or uninstall (202). `applied`: the plan finished, and an uninstalled plugin is gone.
+ * `waiting`: it waits, for its approval in the Inbox (`approvalId`) or for a step still under way; an uninstall also
+ * waits while one of its skills isn't removed yet (`approvalId` names the approval that skill waits for). `failed`: it
+ * stopped, and `summary` says what was done and what to do next. `summary` is the plan's plain summary.
  */
 export interface PluginActionOutcome {
   planId: string;

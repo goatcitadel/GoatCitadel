@@ -13,11 +13,13 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
-import { pluginsBySkillCheck } from "./capability-plugin-store.js";
+import { pluginsBySkillCheck, removedPluginSkills, type RemovedPlugin } from "./capability-plugin-store.js";
 import {
   CapabilitySkillActionsService,
   type CapabilitySkillActionStep,
   type PluginSkillListing,
+  type PluginUninstallRevokeInput,
+  type PluginUninstallRevokeOutcome,
 } from "./capability-skill-actions-service.js";
 import { CapabilitySkillDiscoverService } from "./capability-skill-discover-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
@@ -110,9 +112,13 @@ export interface CapabilitySkillsOwners {
   skillHubSnapshots: { find(snapshotId: string): Promise<SkillHubCheckSource | undefined> };
   /**
    * The plugin records, read through the Plugins tab's one store (never a second one): which plugin lists a check as
-   * its skill, for a step on that skill and for the Skills tab's marks.
+   * its skill, for a step on that skill and for the Skills tab's marks, and the plugins uninstalled since, whose skills
+   * read as removed with them.
    */
-  pluginRecords: { list(): Promise<readonly PluginSkillListing[]> };
+  pluginRecords: {
+    list(): Promise<readonly PluginSkillListing[]>;
+    listRemoved(): Promise<readonly RemovedPlugin[]>;
+  };
   /**
    * The skill import owner's source reads, which Discover lists from: the curated entries and the marketplaces' listings
    * (the marketplaces only when asked), a catalog ranked by a search term, and the skills installed at runtime with the
@@ -150,6 +156,12 @@ export interface CapabilitySkills {
   skills: CapabilitySkillsService;
   actions: CapabilitySkillActionsService;
   discover: CapabilitySkillDiscoverService;
+  /**
+   * The one way a plugin's uninstall revokes a skill it added, bound to the switch above: it asks Skill Hub for the
+   * revoke and approves it as the operator, except on `remote_hardened`. Only the composition that wires the Skills
+   * and Plugins tabs together hands it on (capability-skill-skip-guard.test.ts).
+   */
+  revokeSkillForPluginUninstall(input: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome>;
 }
 
 /** Wires the Skills tab to its owners. */
@@ -186,30 +198,32 @@ export function composeCapabilitySkills({
       listSkillHub: (input) => skillHub.listSkillHub(input),
       findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
       listPluginSkills: async () => pluginsBySkillCheck(await pluginRecords.list()),
+      listRemovedPluginSkills: async () => removedPluginSkills(await pluginRecords.listRemoved()),
     },
     reportFailedRead,
+  );
+  const actions = new CapabilitySkillActionsService(
+    {
+      // The switch carries no note; the approval's own preview shows the state change.
+      setSkillState: (skillId, state, authority) => skills.setSkillState(skillId, state, undefined, authority),
+      resolveApproval: (approvalId, input) => approvals.resolveApproval(approvalId, input),
+      readApproval: (approvalId) => approvals.getApproval(approvalId),
+      appendApprovalAudit: (event, payload) => audit.append("approvals", { event, ...payload }),
+      deploymentProfile,
+      readApprovalSkipSetting,
+      reviewSkillHubSource: (input) => skillHub.reviewSkillHubSource(input),
+      listSkillHub: (input) => skillHub.listSkillHub(input),
+      // The plugin's pass, when the step gives one, reaches Skill Hub's owner exactly as given.
+      createSkillHubApproval: (...args) => skillHub.createSkillHubApproval(...args),
+      findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
+      listPluginRecords: () => pluginRecords.list(),
+    },
+    reportFailedStep,
   );
   return {
     usage: new CapabilitySkillUsageService((sinceIso) => chatTurnCapabilityProfiles.countSkillUsesSince(sinceIso)),
     skills: skillsService,
-    actions: new CapabilitySkillActionsService(
-      {
-        // The switch carries no note; the approval's own preview shows the state change.
-        setSkillState: (skillId, state, authority) => skills.setSkillState(skillId, state, undefined, authority),
-        resolveApproval: (approvalId, input) => approvals.resolveApproval(approvalId, input),
-        readApproval: (approvalId) => approvals.getApproval(approvalId),
-        appendApprovalAudit: (event, payload) => audit.append("approvals", { event, ...payload }),
-        deploymentProfile,
-        readApprovalSkipSetting,
-        reviewSkillHubSource: (input) => skillHub.reviewSkillHubSource(input),
-        listSkillHub: (input) => skillHub.listSkillHub(input),
-        // The plugin's pass, when the step gives one, reaches Skill Hub's owner exactly as given.
-        createSkillHubApproval: (...args) => skillHub.createSkillHubApproval(...args),
-        findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
-        listPluginRecords: () => pluginRecords.list(),
-      },
-      reportFailedStep,
-    ),
+    actions,
     discover: new CapabilitySkillDiscoverService(
       {
         readSourceCatalog: (options) => skillSources.readSourceCatalog(options),
@@ -221,6 +235,7 @@ export function composeCapabilitySkills({
       },
       { reportFailure: (error) => reportFailedRead("skill_hub", error) },
     ),
+    revokeSkillForPluginUninstall: (input) => actions.revokeForPluginUninstall(input),
   };
 }
 

@@ -10,12 +10,16 @@ import {
   type PluginManifestParse,
   type PluginPieceKind,
 } from "@goatcitadel/contracts";
-import type { CapabilityPluginInstallInput } from "./capability-plugin-actions-service.js";
+import type {
+  CapabilityPluginInstallInput,
+  CapabilityPluginUninstallInput,
+} from "./capability-plugin-actions-service.js";
 import {
   buildPluginDetailPieces,
   describePluginPieces,
   installPlanEnded,
   needsInstallPlan,
+  needsUninstallPlan,
   pluginPublicState,
   skillCheckIds,
   type PluginPieceLabel,
@@ -47,7 +51,7 @@ export interface CapabilityPluginsRouteSources {
    * pieces are read from. A check that isn't there is left out.
    */
   readSkillChecks(workspaceId: string, snapshotIds: readonly string[]): Promise<ReadonlyMap<string, PluginSkillCheck>>;
-  /** The install plan's status, read in the plugin's workspace as the operator who asked. */
+  /** A plugin plan's status (its install's, or its uninstall's), read in the plugin's workspace as the operator who asked. */
   readInstallPlanStatus(workspaceId: string, planId: string, actorId: string): Promise<ChangePlanStatus>;
   /** The manifest in a snapshot, read again. */
   readManifest(treeSha256: string): Promise<PluginManifestParse>;
@@ -59,6 +63,8 @@ export interface CapabilityPluginsRouteSources {
   readInspection(inspectionId: string): Promise<CapabilityPluginInspection | undefined>;
   /** Installs an inspection's pieces through one Change Plan the operator confirms with this click. */
   install(input: CapabilityPluginInstallInput): Promise<PluginActionOutcome>;
+  /** Removes exactly what a plugin added through one Change Plan the operator confirms with this click. */
+  uninstall(input: CapabilityPluginUninstallInput): Promise<PluginActionOutcome>;
   /** The first read of the tool groups plugins hold off, which startup awaits before any chat runs. */
   loadToolGroupHolds(): Promise<void>;
   /** Called with the real error of a part that couldn't be read, so the answer carries none of it. */
@@ -117,12 +123,15 @@ export class CapabilityPluginsRouteService {
   public async detail(input: { pluginId: string; actorId: string }): Promise<CapabilityPluginDetail> {
     const plugin = (await this.sources.listInstalled()).find((item) => item.pluginId === input.pluginId);
     if (!plugin) throw new NotFoundError(PLUGIN_NOT_INSTALLED_MESSAGE);
-    const [skillChecks, installEnded, manifest] = await Promise.all([
+    const [skillChecks, installEnded, uninstallEnded, manifest] = await Promise.all([
       this.readSkillChecks(plugin.workspaceId, skillCheckIds(plugin)),
-      this.readInstallEnded(plugin, input.actorId),
+      needsInstallPlan(plugin) ? this.readPlanEnded(plugin, plugin.installPlanId, input.actorId) : undefined,
+      needsUninstallPlan(plugin) && plugin.uninstallPlanId
+        ? this.readPlanEnded(plugin, plugin.uninstallPlanId, input.actorId)
+        : undefined,
       this.readInstalledManifest(plugin),
     ]);
-    const readings = { skillChecks, installEnded };
+    const readings = { skillChecks, installEnded, uninstallEnded };
     const labels = manifest ? await this.describePieces(plugin, manifest) : undefined;
     return {
       ...listItem(plugin, pluginPublicState(plugin, readings)),
@@ -144,6 +153,14 @@ export class CapabilityPluginsRouteService {
    */
   public install(input: CapabilityPluginInstallInput): Promise<PluginActionOutcome> {
     return this.sources.install(input);
+  }
+
+  /**
+   * Removes exactly what a plugin added through one Change Plan: applied at once when the operator's skip applies,
+   * otherwise waiting for its approval in the Inbox; and waiting, with its approval, while a skill's removal waits.
+   */
+  public uninstall(input: CapabilityPluginUninstallInput): Promise<PluginActionOutcome> {
+    return this.sources.uninstall(input);
   }
 
   /** Settles once the tool groups plugins hold off were first read, or that read's failure was reported. */
@@ -221,11 +238,10 @@ export class CapabilityPluginsRouteService {
     }
   }
 
-  /** Whether the install plan is done with the record, read only when a piece depends on it; undefined if unreadable. */
-  private async readInstallEnded(plugin: StoredPlugin, actorId: string): Promise<boolean | undefined> {
-    if (!needsInstallPlan(plugin)) return undefined;
+  /** Whether one of the plugin's plans is done with the record; undefined when it can't be read. */
+  private async readPlanEnded(plugin: StoredPlugin, planId: string, actorId: string): Promise<boolean | undefined> {
     try {
-      const status = await this.sources.readInstallPlanStatus(plugin.workspaceId, plugin.installPlanId, actorId);
+      const status = await this.sources.readInstallPlanStatus(plugin.workspaceId, planId, actorId);
       return installPlanEnded(status);
     } catch (error) {
       this.sources.reportFailure("install_plan", error);

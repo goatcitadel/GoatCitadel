@@ -2,14 +2,11 @@ import { createHash } from "node:crypto";
 import {
   ConflictError,
   HOOK_TRIGGER_LABELS,
-  PolicyViolationError,
   SemanticValidationError,
-  TOOL_GROUPS,
   canonicalJsonString,
   isGoatError,
   type CapabilityPluginInspection,
   type CapabilityPluginPieceView,
-  type ChangePlanOrigin,
   type ChangePlanPluginInstallRequest,
   type ChangePlanRecord,
   type ChangePlanStatus,
@@ -38,8 +35,12 @@ import {
   boundedSentences,
   boundedTitle,
   failureDetail,
+  groupLabel,
+  hookHost,
+  planPluginId,
   pluginAlreadyInstalled,
   pluginChanged,
+  requireCapabilitiesOrigin,
   requireInstallableInspection,
   type KeptPluginInspection,
 } from "./plugin-plan-support.js";
@@ -56,6 +57,10 @@ import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 // snapshot that was checked. The plan holds only references; a hook's signing secret is already in the key store.
 
 const SECRET_REFS_MESSAGE = "Every hook needs its own signing secret, and no other piece takes one.";
+const ORIGIN_REFUSAL = {
+  message: "Plugins are installed from Capabilities.",
+  diagnosticCode: "plugin_install_untrusted_origin",
+} as const;
 /** A plan in one of these never reached apply, so no hook holds a secret it names. */
 const NOT_YET_APPLIED: ReadonlySet<ChangePlanStatus> = new Set([
   "draft",
@@ -166,7 +171,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
   constructor(private readonly sources: PluginInstallSources) {}
 
   async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanPluginInstallRequest) {
-    requireCapabilitiesOrigin(context.origin);
+    requireCapabilitiesOrigin(context.origin, ORIGIN_REFUSAL);
     if (request.workspaceId !== context.origin.workspaceId) throw conflict(OTHER_WORKSPACE_MESSAGE);
     const binding = await this.bind(request);
     const settings = await this.sources.readSettings();
@@ -641,16 +646,6 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
   }
 }
 
-/** Only the operator's own Capabilities install route makes this plan; Chat, a model or the generic API can't. */
-function requireCapabilitiesOrigin(origin: ChangePlanOrigin): void {
-  if (origin.surface !== "capabilities" || origin.sessionId || origin.turnId) {
-    throw new PolicyViolationError({
-      message: "Plugins are installed from Capabilities.",
-      details: { diagnosticCode: "plugin_install_untrusted_origin" },
-    });
-  }
-}
-
 function requireRequest(plan: ChangePlanRecord): ChangePlanPluginInstallRequest {
   if (plan.request.kind !== "plugin_install") throw new SemanticValidationError("Expected a plugin install request.");
   return plan.request;
@@ -658,11 +653,6 @@ function requireRequest(plan: ChangePlanRecord): ChangePlanPluginInstallRequest 
 
 function conflict(message: string): ConflictError {
   return new ConflictError({ message });
-}
-
-/** The plugin a plan's target names (`plugin:<id>`), so nothing depends on its inspection still being kept. */
-function planPluginId(plan: ChangePlanRecord): string {
-  return plan.target.resourceId.startsWith("plugin:") ? plan.target.resourceId.slice("plugin:".length) : "";
 }
 
 /**
@@ -711,14 +701,6 @@ function savedConnectorSentence(label: string, approval: "reads_free" | "everyth
   return approval === "reads_free"
     ? `Saved ${label}, switched off, set to Reading is free.`
     : `Saved ${label}, switched off, and everything it does asks you first.`;
-}
-
-function groupLabel(groupId: string): string {
-  return TOOL_GROUPS.find((group) => group.id === groupId)?.label ?? groupId;
-}
-
-function hookHost(url: string): string {
-  return new URL(url).hostname;
 }
 
 /** One plain sentence per finished step, then a skill's own steps (R66). */

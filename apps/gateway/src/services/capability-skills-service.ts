@@ -60,6 +60,8 @@ export interface CapabilitySkillsSources {
    * a skill switched on from one of them.
    */
   listPluginSkills(): Promise<ReadonlyMap<string, { pluginId: string; name: string }>>;
+  /** The skills uninstalls removed, by skill id, with the plugin each went with: what reads one as removed with it. */
+  listRemovedPluginSkills(): Promise<ReadonlyMap<string, { name: string }>>;
 }
 
 export type CapabilitySkillsSource =
@@ -104,7 +106,10 @@ export class CapabilitySkillsService {
       this.attempt("switchable", () => this.sources.listSwitchableSkillIds()),
       this.attempt("turn_skills", () => this.sources.listWorkspaceTurnSkills(workspaceId)),
       this.readOperatorApprovalSkip(),
-      this.attempt("plugins", () => this.sources.listPluginSkills()),
+      this.attempt("plugins", async () => ({
+        fromPlugin: await this.sources.listPluginSkills(),
+        removed: await this.sources.listRemovedPluginSkills(),
+      })),
     ]);
     const packSnapshotIds = await this.readPackSnapshotIds(skills);
 
@@ -127,7 +132,9 @@ export class CapabilitySkillsService {
         ...(turnSkills.ok ? { turnSkillIds: new Set(turnSkills.value.map((skill) => skill.skillId)) } : {}),
         shippedSkillDirs: this.sources.shippedSkillDirs(),
         // Plugin records that can't be read mark no skill, rather than guessing which came with a plugin.
-        ...(pluginSkills.ok ? { pluginSkills: pluginSkills.value } : {}),
+        ...(pluginSkills.ok
+          ? { pluginSkills: pluginSkills.value.fromPlugin, removedPluginSkills: pluginSkills.value.removed }
+          : {}),
         packSnapshotIds,
       }),
       // Absent when the catalog couldn't be read, or when it cut its candidate list off.

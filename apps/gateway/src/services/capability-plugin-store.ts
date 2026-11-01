@@ -16,6 +16,8 @@ import { logger } from "@goatcitadel/gateway-core";
 export const CAPABILITY_PLUGINS_SETTING_KEY = "capability_plugins_v1";
 /** The most inspections kept. Older ones, and any that ran out of time, are dropped on the next save. */
 export const MAX_KEPT_INSPECTIONS = 50;
+/** The most uninstalled plugins remembered, newest first, so their skills read "Removed with <plugin>". */
+export const MAX_REMOVED_PLUGINS = 100;
 /** How many times a write reads again after another writer got there first. */
 const MAX_WRITE_ATTEMPTS = 8;
 const CHANGED_WHILE_SAVING_MESSAGE = "Plugins changed while this was being saved. Try again.";
@@ -27,9 +29,16 @@ export interface StoredPluginPiece {
   kind: PluginPieceKind;
   /** False for a piece that was already there: uninstalling leaves it. */
   owned: boolean;
-  /** What the piece became: a server, group, hook, prompt pack or skill id. */
+  /** What the piece became: a server, group, hook or prompt pack id. Uninstalling clears it once the piece is gone. */
   ref?: string;
   skillSnapshotId?: string;
+  /**
+   * While uninstalling: the uninstall is done with this piece. Its owner removed it, or, for a skill, it was revoked
+   * or left switched off for good, with its skill's id when it had one.
+   */
+  removed?: { skillId?: string };
+  /** While uninstalling: the approval this skill's removal waits for, its revoke or its own step. */
+  waiting?: { approvalId: string; operation: "revoke" | "install_inactive" | "activate" };
 }
 
 export interface StoredPlugin {
@@ -47,7 +56,18 @@ export interface StoredPlugin {
   installPlanId: string;
   state: "installing" | "installed" | "uninstalling";
   installedAt: string;
+  /** The plan removing it, from the moment its uninstall starts applying. */
+  uninstallPlanId?: string;
   pieces: StoredPluginPiece[];
+}
+
+/** An uninstalled plugin, remembered so the skills it left behind read as removed with it. */
+export interface RemovedPlugin {
+  pluginId: string;
+  name: string;
+  /** Its skills' ids, revoked or left switched off by the uninstall. */
+  skillIds: string[];
+  removedAt: string;
 }
 
 /** The row as system settings hands it back. */
@@ -86,6 +106,8 @@ interface PluginStoreValue {
   version: 1;
   plugins: StoredPlugin[];
   inspections: KeptInspection[];
+  /** Absent in a row written before any plugin was uninstalled: read as none. */
+  removed?: RemovedPlugin[];
 }
 
 export class CapabilityPluginStore {
@@ -133,6 +155,26 @@ export class CapabilityPluginStore {
         : [...others, next];
       return { ...value, plugins };
     });
+  }
+
+  /**
+   * Deletes one plugin's record and keeps the tombstone `remember` answers for it, in the same write, with the newest
+   * 100 tombstones. `remember` may run more than once, each time on the newest record, and may throw to refuse.
+   */
+  public async remove(pluginId: string, remember: (current: StoredPlugin | undefined) => RemovedPlugin): Promise<void> {
+    await this.write((value) => {
+      const tombstone = remember(value.plugins.find((plugin) => plugin.pluginId === pluginId));
+      return {
+        ...value,
+        plugins: value.plugins.filter((plugin) => plugin.pluginId !== pluginId),
+        removed: [tombstone, ...(value.removed ?? [])].slice(0, MAX_REMOVED_PLUGINS),
+      };
+    });
+  }
+
+  /** The uninstalled plugins remembered, newest first. */
+  public async listRemoved(): Promise<RemovedPlugin[]> {
+    return (await this.read()).value.removed ?? [];
   }
 
   /**
@@ -262,6 +304,18 @@ export function pluginsBySkillCheck(
   );
 }
 
+/**
+ * The plugin each skill an uninstall removed was removed with, by skill id: the newest uninstall that names the skill.
+ * What reads a skill as "Removed with <plugin>" once the plugin's record is gone.
+ */
+export function removedPluginSkills(removed: readonly RemovedPlugin[]): Map<string, { name: string }> {
+  const skills = new Map<string, { name: string }>();
+  for (const tombstone of removed) {
+    for (const skillId of tombstone.skillIds) if (!skills.has(skillId)) skills.set(skillId, { name: tombstone.name });
+  }
+  return skills;
+}
+
 function hasExpired(kept: KeptInspection, nowMs: number): boolean {
   const expiresAt = Date.parse(kept.inspection.expiresAt);
   return !Number.isFinite(expiresAt) || expiresAt <= nowMs;
@@ -285,7 +339,18 @@ function parseStoreValue(value: unknown): PluginStoreValue {
       isObject(kept.inspection) &&
       typeof kept.inspection.inspectionId === "string",
   );
-  if (!plugins || !inspections) throw new Error(UNREADABLE_MESSAGE);
+  const removed =
+    value.removed === undefined ||
+    (Array.isArray(value.removed) &&
+      value.removed.every(
+        (tombstone) =>
+          isObject(tombstone) &&
+          typeof tombstone.pluginId === "string" &&
+          typeof tombstone.name === "string" &&
+          Array.isArray(tombstone.skillIds) &&
+          tombstone.skillIds.every((skillId) => typeof skillId === "string"),
+      ));
+  if (!plugins || !inspections || !removed) throw new Error(UNREADABLE_MESSAGE);
   return value as unknown as PluginStoreValue;
 }
 

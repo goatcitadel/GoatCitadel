@@ -96,6 +96,11 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
     inspect: vi.fn(async () => INSPECTION),
     readInspection: vi.fn(async () => INSPECTION),
     install: vi.fn(async () => ({ planId: "plan-install-1", outcome: "applied" as const, summary: "Installed it." })),
+    uninstall: vi.fn(async () => ({
+      planId: "plan-uninstall-1",
+      outcome: "applied" as const,
+      summary: "Removed 1 piece.",
+    })),
     loadToolGroupHolds: vi.fn(async () => undefined),
     reportFailure: vi.fn(),
     ...overrides,
@@ -657,6 +662,7 @@ describe("capability plugin routes", () => {
         }),
         promptPackExists: async () => false,
         lookupHost: async () => [],
+        readSkillCheck: async () => undefined,
         findInstalled: (pluginId) => store.get(pluginId),
         findKeptInspection: (actorScope, key) => store.findInspectionByRequest(actorScope, key),
         saveInspection: (kept, treeSha256, request) => store.saveInspection(kept, treeSha256, request),
@@ -1026,6 +1032,160 @@ describe("capability plugin routes", () => {
       expect(stored).toContain("install-retried");
       expect(stored).not.toContain("s3cret");
       expect(stored).not.toContain("another");
+    });
+  });
+  describe("POST /api/v1/capabilities/plugins/uninstall", () => {
+    const UNINSTALL_URL = "/api/v1/capabilities/plugins/uninstall";
+    const UNINSTALL_BODY = { workspaceId: "default", pluginId: "meeting-tools" };
+    const UNINSTALL_KEY = { "idempotency-key": "uninstall-7f0c" };
+    const databases: Array<ReturnType<typeof createDatabase>> = [];
+    afterEach(() => {
+      for (const database of databases.splice(0)) database.close();
+    });
+
+    it("uninstalls as the operator, 10 a minute, and answers 202 with the outcome", async () => {
+      const outcome = {
+        planId: "plan-uninstall-1",
+        outcome: "waiting" as const,
+        approvalId: "approval-revoke-1",
+        summary: "Removed 4 pieces. Hosts it allowed stay in your allowlist.",
+      };
+      const { service, sources } = routeService({ uninstall: vi.fn(async () => outcome) });
+      const { server, requireOperatorAuth } = await build(service);
+
+      const response = await server.inject({
+        method: "POST",
+        url: UNINSTALL_URL,
+        payload: UNINSTALL_BODY,
+        headers: UNINSTALL_KEY,
+      });
+
+      expect(response.statusCode, response.body).toBe(202);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers["x-ratelimit-limit"]).toBe("10");
+      expect(response.json()).toEqual(outcome);
+      expect(requireOperatorAuth).toHaveBeenCalled();
+      expect(sources.uninstall).toHaveBeenCalledExactlyOnceWith({
+        workspaceId: "default",
+        pluginId: "meeting-tools",
+        actorId: "operator-1",
+        idempotencyKey: "uninstall-7f0c",
+        requestId: expect.any(String),
+        replayOnly: false,
+      });
+    });
+
+    it("refuses a caller without operator sign-in, and a body that isn't exactly a workspace and a plugin", async () => {
+      const { service, sources } = routeService();
+      const refused = await build(service, { operator: false });
+      const forbidden = await refused.server.inject({
+        method: "POST",
+        url: UNINSTALL_URL,
+        payload: UNINSTALL_BODY,
+        headers: UNINSTALL_KEY,
+      });
+      expect(forbidden.statusCode).toBe(403);
+      await app?.close();
+      app = null;
+
+      const { server } = await build(service);
+      for (const [payload, headers] of [
+        [{ ...UNINSTALL_BODY, installPlanId: "plan-1" }, UNINSTALL_KEY],
+        [{ ...UNINSTALL_BODY, pluginId: "Meeting Tools" }, UNINSTALL_KEY],
+        [{ ...UNINSTALL_BODY, workspaceId: " default" }, UNINSTALL_KEY],
+        [{ pluginId: "meeting-tools" }, UNINSTALL_KEY],
+        [UNINSTALL_BODY, { "idempotency-key": "has spaces" }],
+        [UNINSTALL_BODY, {}],
+      ] as const) {
+        const response = await server.inject({ method: "POST", url: UNINSTALL_URL, payload, headers });
+        expect(response.statusCode, `${JSON.stringify(payload)} ${response.body}`).toBe(400);
+      }
+      expect(sources.uninstall).not.toHaveBeenCalled();
+    });
+
+    it("answers an owner's refusal with its own status and plain words, and anything else as a plain 503", async () => {
+      const refusals: Array<[unknown, number]> = [
+        [new PolicyViolationError({ message: "Plugins are uninstalled from Capabilities." }), 403],
+        [new NotFoundError("This plugin isn't installed."), 404],
+        [
+          new ConflictError({ message: "This plugin changed since you asked to uninstall it. Uninstall it again." }),
+          409,
+        ],
+        [
+          new ServiceUnavailableError("Uninstalling plugins needs Change Plans, which are off on this install.", {
+            reason: "change_plans_off",
+          }),
+          503,
+        ],
+      ];
+      for (const [error, status] of refusals) {
+        const { service } = routeService({
+          uninstall: vi.fn(async () => {
+            throw error;
+          }),
+        });
+        const { server } = await build(service);
+        const response = await server.inject({
+          method: "POST",
+          url: UNINSTALL_URL,
+          payload: UNINSTALL_BODY,
+          headers: UNINSTALL_KEY,
+        });
+        expect(response.statusCode, response.body).toBe(status);
+        expect(response.json().error).toBe((error as Error).message);
+        await app?.close();
+        app = null;
+      }
+
+      const { service } = routeService({
+        uninstall: vi.fn(async () => {
+          throw new Error("EPERM: C:\\goat\\data\\prompt-packs\\plugin-meeting-tools-checks.md");
+        }),
+      });
+      const { server } = await build(service);
+      const fault = await server.inject({
+        method: "POST",
+        url: UNINSTALL_URL,
+        payload: UNINSTALL_BODY,
+        headers: UNINSTALL_KEY,
+      });
+      expect(fault.statusCode).toBe(503);
+      expect(fault.json()).toEqual({
+        error: "This plugin can't be uninstalled right now.",
+        code: "EXTERNAL_SERVICE_FAILED",
+      });
+    });
+
+    it("hands a retry of an answered key to the service as a replay, so it answers from the first plan", async () => {
+      const uninstall = vi.fn(async (_input: { replayOnly?: boolean }) => ({
+        planId: "plan-uninstall-1",
+        outcome: "applied" as const,
+        summary: "Removed 1 piece. Hosts it allowed stay in your allowlist.",
+      }));
+      const { service } = routeService({ uninstall });
+      const database = createDatabase({ dbPath: ":memory:" });
+      databases.push(database);
+      const attempts = new MutationIdempotencyRepository(database);
+      const { server } = await build(service, {
+        mutationStore: {
+          claim: async (input) => attempts.claim(input),
+          markCompleted: async (input) => attempts.markCompleted(input),
+          markFailed: async (input) => attempts.markFailed(input),
+        },
+      });
+      const post = () =>
+        server.inject({
+          method: "POST",
+          url: UNINSTALL_URL,
+          payload: UNINSTALL_BODY,
+          headers: { "idempotency-key": "uninstall-retried" },
+        });
+
+      const first = await post();
+      const retried = await post();
+
+      expect([first.statusCode, retried.statusCode], retried.body).toEqual([202, 202]);
+      expect(uninstall.mock.calls.map(([input]) => input.replayOnly)).toEqual([false, true]);
     });
   });
 });

@@ -128,6 +128,8 @@ export function buildCapabilitySkillItems(input: {
   shippedSkillDirs: ShippedSkillDirs;
   /** The Skill Hub checks plugin records list as their skills, with the plugin. Absent when they couldn't be read. */
   pluginSkills?: ReadonlyMap<string, { pluginId: string; name: string }>;
+  /** The skills uninstalls removed, by skill id, with the plugin each went with. Absent when they couldn't be read. */
+  removedPluginSkills?: ReadonlyMap<string, { name: string }>;
   /** The Skill Hub checks that read one of GoatCitadel's own pack folders on this install. */
   packSnapshotIds?: ReadonlySet<string>;
 }): CapabilitySkillItem[] {
@@ -135,6 +137,9 @@ export function buildCapabilitySkillItems(input: {
     .map((skill): CapabilitySkillItem => {
       const pendingApprovalId = input.pendingApprovalIds.get(skill.skillId);
       const fromPlugin = pluginOf(skill, input.pluginSkills);
+      // Only once the AI can't use it: a revoke that hasn't applied yet leaves the skill as it is, switch and all.
+      const removedWith =
+        !fromPlugin && skill.callable !== true ? input.removedPluginSkills?.get(skill.skillId) : undefined;
       return {
         skillId: skill.skillId,
         name: skill.name,
@@ -152,6 +157,7 @@ export function buildCapabilitySkillItems(input: {
         tags: [...(skill.tags ?? [])],
         ...(pendingApprovalId ? { pendingApprovalId } : {}),
         ...(fromPlugin ? { fromPlugin: { pluginId: fromPlugin.pluginId, name: fromPlugin.name } } : {}),
+        ...(removedWith ? { removedWithPlugin: { name: removedWith.name } } : {}),
       };
     })
     .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.skillId, b.skillId));

@@ -101,7 +101,7 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
       createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
     },
     skillHubSnapshots: { find: vi.fn(async () => undefined) },
-    pluginRecords: { list: vi.fn(async () => []) },
+    pluginRecords: { list: vi.fn(async () => []), listRemoved: vi.fn(async () => []) },
     skillSources: {
       readSourceCatalog: vi.fn(async () => ({ providers: [], items: [] })),
       presentSourceCatalog: vi.fn(
@@ -569,7 +569,7 @@ describe("composeCapabilitySkills install steps", () => {
           workspaceId: "workspace-a",
         })),
       },
-      pluginRecords: { list: vi.fn(async () => [plugin as never]) },
+      pluginRecords: { list: vi.fn(async () => [plugin as never]), listRemoved: vi.fn(async () => []) },
     });
     const step = {
       workspaceId: "workspace-a",
@@ -592,7 +592,7 @@ describe("composeCapabilitySkills install steps", () => {
           ]),
           setSkillState: vi.fn(),
         },
-        pluginRecords: { list: vi.fn(async () => [plugin as never]) },
+        pluginRecords: { list: vi.fn(async () => [plugin as never]), listRemoved: vi.fn(async () => []) },
       }),
     ).skills.list("workspace-a");
     expect(listed.items[0]).toMatchObject({ skillId: "extra:browser-qa", fromPlugin: { pluginId: "browser-checks" } });

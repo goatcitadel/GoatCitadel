@@ -1,4 +1,5 @@
 import {
+  NotFoundError,
   SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
   SKILL_LIFECYCLE_APPROVAL_KIND,
   ServiceUnavailableError,
@@ -34,6 +35,8 @@ import type { SkillStateMutationOutcome } from "./skill-state-service.js";
 export const OPERATOR_SKILL_SKIP_NOTES = {
   setting: "Applied without asking: your setting to skip approvals for your own changes is on.",
   tightening: "Applied without asking: turning a skill off, or pausing one that is on, only takes power away.",
+  plugin_uninstall:
+    "Applied without asking: you uninstalled the plugin this skill came with, and removing it only takes power away.",
 } as const;
 
 export type OperatorSkillSkipReason = keyof typeof OPERATOR_SKILL_SKIP_NOTES;
@@ -80,10 +83,10 @@ export interface CapabilitySkillActionSources {
   /** The Inbox's own resolve, which records the decision and runs the approval's effect. */
   resolveApproval(approvalId: string, input: ApprovalResolveInput): Promise<unknown>;
   /**
-   * One approval as the Inbox reads it: the state the skill was in when the owner made it (`preview.currentState`,
-   * written in the same commit as the change it binds).
+   * One approval as the Inbox reads it: where it stands, and the state the skill was in when the owner made it
+   * (`preview.currentState`, written in the same commit as the change it binds).
    */
-  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "preview">>;
+  readApproval(approvalId: string): Promise<Pick<ApprovalRequest, "preview" | "status">>;
   /** One event on the approvals audit stream. */
   appendApprovalAudit(event: string, payload: Record<string, unknown>): Promise<void>;
   /** The install's deployment profile, read on every switch and step. */
@@ -118,6 +121,23 @@ export interface CapabilitySkillActionSources {
 
 /** What a plugin record says about its skills, for a step on one of them. */
 export type PluginSkillListing = Pick<StoredPlugin, "pluginId" | "name" | "workspaceId" | "state" | "pieces">;
+
+/** One skill an uninstall removes: its check, and the revoke an earlier uninstall already asked for, if any. */
+export interface PluginUninstallRevokeInput {
+  workspaceId: string;
+  /** The plugin skill's Skill Hub check, whose switched-on version is revoked. */
+  snapshotId: string;
+  pluginId: string;
+  actorId: string;
+  /** The revoke this plugin's uninstall asked for before, still waiting when it last read it. */
+  knownApprovalId?: string;
+}
+
+/** `approved`: the revoke is approved and its effect applies it. `waiting`: it waits for the operator's approval. */
+export interface PluginUninstallRevokeOutcome {
+  status: "approved" | "waiting";
+  approvalId: string;
+}
 
 /** A plugin whose skills may take their steps: its install is under way, or done. Never while it is uninstalled. */
 const PLUGIN_STATES_TAKING_SKILL_STEPS: ReadonlySet<StoredPlugin["state"]> = new Set(["installing", "installed"]);
@@ -251,6 +271,66 @@ export class CapabilitySkillActionsService {
       actorId: input.actorId,
     });
     return { status: "approved", approvalId };
+  }
+
+  /**
+   * Removes one switched-on skill a plugin's uninstall takes away: Skill Hub's approval owner creates the check's
+   * `revoke` approval with the plugin's pass and the operator as requester, and this resolves that same approval as the
+   * operator, so its own effect revokes the skill. Revoking only takes power away (Phase 3, Q1 A), so the skip setting
+   * isn't read; `remote_hardened` always asks, and then it answers `waiting`. A revoke the uninstall already asked for
+   * that still waits, or was approved, is answered again rather than asked for twice (Skill Hub finds a duplicate only
+   * among a workspace's newest approvals). A failed resolve leaves it waiting.
+   */
+  public async revokeForPluginUninstall(input: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome> {
+    const known = input.knownApprovalId ? await this.readKnownRevoke(input.knownApprovalId) : undefined;
+    const approval =
+      known ??
+      (
+        await this.sources.createSkillHubApproval(
+          {
+            workspaceId: input.workspaceId,
+            snapshotId: input.snapshotId,
+            operationKind: "revoke",
+            actorId: input.actorId,
+          },
+          { pluginPass: { pluginId: input.pluginId } },
+        )
+      ).approval;
+    const { approvalId } = approval;
+    if (approval.status === "approved") return { status: "approved", approvalId };
+    if (this.sources.deploymentProfile() === "remote_hardened") return { status: "waiting", approvalId };
+    try {
+      await this.sources.resolveApproval(approvalId, {
+        decision: "approve",
+        resolvedBy: input.actorId,
+        resolutionNote: OPERATOR_SKILL_SKIP_NOTES.plugin_uninstall,
+      });
+    } catch (error) {
+      // Nothing was approved, so the revoke still waits for the operator's approval.
+      this.reportFailure?.("resolve", error);
+      return { status: "waiting", approvalId };
+    }
+    await this.recordSkip({
+      approvalId,
+      kind: SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
+      reason: "plugin_uninstall",
+      actorId: input.actorId,
+    });
+    return { status: "approved", approvalId };
+  }
+
+  /** A revoke asked for before, while it still waits or once approved; undefined once it was refused or is gone. */
+  private async readKnownRevoke(
+    approvalId: string,
+  ): Promise<{ approvalId: string; status: "pending" | "approved" } | undefined> {
+    let status: ApprovalRequest["status"];
+    try {
+      ({ status } = await this.sources.readApproval(approvalId));
+    } catch (error) {
+      if (error instanceof NotFoundError) return undefined;
+      throw error;
+    }
+    return status === "pending" || status === "approved" ? { approvalId, status } : undefined;
   }
 
   /**

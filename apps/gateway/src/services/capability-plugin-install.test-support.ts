@@ -316,7 +316,11 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
   const database = createDatabase({ dbPath: ":memory:" });
   const sync = new ChangePlanRepository(database);
   const adapter = new PluginInstallChangePlanAdapter(sources);
+  // The uninstall plan joins the same control plane in its own harness.
+  const registry = new EvolutionControlPlaneAdapterRegistry([adapter]);
   let disposition: "approved" | "denied" | "pending" = "pending";
+  /** Approvals decided one at a time; any other follows `disposition`. */
+  const decided = new Map<string, "approved" | "denied">();
   const createApproval = vi.fn(async () => "approval-plugin-install");
   const plans = new EvolutionControlPlaneService({
     repository: {
@@ -328,12 +332,12 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
       findByIdempotency: async (workspaceId, key) => sync.findByIdempotency(workspaceId, key),
       transition: async (planId, transition) => sync.transition(planId, transition),
     },
-    adapters: new EvolutionControlPlaneAdapterRegistry([adapter]),
+    adapters: registry,
     // The Gateway's own rule: remote_hardened never skips, and otherwise the operator's setting decides.
     allowsOperatorApprovalSkip: () =>
       allowsOperatorApprovalSkip(input.profile ?? "local_dev", async () => input.skip ?? true),
     createApproval,
-    getApprovalDisposition: async () => disposition,
+    getApprovalDisposition: async (approvalId: string) => decided.get(approvalId) ?? disposition,
   });
   let minted = 0;
   const storeHookSecret: Mock<(value: string) => string> = vi.fn((value: string) => {
@@ -374,6 +378,7 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
     rows,
     sources,
     adapter,
+    registry,
     plans,
     actions,
     storeHookSecret,
@@ -390,8 +395,10 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
         database.prepare("SELECT * FROM change_plan_events").all(),
         database.prepare("SELECT * FROM change_plan_links").all(),
       ]),
-    approve: () => {
-      disposition = "approved";
+    /** Approves one approval, or with no id every one. */
+    approve: (approvalId?: string) => {
+      if (approvalId) decided.set(approvalId, "approved");
+      else disposition = "approved";
     },
     deny: () => {
       disposition = "denied";

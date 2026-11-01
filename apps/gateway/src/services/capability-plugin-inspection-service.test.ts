@@ -16,6 +16,7 @@ import {
   type CapabilityPluginInspectionSources,
 } from "./capability-plugin-inspection-service.js";
 import type { CapabilityPluginInspectionRequestKey, StoredPlugin } from "./capability-plugin-store.js";
+import type { PluginSkillCheck } from "./plugin-skill-checks.js";
 import { PluginSnapshotPathError, PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { PluginSourceError, fetchPluginSource } from "./plugin-source-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
@@ -100,6 +101,20 @@ afterEach(async () => {
   for (const root of roots.splice(0)) await fs.rm(root, { recursive: true, force: true });
 });
 
+/** A reviewed skill's check as its install steps read it: by default, nothing refuses installing it. */
+function skillCheck(snapshotId: string, overrides: Partial<PluginSkillCheck> = {}): PluginSkillCheck {
+  return {
+    snapshotId,
+    title: "meeting-notes",
+    version: "none",
+    revoked: false,
+    pendingApprovals: {},
+    installInactive: { allowed: true, blockers: [] },
+    step: "check_passed",
+    ...overrides,
+  };
+}
+
 function reviewed(snapshotId: string, blockerCodes: string[] = [], skillName = "meeting-notes"): SkillHubReviewResult {
   return {
     snapshot: { snapshotId, blockerCodes, provenance: { skillName } },
@@ -181,6 +196,7 @@ async function harness(
     })),
     promptPackExists: vi.fn(async () => false),
     lookupHost: vi.fn(async () => [{ address: "93.184.216.34" }]),
+    readSkillCheck: vi.fn(async (_workspaceId: string, snapshotId: string) => skillCheck(snapshotId)),
     findInstalled: vi.fn(async () => undefined),
     findKeptInspection: vi.fn(async (actorScope: string, idempotencyKey: string) => {
       const kept = saved.find(
@@ -328,6 +344,78 @@ describe("CapabilityPluginInspectionService", () => {
       },
     });
     expect(piece(inspection, "no-browser").check).toEqual({ status: "ready" });
+  });
+
+  it.each<[string, Partial<PluginSkillCheck>, string, string]>([
+    [
+      "removed with an earlier install",
+      { installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"] } },
+      "SOURCE_ALREADY_INSTALLED",
+      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+    ],
+    [
+      "revoked, with only its name left installed",
+      { revoked: true, installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS"] } },
+      "RUNTIME_ALREADY_EXISTS",
+      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+    ],
+    [
+      "taken by another installed skill of that name",
+      { installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS"] } },
+      "RUNTIME_ALREADY_EXISTS",
+      "A skill with this name is already installed.",
+    ],
+    [
+      "refused for another reason",
+      { installInactive: { allowed: false, blockers: ["CANDIDATE_INVENTORY_TRUNCATED"] } },
+      "CANDIDATE_INVENTORY_TRUNCATED",
+      "This skill didn't pass GoatCitadel's checks.",
+    ],
+  ])("blocks a skill its check can't install: %s", async (_case, overrides, code, message) => {
+    const readSkillCheck = vi.fn(async (_workspaceId: string, snapshotId: string) => skillCheck(snapshotId, overrides));
+    const { inspect } = await harness({
+      pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
+      overrides: { readSkillCheck },
+    });
+
+    const inspection = await inspect();
+
+    expect(inspection.installable).toBe(false);
+    expect(piece(inspection, "meeting-notes").check).toEqual({ status: "blocked", code, message });
+    // Read by the reviewed check's own id, in the inspection's workspace.
+    expect(readSkillCheck).toHaveBeenCalledExactlyOnceWith(
+      "default",
+      piece(inspection, "meeting-notes").skillSnapshotId,
+    );
+  });
+
+  it("never reads a skill whose check can't be read as installable", async () => {
+    for (const [readSkillCheck, logged] of [
+      [vi.fn(async () => undefined), 0],
+      [
+        vi.fn(async (): Promise<PluginSkillCheck> => {
+          throw new Error("Skill Hub's store is busy.");
+        }),
+        1,
+      ],
+    ] as const) {
+      const { inspect, log } = await harness({
+        pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
+        overrides: { readSkillCheck },
+      });
+
+      const inspection = await inspect();
+
+      expect(inspection.installable).toBe(false);
+      expect(piece(inspection, "meeting-notes").check).toEqual({
+        status: "blocked",
+        code: "SKILL_CHECK_UNREADABLE",
+        message: "GoatCitadel can't check this skill.",
+      });
+      expect(JSON.stringify(inspection)).not.toContain("busy");
+      // A read that failed is logged on the server only.
+      expect(log.warn).toHaveBeenCalledTimes(logged);
+    }
   });
 
   it("blocks a skill the review refuses, with the review's code, and logs a refusal's cause only on the server", async () => {

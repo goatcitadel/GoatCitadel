@@ -24,13 +24,17 @@ import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 // One installed plugin's pieces: where each one is, the link to its own item, and its label. The Plugins list and the
 // plugin's detail read a plugin's state through the same rule here, so the two never disagree.
 
-/** The install plan's statuses once it is done with the record: it finished, stopped, or was stopped. */
+/**
+ * A plan's statuses once it is done with the record: it finished, stopped, was stopped, or is being rolled back. A plan
+ * still being checked after it applied (`monitoring`) isn't done yet.
+ */
 const INSTALL_PLAN_ENDED: ReadonlySet<ChangePlanStatus> = new Set([
   "completed",
   "applied",
   "manual_required",
   "failed",
   "cancelled",
+  "rolling_back",
   "rolled_back",
   "rollback_failed",
 ]);
@@ -57,6 +61,8 @@ export interface PluginPieceReadings {
   skillChecks?: ReadonlyMap<string, PluginSkillCheck>;
   /** Whether its install plan is done with it. Undefined when it wasn't read, or couldn't be. */
   installEnded?: boolean;
+  /** While it is uninstalled: whether its uninstall plan is done with it. Undefined when it wasn't read, or couldn't be. */
+  uninstallEnded?: boolean;
 }
 
 /** Where one piece is. */
@@ -73,10 +79,11 @@ export interface PluginPieceLabel {
 }
 
 /**
- * Where one piece is. A piece already there is kept. While the plugin is uninstalled every piece reads removed, but a
- * skill whose removal still waits for its approval. A skill reads its check's own step; one whose check can't be read
+ * Where one piece is. A piece already there is kept. A skill reads its check's own step; one whose check can't be read
  * is unknown. Any other piece is added once it names what it became; until then it is still installing, failed once
- * the install plan is done with it, and unknown while that can't be told.
+ * the install plan is done with it, and unknown while that can't be told. While the plugin is uninstalled, a piece
+ * reads removed only once it is gone: one still there is added while the uninstall goes on, and failed once the
+ * uninstall stopped before it; a skill whose removal waits for its approval reads so.
  */
 export function readPluginPiece(
   plugin: StoredPlugin,
@@ -85,7 +92,11 @@ export function readPluginPiece(
 ): PluginPieceReading {
   if (!piece.owned) return { state: "kept" };
   if (piece.kind === "skill") return readSkillPiece(plugin, piece, readings.skillChecks);
-  if (plugin.state === "uninstalling") return { state: "removed" };
+  if (plugin.state === "uninstalling") {
+    if (piece.ref === undefined) return { state: "removed" };
+    if (readings.uninstallEnded === undefined) return { state: "unknown" };
+    return { state: readings.uninstallEnded ? "failed" : "added" };
+  }
   if (piece.ref !== undefined) return { state: "added" };
   if (readings.installEnded === undefined) return { state: "unknown" };
   return { state: readings.installEnded ? "failed" : "installing" };
@@ -113,7 +124,15 @@ export function needsInstallPlan(plugin: StoredPlugin): boolean {
   );
 }
 
-/** Whether the install plan, in this status, is done with the record. */
+/** Whether a piece's state depends on the uninstall plan: one the plugin owns that is still there while it is removed. */
+export function needsUninstallPlan(plugin: StoredPlugin): boolean {
+  return (
+    plugin.state === "uninstalling" &&
+    plugin.pieces.some((piece) => piece.owned && piece.kind !== "skill" && piece.ref !== undefined)
+  );
+}
+
+/** Whether a plugin plan, in this status, is done with the record. */
 export function installPlanEnded(status: ChangePlanStatus): boolean {
   return INSTALL_PLAN_ENDED.has(status);
 }
@@ -193,13 +212,18 @@ function readSkillPiece(
   piece: StoredPluginPiece,
   checks: ReadonlyMap<string, PluginSkillCheck> | undefined,
 ): PluginPieceReading {
+  // The uninstall removed it (revoked, or left switched off for good).
+  if (plugin.state === "uninstalling" && piece.removed) return { state: "removed" };
   const check = piece.skillSnapshotId ? checks?.get(piece.skillSnapshotId) : undefined;
   if (!check) return { state: "unknown" };
-  if (plugin.state === "uninstalling") {
-    const revoke = check.pendingApprovals.revoke;
-    return revoke ? { state: "waiting_for_approval", pendingApprovalId: revoke } : { state: "removed" };
-  }
   if (check.revoked) return { state: "removed" };
+  if (plugin.state === "uninstalling") {
+    // The revoke the uninstall asked for, as the check reads it, or as the record kept it when the check's window
+    // no longer holds it.
+    const revoke =
+      check.pendingApprovals.revoke ?? (piece.waiting?.operation === "revoke" ? piece.waiting.approvalId : undefined);
+    if (revoke) return { state: "waiting_for_approval", pendingApprovalId: revoke };
+  }
   const state = SKILL_STEP_STATES[check.step];
   if (state !== "waiting_for_approval") return { state };
   const pendingApprovalId =

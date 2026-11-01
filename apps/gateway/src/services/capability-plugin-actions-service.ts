@@ -5,6 +5,7 @@ import {
   ServiceUnavailableError,
   ValidationError,
   type ChangePlanPluginInstallRequest,
+  type ChangePlanPluginUninstallRequest,
   type ChangePlanRecord,
   type PluginActionOutcome,
   type PluginManifestParse,
@@ -18,13 +19,20 @@ import {
   requireInstallableInspection,
   type KeptPluginInspection,
 } from "./plugin-plan-support.js";
+import {
+  PLUGIN_IN_OTHER_WORKSPACE_MESSAGE,
+  PLUGIN_NOT_INSTALLED_MESSAGE,
+} from "./plugin-uninstall-change-plan-adapter.js";
 import { isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 
 const MAX_SECRET_LENGTH = 512;
 const CHANGE_PLANS_OFF_MESSAGE = "Installing plugins needs Change Plans, which are off on this install.";
+const UNINSTALL_CHANGE_PLANS_OFF_MESSAGE = "Uninstalling plugins needs Change Plans, which are off on this install.";
 const WORKSPACE_MISSING_MESSAGE = "That workspace isn't on this install.";
 const ANSWER_GONE_MESSAGE =
   "This install's first answer is no longer kept, so it can't be sent again. Install the plugin again.";
+const UNINSTALL_ANSWER_GONE_MESSAGE =
+  "This uninstall's first answer is no longer kept, so it can't be sent again. Uninstall the plugin again.";
 const MISSING_SECRET_MESSAGE = "Every hook needs its own signing secret.";
 const EXTRA_SECRET_MESSAGE = "Only a hook takes a signing secret.";
 const SECRET_SHAPE_MESSAGE = "A signing secret is 1 to 512 characters, with no space at either end.";
@@ -49,7 +57,7 @@ export interface CapabilityPluginActionSources {
   findPlan(actor: EvolutionControlPlaneActor, idempotencyKey: string): Promise<ChangePlanRecord | undefined>;
   createPlan(input: {
     actor: EvolutionControlPlaneActor;
-    request: ChangePlanPluginInstallRequest;
+    request: ChangePlanPluginInstallRequest | ChangePlanPluginUninstallRequest;
     idempotencyKey: string;
   }): Promise<ChangePlanRecord>;
   /** The operator's own confirmation, as their own save route gives it: the approval skip may apply (#572). */
@@ -85,10 +93,21 @@ export interface CapabilityPluginInstallInput {
   replayOnly?: boolean;
 }
 
+export interface CapabilityPluginUninstallInput {
+  workspaceId: string;
+  pluginId: string;
+  actorId: string;
+  /** The request's `Idempotency-Key`: the same key answers from the plan its first try made. */
+  idempotencyKey: string;
+  requestId?: string;
+  /** The Gateway's attempt record says this key was answered: only the first plan's answer may be sent. */
+  replayOnly?: boolean;
+}
+
 /**
- * Capabilities › Plugins' install (and, in Task 18, uninstall). An install is one Change Plan the operator confirms
- * with their own click: every check runs before any secret is stored or any plan is made, a hook's secret is kept in
- * the key store and the plan holds only its reference, and a retry with the same key answers from the first plan.
+ * Capabilities › Plugins' install and uninstall. Each is one Change Plan the operator confirms with their own click,
+ * and a retry with the same key answers from the first plan. For an install, every check runs before any secret is
+ * stored or any plan is made, and a hook's secret is kept in the key store while the plan holds only its reference.
  */
 export class CapabilityPluginActionsService {
   public constructor(private readonly sources: CapabilityPluginActionSources) {}
@@ -107,7 +126,7 @@ export class CapabilityPluginActionsService {
     if (!(await this.sources.workspaceExists(input.workspaceId))) throw new NotFoundError(WORKSPACE_MISSING_MESSAGE);
     // A retry is answered from its first plan before anything is checked or stored, so no second secret is ever kept.
     const earlier = await this.sources.findPlan(actor, idempotencyKey);
-    if (earlier) return await this.answerFrom(actor, earlier);
+    if (earlier) return await this.answerFrom(actor, earlier, "plugin_install");
     if (input.replayOnly) throw new ConflictError({ message: ANSWER_GONE_MESSAGE });
 
     const request = await this.checkedRequest(input);
@@ -126,7 +145,37 @@ export class CapabilityPluginActionsService {
       throw error;
     }
     // From here the plan owns the references: its own end (cancel, expiry, refusal or a failed step) deletes them.
-    return await this.answerFrom(actor, plan);
+    return await this.answerFrom(actor, plan, "plugin_install");
+  }
+
+  /**
+   * Uninstalls a plugin through one Change Plan, made from its record: refused with a 404 when it isn't installed, or
+   * was installed in another workspace. A plugin still installing (a failed install to clean up) or still being
+   * uninstalled (a skill's removal that waited) is accepted: the plan removes only what is left.
+   */
+  public async uninstall(input: CapabilityPluginUninstallInput): Promise<PluginActionOutcome> {
+    const actor: EvolutionControlPlaneActor = {
+      workspaceId: input.workspaceId,
+      actorId: input.actorId,
+      surface: "capabilities",
+      ...(input.requestId ? { requestId: input.requestId } : {}),
+    };
+    const idempotencyKey = `capabilities:plugin-uninstall:${input.idempotencyKey}:${input.pluginId}`;
+    if (!(await this.sources.changePlansEnabled())) {
+      throw new ServiceUnavailableError(UNINSTALL_CHANGE_PLANS_OFF_MESSAGE, { reason: "change_plans_off" });
+    }
+    const earlier = await this.sources.findPlan(actor, idempotencyKey);
+    if (earlier) return await this.answerFrom(actor, earlier, "plugin_uninstall");
+    if (input.replayOnly) throw new ConflictError({ message: UNINSTALL_ANSWER_GONE_MESSAGE });
+    const record = await this.sources.readPlugin(input.pluginId);
+    if (!record) throw new NotFoundError(PLUGIN_NOT_INSTALLED_MESSAGE);
+    if (record.workspaceId !== input.workspaceId) throw new NotFoundError(PLUGIN_IN_OTHER_WORKSPACE_MESSAGE);
+    const plan = await this.sources.createPlan({
+      actor,
+      request: { kind: "plugin_uninstall", pluginId: record.pluginId, installPlanId: record.installPlanId },
+      idempotencyKey,
+    });
+    return await this.answerFrom(actor, plan, "plugin_uninstall");
   }
 
   /**
@@ -180,14 +229,36 @@ export class CapabilityPluginActionsService {
   }
 
   /** The plan's answer; a plan still waiting for the operator's confirmation gets it first, as the operator's own. */
-  private async answerFrom(actor: EvolutionControlPlaneActor, plan: ChangePlanRecord): Promise<PluginActionOutcome> {
-    if (plan.kind !== "plugin_install") {
+  private async answerFrom(
+    actor: EvolutionControlPlaneActor,
+    plan: ChangePlanRecord,
+    kind: "plugin_install" | "plugin_uninstall",
+  ): Promise<PluginActionOutcome> {
+    if (plan.kind !== kind) {
       throw new ConflictError({ message: "This request was already used for a different change. Try again." });
     }
     const settled = awaitsApplyConfirmation(plan)
       ? await this.sources.confirmPlan(actor, plan, plan.requiredAction.actionNonce)
       : plan;
-    return outcomeOf(settled);
+    return settled.request.kind === "plugin_uninstall"
+      ? await this.uninstallOutcomeOf(settled, settled.request)
+      : outcomeOf(settled);
+  }
+
+  /**
+   * An uninstall that finished is `applied` once the plugin is gone. While its record is left, a skill's removal still
+   * waits: `waiting`, with the approval that skill waits for when there is one.
+   */
+  private async uninstallOutcomeOf(
+    plan: ChangePlanRecord,
+    request: ChangePlanPluginUninstallRequest,
+  ): Promise<PluginActionOutcome> {
+    const outcome = outcomeOf(plan);
+    if (outcome.outcome !== "applied") return outcome;
+    const left = await this.sources.readPlugin(request.pluginId);
+    if (left?.installPlanId !== request.installPlanId) return outcome;
+    const approvalId = left.pieces.find((piece) => piece.waiting)?.waiting?.approvalId;
+    return { planId: plan.planId, outcome: "waiting", ...(approvalId ? { approvalId } : {}), summary: outcome.summary };
   }
 }
 
