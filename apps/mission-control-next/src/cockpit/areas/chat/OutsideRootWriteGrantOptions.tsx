@@ -9,8 +9,9 @@ import {
 import { approveChatTool } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../data/query-keys";
-import { Button } from "../../ui/Button";
 import { cockpitInputClass } from "../../ui/input-class";
+import { splitApprovalExplanation } from "../inbox/approval-preview";
+import { RiskApprovalAction } from "./RiskApprovalAction";
 import {
   beginInboxApprovalAttempt,
   releaseInboxApprovalCheck,
@@ -36,7 +37,8 @@ interface OutsideRootWriteGrantOptionsProps {
 /**
  * An outside-root write approval can also open one folder the Gateway offered, for the approved tool only and
  * for a bounded time. The plain Approve in the decision bar still admits just this one write. The Gateway
- * re-checks the folder against its own record; the preview here is display only.
+ * re-checks the folder against its own record; the preview here is display only. Approving here goes through the
+ * same risk tiers as the decision bar's Approve once: danger opens the review, nuclear also needs the typed word.
  */
 export function OutsideRootWriteGrantOptions({
   approval,
@@ -162,15 +164,32 @@ export function OutsideRootWriteGrantOptions({
           ))}
         </fieldset>
       </div>
-      <Button
-        size="sm"
-        disabled={busy || !chosen}
-        loading={attempt?.phase === "submitted"}
-        loadingLabel="Approving…"
-        onClick={() => void approveAndOpen()}
-      >
-        Approve and open folder
-      </Button>
+      <RiskApprovalAction
+        workspaceId={workspaceId}
+        approval={{
+          approvalId: approval.approvalId,
+          kind: approval.kind,
+          riskLevel: approval.riskLevel,
+          toolName: approval.linkage?.toolName,
+          // A model-written explanation is advisory; the review summary labels it instead (#499).
+          reason: splitApprovalExplanation(approval).owner?.riskExplanation,
+          expiresAt: approval.expiresAt,
+        }}
+        reviewedApproval={approval}
+        pending={busy || !chosen}
+        approveLabel="Approve and open folder"
+        reviewLabel="Review and open folder"
+        confirmLabel="Approve and open folder"
+        consequence={
+          chosen ? (
+            <p className="mb-3 text-sm text-fg">
+              Approving also opens <span className="font-mono wrap-anywhere">{chosen.path}</span> to {toolName} in{" "}
+              {scope === "workspace" ? "this workspace" : "this chat"} for {DURATION_LABELS[duration]}.
+            </p>
+          ) : undefined
+        }
+        onApprove={() => void approveAndOpen()}
+      />
       {/* The decision bar's uncertain-outcome alert announces this; the detail stays readable here. */}
       {error ? <p className="text-status-failed">{error}</p> : null}
     </section>

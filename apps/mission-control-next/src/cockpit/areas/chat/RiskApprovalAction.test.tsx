@@ -618,4 +618,68 @@ describe("risk approval action", () => {
     expect(dialogButton("Approve once")).toBeUndefined();
     expect(dialogButton("Review danger approval")).toBeDefined();
   });
+
+  it("names the review trigger, the confirm button and the consequence when a caller gives them", async () => {
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={reviewedApproval}
+          pending={false}
+          onApprove={onApprove}
+          reviewLabel="Review and open folder"
+          confirmLabel="Approve and open folder"
+          consequence={<p>Approving also opens a folder.</p>}
+        />,
+      ),
+    );
+    expect(dialogButton("Review danger approval")).toBeUndefined();
+    expect(document.body.textContent).not.toContain("Approving also opens a folder.");
+    await act(async () => dialogButton("Review and open folder").click());
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    const details = dialog.querySelector('[aria-label="Approval action details"]')!;
+    const consequence = [...dialog.querySelectorAll("p")].find(
+      (item) => item.textContent === "Approving also opens a folder.",
+    )!;
+    // The consequence comes before the action details.
+    expect(consequence.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(dialogButton("Approve once")).toBeUndefined();
+    await act(async () => dialogButton("Approve and open folder").click());
+    expect(onApprove).toHaveBeenCalledOnce();
+  });
+
+  it("keeps the nuclear review label when a caller names the review trigger", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={vi.fn()}
+          reviewLabel="Review and open folder"
+          confirmLabel="Approve and open folder"
+        />,
+      ),
+    );
+    expect(dialogButton("Review and open folder")).toBeUndefined();
+    await act(async () => dialogButton("Review nuclear approval").click());
+    expect(dialogButton("Approve and open folder").disabled).toBe(true);
+  });
+
+  it("keeps the default labels when no names are given", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={reviewedApproval}
+          pending={false}
+          onApprove={vi.fn()}
+        />,
+      ),
+    );
+    await act(async () => dialogButton("Review danger approval").click());
+    expect(dialogButton("Approve once")).toBeDefined();
+    expect(dialogButton("Approve and open folder")).toBeUndefined();
+  });
 });

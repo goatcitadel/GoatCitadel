@@ -24,6 +24,9 @@ export function RiskApprovalAction({
   specialistReview,
   reviewedInPlace = false,
   approveLabel,
+  reviewLabel,
+  confirmLabel = "Approve once",
+  consequence,
   approveDanger = false,
 }: {
   approval: ChatPendingApprovalState;
@@ -39,6 +42,12 @@ export function RiskApprovalAction({
   reviewedInPlace?: boolean;
   /** Names the one-click approve button for an action with its own wording, such as "Run it". */
   approveLabel?: string;
+  /** Names the button that opens a danger-level review; nuclear keeps "Review nuclear approval" so its tier shows. */
+  reviewLabel?: string;
+  /** Names the review's confirm button, for an approval that does more than approve once. */
+  confirmLabel?: string;
+  /** What else approving does, shown in the review before the action details. */
+  consequence?: ReactNode;
   /** Styles the one-click approve button as a danger action with a shield. */
   approveDanger?: boolean;
 }) {
@@ -104,9 +113,7 @@ export function RiskApprovalAction({
           <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
           {critical
             ? "Review nuclear approval"
-            : approval.riskLevel === "danger"
-              ? "Review danger approval"
-              : "Review approval"}
+            : (reviewLabel ?? (approval.riskLevel === "danger" ? "Review danger approval" : "Review approval"))}
         </Button>
         <Dialog
           open={confirmOpen}
@@ -121,6 +128,7 @@ export function RiskApprovalAction({
               workspaceId={workspaceId ?? reviewed.linkage?.workspaceId ?? "Scope unavailable"}
             />
           ) : null}
+          {consequence}
           <div
             role="region"
             aria-label="Approval action details"
@@ -211,7 +219,7 @@ export function RiskApprovalAction({
                 phrase={CRITICAL_CONFIRMATION}
                 value={typed}
                 onChange={setTyped}
-                consequence="Approve once"
+                consequence={confirmLabel}
               />
             </div>
           ) : null}
@@ -224,7 +232,7 @@ export function RiskApprovalAction({
                 onApprove();
               }}
             >
-              Approve once
+              {confirmLabel}
             </Button>
             <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
           </div>
