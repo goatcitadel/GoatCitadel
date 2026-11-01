@@ -24,7 +24,13 @@ export function RiskApprovalAction({
   specialistReview,
   reviewedInPlace = false,
   approveLabel,
+  reviewLabel,
+  confirmLabel,
+  consequence,
   approveDanger = false,
+  approveVariant = "primary",
+  loading = false,
+  loadingLabel,
 }: {
   approval: ChatPendingApprovalState;
   workspaceId?: string;
@@ -39,11 +45,23 @@ export function RiskApprovalAction({
   reviewedInPlace?: boolean;
   /** Names the one-click approve button for an action with its own wording, such as "Run it". */
   approveLabel?: string;
+  /** Names the button that opens a danger-level review; nuclear keeps "Review nuclear approval" so its tier shows. */
+  reviewLabel?: string;
+  /** Names the review's confirm button, for an approval that does more than approve once. */
+  confirmLabel?: string;
+  /** What else approving does, shown in the review before the action details. */
+  consequence?: ReactNode;
   /** Styles the one-click approve button as a danger action with a shield. */
   approveDanger?: boolean;
+  /** The one-click approve button's style when it is not a danger action, for an approve beside the primary one. */
+  approveVariant?: "primary" | "secondary";
+  /** Shows the one-click approve button as busy, with `loadingLabel` in place of its label. */
+  loading?: boolean;
+  loadingLabel?: string;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
+  const confirmAction = confirmLabel ?? "Approve once";
   const disabled = pending || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
   const reviewed =
     reviewedApproval?.approvalId === approval.approvalId &&
@@ -104,15 +122,17 @@ export function RiskApprovalAction({
           <ShieldAlert aria-hidden="true" className="size-4 shrink-0" />
           {critical
             ? "Review nuclear approval"
-            : approval.riskLevel === "danger"
-              ? "Review danger approval"
-              : "Review approval"}
+            : (reviewLabel ?? (approval.riskLevel === "danger" ? "Review danger approval" : "Review approval"))}
         </Button>
         <Dialog
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           title={`Confirm ${riskName.toLowerCase()}-level action`}
-          description="Review the exact action before approving once."
+          description={
+            confirmLabel
+              ? `Review the exact action before you choose ${confirmLabel}.`
+              : "Review the exact action before approving once."
+          }
         >
           {specialistReview}
           {reviewed ? (
@@ -121,6 +141,7 @@ export function RiskApprovalAction({
               workspaceId={workspaceId ?? reviewed.linkage?.workspaceId ?? "Scope unavailable"}
             />
           ) : null}
+          {consequence}
           <div
             role="region"
             aria-label="Approval action details"
@@ -200,8 +221,8 @@ export function RiskApprovalAction({
             ) : null}
             {!hasActionPreview ? (
               <p role="alert">
-                The current action preview is unavailable, so Approve once is off. Cancel, then use Deny or wait for the
-                preview.
+                The current action preview is unavailable, so {confirmAction} is off. Cancel, then use Deny or wait for
+                the preview.
               </p>
             ) : null}
           </div>
@@ -211,7 +232,7 @@ export function RiskApprovalAction({
                 phrase={CRITICAL_CONFIRMATION}
                 value={typed}
                 onChange={setTyped}
-                consequence="Approve once"
+                consequence={confirmAction}
               />
             </div>
           ) : null}
@@ -224,7 +245,7 @@ export function RiskApprovalAction({
                 onApprove();
               }}
             >
-              Approve once
+              {confirmAction}
             </Button>
             <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
           </div>
@@ -236,8 +257,11 @@ export function RiskApprovalAction({
     <Button
       type="button"
       size="sm"
-      variant={approveDanger ? "danger" : "primary"}
-      disabled={disabled}
+      variant={approveDanger ? "danger" : approveVariant}
+      // A busy button ignores clicks and keeps keyboard focus (aria-disabled); native disabled would drop it.
+      disabled={disabled && !loading}
+      loading={loading}
+      loadingLabel={loadingLabel}
       onClick={onApprove}
     >
       {approveDanger ? <ShieldAlert aria-hidden="true" className="size-4 shrink-0" /> : null}
