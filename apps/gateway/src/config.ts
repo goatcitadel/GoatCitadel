@@ -129,6 +129,8 @@ export interface FeatureFlagsConfig {
   claudeCliToolBridgeEnabled?: boolean;
   /** Lets a bridged Claude Code CLI tool step park its process and resume it. On by default since its live proof; inert while the bridge is off. */
   claudeCliWarmContinuationEnabled?: boolean;
+  /** Browser errands: Chat drives GoatCitadel's own visible Chrome window on this PC. Off by default; refused under remote_hardened. */
+  browserErrandsEnabled?: boolean;
   /** Gateway-owned governed Change Plan authority. Default-on after foundation proof, with an explicit kill switch. */
   evolutionControlPlaneV1Enabled?: boolean;
   /** Operator opt-in: the operator's own Settings saves and Capabilities installs apply without a separate approval. Off by default; ignored under remote_hardened. */
@@ -893,6 +895,7 @@ function applyEnvironmentOverrides(assistant: AssistantConfig): void {
     ["chatStaticMcpV1Enabled", process.env.GOATCITADEL_FEATURE_CHAT_STATIC_MCP_V1_ENABLED],
     ["claudeCliToolBridgeEnabled", process.env.GOATCITADEL_FEATURE_CLAUDE_CLI_TOOL_BRIDGE_ENABLED],
     ["claudeCliWarmContinuationEnabled", process.env.GOATCITADEL_FEATURE_CLAUDE_CLI_WARM_CONTINUATION_ENABLED],
+    ["browserErrandsEnabled", process.env.GOATCITADEL_FEATURE_BROWSER_ERRANDS_ENABLED],
     ["evolutionControlPlaneV1Enabled", process.env.GOATCITADEL_FEATURE_EVOLUTION_CONTROL_PLANE_V1_ENABLED],
     ["settingsApprovalSkipEnabled", process.env.GOATCITADEL_FEATURE_SETTINGS_APPROVAL_SKIP_ENABLED],
     ["improvementLocalObservationV1Enabled", process.env.GOATCITADEL_FEATURE_IMPROVEMENT_LOCAL_OBSERVATION_V1_ENABLED],
@@ -1539,6 +1542,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       chatStaticMcpV1Enabled: featuresInput.chatStaticMcpV1Enabled ?? false,
       claudeCliToolBridgeEnabled: featuresInput.claudeCliToolBridgeEnabled ?? true,
       claudeCliWarmContinuationEnabled: featuresInput.claudeCliWarmContinuationEnabled ?? true,
+      browserErrandsEnabled: featuresInput.browserErrandsEnabled ?? false,
       evolutionControlPlaneV1Enabled: featuresInput.evolutionControlPlaneV1Enabled ?? true,
       settingsApprovalSkipEnabled: featuresInput.settingsApprovalSkipEnabled ?? false,
       improvementLocalObservationV1Enabled: featuresInput.improvementLocalObservationV1Enabled ?? true,

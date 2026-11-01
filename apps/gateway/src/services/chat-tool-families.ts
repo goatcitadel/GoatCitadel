@@ -20,6 +20,7 @@ export const WEB_TOOL_NAME_LIST = [
   "browser.navigate",
   "browser.extract",
   "browser.interact",
+  "browser.errand",
   "http.get",
   "http.post",
 ] as const;

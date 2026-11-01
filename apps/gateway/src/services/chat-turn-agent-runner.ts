@@ -274,6 +274,7 @@ import {
   RUNTIME_CONFIGURE_TOOL_NAME,
   CODE_MODE_REQUEST_TOOL_NAME,
   SUBAGENT_FANOUT_TOOL_NAME,
+  BROWSER_ERRAND_TOOL_NAME,
   SUBMIT_WORK_RESULT_TOOL_NAME,
   type RuntimeConfigurationTargetId,
   type McpToolPolicyBinding,
@@ -306,6 +307,7 @@ import {
   ChatTurnBudgetExceededError,
   createTurnBudgetDeadline,
   ensureChatTurnBudgetRemaining,
+  extendTurnBudgetForBrowserErrand,
   extendTurnBudgetForExecutedBrowserTool,
   minimumRemainingBudgetForToolStart,
   CHAT_COMPLETION_TIMEOUT_MS_BY_MODE,
@@ -1127,6 +1129,8 @@ export interface ChatTurnAgentRunnerDeps {
    * an in-flight call cannot slip through a mid-turn flag flip).
    */
   subagentFanoutV1Disabled?: () => Promise<boolean>;
+  /** The `browserErrandsEnabled` flag, read live. Absent or false hides `browser.errand` from every tool schema. */
+  browserErrandsEnabled?: () => Promise<boolean>;
   /** Default-disabled durable aggregate gate. Without it, agent.fanout is omitted rather than using a legacy path. */
   durableChatFanoutV1Enabled?: () => Promise<boolean>;
   /**
@@ -5595,6 +5599,7 @@ export class ChatTurnAgentRunner {
               // the serial call would have thrown.
               throw preExecuted.thrown;
             }
+            const toolStartedAt = Date.now();
             const executed =
               preExecuted?.executed ??
               (await this.executeToolCall({
@@ -5632,6 +5637,12 @@ export class ChatTurnAgentRunner {
                 currentCompletionTimeoutMs: effectiveCompletionTimeoutMs,
                 turnBudgetDeadline,
               }));
+            ({ turnBudgetDeadline, effectiveTurnBudgetMs } = extendTurnBudgetForBrowserErrand({
+              toolName: executed.record.toolName,
+              elapsedMs: preExecuted ? 0 : Date.now() - toolStartedAt,
+              currentTurnBudgetMs: effectiveTurnBudgetMs,
+              turnBudgetDeadline,
+            }));
             yield {
               type: "tool_start",
               sessionId: input.sessionId,
@@ -6901,6 +6912,7 @@ export class ChatTurnAgentRunner {
       durableFanoutAvailable,
       attachedContextToolsEnabled,
       delegationScopeExpansionEnabled,
+      browserErrandsEnabled,
     ] = await Promise.all([
       this.deps.subagentFanoutV1Disabled?.() ?? Promise.resolve(false),
       this.deps.durableChatFanoutV1Enabled?.() ?? Promise.resolve(false),
@@ -6911,6 +6923,7 @@ export class ChatTurnAgentRunner {
       }) ?? Promise.resolve(false),
       this.deps.attachedContextToolsV1Enabled?.() ?? Promise.resolve(false),
       this.deps.delegationScopeExpansionV1Enabled?.() ?? Promise.resolve(false),
+      this.deps.browserErrandsEnabled?.() ?? Promise.resolve(false),
     ]);
     // R3-8 `agent.fanout` exposure gate: only interactive Chat-normalized turns
     // whose session subagentPolicy explicitly allows automatic subagents may
@@ -6938,10 +6951,14 @@ export class ChatTurnAgentRunner {
       !input.parentDelegationStepId &&
       !restrictedAutonomousProfile &&
       (await this.isOptionalUserInputEnabled());
+    // Browser errands drive the operator's own window: interactive Chat turns only, never scheduled or delegated ones.
+    const browserErrandEligible =
+      browserErrandsEnabled && input.mode === "chat" && !input.parentDelegationStepId && !restrictedAutonomousProfile;
     const codeModeRequestEligible = await this.isCodeModeRequestEligible(input);
     for (const tool of catalog) {
       if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
       if (tool.toolName === CODE_MODE_REQUEST_TOOL_NAME && !codeModeRequestEligible) continue;
+      if (tool.toolName === BROWSER_ERRAND_TOOL_NAME && !browserErrandEligible) continue;
       if ((tool.toolName === "capabilities.search" || tool.toolName === "skills.read") && !boundedExposure) continue;
       if (tool.toolName === "user_input.request" && !optionalInputToolEligible) continue;
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {

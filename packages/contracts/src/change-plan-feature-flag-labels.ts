@@ -17,6 +17,11 @@ export const CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS: Partial<
     description:
       "When a tool step continues the previous one exactly, keeps that turn's Claude Code process running instead of starting a new one.",
   },
+  browserErrandsEnabled: {
+    label: "Browser errands",
+    description:
+      "Browser errands let GoatCitadel use its own Chrome window on this PC, with your saved logins, to do tasks you ask for. It asks before spending money, sending, deleting, or changing account settings, and hands sign-ins to you. Reading and browsing don't ask, so a hostile page could try to steer it into carrying your information to another site. Sites may notice an automated browser and limit your account.",
+  },
   codeModeV1Enabled: {
     label: "Code Mode",
     description:

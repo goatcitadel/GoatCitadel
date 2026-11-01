@@ -128,6 +128,7 @@ export const TOOL_GROUPS: readonly ToolGroupDefinition[] = [
       "browser.storage.set",
       "browser.storage.clear",
       "browser.context.configure",
+      "browser.errand",
     ],
   },
   {

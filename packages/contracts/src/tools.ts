@@ -8,6 +8,7 @@ export type ToolCategory =
   | "shell"
   | "git"
   | "research"
+  | "browser"
   | "comms"
   | "knowledge"
   | "ops";

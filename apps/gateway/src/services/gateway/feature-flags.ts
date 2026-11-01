@@ -79,6 +79,7 @@ export function buildUpdatedFeatureFlags(
     claudeCliToolBridgeEnabled: patch.claudeCliToolBridgeEnabled ?? current.claudeCliToolBridgeEnabled ?? true,
     claudeCliWarmContinuationEnabled:
       patch.claudeCliWarmContinuationEnabled ?? current.claudeCliWarmContinuationEnabled ?? true,
+    browserErrandsEnabled: patch.browserErrandsEnabled ?? current.browserErrandsEnabled ?? false,
     evolutionControlPlaneV1Enabled: patch.evolutionControlPlaneV1Enabled ?? current.evolutionControlPlaneV1Enabled,
     settingsApprovalSkipEnabled: patch.settingsApprovalSkipEnabled ?? current.settingsApprovalSkipEnabled ?? false,
     improvementLocalObservationV1Enabled:
@@ -179,6 +180,7 @@ export function resolveGatewayFeatureFlags(
     claudeCliToolBridgeEnabled: stored?.claudeCliToolBridgeEnabled ?? fromConfig.claudeCliToolBridgeEnabled ?? true,
     claudeCliWarmContinuationEnabled:
       stored?.claudeCliWarmContinuationEnabled ?? fromConfig.claudeCliWarmContinuationEnabled ?? true,
+    browserErrandsEnabled: stored?.browserErrandsEnabled ?? fromConfig.browserErrandsEnabled ?? false,
     evolutionControlPlaneV1Enabled:
       stored?.evolutionControlPlaneV1Enabled ?? fromConfig.evolutionControlPlaneV1Enabled ?? true,
     settingsApprovalSkipEnabled: stored?.settingsApprovalSkipEnabled ?? fromConfig.settingsApprovalSkipEnabled ?? false,

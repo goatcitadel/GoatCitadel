@@ -79,6 +79,7 @@ export const TOOL_LABELS: Readonly<Record<string, string>> = {
   "browser.storage.set": "Store data for a page",
   "browser.storage.clear": "Clear a page's stored data",
   "browser.context.configure": "Set the browser's location, language and sign-in",
+  "browser.errand": "Do errands in GoatCitadel's own browser",
 
   // Memory
   "memory.read": "Read saved memory",
