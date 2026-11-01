@@ -66,6 +66,8 @@ export interface ErrandLoopDeps {
   waitForHandBack(reason: "sign_in" | "bot_check" | "operator"): Promise<"resumed" | "stopped">;
   /** Called with a people screenshot after an approved action finishes running (the gate's "after" evidence). */
   afterApprovedAction?(png: Buffer): Promise<void>;
+  /** Why the last "denied" answer came without an operator deny (for example the page kept changing); else undefined. */
+  lastDenialReason?(): string | undefined;
   onProgress(progress: ErrandProgress): void;
   now(): number;
   signal: AbortSignal;
@@ -465,7 +467,7 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
           const status: TerminalStatus = answer === "denied" ? "declined" : answer;
           const summary =
             answer === "denied"
-              ? "The operator declined this action."
+              ? (deps.lastDenialReason?.() ?? "The operator declined this action.")
               : answer === "expired"
                 ? "The approval request expired."
                 : "The operator stopped the errand.";

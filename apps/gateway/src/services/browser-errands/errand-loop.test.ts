@@ -137,6 +137,18 @@ describe("runErrandLoop", () => {
     expect(ran).toHaveLength(0);
   });
 
+  it("reports the gate's give-up reason when the denial was not the operator's", async () => {
+    const { deps, browser, ran } = makeDeps([click()], {
+      requestApproval: vi.fn(async () => "denied" as const),
+      lastDenialReason: () => "The page kept changing, so GoatCitadel didn't act.",
+    });
+    browser.describeTarget.mockResolvedValue(target({ text: "Place your order" }));
+    const outcome = await runErrandLoop(deps, { goal: "buy" });
+    expect(outcome.status).toBe("declined");
+    expect(outcome.summary).toBe("The page kept changing, so GoatCitadel didn't act.");
+    expect(ran).toHaveLength(0);
+  });
+
   it("maps expired and stopped approvals to their statuses", async () => {
     for (const answer of ["expired", "stopped"] as const) {
       const { deps, browser } = makeDeps([click()], { requestApproval: vi.fn(async () => answer) });

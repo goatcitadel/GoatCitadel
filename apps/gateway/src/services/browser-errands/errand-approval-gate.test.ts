@@ -20,6 +20,7 @@ import type { ErrandApprovalInput } from "./errand-loop.js";
 import {
   createErrandApprovalGate,
   errandLoopApprovalHooks,
+  ERRAND_APPROVAL_IN_FLIGHT_MESSAGE,
   ERRAND_MAX_PAGE_CHANGED_REASKS,
   ERRAND_PAGE_CHANGED_TITLE,
   ERRAND_PAGE_KEPT_CHANGING_REASON,
@@ -182,7 +183,7 @@ function createFakeBrowser(url = "https://shop.example/checkout") {
   return { browser, state, emit };
 }
 
-function setup(options: { now?: () => number } = {}) {
+function setup(options: { now?: () => number; failSupersededAppend?: boolean } = {}) {
   const { db, SESSION_ID, TURN_ID } = openStorage();
   const host = createHost(db);
   const runtime = new ApprovalRuntimeService(host as never);
@@ -206,7 +207,19 @@ function setup(options: { now?: () => number } = {}) {
     toolRunId: "tool-run-1",
     browser: fake.browser as unknown as ErrandApprovalGateDeps["browser"],
     approvals: runtime,
-    storage: host.storage,
+    storage: options.failSupersededAppend
+      ? ({
+          approvals: host.storage.approvals,
+          chatInlineApprovals: host.storage.chatInlineApprovals,
+          approvalEvents: {
+            append: async (event: Parameters<typeof host.storage.approvalEvents.append>[0]) => {
+              if (event.eventType === "superseded") throw new Error("disk full");
+              return host.storage.approvalEvents.append(event);
+            },
+            listByApprovalId: (approvalId: string) => host.storage.approvalEvents.listByApprovalId(approvalId),
+          },
+        } as unknown as ErrandApprovalGateDeps["storage"])
+      : host.storage,
     attachments,
     realtime: {
       subscribeRealtime: (listener) => {
@@ -373,6 +386,45 @@ describe("errand approval gate", () => {
     expect(gate.lastReason).toBeUndefined();
   });
 
+  it("still re-asks when the superseded evidence cannot be recorded", async () => {
+    const { db, host, fake, gate, waitForPending, SESSION_ID } = setup({ failSupersededAppend: true });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    try {
+      const answer = gate.request(approvalInput());
+      const first = await waitForPending();
+      fake.state.url = "https://other.example/checkout";
+      await resolveApproval(host, first, { decision: "approve", resolvedBy: "operator" });
+      let second = "";
+      await vi.waitFor(
+        async () => {
+          const pending = await host.storage.approvals.listPendingBySession(SESSION_ID);
+          expect(pending).toHaveLength(1);
+          second = pending[0]!.approvalId;
+          expect(second).not.toBe(first);
+        },
+        { timeout: 5_000, interval: 20 },
+      );
+      await resolveApproval(host, second, { decision: "approve", resolvedBy: "operator" });
+      await expect(answer).resolves.toBe("approved");
+      expect(db.approvals.get(first).status).toBe("approved");
+      expect(warn).toHaveBeenCalledWith(
+        "[goatcitadel] errand superseded evidence could not be recorded",
+        expect.objectContaining({ approvalId: first, error: "disk full" }),
+      );
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("is single-flight: a concurrent second request fails fast", async () => {
+    const { gate, controller, waitForPending } = setup();
+    const first = gate.request(approvalInput());
+    await expect(gate.request(approvalInput())).rejects.toThrow(ERRAND_APPROVAL_IN_FLIGHT_MESSAGE);
+    await waitForPending();
+    controller.abort();
+    await expect(first).resolves.toBe("stopped");
+  });
+
   it("gives up after the page keeps changing through every re-ask", async () => {
     const { db, host, fake, gate, SESSION_ID } = setup();
     const answer = gate.request(approvalInput());
@@ -395,6 +447,7 @@ describe("errand approval gate", () => {
     }
     await expect(answer).resolves.toBe("denied");
     expect(gate.lastReason).toBe(ERRAND_PAGE_KEPT_CHANGING_REASON);
+    expect(errandLoopApprovalHooks(gate).lastDenialReason()).toBe(ERRAND_PAGE_KEPT_CHANGING_REASON);
     expect(decided.size).toBe(ERRAND_MAX_PAGE_CHANGED_REASKS + 1);
     const reasked = [...decided].map(
       (id) => db.approvalEvents.listByApprovalId(id).find((event) => event.eventType === "superseded")?.payload.reasked,

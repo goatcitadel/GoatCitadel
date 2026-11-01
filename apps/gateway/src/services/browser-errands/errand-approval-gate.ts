@@ -26,6 +26,8 @@ const APPROVAL_BANNER_TEXT = "Waiting for your OK";
 /** How many times the gate asks again after the page changed under an approval before it gives up. */
 export const ERRAND_MAX_PAGE_CHANGED_REASKS = 3;
 export const ERRAND_PAGE_KEPT_CHANGING_REASON = "The page kept changing, so GoatCitadel didn't act.";
+export const ERRAND_APPROVAL_IN_FLIGHT_MESSAGE =
+  "An errand approval is already waiting for a decision; the errand asks for one approval at a time.";
 
 export type ErrandApprovalAnswer = "approved" | "denied" | "expired" | "stopped";
 
@@ -68,6 +70,10 @@ export interface ErrandApprovalGateDeps {
 }
 
 export interface ErrandApprovalGate {
+  /**
+   * Asks the operator and waits for the decision. Single-flight: one request at a time (the errand loop awaits each);
+   * a second call while one is in flight rejects with ERRAND_APPROVAL_IN_FLIGHT_MESSAGE.
+   */
   request(input: ErrandApprovalInput): Promise<ErrandApprovalAnswer>;
   /** Withdraws the approval the gate is waiting on, if any. */
   withdrawPending(actorId: string): Promise<void>;
@@ -258,6 +264,19 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
 
   /** Inbox evidence: the operator approved, but the page changed, so the action was not taken. */
   const recordSuperseded = async (asked: Asked, originChanged: boolean, reasked: boolean): Promise<void> => {
+    try {
+      await appendSuperseded(asked, originChanged, reasked);
+    } catch (error) {
+      // Evidence only: the action is still not taken, and the errand carries on with its re-ask or give-up.
+      // eslint-disable-next-line no-console -- bounded diagnostic; the approval record itself is already committed.
+      console.warn("[goatcitadel] errand superseded evidence could not be recorded", {
+        approvalId: asked.approvalId,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  };
+
+  const appendSuperseded = async (asked: Asked, originChanged: boolean, reasked: boolean): Promise<void> => {
     await storage.approvalEvents.append({
       approvalId: asked.approvalId,
       eventType: "superseded",
@@ -356,8 +375,21 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
   };
 
   let lastReason: string | undefined;
+  let inFlight = false;
 
   const request = async (initial: ErrandApprovalInput): Promise<ErrandApprovalAnswer> => {
+    if (inFlight) {
+      throw new Error(ERRAND_APPROVAL_IN_FLIGHT_MESSAGE);
+    }
+    inFlight = true;
+    try {
+      return await requestOnce(initial);
+    } finally {
+      inFlight = false;
+    }
+  };
+
+  const requestOnce = async (initial: ErrandApprovalInput): Promise<ErrandApprovalAnswer> => {
     lastReason = undefined;
     let input = initial;
     let title = initial.title;
@@ -453,9 +485,10 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
 /** Wires a gate into the errand loop's approval hooks. */
 export function errandLoopApprovalHooks(
   gate: ErrandApprovalGate,
-): Required<Pick<ErrandLoopDeps, "requestApproval" | "afterApprovedAction">> {
+): Required<Pick<ErrandLoopDeps, "requestApproval" | "afterApprovedAction" | "lastDenialReason">> {
   return {
     requestApproval: (input) => gate.request(input),
     afterApprovedAction: (png) => gate.recordAfterScreenshot(png),
+    lastDenialReason: () => gate.lastReason,
   };
 }
