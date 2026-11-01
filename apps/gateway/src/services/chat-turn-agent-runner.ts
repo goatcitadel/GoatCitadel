@@ -111,7 +111,6 @@ import {
   isToolEffectPotentialRecord,
   normalizeToolEffectEvidenceRefs,
   supportsOpenAiFastMode,
-  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
   TOOL_EFFECT_CLASSIFICATION_VERSION,
   TOOL_EFFECT_RECEIPT_VERSION,
   WORKFLOW_SKILL_CAPTURE_MARKER,
@@ -2451,8 +2450,7 @@ export class ChatTurnAgentRunner {
     if (
       !(await this.isOptionalUserInputEnabled()) ||
       input.parentDelegationStepId ||
-      input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID ||
-      input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID
+      isRestrictedAutonomousPermissionProfile(input.permissionProfileId)
     ) {
       const optionalModelName = filteredToolSchema.canonicalToModel.get("user_input.request");
       filteredToolSchema.canonicalToModel.delete("user_input.request");
@@ -7584,8 +7582,7 @@ export class ChatTurnAgentRunner {
           !registerOptionalUserInput ||
           input.input.mode !== "chat" ||
           input.input.parentDelegationStepId ||
-          input.input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
-          input.input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID
+          isRestrictedAutonomousPermissionProfile(input.input.permissionProfileId)
         ) {
           throw new Error("Optional input is unavailable for this turn.");
         }
