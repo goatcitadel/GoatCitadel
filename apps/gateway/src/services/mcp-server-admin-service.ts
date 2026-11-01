@@ -289,9 +289,10 @@ export async function updateMcpServer(
 }
 
 /**
- * Hands a plugin's server to the operator: its plugin mark is cleared and nothing else changes, so a later edit or
- * removal is the operator's own. Only that plugin's own pass may (an uninstall that leaves the server to another plugin
- * that kept it).
+ * Hands a plugin's server to the operator: its plugin mark is cleared and nothing else changes (its connection, tools,
+ * first-tool approvals and live sessions stay, as the registry write treats the mark like what asks first), so a later
+ * edit or removal is the operator's own. Only that plugin's own pass may (an uninstall that leaves the server to
+ * another plugin that kept it).
  */
 export async function releaseMcpServerFromPlugin(
   host: McpServerAdminHost,

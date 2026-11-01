@@ -223,6 +223,8 @@ describe("glossary and plurals (GL-R02)", () => {
       "apps/gateway/src/services/capability-plugins-route-service.ts",
       "apps/gateway/src/services/plugin-owned-refusal.ts",
       "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts",
+      "apps/gateway/src/services/plugin-uninstall-scope.ts",
+      "apps/gateway/src/services/plugin-uninstall-words.ts",
       "apps/gateway/src/services/plugin-source-service.ts",
       "apps/gateway/src/services/plugin-snapshot-store.ts",
       "apps/gateway/src/services/plugin-git-messages.ts",

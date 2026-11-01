@@ -14,7 +14,11 @@ import { Pool } from "pg";
 import { GATEWAY_OWNED_MCP_SERVER_IDS, McpServerStore } from "./mcp-server-store.js";
 import { normalizeMcpPolicy } from "./mcp-server-policy.js";
 import { mcpServerRevision } from "./mcp-server-revision.js";
-import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
+import {
+  releaseMcpServerFromPlugin,
+  type McpAuthStateRecord,
+  type McpServerAdminHost,
+} from "./mcp-server-admin-service.js";
 
 const KEY = "mcp_servers_v1";
 const uuid = /^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/u;
@@ -134,6 +138,60 @@ describe("McpServerStore configuration authority", () => {
         configurationBindingId: before.configurationBindingId,
         revision: after.revision,
       });
+    });
+
+    it("keeps the connection, its tools, first-tool approvals and sessions when a plugin's server is handed over", async () => {
+      const pluginOwner = { pluginId: "meeting-tools", name: "Meeting tools", installPlanId: "plan-install-1" };
+      const before = await connected({ pluginOwner });
+      expect(before).toMatchObject({ status: "connected", pluginOwner });
+      const closeSessions = vi.fn();
+      // The MCP owner over this real registry, as an uninstall reaches it.
+      const host = {
+        storage: { approvalInbox: { deleteByReceiver: vi.fn(async () => 0) } },
+        readMcpServers: () => store.readServers(),
+        writeMcpServers: (servers: McpServerRecord[], expected: McpServerRecord[], review?: never) =>
+          store.writeServers(servers, expected, review),
+        captureMcpServerSessionCloser: vi.fn(() => closeSessions),
+        appendApprovalsAudit: vi.fn(async () => undefined),
+        publishRealtime: vi.fn(async () => undefined),
+      } as unknown as McpServerAdminHost;
+
+      const released = await releaseMcpServerFromPlugin(host, "server-1", {
+        pluginId: pluginOwner.pluginId,
+        installPlanId: pluginOwner.installPlanId,
+      });
+
+      expect(released).not.toHaveProperty("pluginOwner");
+      expect(released.revision).not.toBe(before.revision);
+      expect(released).toMatchObject({
+        status: "connected",
+        connectionRevision: before.connectionRevision,
+        configurationBindingId: before.configurationBindingId,
+        lastConnectedAt: before.lastConnectedAt,
+      });
+      expect((await toolsOf()).map((item) => item.toolName)).toEqual(["read"]);
+      expect(await firstApprovals()).toEqual({ "server-1": ["read"], peer: ["read"] });
+      expect(closeSessions).not.toHaveBeenCalled();
+      const saved = await store.requireServer("server-1");
+      expect(saved).toMatchObject({
+        status: "connected",
+        connectionRevision: before.connectionRevision,
+        configurationBindingId: before.configurationBindingId,
+      });
+      expect(saved).not.toHaveProperty("pluginOwner");
+    });
+
+    it("still disconnects when the plugin's mark changes along with how the server connects", async () => {
+      const before = await connected({
+        pluginOwner: { pluginId: "meeting-tools", name: "Meeting tools", installPlanId: "plan-install-1" },
+      });
+
+      const after = await reviewedEdit(before, { pluginOwner: undefined, args: ["other-fixture.js"] });
+
+      expect(after.status).toBe("disconnected");
+      expect(after.connectionRevision).not.toBe(before.connectionRevision);
+      expect(after.configurationBindingId).not.toBe(before.configurationBindingId);
+      expect(await toolsOf()).toEqual([]);
     });
 
     it("keeps it again when the setting changes back, each time with a new revision", async () => {

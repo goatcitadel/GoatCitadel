@@ -5,7 +5,6 @@ import path from "node:path";
 import {
   NotFoundError,
   redactStructuredSecrets,
-  type ApprovalRequest,
   type DeploymentProfile,
   type ToolGroupId,
   type ToolPolicyConfig,
@@ -26,6 +25,7 @@ import {
   type RemovedPlugin,
   type StoredPlugin,
 } from "./capability-plugin-store.js";
+import { pluginSecretLogs } from "./capability-plugin-secret-logs.js";
 import { pluginUninstallSources } from "./capability-plugin-uninstall-composition.js";
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
 import type { PluginUninstallRevokeInput, PluginUninstallRevokeOutcome } from "./capability-skill-actions-service.js";
@@ -35,7 +35,12 @@ import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { PluginInstallChangePlanAdapter } from "./plugin-install-change-plan-adapter.js";
 import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-manifest-file.js";
-import { readPluginSkillChecks, type FindSkillHubChecks } from "./plugin-skill-checks.js";
+import {
+  readApprovalReading,
+  readPluginSkillChecks,
+  type ApprovalReading,
+  type FindSkillHubChecks,
+} from "./plugin-skill-checks.js";
 import { PluginSnapshotChangedError, PluginSnapshotPathError, PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { fetchPluginSource } from "./plugin-source-service.js";
 import { PluginUninstallChangePlanAdapter } from "./plugin-uninstall-change-plan-adapter.js";
@@ -44,6 +49,7 @@ import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 
 const log = logger.child("capability-plugins");
+const { reportUndecidedSecrets, reportFailedSecretDelete } = pluginSecretLogs(log);
 /** What a version may hold to name a review key: the review's own key characters, kept short. */
 const GATEWAY_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/u;
 
@@ -139,6 +145,16 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   const custody = new HookSecretCustodyService(keychain);
+  // Where an approval stands and whether its work still runs; one that can't be read answers undefined, and no one is
+  // sent to it.
+  const readApproval = async (approvalId: string): Promise<ApprovalReading | undefined> => {
+    try {
+      return readApprovalReading(await approvals.getApproval(approvalId));
+    } catch (error) {
+      reportFailedRead("approval", error);
+      return undefined;
+    }
+  };
   // The one per-id read of a plugin's skill checks: by each check's own id, never through a workspace's newest checks.
   const readSkillChecks = (workspaceId: string, snapshotIds: readonly string[]) =>
     readPluginSkillChecks(findSkillHubChecks(skillHub), workspaceId, snapshotIds);
@@ -174,6 +190,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
           revokeSkill: (input) => owners.revokeSkill(input),
           connectorTemplates: () => MCP_SERVER_TEMPLATES,
           listPendingApprovals: (input) => approvals.listApprovalsPage(input),
+          readApproval: (approvalId) => readApproval(approvalId),
           reportExportFileKept: reportKeptExportFile,
           reportUndecidedSecrets,
         },
@@ -181,16 +198,10 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
       ),
     ),
   );
-  // Where an approval stands; one that can't be read answers undefined, and no one is sent to it.
-  const readApprovalStatus = async (approvalId: string): Promise<ApprovalRequest["status"] | undefined> => {
-    try {
-      return (await approvals.getApproval(approvalId)).status;
-    } catch (error) {
-      reportFailedRead("approval", error);
-      return undefined;
-    }
-  };
-  const actions = new CapabilityPluginActionsService({ ...pluginActionSources(shared, owners), readApprovalStatus });
+  const actions = new CapabilityPluginActionsService({
+    ...pluginActionSources(shared, owners),
+    readApprovalStatus: async (approvalId) => (await readApproval(approvalId))?.status,
+  });
   const inspection = new CapabilityPluginInspectionService({
     fetchSource: (source) =>
       fetchPluginSource(source, {
@@ -237,7 +248,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     readSkillChecks,
     readInstallPlanStatus: async (workspaceId, planId, actorId) =>
       (await plans.get({ workspaceId, actorId, surface: "capabilities" }, planId)).status,
-    readApprovalStatus,
+    readApproval: (approvalId) => readApproval(approvalId),
     readManifest: (treeSha256) => shared.readManifest(treeSha256),
     readSnapshotText: (treeSha256, relativePath) => shared.readSnapshotText(treeSha256, relativePath),
     inspect: (input) => inspection.inspect(input),
@@ -401,17 +412,7 @@ function reportKeptExportFile(packId: string, error: unknown): void {
   });
 }
 
-/** An uninstall that couldn't tell which stored secrets are in use kept them: logged by plugin and reference. */
-function reportUndecidedSecrets(pluginId: string, secretRefs: readonly string[], error: unknown): void {
-  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
-  log.error("a plugin uninstall kept its stored signing secrets, as it couldn't tell whether a hook still uses them", {
-    pluginId,
-    secretRefs: [...secretRefs],
-    err: redactStructuredSecrets(diagnostic).value,
-  });
-}
-
-/** A signing secret that couldn't be deleted is logged by its reference, so it can be found and removed. */
+/** An install plan that ended unapplied kept its stored signing secrets, as its record can't be read. */
 function reportKeptSecrets(error: unknown): void {
   const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
   log.error(
@@ -420,14 +421,6 @@ function reportKeptSecrets(error: unknown): void {
       err: redactStructuredSecrets(diagnostic).value,
     },
   );
-}
-
-function reportFailedSecretDelete(secretRef: string, error: unknown): void {
-  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
-  log.error("a plugin hook's stored signing secret couldn't be deleted", {
-    secretRef,
-    err: redactStructuredSecrets(diagnostic).value,
-  });
 }
 
 /** The operator sees a plain line or a part left out; the real error stays in the redacted server log. */

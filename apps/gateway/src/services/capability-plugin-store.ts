@@ -39,6 +39,11 @@ export interface StoredPluginPiece {
   removed?: { skillId?: string };
   /** While uninstalling: the approval this skill's removal waits for, its revoke or its own step. */
   waiting?: { approvalId: string; operation: "revoke" | "install_inactive" | "activate" };
+  /**
+   * While uninstalling: a connector the plugin added that was left to the operator, as another plugin kept it. It reads
+   * as kept (`owned` is then false), and nothing removes it.
+   */
+  handedOver?: true;
 }
 
 export interface StoredPlugin {

@@ -85,11 +85,11 @@ describe("a plugin uninstall's prompt-pack delete", () => {
     expect(await exists(file)).toBe(false);
 
     // Uninstalling again finds the pack and deletes it; the file is already gone.
-    await sources.deletePromptPack(checks.packId);
+    await expect(sources.deletePromptPack(checks.packId)).resolves.toBe(true);
     expect(order).toEqual(["cascade:false"]);
     expect(promptPacks.deletePackCascade).toHaveBeenCalledTimes(2);
     // Once it's gone, a further delete has nothing to do.
-    await sources.deletePromptPack(checks.packId);
+    await expect(sources.deletePromptPack(checks.packId)).resolves.toBe(false);
     expect(promptPacks.deletePackCascade).toHaveBeenCalledTimes(2);
   });
 
@@ -106,6 +106,21 @@ describe("a plugin uninstall's prompt-pack delete", () => {
     expect(await exists(file)).toBe(true);
     expect(promptPacks.deletePackCascade).toHaveBeenCalledExactlyOnceWith(checks.packId);
     expect(reportExportFileKept).not.toHaveBeenCalled();
+  });
+
+  it("keeps the export file, and reports it, when the saved packs can't all be read at once", async () => {
+    const checks = pack("plugin-meeting-tools-checks");
+    // As many saved packs as one read returns: one beyond it might write the same file.
+    const many = Array.from({ length: 1_000 }, (_unused, index) => pack(`pack-${index}`, `Pack ${index}`));
+    const { sources, promptPacks, reportExportFileKept, exportFile } = await packOwner([checks, ...many]);
+    promptPacks.listPacks.mockResolvedValueOnce([checks, ...many].slice(0, 1_000));
+    const file = await exportFile(checks);
+
+    await expect(sources.deletePromptPack(checks.packId)).resolves.toBe(true);
+
+    expect(await exists(file)).toBe(true);
+    expect(reportExportFileKept).toHaveBeenCalledExactlyOnceWith(checks.packId, expect.any(Error));
+    expect(promptPacks.deletePackCascade).toHaveBeenCalledExactlyOnceWith(checks.packId);
   });
 
   it("still deletes the pack when its export file can't be removed, and reports the file", async () => {

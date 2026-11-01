@@ -22,6 +22,11 @@ export interface PluginSkillCheck {
   version: "none" | "installed_off" | "switched_on";
   /** The version installed from this check was revoked: the AI can't use it, and it can't be switched on again. */
   revoked: boolean;
+  /**
+   * The installed skill of this name was revoked, whichever check installed it (a check of a changed copy has no version
+   * of its own, so `revoked` can't say).
+   */
+  runtimeRevoked: boolean;
   /** The approval each step still waits for, by the step. */
   pendingApprovals: Partial<Record<SkillHubOperationKind, string>>;
   /**
@@ -37,6 +42,25 @@ export interface PluginSkillCheck {
   installInactive: { allowed: boolean; blockers: string[] };
   /** Where its install is, read exactly as the Skills tab reads a check. */
   step: CapabilitySkillInstallStep;
+}
+
+/** Where an approval stands, and whether the work it approved is still being done. */
+export interface ApprovalReading {
+  status: ApprovalRequest["status"];
+  /** `running` while that work is queued or running; `failed` once part of it failed or was skipped; else `done`. */
+  effects: "running" | "failed" | "done";
+}
+
+/** An approval as the Inbox reads it, with its follow-up. */
+export function readApprovalReading(approval: Pick<ApprovalRequest, "status" | "followUp">): ApprovalReading {
+  const followUp = approval.followUp?.status;
+  const effects =
+    followUp === "queued" || followUp === "running"
+      ? "running"
+      : followUp === "failed" || followUp === "skipped"
+        ? "failed"
+        : "done";
+  return { status: approval.status, effects };
 }
 
 /** A workspace's checks by their ids: Skill Hub's operator owner's per-id read. */
@@ -63,6 +87,7 @@ export function pluginSkillCheck(item: SkillHubOperatorItem): PluginSkillCheck {
     ...(installed && item.skillId ? { skillId: item.skillId } : {}),
     version: item.runtime.activeVersion ? "switched_on" : item.candidate ? "installed_off" : "none",
     revoked: item.candidate?.lifecycleState === "revoked",
+    runtimeRevoked: item.runtime.lifecycle?.lifecycleState === "revoked",
     pendingApprovals,
     ...(revoke
       ? {

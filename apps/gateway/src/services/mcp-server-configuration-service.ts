@@ -17,6 +17,7 @@ import {
   assertUniqueServers,
   sameConfiguration,
   onlyApprovalPostureChanged,
+  onlyPluginOwnerChanged,
   assertConfigurationSnapshot,
 } from "./mcp-server-state-helpers.js";
 import { buildGatewayOwnedInternalMcpServers } from "./mcp-server-read-service.js";
@@ -90,7 +91,10 @@ export async function writeMcpServerConfiguration(
         // approvals stay: nothing about how the server connects moved. It keeps the connection too, unless the
         // server is mid-connection. That attempt holds the pre-edit record, so its late result would be refused and
         // the server would stay stuck connecting; it is disconnected and fenced instead, as a no-op reviewed edit is.
-        const postureOnly = previous !== undefined && onlyApprovalPostureChanged(previous, server);
+        // Handing a plugin's server to the operator changes only who added it: the same holds.
+        const postureOnly =
+          previous !== undefined &&
+          (onlyApprovalPostureChanged(previous, server) || onlyPluginOwnerChanged(previous, server));
         const keepsConnection = postureOnly && previous.status !== "connecting";
         saved.revision = edited || !previous?.revision ? newMcpServerRevision() : previous.revision;
         saved.connectionRevision = previous?.connectionRevision;

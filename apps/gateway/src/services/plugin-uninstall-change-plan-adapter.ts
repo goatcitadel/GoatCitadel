@@ -18,24 +18,42 @@ import type { PluginUninstallRevokeInput, PluginUninstallRevokeOutcome } from ".
 import type {
   EvolutionControlPlaneAdapter,
   EvolutionControlPlaneAdapterContext,
-  EvolutionControlPlaneAdapterOutcome,
 } from "./evolution-control-plane-adapter.js";
-import { mcpServerLabelKey } from "./mcp-money-moving.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
+import { boundedSentences, boundedTitle, requireCapabilitiesOrigin } from "./plugin-plan-support.js";
+import type { ApprovalReading, PluginSkillCheck } from "./plugin-skill-checks.js";
 import {
-  boundedSentences,
-  boundedTitle,
-  failureDetail,
-  groupLabel,
-  requireCapabilitiesOrigin,
-} from "./plugin-plan-support.js";
-import type { PluginSkillCheck } from "./plugin-skill-checks.js";
+  readUninstallScope,
+  scopeEvidenceRef,
+  type ConnectorDecision,
+  type HookSecretHolder,
+  type UninstallScope,
+} from "./plugin-uninstall-scope.js";
 import {
   decideSkillRemoval,
-  hasInstalledSkill,
+  mayHaveInstalledSkill,
+  revokeEndedUnrevoked,
   type PendingSkillStep,
-  type SkillWaitReason,
+  type SkillRemovalDecision,
 } from "./plugin-uninstall-skills.js";
+import {
+  HOSTS_STAY,
+  completedSummary,
+  connectorUnknownStop,
+  holderKeptStop,
+  holderWords,
+  hookWords,
+  keptConnectorWords,
+  labelOf,
+  plannedSentences,
+  recordedStop,
+  revokeDidntTakeStop,
+  stopped,
+  undecidedSecretsStop,
+  waitingSummary,
+  type UninstallProgress,
+  type UninstallStep,
+} from "./plugin-uninstall-words.js";
 
 // A plugin uninstall: one Change Plan that removes exactly the pieces the plugin's install added, each through its own
 // owner with the plugin's pass, in reverse install order. What was already there stays, and so do the hosts it allowed.
@@ -47,21 +65,20 @@ export const UNINSTALL_CHANGE_PLANS_OFF_MESSAGE =
 export const UNINSTALL_ANSWER_GONE_MESSAGE =
   "This uninstall's first answer is no longer kept, so it can't be sent again. Uninstall the plugin again.";
 const UNINSTALL_CHANGED_MESSAGE = "This plugin changed since you asked to uninstall it. Uninstall it again.";
-/** How often, and how many times, an approved revoke's check is read while its effect runs: about 10 seconds. */
+const SCOPE_CHANGED_MESSAGE =
+  "What uninstalling this plugin would remove or keep changed since you asked. Uninstall it again.";
+/**
+ * How often, and how many times, an approved revoke is read while its work runs, when the uninstall applies outside the
+ * approval worker: about 10 seconds. Inside the worker it is read once, as that work runs only after the uninstall.
+ */
 const REVOKE_EFFECT_PAUSE_MS = 250;
 const REVOKE_EFFECT_READS = 40;
-const HOSTS_STAY = "Hosts it allowed stay in your allowlist.";
 const ORIGIN_REFUSAL = {
   message: "Plugins are uninstalled from Capabilities.",
   diagnosticCode: "plugin_uninstall_untrusted_origin",
 } as const;
 
-/** A hook in the workspace that signs with a stored secret: what an uninstall reads to tell which secrets are in use. */
-export interface HookSecretHolder {
-  hookId: string;
-  secretRef: string;
-  url: string;
-}
+export type { HookSecretHolder } from "./plugin-uninstall-scope.js";
 
 /** One plain reader or writer per owner an uninstall goes through. The adapter only orders them. */
 export interface PluginUninstallSources {
@@ -78,8 +95,8 @@ export interface PluginUninstallSources {
   /** A plugin's manifest, read from its snapshot: for each piece's label, and what another plugin kept. */
   readManifest(treeSha256: string): Promise<PluginManifestParse>;
   readSnapshotText(treeSha256: string, relativePath: string): Promise<string>;
-  /** The hooks owner's delete, with the plugin's pass; it deletes the hook's own signing secret with it. */
-  deleteHook(workspaceId: string, hookId: string, pass: PluginPass): Promise<void>;
+  /** The hooks owner's delete, with the plugin's pass, which deletes the hook's own secret too: true when it was there. */
+  deleteHook(workspaceId: string, hookId: string, pass: PluginPass): Promise<boolean>;
   /** Every hook in the workspace that signs with a stored secret; undefined when the list may have been cut off. */
   listHookSecrets(workspaceId: string): Promise<readonly HookSecretHolder[] | undefined>;
   /** The signing secrets the install plan stored, by hook piece. */
@@ -90,16 +107,16 @@ export interface PluginUninstallSources {
   ): Promise<Readonly<Record<string, string>>>;
   /** Deletes a signing secret. It reports its own failure and never throws. */
   deleteHookSecret(secretRef: string): void;
-  /** Deletes a prompt pack with every run, score and benchmark, and its export file. */
-  deletePromptPack(packId: string): Promise<void>;
+  /** Deletes a prompt pack with every run, score and benchmark, and its export file: true when it was there. */
+  deletePromptPack(packId: string): Promise<boolean>;
   /** The saved connectors. */
   listSavedConnectors(): Promise<readonly McpServerRecord[]>;
   /** The shipped connector catalog: what a kept connector piece is saved under. */
   connectorTemplates(): readonly McpServerTemplateRecord[];
   /** Disconnects a connector; one that is already gone is left as it is. */
   disconnectConnector(serverId: string): Promise<void>;
-  /** The MCP owner's delete, with the plugin's pass. */
-  deleteConnector(serverId: string, pass: PluginPass): Promise<void>;
+  /** The MCP owner's delete, with the plugin's pass: true when it was there. */
+  deleteConnector(serverId: string, pass: PluginPass): Promise<boolean>;
   /** The MCP owner's release, with the plugin's pass: the connector becomes the operator's own and nothing else changes. */
   releaseConnector(serverId: string, pass: PluginPass): Promise<void>;
   /** The plugin's skill checks, by their ids; a check that isn't there is left out. */
@@ -111,36 +128,13 @@ export interface PluginUninstallSources {
   ): Promise<ReadonlyMap<string, PendingSkillStep>>;
   /** The Skills tab's one revoke for a plugin's skill: approved at once, except on `remote_hardened`. */
   revokeSkill(input: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome>;
+  /** Where an approval stands and whether its work still runs; undefined when it can't be read. */
+  readApproval(approvalId: string): Promise<ApprovalReading | undefined>;
   /** Reports the signing secrets kept because it couldn't be told whether a hook still uses them. */
   reportUndecidedSecrets(pluginId: string, secretRefs: readonly string[], error: unknown): void;
-  /** Waits this long before a skill's check is read again. */
+  /** Waits this long before an approved revoke is read again. */
   pause(ms: number): Promise<void>;
   now(): Date;
-}
-
-/** The uninstall's steps, in reverse install order; a failure's `failureCode` names the one it stopped at. */
-type UninstallStep = "record" | "hooks" | "prompt_packs" | "tool_groups" | "connectors" | "skills" | "finish";
-
-/** What an apply has done so far, read by its summary. */
-interface UninstallProgress {
-  removed: number;
-  /** The piece a step was working on when it stopped. */
-  current?: StoredPluginPiece;
-  /** Connectors left to the operator because another installed plugin uses them. */
-  readonly handedOver: string[];
-  /** The skills whose removal still waits, by label. */
-  readonly waiting: Array<{ label: string; reason: SkillWaitReason }>;
-}
-
-/** A step that stops with its own plain words, and the owner's in `failureDetail`. */
-class UninstallStepStopped extends Error {
-  public constructor(
-    public readonly what: string,
-    detail: string,
-  ) {
-    super(detail);
-    this.name = "UninstallStepStopped";
-  }
 }
 
 /**
@@ -163,11 +157,13 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
     requireCapabilitiesOrigin(context.origin, ORIGIN_REFUSAL);
     const record = await this.bind(request, context.origin.workspaceId);
     const labels = await this.labelsOf(record);
+    // What apply will act on beyond the record's own pieces; apply reads it again and refuses one that moved.
+    const scope = await readUninstallScope(this.sources, record, context.origin.actorId ?? "operator", labels);
     const installedSkills = await this.installedSkillPieces(record);
-    const keepers = await this.connectorKeepers(record).catch(() => new Map<string, string>());
-    const saved = await this.sources.listSavedConnectors().catch(() => []);
-    const summary = boundedSentences(plannedSentences(record, labels, installedSkills, keepers, saved));
+    const summary = boundedSentences(plannedSentences(record, labels, installedSkills, scope));
     const title = boundedTitle(`Uninstall ${record.name}`);
+    // A skill removed by an earlier pass still blocks a reinstall.
+    const leftSkills = installedSkills.size > 0 || ownedPieces(record, "skill").some((piece) => piece.removed?.skillId);
     return {
       target: {
         ownerId: "capability_plugins",
@@ -179,22 +175,32 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       impact: boundedSentences([
         "Anything that was there before the plugin stays.",
         HOSTS_STAY,
-        ...(installedSkills.size > 0 ? ["A skill it added can't be installed again until skills can be removed."] : []),
+        ...(leftSkills ? ["A skill it added can't be installed again until skills can be removed."] : []),
       ]),
       risk: "caution" as const,
       status: "awaiting_confirmation" as const,
       requiredAction: context.actions.confirmation({ title, confirmationText: summary }),
-      evidenceRefs: [`plugin:${record.pluginId}`],
+      evidenceRefs: [`plugin:${record.pluginId}`, scopeEvidenceRef(scope)],
     };
   }
 
   async apply(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord) {
     const request = requireRequest(plan);
+    // The operator who asked for the uninstall, not whoever resumed it, is named on every revoke.
+    const actorId = plan.origin.actorId ?? "operator";
     let record: StoredPlugin;
+    let labels: ReadonlyMap<string, PluginPieceLabel>;
+    let scope: UninstallScope;
     try {
-      // The record as it was when the plan was made: a change since stops the uninstall before anything is removed.
+      // The record, and what the plan said it would act on, as they were when the plan was made: a change since stops
+      // the uninstall before anything is removed.
       record = await this.bind(request, plan.origin.workspaceId);
       if (recordHash(record) !== plan.target.expectedHash) throw uninstallChanged();
+      labels = await this.labelsOf(record);
+      scope = await readUninstallScope(this.sources, record, actorId, labels);
+      if (!plan.evidenceRefs.includes(scopeEvidenceRef(scope))) {
+        throw new ConflictError({ message: SCOPE_CHANGED_MESSAGE });
+      }
     } catch (error) {
       if (!isGoatError(error) || error.httpStatus >= 500) throw error;
       return {
@@ -205,27 +211,26 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
         },
       };
     }
-    const labels = await this.labelsOf(record);
     const pass: PluginPass = { pluginId: record.pluginId, installPlanId: record.installPlanId };
-    // The operator who asked for the uninstall, not whoever resumed it, is named on every revoke.
-    const actorId = plan.origin.actorId ?? "operator";
+    // Resumed by its approval, it runs inside the approval worker, where a revoke's own work only runs after it.
+    const readRevokeAgain = plan.approvalRefs.length === 0;
     const progress: UninstallProgress = { removed: 0, handedOver: [], waiting: [] };
     let step: UninstallStep = "record";
     try {
       await this.save(request, (current) => ({ ...current, state: "uninstalling", uninstallPlanId: plan.planId }));
       step = "hooks";
-      await this.removeEach(record, request, "hook", progress, (ref) =>
-        this.sources.deleteHook(record.workspaceId, ref, pass),
-      );
-      await this.removeLeftoverHookSecrets(record, request, pass, actorId, labels, progress);
+      await this.removeHooks(record, request, pass, actorId, labels, scope, progress);
       step = "prompt_packs";
-      await this.removeEach(record, request, "prompt_pack", progress, (ref) => this.sources.deletePromptPack(ref));
+      await this.removeEach(record, request, "prompt_pack", progress, (piece) => ({
+        words: `the prompt pack ${labelOf(piece, labels)}`,
+        remove: (ref) => this.sources.deletePromptPack(ref),
+      }));
       step = "tool_groups";
       await this.releaseHolds(record, request, progress);
       step = "connectors";
-      await this.removeConnectors(record, request, pass, labels, progress);
+      await this.removeConnectors(record, request, pass, scope, progress);
       step = "skills";
-      const skillIds = await this.removeSkills(record, request, actorId, labels, progress);
+      const skillIds = await this.removeSkills(record, request, actorId, labels, progress, readRevokeAgain);
       step = "finish";
       if (progress.waiting.length > 0) {
         return { status: "completed" as const, result: { summary: waitingSummary(record, progress) } };
@@ -242,9 +247,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       return {
         status: "completed" as const,
         evidenceRefs: [...plan.evidenceRefs, `plugin_uninstalled:${request.pluginId}`],
-        result: {
-          summary: boundedSentences([`Removed ${piecesCount(progress.removed)}.`, ...progress.handedOver, HOSTS_STAY]),
-        },
+        result: { summary: completedSummary(progress) },
       };
     } catch (error) {
       return stopped(record, labels, progress, step, error);
@@ -294,83 +297,86 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
   }
 
   /**
-   * The skill pieces that have something installed, by piece id, for the plan's own words. A check that can't be read
-   * counts as installed, so the plan never promises less than it might remove.
+   * The skill pieces that may have something installed by the time the plan applies, by piece id, for the plan's own
+   * words: installed now, or with an own step waiting or under way. A check that can't be read counts too, so the plan
+   * never promises less than it might remove.
    */
   private async installedSkillPieces(record: StoredPlugin): Promise<ReadonlySet<string>> {
     const open = ownedPieces(record, "skill").filter((piece) => !piece.removed && piece.skillSnapshotId);
     if (open.length === 0) return new Set();
-    let checks: ReadonlyMap<string, PluginSkillCheck> | undefined;
-    try {
-      checks = await this.sources.readSkillChecks(
-        record.workspaceId,
-        open.map((piece) => piece.skillSnapshotId!),
-      );
-    } catch {
-      checks = undefined;
-    }
+    const ids = open.map((piece) => piece.skillSnapshotId!);
+    const checks = await this.sources.readSkillChecks(record.workspaceId, ids).catch(() => undefined);
+    const steps = await this.sources.listPendingSkillSteps(record.workspaceId, ids).catch(() => undefined);
     return new Set(
       open
         .filter((piece) => {
           const check = checks?.get(piece.skillSnapshotId!);
-          return !checks || !check || hasInstalledSkill(check);
+          return !checks || !steps || !check || mayHaveInstalledSkill(check, steps.get(piece.skillSnapshotId!));
         })
         .map((piece) => piece.pieceId),
     );
   }
 
   /**
-   * After the hooks: every signing secret the install stored is deleted unless a hook in the workspace still uses it. A
-   * hook still holding one is a hook this install made before its record named it (each secret was minted for this
-   * install alone), so it is removed through the hooks owner, which takes its secret too. When it can't be told which
-   * secrets are in use, nothing is deleted and the step stops, so uninstalling again finishes it.
+   * Step 1: the plugin's hooks, a hook its install made before its record named it, and then every signing secret the
+   * install stored that no hook in the workspace uses. When the hooks can't be read in full, or another hook holds one of
+   * those secrets, nothing is removed and the step stops, so nothing a hook still uses is deleted.
    */
-  private async removeLeftoverHookSecrets(
+  private async removeHooks(
     record: StoredPlugin,
     request: ChangePlanPluginUninstallRequest,
     pass: PluginPass,
     actorId: string,
     labels: ReadonlyMap<string, PluginPieceLabel>,
+    scope: UninstallScope,
     progress: UninstallProgress,
   ): Promise<void> {
-    // A plugin with no hooks stored no secret.
-    if (!record.pieces.some((piece) => piece.kind === "hook" && piece.owned)) return;
+    if ("unread" in scope.holders) {
+      this.sources.reportUndecidedSecrets(record.pluginId, scope.holders.secretRefs, scope.holders.error);
+      throw undecidedSecretsStop(scope.holders.error);
+    }
+    const kept = scope.holders.find((holder) => holder.action === "keep");
+    if (kept) throw holderKeptStop(record, kept);
+    await this.removeEach(record, request, "hook", progress, (piece) => ({
+      words: hookWords(piece, labels),
+      remove: (ref) => this.sources.deleteHook(record.workspaceId, ref, pass),
+    }));
+    for (const holder of scope.holders) {
+      const piece = ownedPieces(record, "hook").find((item) => item.pieceId === holder.pieceId)!;
+      progress.current = piece;
+      if (await this.sources.deleteHook(record.workspaceId, holder.hookId, pass)) progress.removed += 1;
+      await this.recordRemoved(request, piece, holderWords(holder));
+    }
+    progress.current = undefined;
+    await this.removeLeftoverSecrets(record, request, actorId);
+  }
+
+  /** After the hooks: each stored secret no hook holds is deleted (a second delete is harmless). */
+  private async removeLeftoverSecrets(
+    record: StoredPlugin,
+    request: ChangePlanPluginUninstallRequest,
+    actorId: string,
+  ): Promise<void> {
+    const hookPieces = ownedPieces(record, "hook");
+    if (hookPieces.length === 0) return;
     let stored: Readonly<Record<string, string>> = {};
-    let holders: readonly HookSecretHolder[];
+    let held: readonly HookSecretHolder[];
     try {
       stored = await this.sources.readInstallSecretRefs(record.workspaceId, record.installPlanId, actorId);
       const listed = await this.sources.listHookSecrets(record.workspaceId);
       if (!listed) throw new Error("The workspace has too many hooks to read them all at once.");
-      holders = listed;
+      held = listed;
     } catch (error) {
       this.sources.reportUndecidedSecrets(record.pluginId, Object.values(stored), error);
-      throw new UninstallStepStopped(
-        "Couldn't tell whether its hooks still use the signing secrets it stored, so they were kept.",
-        failureDetail(error) ?? "The hooks or the install couldn't be read.",
-      );
+      throw undecidedSecretsStop(error);
     }
     for (const [pieceId, secretRef] of Object.entries(stored)) {
-      const holder = holders.find((hook) => hook.secretRef === secretRef);
-      if (!holder) {
-        // A second delete of a secret already gone is harmless.
-        this.sources.deleteHookSecret(secretRef);
-        continue;
-      }
-      const piece = record.pieces.find((item) => item.kind === "hook" && item.pieceId === pieceId && item.owned);
-      const host = labels.get(pieceId)?.hosts?.[0];
-      if (!piece || (host && hostOf(holder.url) !== host)) {
-        throw new UninstallStepStopped(
-          `A hook that sends event details to ${hostOf(holder.url) ?? "another address"} uses a signing secret this ` +
-            "plugin stored, and doesn't match its hook, so it was kept.",
-          `Hook ${holder.hookId} holds the secret stored for piece ${pieceId}.`,
-        );
-      }
-      progress.current = piece;
-      await this.sources.deleteHook(record.workspaceId, holder.hookId, pass);
-      await this.savePiece(request, pieceId, removedPiece);
-      progress.removed += 1;
+      if (held.some((hook) => hook.secretRef === secretRef)) continue;
+      this.sources.deleteHookSecret(secretRef);
+      // A hook piece the install never named and no hook holds the secret of: nothing of it is left.
+      const piece = hookPieces.find((item) => item.pieceId === pieceId);
+      if (piece && piece.ref === undefined && !piece.removed) await this.savePiece(request, pieceId, removedPiece);
     }
-    progress.current = undefined;
   }
 
   /** Step 3: every tool group the plugin holds off is released at once. The operator's own switch is never written. */
@@ -390,93 +396,67 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
   }
 
   /**
-   * Step 4: each connector the plugin added, and any saved connector still marked as this install's that its record
-   * never got to name. One another installed plugin kept is left to the operator (its mark released); the rest are
-   * disconnected, then deleted.
+   * Step 4: the connectors, as the plan decided them: one another plugin kept is handed to the operator (its mark
+   * released), the rest are disconnected and deleted. A connector already gone or no longer marked as this install's is
+   * only marked. When another plugin's connectors can't be read, none is touched and the step stops.
    */
   private async removeConnectors(
     record: StoredPlugin,
     request: ChangePlanPluginUninstallRequest,
     pass: PluginPass,
-    labels: ReadonlyMap<string, PluginPieceLabel>,
+    scope: UninstallScope,
     progress: UninstallProgress,
   ): Promise<void> {
-    const saved = await this.sources.listSavedConnectors();
-    const keepers = await this.connectorKeepers(record);
-    const remove = async (serverId: string): Promise<boolean> => {
-      const server = saved.find((item) => item.serverId === serverId);
-      const keeper = server ? keepers.get(mcpServerLabelKey(server.label)) : undefined;
-      if (server && keeper) {
-        await this.sources.releaseConnector(serverId, pass);
-        progress.handedOver.push(`Kept ${server.label}, which ${keeper} uses.`);
-        return false;
-      }
-      await this.sources.disconnectConnector(serverId);
-      await this.sources.deleteConnector(serverId, pass);
-      return true;
-    };
-    const named = new Set<string>();
-    for (const piece of ownedPieces(record, "connector")) {
-      if (piece.ref === undefined) continue;
-      named.add(piece.ref);
-      progress.current = piece;
-      const removed = await remove(piece.ref);
-      await this.savePiece(request, piece.pieceId, removedPiece);
-      if (removed) progress.removed += 1;
-    }
-    // Saved and marked by this install, which stopped before its record named it.
+    const decisions = scope.connectors;
+    if (!decisions) throw new Error("The saved connectors or the other plugins can't be read right now.");
+    const unknown = decisions.find((decision) => decision.action === "unknown");
+    if (unknown?.action === "unknown") throw connectorUnknownStop(record, unknown);
     const pieces = ownedPieces(record, "connector");
-    for (const server of saved) {
-      const owner = server.pluginOwner;
-      if (owner?.pluginId !== record.pluginId || owner.installPlanId !== record.installPlanId) continue;
-      if (named.has(server.serverId)) continue;
-      progress.current = pieces.find((piece) => piece.ref === undefined);
-      if (await remove(server.serverId)) progress.removed += 1;
+    for (const decision of decisions) {
+      const piece = pieces.find((item) => item.pieceId === decision.pieceId);
+      progress.current = piece ?? pieces.find((item) => item.ref === undefined);
+      await this.applyConnectorDecision(request, pass, decision, piece, progress);
     }
     progress.current = undefined;
   }
 
-  /**
-   * The other installed plugins that kept a connector, by the label key the inspection matches a saved connector on,
-   * with the plugin's name. A plugin whose manifest can't be read stops the step: it can't be told what it kept.
-   */
-  private async connectorKeepers(record: StoredPlugin): Promise<ReadonlyMap<string, string>> {
-    const keepers = new Map<string, string>();
-    for (const other of await this.sources.listPlugins()) {
-      if (other.pluginId === record.pluginId) continue;
-      const kept = other.pieces.filter((piece) => piece.kind === "connector" && !piece.owned);
-      if (kept.length === 0) continue;
-      const parsed = await this.sources.readManifest(other.snapshotTreeSha256);
-      if (!parsed.ok || parsed.manifestSha256 !== other.manifestSha256) {
-        throw new UninstallStepStopped(
-          `Couldn't tell which connectors ${other.name} uses, so none was removed.`,
-          `The manifest of plugin ${other.pluginId} can't be read.`,
-        );
-      }
-      for (const piece of kept) {
-        const manifestPiece = parsed.manifest.pieces.find((item) => item.id === piece.pieceId);
-        if (manifestPiece?.kind !== "connector") continue;
-        const template = this.sources.connectorTemplates().find((item) => item.templateId === manifestPiece.templateId);
-        if (template) keepers.set(mcpServerLabelKey(template.label), other.name);
-      }
+  private async applyConnectorDecision(
+    request: ChangePlanPluginUninstallRequest,
+    pass: PluginPass,
+    decision: ConnectorDecision,
+    piece: StoredPluginPiece | undefined,
+    progress: UninstallProgress,
+  ): Promise<void> {
+    if (decision.action === "keep") {
+      await this.sources.releaseConnector(decision.serverId, pass);
+      progress.handedOver.push(keptConnectorWords(decision, "Kept"));
     }
-    return keepers;
+    if (decision.action === "remove") {
+      await this.sources.disconnectConnector(decision.serverId);
+      if (await this.sources.deleteConnector(decision.serverId, pass)) progress.removed += 1;
+    }
+    if (!piece) return;
+    if (decision.action === "keep" || decision.action === "handed_over") {
+      await this.savePiece(request, piece.pieceId, handedOverPiece);
+    } else {
+      await this.recordRemoved(request, piece, `the connector ${decision.label}`);
+    }
   }
 
-  /** Removes each owned piece of a kind that names what it became, and clears that name once its owner removed it. */
+  /** Removes each owned piece of a kind that names what it became, counted once its owner removed it, then marks it. */
   private async removeEach(
     record: StoredPlugin,
     request: ChangePlanPluginUninstallRequest,
     kind: "hook" | "prompt_pack",
     progress: UninstallProgress,
-    remove: (ref: string) => Promise<void>,
+    owner: (piece: StoredPluginPiece) => { words: string; remove: (ref: string) => Promise<boolean> },
   ): Promise<void> {
     for (const piece of ownedPieces(record, kind)) {
       if (piece.ref === undefined) continue;
       progress.current = piece;
-      await remove(piece.ref);
-      await this.savePiece(request, piece.pieceId, removedPiece);
-      progress.removed += 1;
+      const { words, remove } = owner(piece);
+      if (await remove(piece.ref)) progress.removed += 1;
+      await this.recordRemoved(request, piece, words);
     }
     progress.current = undefined;
   }
@@ -492,6 +472,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
     actorId: string,
     labels: ReadonlyMap<string, PluginPieceLabel>,
     progress: UninstallProgress,
+    readRevokeAgain: boolean,
   ): Promise<string[]> {
     const skills = ownedPieces(record, "skill");
     const skillIds = skills.flatMap((piece) => (piece.removed?.skillId ? [piece.removed.skillId] : []));
@@ -508,7 +489,10 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       progress.current = piece;
       const id = piece.skillSnapshotId;
       const check = id ? checks.get(id) : undefined;
-      const outcome = await this.removeSkill(record, actorId, piece, check, id ? pendingSteps.get(id) : undefined);
+      const skill = { piece, check, label: check?.title ?? labelOf(piece, labels) };
+      const outcome = await this.removeSkill(record, actorId, skill, id ? pendingSteps.get(id) : undefined, {
+        readRevokeAgain,
+      });
       if (outcome.kind === "removed") {
         await this.savePiece(request, piece.pieceId, ({ waiting: _waiting, ...rest }) => ({
           ...rest,
@@ -516,67 +500,102 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
         }));
         if (outcome.skillId) skillIds.push(outcome.skillId);
         if (outcome.counted) progress.removed += 1;
-      } else {
+      } else if (outcome.kind === "waiting") {
         await this.savePiece(request, piece.pieceId, ({ waiting: _waiting, ...rest }) => ({
           ...rest,
           ...(outcome.waiting ? { waiting: outcome.waiting } : {}),
         }));
-        progress.waiting.push({ label: check?.title ?? labelOf(piece, labels), reason: outcome.reason });
+        progress.waiting.push({ label: skill.label, reason: outcome.reason });
       }
     }
     progress.current = undefined;
     return skillIds;
   }
 
-  /** One skill: its decision, and for a switched-on one the revoke, read again from its check once it is approved. */
+  /**
+   * One skill: its decision, and for a switched-on one the revoke, read again once it is approved. A revoke that ended
+   * without revoking the skill is decided once more in the same pass: a fresh revoke is asked for, or, when Skill Hub
+   * hands back the one that ended, the step stops with what would unblock it.
+   */
   private async removeSkill(
     record: StoredPlugin,
     actorId: string,
-    piece: StoredPluginPiece,
-    check: PluginSkillCheck | undefined,
+    skill: { piece: StoredPluginPiece; check: PluginSkillCheck | undefined; label: string },
     pendingStep: PendingSkillStep | undefined,
-  ) {
-    const decision = decideSkillRemoval(piece, check, pendingStep);
-    if (decision.kind !== "revoke") return decision;
-    const snapshotId = piece.skillSnapshotId!;
-    const revoked = await this.sources.revokeSkill({
-      workspaceId: record.workspaceId,
-      snapshotId,
-      pluginId: record.pluginId,
-      actorId,
-      ...(decision.knownApprovalId ? { knownApprovalId: decision.knownApprovalId } : {}),
-    });
-    const waiting = { approvalId: revoked.approvalId, operation: "revoke" as const };
-    if (revoked.status === "waiting") return { kind: "waiting" as const, reason: "revoke" as const, waiting };
-    // Handed back the revoke that already settled without revoking it: asking again can't remove it.
-    if (decision.staleApprovalId === revoked.approvalId) {
-      throw new UninstallStepStopped(
-        `Couldn't remove the skill ${check?.title ?? piece.pieceId}: its removal was approved, but it didn't take effect.`,
-        `Revoke approval ${revoked.approvalId} settled ${check?.revokeApproval?.settled ?? "without revoking it"}.`,
-      );
+    options: { readRevokeAgain: boolean },
+  ): Promise<SkillRemovalDecision> {
+    const { piece, label } = skill;
+    let check = skill.check;
+    let effects = await this.unsettledRevokeEffects(check);
+    let decision = decideSkillRemoval(piece, check, pendingStep, effects);
+    for (let ask = 0; decision.kind === "revoke"; ask += 1) {
+      const revoked = await this.sources.revokeSkill({
+        workspaceId: record.workspaceId,
+        snapshotId: piece.skillSnapshotId!,
+        pluginId: record.pluginId,
+        actorId,
+        ...(decision.knownApprovalId ? { knownApprovalId: decision.knownApprovalId } : {}),
+      });
+      const waiting = { approvalId: revoked.approvalId, operation: "revoke" as const };
+      if (revoked.status === "waiting") return { kind: "waiting", reason: "revoke", waiting };
+      // Handed back the revoke that already ended without revoking it: asking again gets the same answer.
+      if (decision.staleApprovalId === revoked.approvalId) {
+        throw revokeDidntTakeStop(record, label, revoked.approvalId, endedWords(check, revoked.approvalId, effects));
+      }
+      ({ check, effects } = await this.readAfterRevoke(record.workspaceId, piece, revoked.approvalId, options));
+      if (check?.revoked)
+        return { kind: "removed", counted: true, ...(check.skillId ? { skillId: check.skillId } : {}) };
+      if (!revokeEndedUnrevoked(check, revoked.approvalId, effects))
+        return { kind: "waiting", reason: "removing", waiting };
+      if (ask >= 1) {
+        throw revokeDidntTakeStop(record, label, revoked.approvalId, endedWords(check, revoked.approvalId, effects));
+      }
+      decision = decideSkillRemoval({ ...piece, waiting }, check, pendingStep, effects);
+      if (decision.kind === "revoke") decision = { ...decision, staleApprovalId: revoked.approvalId };
     }
-    // Approved: its effect runs in the approval effects worker, usually within moments, so the check is read again.
-    const after = await this.readAfterRevoke(record.workspaceId, snapshotId, revoked.approvalId);
-    if (after?.revoked) {
-      return { kind: "removed" as const, counted: true, ...(after.skillId ? { skillId: after.skillId } : {}) };
-    }
-    return { kind: "waiting" as const, reason: "removing" as const, waiting };
+    return decision;
+  }
+
+  /** For an approved revoke the check shows unsettled: whether its work still runs. */
+  private async unsettledRevokeEffects(
+    check: PluginSkillCheck | undefined,
+  ): Promise<ApprovalReading["effects"] | undefined> {
+    const latest = check?.revokeApproval;
+    if (check?.revoked || latest?.status !== "approved" || latest.settled !== undefined) return undefined;
+    return (await this.sources.readApproval(latest.approvalId))?.effects;
   }
 
   /**
-   * A skill's check once its approved revoke's effect is done: read again until it reads revoked, or that revoke
-   * settled without revoking it, or `REVOKE_EFFECT_READS` reads went by. Then the skill waits to be removed.
+   * The check once an approved revoke's work is done. Outside the approval worker its work runs alongside, so it is read
+   * again until done (about 10 seconds at most); inside, it runs only after this uninstall, so it is read once.
    */
   private async readAfterRevoke(
     workspaceId: string,
-    snapshotId: string,
+    piece: StoredPluginPiece,
     approvalId: string,
-  ): Promise<PluginSkillCheck | undefined> {
+    options: { readRevokeAgain: boolean },
+  ): Promise<{ check: PluginSkillCheck | undefined; effects: ApprovalReading["effects"] | undefined }> {
+    const snapshotId = piece.skillSnapshotId!;
     for (let read = 1; ; read += 1) {
-      const check = (await this.sources.readSkillChecks(workspaceId, [snapshotId])).get(snapshotId);
-      const settled = check?.revokeApproval?.approvalId === approvalId && check.revokeApproval.settled !== undefined;
-      if (!check || check.revoked || settled || read >= REVOKE_EFFECT_READS) return check;
+      const effects = (await this.sources.readApproval(approvalId))?.effects;
+      if (effects !== "running" || !options.readRevokeAgain || read >= REVOKE_EFFECT_READS) {
+        const check = (await this.sources.readSkillChecks(workspaceId, [snapshotId])).get(snapshotId);
+        return { check, effects };
+      }
       await this.sources.pause(REVOKE_EFFECT_PAUSE_MS);
+    }
+  }
+
+  /** Marks a piece its owner removed; a failed write says the piece went, though its record doesn't show it. */
+  private async recordRemoved(
+    request: ChangePlanPluginUninstallRequest,
+    piece: StoredPluginPiece,
+    words: string,
+  ): Promise<void> {
+    try {
+      await this.savePiece(request, piece.pieceId, removedPiece);
+    } catch (error) {
+      throw recordedStop(words, error);
     }
   }
 
@@ -625,143 +644,18 @@ function removedPiece({ ref: _ref, ...piece }: StoredPluginPiece): StoredPluginP
   return { ...piece, removed: {} };
 }
 
-function labelOf(piece: StoredPluginPiece, labels: ReadonlyMap<string, PluginPieceLabel>): string {
-  const label = labels.get(piece.pieceId)?.label;
-  if (label) return label;
-  return piece.kind === "tool_group_off" && piece.ref ? groupLabel(piece.ref) : piece.pieceId;
+/** A connector left to the operator: no longer the plugin's, so it reads as kept and nothing removes it. */
+function handedOverPiece({ pieceId, kind }: StoredPluginPiece): StoredPluginPiece {
+  return { pieceId, kind, owned: false, handedOver: true };
 }
 
-function piecesCount(count: number): string {
-  return `${count} ${count === 1 ? "piece" : "pieces"}`;
-}
-
-function hostOf(url: string): string | undefined {
-  try {
-    return new URL(url).hostname || undefined;
-  } catch {
-    return undefined;
-  }
-}
-
-/** What a hook sends to, as its detail says it, or its label. */
-function hookWords(piece: StoredPluginPiece, labels: ReadonlyMap<string, PluginPieceLabel>): string {
-  const host = labels.get(piece.pieceId)?.hosts?.[0];
-  return host ? `the hook that sends event details to ${host}` : `the hook ${labelOf(piece, labels)}`;
-}
-
-/** The plain steps the plan will take, in order, for its summary and its confirmation. */
-function plannedSentences(
-  record: StoredPlugin,
-  labels: ReadonlyMap<string, PluginPieceLabel>,
-  installedSkills: ReadonlySet<string>,
-  keepers: ReadonlyMap<string, string>,
-  saved: readonly McpServerRecord[],
-): string[] {
-  const sentences: string[] = [];
-  const order: PluginPieceKind[] = ["hook", "prompt_pack", "tool_group_off", "connector", "skill"];
-  for (const kind of order) {
-    for (const piece of ownedPieces(record, kind)) {
-      const label = labelOf(piece, labels);
-      if (kind === "skill") {
-        if (installedSkills.has(piece.pieceId)) sentences.push(`Remove the skill ${label}, so the AI can't use it.`);
-        continue;
-      }
-      if (piece.ref === undefined) continue;
-      if (kind === "hook") sentences.push(`Remove ${hookWords(piece, labels)}.`);
-      if (kind === "prompt_pack") sentences.push(`Delete the prompt pack ${label}, with its runs and scores.`);
-      if (kind === "tool_group_off") sentences.push(`Stop holding ${label} off.`);
-      if (kind === "connector") sentences.push(connectorSentence(piece.ref, label, keepers, saved));
-    }
-  }
-  for (const piece of record.pieces.filter((item) => !item.owned)) {
-    sentences.push(`Keep ${labelOf(piece, labels)}, which was already there.`);
-  }
-  return [...sentences, HOSTS_STAY];
-}
-
-function connectorSentence(
-  serverId: string,
-  label: string,
-  keepers: ReadonlyMap<string, string>,
-  saved: readonly McpServerRecord[],
+/** How an approved revoke ended without revoking the skill, for `failureDetail`. */
+function endedWords(
+  check: PluginSkillCheck | undefined,
+  approvalId: string,
+  effects: ApprovalReading["effects"] | undefined,
 ): string {
-  const server = saved.find((item) => item.serverId === serverId);
-  const keeper = server ? keepers.get(mcpServerLabelKey(server.label)) : undefined;
-  return keeper && server ? `Keep ${server.label}, which ${keeper} uses.` : `Remove the connector ${label}.`;
-}
-
-/** Everything else is removed; a skill still waits for its revoke, for that revoke to apply, or for its own step. */
-function waitingSummary(record: StoredPlugin, progress: UninstallProgress): string {
-  return boundedSentences([
-    `Removed ${piecesCount(progress.removed)}.`,
-    ...progress.handedOver,
-    HOSTS_STAY,
-    ...progress.waiting.map(({ label, reason }) => WAITING_WORDS[reason](label)),
-    `Then uninstall ${record.name} again to finish.`,
-  ]);
-}
-
-const WAITING_WORDS: Readonly<Record<SkillWaitReason, (label: string) => string>> = {
-  revoke: (label) => `Removing the skill ${label} waits for your approval.`,
-  removing: (label) => `The skill ${label} is still being removed.`,
-  own_step: (label) => `The skill ${label} is still taking one of its own steps.`,
-};
-
-/**
- * The outcome when a step fails: what was removed, what wasn't, and what to do next. The record keeps listing what is
- * left, so uninstalling again goes on from there. The owner's own words go to `failureDetail` only.
- */
-function stopped(
-  record: StoredPlugin,
-  labels: ReadonlyMap<string, PluginPieceLabel>,
-  progress: UninstallProgress,
-  step: UninstallStep,
-  error: unknown,
-): EvolutionControlPlaneAdapterOutcome {
-  // Another change to the record landed first: the plain refusal says so, and nothing was removed.
-  if (step === "record" && isGoatError(error) && error.httpStatus < 500) {
-    return { status: "failed", result: { summary: error.message, failureCode: "plugin_uninstall_refused" } };
-  }
-  const detail = failureDetail(error);
-  return {
-    status: step === "record" ? "failed" : "manual_required",
-    result: {
-      summary: boundedSentences([
-        ...(progress.removed > 0 ? [`Removed ${piecesCount(progress.removed)}.`] : []),
-        ...progress.handedOver,
-        error instanceof UninstallStepStopped ? error.what : whatFailed(record, labels, progress.current, step),
-        step === "record"
-          ? "Nothing was removed, so trying again is safe."
-          : `Uninstall ${record.name} again to finish.`,
-      ]),
-      failureCode: `plugin_uninstall_${step}_failed`,
-      ...(detail ? { failureDetail: detail } : {}),
-    },
-  };
-}
-
-/** What didn't happen, naming the piece the step was working on. */
-function whatFailed(
-  record: StoredPlugin,
-  labels: ReadonlyMap<string, PluginPieceLabel>,
-  piece: StoredPluginPiece | undefined,
-  step: UninstallStep,
-): string {
-  const label = piece ? labelOf(piece, labels) : undefined;
-  switch (step) {
-    case "record":
-      return `Couldn't start uninstalling ${record.name}.`;
-    case "hooks":
-      return piece ? `Couldn't remove ${hookWords(piece, labels)}.` : "Couldn't remove its hooks.";
-    case "prompt_packs":
-      return label ? `Couldn't delete the prompt pack ${label}.` : "Couldn't delete its prompt packs.";
-    case "tool_groups":
-      return "Couldn't stop holding its tool groups off.";
-    case "connectors":
-      return label ? `Couldn't remove the connector ${label}.` : "Couldn't remove its connectors.";
-    case "skills":
-      return label ? `Couldn't remove the skill ${label}.` : "Couldn't remove its skills.";
-    case "finish":
-      return `Couldn't finish uninstalling ${record.name}.`;
-  }
+  const settled = check?.revokeApproval?.approvalId === approvalId ? check.revokeApproval.settled : undefined;
+  if (settled) return `settled ${settled}`;
+  return effects === "failed" ? "with its work failed" : "with no settlement";
 }

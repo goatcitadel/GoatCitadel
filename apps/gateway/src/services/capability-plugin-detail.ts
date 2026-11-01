@@ -1,7 +1,6 @@
 import {
   HOOK_TRIGGER_LABELS,
   TOOL_GROUPS,
-  type ApprovalRequest,
   type CapabilityPluginDetailPiece,
   type CapabilityPluginPieceCheck,
   type CapabilityPluginPieceState,
@@ -19,7 +18,7 @@ import {
   pluginPromptPackId,
   pluginPromptPackSourceLabel,
 } from "./plugin-prompt-packs.js";
-import type { PluginSkillCheck } from "./plugin-skill-checks.js";
+import type { ApprovalReading, PluginSkillCheck } from "./plugin-skill-checks.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 
 // One installed plugin's pieces: where each one is, the link to its own item, and its label. The Plugins list and the
@@ -64,8 +63,11 @@ export interface PluginPieceReadings {
   installEnded?: boolean;
   /** While it is uninstalled: whether its uninstall plan is done with it. Undefined when it wasn't read, or couldn't be. */
   uninstallEnded?: boolean;
-  /** While it is uninstalled: where each approval a skill's removal waits for stands, by id. Missing when unread. */
-  approvalStatuses?: ReadonlyMap<string, ApprovalRequest["status"]>;
+  /**
+   * While it is uninstalled: where each approval a skill's removal waits for stands, and whether its work still runs,
+   * by id. One that wasn't read, or couldn't be, is missing.
+   */
+  approvals?: ReadonlyMap<string, ApprovalReading>;
 }
 
 /** Where one piece is. */
@@ -222,7 +224,7 @@ function readSkillPiece(
   if (!check) return { state: "unknown" };
   if (check.revoked) return { state: "removed" };
   if (plugin.state === "uninstalling") {
-    const removing = readRevoke(piece, check, readings.approvalStatuses);
+    const removing = readRevoke(piece, check, readings.approvals);
     if (removing) return removing;
   }
   const state = SKILL_STEP_STATES[check.step];
@@ -234,28 +236,30 @@ function readSkillPiece(
 
 /**
  * A skill's removal while its plugin is uninstalled: waiting for its revoke's approval (as the check reads it, or as the
- * record kept it while that approval still reads pending), or being removed once that revoke is approved and isn't in
- * effect yet. Undefined when no revoke was asked for, or the one asked for was refused: then it reads as its check does.
+ * record kept it while that approval still reads pending), or being removed while an approved revoke's work still runs.
+ * Undefined otherwise (no revoke asked for, one refused, or one that ended without revoking it): then it reads as its
+ * check does.
  */
 function readRevoke(
   piece: StoredPluginPiece,
   check: PluginSkillCheck,
-  statuses: ReadonlyMap<string, ApprovalRequest["status"]> | undefined,
+  approvals: ReadonlyMap<string, ApprovalReading> | undefined,
 ): PluginPieceReading | undefined {
   if (check.pendingApprovals.revoke) {
     return { state: "waiting_for_approval", pendingApprovalId: check.pendingApprovals.revoke };
   }
   const asked = piece.waiting?.operation === "revoke" ? piece.waiting.approvalId : undefined;
+  const latest = check.revokeApproval;
   const status =
-    (asked ? statuses?.get(asked) : undefined) ??
-    (check.revokeApproval && check.revokeApproval.approvalId === asked ? check.revokeApproval.status : undefined);
+    (asked ? approvals?.get(asked)?.status : undefined) ?? (latest?.approvalId === asked ? latest?.status : undefined);
   if (asked && status === "pending") return { state: "waiting_for_approval", pendingApprovalId: asked };
-  if (asked && status === "approved") return { state: "removing" };
-  // Approved and not in effect yet, whoever asked.
-  if (check.revokeApproval?.status === "approved" && check.revokeApproval.settled === undefined) {
-    return { state: "removing" };
-  }
-  return undefined;
+  // Approved, whoever asked: being removed only until it settles, or its work fails or ends.
+  const approvedId =
+    asked && status === "approved" ? asked : latest?.status === "approved" ? latest.approvalId : undefined;
+  if (!approvedId) return undefined;
+  const settled = latest?.approvalId === approvedId && latest.settled !== undefined;
+  const effects = approvals?.get(approvedId)?.effects;
+  return !settled && (effects === undefined || effects === "running") ? { state: "removing" } : undefined;
 }
 
 /**

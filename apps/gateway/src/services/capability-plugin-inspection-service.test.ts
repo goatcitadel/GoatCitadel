@@ -108,6 +108,7 @@ function skillCheck(snapshotId: string, overrides: Partial<PluginSkillCheck> = {
     title: "meeting-notes",
     version: "none",
     revoked: false,
+    runtimeRevoked: false,
     pendingApprovals: {},
     installInactive: { allowed: true, blockers: [] },
     step: "check_passed",
@@ -360,6 +361,30 @@ describe("CapabilityPluginInspectionService", () => {
       "left by an earlier install, with nothing of it running",
       { installInactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED"] } },
       "SOURCE_ALREADY_INSTALLED",
+      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+    ],
+    [
+      "revoked, seen through a check of a changed copy (no version of its own)",
+      { runtimeRevoked: true, installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS"] } },
+      "RUNTIME_ALREADY_EXISTS",
+      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+    ],
+    [
+      "revoked through another check, with its source still installed",
+      {
+        runtimeRevoked: true,
+        installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"] },
+      },
+      "SOURCE_ALREADY_INSTALLED",
+      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+    ],
+    [
+      "revoked through another check, with its version still listed",
+      {
+        runtimeRevoked: true,
+        installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "CANDIDATE_ALREADY_EXISTS"] },
+      },
+      "CANDIDATE_ALREADY_EXISTS",
       "This skill was removed with an earlier install. It can't come back until skills can be removed.",
     ],
     [

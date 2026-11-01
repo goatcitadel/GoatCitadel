@@ -13,7 +13,7 @@ import type { CapabilityPluginInstallOwners, PluginInstallShared } from "./capab
 import type { RemovedPlugin, StoredPlugin } from "./capability-plugin-store.js";
 import type { PluginUninstallRevokeInput, PluginUninstallRevokeOutcome } from "./capability-skill-actions-service.js";
 import { deleteMcpServer, disconnectMcpServer, releaseMcpServerFromPlugin } from "./mcp-server-admin-service.js";
-import type { PluginSkillCheck } from "./plugin-skill-checks.js";
+import type { ApprovalReading, PluginSkillCheck } from "./plugin-skill-checks.js";
 import type { PluginUninstallSources } from "./plugin-uninstall-change-plan-adapter.js";
 import type { PendingSkillStep } from "./plugin-uninstall-skills.js";
 import { resolvePromptPackExportPath } from "./prompt-pack/import-export.js";
@@ -41,6 +41,8 @@ export interface PluginUninstallShared extends Pick<
   connectorTemplates(): readonly McpServerTemplateRecord[];
   /** The Inbox's waiting approvals, a page at a time. */
   listPendingApprovals(input: { status: "pending"; limit: number; cursor?: string }): Promise<ApprovalListResponse>;
+  /** Where one approval stands, and whether its work still runs; undefined when it can't be read. */
+  readApproval(approvalId: string): Promise<ApprovalReading | undefined>;
   /** A prompt pack's export file that couldn't be removed: inert, and logged so it can be found. */
   reportExportFileKept(packId: string, error: unknown): void;
   reportUndecidedSecrets(pluginId: string, secretRefs: readonly string[], error: unknown): void;
@@ -67,15 +69,20 @@ export function pluginUninstallSources(
     removePlugin: (pluginId, remember) => shared.removePlugin(pluginId, remember),
     readManifest: (treeSha256) => shared.readManifest(treeSha256),
     readSnapshotText: (treeSha256, relativePath) => shared.readSnapshotText(treeSha256, relativePath),
-    deleteHook: async (workspaceId, hookId, pass) => {
-      await hooks.deleteWorkspaceHook(workspaceId, hookId, pass);
-    },
+    deleteHook: (workspaceId, hookId, pass) => hooks.deleteWorkspaceHook(workspaceId, hookId, pass),
     listHookSecrets: async (workspaceId) => {
       const listed = await hooks.listWorkspaceHooks(workspaceId, HOOK_LIST_LIMIT);
       if (listed.length >= HOOK_LIST_LIMIT) return undefined;
       return listed.flatMap((hook) =>
         hook.action.type === "webhook" && hook.action.webhook.secretRef
-          ? [{ hookId: hook.hookId, secretRef: hook.action.webhook.secretRef, url: hook.action.webhook.url }]
+          ? [
+              {
+                hookId: hook.hookId,
+                label: hook.label,
+                secretRef: hook.action.webhook.secretRef,
+                url: hook.action.webhook.url,
+              },
+            ]
           : [],
       );
     },
@@ -90,18 +97,26 @@ export function pluginUninstallSources(
         pack = await records.promptPacks.getPack(packId);
       } catch (error) {
         // Already gone: nothing of it is left to delete.
-        if (error instanceof NotFoundError) return;
+        if (error instanceof NotFoundError) return false;
         throw error;
       }
       // The export file goes first, as a reset that clears a pack's runs removes it: it can be written again from the
-      // pack, so an uninstall stopped after this still finds the pack to delete. A file another pack also writes stays.
+      // pack, so an uninstall stopped after this still finds the pack to delete. A file another pack also writes stays,
+      // and so does one when the saved packs can't all be read at once (one beyond the read might write it).
       const exportFile = resolvePromptPackExportPath(rootDir, pack);
-      const others = (await records.promptPacks.listPacks(PACK_LIST_LIMIT)).filter((item) => item.packId !== packId);
+      const listed = await records.promptPacks.listPacks(PACK_LIST_LIMIT);
+      const others = listed.filter((item) => item.packId !== packId);
       const writtenByAnother = others.some((item) => samePath(resolvePromptPackExportPath(rootDir, item), exportFile));
-      if (!writtenByAnother) {
+      if (listed.length >= PACK_LIST_LIMIT) {
+        shared.reportExportFileKept(
+          packId,
+          new Error("Too many saved prompt packs to tell whether another writes it."),
+        );
+      } else if (!writtenByAnother) {
         await fs.rm(exportFile, { force: true }).catch((error: unknown) => shared.reportExportFileKept(packId, error));
       }
       await records.promptPacks.deletePackCascade(packId);
+      return true;
     },
     listSavedConnectors: () => mcp.listMcpServers(),
     connectorTemplates: () => shared.connectorTemplates(),
@@ -113,9 +128,8 @@ export function pluginUninstallSources(
         throw error;
       }
     },
-    deleteConnector: async (serverId, pass) => {
-      await deleteMcpServer(mcpAdministration, serverId, undefined, pass);
-    },
+    deleteConnector: async (serverId, pass) =>
+      (await deleteMcpServer(mcpAdministration, serverId, undefined, pass)).deleted,
     releaseConnector: async (serverId, pass) => {
       await releaseMcpServerFromPlugin(mcpAdministration, serverId, pass);
     },
@@ -123,6 +137,7 @@ export function pluginUninstallSources(
     listPendingSkillSteps: (workspaceId, snapshotIds) =>
       readPendingSkillSteps((input) => shared.listPendingApprovals(input), workspaceId, snapshotIds),
     revokeSkill: (input) => shared.revokeSkill(input),
+    readApproval: (approvalId) => shared.readApproval(approvalId),
     reportUndecidedSecrets: (pluginId, secretRefs, error) => shared.reportUndecidedSecrets(pluginId, secretRefs, error),
     pause: async (ms) => {
       await delay(ms);

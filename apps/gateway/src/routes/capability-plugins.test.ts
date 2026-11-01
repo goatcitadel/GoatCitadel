@@ -12,7 +12,6 @@ import {
   SemanticValidationError,
   ServiceUnavailableError,
   ValidationError,
-  type ApprovalRequest,
   type CapabilityPluginDetail,
   type CapabilityPluginInspection,
   type CapabilityPluginListResponse,
@@ -90,7 +89,7 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
     listBuiltIn: vi.fn(async () => []),
     readSkillChecks: vi.fn(async () => new Map()),
     readInstallPlanStatus: vi.fn(async (): Promise<ChangePlanStatus> => "completed"),
-    readApprovalStatus: vi.fn(async (): Promise<ApprovalRequest["status"] | undefined> => "pending"),
+    readApproval: vi.fn(async () => ({ status: "pending" as const, effects: "done" as const })),
     readManifest: vi.fn(
       async (): Promise<PluginManifestParse> => ({ ok: false, code: "MANIFEST_MISSING", message: "No manifest." }),
     ),

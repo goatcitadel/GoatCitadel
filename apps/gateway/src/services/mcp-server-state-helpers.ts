@@ -80,6 +80,26 @@ export function onlyApprovalPostureChanged(previous: McpServerRecord, next: McpS
   return left.approvalPosture !== right.approvalPosture && isDeepStrictEqual(left.rest, right.rest);
 }
 
+/**
+ * True when the two records differ in which plugin added the server and in nothing that decides how it connects or
+ * what asks first: a plugin's server handed to the operator. Like a change to what asks first, it keeps the connection,
+ * its tools and its first-tool approvals. Pack bookkeeping is left out too, as an operator edit clears it.
+ */
+export function onlyPluginOwnerChanged(previous: McpServerRecord, next: McpServerRecord): boolean {
+  if (isDeepStrictEqual(previous.pluginOwner, next.pluginOwner)) return false;
+  const {
+    packChange: _leftPack,
+    pluginOwner: _leftOwner,
+    ...left
+  } = configurationMaterial(previous) as NormalizedMaterial;
+  const {
+    packChange: _rightPack,
+    pluginOwner: _rightOwner,
+    ...right
+  } = configurationMaterial(next) as NormalizedMaterial;
+  return isDeepStrictEqual(left, right);
+}
+
 type NormalizedMaterial = Record<string, unknown> & { policy: Record<string, unknown> };
 
 /** The setting, and everything else that decides how the server connects. */

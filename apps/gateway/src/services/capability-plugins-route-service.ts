@@ -1,6 +1,5 @@
 import {
   NotFoundError,
-  type ApprovalRequest,
   type CapabilityPluginDetail,
   type CapabilityPluginInspection,
   type CapabilityPluginListItem,
@@ -28,7 +27,7 @@ import {
 import type { CapabilityPluginInspectInput } from "./capability-plugin-inspection-service.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
 import { namePluginOwnedError, type PluginOwnedError } from "./plugin-owned-refusal.js";
-import type { PluginSkillCheck } from "./plugin-skill-checks.js";
+import type { ApprovalReading, PluginSkillCheck } from "./plugin-skill-checks.js";
 
 const BUILT_IN_DISPLAY = "Ships with GoatCitadel";
 const INSPECTION_NOT_FOUND_MESSAGE = "That plugin check wasn't found, or it ran out of time. Check the plugin again.";
@@ -60,8 +59,8 @@ export interface CapabilityPluginsRouteSources {
   readSkillChecks(workspaceId: string, snapshotIds: readonly string[]): Promise<ReadonlyMap<string, PluginSkillCheck>>;
   /** A plugin plan's status (its install's, or its uninstall's), read in the plugin's workspace as the operator who asked. */
   readInstallPlanStatus(workspaceId: string, planId: string, actorId: string): Promise<ChangePlanStatus>;
-  /** Where an approval stands; undefined when it can't be read (the failure is reported by the reader). */
-  readApprovalStatus(approvalId: string): Promise<ApprovalRequest["status"] | undefined>;
+  /** Where an approval stands and whether its work still runs; undefined when it can't be read (the reader reports it). */
+  readApproval(approvalId: string): Promise<ApprovalReading | undefined>;
   /** The manifest in a snapshot, read again. */
   readManifest(treeSha256: string): Promise<PluginManifestParse>;
   /** A file in a snapshot, as text. */
@@ -144,7 +143,7 @@ export class CapabilityPluginsRouteService {
       skillChecks,
       installEnded,
       uninstallEnded,
-      approvalStatuses: await this.readWaitingApprovals(plugin),
+      approvals: await this.readWaitingApprovals(plugin, skillChecks),
     };
     const labels = manifest ? await this.describePieces(plugin, manifest) : undefined;
     return {
@@ -252,18 +251,26 @@ export class CapabilityPluginsRouteService {
     }
   }
 
-  /** While a plugin is uninstalled: where each approval a skill's removal waits for stands, by its id. */
+  /**
+   * While a plugin is uninstalled: each approval a skill's removal waits for, and each approved revoke a check shows
+   * unsettled, by its id: where it stands and whether its work still runs.
+   */
   private async readWaitingApprovals(
     plugin: StoredPlugin,
-  ): Promise<ReadonlyMap<string, ApprovalRequest["status"]> | undefined> {
+    checks: ReadonlyMap<string, PluginSkillCheck> | undefined,
+  ): Promise<ReadonlyMap<string, ApprovalReading> | undefined> {
     if (plugin.state !== "uninstalling") return undefined;
-    const ids = plugin.pieces.flatMap((piece) => (piece.waiting ? [piece.waiting.approvalId] : []));
-    const statuses = new Map<string, ApprovalRequest["status"]>();
-    for (const approvalId of ids) {
-      const status = await this.sources.readApprovalStatus(approvalId);
-      if (status) statuses.set(approvalId, status);
+    const ids = new Set(plugin.pieces.flatMap((piece) => (piece.waiting ? [piece.waiting.approvalId] : [])));
+    for (const check of checks?.values() ?? []) {
+      const latest = check.revokeApproval;
+      if (latest?.status === "approved" && latest.settled === undefined) ids.add(latest.approvalId);
     }
-    return statuses;
+    const approvals = new Map<string, ApprovalReading>();
+    for (const approvalId of ids) {
+      const reading = await this.sources.readApproval(approvalId);
+      if (reading) approvals.set(approvalId, reading);
+    }
+    return approvals;
   }
 
   /** Whether one of the plugin's plans is done with the record; undefined when it can't be read. */

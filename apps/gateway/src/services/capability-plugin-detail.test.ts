@@ -28,6 +28,7 @@ import { CapabilityToolsService } from "./capability-tools-service.js";
 import {
   pluginSkillCheck,
   readPluginSkillChecks,
+  type ApprovalReading,
   type FindSkillHubChecks,
   type PluginSkillCheck,
 } from "./plugin-skill-checks.js";
@@ -148,7 +149,7 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
     listBuiltIn: vi.fn(async () => []),
     readSkillChecks: vi.fn(async () => checksOf(SWITCHED_ON)),
     readInstallPlanStatus: vi.fn(async (): Promise<ChangePlanStatus> => "completed"),
-    readApprovalStatus: vi.fn(async (): Promise<ApprovalRequest["status"] | undefined> => "pending"),
+    readApproval: vi.fn(async (): Promise<ApprovalReading | undefined> => ({ status: "pending", effects: "done" })),
     readManifest: vi.fn(
       async (): Promise<PluginManifestParse> => ({ ok: true, manifest: MANIFEST, manifestSha256: MANIFEST_SHA }),
     ),
@@ -520,12 +521,16 @@ describe("a plugin's detail", () => {
   });
 
   it("reads a skill the uninstall removed as removed, and one still waiting by the revoke its record kept", async () => {
-    const removing = (pieces: StoredPlugin["pieces"], status: ApprovalRequest["status"] = "pending") =>
+    const removing = (
+      pieces: StoredPlugin["pieces"],
+      status: ApprovalRequest["status"] = "pending",
+      effects: ApprovalReading["effects"] = "running",
+    ) =>
       routeService({
         listInstalled: vi.fn(async () => [record({ state: "uninstalling", pieces })]),
         // Switched on, with no revoke among the check's newest approvals.
         readSkillChecks: vi.fn(async () => checksOf(SWITCHED_ON)),
-        readApprovalStatus: vi.fn(async () => status),
+        readApproval: vi.fn(async () => ({ status, effects })),
       }).service;
     const skill = { pieceId: "browser-qa", kind: "skill" as const, owned: true, skillSnapshotId: SKILL_CHECK };
 
@@ -549,6 +554,20 @@ describe("a plugin's detail", () => {
     ).detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
     expect(approved.pieces.map((piece) => [piece.state, piece.pendingApprovalId])).toEqual([["removing", undefined]]);
 
+    // Approved, and its work failed or ended without revoking it: nothing is being removed any more, so it reads as
+    // its check does, still switched on.
+    for (const effects of ["failed", "done"] as const) {
+      const ended = await removing(
+        [{ ...skill, waiting: { approvalId: "approval-revoke-old", operation: "revoke" } }],
+        "approved",
+        effects,
+      ).detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+      expect(
+        ended.pieces.map((piece) => [piece.state, piece.pendingApprovalId]),
+        effects,
+      ).toEqual([["added", undefined]]);
+    }
+
     // Refused: it reads as its check does, still switched on.
     const refused = await removing(
       [{ ...skill, waiting: { approvalId: "approval-revoke-old", operation: "revoke" } }],
@@ -560,21 +579,62 @@ describe("a plugin's detail", () => {
     const notYet = await removing([skill]).detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
     expect(notYet.pieces.map((piece) => piece.state)).toEqual(["added"]);
 
-    // A revoke the check shows approved and still applying, whoever asked for it, reads as being removed.
-    const applying = await routeService({
-      listInstalled: vi.fn(async () => [record({ state: "uninstalling", pieces: [skill] })]),
-      readSkillChecks: vi.fn(async () =>
-        checksOf(
-          check({
-            approvals: {
-              activate: hubApproval("activate", "approved", "applied"),
-              revoke: hubApproval("revoke", "approved"),
-            },
-          }),
+    // A revoke the check shows approved, whoever asked for it, reads as being removed while its work runs, and as its
+    // check does once it settled (blocked here) or its work failed.
+    const readRevoke = async (settled: "blocked" | undefined, effects: ApprovalReading["effects"]) => {
+      const readApproval = vi.fn(async () => ({ status: "approved" as const, effects }));
+      const detail = await routeService({
+        listInstalled: vi.fn(async () => [record({ state: "uninstalling", pieces: [skill] })]),
+        readSkillChecks: vi.fn(async () =>
+          checksOf(
+            check({
+              approvals: {
+                activate: hubApproval("activate", "approved", "applied"),
+                revoke: hubApproval("revoke", "approved", settled),
+              },
+            }),
+          ),
         ),
-      ),
-    }).service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
-    expect(applying.pieces.map((piece) => [piece.state, piece.pendingApprovalId])).toEqual([["removing", undefined]]);
+        readApproval,
+      }).service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+      return { states: detail.pieces.map((piece) => [piece.state, piece.pendingApprovalId]), readApproval };
+    };
+    const running = await readRevoke(undefined, "running");
+    expect(running.states).toEqual([["removing", undefined]]);
+    // Its work is read by the approval's own id.
+    expect(running.readApproval).toHaveBeenCalledWith("approval-revoke");
+    expect((await readRevoke(undefined, "failed")).states).toEqual([["added", undefined]]);
+    expect((await readRevoke("blocked", "done")).states).toEqual([["added", undefined]]);
+  });
+
+  it("reads the installed skill of a check's name as revoked by its own lifecycle, whichever check installed it", () => {
+    const lifecycle = {
+      skillId: "extra:browser-qa",
+      lifecycleState: "revoked",
+    } as SkillHubOperatorItem["runtime"]["lifecycle"];
+    // A check of a changed copy has no version of its own: only the runtime says it was revoked.
+    const item = check({
+      candidate: undefined,
+      runtime: { activeVersion: false, callable: false, inactiveCandidate: false, lifecycle },
+    });
+
+    expect(pluginSkillCheck(item)).toMatchObject({ revoked: false, runtimeRevoked: true });
+    expect(pluginSkillCheck(SWITCHED_ON)).toMatchObject({ revoked: false, runtimeRevoked: false });
+  });
+
+  it("reads a connector the uninstall handed to the operator as kept, not removed", async () => {
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [
+        record({
+          state: "uninstalling",
+          pieces: [{ pieceId: "issues", kind: "connector", owned: false, handedOver: true }],
+        }),
+      ]),
+    });
+
+    const detail = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+
+    expect(detail.pieces.map((piece) => [piece.pieceId, piece.state])).toEqual([["issues", "kept"]]);
   });
 
   it("keeps the pieces when the snapshot's manifest can't be read, labelled by their ids", async () => {

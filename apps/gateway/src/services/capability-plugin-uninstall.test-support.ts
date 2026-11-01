@@ -12,12 +12,12 @@ import {
   type PluginInstallFixture,
 } from "./capability-plugin-install.test-support.js";
 import { assertMcpServerRemovalAllowed, assertNotPluginOwned } from "./plugin-owned-refusal.js";
-import type { PluginSkillCheck } from "./plugin-skill-checks.js";
+import type { ApprovalReading, PluginSkillCheck } from "./plugin-skill-checks.js";
 import {
   PluginUninstallChangePlanAdapter,
-  type HookSecretHolder,
   type PluginUninstallSources,
 } from "./plugin-uninstall-change-plan-adapter.js";
+import type { HookSecretHolder } from "./plugin-uninstall-scope.js";
 import type { PendingSkillStep } from "./plugin-uninstall-skills.js";
 
 // One plugin install and then its uninstall, over the real Change Plan control plane and the plugin store's real
@@ -36,6 +36,7 @@ export function skillCheck(overrides: Partial<PluginSkillCheck> = {}): PluginSki
     skillId: SKILL_ID,
     version: "switched_on",
     revoked: false,
+    runtimeRevoked: false,
     pendingApprovals: {},
     installInactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED", "RUNTIME_ALREADY_EXISTS"] },
     step: "done",
@@ -61,10 +62,14 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
     disconnected: [] as string[],
     /** The plugin's skill checks, by id; a test changes them as Skill Hub would. */
     skillChecks: new Map<string, PluginSkillCheck>([[SKILL_CHECK_ID, skillCheck()]]),
+    /** Each approval as the Inbox reads it; one not listed reads approved, with its work done. */
+    approvals: new Map<string, ApprovalReading>(),
     /** Own install steps still waiting, as the full read of waiting approvals finds them. */
     pendingSteps: new Map<string, PendingSkillStep>(),
     /** The owner that fails: `hook`, `prompt_pack`, `hold_release`, `connector_delete`, `revoke` or `remove_record`. */
     failAt: undefined as string | undefined,
+    /** The next write to the plugin's record fails once, as a store write that lost every retry would. */
+    failNextWrite: false,
   };
   const step = (name: string) => {
     removal.order.push(name);
@@ -93,12 +98,17 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
   const sources = {
     readPlugin: (pluginId: string) => h.store.get(pluginId),
     listPlugins: () => h.store.list(),
-    updatePlugin: (pluginId, change) =>
-      h.store.update(pluginId, (current) => {
+    updatePlugin: async (pluginId, change) => {
+      if (removal.failNextWrite) {
+        removal.failNextWrite = false;
+        throw new Error("Plugins changed while this was being saved. Try again.");
+      }
+      await h.store.update(pluginId, (current) => {
         const next = change(current);
         if (releasesHold(current, next)) step("hold_release");
         return next;
-      }),
+      });
+    },
     removePlugin: async (pluginId, remember) => {
       step("remove_record");
       await h.store.remove(pluginId, remember);
@@ -110,17 +120,18 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
       // The hooks owner reads the plugin store to refuse a hook a plugin added, unless the pass is that plugin's.
       await assertNotPluginOwned((ref) => readPluginPieceOwner(h.rows, "hook", ref), hookId, pass);
       const found = liveHooks().find((item) => item.hookId === hookId);
-      if (!found) return;
+      if (!found) return false;
       removal.deletedHooks.add(hookId);
       // Its own signing secret goes with it, as the hooks owner deletes it.
       const secretRef = found.hook.action.type === "webhook" ? found.hook.action.webhook.secretRef : undefined;
       if (secretRef) h.state.keychain.delete(secretRef);
+      return true;
     }),
     listHookSecrets: vi.fn(
       async (_workspaceId: string): Promise<readonly HookSecretHolder[] | undefined> =>
         liveHooks().flatMap(({ hookId, hook }) =>
           hook.action.type === "webhook" && hook.action.webhook.secretRef
-            ? [{ hookId, secretRef: hook.action.webhook.secretRef, url: hook.action.webhook.url }]
+            ? [{ hookId, label: hook.label, secretRef: hook.action.webhook.secretRef, url: hook.action.webhook.url }]
             : [],
         ),
     ),
@@ -131,10 +142,12 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
     deleteHookSecret: (secretRef) => h.sources.deleteHookSecret(secretRef),
     deletePromptPack: vi.fn(async (packId: string) => {
       step("prompt_pack");
+      const found = h.state.packs.some((pack) => pack.packId === packId);
       h.state.packs = h.state.packs.filter((pack) => pack.packId !== packId);
-      removal.deletedPacks.push(packId);
+      if (found) removal.deletedPacks.push(packId);
+      return found;
     }),
-    listSavedConnectors: async () => [...h.state.servers],
+    listSavedConnectors: vi.fn(async () => [...h.state.servers]),
     connectorTemplates: () => [ISSUES_TEMPLATE],
     disconnectConnector: vi.fn(async (serverId: string) => {
       step("connector_disconnect");
@@ -147,7 +160,9 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
         h.state.servers.find((server) => server.serverId === serverId),
         pass,
       );
+      const found = h.state.servers.some((server) => server.serverId === serverId);
       h.state.servers = h.state.servers.filter((server) => server.serverId !== serverId);
+      return found;
     }),
     releaseConnector: vi.fn(async (serverId: string, pass) => {
       step("connector_release");
@@ -175,6 +190,10 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
         ),
     ),
     revokeSkill,
+    readApproval: vi.fn(
+      async (approvalId: string): Promise<ApprovalReading | undefined> =>
+        removal.approvals.get(approvalId) ?? { status: "approved", effects: "done" },
+    ),
     reportUndecidedSecrets: vi.fn((_pluginId: string, _secretRefs: readonly string[], _error: unknown) => undefined),
     // No real wait: a test changes the check between reads instead.
     pause: vi.fn(async (_ms: number) => undefined),
