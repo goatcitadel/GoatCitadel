@@ -286,34 +286,44 @@ export function useGuidedModelSetup({
     setSigningIn(false);
   }, []);
 
-  const pendingSetupPlan = pendingPlanForSelection(
-    [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
-      (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
-    ),
-    providerId,
+  const livePlans = [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
+    (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
   );
-  const createPlan = async (request: Parameters<typeof createChangePlan>[0]["request"]) => {
-    if (pendingSetupPlan) {
-      setDialogPlan(pendingSetupPlan);
+  const pendingConnectPlan = pendingPlanForSelection(livePlans, providerId, { kind: "provider_connection" });
+  const pendingDefaultPlan = pendingPlanForSelection(livePlans, providerId, {
+    kind: "installation_default_model",
+    model,
+    thinkingLevel,
+  });
+  const createPlan = async (
+    pending: ChangePlanRecord | null,
+    request: Parameters<typeof createChangePlan>[0]["request"],
+  ) => {
+    if (pending) {
+      setDialogPlan(pending);
       return;
     }
     await runAction(() => createChangePlan({ workspaceId, surface: "settings", request }));
   };
   const createProviderPlan = async () => {
-    if (!providerId && !pendingSetupPlan) {
+    if (!providerId && !pendingConnectPlan) {
       setNotice("Choose a provider or local runtime first.");
       return;
     }
     const addProfile = selectedProvider?.addProfile;
-    await createPlan({ kind: "provider_connection", providerId, ...(addProfile ? { profile: addProfile } : {}) });
+    await createPlan(pendingConnectPlan, {
+      kind: "provider_connection",
+      providerId,
+      ...(addProfile ? { profile: addProfile } : {}),
+    });
   };
   const createDefaultPlan = async () => {
-    if ((!providerId || !model) && !pendingSetupPlan) {
+    if ((!providerId || !model) && !pendingDefaultPlan) {
       setNotice("Choose a verified provider and model first.");
       return;
     }
-    if (!pendingSetupPlan) submittedDraftRef.current = modelDraft.value;
-    await createPlan({ kind: "installation_default_model", providerId, model, thinkingLevel });
+    if (!pendingDefaultPlan) submittedDraftRef.current = modelDraft.value;
+    await createPlan(pendingDefaultPlan, { kind: "installation_default_model", providerId, model, thinkingLevel });
   };
   const recheckLocalEndpoint = async () => {
     if (!providerId || recheckingEndpoint) return;

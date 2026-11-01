@@ -90,7 +90,9 @@ export function GuidedModelSetup({
     () =>
       // Includes built-in providers an older saved config lacks, so setup can add them.
       withAddableBuiltinProviders(
-        excludeLlamaCpp ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp") : catalog.providers,
+        excludeLlamaCpp
+          ? catalog.providers.filter((provider) => provider.providerId !== "llamacpp")
+          : catalog.providers,
         catalogLoaded,
       ),
     [catalog.providers, catalogLoaded, excludeLlamaCpp],
@@ -174,7 +176,9 @@ export function GuidedModelSetup({
   // Connection guidance only: once the provider is ready there is no Connect action to point at.
   const connectionHint = providerReady ? null : guidedConnectionHint(selectedProvider);
   // Offer the better-supported provider as a one-click switch, only when the list has it.
-  const alternative = catalogProviders.some((provider) => provider.providerId === connectionHint?.alternative?.providerId)
+  const alternative = catalogProviders.some(
+    (provider) => provider.providerId === connectionHint?.alternative?.providerId,
+  )
     ? connectionHint?.alternative
     : undefined;
   // Shown beside the provider hint, never replaced by it.
@@ -315,13 +319,18 @@ export function GuidedModelSetup({
     [recordPlan],
   );
 
-  const pendingSetupPlan = pendingPlanForSelection(
-    [...(latestPlan ? [latestPlan] : []), ...activePlans].filter((plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status)),
-    providerId,
+  const livePlans = [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
+    (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
   );
+  const pendingConnectPlan = pendingPlanForSelection(livePlans, providerId, { kind: "provider_connection" });
+  const pendingDefaultPlan = pendingPlanForSelection(livePlans, providerId, {
+    kind: "installation_default_model",
+    model,
+    thinkingLevel,
+  });
   const createProviderPlan = async () => {
-    if (pendingSetupPlan) {
-      setDialogPlan(pendingSetupPlan);
+    if (pendingConnectPlan) {
+      setDialogPlan(pendingConnectPlan);
       return;
     }
     if (!providerId) {
@@ -356,8 +365,8 @@ export function GuidedModelSetup({
   };
 
   const createDefaultPlan = async () => {
-    if (pendingSetupPlan) {
-      setDialogPlan(pendingSetupPlan);
+    if (pendingDefaultPlan) {
+      setDialogPlan(pendingDefaultPlan);
       return;
     }
     if (!providerId || !model) {

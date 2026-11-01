@@ -391,16 +391,36 @@ export const GUIDED_CATALOG_LOADING_READINESS: GuidedProviderReadiness = {
   evidence: null,
 };
 
+export interface PendingPlanWant {
+  kind: "provider_connection" | "installation_default_model";
+  model?: string;
+  thinkingLevel?: string;
+}
+
 /**
  * Picks the active setup plan to resume: the one targeting the selected provider,
  * or the first one when no provider is chosen yet. Callers pass every active plan.
+ * With `want`, only a plan of that kind (and, for a default-model plan, the same
+ * model and thinking level) counts, so Confirm never reopens a connect plan.
  */
 export function pendingPlanForSelection(
   activePlans: readonly ChangePlanRecord[],
   providerId: string,
+  want?: PendingPlanWant,
 ): ChangePlanRecord | null {
-  if (!providerId) return activePlans[0] ?? null;
-  return activePlans.find((plan) => "providerId" in plan.request && plan.request.providerId === providerId) ?? null;
+  const matchesWant = (plan: ChangePlanRecord) => {
+    if (!want) return true;
+    const request = plan.request;
+    if (request.kind !== want.kind) return false;
+    if (request.kind !== "installation_default_model") return true;
+    return (
+      (want.model === undefined || request.model === want.model) &&
+      (request.thinkingLevel ?? "standard") === (want.thinkingLevel ?? "standard")
+    );
+  };
+  const candidates = activePlans.filter(matchesWant);
+  if (!providerId) return candidates[0] ?? null;
+  return candidates.find((plan) => "providerId" in plan.request && plan.request.providerId === providerId) ?? null;
 }
 
 export interface LocalRuntimeSetupGuide {
