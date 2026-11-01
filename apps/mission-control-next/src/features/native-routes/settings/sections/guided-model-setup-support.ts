@@ -501,15 +501,36 @@ export const activeGuidedSetupPlans = (items: readonly ChangePlanRecord[]) =>
 /**
  * A plan-list read reconciled with the records this view already holds: a held record with a higher revision of
  * the same plan wins, so a read that snapshotted state before an action committed cannot step a plan back.
+ * `recordedSince` holds the records the view made after the read started: a live one the read leaves out (an
+ * action created it after the snapshot) stays, listed first as the newest.
  */
 export const mergePlansByRevision = (
   fetched: readonly ChangePlanRecord[],
   held: readonly ChangePlanRecord[],
-): ChangePlanRecord[] =>
-  fetched.map((plan) => {
+  recordedSince: readonly ChangePlanRecord[] = [],
+): ChangePlanRecord[] => [
+  ...recordedSince.filter(
+    (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status) && !fetched.some((item) => item.planId === plan.planId),
+  ),
+  ...fetched.map((plan) => {
     const newer = held.find((candidate) => candidate.planId === plan.planId && candidate.revision > plan.revision);
     return newer ?? plan;
-  });
+  }),
+];
+
+/** A plan-list read's active guided plans, given what the view held when the read started and what it holds now. */
+export const reconcileGuidedPlanRead = (
+  fetched: readonly ChangePlanRecord[],
+  heldAtStart: readonly ChangePlanRecord[],
+  held: readonly ChangePlanRecord[],
+) =>
+  activeGuidedSetupPlans(
+    mergePlansByRevision(
+      fetched,
+      held,
+      held.filter((plan) => !heldAtStart.includes(plan)),
+    ),
+  );
 
 /** `held` with `plan` in place of any older record of the same plan; a newer held record stays. */
 export const withHeldPlan = (held: readonly ChangePlanRecord[], plan: ChangePlanRecord): ChangePlanRecord[] => [

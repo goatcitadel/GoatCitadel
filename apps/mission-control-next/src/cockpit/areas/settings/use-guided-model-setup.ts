@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatThinkingLevel, ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import { cancelChangePlan, createChangePlan, fetchChangePlans } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -6,15 +6,14 @@ import { deriveSetupProgress } from "@goatcitadel/mission-control-shared/content
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useSessionDraft } from "../../../features/native-routes/library/session-drafts";
 import {
-  activeGuidedSetupPlans,
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
   localRuntimeSetupGuide,
-  mergePlansByRevision,
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
+  reconcileGuidedPlanRead,
   resolveGuidedProviderReadiness,
   submittedGuidedSelection,
   supportedGuidedThinkingLevels,
@@ -89,6 +88,8 @@ export function useGuidedModelSetup({
   // Counts workspace changes, so a settled sign-in completion can tell it outlived the visit it started in.
   const workspaceVisit = useRef(0);
   const workspaceRef = useRef(workspaceId);
+  // Set when a sign-in completion re-read was due while another action ran; that action starts it once it settles.
+  const refreshAfterAction = useRef(false);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
   const [activePlans, setActivePlans] = useState<ChangePlanRecord[]>([]);
@@ -165,11 +166,15 @@ export function useGuidedModelSetup({
 
   /** Reads the workspace's active guided plans; the result applies only while `generation` is still current. */
   const readPlans = useCallback((targetWorkspaceId: string, generation: number) => {
+    // Any fresh read stands in for a completion re-read held back for a running action.
+    refreshAfterAction.current = false;
+    const heldAtStart = recordedPlans.current;
     void fetchChangePlans({ workspaceId: targetWorkspaceId }, { limit: 25 })
       .then(({ items }) => {
         if (generation !== planLoadGeneration.current) return;
-        // A read that snapshotted a plan before this visit recorded a newer revision keeps the newer record.
-        const pending = activeGuidedSetupPlans(mergePlansByRevision(items, recordedPlans.current));
+        // A read that snapshotted a plan before this visit recorded a newer revision keeps the newer record, and
+        // a live plan recorded after the read started stays even when the read leaves it out.
+        const pending = reconcileGuidedPlanRead(items, heldAtStart, recordedPlans.current);
         // Keep every active plan so Connect can resume the one for the selected provider.
         setActivePlans(pending);
         // A re-read drops a live plan it no longer lists, but keeps a finished one this visit recorded.
@@ -182,24 +187,37 @@ export function useGuidedModelSetup({
       });
   }, []);
 
-  useEffect(() => {
+  // The workspace guards move in the commit that shows the new workspace, before its passive effects run: a result
+  // from the previous workspace that settles in between fails runAction's generation check and sees the new visit.
+  useLayoutEffect(() => {
     workspaceVisit.current += 1;
     workspaceRef.current = workspaceId;
     busyRef.current = false;
+    recordedPlans.current = [];
+    // The previous visit's cleanup already moved the generation on.
+    return () => {
+      planLoadGeneration.current += 1;
+      signInRef.current?.abort();
+      signInRef.current = null;
+    };
+  }, [workspaceId]);
+
+  useEffect(() => {
     setBusy(false);
     setSigningIn(false);
     setActionError(null);
     setLatestPlan(null);
     setActivePlans([]);
     setDialogPlan(null);
-    recordedPlans.current = [];
     readPlans(workspaceId, ++planLoadGeneration.current);
-    return () => {
-      planLoadGeneration.current += 1;
-      signInRef.current?.abort();
-      signInRef.current = null;
-    };
   }, [workspaceId, readPlans]);
+
+  /** Ends the running action; a completion re-read it held back starts now, so it sees what the action persisted. */
+  const releaseAction = useCallback(() => {
+    busyRef.current = false;
+    setBusy(false);
+    if (refreshAfterAction.current) readPlans(workspaceRef.current, ++planLoadGeneration.current);
+  }, [readPlans]);
 
   const recordPlan = useCallback(
     async (updated: ChangePlanRecord) => {
@@ -247,13 +265,10 @@ export function useGuidedModelSetup({
       } catch (error) {
         if (generation === planLoadGeneration.current) setActionError(errorText(error));
       } finally {
-        if (generation === planLoadGeneration.current) {
-          busyRef.current = false;
-          setBusy(false);
-        }
+        if (generation === planLoadGeneration.current) releaseAction();
       }
     },
-    [recordPlan],
+    [recordPlan, releaseAction],
   );
 
   const continueProviderSignIn = useCallback(
@@ -286,10 +301,10 @@ export function useGuidedModelSetup({
           // meanwhile may hold the old revision: re-read it if the operator is back in this workspace (a later
           // visit reads it fresh), and refresh the install-wide provider readiness either way.
           if (completing && workspaceVisit.current !== visit) {
-            if (workspaceRef.current === workspaceId) {
-              // An action running in this visit keeps its generation; it already invalidated older reads.
-              readPlans(workspaceId, busyRef.current ? planLoadGeneration.current : ++planLoadGeneration.current);
-            }
+            // A read started while another action runs could answer after that action records a plan it created,
+            // and drop it: the action starts the re-read once it settles.
+            if (workspaceRef.current === workspaceId && busyRef.current) refreshAfterAction.current = true;
+            else if (workspaceRef.current === workspaceId) readPlans(workspaceId, ++planLoadGeneration.current);
             void catalog.reload();
           }
         }
@@ -305,10 +320,9 @@ export function useGuidedModelSetup({
     controller.abort();
     // Discards the cancelled run's late result or error.
     planLoadGeneration.current += 1;
-    busyRef.current = false;
-    setBusy(false);
+    releaseAction();
     setSigningIn(false);
-  }, []);
+  }, [releaseAction]);
 
   const livePlans = [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
     (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),

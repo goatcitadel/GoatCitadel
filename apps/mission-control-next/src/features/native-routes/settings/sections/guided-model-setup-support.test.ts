@@ -11,6 +11,7 @@ import {
   withAddableBuiltinProviders,
   localRuntimeSetupGuide,
   mergePlansByRevision,
+  reconcileGuidedPlanRead,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
   submittedGuidedSelection,
@@ -454,6 +455,20 @@ describe("plan reads reconciled by revision", () => {
   it("adds plans only the fetch lists and leaves out plans only held", () => {
     const fetched = plan("b", 1);
     expect(mergePlansByRevision([fetched], [plan("a", 3)])).toEqual([fetched]);
+  });
+  it("keeps a live plan recorded after the read started that the read leaves out, first", () => {
+    const fetched = plan("b", 1);
+    const created = plan("c", 1);
+    expect(mergePlansByRevision([fetched], [plan("a", 3), created], [created])).toEqual([created, fetched]);
+    expect(mergePlansByRevision([fetched], [plan("c", 2, "completed")], [plan("c", 2, "completed")])).toEqual([
+      fetched,
+    ]);
+  });
+  it("reconciles a read with only the live records made after it started", () => {
+    const before = plan("a", 1);
+    const created = plan("c", 1);
+    expect(reconcileGuidedPlanRead([], [before], [before, created]).map((item) => item.planId)).toEqual(["c"]);
+    expect(reconcileGuidedPlanRead([], [before, created], [before, created])).toEqual([]);
   });
   it("keeps a stale non-terminal copy out of the active list when the held newer plan is terminal", () => {
     const merged = mergePlansByRevision([plan("a", 2), plan("b", 1)], [plan("a", 3, "completed")]);

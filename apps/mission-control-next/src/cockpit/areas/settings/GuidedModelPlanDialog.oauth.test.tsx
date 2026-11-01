@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   start: vi.fn(),
   poll: vi.fn(),
   complete: vi.fn(),
+  create: vi.fn(),
   workspace: { activeWorkspaceId: undefined as string | undefined },
 }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () => ({
@@ -21,7 +22,7 @@ vi.mock("@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog", () 
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchChangePlans: mocks.plans,
-  createChangePlan: vi.fn(),
+  createChangePlan: mocks.create,
   cancelChangePlan: vi.fn(),
   completeChangePlanProviderOAuth: mocks.complete,
   confirmChangePlan: vi.fn(),
@@ -66,6 +67,18 @@ vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => mocks.workspace,
 }));
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ navigate: vi.fn() }) }));
+
+// Captured before the fake clock installs: React's scheduler keeps its own real setImmediate.
+const realSetImmediate = globalThis.setImmediate;
+/** Lets React's scheduler run its queued tasks (a commit, then its passive effects) on the real clock. */
+const drainScheduler = async () => {
+  for (let turn = 0; turn < 10; turn += 1) await new Promise<void>((resolve) => realSetImmediate(() => resolve()));
+};
+/** Calls `onCommit` from a layout effect: during the commit, before that commit's passive effects run. */
+function CommitProbe({ onCommit }: { onCommit?: () => void }) {
+  useLayoutEffect(() => onCommit?.(), [onCommit]);
+  return null;
+}
 
 let root: Root, container: HTMLDivElement, onboarding: OnboardingState, mounted: boolean;
 const button = (label: string) =>
@@ -238,6 +251,12 @@ describe("guided setup sign-in completion across a workspace switch", () => {
     revision: 2,
     requiredAction: { kind: "confirmation", actionId: "confirm-1", actionNonce: "nonce-2", title: "Confirm" },
   };
+  const createdPlan = {
+    ...oauthPlan,
+    planId: "plan-created",
+    revision: 7,
+    requiredAction: { kind: "oauth", actionId: "oauth-7", actionNonce: "nonce-7", title: "Sign in" },
+  };
   const switchTo = async (workspaceId: string | undefined) => {
     mocks.workspace.activeWorkspaceId = workspaceId;
     await render();
@@ -304,7 +323,8 @@ describe("guided setup sign-in completion across a workspace switch", () => {
     let answerRead: (() => void) | undefined;
     mocks.plans.mockImplementation(() => new Promise((resolve) => (answerRead = () => resolve({ items: [revised] }))));
     await settleFirst();
-    expect(answerRead).toBeDefined();
+    // The second sign-in still runs, so the re-read waits for it to settle.
+    expect(answerRead).toBeUndefined();
     const latest = {
       ...oauthPlan,
       revision: 3,
@@ -312,9 +332,76 @@ describe("guided setup sign-in completion across a workspace switch", () => {
     };
     await act(async () => settleSecond(latest));
     expect(dialog()?.getAttribute("data-revision")).toBe("3");
+    expect(answerRead).toBeDefined();
     await act(async () => answerRead!());
     await act(async () => button("Close")!.click());
     await act(async () => button("Connect provider")!.click());
     expect(dialog()?.getAttribute("data-revision")).toBe("3");
+  });
+  it("keeps a plan an action created while a completion re-read was due", async () => {
+    const settleFirst = await startCompletion();
+    await switchTo("other");
+    // Back in this workspace, its plan list names no connection plan, so Connect creates one. A read the Gateway
+    // answers before the create persists snapshots that empty list, whenever its answer arrives.
+    let created = false;
+    const staleReads: Array<() => void> = [];
+    mocks.plans.mockImplementation(() =>
+      created
+        ? Promise.resolve({ items: [createdPlan] })
+        : new Promise((resolve) => staleReads.push(() => resolve({ items: [] }))),
+    );
+    await switchTo(undefined);
+    let finishCreate!: () => void;
+    mocks.create.mockReturnValue(
+      new Promise((resolve) => {
+        finishCreate = () => {
+          created = true;
+          resolve(createdPlan);
+        };
+      }),
+    );
+    await act(async () => button("Connect provider")!.click());
+    expect(mocks.create).toHaveBeenCalledOnce();
+    // The first completion settles while the create is in flight; a read started now would miss the new plan.
+    await settleFirst();
+    await act(async () => finishCreate());
+    expect(dialog()?.getAttribute("data-revision")).toBe("7");
+    await act(async () => staleReads.forEach((answer) => answer()));
+    await act(async () => button("Close")!.click());
+    await act(async () => button("Connect provider")!.click());
+    expect(mocks.create).toHaveBeenCalledOnce();
+    expect(dialog()?.getAttribute("data-revision")).toBe("7");
+  });
+  it("discards a completion that settles after the switch commits but before its passive effects run", async () => {
+    const completed = { ...oauthPlan, revision: 2, status: "completed", requiredAction: undefined };
+    let settle!: (plan: unknown) => void;
+    mocks.complete.mockReturnValue(new Promise((resolve) => (settle = resolve)));
+    mocks.poll.mockResolvedValue({ flowId: "flow-1", providerId: "openai-codex", status: "connected" });
+    const reloadOnboarding = vi.fn(async () => {});
+    const tree = (onCommit?: () => void) => (
+      <>
+        <CockpitGuidedModelSetup onboarding={onboarding} reloadOnboarding={reloadOnboarding} onEnterChat={() => {}} />
+        <CommitProbe onCommit={onCommit} />
+      </>
+    );
+    await act(async () => root.render(tree()));
+    await act(async () => button("Connect provider")!.click());
+    await act(async () => button("Continue sign-in")!.click());
+    await advance(1_000);
+    expect(mocks.complete).toHaveBeenCalledOnce();
+    const actEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      // Outside act, React commits this update in one scheduler task and runs its passive effects in a later one.
+      // The probe settles the completion during the commit, so the result arrives inside that gap.
+      mocks.workspace.activeWorkspaceId = "other";
+      root.render(tree(() => settle(completed)));
+      await drainScheduler();
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    }
+    await act(async () => {});
+    expect(reloadOnboarding).not.toHaveBeenCalled();
+    expect(dialog()).toBeNull();
   });
 });
