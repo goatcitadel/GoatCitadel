@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
 import {
@@ -13,10 +14,10 @@ import { CapabilityPluginStore, type CapabilityPluginSettingRows } from "./capab
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
 import { SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
-import { lookUpHostAddresses } from "./hardened-git.js";
+import { TEMP_REMOVAL_OPTIONS, lookUpHostAddresses } from "./hardened-git.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { listBuiltInPluginManifests } from "./plugin-manifest-file.js";
-import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
+import { PluginSnapshotStore, SNAPSHOT_SWEEP_GRACE_MS } from "./plugin-snapshot-store.js";
 import { fetchPluginSource } from "./plugin-source-service.js";
 import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
@@ -89,6 +90,12 @@ export function composeCapabilityPlugins({
   const paths = pluginDataPaths(config);
   const snapshots = new PluginSnapshotStore(paths.snapshots);
   const store = new CapabilityPluginStore(systemSettings);
+  // Never rejects (it logs its own failures); the catch only satisfies the async-boundary rule.
+  reclaimPluginStorage(
+    paths.temp,
+    () => store.listReferencedSnapshots(),
+    (keep, options) => snapshots.sweep(keep, options),
+  ).catch(() => undefined);
   const inspection = new CapabilityPluginInspectionService({
     fetchSource: (source) =>
       fetchPluginSource(source, {
@@ -136,6 +143,32 @@ export function composeCapabilityPlugins({
     readInspection: async (inspectionId) => (await store.getInspection(inspectionId))?.inspection,
     reportFailure: reportFailedRead,
   });
+}
+
+/**
+ * Runs once when plugins are wired, off the request path: clears the temp copies a crashed fetch left (nothing is in
+ * flight at startup) and removes the snapshots no installed plugin or kept inspection points at and that are past the
+ * grace window. A failure is logged and never blocks boot.
+ */
+export async function reclaimPluginStorage(
+  tempRoot: string,
+  listReferencedSnapshots: () => Promise<ReadonlySet<string>>,
+  sweep: (keep: ReadonlySet<string>, options: { olderThanMs: number }) => Promise<unknown>,
+  olderThanMs = SNAPSHOT_SWEEP_GRACE_MS,
+): Promise<void> {
+  try {
+    const leftovers = await fs.readdir(tempRoot).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === "ENOENT") return [];
+      throw error;
+    });
+    for (const name of leftovers) await fs.rm(path.join(tempRoot, name), TEMP_REMOVAL_OPTIONS);
+    await sweep(await listReferencedSnapshots(), { olderThanMs });
+  } catch (error) {
+    const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+    log.warn("unused plugin copies could not be cleaned up at startup", {
+      err: redactStructuredSecrets(diagnostic).value,
+    });
+  }
 }
 
 /** The label a plugin skill's review key uses when the Gateway package's version can't be read. */

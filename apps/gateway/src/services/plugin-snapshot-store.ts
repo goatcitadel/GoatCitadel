@@ -11,6 +11,8 @@ import { TEMP_REMOVAL_OPTIONS, createTreePathTracker, isPortableTreePath, treeEn
 // ever read. Nothing in one is executed, and the store itself creates only plain files and folders.
 
 const SHA256_PATTERN = /^[a-f0-9]{64}$/u;
+/** A snapshot younger than this is never swept: an inspection may have imported it and not saved yet. */
+export const SNAPSHOT_SWEEP_GRACE_MS = 60 * 60 * 1000;
 const READ_CHUNK_BYTES = 64 * 1024;
 const MAX_TREE_ENTRIES = treeEntryLimit(PLUGIN_LIMITS.maxFiles);
 const FOLDER_CHANGED_MESSAGE = "The folder changed while it was being copied.";
@@ -210,6 +212,41 @@ export class PluginSnapshotStore {
       await fs.rm(sourceDir, TEMP_REMOVAL_OPTIONS);
     }
     return snapshot;
+  }
+
+  /**
+   * Removes the stored snapshots nothing keeps. Only folders named by a SHA-256 are considered, so anything else in
+   * the store is left alone, and one modified less than `olderThanMs` ago is kept even when it isn't in `keep`, since
+   * an inspection may have imported it and not yet saved. A folder that can't be removed throws after the rest were tried.
+   */
+  public async sweep(
+    keep: ReadonlySet<string>,
+    options: { olderThanMs: number; now?: number },
+  ): Promise<{ removed: string[] }> {
+    const now = options.now ?? Date.now();
+    let names: string[];
+    try {
+      names = await fs.readdir(this.root);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "ENOENT") return { removed: [] };
+      throw error;
+    }
+    const removed: string[] = [];
+    let failure: unknown;
+    for (const name of names) {
+      if (!SHA256_PATTERN.test(name) || keep.has(name)) continue;
+      const dir = path.join(this.root, name);
+      try {
+        const info = await fs.lstat(dir);
+        if (!info.isDirectory() || info.isSymbolicLink() || now - info.mtimeMs < options.olderThanMs) continue;
+        await fs.rm(dir, TEMP_REMOVAL_OPTIONS);
+        removed.push(name);
+      } catch (error) {
+        failure ??= error;
+      }
+    }
+    if (failure !== undefined) throw failure;
+    return { removed };
   }
 
   /**

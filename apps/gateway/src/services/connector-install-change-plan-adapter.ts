@@ -45,7 +45,11 @@ export interface ConnectorInstallDependencies {
   updateSettings(
     input: Pick<UpdateSettingsInput, "expectedRevision" | "networkAllowlist" | "features">,
   ): Promise<unknown>;
-  createMcpServer(input: McpServerCreateInput): Promise<McpServerRecord>;
+  /** `options.assertUnique` runs against the list the write itself reads, so two installs can't both pass it. */
+  createMcpServer(
+    input: McpServerCreateInput,
+    options?: mcpServerAdminService.McpServerCreateOptions,
+  ): Promise<McpServerRecord>;
   /** Sets "Reading is free" through the policy write, which audits the change under `actorId`. */
   setReadsFree(server: McpServerRecord, actorId: string): Promise<McpServerRecord>;
 }
@@ -144,7 +148,9 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         allowed = pending;
       }
       step = "save";
-      const created = await this.deps.createMcpServer(createInput(template));
+      const created = await this.deps.createMcpServer(createInput(template), {
+        assertUnique: (previous) => assertLabelFree(template, previous),
+      });
       savedId = created.serverId;
       step = "posture";
       // The operator who asked for the install, not whoever resumed it, is named in the audit record.
@@ -165,6 +171,17 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         result: { summary: finishedSentences(template, allowed, true, chatTurnedOn).join(" ") },
       };
     } catch (error) {
+      // Another install saved the app between this one's check and its save: this one saved nothing, so it is refused
+      // like a check at apply, and the other install's server is never named as its own.
+      if (step === "save" && isAlreadyInstalled(error)) {
+        return {
+          status: "failed" as const,
+          result: {
+            summary: [...finishedSentences(template, allowed, false, false), error.message].join(" "),
+            failureCode: "connector_install_refused",
+          },
+        };
+      }
       // Nothing was written before the allowed-host write landed. After it, what the owners hold decides the summary:
       // a save can report a failed follow-up after it landed, or be rolled back with its transaction.
       const observed =
@@ -236,10 +253,7 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
     const found = findInstallableConnectorTemplate(this.deps.templates, request.templateId);
     if (!found.ok) throw refusal(found.field, found.message);
     const { template } = found;
-    const label = mcpServerLabelKey(template.label);
-    if ((await this.deps.readMcpServers()).some((server) => mcpServerLabelKey(server.label) === label)) {
-      throw refusal("alreadyInstalled", `${template.label} is already saved.`);
-    }
+    assertLabelFree(template, await this.deps.readMcpServers());
     return template;
   }
 }
@@ -285,8 +299,10 @@ export function connectorInstallDependencies(
     readMcpServers: () => gateway.listMcpServers(),
     readSettings: () => gateway.getSettings(),
     updateSettings: (input) => gateway.updateSettings(input),
-    createMcpServer: (input) =>
-      gateway.storage.runImmediateTransaction(() => mcpServerAdminService.createMcpServer(mcpAdministration, input)),
+    createMcpServer: (input, options) =>
+      gateway.storage.runImmediateTransaction(() =>
+        mcpServerAdminService.createMcpServer(mcpAdministration, input, undefined, undefined, undefined, options),
+      ),
     setReadsFree: (server, actorId) =>
       mcpServerAdminService.updateMcpServerPolicy(
         mcpAdministration,
@@ -322,8 +338,21 @@ function requireRequest(plan: ChangePlanRecord): ChangePlanConnectorInstallReque
   return plan.request;
 }
 
+/** Refuses when a server with the template's label is saved. Apply runs it again on the list its save reads. */
+function assertLabelFree(template: McpServerTemplateRecord, servers: readonly McpServerRecord[]): void {
+  const label = mcpServerLabelKey(template.label);
+  if (servers.some((server) => mcpServerLabelKey(server.label) === label)) {
+    throw refusal("alreadyInstalled", `${template.label} is already saved.`);
+  }
+}
+
 function refusal(field: string, message: string): ConflictError {
   return new ConflictError({ message, details: { field } });
+}
+
+/** Whether a save was refused by `assertLabelFree` because a server with the template's label is saved. */
+function isAlreadyInstalled(error: unknown): error is ConflictError {
+  return error instanceof ConflictError && error.details?.field === "alreadyInstalled";
 }
 
 /**

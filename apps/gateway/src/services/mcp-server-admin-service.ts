@@ -138,12 +138,19 @@ export interface McpServerEditReview {
   actorId?: string;
 }
 
+/** Checks a create makes against the saved list it reads, in the same step as the write. */
+export interface McpServerCreateOptions {
+  /** Throws to refuse the save. It runs on the list read for the write, so a concurrent save can't slip past it. */
+  assertUnique?(previous: readonly McpServerRecord[]): void;
+}
+
 export async function createMcpServer(
   host: McpServerAdminHost,
   input: McpServerCreateInput,
   ownerServerId?: string,
   ownerPlanId?: string,
   onCommitted?: () => void | Promise<void>,
+  options?: McpServerCreateOptions,
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
@@ -185,6 +192,7 @@ export async function createMcpServer(
   };
   assertMcpApprovalPostureAllowed(created, created.policy.approvalPosture, undefined);
   const previous = await host.readMcpServers();
+  options?.assertUnique?.(previous);
   const servers = [created, ...previous];
   const committed = await host.writeMcpServers(servers, previous);
   const acknowledgement = committed.find((server) => server.serverId === created.serverId)!;

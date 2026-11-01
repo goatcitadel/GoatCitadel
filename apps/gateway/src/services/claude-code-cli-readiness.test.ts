@@ -8,6 +8,53 @@ import {
 const status = (value: unknown) => vi.fn(async () => ({ exitCode: 0, stdout: JSON.stringify(value) }));
 
 describe("ClaudeCodeCliReadiness", () => {
+  const deferredRun = () => {
+    const pending: Array<(value: { exitCode: number | null; stdout: string }) => void> = [];
+    const run = vi.fn(
+      () =>
+        new Promise<{ exitCode: number | null; stdout: string }>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    return { run, pending };
+  };
+  const loggedIn = (value: boolean) => ({
+    exitCode: 0,
+    stdout: JSON.stringify({ loggedIn: value, authMethod: "claude.ai", apiProvider: "firstParty" }),
+  });
+
+  it("refresh after an in-flight logged-out probe starts a new probe and caches its result", async () => {
+    const { run, pending } = deferredRun();
+    const readiness = new ClaudeCodeCliReadiness({ run });
+    const checkA = readiness.check();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    readiness.invalidate();
+    const checkB = readiness.check();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    pending[1]!(loggedIn(true));
+    await expect(checkB).resolves.toMatchObject({ status: "ready" });
+    pending[0]!(loggedIn(false));
+    await checkA;
+    await expect(readiness.check()).resolves.toMatchObject({ status: "ready" });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(readiness.peek()).toMatchObject({ status: "ready" });
+  });
+
+  it("a superseded probe that resolves ready after invalidate leaves the cache empty", async () => {
+    const { run, pending } = deferredRun();
+    const readiness = new ClaudeCodeCliReadiness({ run });
+    const checkA = readiness.check();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    readiness.invalidate();
+    pending[0]!(loggedIn(true));
+    await checkA;
+    expect(readiness.peek()).toBeUndefined();
+    const checkB = readiness.check();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    pending[1]!(loggedIn(false));
+    await expect(checkB).resolves.toMatchObject({ status: "missing" });
+  });
+
   it("reports a logged-out CLI as missing", async () => {
     const readiness = new ClaudeCodeCliReadiness({
       run: status({ loggedIn: false, authMethod: "none", apiProvider: "firstParty" }),

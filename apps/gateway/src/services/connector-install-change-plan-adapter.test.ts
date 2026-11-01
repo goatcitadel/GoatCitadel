@@ -20,6 +20,7 @@ import {
   connectorInstallDependencies,
   type ConnectorInstallDependencies,
 } from "./connector-install-change-plan-adapter.js";
+import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
 import { isAutoResumeOnApprovalPlan } from "./evolution-control-plane-approval-reconciliation.js";
 import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-adapter.js";
 import { EvolutionControlPlaneService, type EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
@@ -163,7 +164,9 @@ function owners(
         };
       },
     ),
-    createMcpServer: vi.fn(async (create: McpServerCreateInput) => {
+    createMcpServer: vi.fn(async (create: McpServerCreateInput, options?: McpServerCreateOptions) => {
+      // The real owner runs this against the list it reads inside the write, in the same step as the save.
+      options?.assertUnique?.(state.servers);
       const server = savedServer(create.label, {
         ...create,
         serverId: `server-${state.servers.length + 1}`,
@@ -263,18 +266,21 @@ describe("installing a connector through one Change Plan", () => {
       "other.example.org",
       "mcp.example.test",
     ]);
-    expect(h.deps.createMcpServer).toHaveBeenCalledExactlyOnceWith({
-      label: "Example",
-      transport: "http",
-      url: "https://mcp.example.test/mcp",
-      authType: "oauth2",
-      oauth: { metadataDiscovery: true },
-      category: "data",
-      trustTier: "restricted",
-      costTier: "unknown",
-      policy: POLICY,
-      enabled: false,
-    });
+    expect(h.deps.createMcpServer).toHaveBeenCalledExactlyOnceWith(
+      {
+        label: "Example",
+        transport: "http",
+        url: "https://mcp.example.test/mcp",
+        authType: "oauth2",
+        oauth: { metadataDiscovery: true },
+        category: "data",
+        trustTier: "restricted",
+        costTier: "unknown",
+        policy: POLICY,
+        enabled: false,
+      },
+      { assertUnique: expect.any(Function) },
+    );
     // "Reading is free" goes through the audited policy write, naming the operator who asked for the install.
     expect(h.deps.setReadsFree).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ serverId: "server-1" }),
@@ -376,6 +382,58 @@ describe("installing a connector through one Change Plan", () => {
 
     expect(h.writes()).toEqual([]);
     expect(await h.service.list(OPERATOR)).toEqual([]);
+  });
+
+  it("saves a connector once when two installs of it run at the same time", async () => {
+    // Hosts already allowed, so the settings revision fence is not what stops the second install.
+    const h = harness({ allowlist: ["*.example.test"] });
+    const first = await h.service.create({ actor: OPERATOR, request: installRequest("example") });
+    // One active plan per target and workspace, so the second operator installs from another workspace.
+    const otherWorkspace = { ...OPERATOR, workspaceId: "other" };
+    const second = await h.service.create({ actor: otherWorkspace, request: installRequest("example") });
+    // Both installs read the saved servers (empty) before either one writes.
+    const real = h.deps.readMcpServers.getMockImplementation()!;
+    let reads = 0;
+    let release!: () => void;
+    const bothRead = new Promise<void>((resolve) => (release = resolve));
+    h.deps.readMcpServers.mockImplementation(async () => {
+      const snapshot = await real();
+      if (++reads <= 2) {
+        if (reads === 2) release();
+        await bothRead;
+      }
+      return snapshot;
+    });
+
+    const settled = await Promise.all([h.confirm(first), h.confirm(second, otherWorkspace)]);
+
+    expect(h.state.servers.filter((server) => server.label === "Example")).toHaveLength(1);
+    const completed = settled.filter((plan) => plan.status === "completed");
+    expect(completed).toHaveLength(1);
+    // The loser saved nothing, so it says it was refused and doesn't claim the winner's server as its own.
+    const other = settled.find((plan) => plan.status !== "completed")!;
+    expect(other.status).toBe("failed");
+    expect(other.result).toEqual({ summary: "Example is already saved.", failureCode: "connector_install_refused" });
+    expect(other.evidenceRefs).toEqual(["mcp_template:example"]);
+  });
+
+  it("names the hosts it allowed when its save is refused because another install saved the app first", async () => {
+    const h = harness();
+    h.deps.createMcpServer.mockImplementationOnce(async () => {
+      h.state.servers = [savedServer("Example")];
+      throw new ConflictError({ message: "Example is already saved.", details: { field: "alreadyInstalled" } });
+    });
+
+    const settled = await h.install(installRequest("example", true));
+
+    expect(settled.status).toBe("failed");
+    expect(settled.result).toEqual({
+      summary: "Allowed mcp.example.test, auth.example.test. Example is already saved.",
+      failureCode: "connector_install_refused",
+    });
+    expect(settled.evidenceRefs).toEqual(["mcp_template:example"]);
+    expect(h.deps.setReadsFree).not.toHaveBeenCalled();
+    expect(h.state.settings.features.chatStaticMcpV1Enabled).toBe(false);
   });
 
   it("refuses a template already saved under a different letter case", async () => {
