@@ -127,10 +127,10 @@ export class BrowserErrandService {
     if (!errand || errand.view.errandId !== errandId) {
       return false;
     }
+    // Withdraw under the stopping actor before the abort lets the gate withdraw it as a system stop.
+    await errand.gate?.withdrawPending(actorId).catch(() => undefined);
     errand.controller.abort();
     this.resolveHandBack(errand, "stopped");
-    // Withdraw under the stopping actor before the gate's own abort path withdraws it as a system stop.
-    await errand.gate?.withdrawPending(actorId).catch(() => undefined);
     return true;
   }
 

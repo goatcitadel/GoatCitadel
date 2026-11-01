@@ -118,9 +118,12 @@ export async function describePointOverCdp(
 /** True when every frame from the main frame down to `frameId` shares the main frame's origin (so its content is readable). */
 function isSameOriginChain(root: FrameTreeNode, frameId: string): boolean {
   const origin = root.frame.securityOrigin;
+  const contains = (node: FrameTreeNode): boolean =>
+    node.frame.id === frameId || (node.childFrames ?? []).some(contains);
   const walk = (node: FrameTreeNode): boolean | undefined => {
     if (node.frame.securityOrigin !== origin) {
-      return false;
+      // A cross-origin branch decides only when the target sits inside it; a sibling (an ad frame, say) is skipped.
+      return contains(node) ? false : undefined;
     }
     if (node.frame.id === frameId) {
       return true;

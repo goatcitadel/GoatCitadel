@@ -445,26 +445,27 @@ export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): Appr
 }
 
 /**
- * A browser errand's risky step (a click or entry the errand wants to make). The preview names the step, the page it
- * is on (the target) and that page's address (supporting); the screenshot the Gateway captured with it is shown beside
- * the decision. Without a step or a page title there is nothing exact to review here, so the generic model applies.
+ * A browser errand's risky step (a click or entry the errand wants to make). The Gateway's preview carries the step's
+ * title, a summary (that title plus what the step does) and the page's address; it carries no page title. The step and
+ * the page address are the targets; the screenshot the Gateway captured with it is shown beside the decision. Without
+ * a step there is nothing exact to review here, so the generic model applies.
  */
 export function browserErrandActionApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
   const preview = approval.preview as Record<string, unknown> | undefined;
-  const summary = nonEmptyText(preview?.summary);
-  const title = nonEmptyText(preview?.title);
-  if (!summary && !title) return null;
+  // The summary already starts with the title, so the title stands alone only when there is no summary.
+  const step = nonEmptyText(preview?.summary) ?? nonEmptyText(preview?.title);
+  if (!step) return null;
   const url = nonEmptyText(preview?.url);
   const entries: ApprovalTargetEntry[] = [
-    ...(summary ? [{ label: "Step", value: summary }] : []),
-    ...(title ? [{ label: "Page", value: title }] : []),
+    { label: "Step", value: step },
+    ...(url ? [{ label: "Page", value: url }] : []),
   ];
   return {
     targets: entries.map((entry) => `${entry.label}: ${entry.value}`),
     targetEntries: entries,
     commands: [],
     changes: [],
-    supporting: url ? [url] : [],
+    supporting: [],
     consequence: "Approving lets the browser errand take this one step. Denying ends the errand.",
   };
 }

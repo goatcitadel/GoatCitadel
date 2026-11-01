@@ -11273,7 +11273,8 @@ function shouldExposeWebToolForTurn(input: {
   if (input.webMode === "off") {
     return false;
   }
-  if (input.mode !== "chat") {
+  // An errand is a transaction ("add it to my cart"), not a lookup; its own flag and Chat-only gate still apply.
+  if (input.mode !== "chat" || input.toolName === BROWSER_ERRAND_TOOL_NAME) {
     return true;
   }
   return input.webLookupIntent;

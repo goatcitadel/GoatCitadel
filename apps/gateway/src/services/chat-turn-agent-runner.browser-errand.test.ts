@@ -79,6 +79,26 @@ describe("ChatTurnAgentRunner browser.errand exposure", () => {
     }
   });
 
+  it("offers browser.errand to a capability-profile turn with no web-lookup intent, but not with Web off", async () => {
+    const profile = {
+      profileId: "profile-errand",
+      identity: { workspaceId: "workspace-errand" },
+      selection: { tools: [], activatedSkills: [] },
+      governance: { policyDecisions: [] },
+    } as unknown as ChatTurnAgentRunnerInput["capabilityProfile"];
+    const content = "Add the selected item to my cart on the site I'm signed in to.";
+    for (const [suffix, webMode, offered] of [
+      ["profile-auto", "auto", true],
+      ["profile-off", "off", false],
+    ] as const) {
+      const harness = buildHarness(true);
+      const schema = await harness.orchestrator.resolveCapabilityToolSchema(
+        turnInput({ sessionSuffix: suffix, content, webMode, capabilityProfile: profile }),
+      );
+      expect([...schema.canonicalToModel.keys()].includes("browser.errand")).toBe(offered);
+    }
+  });
+
   it("offers browser.errand in Chat when the flag is on", async () => {
     const harness = buildHarness(true);
     await harness.orchestrator.run(turnInput({ sessionSuffix: "on" }));

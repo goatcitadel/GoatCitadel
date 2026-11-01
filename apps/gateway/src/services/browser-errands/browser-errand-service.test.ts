@@ -289,6 +289,46 @@ describe("BrowserErrandService", () => {
   });
 });
 
+describe("BrowserErrandService stop", () => {
+  it("withdraws the pending approval under the stopping operator before it aborts the errand", async () => {
+    const order: string[] = [];
+    let asked!: () => void;
+    const approvalAsked = new Promise<void>((resolve) => (asked = resolve));
+    const gate = fakeGate(vi.fn, {
+      withdrawPending: vi.fn(async () => {
+        order.push("withdraw");
+      }),
+    });
+    const built = buildService(vi.fn, {
+      createGate: (deps) => {
+        gate.request = vi.fn(
+          () =>
+            new Promise<"stopped">((resolve) => {
+              asked();
+              deps.signal.addEventListener(
+                "abort",
+                () => {
+                  order.push("abort");
+                  resolve("stopped");
+                },
+                { once: true },
+              );
+            }),
+        );
+        return gate;
+      },
+      runLoop: async (deps) => outcome((await deps.requestApproval({} as never)) === "stopped" ? "stopped" : "done"),
+    });
+    const running = built.service.run(errandRequest());
+    await approvalAsked;
+    await expect(built.service.stop(built.service.getStatus("tool-run-1")!.errandId, "operator")).resolves.toBe(true);
+    expect(gate.withdrawPending).toHaveBeenCalledWith("operator");
+    expect(order).toEqual(["withdraw", "abort"]);
+    await expect(running).resolves.toMatchObject({ outcome: "stopped" });
+    await built.service.dispose();
+  });
+});
+
 describe("BrowserErrandService dispose", () => {
   it("withdraws a pending approval before dispose resolves, then closes the window", async () => {
     const order: string[] = [];

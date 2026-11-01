@@ -41,8 +41,8 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
   it("parses against LlmModelMetadataManifest and every entry is well-formed", () => {
     expect(parsedManifest.version).toBe(1);
     expect(typeof parsedManifest.entries).toBe("object");
-    // 45 earlier entries plus the Claude 5 models (4) under anthropic, claude-code and claude-code-cli.
-    expect(Object.keys(parsedManifest.entries)).toHaveLength(57);
+    // 45 earlier entries, the Claude 5 models (4) under anthropic, claude-code and claude-code-cli, and the errand model.
+    expect(Object.keys(parsedManifest.entries)).toHaveLength(58);
     for (const [key, entry] of Object.entries(parsedManifest.entries)) {
       expect(key.toLowerCase()).not.toMatch(/(?:^|\/)(?:xai|grok)(?:\/|$)/);
       expect(entry.contextWindow, `${key} contextWindow`).toBeGreaterThan(0);
@@ -55,6 +55,11 @@ describe("shipped manifest at config/llm-model-metadata.json", () => {
 
   it("includes the critical entries called out in the plan", () => {
     expect(parsedManifest.entries["openai-codex/*"]).toEqual({ contextWindow: 272000, outputTokenLimit: 32000 });
+    expect(parsedManifest.entries["openai-codex/gpt-6.1-sol"]).toEqual({
+      contextWindow: 272000,
+      outputTokenLimit: 32000,
+      reasoning: { supportedEfforts: ["low", "medium", "high", "xhigh", "max"] },
+    });
     expect(parsedManifest.entries["openai/gpt-6-astra"]?.reasoning?.supportedEfforts).toEqual([
       "low",
       "medium",

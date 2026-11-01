@@ -14,20 +14,27 @@ const approval = (preview: Record<string, unknown>): ApprovalRequest => ({
 });
 
 describe("browser errand approval evidence", () => {
-  it("names the page as the target and its address as supporting detail", () => {
+  it("names the step and the page address, matching the Gateway's preview", () => {
+    // The Gateway sets title to the step title and summary to that title plus the step's description.
     const model = buildApprovalRequestReviewEvidenceModel(
       approval({
-        summary: "Click Place order",
+        summary: 'Click "Place order" — Buy the hub for $39',
         url: "https://shop.example/checkout",
-        title: "Checkout",
+        title: 'Click "Place order"',
         screenshotAttachmentId: "att-1",
+        screenshotSha256: "a".repeat(64),
       }),
     );
     expect(model?.targetEntries).toEqual([
-      { label: "Step", value: "Click Place order" },
-      { label: "Page", value: "Checkout" },
+      { label: "Step", value: 'Click "Place order" — Buy the hub for $39' },
+      { label: "Page", value: "https://shop.example/checkout" },
     ]);
-    expect(model?.supporting).toEqual(["https://shop.example/checkout"]);
+    expect(model?.supporting).toEqual([]);
+  });
+
+  it("names the step from its title when there is no summary", () => {
+    const model = buildApprovalRequestReviewEvidenceModel(approval({ title: "The page changed" }));
+    expect(model?.targetEntries).toEqual([{ label: "Step", value: "The page changed" }]);
   });
 
   it("falls back to the generic model when the preview names no page or step", () => {

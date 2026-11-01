@@ -35,6 +35,41 @@ const COMMON = {
   "Page.createIsolatedWorld": { executionContextId: 7 },
 };
 
+describe("errand target inspection across frames", () => {
+  const tree = {
+    frame: { id: "main", securityOrigin: "http://a" },
+    childFrames: [
+      {
+        frame: { id: "ad", securityOrigin: "http://ads" },
+        childFrames: [{ frame: { id: "ad-inner", securityOrigin: "http://a" } }],
+      },
+      {
+        frame: { id: "shop", securityOrigin: "http://a" },
+        childFrames: [{ frame: { id: "cart", securityOrigin: "http://a" } }],
+      },
+    ],
+  };
+  const pointIn = async (frameId: string) => {
+    const { context, page } = fakeContext([], {
+      "Page.getFrameTree": { frameTree: tree },
+      "Page.createIsolatedWorld": { executionContextId: 7 },
+      "DOM.getNodeForLocation": { backendNodeId: 3, frameId },
+      "DOM.resolveNode": { object: { objectId: "node" } },
+      "Runtime.callFunctionOn": { result: { value: BASE_INFO } },
+      "Runtime.evaluate": { result: { value: BASE_INFO } },
+    });
+    return describePointOverCdp(context, page, 5, 5);
+  };
+
+  it("reads a same-origin frame listed after a cross-origin sibling", async () => {
+    expect(await pointIn("cart")).toMatchObject({ tagName: "div", isOpaque: false });
+  });
+
+  it("still treats a frame inside a cross-origin branch as opaque", async () => {
+    expect(await pointIn("ad-inner")).toMatchObject({ isOpaque: true });
+  });
+});
+
 describe("errand target inspection fault handling", () => {
   it("flags the world-side answer as opaque when the CDP hit test fails", async () => {
     const { context, page } = fakeContext(["DOM.getNodeForLocation"], {

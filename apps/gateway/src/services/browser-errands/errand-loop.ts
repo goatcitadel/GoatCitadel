@@ -171,9 +171,11 @@ function approvalTitle(action: ComputerAction, subject: ErrandTargetInfo | null)
   return subject?.text ? `${verb} "${subject.text}"` : `${verb} on the page`;
 }
 
-/** Only these actions can carry the model's declared risk; the declaration is consumed by the first one. */
+/** Only these actions can carry the model's declared risk; a risky batch must hold exactly one of them. */
 function carriesDeclaredRisk(action: ComputerAction): boolean {
-  return action.type === "click" || action.type === "double_click" || action.type === "keypress";
+  return (
+    action.type === "click" || action.type === "double_click" || action.type === "drag" || action.type === "keypress"
+  );
 }
 
 const MAX_MODEL_SCREENSHOTS = 3;
@@ -412,9 +414,10 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
       parsed.risk === "spend" || parsed.risk === "send" || parsed.risk === "delete" || parsed.risk === "settings"
         ? parsed.risk
         : undefined;
-    if (declaredRisk && actions.filter(carriesDeclaredRisk).length > 1) {
+    // A declaration is never dropped: a risky batch with no carrier (typing only) is refused like one with several.
+    if (declaredRisk && actions.filter(carriesDeclaredRisk).length !== 1) {
       return imageContent(
-        "Nothing was run. You marked this step as risky. Send the risky action in its own computer call so it can be shown to the user before it runs.",
+        "Nothing was run. You marked this step as risky. Send the risky action (one click, drag or key press) in its own computer call so it can be shown to the user before it runs.",
         await captureForModel(),
       );
     }

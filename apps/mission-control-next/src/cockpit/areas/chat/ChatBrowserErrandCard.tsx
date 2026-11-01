@@ -1,5 +1,5 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Globe } from "lucide-react";
 import {
@@ -19,19 +19,21 @@ const POLL_MS = 2_000;
 const MAX_POLL_MS = 30_000;
 
 /**
- * How long until the next status read, or false to stop. A failing read backs off (2 s, 4 s, ... up to 30 s) while the
- * tool run is open and stops once it has closed, so a dead Gateway or a lost sign-in is not asked every 2 s forever.
+ * How long until the next status read, or false to stop. Failing reads back off (4 s, 8 s, ... up to 30 s) while the
+ * tool run is open and stop once it has closed, so a dead Gateway or a lost sign-in is not asked every 2 s forever.
+ * `consecutiveFailures` counts failed polls since the last good one; TanStack's own `fetchFailureCount` restarts at
+ * every fetch, so it cannot carry a backoff across polls.
  */
 export function errandPollInterval(state: {
   data: BrowserErrandStatus | null | undefined;
   status: string;
-  fetchFailureCount: number;
+  consecutiveFailures: number;
   toolRunOpen: boolean;
 }): number | false {
   if (state.data?.state === "finished") return false;
   if (state.data === null && !state.toolRunOpen) return false;
   if (state.status === "error") {
-    return state.toolRunOpen ? Math.min(MAX_POLL_MS, POLL_MS * 2 ** state.fetchFailureCount) : false;
+    return state.toolRunOpen ? Math.min(MAX_POLL_MS, POLL_MS * 2 ** state.consecutiveFailures) : false;
   }
   return POLL_MS;
 }
@@ -90,12 +92,30 @@ export function ChatBrowserErrandCard(props: {
   const { toolRunId, fallbackResult, toolRunOpen = false } = props;
   const queryClient = useQueryClient();
   const queryKey = ["browser-errands", "status", toolRunId] as const;
+  const failures = useRef(0);
   const query = useQuery({
     queryKey,
-    queryFn: ({ signal }) => fetchBrowserErrandStatus(toolRunId, { signal }),
+    queryFn: async ({ signal }) => {
+      try {
+        const status = await fetchBrowserErrandStatus(toolRunId, { signal });
+        failures.current = 0;
+        return status;
+      } catch (error) {
+        failures.current += 1;
+        throw error;
+      }
+    },
     staleTime: 0,
+    // One read per poll, so the backoff below is the only retry.
+    retry: false,
     // Polls until the errand finishes. A tool run that already ended stops asking once the Gateway has nothing on it.
-    refetchInterval: (current) => errandPollInterval({ ...current.state, toolRunOpen }),
+    refetchInterval: (current) =>
+      errandPollInterval({
+        data: current.state.data,
+        status: current.state.status,
+        consecutiveFailures: failures.current,
+        toolRunOpen,
+      }),
   });
   const [stopError, setStopError] = useState<string>();
   const stop = useMutation({
@@ -128,7 +148,7 @@ export function ChatBrowserErrandCard(props: {
   const canStop = !finished && view.errandId !== "";
 
   return (
-    <section aria-label="Browser errand" className="mt-3 rounded-md border border-line-subtle bg-raised p-3 text-sm">
+    <section aria-label="Browser errand" className="mt-3 border-t border-line-subtle pt-3 text-sm">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <Globe aria-hidden="true" className="size-4 text-fg-muted" />

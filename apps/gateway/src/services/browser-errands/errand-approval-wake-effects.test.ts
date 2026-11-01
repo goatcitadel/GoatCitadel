@@ -2,6 +2,7 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import { ApprovalEffectsService } from "../approval-resolution-effects-service.js";
+import { ApprovalWaitRunService } from "../approval-wait-run-service.js";
 import type { ServiceContext } from "../service-context.js";
 import { ERRAND_APPROVAL_KIND, ERRAND_TOOL_NAME } from "./errand-approval-gate.js";
 
@@ -134,5 +135,36 @@ describe("errand approval resolution effects", () => {
     expect(kinds).toContain("approval_resolution_signals");
     expect(kinds).not.toContain("approval_wait_wake");
     expect(kinds).not.toContain("linked_chat_turn_wake");
+  });
+
+  it("reserves, materializes and creates no approval wait run for an errand approval", async () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+    try {
+      const asyncStorage = createSqliteAsyncStorage(storage);
+      const approval = storage.approvals.create({
+        kind: ERRAND_APPROVAL_KIND,
+        riskLevel: "caution",
+        payload: { category: "spend" },
+        preview: { summary: "Click Place your order" },
+        linkage: { sessionId: "session-errand", turnId: "turn-errand", durableRunId: "durable-errand-turn" },
+      });
+      const createDurableRun = vi.fn();
+      const waits = new ApprovalWaitRunService(
+        { storage: asyncStorage, isFeatureEnabled: async () => true, publishRealtime: async () => undefined },
+        { createDurableRun, getDurableRun: vi.fn() },
+      );
+      expect(await waits.reserveApprovalWaitRun(approval)).toBe(approval);
+      expect(await waits.ensureApprovalWaitDurableRun(approval)).toBeUndefined();
+      expect((await waits.primeApprovalLifecycle(approval.approvalId)).linkage).toEqual(approval.linkage);
+      const effects = new ApprovalEffectsService(
+        { storage: asyncStorage, publishRealtime: vi.fn() } as unknown as ServiceContext,
+        deps(),
+      );
+      expect(await effects.enqueueApprovalWaitMaterialization(approval, { deferProcessing: true })).toBeUndefined();
+      expect(storage.approvalWaitRuns.getRunId(approval.approvalId)).toBeUndefined();
+      expect(createDurableRun).not.toHaveBeenCalled();
+    } finally {
+      storage.close();
+    }
   });
 });

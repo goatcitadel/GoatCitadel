@@ -14,6 +14,7 @@ import type { RequestAttribution, AsyncStorage as Storage } from "@goatcitadel/s
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { buildApprovalRealtimeLinks } from "./approval-observability.js";
 import { isNativeExecutionApproval, requireNativeApprovalParent } from "./approval-native-runtime-parent.js";
+import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
 
 export interface ApprovalWaitRunServiceDeps {
   createDurableRun(input: DurableRunCreateRequest): Promise<DurableRunRecord>;
@@ -93,7 +94,11 @@ export class ApprovalWaitRunService {
    * happens on another node after the approval commits.
    */
   public async reserveApprovalWaitRun(approval: ApprovalRequest): Promise<ApprovalRequest> {
-    if (!(await this.ctx.isFeatureEnabled("durableKernelV1Enabled")) || approval.status !== "pending") {
+    if (
+      isSelfPolledApprovalKind(approval.kind) ||
+      !(await this.ctx.isFeatureEnabled("durableKernelV1Enabled")) ||
+      approval.status !== "pending"
+    ) {
       return approval;
     }
     const nativeParent = isNativeExecutionApproval(approval)
@@ -130,7 +135,7 @@ export class ApprovalWaitRunService {
   }
 
   public async ensureApprovalWaitDurableRun(approval: ApprovalRequest): Promise<DurableRunRecord | undefined> {
-    if (!(await this.ctx.isFeatureEnabled("durableKernelV1Enabled"))) {
+    if (isSelfPolledApprovalKind(approval.kind) || !(await this.ctx.isFeatureEnabled("durableKernelV1Enabled"))) {
       return undefined;
     }
     let reservation = await this.ctx.storage.approvalWaitRuns.get(approval.approvalId);

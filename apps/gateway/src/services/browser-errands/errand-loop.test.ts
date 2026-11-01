@@ -5,6 +5,8 @@ import { runErrandLoop, type ErrandLoopDeps } from "./errand-loop.js";
 
 const PNG = Buffer.from("png-bytes");
 const PEOPLE_PNG = Buffer.from("people-png");
+const RISKY_REFUSAL =
+  "Send the risky action (one click, drag or key press) in its own computer call so it can be shown to the user before it runs.";
 
 function target(partial: Partial<ErrandTargetInfo> = {}): ErrandTargetInfo {
   return {
@@ -355,14 +357,47 @@ describe("runErrandLoop", () => {
     const outcome = await runErrandLoop(deps, { goal: "x" });
     const first = requests[1]!.messages.find((m) => m.role === "tool")!;
     const text = String((first.content as Array<Record<string, unknown>>)[0]!.text);
-    expect(text).toContain(
-      "Send the risky action in its own computer call so it can be shown to the user before it runs.",
-    );
+    expect(text).toContain(RISKY_REFUSAL);
     expect(first.content as unknown[]).toHaveLength(2);
     expect(deps.requestApproval).toHaveBeenCalledTimes(1);
     expect(vi.mocked(deps.requestApproval).mock.calls[0]![0].category).toBe("send");
     expect(ran.map((a) => a.type)).toEqual(["keypress"]);
     expect(outcome.steps).toBe(2);
+  });
+
+  it("asks before a drag the model marked as risky", async () => {
+    const drag = toolReply("computer", {
+      actions: [
+        {
+          type: "drag",
+          path: [
+            { x: 1, y: 1 },
+            { x: 9, y: 9 },
+          ],
+        },
+      ],
+      about_to: "Drag the item to the trash",
+      risk: "delete",
+    });
+    const { deps, ran } = makeDeps([drag, textReply("deleted")]);
+    await runErrandLoop(deps, { goal: "x" });
+    expect(deps.requestApproval).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.requestApproval).mock.calls[0]![0].category).toBe("delete");
+    expect(ran.map((a) => a.type)).toEqual(["drag"]);
+  });
+
+  it("refuses a risky batch with no click, drag or key action instead of dropping the declared risk", async () => {
+    const typing = toolReply("computer", {
+      actions: [{ type: "type", text: "hello" }],
+      about_to: "Send the message",
+      risk: "send",
+    });
+    const { deps, ran, requests } = makeDeps([typing, textReply("ok")]);
+    await runErrandLoop(deps, { goal: "x" });
+    const first = requests[1]!.messages.find((m) => m.role === "tool")!;
+    expect(String((first.content as Array<Record<string, unknown>>)[0]!.text)).toContain(RISKY_REFUSAL);
+    expect(ran).toEqual([]);
+    expect(deps.requestApproval).not.toHaveBeenCalled();
   });
 
   it("spends a step on an empty reply and continues", async () => {

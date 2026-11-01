@@ -590,9 +590,9 @@ it("approval blocker shows the errand screenshot", async () => {
     riskLevel: "caution",
     payload: {},
     preview: {
-      summary: "Click Place order",
+      summary: 'Click "Place order" — Buy the hub',
       url: "https://shop.example/checkout",
-      title: "Checkout",
+      title: 'Click "Place order"',
       screenshotAttachmentId: "shot-1",
       screenshotSha256: "a".repeat(64),
     },

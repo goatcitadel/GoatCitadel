@@ -42,11 +42,11 @@ let root: Root;
 let container: HTMLDivElement;
 let client: QueryClient;
 
-async function mount(props: { fallback?: Record<string, unknown> } = {}) {
+async function mount(props: { fallback?: Record<string, unknown>; toolRunOpen?: boolean } = {}) {
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        <ChatBrowserErrandCard toolRunId="run-1" fallbackResult={props.fallback} />
+        <ChatBrowserErrandCard toolRunId="run-1" fallbackResult={props.fallback} toolRunOpen={props.toolRunOpen} />
       </QueryClientProvider>,
     ),
   );
@@ -150,18 +150,56 @@ describe("ChatBrowserErrandCard", () => {
   });
 
   it("backs off while reads fail and stops once the tool run has closed", () => {
-    const failing = (fetchFailureCount: number, toolRunOpen: boolean) =>
-      errandPollInterval({ data: undefined, status: "error", fetchFailureCount, toolRunOpen });
+    const failing = (consecutiveFailures: number, toolRunOpen: boolean) =>
+      errandPollInterval({ data: undefined, status: "error", consecutiveFailures, toolRunOpen });
     expect(failing(1, true)).toBe(4_000);
     expect(failing(2, true)).toBe(8_000);
     expect(failing(10, true)).toBe(30_000);
     expect(failing(1, false)).toBe(false);
-    expect(errandPollInterval({ data: running, status: "success", fetchFailureCount: 0, toolRunOpen: true })).toBe(
+    expect(errandPollInterval({ data: running, status: "success", consecutiveFailures: 0, toolRunOpen: true })).toBe(
       2_000,
     );
-    expect(errandPollInterval({ data: finished, status: "success", fetchFailureCount: 0, toolRunOpen: true })).toBe(
+    expect(errandPollInterval({ data: finished, status: "success", consecutiveFailures: 0, toolRunOpen: true })).toBe(
       false,
     );
+  });
+
+  it("backs off across consecutive failed polls and starts over after a good one", async () => {
+    vi.useFakeTimers();
+    const fail = () => Promise.reject(new Error("Gateway unavailable"));
+    api.fetchBrowserErrandStatus
+      .mockImplementationOnce(fail)
+      .mockImplementationOnce(fail)
+      .mockImplementationOnce(fail)
+      .mockResolvedValueOnce(running)
+      .mockImplementationOnce(fail)
+      .mockResolvedValue(running);
+    await mount({ toolRunOpen: true });
+    let elapsed = 0;
+    const callsAt = async (ms: number) => {
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(ms - elapsed);
+      });
+      elapsed = ms;
+      return api.fetchBrowserErrandStatus.mock.calls.length;
+    };
+    expect(await callsAt(0)).toBe(1);
+    // Reads at 0 s (fails), 4 s (fails), 12 s (fails), 28 s (good), 30 s (fails), 34 s: the count restarts after 28 s.
+    const expected: Array<[number, number]> = [
+      [3_900, 1],
+      [4_100, 2],
+      [11_900, 2],
+      [12_100, 3],
+      [27_900, 3],
+      [28_100, 4],
+      [29_900, 4],
+      [30_100, 5],
+      [33_900, 5],
+      [34_100, 6],
+    ];
+    for (const [at, calls] of expected) {
+      expect(await callsAt(at), `reads by ${at} ms`).toBe(calls);
+    }
   });
 
   it("stops asking after a failed read when the tool run is closed", async () => {
