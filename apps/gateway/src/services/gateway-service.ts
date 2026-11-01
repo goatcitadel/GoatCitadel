@@ -3735,6 +3735,7 @@ export class GatewayService {
         await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
       composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
       resolveBasePromptCapabilityCatalog: (scope) => this.resolveBasePromptCapabilityCatalog(scope),
+      getCodeModeReadiness: async () => await this.capabilitySystemService.getCodeModeReadiness(),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       collectCapabilityUpgradeSuggestions: async (input) => await this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
@@ -12875,6 +12876,7 @@ export class GatewayService {
       compactionDimension?: chatMessageHistoryService.ChatCompactionDimension;
       agenticStateCapsule?: string;
       protectedTurnIds?: readonly string[];
+      codeModeRequestEligible?: boolean;
     },
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
   ): Promise<ChatCompletionRequest["messages"]> {
@@ -12891,11 +12893,13 @@ export class GatewayService {
   private buildUserMessageContent(
     message: ChatMessageRecord,
     supportsVision: boolean,
+    codeModeRequestEligible: boolean,
   ): Promise<string | Array<Record<string, unknown>>> {
     return chatTurnUserMessage.buildUserMessageContent(
       this.buildChatTurnUserMessageDependencies(),
       message,
       supportsVision,
+      codeModeRequestEligible,
     );
   }
 
@@ -12941,7 +12945,8 @@ export class GatewayService {
       llmService: this.llmService,
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
-      buildUserMessageContent: (message, supportsVision) => this.buildUserMessageContent(message, supportsVision),
+      buildUserMessageContent: (message, supportsVision, codeModeRequestEligible) =>
+        this.buildUserMessageContent(message, supportsVision, codeModeRequestEligible),
       getModelTokenMultiplier: (providerId, model) => this.llmService.getModelTokenMultiplier(providerId, model),
       onCompaction: async (input) => {
         // Both compaction triggers are record_only observers. Failures were

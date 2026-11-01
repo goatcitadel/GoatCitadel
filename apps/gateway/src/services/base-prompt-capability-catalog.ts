@@ -15,10 +15,11 @@ import type {
   ToolAccessEvaluateRequest,
   ToolAccessEvaluateResponse,
 } from "@goatcitadel/contracts";
-import { SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
+import { CODE_MODE_REQUEST_TOOL_NAME, SUBAGENT_FANOUT_TOOL_NAME } from "@goatcitadel/policy-engine";
 import type { BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { buildToolAccessProbeArgs } from "./chat-turn-agent-runner.js";
 import { TOOL_GROUP_OFF_REASON_CODE } from "./chat-turn-agent-runner/tool-failure-messaging.js";
+import { CODE_MODE_ONLY_TOOL_NAMES } from "./chat-tool-families.js";
 
 export interface BasePromptCatalogScope {
   sessionId: string;
@@ -98,4 +99,27 @@ export function withoutUnadmittedFanout(
 ): BaseAgentPromptToolset {
   if (subagentPolicy === "auto_when_useful" || !toolset.toolNames.includes(SUBAGENT_FANOUT_TOOL_NAME)) return toolset;
   return { ...toolset, toolNames: toolset.toolNames.filter((name) => name !== SUBAGENT_FANOUT_TOOL_NAME) };
+}
+
+/**
+ * No Chat step offers the Code Mode script-only tools (`docs.read_bytes`, `docs.extract_text`, `docs.decompress`):
+ * they run only inside an approved Code Mode script. The runner offers `code_mode.request` only on an eligible turn
+ * (`resolveCodeModeRequestEligibility`). Listing either otherwise invited calls to tools the step does not offer,
+ * which the Claude Code CLI bridge fails closed.
+ */
+export function withoutUnofferedCodeModeTools<T extends BaseAgentPromptToolset>(
+  toolset: T,
+  codeModeRequestEligible: boolean,
+): T {
+  const offered = (name: string) =>
+    !CODE_MODE_ONLY_TOOL_NAMES.has(name) && (codeModeRequestEligible || name !== CODE_MODE_REQUEST_TOOL_NAME);
+  return {
+    ...toolset,
+    toolNames: toolset.toolNames.filter(offered),
+    ...(toolset.approvalRequiredToolNames
+      ? { approvalRequiredToolNames: toolset.approvalRequiredToolNames.filter(offered) }
+      : {}),
+    ...(toolset.policyDeniedToolNames ? { policyDeniedToolNames: toolset.policyDeniedToolNames.filter(offered) } : {}),
+    ...(toolset.switchedOffToolNames ? { switchedOffToolNames: toolset.switchedOffToolNames.filter(offered) } : {}),
+  };
 }
