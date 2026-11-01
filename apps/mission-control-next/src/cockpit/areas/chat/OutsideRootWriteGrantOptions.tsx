@@ -7,10 +7,15 @@ import {
   type OutsideRootWriteGrantDuration,
 } from "@goatcitadel/contracts";
 import { approveChatTool } from "@goatcitadel/mission-control-shared/api/client";
+import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { queryKeys } from "../../data/query-keys";
 import { cockpitInputClass } from "../../ui/input-class";
+import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
 import { splitApprovalExplanation } from "../inbox/approval-preview";
+import { CHANGED_APPROVAL_RECORD, canResolveInboxApproval } from "../inbox/inbox-approval-guard";
+import { nullWhenMissing } from "../inbox/inbox-record-read";
+import { hasExpired, useMinuteClock } from "../inbox/use-minute-clock";
 import { RiskApprovalAction } from "./RiskApprovalAction";
 import {
   beginInboxApprovalAttempt,
@@ -39,6 +44,7 @@ interface OutsideRootWriteGrantOptionsProps {
  * for a bounded time. The plain Approve in the decision bar still admits just this one write. The Gateway
  * re-checks the folder against its own record; the preview here is display only. Approving here goes through the
  * same risk tiers as the decision bar's Approve once: danger opens the review, nuclear also needs the typed word.
+ * Like the decision bar, a click re-reads the record first and sends nothing unless it is the same pending record.
  */
 export function OutsideRootWriteGrantOptions({
   approval,
@@ -48,6 +54,7 @@ export function OutsideRootWriteGrantOptions({
 }: OutsideRootWriteGrantOptionsProps) {
   const details = readOutsideRootWriteApprovalDetails(approval.preview?.outsideRootWrite);
   const queryClient = useQueryClient();
+  const access = useProjectAccess(workspaceId);
   const attempt = useInboxApprovalAttempt(workspaceId, approval.approvalId);
   const groupName = useId();
   const current = useRef(true);
@@ -55,6 +62,8 @@ export function OutsideRootWriteGrantOptions({
   const [duration, setDuration] = useState<OutsideRootWriteGrantDuration>(details?.defaultDuration ?? "1h");
   const [scope, setScope] = useState<GrantScope>("session");
   const [error, setError] = useState("");
+  // The shared minute clock plus one re-render at the expiry moment turn the control off on time (IN-05).
+  const now = useMinuteClock(approval.expiresAt);
   useLayoutEffect(() => {
     current.current = true;
     return () => {
@@ -66,15 +75,34 @@ export function OutsideRootWriteGrantOptions({
   const toolName = approval.linkage?.toolName ?? "this tool";
   const durations = details.durations.filter((value) => value in OUTSIDE_ROOT_WRITE_GRANT_DURATIONS);
   const chosen = details.candidates.find((candidate) => candidate.rootId === rootId);
+  const expired = hasExpired(approval.expiresAt, now);
+  const otherChat = Boolean(approval.linkage?.sessionId && approval.linkage.sessionId !== sessionId);
 
   async function approveAndOpen() {
-    if (!chosen || !current.current) return;
+    if (
+      !chosen ||
+      !current.current ||
+      !access.current() ||
+      otherChat ||
+      !canResolveInboxApproval(undefined, approval, approval, workspaceId, Date.now())
+    )
+      return;
     const token = beginInboxApprovalAttempt(workspaceId, approval.approvalId);
     if (!token) return;
     setError("");
-    updateInboxApprovalAttempt(workspaceId, approval.approvalId, token, "submitted", "Recording the approval…");
     let message: string | undefined;
+    let dispatched = false;
     try {
+      // The same check the decision bar makes before dispatch: the record must still be the reviewed pending one.
+      const latest = await nullWhenMissing(fetchApproval(approval.approvalId, { workspaceId }));
+      if (!current.current || !access.current()) return;
+      if (!canResolveInboxApproval(undefined, approval, latest ?? undefined, workspaceId, Date.now())) {
+        setError(CHANGED_APPROVAL_RECORD);
+        void queryClient.invalidateQueries({ queryKey: ["approvals", "record", workspaceId, approval.approvalId] });
+        return;
+      }
+      updateInboxApprovalAttempt(workspaceId, approval.approvalId, token, "submitted", "Recording the approval…");
+      dispatched = true;
       const result = await approveChatTool(sessionId, approval.approvalId, {
         allowScope: scope,
         writeGrant: { rootId: chosen.rootId, duration },
@@ -88,6 +116,10 @@ export function OutsideRootWriteGrantOptions({
           : "This approval was already decided elsewhere, so nothing was opened. Check the recorded decision below.";
       updateInboxApprovalAttempt(workspaceId, approval.approvalId, token, "resolved", message);
     } catch (cause) {
+      if (!dispatched) {
+        if (current.current) setError(`Could not check the current approval. ${describeApiError(cause).summary}`);
+        return;
+      }
       updateInboxApprovalAttempt(
         workspaceId,
         approval.approvalId,
@@ -164,32 +196,39 @@ export function OutsideRootWriteGrantOptions({
           ))}
         </fieldset>
       </div>
-      <RiskApprovalAction
-        workspaceId={workspaceId}
-        approval={{
-          approvalId: approval.approvalId,
-          kind: approval.kind,
-          riskLevel: approval.riskLevel,
-          toolName: approval.linkage?.toolName,
-          // A model-written explanation is advisory; the review summary labels it instead (#499).
-          reason: splitApprovalExplanation(approval).owner?.riskExplanation,
-          expiresAt: approval.expiresAt,
-        }}
-        reviewedApproval={approval}
-        pending={busy || !chosen}
-        approveLabel="Approve and open folder"
-        reviewLabel="Review and open folder"
-        confirmLabel="Approve and open folder"
-        consequence={
-          chosen ? (
-            <p className="mb-3 text-sm text-fg">
-              Approving also opens <span className="font-mono wrap-anywhere">{chosen.path}</span> to {toolName} in{" "}
-              {scope === "workspace" ? "this workspace" : "this chat"} for {DURATION_LABELS[duration]}.
-            </p>
-          ) : undefined
-        }
-        onApprove={() => void approveAndOpen()}
-      />
+      {/* Without a risk level the decision bar above already says why nothing can be approved. */}
+      {approval.riskLevel ? (
+        <RiskApprovalAction
+          workspaceId={workspaceId}
+          approval={{
+            approvalId: approval.approvalId,
+            kind: approval.kind,
+            riskLevel: approval.riskLevel,
+            toolName: approval.linkage?.toolName,
+            // A model-written explanation is advisory; the review summary labels it instead (#499).
+            reason: splitApprovalExplanation(approval).owner?.riskExplanation,
+            expiresAt: approval.expiresAt,
+          }}
+          reviewedApproval={approval}
+          pending={busy || !chosen || expired || otherChat}
+          // Approve once in the decision bar is the primary choice; also opening a folder stays secondary.
+          approveVariant="secondary"
+          loading={attempt?.phase === "submitted"}
+          loadingLabel="Approving…"
+          approveLabel="Approve and open folder"
+          reviewLabel="Review and open folder"
+          confirmLabel="Approve and open folder"
+          consequence={
+            chosen ? (
+              <p className="mb-3 text-sm text-fg">
+                Approving also opens <span className="font-mono wrap-anywhere">{chosen.path}</span> to {toolName} in{" "}
+                {scope === "workspace" ? "this workspace" : "this chat"} for {DURATION_LABELS[duration]}.
+              </p>
+            ) : undefined
+          }
+          onApprove={() => void approveAndOpen()}
+        />
+      ) : null}
       {/* The decision bar's uncertain-outcome alert announces this; the detail stays readable here. */}
       {error ? <p className="text-status-failed">{error}</p> : null}
     </section>

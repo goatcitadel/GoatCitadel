@@ -682,4 +682,87 @@ describe("risk approval action", () => {
     expect(dialogButton("Approve once")).toBeDefined();
     expect(dialogButton("Approve and open folder")).toBeUndefined();
   });
+
+  it("names the confirm action in the review's description, missing-preview alert and typed confirmation", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={{ ...reviewedApproval, preview: {} }}
+          pending={false}
+          onApprove={vi.fn()}
+          confirmLabel="Approve and open folder"
+        />,
+      ),
+    );
+    await act(async () => dialogButton("Review danger approval").click());
+    const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog().textContent).toContain("Review the exact action before you choose Approve and open folder.");
+    expect(dialog().textContent).not.toContain("approving once");
+    expect(dialog().querySelector('[role="alert"]')!.textContent).toBe(
+      "The current action preview is unavailable, so Approve and open folder is off. Cancel, then use Deny or wait for the preview.",
+    );
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("nuclear")}
+          reviewedApproval={{ ...reviewedApproval, riskLevel: "nuclear" }}
+          pending={false}
+          onApprove={vi.fn()}
+          confirmLabel="Approve and open folder"
+        />,
+      ),
+    );
+    await act(async () => dialogButton("Review nuclear approval").click());
+    expect(dialog().textContent).toContain("Approve and open folder stays unavailable until the text matches.");
+    expect(dialog().textContent).not.toContain("Approve once");
+  });
+
+  it("keeps the default review copy when no confirm action is named", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={{ ...reviewedApproval, preview: {} }}
+          pending={false}
+          onApprove={vi.fn()}
+        />,
+      ),
+    );
+    await act(async () => dialogButton("Review danger approval").click());
+    const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
+    expect(dialog.textContent).toContain("Review the exact action before approving once.");
+    expect(dialog.querySelector('[role="alert"]')!.textContent).toBe(
+      "The current action preview is unavailable, so Approve once is off. Cancel, then use Deny or wait for the preview.",
+    );
+  });
+
+  it("renders a one-click approve as a secondary button with a loading label when asked", async () => {
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("caution")}
+          pending
+          onApprove={vi.fn()}
+          approveLabel="Approve and open folder"
+          approveVariant="secondary"
+          loading
+          loadingLabel="Approving…"
+        />,
+      ),
+    );
+    const busy = dialogButton("Approving…");
+    expect(busy.getAttribute("aria-busy")).toBe("true");
+    expect(busy.className).toContain("bg-raised");
+    expect(busy.className).not.toContain("bg-accent");
+  });
+
+  it("keeps the one-click approve primary and idle by default", async () => {
+    await act(async () =>
+      root.render(<RiskApprovalAction approval={approval("caution")} pending={false} onApprove={vi.fn()} />),
+    );
+    const approve = dialogButton("Approve once");
+    expect(approve.className).toContain("bg-accent");
+    expect(approve.hasAttribute("aria-busy")).toBe(false);
+  });
 });

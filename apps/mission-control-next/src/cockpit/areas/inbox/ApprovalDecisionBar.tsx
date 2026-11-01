@@ -19,7 +19,7 @@ import { RiskApprovalAction } from "../chat/RiskApprovalAction";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
-import { canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
+import { CHANGED_APPROVAL_RECORD, canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
 import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
 import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
 import { splitApprovalExplanation } from "./approval-preview";
@@ -35,8 +35,6 @@ import {
   useInboxApprovalAttempt,
 } from "./inbox-approval-attempts";
 
-const CHANGED_RECORD =
-  "This approval changed or is no longer in the current pending queue. Refresh it before deciding.";
 const STILL_PENDING = "The approval is still pending and unchanged. Decide again when ready.";
 
 interface ApprovalDecisionBarProps {
@@ -225,7 +223,7 @@ function ApprovalDecisionReview({
           specialistReady || decision === "reject",
         )
       ) {
-        setError(CHANGED_RECORD);
+        setError(CHANGED_APPROVAL_RECORD);
         onInvalidated();
         return;
       }
@@ -306,7 +304,7 @@ function ApprovalDecisionReview({
         if (canResolveInboxApproval(item, approval, latest, workspaceId, Date.now(), true)) {
           setNotice(STILL_PENDING);
         } else {
-          setError(CHANGED_RECORD);
+          setError(CHANGED_APPROVAL_RECORD);
           onInvalidated();
         }
         return;
@@ -316,7 +314,7 @@ function ApprovalDecisionReview({
         invalidateOwnerReads();
         return;
       }
-      setError(CHANGED_RECORD);
+      setError(CHANGED_APPROVAL_RECORD);
       onInvalidated();
     } catch (cause) {
       if (current.current) setError(`Could not check the current approval. ${describeApiError(cause).summary}`);

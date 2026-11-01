@@ -1,5 +1,9 @@
 import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
 
+/** Shown when the click-time re-read finds the reviewed approval changed, decided, expired or gone; nothing is sent. */
+export const CHANGED_APPROVAL_RECORD =
+  "This approval changed or is no longer in the current pending queue. Refresh it before deciding.";
+
 export function inboxApprovalReviewKey(
   item: OperatorInboxItem | undefined,
   approval: ApprovalRequest,

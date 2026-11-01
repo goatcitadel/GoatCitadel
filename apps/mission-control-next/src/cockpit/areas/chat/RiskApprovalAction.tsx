@@ -25,9 +25,12 @@ export function RiskApprovalAction({
   reviewedInPlace = false,
   approveLabel,
   reviewLabel,
-  confirmLabel = "Approve once",
+  confirmLabel,
   consequence,
   approveDanger = false,
+  approveVariant = "primary",
+  loading = false,
+  loadingLabel,
 }: {
   approval: ChatPendingApprovalState;
   workspaceId?: string;
@@ -50,9 +53,15 @@ export function RiskApprovalAction({
   consequence?: ReactNode;
   /** Styles the one-click approve button as a danger action with a shield. */
   approveDanger?: boolean;
+  /** The one-click approve button's style when it is not a danger action, for an approve beside the primary one. */
+  approveVariant?: "primary" | "secondary";
+  /** Shows the one-click approve button as busy, with `loadingLabel` in place of its label. */
+  loading?: boolean;
+  loadingLabel?: string;
 }) {
   const [confirmOpen, setConfirmOpen] = useState(false);
   const [typed, setTyped] = useState("");
+  const confirmAction = confirmLabel ?? "Approve once";
   const disabled = pending || Boolean(approval.expiresAt && Date.parse(approval.expiresAt) <= Date.now());
   const reviewed =
     reviewedApproval?.approvalId === approval.approvalId &&
@@ -119,7 +128,11 @@ export function RiskApprovalAction({
           open={confirmOpen}
           onOpenChange={setConfirmOpen}
           title={`Confirm ${riskName.toLowerCase()}-level action`}
-          description="Review the exact action before approving once."
+          description={
+            confirmLabel
+              ? `Review the exact action before you choose ${confirmLabel}.`
+              : "Review the exact action before approving once."
+          }
         >
           {specialistReview}
           {reviewed ? (
@@ -208,8 +221,8 @@ export function RiskApprovalAction({
             ) : null}
             {!hasActionPreview ? (
               <p role="alert">
-                The current action preview is unavailable, so Approve once is off. Cancel, then use Deny or wait for the
-                preview.
+                The current action preview is unavailable, so {confirmAction} is off. Cancel, then use Deny or wait for
+                the preview.
               </p>
             ) : null}
           </div>
@@ -219,7 +232,7 @@ export function RiskApprovalAction({
                 phrase={CRITICAL_CONFIRMATION}
                 value={typed}
                 onChange={setTyped}
-                consequence={confirmLabel}
+                consequence={confirmAction}
               />
             </div>
           ) : null}
@@ -232,7 +245,7 @@ export function RiskApprovalAction({
                 onApprove();
               }}
             >
-              {confirmLabel}
+              {confirmAction}
             </Button>
             <Button onClick={() => setConfirmOpen(false)}>Cancel</Button>
           </div>
@@ -244,8 +257,10 @@ export function RiskApprovalAction({
     <Button
       type="button"
       size="sm"
-      variant={approveDanger ? "danger" : "primary"}
+      variant={approveDanger ? "danger" : approveVariant}
       disabled={disabled}
+      loading={loading}
+      loadingLabel={loadingLabel}
       onClick={onApprove}
     >
       {approveDanger ? <ShieldAlert aria-hidden="true" className="size-4 shrink-0" /> : null}

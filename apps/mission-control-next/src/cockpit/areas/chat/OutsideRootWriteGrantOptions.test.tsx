@@ -5,11 +5,14 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { __resetInboxApprovalAttemptsForTests } from "../inbox/inbox-approval-attempts";
+import { __resetMinuteClockForTests } from "../inbox/use-minute-clock";
 import { OutsideRootWriteGrantOptions } from "./OutsideRootWriteGrantOptions";
 import { refuseNetwork } from "../../../test/refuse-network";
 
-const api = vi.hoisted(() => ({ approveChatTool: vi.fn() }));
+const api = vi.hoisted(() => ({ approveChatTool: vi.fn(), fetchApproval: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ approveChatTool: api.approveChatTool }));
+// Every approve re-reads the current record first, as the decision bar does.
+vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: api.fetchApproval }));
 // The danger review summary names workspaces from the workspace list.
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/workspaces")>()),
@@ -23,17 +26,19 @@ const ROOT_B = "owr_fedcba9876543210";
 function approvalWith(
   preview: Record<string, unknown>,
   status: ApprovalRequest["status"] = "pending",
-  overrides: Partial<Record<"riskLevel" | "kind" | "expiresAt", string | undefined>> = {},
+  overrides: Partial<Record<"riskLevel" | "kind" | "expiresAt", string | undefined>> & {
+    linkage?: Record<string, string>;
+  } = {},
 ) {
   return {
     approvalId: "approval-1",
     kind: "fs.write",
     riskLevel: "danger",
     status,
-    ...overrides,
     payload: {},
     preview,
     linkage: { sessionId: "session-1", toolName: "fs.write" },
+    ...overrides,
     createdAt: "2026-10-19T00:00:00.000Z",
   } as unknown as ApprovalRequest;
 }
@@ -50,6 +55,9 @@ const OUTSIDE_ROOT_PREVIEW = {
     defaultDuration: "1h",
   },
 };
+
+const CHANGED_RECORD =
+  "This approval changed or is no longer in the current pending queue. Refresh it before deciding.";
 
 let container: HTMLDivElement, root: Root, client: QueryClient;
 const text = () => container.textContent ?? "";
@@ -73,6 +81,8 @@ async function click(element: HTMLElement) {
   });
 }
 async function render(approval: ApprovalRequest, onResolved = vi.fn()) {
+  // The re-read finds the record unchanged unless a test says otherwise.
+  if (!api.fetchApproval.getMockImplementation()) api.fetchApproval.mockResolvedValue(approval);
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
@@ -99,6 +109,8 @@ afterEach(async () => {
   client.clear();
   container.remove();
   __resetInboxApprovalAttemptsForTests();
+  __resetMinuteClockForTests();
+  vi.useRealTimers();
   vi.resetAllMocks();
 });
 
@@ -238,7 +250,8 @@ describe("OutsideRootWriteGrantOptions", () => {
     await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: undefined }));
     expect(button("Approve and open folder")).toBeUndefined();
     expect(button("Review and open folder")).toBeUndefined();
-    expect(text()).toContain("Risk is unavailable");
+    // The decision bar above already says risk is unavailable; the folder section does not repeat it.
+    expect(text()).not.toContain("Risk is unavailable");
     expect(api.approveChatTool).not.toHaveBeenCalled();
   });
 
@@ -250,5 +263,82 @@ describe("OutsideRootWriteGrantOptions", () => {
     expect(dialog()?.textContent).toContain("current action preview is unavailable");
     expect(dialogButton("Approve and open folder")!.disabled).toBe(true);
     expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["was decided elsewhere", { status: "approved" }],
+    ["changed after review", { preview: { ...OUTSIDE_ROOT_PREVIEW, note: "changed" } }],
+  ])("does not approve when the re-read record %s", async (_label, change) => {
+    const approval = approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "caution" });
+    api.fetchApproval.mockResolvedValue({ ...approval, ...change });
+    const onResolved = await render(approval);
+    await click(button("Approve and open folder"));
+    await vi.waitFor(() => expect(text()).toContain(CHANGED_RECORD));
+    expect(api.fetchApproval).toHaveBeenCalledWith("approval-1", { workspaceId: "workspace-1" });
+    expect(api.approveChatTool).not.toHaveBeenCalled();
+    expect(onResolved).not.toHaveBeenCalled();
+  });
+
+  it("does not approve when the record is gone on the re-read", async () => {
+    api.fetchApproval.mockResolvedValue(null);
+    await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "caution" }));
+    await click(button("Approve and open folder"));
+    await vi.waitFor(() => expect(text()).toContain(CHANGED_RECORD));
+    expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it("does not approve when the approval expires while the record is re-read", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-19T00:00:00.000Z"));
+    const approval = approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", {
+      riskLevel: "caution",
+      expiresAt: "2026-10-19T00:30:00.000Z",
+    });
+    api.fetchApproval.mockImplementation(async () => {
+      vi.setSystemTime(new Date("2026-10-19T00:31:00.000Z"));
+      return approval;
+    });
+    await render(approval);
+    await click(button("Approve and open folder"));
+    await vi.waitFor(() => expect(text()).toContain(CHANGED_RECORD));
+    expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it("does not approve an approval from another chat", async () => {
+    await render(
+      approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", {
+        riskLevel: "caution",
+        linkage: { sessionId: "session-2", toolName: "fs.write" },
+      }),
+    );
+    await click(button("Approve and open folder"));
+    expect(api.fetchApproval).not.toHaveBeenCalled();
+    expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it("turns the approve control off once the approval expires, without another render", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+    vi.setSystemTime(new Date("2026-10-19T00:00:00.000Z"));
+    await render(
+      approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "caution", expiresAt: "2026-10-19T00:00:05.000Z" }),
+    );
+    expect(button("Approve and open folder").disabled).toBe(false);
+    await act(async () => {
+      vi.advanceTimersByTime(6_000);
+    });
+    expect(button("Approve and open folder").disabled).toBe(true);
+    expect(api.approveChatTool).not.toHaveBeenCalled();
+  });
+
+  it("stays a secondary button and says Approving… while the approval is recorded", async () => {
+    api.approveChatTool.mockReturnValue(new Promise(() => {}));
+    await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "caution" }));
+    const approve = button("Approve and open folder");
+    // The decision bar's Approve once is the primary action; also opening a folder is the secondary choice.
+    expect(approve.className).not.toContain("bg-accent");
+    expect(approve.className).toContain("bg-raised");
+    await click(approve);
+    await vi.waitFor(() => expect(api.approveChatTool).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(button("Approving…")?.getAttribute("aria-busy")).toBe("true"));
   });
 });
