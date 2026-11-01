@@ -27,7 +27,9 @@ export class ClaudeCodeCliReadiness {
   private readonly now: () => number;
   private readonly ttlMs: number;
   private cached: { at: number; result: ClaudeCodeCliReadinessResult } | undefined;
-  private inFlight: Promise<ClaudeCodeCliReadinessResult> | undefined;
+  /** Bumped by invalidate(); a probe only writes the cache while its generation is still current. */
+  private generation = 0;
+  private inFlight: { gen: number; promise: Promise<ClaudeCodeCliReadinessResult> } | undefined;
   private last: ClaudeCodeCliReadinessResult | undefined;
 
   private readonly managedHooks: () => ClaudeManagedHooksState;
@@ -46,17 +48,24 @@ export class ClaudeCodeCliReadiness {
 
   public async check(): Promise<ClaudeCodeCliReadinessResult> {
     if (this.cached && this.now() - this.cached.at < this.ttlMs) return this.cached.result;
-    if (this.inFlight) return await this.inFlight;
-    this.inFlight = this.probe().then((result) => {
-      // A transient probe failure (slow cold start, spawn hiccup) must not block every turn for the TTL.
-      this.cached = result.status === "unavailable" ? undefined : { at: this.now(), result };
-      this.last = result;
-      return result;
-    });
+    if (this.inFlight) return await this.inFlight.promise;
+    const gen = this.generation;
+    const entry: { gen: number; promise: Promise<ClaudeCodeCliReadinessResult> } = {
+      gen,
+      promise: this.probe().then((result) => {
+        if (gen === this.generation) {
+          // A transient probe failure (slow cold start, spawn hiccup) must not block every turn for the TTL.
+          this.cached = result.status === "unavailable" ? undefined : { at: this.now(), result };
+          this.last = result;
+        }
+        return result;
+      }),
+    };
+    this.inFlight = entry;
     try {
-      return await this.inFlight;
+      return await entry.promise;
     } finally {
-      this.inFlight = undefined;
+      if (this.inFlight === entry) this.inFlight = undefined;
     }
   }
 
@@ -66,7 +75,9 @@ export class ClaudeCodeCliReadiness {
   }
 
   public invalidate(): void {
+    this.generation += 1;
     this.cached = undefined;
+    this.inFlight = undefined;
   }
 
   private async probe(): Promise<ClaudeCodeCliReadinessResult> {
