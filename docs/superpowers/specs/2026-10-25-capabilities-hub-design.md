@@ -234,7 +234,7 @@ A Verified tier can come later if there is ever a reviewed external list.
 
 **Ownership and uninstall.** Pieces a plugin added show "From plugin X" and can't be edited individually, the same way Hermes treats plugin-supplied MCP servers. Uninstall removes exactly the pieces that plugin added, never ones the operator installed separately.
 
-**Claude Code plugin format.** Investigate this as a spike before promising it. A Claude Code plugin is `.claude-plugin/plugin.json` with `skills/` (the same SKILL.md format) and `.mcp.json`. Importing its skills and MCP servers as a GoatCitadel plugin looks feasible. Its commands, agents and hooks probably don't map, and would be listed as "not supported, ignored" in the panel.
+**Claude Code plugin format.** Investigate this as a spike before promising it. A Claude Code plugin is `.claude-plugin/plugin.json` with `skills/` (the same SKILL.md format) and `.mcp.json`. Importing its skills and MCP servers as a GoatCitadel plugin looks feasible. Its commands, agents and hooks probably don't map, and would be listed as "not supported, ignored" in the panel. The spike ran on 2026-11-01: see `2026-11-01-claude-code-plugin-import-spike.md` (sound, but narrow; Phase 5 waits on the operator's answers there).
 
 **Removals:**
 - The Arena add-on, the add-ons service and its `/api/v1/addons/*` routes, add-on dashboard slots, and the Settings › Add-ons & packs page.
