@@ -21,6 +21,7 @@ import { RequesterMcpApprovalResumeRequiredError } from "./mcp-requester-admissi
 import { yieldFanoutApprovalEffect } from "./chat-fanout-approval-service.js";
 import { StaleDelegationScopeResumeError, UnverifiableDelegationInstructionsError } from "./chat-delegation-service.js";
 import { isNativeExecutionApproval, readPendingNativeApprovalParentWake } from "./approval-native-runtime-parent.js";
+import { ERRAND_APPROVAL_KIND } from "./browser-errands/errand-constants.js";
 import type {
   ApprovalEffectRecord,
   ApprovalInboxItemState,
@@ -861,7 +862,10 @@ export class ApprovalEffectsService {
       );
     }
 
-    const approvalWaitRunId = await this.readApprovalWaitRunId(approval.approvalId);
+    // A browser errand's gate polls its own approval record from inside the still-running turn, so nothing parks on
+    // it: waking the turn (or a wait run) would only retry while the turn runs and could resume a later, unrelated park.
+    const wakesWaiters = approval.kind !== ERRAND_APPROVAL_KIND;
+    const approvalWaitRunId = wakesWaiters ? await this.readApprovalWaitRunId(approval.approvalId) : undefined;
     if (approvalWaitRunId) {
       const delegatedScopeChildTurnId =
         approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND
@@ -902,7 +906,7 @@ export class ApprovalEffectsService {
     }
 
     const linkedTurn =
-      approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND
+      approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND || !wakesWaiters
         ? undefined
         : await this.resolveLinkedTurnWakeTarget(approval);
     if (linkedTurn) {
@@ -938,7 +942,7 @@ export class ApprovalEffectsService {
       );
     }
 
-    for (const parentTurn of approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND
+    for (const parentTurn of approval.kind === DELEGATION_SCOPE_EXPANSION_APPROVAL_KIND || !wakesWaiters
       ? []
       : await this.resolveDelegationParentWakeTargets(approval)) {
       enqueued.push(
