@@ -404,4 +404,35 @@ describe("guided setup sign-in completion across a workspace switch", () => {
     expect(reloadOnboarding).not.toHaveBeenCalled();
     expect(dialog()).toBeNull();
   });
+  it("releases busy for an action started after the switch commits but before its passive effects run", async () => {
+    mocks.plans.mockResolvedValue({ items: [] });
+    let failCreate!: () => void;
+    mocks.create.mockReturnValueOnce(new Promise((_resolve, reject) => (failCreate = () => reject(new Error("boom")))));
+    const tree = (onCommit?: () => void) => (
+      <>
+        <CockpitGuidedModelSetup onboarding={onboarding} reloadOnboarding={async () => {}} onEnterChat={() => {}} />
+        <CommitProbe onCommit={onCommit} />
+      </>
+    );
+    await act(async () => root.render(tree()));
+    const actEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      // The probe starts Connect during the switch's commit, so the action takes its generation inside the gap.
+      mocks.workspace.activeWorkspaceId = "other";
+      root.render(tree(() => button("Connect provider")!.click()));
+      await drainScheduler();
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    }
+    expect(mocks.create).toHaveBeenCalledOnce();
+    await act(async () => failCreate());
+    expect(container.querySelector('[role="alert"]')?.textContent).toBe("boom");
+    expect(container.querySelector("select")?.disabled).toBe(false);
+    // The action released busy, so the next Connect runs instead of returning early.
+    mocks.create.mockResolvedValueOnce(createdPlan);
+    await act(async () => button("Connect provider")!.click());
+    expect(mocks.create).toHaveBeenCalledTimes(2);
+    expect(dialog()?.getAttribute("data-revision")).toBe("7");
+  });
 });

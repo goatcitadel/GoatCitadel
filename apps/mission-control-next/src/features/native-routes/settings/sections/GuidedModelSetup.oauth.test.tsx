@@ -402,4 +402,47 @@ describe("guided setup sign-in completion across a workspace switch", () => {
     expect(reloadOnboarding).not.toHaveBeenCalled();
     expect(dialog()).toBeNull();
   });
+  it("releases busy for an action started after the switch commits but before its passive effects run", async () => {
+    const createdPlan = {
+      ...oauthPlan,
+      planId: "plan-created",
+      revision: 7,
+      requiredAction: { kind: "oauth", actionId: "oauth-7", actionNonce: "nonce-7", title: "Sign in" },
+    };
+    mocks.plans.mockResolvedValue({ items: [] });
+    let failCreate!: () => void;
+    mocks.create.mockReturnValueOnce(new Promise((_resolve, reject) => (failCreate = () => reject(new Error("boom")))));
+    const tree = (workspaceId: string, onCommit?: () => void) => (
+      <>
+        <GuidedModelSetup
+          workspaceId={workspaceId}
+          onboarding={onboarding}
+          route={{ area: "settings", section: "onboarding", theme: "dark" }}
+          navigate={vi.fn()}
+          reloadOnboarding={async () => {}}
+          setNotice={vi.fn()}
+        />
+        <CommitProbe onCommit={onCommit} />
+      </>
+    );
+    await act(async () => root.render(tree("default")));
+    const actEnvironment = globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean };
+    actEnvironment.IS_REACT_ACT_ENVIRONMENT = false;
+    try {
+      // The probe starts Connect during the switch's commit, so the action takes its generation inside the gap.
+      root.render(tree("other", () => button("Verify provider connection")!.click()));
+      await drainScheduler();
+    } finally {
+      actEnvironment.IS_REACT_ACT_ENVIRONMENT = true;
+    }
+    expect(mocks.create).toHaveBeenCalledOnce();
+    await act(async () => failCreate());
+    expect(container.querySelector('[role="alert"]')?.textContent).toContain("boom");
+    expect(container.querySelector("select")?.disabled).toBe(false);
+    // The action released busy, so the next Connect runs instead of returning early.
+    mocks.create.mockResolvedValueOnce(createdPlan);
+    await act(async () => button("Verify provider connection")!.click());
+    expect(mocks.create).toHaveBeenCalledTimes(2);
+    expect(dialog()?.getAttribute("data-revision")).toBe("7");
+  });
 });

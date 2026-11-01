@@ -187,22 +187,14 @@ export function useGuidedModelSetup({
       });
   }, []);
 
-  // The workspace guards move in the commit that shows the new workspace, before its passive effects run: a result
-  // from the previous workspace that settles in between fails runAction's generation check and sees the new visit.
+  // The whole workspace reset runs in the commit that shows the new workspace, before any passive effect: a result
+  // from the previous workspace that settles after it fails runAction's generation check and sees the new visit,
+  // and an action started after it keeps its generation, so its settling still releases busy.
   useLayoutEffect(() => {
     workspaceVisit.current += 1;
     workspaceRef.current = workspaceId;
     busyRef.current = false;
     recordedPlans.current = [];
-    // The previous visit's cleanup already moved the generation on.
-    return () => {
-      planLoadGeneration.current += 1;
-      signInRef.current?.abort();
-      signInRef.current = null;
-    };
-  }, [workspaceId]);
-
-  useEffect(() => {
     setBusy(false);
     setSigningIn(false);
     setActionError(null);
@@ -210,6 +202,11 @@ export function useGuidedModelSetup({
     setActivePlans([]);
     setDialogPlan(null);
     readPlans(workspaceId, ++planLoadGeneration.current);
+    return () => {
+      planLoadGeneration.current += 1;
+      signInRef.current?.abort();
+      signInRef.current = null;
+    };
   }, [workspaceId, readPlans]);
 
   /** Ends the running action; a completion re-read it held back starts now, so it sees what the action persisted. */
