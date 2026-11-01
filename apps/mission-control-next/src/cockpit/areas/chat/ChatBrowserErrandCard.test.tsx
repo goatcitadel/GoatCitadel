@@ -4,7 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BrowserErrandStatus } from "@goatcitadel/mission-control-shared/api/browser-errands";
-import { ChatBrowserErrandCard } from "./ChatBrowserErrandCard";
+import { ChatBrowserErrandCard, errandPollInterval } from "./ChatBrowserErrandCard";
 
 const api = vi.hoisted(() => ({ fetchBrowserErrandStatus: vi.fn(), stopBrowserErrand: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/browser-errands", () => ({
@@ -138,5 +138,40 @@ describe("ChatBrowserErrandCard", () => {
     await mount();
     await vi.waitFor(() => expect(container.textContent).toContain("Paused"));
     expect(container.textContent).not.toContain("taken_over");
+  });
+
+  it("announces the step text politely", async () => {
+    api.fetchBrowserErrandStatus.mockResolvedValue(running);
+    await mount();
+    await vi.waitFor(() => expect(container.textContent).toContain("Searching for flights"));
+    const step = [...container.querySelectorAll("p")].find((p) => p.textContent === "Searching for flights");
+    expect(step?.getAttribute("aria-live")).toBe("polite");
+  });
+
+  it("backs off while reads fail and stops once the tool run has closed", () => {
+    const failing = (fetchFailureCount: number, toolRunOpen: boolean) =>
+      errandPollInterval({ data: undefined, status: "error", fetchFailureCount, toolRunOpen });
+    expect(failing(1, true)).toBe(4_000);
+    expect(failing(2, true)).toBe(8_000);
+    expect(failing(10, true)).toBe(30_000);
+    expect(failing(1, false)).toBe(false);
+    expect(errandPollInterval({ data: running, status: "success", fetchFailureCount: 0, toolRunOpen: true })).toBe(
+      2_000,
+    );
+    expect(errandPollInterval({ data: finished, status: "success", fetchFailureCount: 0, toolRunOpen: true })).toBe(
+      false,
+    );
+  });
+
+  it("stops asking after a failed read when the tool run is closed", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.fetchBrowserErrandStatus.mockRejectedValue(new Error("Gateway unavailable"));
+    await mount();
+    await vi.waitFor(() => expect(container.querySelector("[role=alert]")).not.toBeNull());
+    const calls = api.fetchBrowserErrandStatus.mock.calls.length;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(api.fetchBrowserErrandStatus.mock.calls.length).toBe(calls);
   });
 });

@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { buildGatewayUrl, readGatewayAuthHeaders } from "@goatcitadel/mission-control-shared/api/client-core";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
+const IMAGE_FAILED = "The image couldn't be loaded.";
+
 function attachmentContentPath(attachmentId: string): string {
   return `/api/v1/chat/attachments/${encodeURIComponent(attachmentId)}/content?disposition=inline`;
 }
@@ -25,28 +27,33 @@ export function AttachmentImage({
 
   useEffect(() => {
     let active = true;
-    let objectUrl: string | null = null;
     const contentPath = attachmentContentPath(attachmentId);
-    setBlobUrl(null);
+    // The previous picture stays up until the next one has loaded, so the card does not jump on every step.
     setFailure(null);
     void (async () => {
       try {
         const response = await fetch(buildGatewayUrl(contentPath), { headers: readGatewayAuthHeaders(contentPath) });
-        if (!response.ok) throw new Error(`Render image request failed (${response.status}).`);
+        if (!response.ok) throw new Error(IMAGE_FAILED);
         const blob = await response.blob();
         // Create the object URL only while mounted; one created after cleanup would never be revoked.
         if (!active) return;
-        objectUrl = URL.createObjectURL(blob);
-        setBlobUrl(objectUrl);
+        setBlobUrl(URL.createObjectURL(blob));
       } catch (error) {
         if (active) setFailure(describeFailure(error));
       }
     })();
     return () => {
       active = false;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
   }, [attachmentId]);
+
+  // Runs when the shown URL is replaced (after the new one is committed) and on unmount.
+  useEffect(
+    () => () => {
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+    },
+    [blobUrl],
+  );
 
   if (failure) {
     return (

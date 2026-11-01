@@ -16,6 +16,26 @@ import { Button } from "../../ui/Button";
 import { StatusBadge } from "../../ui/StatusBadge";
 
 const POLL_MS = 2_000;
+const MAX_POLL_MS = 30_000;
+
+/**
+ * How long until the next status read, or false to stop. A failing read backs off (2 s, 4 s, ... up to 30 s) while the
+ * tool run is open and stops once it has closed, so a dead Gateway or a lost sign-in is not asked every 2 s forever.
+ */
+export function errandPollInterval(state: {
+  data: BrowserErrandStatus | null | undefined;
+  status: string;
+  fetchFailureCount: number;
+  toolRunOpen: boolean;
+}): number | false {
+  if (state.data?.state === "finished") return false;
+  if (state.data === null && !state.toolRunOpen) return false;
+  if (state.status === "error") {
+    return state.toolRunOpen ? Math.min(MAX_POLL_MS, POLL_MS * 2 ** state.fetchFailureCount) : false;
+  }
+  return POLL_MS;
+}
+
 const IMAGE_CLASS = "mt-2 max-h-56 w-auto max-w-full rounded-md border border-line bg-sunken";
 
 const OUTCOME_COPY: Record<BrowserErrandOutcome, string> = {
@@ -74,12 +94,7 @@ export function ChatBrowserErrandCard(props: {
     queryFn: ({ signal }) => fetchBrowserErrandStatus(toolRunId, { signal }),
     staleTime: 0,
     // Polls until the errand finishes. A tool run that already ended stops asking once the Gateway has nothing on it.
-    refetchInterval: (current) => {
-      const data = current.state.data;
-      if (data?.state === "finished") return false;
-      if (data === null && !toolRunOpen) return false;
-      return POLL_MS;
-    },
+    refetchInterval: (current) => errandPollInterval({ ...current.state, toolRunOpen }),
   });
   const [stopError, setStopError] = useState<string>();
   const stop = useMutation({
@@ -137,7 +152,7 @@ export function ChatBrowserErrandCard(props: {
         ) : null
       ) : (
         <>
-          <p className="mt-2 text-fg-secondary">
+          <p aria-live="polite" className="mt-2 text-fg-secondary">
             {view.state === "waiting_on_you"
               ? "Waiting for your decision before the next step."
               : view.state === "taken_over"
