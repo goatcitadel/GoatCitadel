@@ -51,9 +51,15 @@ export interface ErrandBrowser {
   close(): Promise<void>;
   /** The banner, cursor and approval card GoatCitadel draws over the page, out of the page's reach. */
   overlay: ErrandOverlay;
-  /** Describes the interactive element at a viewport point, read in an isolated world; null when nothing is there. */
+  /**
+   * Describes the interactive element at a viewport point, read in an isolated world. Null means GoatCitadel could not
+   * inspect it; callers must treat it as unknown, never as safe.
+   */
   describeTarget(x: number, y: number): Promise<ErrandTargetInfo | null>;
-  /** Describes the focused element, read in an isolated world; null when nothing is focused. */
+  /**
+   * Describes the focused element, read in an isolated world. Null means nothing is focused or GoatCitadel could not
+   * inspect it; callers must treat it as unknown, never as safe.
+   */
   describeFocused(): Promise<ErrandTargetInfo | null>;
   /**
    * Runs the actions in order, moving the overlay cursor to each action's point first. `beforeAction` is asked before

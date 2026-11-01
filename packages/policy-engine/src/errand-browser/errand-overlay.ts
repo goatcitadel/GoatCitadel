@@ -205,9 +205,10 @@ export function createErrandOverlay(activePage: () => Page): ErrandOverlayContro
       return overlay.snapshot();
     },
     async withAutomationInput(dispatch) {
+      // The increment and every await sit inside the try, so the depth unwinds even if `current()` throws.
       automationDepth += 1;
-      const overlay = await current();
       try {
+        const overlay = await current();
         // Best effort: the Gateway-side guard in `emit` already drops anything reported while this runs.
         await overlay?.setAutomationInput(true).catch(() => undefined);
         return await dispatch();

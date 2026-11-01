@@ -81,6 +81,22 @@ const TARGET_SCRIPT_BODY = String.raw`
       y: el.clientTop + (parseFloat(style.paddingTop) || 0)
     };
   }
+  /** Where the element's document origin sits in the top viewport, walking up same-origin frames. */
+  function frameOffset(el) {
+    var ox = 0, oy = 0;
+    var win = el.ownerDocument.defaultView;
+    for (var depth = 0; win && depth < 20; depth += 1) {
+      var owner = null;
+      try { owner = win.frameElement; } catch (error) { owner = null; }
+      if (!owner) break;
+      var rect = owner.getBoundingClientRect();
+      var inset = frameInset(owner);
+      ox += rect.left + inset.x;
+      oy += rect.top + inset.y;
+      win = win.parent;
+    }
+    return { x: ox, y: oy };
+  }
   function describe(el, x, y, ox, oy, opaque) {
     var tag = el.tagName.toLowerCase();
     var isInput = tag === "input";
@@ -177,6 +193,7 @@ export function buildDescribeNodeFunction(x: number, y: number): string {
     if (hit.nodeType !== 1) hit = hit.parentElement || (hit.parentNode && hit.parentNode.host) || null;
     if (!hit || hit.ownerDocument !== document) return undefined;
     var target = hit.closest(INTERACTIVE) || hit;
-    return describe(target, ${JSON.stringify(x)}, ${JSON.stringify(y)}, 0, 0, false);
+    var offset = frameOffset(target);
+    return describe(target, ${JSON.stringify(x)}, ${JSON.stringify(y)}, offset.x, offset.y, false);
   }`;
 }

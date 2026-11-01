@@ -5,6 +5,8 @@ import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { normalizeComputerActions, type ComputerAction } from "./computer-actions.js";
+import { loadPlaywright } from "../playwright-runtime.js";
+import { createErrandOverlay } from "./errand-overlay.js";
 import { launchErrandBrowser, type ErrandBrowser } from "./errand-browser.js";
 
 const HEADLESS = process.env.ERRAND_BROWSER_HEADED !== "1";
@@ -39,6 +41,17 @@ a.innerHTML = '<input type="password" style="width:200px;height:30px;margin:0">'
 var b = document.getElementById("fancy").attachShadow({ mode: "closed" });
 b.innerHTML = '<input type="password" style="width:200px;height:30px;margin:0;display:block"><slot></slot>';
 </script>
+</body></html>`;
+
+const INNER_CLOSED_PAGE = `<html><body style="margin:0">
+<div id="h" style="width:220px;height:40px"></div>
+<script>
+document.getElementById("h").attachShadow({ mode: "closed" }).innerHTML = '<input type="password" style="width:200px;height:30px;margin:0">';
+</script>
+</body></html>`;
+
+const FRAME_CLOSED_PAGE = `<html><body style="margin:0">
+<iframe id="f" src="/innerclosed" style="position:absolute;left:20px;top:400px;width:300px;height:100px;border:0"></iframe>
 </body></html>`;
 
 const INNER_PAGE = `<html><body style="margin:0"><input id="ipw" type="password" style="width:200px;height:30px;margin:0"></body></html>`;
@@ -102,7 +115,9 @@ describe("errand browser computer actions", () => {
     server = http.createServer((req, res) => {
       res.setHeader("content-type", "text/html");
       const route = req.url ?? "/";
-      if (route.startsWith("/closed")) res.end(CLOSED_PAGE);
+      if (route.startsWith("/innerclosed")) res.end(INNER_CLOSED_PAGE);
+      else if (route.startsWith("/framec")) res.end(FRAME_CLOSED_PAGE);
+      else if (route.startsWith("/closed")) res.end(CLOSED_PAGE);
       else if (route.startsWith("/shadow")) res.end(SHADOW_PAGE);
       else if (route.startsWith("/inner")) res.end(INNER_PAGE);
       else if (route.startsWith("/frame")) res.end(FRAME_PAGE);
@@ -244,6 +259,43 @@ describe("errand browser computer actions", () => {
     await browser.page().mouse.click(30, 370);
     const focused = await browser.describeFocused();
     expect(focused?.isPasswordLike).toBe(true);
+  }, 60_000);
+
+  it("sees a password field in a closed shadow root inside a same-origin iframe", async () => {
+    const browser = await launch("framec");
+    await browser.page().waitForLoadState("load");
+    const byPoint = await browser.describeTarget(30, 410);
+    expect(byPoint?.isPasswordLike).toBe(true);
+    expect(byPoint?.rect.y).toBe(400);
+    await browser.page().mouse.click(30, 410);
+    const focused = await browser.describeFocused();
+    expect(focused?.isPasswordLike).toBe(true);
+  }, 60_000);
+
+  it("unwinds the automation depth when the overlay cannot be reached", async () => {
+    const playwright = await loadPlaywright<typeof import("playwright")>();
+    const chromium = await playwright.chromium.launch({ headless: true });
+    try {
+      const page = await chromium.newPage({ viewport: { width: 1280, height: 800 } });
+      await page.goto(baseUrl);
+      let broken = false;
+      const overlay = createErrandOverlay(() => {
+        if (broken) throw new Error("page unavailable");
+        return page;
+      });
+      await overlay.attach(page);
+      const events: string[] = [];
+      overlay.onEvent((event) => events.push(event.type));
+      await overlay.render({ mode: "driving", bannerText: "Working", cursor: { x: 5, y: 5 } });
+      broken = true;
+      await expect(overlay.withAutomationInput(async () => undefined)).rejects.toThrow("page unavailable");
+      broken = false;
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      await page.keyboard.press("Escape");
+      await expect.poll(() => events, { timeout: 5_000 }).toEqual(["stop"]);
+    } finally {
+      await chromium.close().catch(() => undefined);
+    }
   }, 60_000);
 
   it("restores operator input after an automation callback throws", async () => {

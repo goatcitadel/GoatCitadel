@@ -13,6 +13,13 @@ const FORM_CONTROL_TAGS = new Set(["input", "textarea", "select", "button", "a",
 interface InspectorWorld {
   session: CDPSession;
   contextId: number;
+  frameId: string;
+  frameTree: FrameTreeNode;
+}
+
+interface FrameTreeNode {
+  frame: { id: string; securityOrigin?: string };
+  childFrames?: FrameTreeNode[];
 }
 
 /**
@@ -27,13 +34,14 @@ async function withInspectorWorld<T>(
   let session: CDPSession | undefined;
   try {
     session = await context.newCDPSession(page);
-    const frameId = (await session.send("Page.getFrameTree")).frameTree.frame.id;
+    const frameTree = (await session.send("Page.getFrameTree")).frameTree as FrameTreeNode;
+    const frameId = frameTree.frame.id;
     const { executionContextId } = await session.send("Page.createIsolatedWorld", {
       frameId,
       worldName: ERRAND_TARGET_WORLD,
       grantUniveralAccess: false,
     });
-    return await work({ session, contextId: executionContextId });
+    return await work({ session, contextId: executionContextId, frameId, frameTree });
   } catch {
     return null;
   } finally {
@@ -50,7 +58,10 @@ async function evaluateByValue(world: InspectorWorld, expression: string): Promi
   return response.exceptionDetails ? undefined : response.result.value;
 }
 
-/** Describes the interactive element at a point. CDP's hit test reaches into closed shadow roots; the world script is the fallback. */
+/**
+ * Describes the interactive element at a point. CDP's hit test reaches into closed shadow roots and same-origin frames.
+ * When that path fails, the world-side hit test (which cannot see closed roots) answers, flagged opaque.
+ */
 export async function describePointOverCdp(
   context: BrowserContext,
   page: Page,
@@ -60,16 +71,26 @@ export async function describePointOverCdp(
   const result = await withInspectorWorld(context, page, async (world) => {
     try {
       await world.session.send("DOM.enable");
-      const { backendNodeId } = await world.session.send("DOM.getNodeForLocation", {
+      const { backendNodeId, frameId } = await world.session.send("DOM.getNodeForLocation", {
         x,
         y,
         includeUserAgentShadowDOM: false,
         ignorePointerEventsNone: true,
       });
-      const { object } = await world.session.send("DOM.resolveNode", {
-        backendNodeId,
-        executionContextId: world.contextId,
-      });
+      let contextId = world.contextId;
+      if (frameId && frameId !== world.frameId) {
+        if (!isSameOriginChain(world.frameTree, frameId)) {
+          throw new Error("The node sits in a cross-origin frame.");
+        }
+        contextId = (
+          await world.session.send("Page.createIsolatedWorld", {
+            frameId,
+            worldName: ERRAND_TARGET_WORLD,
+            grantUniveralAccess: false,
+          })
+        ).executionContextId;
+      }
+      const { object } = await world.session.send("DOM.resolveNode", { backendNodeId, executionContextId: contextId });
       if (object.objectId) {
         const described = await world.session.send("Runtime.callFunctionOn", {
           objectId: object.objectId,
@@ -81,11 +102,36 @@ export async function describePointOverCdp(
         }
       }
     } catch {
-      // Fall back to the world-side hit test below (nodes of child frames, or a CDP hiccup).
+      // Fall through to the flagged world-side answer.
     }
-    return (await evaluateByValue(world, buildDescribePointExpression(x, y))) as ErrandTargetInfo | null | undefined;
+    const fallback = (await evaluateByValue(world, buildDescribePointExpression(x, y))) as
+      | ErrandTargetInfo
+      | null
+      | undefined;
+    return fallback ? { ...fallback, isOpaque: true } : null;
   });
   return result ?? null;
+}
+
+/** True when every frame from the main frame down to `frameId` shares the main frame's origin (so its content is readable). */
+function isSameOriginChain(root: FrameTreeNode, frameId: string): boolean {
+  const origin = root.frame.securityOrigin;
+  const walk = (node: FrameTreeNode): boolean | undefined => {
+    if (node.frame.securityOrigin !== origin) {
+      return false;
+    }
+    if (node.frame.id === frameId) {
+      return true;
+    }
+    for (const child of node.childFrames ?? []) {
+      const found = walk(child);
+      if (found !== undefined) {
+        return found;
+      }
+    }
+    return undefined;
+  };
+  return walk(root) === true;
 }
 
 /** Describes the focused element; a focused host with a (possibly closed) shadow root is also checked for password and code fields. */
@@ -119,7 +165,7 @@ export async function describeFocusedOverCdp(context: BrowserContext, page: Page
         returnByValue: false,
       });
       if (!element.result.objectId) {
-        return info;
+        return { ...info, isOpaque: true };
       }
       const { node } = await world.session.send("DOM.describeNode", {
         objectId: element.result.objectId,
@@ -133,7 +179,8 @@ export async function describeFocusedOverCdp(context: BrowserContext, page: Page
         isOneTimeCode: info.isOneTimeCode || hidden.oneTimeCode,
       };
     } catch {
-      return info;
+      // The host could not be inspected, so a closed root may hide a field.
+      return { ...info, isOpaque: true };
     }
   });
   return result ?? null;
