@@ -171,3 +171,66 @@ describe("streaming tables", () => {
     ]);
   });
 });
+
+describe("tail rewrites keep the committed blocks", () => {
+  const prefix = Array.from({ length: 40 }, (_, i) => `Paragraph ${i} of the reply.\n\n`).join("");
+
+  function rewriteTail(before: string, after: string) {
+    const state = createIncrementalSplitState();
+    splitIncremental(state, before);
+    const blocks = [...state.blocks];
+    const resumeIndex = state.resumeIndex;
+    const split = splitIncremental(state, after);
+    return { state, blocks, resumeIndex, split };
+  }
+
+  it("re-parses only from the last commit point when a closed formula rewrites the tail", () => {
+    const { state, blocks, resumeIndex, split } = rewriteTail(
+      `${prefix}Final paragraph where $x`,
+      `${prefix}Final paragraph where $$x$$ is`,
+    );
+    expect(resumeIndex).toBeGreaterThan(0);
+    expect(state.lastScanStart).toBe(resumeIndex);
+    expect(state.blocks).toHaveLength(blocks.length);
+    blocks.forEach((block, i) => expect(state.blocks[i]).toBe(block));
+    expect(split).toEqual(splitStreamingMarkdown(`${prefix}Final paragraph where $$x$$ is`));
+  });
+
+  it("forgets a reference definition that the rewritten tail no longer holds", () => {
+    const head = `See [the spec][spec].\n\n${prefix}`;
+    const { state, blocks, split } = rewriteTail(
+      `${head}[spec]: https://example.com/spec\n\nTail where $x`,
+      `${head}Tail where $$x$$ is`,
+    );
+    // The definition was the block that committed "Paragraph 39"; without it that paragraph is the tail's again.
+    expect(state.blocks).toHaveLength(blocks.length - 1);
+    state.blocks.forEach((block, i) => expect(block).toBe(blocks[i]));
+    expect(state.definitionMap.has("spec")).toBe(false);
+    expect(state.definitions).toEqual([]);
+    expect(JSON.stringify(state.blocks[0]!.tree)).not.toContain("https://example.com/spec");
+    expect(JSON.stringify(state.tailTree)).not.toContain("https://example.com/spec");
+    expect(split).toEqual(splitStreamingMarkdown(`${head}Tail where $$x$$ is`));
+  });
+
+  it("keeps the committed blocks when the formula sits in a list item's continuation", () => {
+    const after = `${prefix}1. Item\n    where $$x$$ is`;
+    const { state, blocks, split } = rewriteTail(`${prefix}1. Item\n    where $x`, after);
+    blocks.forEach((block, i) => expect(state.blocks[i]).toBe(block));
+    expect(state.blocks).toHaveLength(blocks.length);
+    expect(split).toEqual(splitStreamingMarkdown(after));
+  });
+});
+
+describe("tail rewrites that reach back into the last committed block", () => {
+  it("returns the last block to the tail when the rewrite changes the line that committed it", () => {
+    const state = createIncrementalSplitState();
+    splitIncremental(state, "Intro.\n\n- item\n\nAfter.\n");
+    const [intro] = state.blocks;
+    const after = "Intro.\n\n- item\n\n  continued in the item\n";
+    const split = splitIncremental(state, after);
+    expect(split).toEqual(splitStreamingMarkdown(after));
+    expect(split.tail.startsWith("- item")).toBe(true);
+    expect(state.blocks).toEqual([intro]);
+    expect(state.blocks[0]).toBe(intro);
+  });
+});
