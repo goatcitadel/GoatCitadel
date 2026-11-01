@@ -4,6 +4,7 @@ import { canRetryTurn } from "@goatcitadel/mission-control-shared/components/cha
 import {
   getChatTurnRecoveryActionSummary,
   isChatTurnTerminalStatus,
+  type ChatCapabilityUpgradeSuggestion,
   type ChatThreadTurnRecord,
 } from "@goatcitadel/contracts";
 import { NativeMessageRenderer as AssistantMessageRenderer } from "./NativeMessageRenderer";
@@ -27,7 +28,7 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
-import { ChatCapabilitySuggestionLine, selectTurnCapabilitySuggestions } from "./ChatCapabilitySuggestionLine";
+import { ChatCapabilitySuggestionLine } from "./ChatCapabilitySuggestionLine";
 import { ChatCodeModeRequestCard } from "./ChatCodeModeRequestCard";
 import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
 import { ChatContinueAction } from "./ChatContinueAction";
@@ -84,6 +85,7 @@ export const Turn = memo(function Turn({
   previewText,
   streaming,
   actions,
+  capabilitySuggestions,
   draftEmpty,
   continueActions,
   channel,
@@ -100,6 +102,11 @@ export const Turn = memo(function Turn({
   previewText: string | null;
   streaming: boolean;
   actions: TurnActions;
+  /**
+   * The capability suggestions this turn offers (`selectTurnCapabilitySuggestions`): the selection arrives per turn, so
+   * moving it re-renders only the turns it leaves and reaches. Callers pass one shared empty list to every other turn.
+   */
+  capabilitySuggestions: ChatCapabilityUpgradeSuggestion[];
   /** Whether the composer is empty; it matters only to a turn that `turnReadsDraft`. */
   draftEmpty: boolean;
   /**
@@ -223,7 +230,7 @@ export const Turn = memo(function Turn({
       />
       {actions.onCapabilitySuggestionAction && actions.onDismissCapabilitySuggestion ? (
         <ChatCapabilitySuggestionLine
-          suggestions={selectTurnCapabilitySuggestions(actions, turn.turnId, isLatest)}
+          suggestions={capabilitySuggestions}
           onAction={actions.onCapabilitySuggestionAction}
           onDismiss={actions.onDismissCapabilitySuggestion}
         />

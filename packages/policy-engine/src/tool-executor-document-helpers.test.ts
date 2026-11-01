@@ -198,6 +198,91 @@ describe("document helper tools", () => {
     expect(next.text).toBe("second, longer version of the text");
   });
 
+  it("re-parses a same-size rewrite that carries a new mtime", async () => {
+    const root = createRoot();
+    const file = path.join(root, "same-size.txt");
+    fs.writeFileSync(file, "version one of the text");
+    const stamp = new Date("2026-01-01T00:00:00Z");
+    fs.utimesSync(file, stamp, stamp);
+    const config = createConfig(root);
+    const parse = vi.mocked(nativeDocumentParser.parseNativeFileDocument);
+    parse.mockClear();
+    await executeTool(request("docs.extract_text", { path: file }), config, storage);
+    await executeTool(request("docs.extract_text", { path: file }), config, storage);
+    expect(parse).toHaveBeenCalledTimes(1);
+    fs.writeFileSync(file, "version two of the text");
+    const later = new Date("2026-01-02T00:00:00Z");
+    fs.utimesSync(file, later, later);
+    const next = await executeTool(request("docs.extract_text", { path: file }), config, storage);
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(next.text).toBe("version two of the text");
+  });
+
+  describe("the attachment-source cache", () => {
+    const attachmentCall = (
+      root: string,
+      attachmentId: string,
+      content: string,
+      scope: Partial<ToolInvokeRequest> = {},
+      args: Record<string, unknown> = {},
+    ) => {
+      const readAttachmentBytes = vi.fn(async (_request: ToolInvokeRequest, _attachmentId: string) => ({
+        fileName: "note.txt",
+        mimeType: "text/plain",
+        bytes: Buffer.from(content),
+      }));
+      return executeTool(
+        { ...request("docs.extract_text", { attachmentId, ...args }), ...scope },
+        createConfig(root),
+        storage,
+        { readAttachmentBytes },
+      );
+    };
+
+    it("parses one attachment once across two pages", async () => {
+      const root = createRoot();
+      const body = "attachment-paging ".repeat(40);
+      const parse = vi.mocked(nativeDocumentParser.parseNativeFileDocument);
+      parse.mockClear();
+      const first = await attachmentCall(root, "att_cache_pages", body, {}, { maxChars: 300 });
+      const second = await attachmentCall(
+        root,
+        "att_cache_pages",
+        body,
+        {},
+        { maxChars: 300, offset: first.nextOffset },
+      );
+      expect(parse).toHaveBeenCalledTimes(1);
+      expect(String(first.text) + String(second.text)).toBe(body.slice(0, 600));
+    });
+
+    it("misses for a different request scope", async () => {
+      const root = createRoot();
+      const body = "attachment-scope text";
+      const parse = vi.mocked(nativeDocumentParser.parseNativeFileDocument);
+      parse.mockClear();
+      await attachmentCall(root, "att_cache_scope", body);
+      await attachmentCall(root, "att_cache_scope", body, { sessionId: "session-2" });
+      expect(parse).toHaveBeenCalledTimes(2);
+      await attachmentCall(root, "att_cache_scope", body, { workspaceId: "workspace-2" });
+      expect(parse).toHaveBeenCalledTimes(3);
+      await attachmentCall(root, "att_cache_scope", body, { agentId: "agent-2" });
+      expect(parse).toHaveBeenCalledTimes(4);
+      await attachmentCall(root, "att_cache_scope", body);
+      expect(parse).toHaveBeenCalledTimes(4);
+    });
+
+    it("misses for a different total size", async () => {
+      const root = createRoot();
+      const parse = vi.mocked(nativeDocumentParser.parseNativeFileDocument);
+      parse.mockClear();
+      await attachmentCall(root, "att_cache_size", "short attachment");
+      const grown = await attachmentCall(root, "att_cache_size", "short attachment, now longer");
+      expect(parse).toHaveBeenCalledTimes(2);
+      expect(grown.text).toBe("short attachment, now longer");
+    });
+  });
+
   it("still rejects an outside path after the same name was cached", async () => {
     const root = createRoot();
     const outside = createRoot();

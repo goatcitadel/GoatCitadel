@@ -1,6 +1,6 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
-import { turnReadsDraft, useTurnActions } from "./use-turn-actions";
+import { selectTurnCapabilitySuggestions, turnReadsDraft, useTurnActions } from "./use-turn-actions";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
 import {
@@ -301,6 +301,7 @@ export function ChatTranscript({
       previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
       streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
       actions={turnActions}
+      capabilitySuggestions={selectTurnCapabilitySuggestions(props, turn.turnId, turn.turnId === latestTurn?.turnId)}
       draftEmpty={turnReadsDraft(turn) ? !props.draft.trim() : true}
       continueActions={turn.turnId === continueTurnId ? props : undefined}
       channel={channel}

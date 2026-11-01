@@ -150,7 +150,12 @@ import {
   MCP_BROWSER_FALLBACK_TOOL_NAMES,
   WEB_TOOL_NAMES,
 } from "./chat-tool-families.js";
-import { loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
+import {
+  buildCodeModeRequestTurnShape,
+  isRestrictedAutonomousPermissionProfile,
+  loadCodeModeRequestEligibility,
+  type CodeModeRequestTurnFields,
+} from "./code-mode-request-eligibility.js";
 import {
   buildAnswerRecoveryNudge,
   buildDegradedAnswerFooter,
@@ -1466,23 +1471,8 @@ export class ChatTurnAgentRunner {
   }
 
   /** Whether this turn offers `code_mode.request`, by the rule turn preparation also applies to the base prompt. */
-  private async isCodeModeRequestEligible(
-    input: Pick<
-      ChatTurnAgentRunnerInput,
-      "mode" | "parentDelegationStepId" | "authActorSource" | "policyContext" | "serverOnlyPosture"
-    >,
-    restrictedAutonomousProfile: boolean,
-  ): Promise<boolean> {
-    return await loadCodeModeRequestEligibility(
-      {
-        mode: input.mode,
-        parentDelegationStepId: input.parentDelegationStepId,
-        serverOnlyPosture: Boolean(input.serverOnlyPosture),
-        restrictedAutonomousProfile,
-        actorSource: input.authActorSource ?? input.policyContext?.authActorSource,
-      },
-      this.deps.getCodeModeReadiness,
-    );
+  private async isCodeModeRequestEligible(input: CodeModeRequestTurnFields): Promise<boolean> {
+    return await loadCodeModeRequestEligibility(buildCodeModeRequestTurnShape(input), this.deps.getCodeModeReadiness);
   }
 
   /** Reads the turn's optional-input mailbox under its write fence; undefined when no reader is wired. */
@@ -6898,9 +6888,7 @@ export class ChatTurnAgentRunner {
     const filteredCatalog: ToolCatalogEntry[] = [];
     const exactSystemHeartbeat = isExactSystemHeartbeatRunnerPosture(input);
     const policyDecisions: ResolvedChatTurnToolSchema["policyDecisions"] = [];
-    const restrictedAutonomousProfile =
-      input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
-      input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID;
+    const restrictedAutonomousProfile = isRestrictedAutonomousPermissionProfile(input.permissionProfileId);
     const boundedExposure =
       input.mode === "chat" &&
       !input.capabilityProfile &&
@@ -6952,7 +6940,7 @@ export class ChatTurnAgentRunner {
       !input.parentDelegationStepId &&
       !restrictedAutonomousProfile &&
       (await this.isOptionalUserInputEnabled());
-    const codeModeRequestEligible = await this.isCodeModeRequestEligible(input, restrictedAutonomousProfile);
+    const codeModeRequestEligible = await this.isCodeModeRequestEligible(input);
     for (const tool of catalog) {
       if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
       if (tool.toolName === CODE_MODE_REQUEST_TOOL_NAME && !codeModeRequestEligible) continue;

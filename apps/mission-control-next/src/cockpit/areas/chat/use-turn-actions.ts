@@ -7,16 +7,15 @@ import type {
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 /**
- * What a turn reads from the session surface. Values change only with the conversation or the selection; every
- * handler keeps one identity, so composer typing and streamed chunks leave the memoized turns alone.
+ * What every turn reads from the session surface. Values change only with the conversation; every handler keeps one
+ * identity, so composer typing and streamed chunks leave the memoized turns alone. The selection reaches each turn as
+ * its own capability suggestions instead, so moving it re-renders two turns, not all of them.
  */
 export type TurnActions = Pick<
   MissionThreadedActiveSessionSurfaceProps,
   | "historicalReadOnly"
   | "workspaceId"
   | "selectedSessionId"
-  | "selectedTurnId"
-  | "capabilitySuggestions"
   | "composerRef"
   | "onRefreshThread"
   | "onCapabilitySuggestionAction"
@@ -39,13 +38,15 @@ export function turnReadsDraft(turn: ChatThreadTurnRecord): boolean {
   return turn.trace.status === "completed" && turn.trace.completion?.status === "complete";
 }
 
+/** The suggestions one turn offers; a turn receives its own list, never the selection itself. */
+export { selectTurnCapabilitySuggestions } from "./ChatCapabilitySuggestionLine";
+
 /** The surface props a turn reads, as one object that changes only when one of its values does. */
 export function useTurnActions(
   props: MissionThreadedActiveSessionSurfaceProps,
   reviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"],
 ): TurnActions {
-  const { historicalReadOnly, workspaceId, selectedSessionId, selectedTurnId, capabilitySuggestions, composerRef } =
-    props;
+  const { historicalReadOnly, workspaceId, selectedSessionId, composerRef } = props;
   const onRefreshThread = useStableHandler(props.onRefreshThread);
   const onCapabilitySuggestionAction = useOptionalStableHandler(props.onCapabilitySuggestionAction);
   const onDismissCapabilitySuggestion = useOptionalStableHandler(props.onDismissCapabilitySuggestion);
@@ -63,8 +64,6 @@ export function useTurnActions(
       historicalReadOnly,
       workspaceId,
       selectedSessionId,
-      selectedTurnId,
-      capabilitySuggestions,
       composerRef,
       onRefreshThread,
       onCapabilitySuggestionAction,
@@ -83,8 +82,6 @@ export function useTurnActions(
       historicalReadOnly,
       workspaceId,
       selectedSessionId,
-      selectedTurnId,
-      capabilitySuggestions,
       composerRef,
       onRefreshThread,
       onCapabilitySuggestionAction,

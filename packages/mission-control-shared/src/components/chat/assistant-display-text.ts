@@ -399,12 +399,24 @@ function looksLikeHtml(content: string): boolean {
 //     present, `stripHtmlNoise` distributes over the cut. When one appears,
 //     finalization simply stops until the segment completes — equivalence is
 //     preserved and only the perf win degrades to the from-scratch cost.
-//   * A text prefix is cut only at the start of a non-blank line at column 0
-//     whose previous line is blank (or which opens its text segment). Any
-//     other line can still continue a list item or a paragraph above it (an
-//     indented continuation, a lazy line), and cut there the re-normalized
-//     tail would lose that context; a container-opening line (`- `, `1. `,
-//     `>`) carries its own context into the tail.
+//   * A text prefix is cut only where the markdown parser (which decides which
+//     lines are code, and so keep their math as written) is in the state a
+//     fresh document starts in, so the tail parses alone exactly as it does in
+//     place. Lines are judged as the parser sees them, after the line-local
+//     HTML strip. Three places qualify, all with no blocker open:
+//       - after a blank line with no list item, quote or footnote open;
+//       - at a non-blank line at column 0 after a blank line, which closes any
+//         such container (a container-opening line, `- `, `1. `, `>`, carries
+//         its own context into the tail);
+//       - at each line of a top-level indented code block (one that began
+//         after a blank line with no container open), so a long block or
+//         listing is not re-normalized on every chunk.
+//     Any other line can still continue a list item or a paragraph above it
+//     (an indented continuation, a lazy line), and cut there the tail would
+//     lose that context. A `$$` math block or an HTML block that survives the
+//     strip (`<?`, `<pre <`) runs across blank lines and keeps every later
+//     line inside it, so once a line could open one, its text segment takes no
+//     further cuts. Lines inside a blocked region count as an unknown context.
 //   * The trailing `\n{3,}` collapse is per-maximal-run, so collapsing within
 //     each finalized piece and again across each seam (including the final
 //     assembly seam) reproduces the global collapse; `.trim()` and the
@@ -418,6 +430,21 @@ function looksLikeHtml(content: string): boolean {
 const STARTS_AT_COLUMN_ZERO_RE = /^\S/;
 
 const BLANK_LINE_RE = /^\s*$/;
+
+/** Indented four columns or more: code at the top level after a blank line, never a container opener. */
+const INDENTED_CODE_LINE_RE = /^(?: {4}| {0,3}\t)/;
+
+/** A line that may open a list item, quote or footnote, whose content can continue after blank lines. */
+const CONTAINER_OPENER_RE = /^ {0,3}(?:[-+*](?:[ \t]|$)|\d{1,9}[.)](?:[ \t]|$)|>|\[\^)/;
+
+/**
+ * A line (behind any container markers) that may open a `$$` math block or an HTML block left after the strip; both
+ * run across blank lines, so no later line of the text segment is a fresh parse.
+ */
+const SPANNING_BLOCK_OPENER_RE = /^[ \t]*(?:(?:[>*+-]|\d{1,9}[.)]|\[\^[^\]\n]*\]:)[ \t]*)*(?:<|\$\$)/m;
+
+/** A raw line whose first character survives the HTML strip, so a blocked line's column can be read before it. */
+const KEEPS_FIRST_CHARACTER_RE = /^[^\s<&]/;
 
 const TEXT_FINALIZE_BLOCKER_RE = /<(?:script|style|svg|math|canvas)\b|<!--/i;
 
@@ -518,14 +545,20 @@ export interface IncrementalDisplayTextState {
   /** True when the growing text segment contains a construct that blocks prefix finalization. */
   textBlocked: boolean;
   /**
-   * Start of the latest completed, unblocked text line at column 0 that
-   * follows a blank line (or opens its text segment). Text finalizes only up
-   * to here: any other line may continue a list item or paragraph above it,
-   * so it must stay in the tail with that context.
+   * Start of the latest completed text line where the parser is in a fresh
+   * document's state (see the cut rules above). Text finalizes only up to
+   * here: any other line may continue a list item or paragraph above it, so
+   * it must stay in the tail with that context.
    */
   safeTextCut: number;
-  /** True when the previous walked text line was blank, or the walk sits at a text segment's start. */
+  /** True when the parser saw a blank line just before the walk, or the walk sits at a text segment's start. */
   previousTextLineBlank: boolean;
+  /** True when a list item, quote or footnote may be open, or a blocked line left the context unknown. */
+  textContainerOpen: boolean;
+  /** True while the walk is inside a top-level indented code block. */
+  inIndentedCode: boolean;
+  /** True once a line of this text segment may have opened a block that runs across blank lines. */
+  textSpanningBlock: boolean;
   /**
    * True when the blocked region ends in a `</name` closer still awaiting its
    * terminating `>` (which RAW_HTML_BLOCK_RE allows on a later line): the
@@ -562,6 +595,9 @@ export function createIncrementalDisplayTextState(): IncrementalDisplayTextState
     textBlocked: false,
     safeTextCut: 0,
     previousTextLineBlank: true,
+    textContainerOpen: false,
+    inIndentedCode: false,
+    textSpanningBlock: false,
     pendingTagClose: false,
     completedOut: "",
     seenCommentOpen: false,
@@ -581,6 +617,9 @@ function resetIncrementalDisplayTextState(state: IncrementalDisplayTextState): v
   state.textBlocked = false;
   state.safeTextCut = 0;
   state.previousTextLineBlank = true;
+  state.textContainerOpen = false;
+  state.inIndentedCode = false;
+  state.textSpanningBlock = false;
   state.pendingTagClose = false;
   state.completedOut = "";
   state.seenCommentOpen = false;
@@ -643,6 +682,54 @@ function consumePiece(state: IncrementalDisplayTextState, decoded: string, end: 
   state.consumedEnd = end;
 }
 
+/** A text segment is parsed on its own on both paths, so it starts in a fresh document's state. */
+function startTextSegment(state: IncrementalDisplayTextState): void {
+  state.previousTextLineBlank = true;
+  state.textContainerOpen = false;
+  state.inIndentedCode = false;
+  state.textSpanningBlock = false;
+}
+
+/**
+ * Whether a cut before `line` leaves the tail parsing alone exactly as it does in place. `parsed` is the line's first
+ * line as the parser sees it, or null while a blocked region hides that.
+ */
+function isFreshParseCut(state: IncrementalDisplayTextState, line: string, parsed: string | null): boolean {
+  if (state.textBlocked || state.textSpanningBlock) return false;
+  if (state.previousTextLineBlank && !state.textContainerOpen) return true;
+  const first = parsed ?? (KEEPS_FIRST_CHARACTER_RE.test(line) ? line : "");
+  if (state.previousTextLineBlank && STARTS_AT_COLUMN_ZERO_RE.test(first)) return true;
+  return parsed !== null && state.inIndentedCode && INDENTED_CODE_LINE_RE.test(parsed) && !BLANK_LINE_RE.test(parsed);
+}
+
+/** Tracks the parser's block context through lines it sees as written (after the line-local strip). */
+function noteParsedTextLines(state: IncrementalDisplayTextState, lines: readonly string[]): void {
+  for (const line of lines) {
+    if (BLANK_LINE_RE.test(line)) {
+      state.previousTextLineBlank = true;
+      continue;
+    }
+    if (INDENTED_CODE_LINE_RE.test(line)) {
+      state.inIndentedCode =
+        state.inIndentedCode || (state.previousTextLineBlank && !state.textContainerOpen && !state.textSpanningBlock);
+    } else {
+      state.inIndentedCode = false;
+      if (CONTAINER_OPENER_RE.test(line)) state.textContainerOpen = true;
+      else if (state.previousTextLineBlank && STARTS_AT_COLUMN_ZERO_RE.test(line)) state.textContainerOpen = false;
+    }
+    // A code line opens nothing; any other line may open a block that runs across blank lines.
+    if (!state.inIndentedCode && SPANNING_BLOCK_OPENER_RE.test(line)) state.textSpanningBlock = true;
+    state.previousTextLineBlank = false;
+  }
+}
+
+/** A blocked line hides what the parser will see, so nothing is assumed about the context after it. */
+function noteUnknownTextLine(state: IncrementalDisplayTextState): void {
+  state.previousTextLineBlank = false;
+  state.textContainerOpen = true;
+  state.inIndentedCode = false;
+}
+
 /**
  * Advance the carried normalization state with the latest accumulated raw
  * `content` and return the same value as `normalizeAssistantDisplayText`.
@@ -691,7 +778,7 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
         state.pendingTagClose = false;
         if (hasSameLineFenceClose(line, opening.char, opening.length, opening.start + opening.length)) {
           consumePiece(state, decoded, lineEnd, "code");
-          state.previousTextLineBlank = true;
+          startTextSegment(state);
         } else {
           state.inFence = true;
           state.fenceChar = opening.char;
@@ -699,12 +786,17 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
         }
       } else {
         // Everything before an unblocked line is unblocked text, so its start
-        // is a safe cut when the line cannot continue anything above it.
-        if (!state.textBlocked && state.previousTextLineBlank && STARTS_AT_COLUMN_ZERO_RE.test(line)) {
+        // is a safe cut when the parser reads it as a fresh document would.
+        const lineBlocks = state.textBlocked || lineBlocksTextFinalization(line);
+        // The line as the parser sees it: the HTML strip is line-local outside a blocked region (`<br>` and block
+        // tags may still split it into several lines).
+        const parsedLines = lineBlocks ? null : stripHtmlNoiseProse(line).split("\n");
+        if (isFreshParseCut(state, line, parsedLines?.[0] ?? null)) {
           state.safeTextCut = lineStart;
         }
-        state.previousTextLineBlank = BLANK_LINE_RE.test(line);
-        if (!state.textBlocked && lineBlocksTextFinalization(line)) {
+        if (parsedLines) noteParsedTextLines(state, parsedLines);
+        else noteUnknownTextLine(state);
+        if (!state.textBlocked && lineBlocks) {
           state.textBlocked = true;
         }
         // Same-pass close check so an inline `<script>x</script>` line (or the
@@ -720,6 +812,8 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
           if (blockedRegionCanFinalize(region)) {
             state.textBlocked = false;
             state.pendingTagClose = false;
+            // What the closed region leaves after the strip may open a block that runs across blank lines.
+            if (SPANNING_BLOCK_OPENER_RE.test(stripHtmlNoiseOutsideInlineCode(region))) state.textSpanningBlock = true;
           } else {
             state.pendingTagClose = regionEndsWithDanglingCloser(decodeBasicHtmlEntities(region));
           }
@@ -728,7 +822,7 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
     } else if (state.fenceChar && matchMarkdownFenceClosing(line, state.fenceChar, state.fenceLength)) {
       consumePiece(state, decoded, lineEnd, "code");
       // The next line opens a new text segment, normalized on its own on both paths.
-      state.previousTextLineBlank = true;
+      startTextSegment(state);
       state.inFence = false;
       state.fenceChar = null;
       state.fenceLength = 0;

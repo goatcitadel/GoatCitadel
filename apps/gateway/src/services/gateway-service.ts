@@ -871,7 +871,7 @@ import { MeshCapabilityInvocationService } from "./mesh-capability-invocation-se
 import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { filterBasePromptToolsetByPolicy, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
-import { withBasePromptPolicyScope } from "./base-prompt-policy-scope.js";
+import { resolveProbeCitadelId, withBasePromptPolicyScope } from "./base-prompt-policy-scope.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
@@ -9706,7 +9706,7 @@ export class GatewayService {
         (await this.storage.chatSessionMeta.get(input.sessionId))?.workspaceId ??
         DEFAULT_WORKSPACE_ID,
     );
-    const citadelId = input.citadelId ?? (await this.storage.workspaces?.find(workspaceId))?.citadelId;
+    const citadelId = await resolveProbeCitadelId(input, workspaceId, (id) => this.storage.workspaces?.find(id));
     return await this.enrichToolPolicyContext(
       this.applyRuntimeBrowserBackendDefaults(
         await this.resolveToolRequestPathsForSession({

@@ -1,5 +1,5 @@
 import { useSessionDraft } from "../../library/session-drafts";
-import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { Play, PlugZap } from "lucide-react";
 import type { ChatThinkingLevel, ChangePlanRecord, OnboardingState } from "@goatcitadel/contracts";
 import {
@@ -36,21 +36,14 @@ import {
   localRuntimeSetupGuide,
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
+  reconcileGuidedPlanRead,
   resolveGuidedProviderReadiness,
   submittedGuidedSelection,
   supportedGuidedThinkingLevels,
+  TERMINAL_CHANGE_PLAN_STATUSES,
   withAddableBuiltinProviders,
+  withHeldPlan,
 } from "./guided-model-setup-support";
-
-const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
-  "completed",
-  "applied",
-  "manual_required",
-  "failed",
-  "cancelled",
-  "rolled_back",
-  "rollback_failed",
-]);
 
 export function GuidedModelSetup({
   workspaceId,
@@ -133,8 +126,15 @@ export function GuidedModelSetup({
   // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
   const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
+  // The newest record of each plan this visit recorded from an action, so a late plan read cannot step one back.
+  const recordedPlans = useRef<readonly ChangePlanRecord[]>([]);
   // The running provider sign-in poll, if any; aborted on close, unmount and workspace change.
   const signInRef = useRef<AbortController | null>(null);
+  // Counts workspace changes, so a settled sign-in completion can tell it outlived the visit it started in.
+  const workspaceVisit = useRef(0);
+  const workspaceRef = useRef(workspaceId);
+  // Set when a sign-in completion re-read was due while another action ran; that action starts it once it settles.
+  const refreshAfterAction = useRef(false);
   const [signingIn, setSigningIn] = useState(false);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
@@ -230,43 +230,61 @@ export function GuidedModelSetup({
     };
   }, [catalogProviders, loadModelsForProvider, activeModel, activeProviderId, providerId]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const generation = ++planLoadGeneration.current;
+  /** Reads the workspace's active guided plans; the result applies only while `generation` is still current. */
+  const readPlans = useCallback((targetWorkspaceId: string, generation: number) => {
+    // Any fresh read stands in for a completion re-read held back for a running action.
+    refreshAfterAction.current = false;
+    const heldAtStart = recordedPlans.current;
+    void fetchChangePlans({ workspaceId: targetWorkspaceId }, { limit: 25 })
+      .then(({ items }) => {
+        if (generation !== planLoadGeneration.current) return;
+        // A read that snapshotted a plan before this visit recorded a newer revision keeps the newer record, and
+        // a live plan recorded after the read started stays even when the read leaves it out.
+        const pending = reconcileGuidedPlanRead(items, heldAtStart, recordedPlans.current);
+        // Keep every active plan so Connect can resume the one for the selected provider.
+        setActivePlans(pending);
+        // A re-read drops a live plan it no longer lists, but keeps a finished one this visit recorded.
+        setLatestPlan(
+          (current) => pending[0] ?? (current && TERMINAL_CHANGE_PLAN_STATUSES.has(current.status) ? current : null),
+        );
+      })
+      .catch((error) => {
+        if (generation === planLoadGeneration.current) setActionError(getErrorMessage(error));
+      });
+  }, []);
+
+  // The whole workspace reset runs in the commit that shows the new workspace, before any passive effect: a result
+  // from the previous workspace that settles after it fails runAction's generation check and sees the new visit,
+  // and an action started after it keeps its generation, so its settling still releases busy.
+  useLayoutEffect(() => {
+    workspaceVisit.current += 1;
+    workspaceRef.current = workspaceId;
     busyRef.current = false;
+    recordedPlans.current = [];
     setBusy(false);
     setSigningIn(false);
     setActionError(null);
     setLatestPlan(null);
     setActivePlans([]);
     setDialogPlan(null);
-    void fetchChangePlans({ workspaceId }, { limit: 25 })
-      .then(({ items }) => {
-        if (cancelled) return;
-        const pending = items.filter(
-          (plan) =>
-            plan.origin.surface === "settings" &&
-            ["provider_connection", "installation_default_model"].includes(plan.kind) &&
-            !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
-        );
-        if (generation !== planLoadGeneration.current) return;
-        // Keep every active plan so Connect can resume the one for the selected provider.
-        setActivePlans(pending);
-        if (pending[0]) setLatestPlan(pending[0]);
-      })
-      .catch((error) => {
-        if (!cancelled && generation === planLoadGeneration.current) setActionError(getErrorMessage(error));
-      });
+    readPlans(workspaceId, ++planLoadGeneration.current);
     return () => {
-      cancelled = true;
       planLoadGeneration.current += 1;
       signInRef.current?.abort();
       signInRef.current = null;
     };
-  }, [workspaceId]);
+  }, [workspaceId, readPlans]);
+
+  /** Ends the running action; a completion re-read it held back starts now, so it sees what the action persisted. */
+  const releaseAction = useCallback(() => {
+    busyRef.current = false;
+    setBusy(false);
+    if (refreshAfterAction.current) readPlans(workspaceRef.current, ++planLoadGeneration.current);
+  }, [readPlans]);
 
   const recordPlan = useCallback(
     async (updated: ChangePlanRecord) => {
+      recordedPlans.current = withHeldPlan(recordedPlans.current, updated);
       setLatestPlan(updated);
       setActivePlans((current) => current.map((plan) => (plan.planId === updated.planId ? updated : plan)));
       if (updated.requiredAction && !TERMINAL_CHANGE_PLAN_STATUSES.has(updated.status)) {
@@ -314,13 +332,10 @@ export function GuidedModelSetup({
       } catch (error) {
         if (generation === planLoadGeneration.current) setActionError(getErrorMessage(error));
       } finally {
-        if (generation === planLoadGeneration.current) {
-          busyRef.current = false;
-          setBusy(false);
-        }
+        if (generation === planLoadGeneration.current) releaseAction();
       }
     },
-    [recordPlan],
+    [recordPlan, releaseAction],
   );
 
   const continueProviderSignIn = async (plan: ChangePlanRecord) => {
@@ -328,6 +343,8 @@ export function GuidedModelSetup({
       setActionError("This sign-in action changed. Reopen the setup request.");
       return;
     }
+    const visit = workspaceVisit.current;
+    let completing = false;
     await runAction(async () => {
       const controller = new AbortController();
       signInRef.current = controller;
@@ -336,6 +353,7 @@ export function GuidedModelSetup({
         return await runProviderSignIn(plan, workspaceId, controller.signal, {
           // Past this point the Gateway consumes the sign-in, so closing the dialog must no longer cancel the run.
           onCompleting: () => {
+            completing = true;
             if (signInRef.current === controller) signInRef.current = null;
             setSigningIn(false);
           },
@@ -344,6 +362,16 @@ export function GuidedModelSetup({
         if (signInRef.current === controller) {
           signInRef.current = null;
           setSigningIn(false);
+        }
+        // The workspace changed while completion ran, so runAction discards the record. A plan read made
+        // meanwhile may hold the old revision: re-read it if the operator is back in this workspace (a later
+        // visit reads it fresh), and refresh the install-wide provider readiness either way.
+        if (completing && workspaceVisit.current !== visit) {
+          // A read started while another action runs could answer after that action records a plan it created,
+          // and drop it: the action starts the re-read once it settles.
+          if (workspaceRef.current === workspaceId && busyRef.current) refreshAfterAction.current = true;
+          else if (workspaceRef.current === workspaceId) readPlans(workspaceId, ++planLoadGeneration.current);
+          void catalog.reload();
         }
       }
     });
@@ -356,8 +384,7 @@ export function GuidedModelSetup({
     controller.abort();
     // Discards the cancelled run's late result or error.
     planLoadGeneration.current += 1;
-    busyRef.current = false;
-    setBusy(false);
+    releaseAction();
     setSigningIn(false);
   };
 

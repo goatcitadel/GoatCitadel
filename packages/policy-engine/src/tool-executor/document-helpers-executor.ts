@@ -125,6 +125,19 @@ interface ResolvedSource {
   totalBytes: number;
 }
 
+/** The one place a call's `path` / `attachmentId` arguments are read: exactly one of the two must be given. */
+function parseSourceArgs(request: ToolInvokeRequest): { pathArg?: string; attachmentId?: string } {
+  const rawPath = request.args.path;
+  const rawAttachmentId = request.args.attachmentId;
+  const pathArg = typeof rawPath === "string" && rawPath.trim().length > 0 ? rawPath : undefined;
+  const attachmentId =
+    typeof rawAttachmentId === "string" && rawAttachmentId.trim().length > 0 ? rawAttachmentId.trim() : undefined;
+  if ((pathArg === undefined) === (attachmentId === undefined)) {
+    throw new Error("Provide exactly one of path or attachmentId.");
+  }
+  return { ...(pathArg === undefined ? {} : { pathArg }), ...(attachmentId === undefined ? {} : { attachmentId }) };
+}
+
 async function resolveSource(
   request: ToolInvokeRequest,
   config: ToolPolicyConfig,
@@ -134,14 +147,7 @@ async function resolveSource(
   startByte = 0,
   policyChecked = false,
 ): Promise<ResolvedSource> {
-  const rawPath = request.args.path;
-  const rawAttachmentId = request.args.attachmentId;
-  const pathArg = typeof rawPath === "string" && rawPath.trim().length > 0 ? rawPath : undefined;
-  const attachmentId =
-    typeof rawAttachmentId === "string" && rawAttachmentId.trim().length > 0 ? rawAttachmentId.trim() : undefined;
-  if ((pathArg === undefined) === (attachmentId === undefined)) {
-    throw new Error("Provide exactly one of path or attachmentId.");
-  }
+  const { pathArg, attachmentId } = parseSourceArgs(request);
   if (pathArg !== undefined) {
     if (!policyChecked) {
       await deps.assertReadPathAllowedForRequest(pathArg, request, config, storage);
@@ -258,13 +264,10 @@ async function loadExtractedDocument(
   storage: AsyncStorage,
   deps: DocumentHelperExecutorDeps,
 ): Promise<ExtractedDocument> {
-  const rawPath = request.args.path;
-  const rawAttachmentId = request.args.attachmentId;
-  const hasPath = typeof rawPath === "string" && rawPath.trim().length > 0;
-  const attachmentId = typeof rawAttachmentId === "string" ? rawAttachmentId.trim() : "";
-  if (hasPath && attachmentId.length === 0) {
-    await deps.assertReadPathAllowedForRequest(rawPath, request, config, storage);
-    const full = path.resolve(rawPath);
+  const { pathArg, attachmentId } = parseSourceArgs(request);
+  if (pathArg !== undefined) {
+    await deps.assertReadPathAllowedForRequest(pathArg, request, config, storage);
+    const full = path.resolve(pathArg);
     const stat = await fs.stat(full);
     const key = JSON.stringify(["path", full, stat.size, stat.mtimeMs]);
     const cached = stat.isFile() ? readExtractCache(key) : undefined;

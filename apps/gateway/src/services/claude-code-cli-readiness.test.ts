@@ -55,6 +55,27 @@ describe("ClaudeCodeCliReadiness", () => {
     await expect(checkB).resolves.toMatchObject({ status: "missing" });
   });
 
+  it("a stale probe finishing while a newer probe is in flight does not detach it from later checks", async () => {
+    const { run, pending } = deferredRun();
+    const readiness = new ClaudeCodeCliReadiness({ run });
+    const checkA = readiness.check();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(1));
+    readiness.invalidate();
+    const checkB = readiness.check();
+    await vi.waitFor(() => expect(run).toHaveBeenCalledTimes(2));
+    pending[0]!(loggedIn(false));
+    await checkA;
+    const checkC = readiness.check();
+    await Promise.resolve();
+    expect(run).toHaveBeenCalledTimes(2);
+    pending[1]!(loggedIn(true));
+    await expect(checkB).resolves.toMatchObject({ status: "ready" });
+    await expect(checkC).resolves.toMatchObject({ status: "ready" });
+    await expect(readiness.check()).resolves.toMatchObject({ status: "ready" });
+    expect(run).toHaveBeenCalledTimes(2);
+    expect(readiness.peek()).toMatchObject({ status: "ready" });
+  });
+
   it("reports a logged-out CLI as missing", async () => {
     const readiness = new ClaudeCodeCliReadiness({
       run: status({ loggedIn: false, authMethod: "none", apiProvider: "firstParty" }),

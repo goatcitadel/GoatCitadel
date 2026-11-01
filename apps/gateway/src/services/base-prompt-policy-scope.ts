@@ -21,10 +21,17 @@ export type BasePromptPolicyContextResolver = (input: {
 /** Reads the scope's workspace, for its Citadel. */
 export type BasePromptWorkspaceReader = (id: string) => Promise<{ citadelId?: string } | undefined>;
 
+/**
+ * Marks a probe request whose workspace was already read and has no Citadel, so evaluation does not read it again.
+ * A symbol key keeps it off the request contract; only requests built by this scope carry it.
+ */
+export const WORKSPACE_HAS_NO_CITADEL = Symbol("goatcitadel.workspaceHasNoCitadel");
+
 export interface BasePromptPolicyScope {
   workspaceId: string;
   citadelId?: string;
   policyContext: ToolPolicyActorContext;
+  [WORKSPACE_HAS_NO_CITADEL]?: true;
 }
 
 export async function resolveBasePromptPolicyScope(
@@ -43,9 +50,20 @@ export async function resolveBasePromptPolicyScope(
   ]);
   return {
     workspaceId: scope.workspaceId,
-    ...(workspace?.citadelId ? { citadelId: workspace.citadelId } : {}),
+    ...(workspace?.citadelId ? { citadelId: workspace.citadelId } : { [WORKSPACE_HAS_NO_CITADEL]: true as const }),
     policyContext,
   };
+}
+
+/** The request's Citadel: its own, none for a scope that already read a workspace without one, else the workspace's. */
+export async function resolveProbeCitadelId(
+  request: ToolAccessEvaluateRequest,
+  workspaceId: string,
+  findWorkspace: BasePromptWorkspaceReader,
+): Promise<string | undefined> {
+  if (request.citadelId) return request.citadelId;
+  if (WORKSPACE_HAS_NO_CITADEL in request) return undefined;
+  return (await findWorkspace(workspaceId))?.citadelId;
 }
 
 /**

@@ -935,4 +935,19 @@ describe("request without AbortSignal.any", () => {
     expect(add.mock.calls.length).toBeGreaterThan(0);
     expect(remove.mock.calls.length).toBe(add.mock.calls.length);
   });
+
+  it("rejects an already-aborted caller signal up front with its reason and adds no listeners", async () => {
+    const fetchMock = stalledFetch();
+    vi.stubGlobal("fetch", fetchMock);
+    const reason = new DOMException("The caller gave up.", "AbortError");
+    const caller = new AbortController();
+    caller.abort(reason);
+    const add = vi.spyOn(caller.signal, "addEventListener");
+    const remove = vi.spyOn(caller.signal, "removeEventListener");
+    await expect(request("/api/v1/any-free-preaborted", { signal: caller.signal })).rejects.toBe(reason);
+    const sent = fetchMock.mock.calls[0]?.[1]?.signal;
+    if (sent) expect(sent.reason).toBe(reason);
+    expect(add).not.toHaveBeenCalled();
+    expect(remove).not.toHaveBeenCalled();
+  });
 });

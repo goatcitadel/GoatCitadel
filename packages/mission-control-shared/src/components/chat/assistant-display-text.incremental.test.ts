@@ -256,4 +256,126 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     // Only the pre-blocker prefix was consumed.
     expect(state.consumedEnd).toBe("intro\n\n".length);
   });
+
+  // Each push must match from scratch, line by line, char by char and in 3-char chunks.
+  function expectEquivalentStream(content: string) {
+    const plans = [
+      content.split(/(?<=\n)/).map((line) => line.length),
+      Array.from({ length: content.length }, () => 1),
+      chunkings(content)[2]!,
+    ];
+    for (const plan of plans) {
+      const state = createIncrementalDisplayTextState();
+      let streamed = "";
+      for (const size of plan) {
+        streamed = content.slice(0, streamed.length + size);
+        expect(normalizeAssistantDisplayTextIncremental(state, streamed), `prefix ${JSON.stringify(streamed)}`).toBe(
+          normalizeAssistantDisplayText(streamed),
+        );
+      }
+    }
+  }
+
+  // A block that runs across blank lines keeps every later line inside it, and code lines indented four spaces are
+  // not code there: a cut inside one would let the tail parse that line as code and leave its math unconverted.
+  it.each([
+    ["column-0 line inside an open $$ block", "$$\n\nfoo\n\n    \\(x\\) a\n"],
+    ["column-0 line inside an open <? block", "<?\n\nfoo\n\n    \\(x\\) a\n"],
+    ["entity-encoded <? block", "&lt;?\n\nfoo\n\n    \\(x\\) a\n"],
+    ["$$ block opened in a list item", "- $$\n\nfoo\n\n    \\(x\\) a\n"],
+    ["unclosed tag left as an HTML block", "<pre <\n\nfoo\n\n    \\(x\\) a\n"],
+    ["$$ block after a closed comment", "intro\n\n<!-- c -->\n$$\n\nfoo\n\n    \\(x\\) a\n"],
+  ])("matches the from-scratch normalizer inside a block spanning blank lines: %s", (_name, content) => {
+    expectEquivalentStream(content);
+  });
+
+  it.each([
+    ["indented code with a blank line inside", "Text\n\n    $x$ one\n\n    \\(y\\) two\n    $z$ three\nAfter $w$\n"],
+    ["tab-indented code", "Text\n\n\t$x$ one\n  \t\\(y\\) two\n"],
+    ["code after a list closed by a column-0 paragraph", "- a\n\nPara\n\n    $x$ code\n    \\(y\\) more\n"],
+    ["list continuation, not code", "- a\n\n    $x$ continuation\n    \\(y\\) more\n"],
+    ["footnote continuation, not code", "[^1]: note\n\n    $x$ continuation\n    \\(y\\) more\n"],
+    ["blockquote then indented line", "> quote\n\n    $x$ code\n    \\(y\\) more\n"],
+    ["tag that strips to an indented line in a list", "- a\n\n<b></b>    $x$ is\n"],
+    ["tag that strips to a list marker", "Text\n\n<b></b>- $x$ item\n\n    \\(y\\) continuation\n"],
+    ["br splitting a line into a list", "Text\n\nlead<br>- $x$ item\n\n    \\(y\\) continuation\n"],
+    ["code line holding backticks", "Text\n\n    `a` $x$\n    \\(y\\) more\n"],
+    ["code line opening a comment", "Text\n\n    <!-- $x$\n    \\(y\\) -->\n    $z$\n"],
+    ["code then lazy paragraph", "Text\n\n    $x$ code\nPara $y$\n    \\(z\\) lazy\n"],
+    ["ordered list after code", "Text\n\n    $x$ code\n\n1. item\n\n    \\(y\\) continuation\n"],
+  ])("matches the from-scratch normalizer around indented code: %s", (_name, content) => {
+    expectEquivalentStream(content);
+  });
+
+  it("matches the from-scratch normalizer over mixed block structure", () => {
+    const fragments = [
+      "",
+      "",
+      "Text $a$",
+      "- a \\(b\\)",
+      "1. b",
+      "> q $c$",
+      "[^1]: n",
+      "    $x$ code",
+      "\t\\(y\\) tab",
+      "  \\(z\\) two",
+      "$$",
+      "<?",
+      "&lt;?",
+      "<b></b>    $w$",
+      "lead<br>- $v$",
+      "    `a` $x$",
+      "<!-- c $x$",
+      "--> e \\(f\\)",
+      "<script>",
+      "</script>",
+      "```",
+      "Para \\(p\\)",
+    ];
+    let seed = 99;
+    const random = () => {
+      seed = (seed * 48271) % 2147483647;
+      return seed / 2147483647;
+    };
+    for (let doc = 0; doc < 300; doc += 1) {
+      const lines = Array.from({ length: 2 + Math.floor(random() * 8) }, () => {
+        return fragments[Math.floor(random() * fragments.length)]!;
+      });
+      const content = `${lines.join("\n")}\n`;
+      const state = createIncrementalDisplayTextState();
+      let streamed = "";
+      for (const line of content.split(/(?<=\n)/)) {
+        streamed += line;
+        expect(normalizeAssistantDisplayTextIncremental(state, streamed), JSON.stringify(streamed)).toBe(
+          normalizeAssistantDisplayText(streamed),
+        );
+      }
+    }
+  });
+
+  it("reads a first line indented by spaces and a tab as code", () => {
+    // The outer trim drops the indent; the math stays as written because the parser read the line as code.
+    expect(normalizeAssistantDisplayText("  \t\\(y\\) code\n")).toBe("\\(y\\) code");
+    expect(normalizeAssistantDisplayText("Text\n\n  \t\\(y\\) code\n")).toContain("  \t\\(y\\) code");
+  });
+
+  it("does not re-normalize a long indented code block on every chunk", () => {
+    const lines = Array.from({ length: 500 }, (_, index) => `    const value${index} = compute($x$, ${index});\n`);
+    const intro = "Here is the listing:\n\n";
+    const longest = Math.max(...lines.map((line) => line.length));
+    const state = createIncrementalDisplayTextState();
+    let streamed = intro;
+    normalizeAssistantDisplayTextIncremental(state, streamed);
+    let largestTail = 0;
+    for (const line of lines) {
+      for (const part of [line.slice(0, 10), line.slice(10)]) {
+        streamed += part;
+        normalizeAssistantDisplayTextIncremental(state, streamed);
+        largestTail = Math.max(largestTail, streamed.length - state.consumedEnd);
+      }
+    }
+    // The mutable tail never holds more than the last completed line and the one still arriving.
+    expect(largestTail).toBeLessThanOrEqual(2 * longest);
+    expect(normalizeAssistantDisplayTextIncremental(state, streamed)).toBe(normalizeAssistantDisplayText(streamed));
+  });
 });
