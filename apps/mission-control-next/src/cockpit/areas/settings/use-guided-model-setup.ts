@@ -12,6 +12,7 @@ import {
   GUIDED_THINKING_LEVELS,
   guidedConnectionHint,
   localRuntimeSetupGuide,
+  mergePlansByRevision,
   pendingPlanForSelection,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
@@ -19,6 +20,7 @@ import {
   supportedGuidedThinkingLevels,
   TERMINAL_CHANGE_PLAN_STATUSES,
   withAddableBuiltinProviders,
+  withHeldPlan,
 } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
 import { runProviderSignIn } from "./guided-provider-sign-in";
 
@@ -80,6 +82,8 @@ export function useGuidedModelSetup({
   // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
   const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
+  // The newest record of each plan this visit recorded from an action, so a late plan read cannot step one back.
+  const recordedPlans = useRef<readonly ChangePlanRecord[]>([]);
   // The running provider sign-in poll, if any; aborted on close, unmount and workspace change.
   const signInRef = useRef<AbortController | null>(null);
   // Counts workspace changes, so a settled sign-in completion can tell it outlived the visit it started in.
@@ -164,7 +168,8 @@ export function useGuidedModelSetup({
     void fetchChangePlans({ workspaceId: targetWorkspaceId }, { limit: 25 })
       .then(({ items }) => {
         if (generation !== planLoadGeneration.current) return;
-        const pending = activeGuidedSetupPlans(items);
+        // A read that snapshotted a plan before this visit recorded a newer revision keeps the newer record.
+        const pending = activeGuidedSetupPlans(mergePlansByRevision(items, recordedPlans.current));
         // Keep every active plan so Connect can resume the one for the selected provider.
         setActivePlans(pending);
         // A re-read drops a live plan it no longer lists, but keeps a finished one this visit recorded.
@@ -187,6 +192,7 @@ export function useGuidedModelSetup({
     setLatestPlan(null);
     setActivePlans([]);
     setDialogPlan(null);
+    recordedPlans.current = [];
     readPlans(workspaceId, ++planLoadGeneration.current);
     return () => {
       planLoadGeneration.current += 1;
@@ -197,6 +203,7 @@ export function useGuidedModelSetup({
 
   const recordPlan = useCallback(
     async (updated: ChangePlanRecord) => {
+      recordedPlans.current = withHeldPlan(recordedPlans.current, updated);
       setLatestPlan(updated);
       setActivePlans((current) => current.map((plan) => (plan.planId === updated.planId ? updated : plan)));
       setDialogPlan(updated.requiredAction && !TERMINAL_CHANGE_PLAN_STATUSES.has(updated.status) ? updated : null);

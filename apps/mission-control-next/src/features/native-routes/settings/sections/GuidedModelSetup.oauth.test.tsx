@@ -280,4 +280,33 @@ describe("guided setup sign-in completion across a workspace switch", () => {
     await act(async () => button("Verify provider connection")!.click());
     expect(dialog()?.getAttribute("data-revision")).toBe("2");
   });
+  it("keeps a plan revision it recorded when an older plan read answers after it", async () => {
+    const settleFirst = await startCompletion();
+    await render("other");
+    await render("default");
+    // A second sign-in in this visit, whose completion also stays in flight.
+    let settleSecond!: (plan: unknown) => void;
+    mocks.complete.mockReturnValue(new Promise((resolve) => (settleSecond = resolve)));
+    await act(async () => button("Verify provider connection")!.click());
+    expect(dialog()?.getAttribute("data-revision")).toBe("1");
+    await act(async () => button("Continue sign-in")!.click());
+    await advance(1_000);
+    expect(mocks.complete).toHaveBeenCalledTimes(2);
+    // The re-read after the first completion snapshots revision 2 but answers only after the second records 3.
+    let answerRead: (() => void) | undefined;
+    mocks.plans.mockImplementation(() => new Promise((resolve) => (answerRead = () => resolve({ items: [revised] }))));
+    await settleFirst();
+    expect(answerRead).toBeDefined();
+    const latest = {
+      ...oauthPlan,
+      revision: 3,
+      requiredAction: { kind: "confirmation", actionId: "confirm-2", actionNonce: "nonce-3", title: "Confirm" },
+    };
+    await act(async () => settleSecond(latest));
+    expect(dialog()?.getAttribute("data-revision")).toBe("3");
+    await act(async () => answerRead!());
+    await act(async () => button("Close")!.click());
+    await act(async () => button("Verify provider connection")!.click());
+    expect(dialog()?.getAttribute("data-revision")).toBe("3");
+  });
 });

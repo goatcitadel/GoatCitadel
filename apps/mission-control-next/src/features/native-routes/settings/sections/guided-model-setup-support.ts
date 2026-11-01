@@ -497,3 +497,22 @@ export const activeGuidedSetupPlans = (items: readonly ChangePlanRecord[]) =>
       ["provider_connection", "installation_default_model"].includes(plan.kind) &&
       !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
   );
+
+/**
+ * A plan-list read reconciled with the records this view already holds: a held record with a higher revision of
+ * the same plan wins, so a read that snapshotted state before an action committed cannot step a plan back.
+ */
+export const mergePlansByRevision = (
+  fetched: readonly ChangePlanRecord[],
+  held: readonly ChangePlanRecord[],
+): ChangePlanRecord[] =>
+  fetched.map((plan) => {
+    const newer = held.find((candidate) => candidate.planId === plan.planId && candidate.revision > plan.revision);
+    return newer ?? plan;
+  });
+
+/** `held` with `plan` in place of any older record of the same plan; a newer held record stays. */
+export const withHeldPlan = (held: readonly ChangePlanRecord[], plan: ChangePlanRecord): ChangePlanRecord[] => [
+  ...held.filter((candidate) => candidate.planId !== plan.planId),
+  ...mergePlansByRevision([plan], held),
+];

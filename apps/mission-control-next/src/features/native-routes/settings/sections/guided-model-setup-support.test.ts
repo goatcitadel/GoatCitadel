@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
+import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import {
+  activeGuidedSetupPlans,
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
   groupGuidedProviders,
@@ -8,10 +10,12 @@ import {
   pendingPlanForSelection,
   withAddableBuiltinProviders,
   localRuntimeSetupGuide,
+  mergePlansByRevision,
   pickDefaultGuidedProvider,
   resolveGuidedProviderReadiness,
   submittedGuidedSelection,
   supportedGuidedThinkingLevels,
+  withHeldPlan,
 } from "./guided-model-setup-support";
 
 const LOCAL_RUNTIME = {
@@ -425,5 +429,39 @@ describe("grouped provider choices", () => {
       "Claude Code token (may be rejected)",
     );
     expect(guidedProviderOptionLabel({ providerId: "ollama", label: "Ollama" })).toBe("Ollama");
+  });
+});
+
+describe("plan reads reconciled by revision", () => {
+  const plan = (planId: string, revision: number, status: ChangePlanRecord["status"] = "awaiting_input") =>
+    ({
+      planId,
+      revision,
+      status,
+      kind: "provider_connection",
+      origin: { workspaceId: "default", surface: "settings" },
+      request: { kind: "provider_connection", providerId: "test" },
+    }) as unknown as ChangePlanRecord;
+
+  it("keeps a held newer revision over an older fetched copy", () => {
+    const held = plan("a", 3);
+    expect(mergePlansByRevision([plan("a", 2)], [held])).toEqual([held]);
+  });
+  it("takes a fetched revision newer than the held one", () => {
+    const fetched = plan("a", 4);
+    expect(mergePlansByRevision([fetched], [plan("a", 3)])).toEqual([fetched]);
+  });
+  it("adds plans only the fetch lists and leaves out plans only held", () => {
+    const fetched = plan("b", 1);
+    expect(mergePlansByRevision([fetched], [plan("a", 3)])).toEqual([fetched]);
+  });
+  it("keeps a stale non-terminal copy out of the active list when the held newer plan is terminal", () => {
+    const merged = mergePlansByRevision([plan("a", 2), plan("b", 1)], [plan("a", 3, "completed")]);
+    expect(activeGuidedSetupPlans(merged).map((item) => item.planId)).toEqual(["b"]);
+  });
+  it("records a plan in place of an older held copy, but never over a newer one", () => {
+    const other = plan("b", 1);
+    expect(withHeldPlan([plan("a", 1), other], plan("a", 2))).toEqual([other, plan("a", 2)]);
+    expect(withHeldPlan([plan("a", 3)], plan("a", 2))).toEqual([plan("a", 3)]);
   });
 });
