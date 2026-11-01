@@ -127,6 +127,37 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     });
   }
 
+  // A line indented four or more spaces reads as a list or paragraph
+  // continuation only beside the line above it; finalized alone it would parse
+  // as indented code and keep its math unconverted.
+  it.each([
+    ["ordered-list continuation", "1. Item\n    where $x$ is the input\n"],
+    ["nested bullet", "- a\n    - $x$ nested\n"],
+    ["lazy paragraph continuation", "Intro line\n    \\(y\\) lazy continuation\n"],
+    ["indented code after a blank line", "Text\n\n    $x$ code\n"],
+  ])("matches the from-scratch normalizer under indented continuations: %s", (_name, content) => {
+    const lineByLine = content.split(/(?<=\n)/).map((line) => line.length);
+    const charByChar = Array.from({ length: content.length }, () => 1);
+    for (const plan of [charByChar, lineByLine]) {
+      const state = createIncrementalDisplayTextState();
+      let streamed = "";
+      for (const size of plan) {
+        streamed = content.slice(0, streamed.length + size);
+        expect(normalizeAssistantDisplayTextIncremental(state, streamed), `prefix length ${streamed.length}`).toBe(
+          normalizeAssistantDisplayText(streamed),
+        );
+      }
+    }
+  });
+
+  it("keeps math in indented code shielded on both paths", () => {
+    const content = "Text\n\n    $x$ code\n";
+    const state = createIncrementalDisplayTextState();
+    normalizeAssistantDisplayTextIncremental(state, "Text\n\n");
+    expect(normalizeAssistantDisplayText(content)).toContain("    $x$ code");
+    expect(normalizeAssistantDisplayTextIncremental(state, content)).toBe(normalizeAssistantDisplayText(content));
+  });
+
   it("self-heals on a non-append delta (edit / retry / shrink)", () => {
     const state = createIncrementalDisplayTextState();
     normalizeAssistantDisplayTextIncremental(state, "first answer\n\nwith <b>tags</b> and more\n");
@@ -147,7 +178,8 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     // not from index 0.
     expect(state.lastWalkStart).toBe(first.length);
     // And the finalized prefix was consumed, so the recomputed tail excludes it.
-    expect(state.consumedEnd).toBe(first.length);
+    // The last completed line stays in the tail: the next line may continue it.
+    expect(state.consumedEnd).toBe(first.length - "para two\n".length);
   });
 
   it("detects a JSON escape split across pushes via the boundary window", () => {
@@ -200,9 +232,10 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     }
     // The blocked region closed, so finalization resumed: the consumed prefix
     // advanced past the whole blocked construct instead of anchoring the
-    // mutable tail at the opener for the rest of the stream.
+    // mutable tail at the opener for the rest of the stream. Only the last
+    // completed line stays in the tail, since the next line may continue it.
     expect(state.textBlocked).toBe(false);
-    expect(state.consumedEnd).toBe(full.length);
+    expect(state.consumedEnd).toBe(full.length - "later prose line two\n".length);
   });
 
   it("stays blocked (and correct) while a block element never closes", () => {

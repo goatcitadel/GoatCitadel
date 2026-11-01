@@ -399,6 +399,10 @@ function looksLikeHtml(content: string): boolean {
 //     present, `stripHtmlNoise` distributes over the cut. When one appears,
 //     finalization simply stops until the segment completes — equivalence is
 //     preserved and only the perf win degrades to the from-scratch cost.
+//   * A text prefix is cut only at the start of a non-blank line indented
+//     0-3 spaces with no tab. A line indented further reads as indented code
+//     or as a list/paragraph continuation depending on the line above it, so
+//     it always stays in the tail together with that line.
 //   * The trailing `\n{3,}` collapse is per-maximal-run, so collapsing within
 //     each finalized piece and again across each seam (including the final
 //     assembly seam) reproduces the global collapse; `.trim()` and the
@@ -407,6 +411,9 @@ function looksLikeHtml(content: string): boolean {
 // If a push is not a pure append of the previous content, the engine resets
 // and rescans from scratch, so it can never diverge.
 // ---------------------------------------------------------------------------
+
+/** A non-blank line indented 0-3 spaces with no tab: never indented code or a continuation by indentation. */
+const STARTS_OWN_TEXT_LINE_RE = /^ {0,3}[^ \t]/;
 
 const TEXT_FINALIZE_BLOCKER_RE = /<(?:script|style|svg|math|canvas)\b|<!--/i;
 
@@ -507,6 +514,13 @@ export interface IncrementalDisplayTextState {
   /** True when the growing text segment contains a construct that blocks prefix finalization. */
   textBlocked: boolean;
   /**
+   * Start of the latest completed, unblocked text line indented 0-3 spaces
+   * with no tab. Text finalizes only up to here: a line indented further is
+   * code or a list/paragraph continuation depending on the line above it, so
+   * it must stay in the tail with that line.
+   */
+  safeTextCut: number;
+  /**
    * True when the blocked region ends in a `</name` closer still awaiting its
    * terminating `>` (which RAW_HTML_BLOCK_RE allows on a later line): the
    * next `>`-bearing line must re-run the region check even though it carries
@@ -540,6 +554,7 @@ export function createIncrementalDisplayTextState(): IncrementalDisplayTextState
     fenceChar: null,
     fenceLength: 0,
     textBlocked: false,
+    safeTextCut: 0,
     pendingTagClose: false,
     completedOut: "",
     seenCommentOpen: false,
@@ -557,6 +572,7 @@ function resetIncrementalDisplayTextState(state: IncrementalDisplayTextState): v
   state.fenceChar = null;
   state.fenceLength = 0;
   state.textBlocked = false;
+  state.safeTextCut = 0;
   state.pendingTagClose = false;
   state.completedOut = "";
   state.seenCommentOpen = false;
@@ -673,6 +689,11 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
           state.fenceLength = opening.length;
         }
       } else {
+        // Everything before an unblocked line is unblocked text, so its start
+        // is a safe cut when the line itself cannot continue the line above.
+        if (!state.textBlocked && STARTS_OWN_TEXT_LINE_RE.test(line)) {
+          state.safeTextCut = lineStart;
+        }
         if (!state.textBlocked && lineBlocksTextFinalization(line)) {
           state.textBlocked = true;
         }
@@ -704,10 +725,11 @@ export function normalizeAssistantDisplayTextIncremental(state: IncrementalDispl
   }
   state.fenceScanEnd = lineStart;
 
-  // Outside a fence and unblocked, every completed line scanned so far is a
-  // safe, opener-free text prefix: finalize it in one batch.
-  if (!state.inFence && !state.textBlocked && state.fenceScanEnd > state.consumedEnd) {
-    consumePiece(state, decoded, state.fenceScanEnd, "text");
+  // Outside a fence, the text before the safe cut is an opener-free prefix
+  // that no later line can re-read: finalize it in one batch. The cut never
+  // advances inside a blocked region, so it stays valid while blocked.
+  if (!state.inFence && state.safeTextCut > state.consumedEnd) {
+    consumePiece(state, decoded, state.safeTextCut, "text");
   }
 
   // Re-normalize the still-mutable tail from scratch each push. Its leading
