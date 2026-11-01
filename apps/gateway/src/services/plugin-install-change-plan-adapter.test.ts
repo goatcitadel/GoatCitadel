@@ -853,13 +853,13 @@ describe("installing a plugin through one Change Plan", () => {
 
   // R59 and #572: the approval is the operator's last word on their own click, so approving applies the plan.
   it("applies a Capabilities plugin install or uninstall once approved, but nothing tied to a chat", () => {
+    // One harness for the request: each one migrates a ledger, which pushed this test past its timeout on CI.
+    const installRequest = harness().pluginRequest();
     const plan = (kind: "plugin_install" | "plugin_uninstall", origin: Partial<ChangePlanRecord["origin"]> = {}) =>
       ({
         kind,
         request:
-          kind === "plugin_install"
-            ? harness().pluginRequest()
-            : { kind, pluginId: PLUGIN_ID, installPlanId: "plan-install-1" },
+          kind === "plugin_install" ? installRequest : { kind, pluginId: PLUGIN_ID, installPlanId: "plan-install-1" },
         origin: { surface: "capabilities", workspaceId: WORKSPACE_ID, actorId: "operator-1", ...origin },
         evidenceRefs: [],
       }) as unknown as ChangePlanRecord;
