@@ -65,8 +65,11 @@ export function readInlineCodeRanges(source: string): Array<{ start: number; end
   return ranges;
 }
 
-/** A sign the source may hold code: a backtick or tilde fence, or a line indented as code. */
-const MAY_HOLD_CODE = /[`~]|^(?: {4}|\t)|\n(?:[ >]*)(?: {4}|\t)/u;
+/**
+ * A sign the source may hold code: a backtick or tilde fence, or a line indented as code. The first line is read
+ * like every other, so `  \t` there counts too: streamed text is normalized from line cuts, where any line is first.
+ */
+const MAY_HOLD_CODE = /[`~]|(?:^|\n)[ >]*(?: {4}|\t)/u;
 
 /** Source ranges of every code node, inline spans and blocks alike (indented, or fenced inside a quote or list). */
 export function readCodeRanges(source: string): Array<{ start: number; end: number }> {
