@@ -16,8 +16,17 @@ import {
 
 const MAX_TOOL_LOOPS = 6;
 const MAX_TOOL_RUNS_PER_TURN = 12;
-const DEEP_MAX_TOOL_LOOPS = 8;
-const DEEP_MAX_TOOL_RUNS_PER_TURN = 16;
+const DEEP_MAX_TOOL_LOOPS = 12;
+const DEEP_MAX_TOOL_RUNS_PER_TURN = 24;
+const RESEARCH_ARTIFACT_MAX_TOOL_LOOPS = 8;
+const RESEARCH_ARTIFACT_MAX_TOOL_RUNS_PER_TURN = 16;
+// Deep plus a requested file is the most thorough Chat research turn: it keeps the
+// research-artifact profile but takes Deep's breadth and more, never less.
+const DEEP_RESEARCH_ARTIFACT_MAX_TOOL_LOOPS = 14;
+const DEEP_RESEARCH_ARTIFACT_MAX_TOOL_RUNS_PER_TURN = 32;
+// The artifact tool call carries the whole document as arguments, so its output
+// budget must fit a full multi-section report, not just the closing answer.
+const RESEARCH_ARTIFACT_MIN_MAX_TOKENS = 4096;
 const COWORK_RESEARCH_LIST_MAX_TOOL_LOOPS = 6;
 const COWORK_RESEARCH_LIST_MAX_TOOL_RUNS_PER_TURN = 16;
 const COWORK_RESEARCH_LIST_EXTENDED_MAX_TOOL_RUNS_PER_TURN = 48;
@@ -59,6 +68,7 @@ export const CHAT_TURN_BUDGET_MS_BY_MODE = {
   deep: 480000,
   coworkResearchList: 480000,
   researchArtifact: 600000,
+  deepResearchArtifact: 900000,
   default: 240000,
 } as const;
 export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
@@ -69,6 +79,7 @@ export const CHAT_COMPLETION_TIMEOUT_MS_BY_MODE = {
   deep: 240000,
   coworkResearchList: 240000,
   researchArtifact: 300000,
+  deepResearchArtifact: 300000,
   default: 150000,
 } as const;
 
@@ -228,17 +239,24 @@ export function resolveChatExecutionBudget(input: ResolveChatExecutionBudgetInpu
       input.promptLabExplicitTools,
     );
   } else if (input.webLookupIntent && input.artifactIntent) {
+    const isDeep = input.webMode === "deep";
     budget = applyPromptLabExplicitToolBudget(
       {
         profile: "research_artifact",
         promotionReason: "explicit_research_artifact",
-        turnBudgetMs: CHAT_TURN_BUDGET_MS_BY_MODE.researchArtifact,
-        completionTimeoutMs: CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.researchArtifact,
-        maxToolLoops: 6,
+        turnBudgetMs: isDeep
+          ? CHAT_TURN_BUDGET_MS_BY_MODE.deepResearchArtifact
+          : CHAT_TURN_BUDGET_MS_BY_MODE.researchArtifact,
+        completionTimeoutMs: isDeep
+          ? CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.deepResearchArtifact
+          : CHAT_COMPLETION_TIMEOUT_MS_BY_MODE.researchArtifact,
+        maxToolLoops: isDeep ? DEEP_RESEARCH_ARTIFACT_MAX_TOOL_LOOPS : RESEARCH_ARTIFACT_MAX_TOOL_LOOPS,
         loopLimitBehavior,
-        maxToolRunsPerTurn: 12,
-        searchMaxResults: 6,
-        maxTokens: Math.max(defaultMaxTokens ?? 900, 2400),
+        maxToolRunsPerTurn: isDeep
+          ? DEEP_RESEARCH_ARTIFACT_MAX_TOOL_RUNS_PER_TURN
+          : RESEARCH_ARTIFACT_MAX_TOOL_RUNS_PER_TURN,
+        searchMaxResults: isDeep ? 10 : 8,
+        maxTokens: Math.max(defaultMaxTokens ?? 900, RESEARCH_ARTIFACT_MIN_MAX_TOKENS),
         minSynthesisReserveMs: 30000,
         expensiveToolMinimumRemainingMs: 45000,
       },

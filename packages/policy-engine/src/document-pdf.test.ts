@@ -285,6 +285,50 @@ describe("documents.create pdf design report", () => {
     expect(report.residualRisks).toContain("Plain PDF output is unstyled text: no cover, color, callouts, or tables.");
   });
 
+  it("renders long bullets in full and reports any text a limit still cuts", async () => {
+    const root = createRoot();
+    // A 247-character bullet like the one the old 220-character cap cut mid-sentence.
+    const longBullet =
+      "Why it matters: higher-trust people are likelier to help neighbors (82% vs 67% would bring in a neighbor's mail or water plants) and trust is associated with better economic and democratic functioning, though cause and effect are hard to separate.";
+    const full = path.join(root, "long-bullets.pdf");
+    const fits = await executeArtifactTool(
+      "documents.create",
+      {
+        path: full,
+        format: "pdf",
+        title: "Long Bullets",
+        sections: [{ heading: "Trust", bullets: [longBullet] }],
+        design: { mode: "polished" },
+      },
+      createConfig(root),
+    );
+    const text = (await extractPdfText(fs.readFileSync(full))).replace(/\s+/gu, " ");
+
+    expect(text).toContain("though cause and effect are hard to separate.");
+    expect(fits.warnings).toBeUndefined();
+
+    const cut = await executeArtifactTool(
+      "documents.create",
+      {
+        path: path.join(root, "cut.pdf"),
+        format: "pdf",
+        title: "Cut",
+        sections: [
+          { heading: "Too long", bullets: ["x".repeat(1300), ...Array.from({ length: 13 }, (_, i) => `b${i}`)] },
+        ],
+        design: { mode: "polished" },
+      },
+      createConfig(root),
+    );
+
+    expect(cut.warnings).toEqual([
+      "Some text is missing from the document: Cut 1 bullet(s) to 1200 characters. Dropped 2 bullet(s) past 12 per section. Split the content and write the document again.",
+    ]);
+    expect((cut.designReport as Record<string, unknown>).residualRisks).toEqual(
+      expect.arrayContaining([expect.stringContaining("Some text is missing from the document")]),
+    );
+  });
+
   it("marks the design receipt injected only when a design skill was activated", async () => {
     const root = createRoot();
     const create = (skillId: string) =>
