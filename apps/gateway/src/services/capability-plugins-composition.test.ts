@@ -2,7 +2,6 @@ import fs, { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import type { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import {
   gatewayVersionForReviewKeys,
@@ -80,11 +79,11 @@ describe("reclaimPluginStorage", () => {
     const old = new Date(Date.now() - 2 * 60 * 60 * 1000);
     fs.utimesSync(kept.dir, old, old);
     fs.utimesSync(orphan.dir, old, old);
-    const store = {
-      listReferencedSnapshots: async () => new Set([kept.treeSha256]),
-    } as unknown as CapabilityPluginStore;
-
-    await reclaimPluginStorage({ snapshots, store, tempRoot });
+    await reclaimPluginStorage(
+      tempRoot,
+      async () => new Set([kept.treeSha256]),
+      (keep, options) => snapshots.sweep(keep, options),
+    );
 
     expect(fs.readdirSync(tempRoot)).toEqual([]);
     expect(snapshots.resolve(kept.treeSha256)).toBe(kept.dir);
@@ -93,15 +92,13 @@ describe("reclaimPluginStorage", () => {
 
   it("logs and swallows a failure instead of blocking boot", async () => {
     await expect(
-      reclaimPluginStorage({
-        snapshots: { sweep: async () => ({ removed: [] }) },
-        store: {
-          listReferencedSnapshots: async () => {
-            throw new Error("settings unreadable");
-          },
+      reclaimPluginStorage(
+        path.join(os.tmpdir(), "goat-plugin-reclaim-missing"),
+        async () => {
+          throw new Error("settings unreadable");
         },
-        tempRoot: path.join(os.tmpdir(), "goat-plugin-reclaim-missing"),
-      }),
+        async () => ({ removed: [] }),
+      ),
     ).resolves.toBeUndefined();
   });
 });

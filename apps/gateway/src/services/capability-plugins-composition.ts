@@ -91,7 +91,11 @@ export function composeCapabilityPlugins({
   const snapshots = new PluginSnapshotStore(paths.snapshots);
   const store = new CapabilityPluginStore(systemSettings);
   // Never rejects (it logs its own failures); the catch only satisfies the async-boundary rule.
-  reclaimPluginStorage({ snapshots, store, tempRoot: paths.temp }).catch(() => undefined);
+  reclaimPluginStorage(
+    paths.temp,
+    () => store.listReferencedSnapshots(),
+    (keep, options) => snapshots.sweep(keep, options),
+  ).catch(() => undefined);
   const inspection = new CapabilityPluginInspectionService({
     fetchSource: (source) =>
       fetchPluginSource(source, {
@@ -146,20 +150,19 @@ export function composeCapabilityPlugins({
  * flight at startup) and removes the snapshots no installed plugin or kept inspection points at and that are past the
  * grace window. A failure is logged and never blocks boot.
  */
-export async function reclaimPluginStorage(deps: {
-  snapshots: Pick<PluginSnapshotStore, "sweep">;
-  store: Pick<CapabilityPluginStore, "listReferencedSnapshots">;
-  tempRoot: string;
-  olderThanMs?: number;
-}): Promise<void> {
+export async function reclaimPluginStorage(
+  tempRoot: string,
+  listReferencedSnapshots: () => Promise<ReadonlySet<string>>,
+  sweep: (keep: ReadonlySet<string>, options: { olderThanMs: number }) => Promise<unknown>,
+  olderThanMs = SNAPSHOT_SWEEP_GRACE_MS,
+): Promise<void> {
   try {
-    const leftovers = await fs.readdir(deps.tempRoot).catch((error: NodeJS.ErrnoException) => {
+    const leftovers = await fs.readdir(tempRoot).catch((error: NodeJS.ErrnoException) => {
       if (error.code === "ENOENT") return [];
       throw error;
     });
-    for (const name of leftovers) await fs.rm(path.join(deps.tempRoot, name), TEMP_REMOVAL_OPTIONS);
-    const keep = await deps.store.listReferencedSnapshots();
-    await deps.snapshots.sweep(keep, { olderThanMs: deps.olderThanMs ?? SNAPSHOT_SWEEP_GRACE_MS });
+    for (const name of leftovers) await fs.rm(path.join(tempRoot, name), TEMP_REMOVAL_OPTIONS);
+    await sweep(await listReferencedSnapshots(), { olderThanMs });
   } catch (error) {
     const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
     log.warn("unused plugin copies could not be cleaned up at startup", {
