@@ -60,9 +60,13 @@ describe("ClassicChannelHostsCheck", () => {
     );
     await settle();
 
+    // js/missing-space-in-concatenation: the two notices are separate elements, so their
+    // textContent joins with no separator. Keep the explicit join("") rather than `+`.
     expect(container.textContent).toBe(
-      "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it." +
+      [
+        "GoatCitadel can't read the address in Webhook URL after it's saved, so it can't check its host. Make sure GoatCitadel may reach it.",
         "GoatCitadel can't find a host in Server. Use an address like https://example.com.",
+      ].join(""),
     );
     expect(api.fetchSettings).not.toHaveBeenCalled();
   });
