@@ -1,6 +1,15 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
-import { PLUGIN_TOOL_GROUP_HOLD_REASON_CODE } from "@goatcitadel/policy-engine";
+import {
+  PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON,
+  PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE,
+  PLUGIN_TOOL_GROUP_HOLD_REASON_CODE,
+} from "@goatcitadel/policy-engine";
 import { readLongestPageTextLength } from "../chat-agent-browser-results.js";
+import {
+  PLUGIN_HOLDS_UNREADABLE_ALSO,
+  PLUGIN_HOLDS_UNREADABLE_CLOSING,
+  pluginHoldsUnreadableGuidance,
+} from "../plugin-tool-group-holds-words.js";
 
 const PATH_BRIDGE_POLICY_REASON = "workspace path was not freshly verified for execution";
 const WEB_TOOL_PREFIXES = ["browser.", "http."];
@@ -121,6 +130,9 @@ const OPERATOR_BOUNDARY_NEXT_STEP =
 // The policy engine's reason code, and the sentence it puts in its reason, for a tool in a switched-off group.
 export const TOOL_GROUP_OFF_REASON_CODE = "tool_group_off";
 const TOOL_GROUP_OFF_ERROR_FRAGMENT = "tool group switched off";
+// How the engine's reason ends while it can't read which tool groups plugins keep off, and so keeps every tool in a
+// group a plugin could hold off. Its re-check code is `plugin_tool_group_holds_unavailable`, beside `tool_group_off`.
+const HOLDS_UNREADABLE_FRAGMENT = PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON.toLowerCase();
 const POLICY_DENY_REASON_CODE = "policy_deny";
 
 /** Reason codes the Chat runner recorded when it re-checked policy before the call (`result.policyRevalidation`). */
@@ -136,11 +148,22 @@ function readPolicyRevalidationReasonCodes(result: Record<string, unknown> | und
  * policy_deny, and switching its group on alone would not run it, so that is not a switch-off block.
  */
 function isSwitchedOffGroupBlock(lowercasedError: string, result: Record<string, unknown> | undefined): boolean {
-  if (lowercasedError.includes(TOOL_GROUP_OFF_ERROR_FRAGMENT)) {
+  if (lowercasedError.includes(TOOL_GROUP_OFF_ERROR_FRAGMENT) || lowercasedError.includes(HOLDS_UNREADABLE_FRAGMENT)) {
     return true;
   }
   const codes = readPolicyRevalidationReasonCodes(result);
   return codes.includes(TOOL_GROUP_OFF_REASON_CODE) && !codes.includes(POLICY_DENY_REASON_CODE);
+}
+
+/**
+ * True when the tool is off because GoatCitadel can't read which tool groups plugins keep off. The engine's reason says
+ * so; the runner's own re-check writes an error of its own, so there it is read from the re-check's reason code.
+ */
+function isHoldsUnreadableBlock(error: string | undefined, result: Record<string, unknown> | undefined): boolean {
+  return (
+    (error ?? "").toLowerCase().includes(HOLDS_UNREADABLE_FRAGMENT) ||
+    readPolicyRevalidationReasonCodes(result).includes(PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE)
+  );
 }
 
 function isSwitchedOffRun(run: ChatToolRunRecord): boolean {
@@ -169,8 +192,19 @@ function pluginHoldingGroup(
     : undefined;
 }
 
-/** Where the operator lifts switched-off groups: the Tools switch, uninstalling the plugin that holds one, or both. */
+/**
+ * Where the operator lifts switched-off groups: the Tools switch, uninstalling the plugin that holds one, or both. A
+ * group kept off because the holds can't be read waits for GoatCitadel to read them, and says so.
+ */
 function switchedOffClosing(runs: readonly ChatToolRunRecord[]): string {
+  const others = runs.filter((run) => !isHoldsUnreadableBlock(run.error, run.result));
+  if (others.length === 0) return PLUGIN_HOLDS_UNREADABLE_CLOSING;
+  const closing = liftableClosing(others);
+  return others.length < runs.length ? `${closing} ${PLUGIN_HOLDS_UNREADABLE_ALSO}` : closing;
+}
+
+/** The closing for groups the operator can lift: by their Tools switch, by uninstalling the holding plugin, or both. */
+function liftableClosing(runs: readonly ChatToolRunRecord[]): string {
   const held = runs.filter((run) => pluginHoldingGroup(run.error, run.result) !== undefined).length;
   if (held === runs.length) {
     return "The operator can uninstall the plugin that keeps a group off, which turns that group back on. Once the group is on, ask again and I'll retry.";
@@ -208,6 +242,8 @@ export function buildGovernanceBlockGuidance(input: {
   }
   // Before the tools.deny branch: the remedy is the operator's switch, and nothing in tools.deny needs editing.
   if (isSwitchedOffGroupBlock(error, input.result)) {
+    // Nothing the operator switches lifts a group kept off because the holds can't be read.
+    if (isHoldsUnreadableBlock(input.error, input.result)) return pluginHoldsUnreadableGuidance(tool);
     // A plugin's hold is lifted only by uninstalling that plugin, never by the Tools switch.
     const plugin = pluginHoldingGroup(input.error, input.result);
     if (plugin === UNNAMED_PLUGIN) {

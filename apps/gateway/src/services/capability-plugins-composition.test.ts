@@ -2,6 +2,13 @@ import fs, { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ToolPolicyConfig } from "@goatcitadel/contracts";
+import {
+  PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE,
+  ToolPolicyEngine,
+  type PluginToolGroupHold,
+} from "@goatcitadel/policy-engine";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import {
   feedPluginToolGroupHolds,
@@ -62,6 +69,19 @@ describe("gatewayVersionForReviewKeys", () => {
 });
 
 describe("feedPluginToolGroupHolds", () => {
+  /** A policy where nothing but a tool group's switch or a hold can stop a tool. */
+  const ENGINE_CONFIG: ToolPolicyConfig = {
+    tools: { approvalMode: "bypass", allow: ["*"], deny: [] },
+    agents: {},
+    sandbox: {
+      writeJailRoots: ["."],
+      readOnlyRoots: [],
+      networkAllowlist: [],
+      riskyShellPatterns: [],
+      requireApprovalForRiskyShell: true,
+    },
+  };
+
   /** One `system_settings` row with the repository's compare-and-set rule. */
   function settingRows(): CapabilityPluginSettingRows & { record?: CapabilityPluginSettingRecord } {
     let clock = 0;
@@ -101,21 +121,63 @@ describe("feedPluginToolGroupHolds", () => {
     };
   }
 
-  /** The feed over a real store, wired as the composition wires it, with the waits between first reads skipped. */
+  /**
+   * The feed over a real store and a real policy engine, wired as the composition wires them, with the waits between
+   * first reads skipped. Each background wait is held until the test lets it go, and `closing` stands for the Gateway's.
+   */
   function feed(store: CapabilityPluginStore, readPlugins: () => Promise<StoredPlugin[]> = () => store.list()) {
-    const setHolds = vi.fn();
+    const engine = new ToolPolicyEngine(ENGINE_CONFIG, {} as AsyncStorage);
+    const setHolds = vi.fn((held: readonly PluginToolGroupHold[]) => engine.setPluginToolGroupHolds(held));
+    const setHoldsUnavailable = vi.fn(() => engine.setPluginToolGroupHoldsUnavailable());
     const report = vi.fn();
     const reportFirstReadFailure = vi.fn();
     const wait = vi.fn(async (_ms: number) => undefined);
+    const backgroundWaits: Array<() => void> = [];
+    const waitInBackground = vi.fn(
+      (_ms: number) => new Promise<void>((resolve) => backgroundWaits.push(() => resolve())),
+    );
+    const gateway = { closing: false };
     const holds = feedPluginToolGroupHolds({
       readPlugins,
       onStoreChange: (listener) => store.onChange(listener),
       setHolds,
+      setHoldsUnavailable,
       report,
       reportFirstReadFailure,
       wait,
+      waitInBackground,
+      isClosing: () => gateway.closing,
     });
-    return { holds, fed: holds.load(), setHolds, report, reportFirstReadFailure, wait };
+    /** Ends the oldest background wait and lets the read it was waiting for run. */
+    const endBackgroundWait = async (): Promise<void> => {
+      const end = backgroundWaits.shift();
+      if (!end) throw new Error("No background wait is pending.");
+      end();
+      // The fake store reads through promises only, so they all settle before the next turn of the event loop.
+      await new Promise((resolve) => setImmediate(resolve));
+    };
+    return {
+      holds,
+      fed: holds.load(),
+      engine,
+      setHolds,
+      setHoldsUnavailable,
+      report,
+      reportFirstReadFailure,
+      wait,
+      waitInBackground,
+      backgroundWaits,
+      endBackgroundWait,
+      gateway,
+    };
+  }
+
+  /** True when the engine denies the tool because no read of the holds has landed. */
+  async function keptOffUnread(engine: ToolPolicyEngine, toolName: string): Promise<boolean> {
+    // Only a switched-off tool is inspected: its denial comes before any read of the engine's storage.
+    if (!engine.listSwitchedOffToolNames().has(toolName)) return false;
+    const access = await engine.inspectAccess({ toolName, args: {}, agentId: "assistant", sessionId: "s" });
+    return !access.allowed && access.reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE);
   }
 
   it("loads the holds at startup and reads them again after every write to the store", async () => {
@@ -163,9 +225,12 @@ describe("feedPluginToolGroupHolds", () => {
         expect.objectContaining({ message: "The saved plugin records can't be read." }),
       ),
     );
-    // Nothing is lifted because a read failed.
+    // Nothing is lifted because a read failed, and the holds read stay known: nothing else is kept off.
     expect(policy.setHolds).toHaveBeenCalledTimes(1);
     expect(policy.reportFirstReadFailure).not.toHaveBeenCalled();
+    expect(policy.setHoldsUnavailable).not.toHaveBeenCalled();
+    expect(policy.engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
+    expect(policy.engine.listSwitchedOffToolNames().has("browser.navigate")).toBe(false);
   });
 
   it("reads again when the first read fails, so the holds are set before startup goes on", async () => {
@@ -186,22 +251,82 @@ describe("feedPluginToolGroupHolds", () => {
       { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" },
     ]);
     expect(policy.reportFirstReadFailure).not.toHaveBeenCalled();
+    expect(policy.setHoldsUnavailable).not.toHaveBeenCalled();
+    expect(policy.waitInBackground).not.toHaveBeenCalled();
   });
 
-  it("reports a first read that keeps failing, and sets the holds once a later write can be read", async () => {
+  it("keeps every tool a plugin could hold off when the first read keeps failing, and startup still goes on", async () => {
     const store = new CapabilityPluginStore(settingRows());
+    let reads = 0;
+    const policy = feed(store, async () => {
+      reads += 1;
+      throw new Error("The saved plugin records can't be read.");
+    });
+
+    // `load` settles after the three tries, so startup is never blocked.
+    await policy.fed;
+
+    expect(reads).toBe(3);
+    expect(policy.reportFirstReadFailure).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "The saved plugin records can't be read." }),
+    );
+    expect(policy.setHoldsUnavailable).toHaveBeenCalledOnce();
+    expect(policy.setHolds).not.toHaveBeenCalled();
+    // Fail closed: a group no record could be read for is off all the same, and Core stays on.
+    for (const toolName of ["browser.navigate", "git.status", "fs.write", "shell.exec"]) {
+      expect(await keptOffUnread(policy.engine, toolName), toolName).toBe(true);
+    }
+    expect(policy.engine.listSwitchedOffToolNames().has("session.status")).toBe(false);
+    // The next read waits in the background, not in startup.
+    expect(policy.waitInBackground.mock.calls.map(([ms]) => ms)).toEqual([5_000]);
+  });
+
+  it("reads again in the background after 5 s, 15 s and then every minute, and a read that lands ends it", async () => {
+    const store = new CapabilityPluginStore(settingRows());
+    await store.update("meeting-tools", () => holding(["git"]));
     let readable = false;
     const policy = feed(store, async () => {
       if (!readable) throw new Error("The saved plugin records can't be read.");
       return await store.list();
     });
-
     await policy.fed;
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(true);
 
-    expect(policy.reportFirstReadFailure).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ message: "The saved plugin records can't be read." }),
-    );
+    for (const nextWait of [15_000, 60_000, 60_000]) {
+      await policy.endBackgroundWait();
+      expect(policy.waitInBackground.mock.calls.at(-1)?.[0]).toBe(nextWait);
+    }
+    // Each background read that failed is reported, and nothing is lifted.
+    expect(policy.report).toHaveBeenCalledTimes(3);
     expect(policy.setHolds).not.toHaveBeenCalled();
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(true);
+
+    readable = true;
+    await policy.endBackgroundWait();
+
+    expect(policy.setHolds).toHaveBeenCalledExactlyOnceWith([
+      { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" },
+    ]);
+    // The read set the holds, which ends the unavailable state: only the held group stays off.
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(false);
+    expect(policy.engine.listSwitchedOffToolNames().has("browser.navigate")).toBe(false);
+    expect(policy.engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
+    // The loop is done: it asks for no further wait.
+    expect(policy.waitInBackground).toHaveBeenCalledTimes(4);
+    expect(policy.backgroundWaits).toHaveLength(0);
+  });
+
+  it("ends the unavailable state when a store write's read lands, and the background reads stop", async () => {
+    const store = new CapabilityPluginStore(settingRows());
+    let readable = false;
+    let reads = 0;
+    const policy = feed(store, async () => {
+      reads += 1;
+      if (!readable) throw new Error("The saved plugin records can't be read.");
+      return await store.list();
+    });
+    await policy.fed;
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(true);
 
     readable = true;
     await store.update("meeting-tools", () => holding(["browser"]));
@@ -210,6 +335,38 @@ describe("feedPluginToolGroupHolds", () => {
         { groupId: "browser", pluginId: "meeting-tools", pluginName: "Meeting tools" },
       ]),
     );
+    expect(await keptOffUnread(policy.engine, "git.status")).toBe(false);
+    expect(policy.engine.listSwitchedOffToolNames().has("git.status")).toBe(false);
+    expect(policy.engine.listSwitchedOffToolNames().has("browser.navigate")).toBe(true);
+
+    const readsSoFar = reads;
+    await policy.endBackgroundWait();
+    // The pending background wait ends with no read and no new wait.
+    expect(reads).toBe(readsSoFar);
+    expect(policy.waitInBackground).toHaveBeenCalledOnce();
+    expect(policy.setHolds).toHaveBeenCalledOnce();
+  });
+
+  it("stops reading in the background once the Gateway closes", async () => {
+    const store = new CapabilityPluginStore(settingRows());
+    let reads = 0;
+    const policy = feed(store, async () => {
+      reads += 1;
+      throw new Error("The saved plugin records can't be read.");
+    });
+    await policy.fed;
+    await policy.endBackgroundWait();
+    expect(reads).toBe(4);
+    expect(policy.waitInBackground).toHaveBeenCalledTimes(2);
+
+    policy.gateway.closing = true;
+    await policy.endBackgroundWait();
+
+    expect(reads).toBe(4);
+    expect(policy.waitInBackground).toHaveBeenCalledTimes(2);
+    expect(policy.backgroundWaits).toHaveLength(0);
+    // Closing lifts nothing: the tools stay off.
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(true);
   });
 });
 

@@ -3939,6 +3939,7 @@ export class GatewayService {
         settings: this,
         records: this.storage,
         policy: this.policyEngine,
+        isClosing: () => this.closing,
         plans: this.evolutionControlPlaneService,
         hooks: this.hooksService,
         keychain: this.secretStore,

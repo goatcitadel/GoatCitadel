@@ -36,6 +36,7 @@ import {
   isOutsideRootWriteTool,
   resolveWebSearchEngineCandidates,
   splitUtf8HeadTail,
+  SWITCHABLE_TOOL_GROUP_IDS,
   toolGroupForTool,
   toolNamesSwitchedOff,
   type OutsideRootWriteApprovalDetails,
@@ -407,10 +408,22 @@ const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
  */
 export const PLUGIN_TOOL_GROUP_HOLD_REASON_CODE = "plugin_tool_group_hold";
 
+/**
+ * The reason code added next to `tool_group_off` while the engine can't know which groups plugins hold off, because
+ * the plugin records couldn't be read: every tool in a group a plugin could hold is kept off until they can be.
+ */
+export const PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE = "plugin_tool_group_holds_unavailable";
+
+/** How the policy reason ends in that state, so a reader that keeps only the reason can tell it apart. */
+export const PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON =
+  "GoatCitadel can't read which tool groups plugins keep off, so it keeps those tools off until it can";
+
 export class ToolPolicyEngine {
   private readonly approvals: ApprovalGate;
   private readonly registry: ToolRegistry;
   private pluginToolGroupHolds: readonly PluginToolGroupHold[] = [];
+  /** Set while the plugin records can't be read: deny-wins fails closed on every group a plugin could hold. */
+  private pluginToolGroupHoldsUnavailable = false;
 
   public constructor(
     private readonly config: ToolPolicyConfig,
@@ -435,11 +448,22 @@ export class ToolPolicyEngine {
   }
 
   /**
-   * Replaces the groups installed plugins hold off, as the plugin store lists them now. The operator's own
-   * `tools.disabledGroups` and its file are never written; Core and unknown ids are ignored.
+   * Replaces the groups installed plugins hold off, as the plugin store lists them now, and ends the unavailable state
+   * below. The operator's own `tools.disabledGroups` and its file are never written; Core and unknown ids are ignored.
    */
   public setPluginToolGroupHolds(holds: readonly PluginToolGroupHold[]): void {
     this.pluginToolGroupHolds = Object.freeze(holds.map((hold) => Object.freeze({ ...hold })));
+    this.pluginToolGroupHoldsUnavailable = false;
+  }
+
+  /**
+   * The plugin records can't be read, so which groups plugins hold off isn't known: until `setPluginToolGroupHolds`
+   * sets the holds read next, every tool in a switchable group is denied, as if each group were held. Core, MCP and
+   * mesh tools, which no plugin can hold, are untouched. The engine starts with no holds and this state off; the
+   * Gateway reads the holds before any chat runs and sets this only when that read fails.
+   */
+  public setPluginToolGroupHoldsUnavailable(): void {
+    this.pluginToolGroupHoldsUnavailable = true;
   }
 
   /** The holds last set, so a reader can say which plugin keeps a group off. */
@@ -458,12 +482,39 @@ export class ToolPolicyEngine {
     return pluginName ? `the plugin ${pluginName}` : "a plugin";
   }
 
-  /** The live config with every held group added to the operator's switch, as the policy resolver reads it. */
+  /**
+   * The live config with every held group added to the operator's switch, as the policy resolver reads it; every
+   * switchable group while the holds can't be read.
+   */
   private policyConfig(): ToolPolicyConfig {
     return withHeldToolGroups(
       this.config,
-      this.pluginToolGroupHolds.map((hold) => hold.groupId),
+      this.pluginToolGroupHoldsUnavailable
+        ? SWITCHABLE_TOOL_GROUP_IDS
+        : this.pluginToolGroupHolds.map((hold) => hold.groupId),
     );
+  }
+
+  /**
+   * The denial for a tool in a group that is off: the operator's switch, else a plugin's hold the engine can't read
+   * (it may be none), else the hold of the first plugin that keeps it off. Each but the operator's adds its own code.
+   */
+  private switchedOffDenial(name: string, toolName: string, riskLevel: ToolRiskLevel): AccessEvaluation {
+    const label = toolGroupForTool(name)?.label;
+    const group = label ? ` (${label})` : "";
+    if (toolNamesSwitchedOff(this.config.tools.disabledGroups).has(name)) {
+      return deny(
+        riskLevel,
+        "tool_group_off",
+        `tool ${toolName} is in a tool group switched off by the operator${group}`,
+      );
+    }
+    if (this.pluginToolGroupHoldsUnavailable) {
+      const reason = `tool ${toolName} is in a tool group kept off${group}: ${PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON}`;
+      return withReasonCode(deny(riskLevel, "tool_group_off", reason), PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE);
+    }
+    const reason = `tool ${toolName} is in a tool group switched off by ${this.pluginHoldingTool(name)}${group}`;
+    return withReasonCode(deny(riskLevel, "tool_group_off", reason), PLUGIN_TOOL_GROUP_HOLD_REASON_CODE);
   }
 
   public listGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
@@ -1335,23 +1386,12 @@ export class ToolPolicyEngine {
     // the remedy switching the group on would not fix. Core, MCP and mesh names are never in the map.
     // The switch stops the AI only: a Gateway-minted own-delivery marker skips this one check and nothing else.
     // The reason can reach the operator (a failed channel delivery, a Chat tool run), so it names the group's label.
+    // A group only a plugin holds off names that plugin, so the operator isn't told it was their own switch, and adds
+    // `plugin_tool_group_hold`, so a reader that keeps only the codes can say so too. While the holds can't be read,
+    // every switchable group is off (fail closed) with `plugin_tool_group_holds_unavailable`.
     for (const name of isOwnDeliveryMarker(options.ownDelivery) ? [] : toolNames) {
       if (policy.switchedOffTools?.has(name)) {
-        const label = toolGroupForTool(name)?.label;
-        // A group only a plugin holds off names that plugin, so the operator isn't told it was their own switch, and
-        // adds `plugin_tool_group_hold`, so a reader that keeps only the codes can say so too.
-        const byOperator = toolNamesSwitchedOff(this.config.tools.disabledGroups).has(name);
-        const switchedBy = byOperator ? "the operator" : this.pluginHoldingTool(name);
-        const evaluation = deny(
-          riskLevel,
-          "tool_group_off",
-          `tool ${request.toolName} is in a tool group switched off by ${switchedBy}${label ? ` (${label})` : ""}`,
-        );
-        return withPolicy(
-          byOperator
-            ? evaluation
-            : { ...evaluation, reasonCodes: [...evaluation.reasonCodes, PLUGIN_TOOL_GROUP_HOLD_REASON_CODE] },
-        );
+        return withPolicy(this.switchedOffDenial(name, request.toolName, riskLevel));
       }
     }
 
@@ -3370,6 +3410,10 @@ function deny(riskLevel: ToolRiskLevel, code: string, reason: string): AccessEva
     riskLevel,
     policyReason: reason,
   };
+}
+
+function withReasonCode(evaluation: AccessEvaluation, code: string): AccessEvaluation {
+  return { ...evaluation, reasonCodes: [...evaluation.reasonCodes, code] };
 }
 
 function asToolInvokeRequest(value: Record<string, unknown>): ToolInvokeRequest {

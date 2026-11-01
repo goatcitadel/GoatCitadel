@@ -60,6 +60,9 @@ const GATEWAY_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/u;
 
 /** The first reads of the holds at startup, and the waits between them: about a second in all before it is reported. */
 const FIRST_HOLDS_READ_WAITS_MS = [250, 1000] as const;
+/** When those fail, the waits before the reads made in the background: 5 s, 15 s, then every minute until one lands. */
+const BACKGROUND_HOLDS_READ_WAITS_MS = [5_000, 15_000] as const;
+const BACKGROUND_HOLDS_READ_INTERVAL_MS = 60_000;
 
 /** The install's folders and profile, and the operator's own tool switches, read from its live config. */
 export interface CapabilityPluginsConfig {
@@ -68,9 +71,13 @@ export interface CapabilityPluginsConfig {
   toolPolicy: Pick<ToolPolicyConfig, "tools" | "hooks">;
 }
 
-/** Where the groups plugins hold off take effect: the policy engine, which denies them in every chat. */
+/**
+ * Where the groups plugins hold off take effect: the policy engine, which denies them in every chat, and, while they
+ * can't be read, denies every tool in a group a plugin could hold.
+ */
 export interface PluginToolGroupHoldsTarget {
   setPluginToolGroupHolds(holds: readonly PluginToolGroupHold[]): void;
+  setPluginToolGroupHoldsUnavailable(): void;
 }
 
 /**
@@ -89,6 +96,8 @@ export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
   };
   /** Takes the groups plugins hold off, loaded at startup and again after every write to the plugin store. */
   policy: PluginToolGroupHoldsTarget;
+  /** True once the Gateway is closing: the holds' background reads stop. */
+  isClosing(): boolean;
   /**
    * The Skills tab's one revoke for a plugin's skill, as a plain function: the uninstall plan asks it for each skill
    * the plugin switched on, and never asks Skill Hub or approves anything itself.
@@ -151,9 +160,13 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     readPlugins: () => store.list(),
     onStoreChange: (listener) => store.onChange(listener),
     setHolds: (held) => policy.setPluginToolGroupHolds(held),
+    setHoldsUnavailable: () => policy.setPluginToolGroupHoldsUnavailable(),
     report: reportHoldsReadFailure,
     reportFirstReadFailure: reportFirstHoldsReadFailure,
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+    // Unref'd, as the Gateway's other background timers are, so a wait never keeps the process (or a test) alive.
+    waitInBackground: (ms) => new Promise((resolve) => setTimeout(resolve, ms).unref()),
+    isClosing: () => owners.isClosing(),
   });
   const custody = new HookSecretCustodyService(keychain);
   // Where an approval stands and whether its work still runs; one that can't be read answers undefined, and no one is
@@ -313,12 +326,20 @@ async function readSnapshotText(file: string): Promise<string> {
 export interface PluginToolGroupHoldsSources {
   readPlugins(): Promise<readonly StoredPlugin[]>;
   onStoreChange(listener: () => void): void;
+  /** The holds read now; this also ends the unavailable state. */
   setHolds(holds: readonly PluginToolGroupHold[]): void;
-  /** A later read that failed: the holds last read stay in force. */
+  /** No read has landed yet: every tool in a group a plugin could hold is kept off until one does. */
+  setHoldsUnavailable(): void;
+  /** A later read that failed: nothing a plugin keeps off is switched back on. */
   report(error: unknown): void;
-  /** The first read failed every time it was tried: no group is held until a later read lands. */
+  /** The first read failed every time it was tried: the holds are unavailable, and read again in the background. */
   reportFirstReadFailure(error: unknown): void;
+  /** A wait between the first reads, which startup awaits. */
   wait(ms: number): Promise<void>;
+  /** A wait between the background reads: its timer never keeps the process alive. */
+  waitInBackground(ms: number): Promise<void>;
+  /** True once the Gateway is closing: the background reads stop. */
+  isClosing(): boolean;
 }
 
 /** The holds feed: `load` is the first read, which startup awaits before any chat runs. */
@@ -330,8 +351,10 @@ export interface PluginToolGroupHoldsFeed {
  * Feeds the groups plugins hold off to the policy engine: once at startup (`load`), and again after every write to the
  * plugin store. Each read replaces the holds whole; a read that started earlier never replaces a later one. A store
  * that can't be read keeps the holds last read and reports the failure, so a hold never lifts because a read failed.
- * The first read is tried again, twice, before its failure is reported; `load` settles then either way, and the next
- * write that can be read sets the holds.
+ * The first read is tried again, twice. If it still fails and no read has landed, the failure is reported and the
+ * engine is told the holds are unavailable, so every tool a plugin could hold off stays off (deny-wins fails closed);
+ * `load` settles then, so startup goes on. The holds are then read again in the background, after 5 s, 15 s and then
+ * every minute, until a read lands (that one, or a store write's) or the Gateway closes.
  */
 export function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): PluginToolGroupHoldsFeed {
   let started = 0;
@@ -343,7 +366,19 @@ export function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): 
     applied = attempt;
     sources.setHolds(holds);
   };
+  const landed = (): boolean => applied > 0;
   sources.onStoreChange(() => void read().catch((error: unknown) => sources.report(error)));
+  const readInBackground = async (): Promise<void> => {
+    for (let attempt = 0; !landed() && !sources.isClosing(); attempt += 1) {
+      await sources.waitInBackground(BACKGROUND_HOLDS_READ_WAITS_MS[attempt] ?? BACKGROUND_HOLDS_READ_INTERVAL_MS);
+      if (landed() || sources.isClosing()) return;
+      try {
+        await read();
+      } catch (error) {
+        sources.report(error);
+      }
+    }
+  };
   let first: Promise<void> | undefined;
   const firstRead = async (): Promise<void> => {
     for (let attempt = 0; ; attempt += 1) {
@@ -351,8 +386,17 @@ export function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): 
         return await read();
       } catch (error) {
         const wait = FIRST_HOLDS_READ_WAITS_MS[attempt];
-        if (wait === undefined) return sources.reportFirstReadFailure(error);
-        await sources.wait(wait);
+        if (wait !== undefined) {
+          await sources.wait(wait);
+          continue;
+        }
+        // A store write's read may have landed meanwhile; then the holds are known and nothing stays closed.
+        if (landed()) return;
+        sources.reportFirstReadFailure(error);
+        sources.setHoldsUnavailable();
+        // Never rejects (each read's failure is reported); the catch only satisfies the async-boundary rule.
+        readInBackground().catch((failure: unknown) => sources.report(failure));
+        return;
       }
     }
   };
@@ -423,19 +467,22 @@ export function readGatewayVersion(load: (specifier: string) => unknown = create
   return version;
 }
 
-/** A hold that can't be read is logged; the holds last read stay in force. */
+/**
+ * A hold that can't be read is logged. Nothing a plugin keeps off is switched back on: the holds last read stay in
+ * force, or, before any read landed, every tool a plugin could hold stays off.
+ */
 function reportHoldsReadFailure(error: unknown): void {
   const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
-  log.error("the tool groups plugins hold off couldn't be read; the last ones read stay in force", {
+  log.error("the tool groups plugins hold off couldn't be read; no tool a plugin keeps off is switched back on", {
     err: redactStructuredSecrets(diagnostic).value,
   });
 }
 
-/** The first read failed each time: nothing a plugin holds off is held until a later write is read. */
+/** The first read failed each time: every tool a plugin could hold off stays off, and the holds are read again later. */
 function reportFirstHoldsReadFailure(error: unknown): void {
   const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
   log.error(
-    "the tool groups plugins hold off couldn't be read at startup; none is held off until the plugin records can be read",
+    "the tool groups plugins hold off couldn't be read at startup; every tool a plugin could keep off stays off until they can be read, and they're read again in the background",
     { err: redactStructuredSecrets(diagnostic).value },
   );
 }

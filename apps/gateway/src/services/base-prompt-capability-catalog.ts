@@ -17,6 +17,7 @@ import type {
 } from "@goatcitadel/contracts";
 import {
   CODE_MODE_REQUEST_TOOL_NAME,
+  PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE,
   PLUGIN_TOOL_GROUP_HOLD_REASON_CODE,
   SUBAGENT_FANOUT_TOOL_NAME,
 } from "@goatcitadel/policy-engine";
@@ -44,8 +45,8 @@ export async function filterBasePromptToolsetByPolicy(
 ): Promise<BaseAgentPromptToolset> {
   type Verdict =
     | { callable: true; requiresApproval: boolean }
-    | { callable: false; switchedOff: boolean; pluginHeld: boolean };
-  /** Whether the tool is callable this turn and, if so, whether it asks the operator first; if not, whether the operator's tool group switch, or a plugin's hold, is why. */
+    | { callable: false; switchedOff: boolean; pluginHeld: boolean; holdsUnreadable: boolean };
+  /** Whether the tool is callable this turn and, if so, whether it asks the operator first; if not, whether the operator's tool group switch, a plugin's hold, or holds that can't be read is why. */
   const probe = async (toolName: string): Promise<Verdict> => {
     try {
       const access = await inspect({
@@ -64,16 +65,18 @@ export async function filterBasePromptToolsetByPolicy(
         callable: false,
         switchedOff,
         pluginHeld: switchedOff && access.reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLD_REASON_CODE),
+        holdsUnreadable: switchedOff && access.reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE),
       };
     } catch {
       // Like the runner: a tool whose policy cannot be evaluated is not callable this turn.
-      return { callable: false, switchedOff: false, pluginHeld: false };
+      return { callable: false, switchedOff: false, pluginHeld: false, holdsUnreadable: false };
     }
   };
   const allowed = new Set<string>();
   const asksFirst = new Set<string>();
   const switchedOff = new Set<string>();
   const pluginHeld = new Set<string>();
+  const holdsUnreadable = new Set<string>();
   const names = [...toolset.toolNames];
   for (let start = 0; start < names.length; start += PROBE_CONCURRENCY) {
     const batch = names.slice(start, start + PROBE_CONCURRENCY);
@@ -84,6 +87,7 @@ export async function filterBasePromptToolsetByPolicy(
       if (!verdict.callable) {
         if (verdict.switchedOff) switchedOff.add(toolName);
         if (verdict.pluginHeld) pluginHeld.add(toolName);
+        if (verdict.holdsUnreadable) holdsUnreadable.add(toolName);
         return;
       }
       allowed.add(toolName);
@@ -97,6 +101,7 @@ export async function filterBasePromptToolsetByPolicy(
     policyDeniedToolNames: names.filter((toolName) => !allowed.has(toolName)),
     switchedOffToolNames: names.filter((toolName) => switchedOff.has(toolName)),
     pluginHeldToolNames: names.filter((toolName) => pluginHeld.has(toolName)),
+    pluginHoldsUnreadableToolNames: names.filter((toolName) => holdsUnreadable.has(toolName)),
     approvalRequiredToolNames: names.filter((toolName) => asksFirst.has(toolName)),
   };
 }

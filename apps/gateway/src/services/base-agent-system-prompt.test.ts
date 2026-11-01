@@ -329,6 +329,28 @@ describe("buildBaseAgentSystemPrompt", () => {
     );
   });
 
+  it("says nothing lifts a tool kept off because the plugin holds can't be read, in this turn", () => {
+    const tail = buildBaseAgentSystemPrompt(
+      input({
+        toolset: {
+          toolNames: ["fs.read"],
+          policyDeniedToolNames: ["fs.write", "shell.exec"],
+          switchedOffToolNames: ["fs.write", "shell.exec"],
+          // Files is off only because the holds can't be read; Shell and code is the operator's own switch.
+          pluginHoldsUnreadableToolNames: ["fs.write"],
+        },
+      }),
+    ).volatileTail;
+    expect(tail).toContain(
+      "To allow file writes, try again later: GoatCitadel can't read which tool groups plugins keep off, so it keeps those tools off until it can.",
+    );
+    expect(tail).not.toContain("switches the Files tools back on");
+    expect(tail).not.toContain("uninstalls the plugin that keeps the Files tools off");
+    expect(tail).toContain(
+      "To allow shell commands, the operator switches the Shell and code tools back on in Capabilities › Tools.",
+    );
+  });
+
   it("words each write-and-run tool by why it is off: the switch for one, the policy for the other", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({

@@ -233,6 +233,7 @@ describe("glossary and plurals (GL-R02)", () => {
       "apps/gateway/src/services/plugin-git-messages.ts",
       "apps/gateway/src/services/skill-hub-plugin-skill-source.ts",
       "apps/gateway/src/services/chat-capability-scout.ts",
+      "apps/gateway/src/services/plugin-tool-group-holds-words.ts",
     ]);
     // The skill import's Git words stay out: only a plugin fetch's own file is read.
     for (const skillWords of ["hardened-git.ts", "hardened-git-wording.ts"]) {
