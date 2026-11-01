@@ -215,7 +215,9 @@ export function createErrandOverlay(activePage: () => Page): ErrandOverlayContro
         automationDepth -= 1;
         if (automationDepth === 0) {
           automationEndedAt = Date.now();
-          await overlay?.setAutomationInput(false).catch(() => undefined);
+          // Clear every page, not just the one active at the start: dispatch may have opened a tab or popup, which
+          // picked the flag up from `automationDepth` when its world appeared.
+          await Promise.all([...pages.values()].map((each) => each.setAutomationInput(false).catch(() => undefined)));
         }
       }
     },

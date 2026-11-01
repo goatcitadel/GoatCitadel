@@ -372,6 +372,32 @@ describe("errand overlay", () => {
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(await Promise.race([page.evaluate(() => 1 + 1), wedged(3_000)])).toBe(2);
   }, 60_000);
+  it("automation input is cleared on a page opened during dispatch", async () => {
+    const { browser, events } = await openErrand();
+    const context = browser.page().context();
+    const second = await browser.overlay.withAutomationInput(async () => {
+      const page = await context.newPage();
+      await page.goto(baseUrl);
+      await sleep(200);
+      return page;
+    });
+    const resolvedAt = Date.now();
+    expect(browser.page()).toBe(second);
+    await browser.overlay.render(drivingState());
+    await waitFor(
+      () => browser.overlay.snapshot(),
+      (value) => value.bannerText === BANNER,
+    );
+    await sleep(200);
+    await second.keyboard.press("Escape");
+    await waitFor(
+      async () => events.length,
+      (count) => count > 0,
+    );
+    expect(events).toEqual([{ type: "stop" }]);
+    // Well inside the world-side self-expiry, so this proves the explicit clear reached the new page.
+    expect(Date.now() - resolvedAt).toBeLessThan(1_500);
+  }, 60_000);
 });
 
 async function differingRatio(a: Buffer, b: Buffer): Promise<number> {

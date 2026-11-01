@@ -42,6 +42,8 @@ const ERRAND_OVERLAY_CONSTANTS = {
   decisionDwellMs: 500,
   /** Input this soon after GoatCitadel's own automation input ends is still treated as automation's. */
   automationGraceMs: 150,
+  /** The automation flag clears itself this long after it was last set, so a lost clear cannot leave controls dead. */
+  automationExpiryMs: 2_000,
   /** Re-attaching the host is limited so a hostile page cannot ping-pong it forever; then it backs off. */
   reattach: { budget: 20, windowMs: 1_000, backoffMinMs: 250, backoffMaxMs: 2_000 },
   motion: {
@@ -194,9 +196,12 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   let cursorTarget: Point | undefined;
   let automation = false;
   let automationEndedAt = Number.NEGATIVE_INFINITY;
+  let automationSetAt = Number.NEGATIVE_INFINITY;
   let cardShownAt = Number.POSITIVE_INFINITY;
   const inputBlocked = (): boolean =>
-    suspended || automation || performance.now() - automationEndedAt < c.automationGraceMs;
+    suspended ||
+    (automation && performance.now() - automationSetAt < c.automationExpiryMs) ||
+    performance.now() - automationEndedAt < c.automationGraceMs;
 
   const hostStyle = (): string =>
     [
@@ -517,6 +522,9 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
         automationEndedAt = performance.now();
       }
       automation = active;
+      if (active) {
+        automationSetAt = performance.now();
+      }
       return { installed: true, automation };
     },
     snapshot() {
