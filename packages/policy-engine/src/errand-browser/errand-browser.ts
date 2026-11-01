@@ -12,11 +12,7 @@ import {
 import type { ComputerAction, ErrandTargetInfo } from "./computer-actions.js";
 import { dispatchComputerAction, pointOf } from "./computer-dispatch.js";
 import { createErrandOverlay, type ErrandOverlay } from "./errand-overlay.js";
-import {
-  buildDescribeFocusedExpression,
-  buildDescribePointExpression,
-  ERRAND_TARGET_WORLD,
-} from "./errand-target-script.js";
+import { describeFocusedOverCdp, describePointOverCdp } from "./errand-target-cdp.js";
 
 export type ErrandBrowserLaunchErrorCode = "profile_locked" | "chrome_missing" | "launch_failed";
 
@@ -297,34 +293,6 @@ async function createErrandBrowser(
     return activePage.screenshot({ type: "png" });
   }
 
-  /** Evaluates `expression` in a GoatCitadel-only isolated world, so page script cannot intercept or spoof it. */
-  async function inspect(expression: string): Promise<ErrandTargetInfo | null> {
-    const page = activePage;
-    let session: CDPSession | undefined;
-    try {
-      session = await context.newCDPSession(page);
-      const frameId = (await session.send("Page.getFrameTree")).frameTree.frame.id;
-      const { executionContextId } = await session.send("Page.createIsolatedWorld", {
-        frameId,
-        worldName: ERRAND_TARGET_WORLD,
-        grantUniveralAccess: false,
-      });
-      const response = await session.send("Runtime.evaluate", {
-        contextId: executionContextId,
-        expression,
-        returnByValue: true,
-      });
-      if (response.exceptionDetails) {
-        return null;
-      }
-      return (response.result.value as ErrandTargetInfo | null | undefined) ?? null;
-    } catch {
-      return null;
-    } finally {
-      await session?.detach().catch(() => undefined);
-    }
-  }
-
   /** Moves the drawn cursor; purely cosmetic, so overlay failures never stop an action. */
   async function moveCursor(point: { x: number; y: number }): Promise<void> {
     try {
@@ -350,8 +318,8 @@ async function createErrandBrowser(
 
   return {
     overlay,
-    describeTarget: (x, y) => inspect(buildDescribePointExpression(x, y)),
-    describeFocused: () => inspect(buildDescribeFocusedExpression()),
+    describeTarget: (x, y) => describePointOverCdp(context, activePage, x, y),
+    describeFocused: () => describeFocusedOverCdp(context, activePage),
     async runActions(actions, beforeAction) {
       let ran = 0;
       for (const [index, action] of actions.entries()) {

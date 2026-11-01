@@ -30,6 +30,17 @@ root.innerHTML = '<input class="sp" type="password" style="width:200px;height:30
 </script>
 </body></html>`;
 
+const CLOSED_PAGE = `<html><body style="margin:0">
+<div id="closed" style="position:absolute;left:20px;top:300px;width:220px;height:40px"></div>
+<fancy-box id="fancy" style="position:absolute;left:20px;top:360px;width:220px;height:60px;display:block"><span>slotted</span></fancy-box>
+<script>
+var a = document.getElementById("closed").attachShadow({ mode: "closed" });
+a.innerHTML = '<input type="password" style="width:200px;height:30px;margin:0">';
+var b = document.getElementById("fancy").attachShadow({ mode: "closed" });
+b.innerHTML = '<input type="password" style="width:200px;height:30px;margin:0;display:block"><slot></slot>';
+</script>
+</body></html>`;
+
 const INNER_PAGE = `<html><body style="margin:0"><input id="ipw" type="password" style="width:200px;height:30px;margin:0"></body></html>`;
 
 const FRAME_PAGE = `<html><body style="margin:0">
@@ -91,7 +102,8 @@ describe("errand browser computer actions", () => {
     server = http.createServer((req, res) => {
       res.setHeader("content-type", "text/html");
       const route = req.url ?? "/";
-      if (route.startsWith("/shadow")) res.end(SHADOW_PAGE);
+      if (route.startsWith("/closed")) res.end(CLOSED_PAGE);
+      else if (route.startsWith("/shadow")) res.end(SHADOW_PAGE);
       else if (route.startsWith("/inner")) res.end(INNER_PAGE);
       else if (route.startsWith("/frame")) res.end(FRAME_PAGE);
       else if (route.startsWith("/xorigin")) res.end(crossOriginPage(otherUrl));
@@ -214,6 +226,39 @@ describe("errand browser computer actions", () => {
     const focused = await browser.describeFocused();
     expect(focused?.tagName).toBe("iframe");
     expect(focused?.isOpaque).toBe(true);
+  }, 60_000);
+
+  it("sees a password field inside a closed shadow root on a div host", async () => {
+    const browser = await launch("closed");
+    const byPoint = await browser.describeTarget(30, 310);
+    expect(byPoint?.isPasswordLike).toBe(true);
+    await browser.page().mouse.click(30, 310);
+    const focused = await browser.describeFocused();
+    expect(focused?.isPasswordLike).toBe(true);
+  }, 60_000);
+
+  it("sees a password field inside a closed root of a custom element with slotted children", async () => {
+    const browser = await launch("closed");
+    const byPoint = await browser.describeTarget(30, 370);
+    expect(byPoint?.isPasswordLike).toBe(true);
+    await browser.page().mouse.click(30, 370);
+    const focused = await browser.describeFocused();
+    expect(focused?.isPasswordLike).toBe(true);
+  }, 60_000);
+
+  it("restores operator input after an automation callback throws", async () => {
+    const browser = await launch();
+    const events: string[] = [];
+    browser.overlay.onEvent((event) => events.push(event.type));
+    await browser.overlay.render({ mode: "driving", bannerText: "Working", cursor: { x: 5, y: 5 } });
+    await expect(
+      browser.overlay.withAutomationInput(async () => {
+        throw new Error("dispatch failed");
+      }),
+    ).rejects.toThrow("dispatch failed");
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    await browser.page().keyboard.press("Escape");
+    await expect.poll(() => events, { timeout: 5_000 }).toEqual(["stop"]);
   }, 60_000);
 
   it("accepts case-insensitive named keys", async () => {

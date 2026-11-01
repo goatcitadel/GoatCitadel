@@ -81,9 +81,6 @@ const TARGET_SCRIPT_BODY = String.raw`
       y: el.clientTop + (parseFloat(style.paddingTop) || 0)
     };
   }
-  function looksLikeClosedShadowHost(el) {
-    return el.tagName.indexOf("-") !== -1 && !el.shadowRoot && el.children.length === 0;
-  }
   function describe(el, x, y, ox, oy, opaque) {
     var tag = el.tagName.toLowerCase();
     var isInput = tag === "input";
@@ -101,7 +98,7 @@ const TARGET_SCRIPT_BODY = String.raw`
       text: visibleText(el),
       isPasswordLike: type === "password" || (autocomplete !== undefined && autocomplete.indexOf("password") !== -1),
       isOneTimeCode: (autocomplete !== undefined && autocomplete.split(/\s+/).indexOf("one-time-code") !== -1) || ONE_TIME_CODE.test(identity),
-      isOpaque: opaque || looksLikeClosedShadowHost(el),
+      isOpaque: opaque || (isFrame(el) && !frameDocument(el)),
       rect: { x: Math.round(left), y: Math.round(top), width: Math.round(rect.width), height: Math.round(rect.height) }
     };
     if (type !== undefined) info.inputType = type;
@@ -142,7 +139,10 @@ export function buildDescribePointExpression(x: number, y: number): string {
   })()`;
 }
 
-/** An expression describing the focused element (descending into open shadow roots), or null when nothing is focused. */
+/**
+ * An expression for the focused element (descending through open shadow roots and same-origin frames): `{ info, element }`,
+ * or null when nothing is focused. Evaluated without returnByValue so the element can be inspected over CDP.
+ */
 export function buildDescribeFocusedExpression(): string {
   return `(function () {${TARGET_SCRIPT_BODY}
     var active = document.activeElement, ox = 0, oy = 0, opaque = false;
@@ -163,6 +163,20 @@ export function buildDescribeFocusedExpression(): string {
       }
       break;
     }
-    return describe(active, undefined, undefined, ox, oy, opaque);
+    return { info: describe(active, undefined, undefined, ox, oy, opaque), element: active };
   })()`;
+}
+
+/**
+ * A function declaration (for Runtime.callFunctionOn, `this` = the node CDP found at a point, which may sit inside a
+ * closed shadow root) that describes the nearest interactive element. Returns undefined for nodes of other documents.
+ */
+export function buildDescribeNodeFunction(x: number, y: number): string {
+  return `function () {${TARGET_SCRIPT_BODY}
+    var hit = this;
+    if (hit.nodeType !== 1) hit = hit.parentElement || (hit.parentNode && hit.parentNode.host) || null;
+    if (!hit || hit.ownerDocument !== document) return undefined;
+    var target = hit.closest(INTERACTIVE) || hit;
+    return describe(target, ${JSON.stringify(x)}, ${JSON.stringify(y)}, 0, 0, false);
+  }`;
 }
