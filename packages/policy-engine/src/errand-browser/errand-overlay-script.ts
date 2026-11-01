@@ -38,6 +38,12 @@ const ERRAND_OVERLAY_CONSTANTS = {
   zIndex: 2147483647,
   /** IntersectionObserver v2 visibility sampling; the spec's minimum delay. */
   visibilityDelayMs: 100,
+  /** Approve and Not now count only after the card and the button have both been visible this long. */
+  decisionDwellMs: 500,
+  /** Input this soon after GoatCitadel's own automation input ends is still treated as automation's. */
+  automationGraceMs: 150,
+  /** Re-attaching the host is limited so a hostile page cannot ping-pong it forever; then it backs off. */
+  reattach: { budget: 20, windowMs: 1_000, backoffMinMs: 250, backoffMaxMs: 2_000 },
   motion: {
     minMs: 220,
     maxMs: 400,
@@ -119,7 +125,7 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       pointer-events: auto; }
     .card .title { color: ${c.colors.accent}; font-size: 15px; font-weight: 600; margin: 0 0 6px; }
     .card .body { margin: 0 0 12px; white-space: pre-wrap; }
-    .card .notice { margin: 0 0 12px; color: ${c.colors.accent}; }
+    .card .notice { margin: 10px 0 0; color: ${c.colors.accent}; }
     .actions { display: flex; gap: 8px; justify-content: flex-end; }
     button { pointer-events: auto; font: inherit; border-radius: 8px; padding: 6px 12px; cursor: pointer;
       border: 1px solid ${c.colors.accent}; background: transparent; color: ${c.colors.accent}; }
@@ -168,13 +174,17 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   const deny = make("button", "", c.copy.deny);
   const actions = make("div", "actions");
   actions.append(deny, approve);
-  card.append(cardTitle, cardBody, cardNotice, actions);
+  // The notice goes below the buttons so showing it never moves them out from under the pointer.
+  card.append(cardTitle, cardBody, actions, cardNotice);
 
   // Paint order matters: nothing GoatCitadel draws may sit above the card's buttons, or the visibility check fails.
   layer.append(spot, blocker, trail, cursor, banner, card);
   root.append(style, layer);
   for (const button of [takeOver, handBack, stop, approve, deny]) {
     button.type = "button";
+    // Out of the page Tab order, and never focused by a press, so no keyboard path can activate a control.
+    button.tabIndex = -1;
+    button.addEventListener("mousedown", (event) => event.preventDefault());
   }
 
   // ---- State -----------------------------------------------------------------------------------------------------
@@ -182,6 +192,11 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   let suspended = false;
   let cursorAt: Point | undefined;
   let cursorTarget: Point | undefined;
+  let automation = false;
+  let automationEndedAt = Number.NEGATIVE_INFINITY;
+  let cardShownAt = Number.POSITIVE_INFINITY;
+  const inputBlocked = (): boolean =>
+    suspended || automation || performance.now() - automationEndedAt < c.automationGraceMs;
 
   const hostStyle = (): string =>
     [
@@ -212,6 +227,31 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   };
 
   // ---- Re-attach when the page removes or restyles the host ------------------------------------------------------
+  // A page observer that removes or restyles the host on every mutation would ping-pong with ours forever inside one
+  // microtask checkpoint and wedge the renderer. Past the budget, reactions move to a timer and back off.
+  let reactions: number[] = [];
+  let backoffMs: number = c.reattach.backoffMinMs;
+  let backoffTimer = 0;
+  const throttled = (work: () => void) => (): void => {
+    const now = performance.now();
+    reactions = reactions.filter((at) => now - at < c.reattach.windowMs);
+    if (reactions.length < c.reattach.budget) {
+      reactions.push(now);
+      if (reactions.length === 1) {
+        backoffMs = c.reattach.backoffMinMs;
+      }
+      work();
+      return;
+    }
+    if (!backoffTimer) {
+      backoffTimer = window.setTimeout(() => {
+        backoffTimer = 0;
+        reactions = [];
+        work();
+      }, backoffMs);
+      backoffMs = Math.min(backoffMs * 2, c.reattach.backoffMaxMs);
+    }
+  };
   let observedRoot: Element | null = null;
   const ensureAttached = (): void => {
     let documentRoot = document.documentElement;
@@ -230,9 +270,10 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
     }
     applyHostStyle();
   };
-  const rootObserver = new MutationObserver(ensureAttached);
-  new MutationObserver(ensureAttached).observe(document, { childList: true });
-  new MutationObserver(applyHostStyle).observe(host, { attributes: true });
+  const onMutation = throttled(() => ensureAttached());
+  const rootObserver = new MutationObserver(onMutation);
+  new MutationObserver(onMutation).observe(document, { childList: true });
+  new MutationObserver(onMutation).observe(host, { attributes: true });
   ensureAttached();
   document.addEventListener("DOMContentLoaded", ensureAttached);
 
@@ -240,10 +281,17 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   // `isVisible` is true only when the browser itself confirms nothing is painted over the button and no ancestor
   // fades, filters or transforms it, so a page cannot cover the card (even with pointer-events: none) to steer a click.
   const visible = new Map<Element, boolean>();
+  const visibleSince = new Map<Element, number>();
   const visibility = new IntersectionObserver(
     (entries) => {
       for (const entry of entries) {
-        visible.set(entry.target, (entry as IntersectionObserverEntry & { isVisible?: boolean }).isVisible === true);
+        const isVisible = (entry as IntersectionObserverEntry & { isVisible?: boolean }).isVisible === true;
+        if (!isVisible) {
+          visibleSince.delete(entry.target);
+        } else if (!visibleSince.has(entry.target)) {
+          visibleSince.set(entry.target, performance.now());
+        }
+        visible.set(entry.target, isVisible);
       }
     },
     { trackVisibility: true, delay: c.visibilityDelayMs } as IntersectionObserverInit,
@@ -254,18 +302,27 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   const onControl = (element: HTMLElement, handler: (event: MouseEvent) => void): void => {
     element.addEventListener("click", (event) => {
       event.stopPropagation();
-      if (!event.isTrusted || suspended) {
+      if (!event.isTrusted || inputBlocked()) {
         return;
       }
       handler(event);
     });
   };
-  const decide = (type: "approve" | "deny") => () => {
+  // A decision needs a real pointer click (detail > 0; keyboard activation reports 0) on a button the browser has
+  // seen continuously unobscured, on a card that has been up long enough to read. Anything else points to Chat.
+  const decide = (type: "approve" | "deny") => (event: MouseEvent) => {
     const button = type === "approve" ? approve : deny;
     if (state.mode !== "approval" || !state.requestId) {
       return;
     }
-    if (visible.get(button) !== true) {
+    const now = performance.now();
+    const since = visibleSince.get(button);
+    const settled =
+      visible.get(button) === true &&
+      since !== undefined &&
+      now - since >= c.decisionDwellMs &&
+      now - cardShownAt >= c.decisionDwellMs;
+    if (event.detail === 0 || !settled) {
       cardNotice.textContent = c.copy.useChat;
       cardNotice.hidden = false;
       return;
@@ -280,7 +337,7 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   window.addEventListener(
     "keydown",
     (event) => {
-      if (event.isTrusted && event.key === "Escape" && state.mode !== "hidden" && !suspended) {
+      if (event.isTrusted && event.key === "Escape" && state.mode !== "hidden" && !inputBlocked()) {
         report({ type: "stop" });
       }
     },
@@ -421,6 +478,7 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       if (previous.mode !== "approval" || previous.requestId !== next.requestId) {
         cardNotice.textContent = "";
         cardNotice.hidden = true;
+        cardShownAt = performance.now();
       }
       placeCard(rect, next.cursor);
     }
@@ -436,19 +494,30 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
 
   const api = {
     render,
-    setSuspended(value: boolean): Promise<void> {
+    /** Resolves after the change is painted (or on a timer, if no frames come) with the actual host state. */
+    setSuspended(value: boolean): Promise<{ installed: true; displayed: boolean }> {
       suspended = value;
-      applyHostStyle();
-      // Resolve once the change has been painted, with a timer in case the window is not producing frames.
-      return new Promise<void>((resolve) => {
-        const done = setTimeout(resolve, 60);
+      ensureAttached();
+      const actual = () => ({
+        installed: true as const,
+        displayed: host.isConnected && window.getComputedStyle(host).display !== "none",
+      });
+      return new Promise((resolve) => {
+        const done = setTimeout(() => resolve(actual()), 60);
         requestAnimationFrame(() =>
           requestAnimationFrame(() => {
             clearTimeout(done);
-            resolve();
+            resolve(actual());
           }),
         );
       });
+    },
+    setAutomationInput(active: boolean): { installed: true; automation: boolean } {
+      if (automation && !active) {
+        automationEndedAt = performance.now();
+      }
+      automation = active;
+      return { installed: true, automation };
     },
     snapshot() {
       const displayed = host.isConnected && host.style.display !== "none";

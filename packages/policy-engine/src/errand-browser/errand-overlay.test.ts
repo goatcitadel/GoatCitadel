@@ -6,7 +6,12 @@ import path from "node:path";
 import sharp from "sharp";
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { launchErrandBrowser, type ErrandBrowser } from "./errand-browser.js";
-import type { ErrandOverlayEvent, ErrandOverlayRect, ErrandOverlayState } from "./errand-overlay.js";
+import {
+  ErrandOverlayError,
+  type ErrandOverlayEvent,
+  type ErrandOverlayRect,
+  type ErrandOverlayState,
+} from "./errand-overlay.js";
 import { ERRAND_OVERLAY_COPY } from "./errand-overlay-script.js";
 
 const HEADLESS = process.env.ERRAND_BROWSER_HEADED !== "1";
@@ -19,6 +24,7 @@ const PAGE_HTML = `<!doctype html><html><head><style>
   #buy { position: absolute; left: ${TARGET.x}px; top: ${TARGET.y}px; width: ${TARGET.width}px; height: ${TARGET.height}px; }
 </style></head><body><div class="stripe"></div><p>Errand test page</p><button id="buy">Place your order</button></body></html>`;
 
+const DWELL_WAIT_MS = 600;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 describe("errand overlay", () => {
@@ -93,7 +99,17 @@ describe("errand overlay", () => {
     );
     const approve = snapshot.controls.approve;
     expect(approve?.visible, "the Approve button should be visible to the operator").toBe(true);
+    // Decisions count only after the card and button have been visible for the dwell time.
+    await sleep(DWELL_WAIT_MS);
     return approve!;
+  }
+
+  async function approveRectNow(browser: ErrandBrowser): Promise<ErrandOverlayRect> {
+    const snapshot = await waitFor(
+      () => browser.overlay.snapshot(),
+      (value) => value.controls.approve !== undefined,
+    );
+    return snapshot.controls.approve!;
   }
 
   const center = (rect: ErrandOverlayRect) => ({ x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 });
@@ -248,6 +264,113 @@ describe("errand overlay", () => {
       (count) => count > 0,
     );
     expect(events).toEqual([{ type: "stop" }]);
+  }, 60_000);
+  it("automation input cannot stop or approve; the operator's Esc still stops", async () => {
+    const { browser, events } = await openErrand();
+    await browser.overlay.render(approvalState("r3"));
+    const point = center(await approveRectWhenVisible(browser));
+    await browser.overlay.withAutomationInput(async () => {
+      await browser.page().keyboard.press("Escape");
+      await browser.page().mouse.click(point.x, point.y);
+    });
+    await sleep(300);
+    expect(events).toEqual([]);
+    await browser.page().keyboard.press("Escape");
+    await waitFor(
+      async () => events.length,
+      (count) => count > 0,
+    );
+    expect(events).toEqual([{ type: "stop" }]);
+  }, 60_000);
+
+  it("keyboard activation cannot approve or deny", async () => {
+    const { browser, events } = await openErrand();
+    await browser.overlay.render(approvalState("r4"));
+    const point = center(await approveRectWhenVisible(browser));
+    const page = browser.page();
+    await page.focus("#buy");
+    for (let index = 0; index < 8; index += 1) {
+      await page.keyboard.press("Tab");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("Space");
+    }
+    // Press on Approve, slide off before releasing (no click), then try to activate whatever got focus.
+    await page.mouse.move(point.x, point.y);
+    await page.mouse.down();
+    await page.mouse.move(10, 790);
+    await page.mouse.up();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Space");
+    await sleep(300);
+    expect(events).toEqual([]);
+  }, 60_000);
+
+  it("a click right after the card appears is ignored until the dwell time passes", async () => {
+    const { browser, events } = await openErrand();
+    const rendered = Date.now();
+    await browser.overlay.render(approvalState("r9"));
+    const point = center(await approveRectNow(browser));
+    await browser.page().mouse.click(point.x, point.y);
+    expect(Date.now() - rendered).toBeLessThan(450);
+    await sleep(200);
+    expect(events).toEqual([]);
+    await sleep(DWELL_WAIT_MS);
+    await browser.page().mouse.click(point.x, point.y);
+    await waitFor(
+      async () => events.length,
+      (count) => count > 0,
+    );
+    expect(events).toEqual([{ type: "approve", requestId: "r9" }]);
+  }, 60_000);
+
+  it("model capture is refused when the overlay cannot be hidden", async () => {
+    const { browser } = await openErrand();
+    await browser.overlay.render(drivingState());
+    await waitFor(
+      () => browser.overlay.snapshot(),
+      (value) => value.bannerText === BANNER,
+    );
+    // Freeze the page's JavaScript so every call into the overlay world stalls.
+    const debuggerSession = await browser.page().context().newCDPSession(browser.page());
+    await debuggerSession.send("Debugger.enable");
+    await debuggerSession.send("Debugger.pause");
+    try {
+      await expect(browser.captureForModel()).rejects.toBeInstanceOf(ErrandOverlayError);
+    } finally {
+      await debuggerSession.send("Debugger.resume").catch(() => undefined);
+      await debuggerSession.detach().catch(() => undefined);
+    }
+  }, 60_000);
+
+  it("a page fighting the host cannot wedge the overlay or the renderer", async () => {
+    const { browser } = await openErrand();
+    await browser.overlay.render(drivingState());
+    await waitFor(
+      () => browser.overlay.snapshot(),
+      (value) => value.bannerText === BANNER,
+    );
+    const page = browser.page();
+    const wedged = (ms: number) => sleep(ms).then(() => "wedged" as const);
+    const installed = await Promise.race([
+      page.evaluate(() => {
+        const strip = () => {
+          for (const element of Array.from(document.documentElement.children)) {
+            if (element !== document.head && element !== document.body) {
+              element.remove();
+            }
+          }
+        };
+        new MutationObserver(strip).observe(document, { childList: true, subtree: true, attributes: true });
+        strip();
+        return "installed" as const;
+      }),
+      wedged(3_000),
+    ]);
+    expect(installed).toBe("installed");
+    const started = Date.now();
+    await browser.overlay.render(drivingState({ x: 500, y: 400 }));
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(await Promise.race([page.evaluate(() => 1 + 1), wedged(3_000)])).toBe(2);
   }, 60_000);
 });
 

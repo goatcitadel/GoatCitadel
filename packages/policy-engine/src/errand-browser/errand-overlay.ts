@@ -60,24 +60,56 @@ export interface ErrandOverlay {
   onEvent(listener: (event: ErrandOverlayEvent) => void): () => void;
   /** Reads what the overlay draws on the active page. */
   snapshot(): Promise<ErrandOverlaySnapshot>;
+  /**
+   * Runs `dispatch` (GoatCitadel's own mouse or keyboard input) with the overlay's controls and Esc switched off, so
+   * automation input is never mistaken for the operator's. Every action the errand loop sends must go through this.
+   */
+  withAutomationInput<T>(dispatch: () => Promise<T>): Promise<T>;
 }
 
 /** The launcher-side controls: attaching pages and hiding the overlay around a model capture. */
 export interface ErrandOverlayController extends ErrandOverlay {
   attach(page: Page): Promise<void>;
-  /** Runs `capture` with the overlay hidden on the active page, then restores it. */
+  /** Runs `capture` with the overlay verified hidden on the active page, then restores it; refuses otherwise. */
   withOverlayHidden<T>(capture: () => Promise<T>): Promise<T>;
+}
+
+export class ErrandOverlayError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options);
+    this.name = "ErrandOverlayError";
+  }
+}
+
+/** A CDP call to the overlay world did not answer within ERRAND_OVERLAY_CDP_TIMEOUT_MS. */
+export class ErrandOverlayTimeoutError extends ErrandOverlayError {
+  constructor(what: string) {
+    super(`The errand overlay did not answer ${what} in time.`);
+    this.name = "ErrandOverlayTimeoutError";
+  }
 }
 
 const HIDDEN: ErrandOverlayState = { mode: "hidden" };
 const EVENT_TYPES = new Set(["approve", "deny", "take_over", "hand_back", "stop"]);
 const MAX_PAYLOAD_LENGTH = 512;
+/** Every CDP call the overlay makes on the hot path gives up after this long instead of wedging the caller. */
+export const ERRAND_OVERLAY_CDP_TIMEOUT_MS = 3_000;
+/** Input reported this soon after automation input ends is still treated as automation's. */
+const AUTOMATION_GRACE_MS = 150;
+const HIDE_RETRY_DELAY_MS = 100;
+
+interface WorldResult {
+  installed: boolean;
+  displayed?: boolean;
+}
 
 interface PageOverlay {
   ready: Promise<void>;
   applied(): ErrandOverlayState;
   apply(state: ErrandOverlayState): Promise<void>;
-  setSuspended(suspended: boolean): Promise<void>;
+  /** Resolves with the host's actual state after the change; rejects when the world could not be reached. */
+  setSuspended(suspended: boolean): Promise<WorldResult>;
+  setAutomationInput(active: boolean): Promise<void>;
   snapshot(): Promise<ErrandOverlaySnapshot>;
   dispose(): void;
 }
@@ -86,10 +118,12 @@ export function createErrandOverlay(activePage: () => Page): ErrandOverlayContro
   const pages = new Map<Page, PageOverlay>();
   const listeners = new Set<(event: ErrandOverlayEvent) => void>();
   let lastState: ErrandOverlayState = HIDDEN;
+  let automationDepth = 0;
+  let automationEndedAt = Number.NEGATIVE_INFINITY;
 
   const emit = (page: Page, event: ErrandOverlayEvent): void => {
-    // Only the page the operator is looking at may answer, and an answer must name the request it shows.
-    if (page !== activePage()) {
+    // Only the page the operator is looking at may answer, and never while GoatCitadel's own input is in flight.
+    if (page !== activePage() || automationDepth > 0 || Date.now() - automationEndedAt < AUTOMATION_GRACE_MS) {
       return;
     }
     for (const listener of [...listeners]) {
@@ -107,12 +141,34 @@ export function createErrandOverlay(activePage: () => Page): ErrandOverlayContro
     return overlay;
   };
 
+  const hideVerified = async (overlay: PageOverlay): Promise<void> => {
+    let failure: unknown;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      try {
+        const result = await overlay.setSuspended(true);
+        if (!result.installed || result.displayed === false) {
+          return;
+        }
+      } catch (error) {
+        failure = error;
+      }
+      await new Promise((resolve) => setTimeout(resolve, HIDE_RETRY_DELAY_MS));
+    }
+    throw new ErrandOverlayError("The errand overlay could not be hidden, so the model capture was refused.", {
+      cause: failure,
+    });
+  };
+
   return {
     async attach(page) {
       if (pages.has(page) || page.isClosed()) {
         return;
       }
-      const overlay = attachPageOverlay(page, (event) => emit(page, event));
+      const overlay = attachPageOverlay(
+        page,
+        (event) => emit(page, event),
+        () => automationDepth > 0,
+      );
       pages.set(page, overlay);
       page.once("close", () => {
         overlay.dispose();
@@ -148,13 +204,31 @@ export function createErrandOverlay(activePage: () => Page): ErrandOverlayContro
       }
       return overlay.snapshot();
     },
+    async withAutomationInput(dispatch) {
+      automationDepth += 1;
+      const overlay = await current();
+      try {
+        // Best effort: the Gateway-side guard in `emit` already drops anything reported while this runs.
+        await overlay?.setAutomationInput(true).catch(() => undefined);
+        return await dispatch();
+      } finally {
+        automationDepth -= 1;
+        if (automationDepth === 0) {
+          automationEndedAt = Date.now();
+          await overlay?.setAutomationInput(false).catch(() => undefined);
+        }
+      }
+    },
     async withOverlayHidden(capture) {
       const overlay = await current();
-      await overlay?.setSuspended(true);
+      if (!overlay) {
+        return capture();
+      }
       try {
+        await hideVerified(overlay);
         return await capture();
       } finally {
-        await overlay?.setSuspended(false);
+        await overlay.setSuspended(false).catch(() => undefined);
       }
     },
   };
@@ -164,12 +238,24 @@ function emptySnapshot(mode: ErrandOverlayState["mode"]): ErrandOverlaySnapshot 
   return { connected: false, displayed: false, mode, bannerText: null, notice: null, cursor: null, controls: {} };
 }
 
+function withTimeout<T>(work: Promise<T>, what: string): Promise<T> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => reject(new ErrandOverlayTimeoutError(what)), ERRAND_OVERLAY_CDP_TIMEOUT_MS);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer));
+}
+
 /**
  * One CDP session per page. The overlay runs in the "goatcitadel-errand" isolated world, and the binding it reports
  * through exists only in worlds of that name, so page script never sees either. A binding call is accepted only from
  * the errand world of the page's main frame, whose execution context ids are tracked from CDP itself.
  */
-function attachPageOverlay(page: Page, onEvent: (event: ErrandOverlayEvent) => void): PageOverlay {
+function attachPageOverlay(
+  page: Page,
+  onEvent: (event: ErrandOverlayEvent) => void,
+  automationActive: () => boolean,
+): PageOverlay {
   let session: CDPSession | undefined;
   let disposed = false;
   let mainFrameId: string | undefined;
@@ -177,33 +263,47 @@ function attachPageOverlay(page: Page, onEvent: (event: ErrandOverlayEvent) => v
   let applied: ErrandOverlayState = HIDDEN;
   let suspended = false;
 
-  const evaluate = async (expression: string, awaitPromise = false): Promise<unknown> => {
+  /** Evaluates in the errand world; rejects when the world is missing, the call fails, or it times out. */
+  const evaluateStrict = async (expression: string, awaitPromise = false): Promise<unknown> => {
     const contextId = worldContextId;
     if (!session || disposed || contextId === undefined) {
-      return undefined;
+      throw new ErrandOverlayError("The errand overlay world is not available in this document.");
     }
+    const response = await withTimeout(
+      session.send("Runtime.evaluate", { contextId, expression, awaitPromise, returnByValue: true }),
+      "a call",
+    );
+    if (response.exceptionDetails) {
+      throw new ErrandOverlayError(`The errand overlay call failed: ${response.exceptionDetails.text}`);
+    }
+    return response.result.value;
+  };
+
+  /** Like `evaluateStrict`, but a missing or replaced document is not an error (its successor re-applies state). */
+  const evaluate = async (expression: string, awaitPromise = false): Promise<unknown> => {
     try {
-      const response = await session.send("Runtime.evaluate", {
-        contextId,
-        expression,
-        awaitPromise,
-        returnByValue: true,
-      });
-      return response.exceptionDetails ? undefined : response.result.value;
-    } catch {
-      // The document went away mid-call; the next document re-applies the state when its world appears.
+      return await evaluateStrict(expression, awaitPromise);
+    } catch (error) {
+      if (error instanceof ErrandOverlayTimeoutError) {
+        throw error;
+      }
       return undefined;
     }
   };
 
-  const callApi = (method: string, argument: unknown, awaitPromise = false) =>
-    evaluate(`globalThis[${JSON.stringify(ERRAND_OVERLAY_API)}]?.${method}(${JSON.stringify(argument)})`, awaitPromise);
+  const apiCall = (method: string, argument: unknown): string => {
+    const api = `globalThis[${JSON.stringify(ERRAND_OVERLAY_API)}]`;
+    return `(${api} ? ${api}.${method}(${JSON.stringify(argument) ?? "undefined"}) : { installed: false })`;
+  };
 
   const restore = async (): Promise<void> => {
-    if (suspended) {
-      await callApi("setSuspended", true, true);
+    if (automationActive()) {
+      await evaluate(apiCall("setAutomationInput", true));
     }
-    await callApi("render", applied);
+    if (suspended) {
+      await evaluate(apiCall("setSuspended", true), true);
+    }
+    await evaluate(apiCall("render", applied));
   };
 
   const handleBinding = (payload: string): void => {
@@ -229,7 +329,7 @@ function attachPageOverlay(page: Page, onEvent: (event: ErrandOverlayEvent) => v
         return;
       }
       worldContextId = context.id;
-      void restore();
+      void restore().catch(() => undefined);
     });
     session.on("Runtime.executionContextDestroyed", ({ executionContextId }) => {
       if (executionContextId === worldContextId) {
@@ -280,15 +380,22 @@ function attachPageOverlay(page: Page, onEvent: (event: ErrandOverlayEvent) => v
     applied: () => applied,
     async apply(state) {
       applied = state;
-      await callApi("render", state);
+      await evaluate(apiCall("render", state));
     },
     async setSuspended(value) {
       suspended = value;
-      await callApi("setSuspended", value, true);
+      const result = (await evaluateStrict(apiCall("setSuspended", value), true)) as WorldResult | undefined;
+      if (!result || typeof result.installed !== "boolean") {
+        throw new ErrandOverlayError("The errand overlay did not report its state.");
+      }
+      return result;
+    },
+    async setAutomationInput(active) {
+      await evaluateStrict(apiCall("setAutomationInput", active));
     },
     async snapshot() {
-      const value = (await callApi("snapshot", undefined)) as ErrandOverlaySnapshot | undefined;
-      return value ?? emptySnapshot(applied.mode);
+      const value = (await evaluate(apiCall("snapshot", undefined))) as ErrandOverlaySnapshot | undefined;
+      return value && "mode" in value ? value : emptySnapshot(applied.mode);
     },
     dispose() {
       disposed = true;
