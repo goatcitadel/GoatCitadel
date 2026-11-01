@@ -66,7 +66,7 @@ export interface ErrandBrowser {
   runActions(
     actions: ComputerAction[],
     beforeAction: (action: ComputerAction, index: number) => Promise<"proceed" | "halt">,
-  ): Promise<{ ran: number; halted: boolean }>;
+  ): Promise<{ ran: number; halted: boolean; error?: string }>;
 }
 
 const VIEWPORT = { width: 1280, height: 800 } as const;
@@ -337,9 +337,13 @@ async function createErrandBrowser(
     }
   }
 
-  async function settle(ran: number, halted: boolean): Promise<{ ran: number; halted: boolean }> {
+  async function settle(
+    ran: number,
+    halted: boolean,
+    error?: string,
+  ): Promise<{ ran: number; halted: boolean; error?: string }> {
     await new Promise((resolve) => setTimeout(resolve, ACTION_SETTLE_MS));
-    return { ran, halted };
+    return error === undefined ? { ran, halted } : { ran, halted, error };
   }
 
   await overlay.attach(firstPage);
@@ -360,7 +364,12 @@ async function createErrandBrowser(
         }
         // Every mouse and keyboard action goes through the overlay's automation guard so Esc and the overlay's own
         // controls never mistake it for the operator.
-        await overlay.withAutomationInput(() => dispatchComputerAction(activePage, action));
+        try {
+          await overlay.withAutomationInput(() => dispatchComputerAction(activePage, action));
+        } catch (error) {
+          const detail = (error instanceof Error ? error.message : String(error)).split("\n")[0]?.trim() ?? "";
+          return await settle(ran, false, `action ${index + 1} (${action.type}) failed: ${detail}`);
+        }
         ran += 1;
       }
       return await settle(ran, false);

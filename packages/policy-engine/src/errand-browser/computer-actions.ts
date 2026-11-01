@@ -29,6 +29,8 @@ export interface ErrandTargetInfo {
   autocomplete?: string;
   isPasswordLike: boolean;
   isOneTimeCode: boolean;
+  /** The target is a cross-origin frame or an unreadable shadow host; only the host element is described. */
+  isOpaque: boolean;
   formSubmitText?: string;
   rect: { x: number; y: number; width: number; height: number };
 }
@@ -54,8 +56,51 @@ const MAX_KEYS = 8;
 const MAX_DRAG_POINTS = 64;
 const MAX_SCROLL = 10_000;
 
+/** Playwright's named keys, so "arrowdown" and "PAGEDOWN" resolve to "ArrowDown" and "PageDown". */
+const PLAYWRIGHT_NAMED_KEYS = [
+  "Backspace",
+  "Tab",
+  "Enter",
+  "Escape",
+  "Delete",
+  "Insert",
+  "Home",
+  "End",
+  "PageUp",
+  "PageDown",
+  "ArrowUp",
+  "ArrowDown",
+  "ArrowLeft",
+  "ArrowRight",
+  "Control",
+  "Shift",
+  "Alt",
+  "Meta",
+  "CapsLock",
+  "ContextMenu",
+  "Pause",
+  "NumLock",
+  "ScrollLock",
+  "PrintScreen",
+  "F1",
+  "F2",
+  "F3",
+  "F4",
+  "F5",
+  "F6",
+  "F7",
+  "F8",
+  "F9",
+  "F10",
+  "F11",
+  "F12",
+] as const;
+const NAMED_KEYS_BY_LOWERCASE: ReadonlyMap<string, string> = new Map(
+  PLAYWRIGHT_NAMED_KEYS.map((name) => [name.toLowerCase(), name]),
+);
+
 export function normalizeComputerKey(key: string): string {
-  return COMPUTER_KEY_ALIASES[key.toUpperCase()] ?? key;
+  return COMPUTER_KEY_ALIASES[key.toUpperCase()] ?? NAMED_KEYS_BY_LOWERCASE.get(key.toLowerCase()) ?? key;
 }
 
 /**

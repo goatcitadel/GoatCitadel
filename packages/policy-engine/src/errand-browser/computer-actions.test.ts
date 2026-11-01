@@ -22,6 +22,26 @@ document.addEventListener("keydown", function (e) { window.__keys.push(e.key); }
 </script>
 </body></html>`;
 
+const SHADOW_PAGE = `<html><body style="margin:0">
+<div id="host" style="position:absolute;left:20px;top:300px;width:220px;height:40px"></div>
+<script>
+var root = document.getElementById("host").attachShadow({ mode: "open" });
+root.innerHTML = '<input class="sp" type="password" style="width:200px;height:30px;margin:0">';
+</script>
+</body></html>`;
+
+const INNER_PAGE = `<html><body style="margin:0"><input id="ipw" type="password" style="width:200px;height:30px;margin:0"></body></html>`;
+
+const FRAME_PAGE = `<html><body style="margin:0">
+<iframe id="f" src="/inner" style="position:absolute;left:20px;top:400px;width:300px;height:100px;border:0"></iframe>
+</body></html>`;
+
+function crossOriginPage(otherOrigin: string): string {
+  return `<html><body style="margin:0">
+<iframe id="x" src="${otherOrigin}inner" style="position:absolute;left:20px;top:400px;width:300px;height:100px;border:0"></iframe>
+</body></html>`;
+}
+
 describe("normalizeComputerActions", () => {
   it("ignores irrelevant fields", () => {
     const result = normalizeComputerActions([
@@ -55,14 +75,27 @@ describe("normalizeComputerActions", () => {
 
 describe("errand browser computer actions", () => {
   let server: http.Server;
+  let otherServer: http.Server;
   let baseUrl: string;
+  let otherUrl: string;
   const openBrowsers: ErrandBrowser[] = [];
   const profileDirs: string[] = [];
 
   beforeAll(async () => {
-    server = http.createServer((_req, res) => {
+    otherServer = http.createServer((_req, res) => {
       res.setHeader("content-type", "text/html");
-      res.end(PAGE);
+      res.end(INNER_PAGE);
+    });
+    await new Promise<void>((resolve) => otherServer.listen(0, "127.0.0.1", resolve));
+    otherUrl = `http://127.0.0.1:${(otherServer.address() as AddressInfo).port}/`;
+    server = http.createServer((req, res) => {
+      res.setHeader("content-type", "text/html");
+      const route = req.url ?? "/";
+      if (route.startsWith("/shadow")) res.end(SHADOW_PAGE);
+      else if (route.startsWith("/inner")) res.end(INNER_PAGE);
+      else if (route.startsWith("/frame")) res.end(FRAME_PAGE);
+      else if (route.startsWith("/xorigin")) res.end(crossOriginPage(otherUrl));
+      else res.end(PAGE);
     });
     await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
     baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}/`;
@@ -70,6 +103,7 @@ describe("errand browser computer actions", () => {
 
   afterAll(async () => {
     await new Promise<void>((resolve) => server.close(() => resolve()));
+    await new Promise<void>((resolve) => otherServer.close(() => resolve()));
   });
 
   afterEach(async () => {
@@ -81,7 +115,7 @@ describe("errand browser computer actions", () => {
     }
   });
 
-  async function launch(): Promise<ErrandBrowser> {
+  async function launch(route = ""): Promise<ErrandBrowser> {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "errand-actions-"));
     profileDirs.push(dir);
     const browser = await launchErrandBrowser({
@@ -90,7 +124,7 @@ describe("errand browser computer actions", () => {
       networkAllowlist: ["127.0.0.1"],
     });
     openBrowsers.push(browser);
-    await browser.page().goto(baseUrl);
+    await browser.page().goto(baseUrl + route);
     return browser;
   }
 
@@ -143,6 +177,65 @@ describe("errand browser computer actions", () => {
     await browser.page().focus("#pw");
     const info = await browser.describeFocused();
     expect(info?.isPasswordLike).toBe(true);
+  }, 60_000);
+
+  it("describeTarget and describeFocused see a password field inside an open shadow root", async () => {
+    const browser = await launch("shadow");
+    const byPoint = await browser.describeTarget(30, 310);
+    expect(byPoint?.isPasswordLike).toBe(true);
+    expect(byPoint?.isOpaque).toBe(false);
+    await browser.page().evaluate(() => {
+      (document.getElementById("host")!.shadowRoot!.querySelector("input") as HTMLInputElement).focus();
+    });
+    const focused = await browser.describeFocused();
+    expect(focused?.isPasswordLike).toBe(true);
+    expect(focused?.rect.y).toBe(300);
+  }, 60_000);
+
+  it("describeTarget and describeFocused see a password field inside a same-origin iframe", async () => {
+    const browser = await launch("frame");
+    await browser.page().waitForLoadState("load");
+    const byPoint = await browser.describeTarget(30, 410);
+    expect(byPoint?.isPasswordLike).toBe(true);
+    expect(byPoint?.isOpaque).toBe(false);
+    await browser.page().frames()[1]!.focus("#ipw");
+    const focused = await browser.describeFocused();
+    expect(focused?.isPasswordLike).toBe(true);
+    expect(focused?.rect).toMatchObject({ x: 20, y: 400 });
+  }, 60_000);
+
+  it("flags a cross-origin iframe as opaque", async () => {
+    const browser = await launch("xorigin");
+    await browser.page().waitForLoadState("load");
+    const byPoint = await browser.describeTarget(30, 410);
+    expect(byPoint?.tagName).toBe("iframe");
+    expect(byPoint?.isOpaque).toBe(true);
+    await browser.page().evaluate(() => document.getElementById("x")!.focus());
+    const focused = await browser.describeFocused();
+    expect(focused?.tagName).toBe("iframe");
+    expect(focused?.isOpaque).toBe(true);
+  }, 60_000);
+
+  it("accepts case-insensitive named keys", async () => {
+    const browser = await launch();
+    const { actions } = normalizeComputerActions([{ type: "keypress", keys: ["arrowdown"] }]);
+    const result = await browser.runActions(actions, async () => "proceed");
+    expect(result).toEqual({ ran: 1, halted: false });
+    const keys = await browser.page().evaluate(() => (window as unknown as { __keys: string[] }).__keys);
+    expect(keys).toEqual(["ArrowDown"]);
+  }, 60_000);
+
+  it("returns a dispatch error instead of throwing and stops at the bad action", async () => {
+    const browser = await launch();
+    const actions: ComputerAction[] = [
+      { type: "move", x: 10, y: 10 },
+      { type: "keypress", keys: ["NotAKey"] },
+      { type: "move", x: 20, y: 20 },
+    ];
+    const result = await browser.runActions(actions, async () => "proceed");
+    expect(result.ran).toBe(1);
+    expect(result.halted).toBe(false);
+    expect(result.error).toContain("action 2");
   }, 60_000);
 
   it("runActions halts before the second action", async () => {
