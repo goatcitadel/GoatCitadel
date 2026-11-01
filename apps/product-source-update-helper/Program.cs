@@ -580,7 +580,7 @@ internal static partial class Program
         {
             Task.WaitAll(stdoutTask, stderrTask);
         }
-        catch (AggregateException error) when (error.InnerExceptions.OfType<HelperException>().FirstOrDefault() is { } limit)
+        catch (AggregateException error) when (IsRecoverable(error) && error.InnerExceptions.OfType<HelperException>().FirstOrDefault() is { } limit)
         {
             throw limit;
         }
@@ -825,8 +825,13 @@ internal static partial class Program
     // cs/catch-of-all-exceptions: the helper's outcome boundaries catch every recoverable failure so the
     // journal and result file always record one, but a fatal runtime failure must crash the process
     // (non-zero exit, no result file) instead of journaling and rolling back on a corrupt runtime.
-    private static bool IsRecoverable(Exception error) =>
-        error is not (OutOfMemoryException or StackOverflowException or AccessViolationException);
+    // Task.WaitAll wraps reader failures, so a fatal failure inside an aggregate is fatal too.
+    private static bool IsRecoverable(Exception error) => error switch
+    {
+        OutOfMemoryException or StackOverflowException or AccessViolationException => false,
+        AggregateException aggregate => aggregate.Flatten().InnerExceptions.All(IsRecoverable),
+        _ => true,
+    };
 
     private static string FailureCode(Exception error) => error is HelperException helper ? helper.Code : "native_helper_failed";
 
