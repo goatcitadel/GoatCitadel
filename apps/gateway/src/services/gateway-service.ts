@@ -422,7 +422,7 @@ import type { ChatTurnCapabilityProfileRecord, McpRequesterScopeAuthActorSource 
 import { AgentSubagentDefaultsSchema, BUILTIN_AGENT_PROFILES } from "@goatcitadel/contracts";
 import type { GatewayRuntimeConfig } from "../config.js";
 import type { OrchestrationCheckpoint } from "@goatcitadel/storage";
-import { getRequestAttribution, runWithIsolatedRequestAttribution } from "@goatcitadel/storage";
+import { getRequestAttribution } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
 import {
   resolveBackgroundJobModel,
@@ -581,7 +581,7 @@ import {
 } from "./shared-host-lifecycle-service.js";
 import { createJourneyTimelineRouteService } from "./journey-timeline-route-service.js";
 import { JourneyTimelineService } from "./journey-timeline-service.js";
-import { OpsSavedBoardService } from "./ops-saved-board-service.js";
+import { composeOpsSavedBoards } from "./ops-saved-board-composition.js";
 import { createExternalSourceRouteService } from "./external-source-route-service.js";
 import { ExternalSourceImportServiceError } from "./external-source-import-service.js";
 import {
@@ -3877,40 +3877,12 @@ export class GatewayService {
         path.resolve(this.config.rootDir, this.config.assistant.dataDir ?? "data", "external-sources"),
       ),
       workspacePathBridge: this.workspacePathBridgeRuntime.service,
-      opsSavedBoards: new OpsSavedBoardService(this.storage, {
-        realtimeEpoch: this.opsSavedBoardRealtimeEpoch,
-        publishChange: async (signal) => {
-          await runWithIsolatedRequestAttribution({}, async () => {
-            await this.publishRealtime(
-              "ops_saved_board_changed",
-              "ops_saved_boards",
-              { ...signal },
-              {
-                eventClass: "operational_signal",
-                eventAuthority: "retained_stream",
-                links: { workspaceId: signal.workspaceId },
-              },
-            );
-          });
-        },
-        reportPublicationFailure: (_error, signal) => {
-          this.recordDevDiagnostic({
-            level: "warn",
-            category: "ops_boards",
-            event: "ops_saved_board.realtime_projection_failed",
-            message: "Saved board mutation committed before retained realtime publication failed.",
-            runtimeKind: "ops_saved_board.realtime",
-            runtimeStatus: "degraded",
-            context: {
-              workspaceId: signal.workspaceId,
-              boardId: signal.boardId,
-              revision: signal.revision,
-              epoch: signal.epoch,
-              operation: signal.operation,
-            },
-          });
-        },
-      }),
+      opsSavedBoards: composeOpsSavedBoards(
+        this.storage,
+        this.opsSavedBoardRealtimeEpoch,
+        (eventType, source, payload, options) => this.publishRealtime(eventType, source, payload, options),
+        (input) => this.recordDevDiagnostic(input),
+      ),
       journeyTimeline: createJourneyTimelineRouteService(
         new JourneyTimelineService(this.storage.governanceJourneyEvents),
       ),
