@@ -7,6 +7,7 @@ import {
   createMcpServer,
   deleteMcpServer,
   disconnectMcpServer,
+  releaseMcpServerFromPlugin,
   resolveConnectedMcpTools,
   startMcpOAuth,
   updateMcpServer,
@@ -824,6 +825,129 @@ describe("mcp-server-admin-service", () => {
     expect(host.resolveMcpOAuthClientId).not.toHaveBeenCalled();
     expect(host.readMcpAuthState).not.toHaveBeenCalled();
     expect(host.writeMcpAuthState).not.toHaveBeenCalled();
+  });
+
+  it("refuses editing or removing a plugin's connector, and still switches it and signs it in", async () => {
+    const pluginOwner = { pluginId: "meeting-tools", name: "Meeting tools", installPlanId: "plan-install-1" };
+    const pass = { pluginId: pluginOwner.pluginId, installPlanId: pluginOwner.installPlanId };
+    const refusal = {
+      name: "PluginOwnedError",
+      code: "PLUGIN_OWNED",
+      httpStatus: 409,
+      message: "From Meeting tools. Uninstall it to remove this.",
+      details: { pluginId: "meeting-tools" },
+    };
+    // A plain create never marks a server; only the plugin service's trailing option does.
+    const creating = createHost();
+    const plain = await createMcpServer(creating, { label: "Plain", transport: "stdio", command: "node" });
+    expect(plain.pluginOwner).toBeUndefined();
+    const created = await createMcpServer(
+      creating,
+      { label: "Plugin tool", transport: "stdio", command: "node", enabled: false },
+      undefined,
+      undefined,
+      undefined,
+      pluginOwner,
+    );
+    expect(created).toMatchObject({ enabled: false, pluginOwner });
+    expect(creating.servers.find((server) => server.serverId === created.serverId)?.pluginOwner).toEqual(pluginOwner);
+
+    const serverId = "plugin-server";
+    const host = createHost({
+      servers: [
+        createServer({ serverId: "plain-server" }),
+        createServer({
+          serverId,
+          label: "Linear",
+          authType: "oauth2",
+          url: "https://mcp.example/events",
+          oauth: { authorizationUrl: "https://mcp.example/authorize", tokenUrl: "https://mcp.example/token" },
+          enabled: false,
+          pluginOwner,
+        }),
+      ],
+      resolveConnectedMcpTools: vi.fn(async () => []),
+      exchangeMcpOAuthCode: vi.fn(async (_server, _code, authRow) => ({
+        ...authRow,
+        accessTokenRef: "keychain:goatcitadel:mcp:plugin-server:access-token",
+        oauthState: undefined,
+        updatedAt: "2026-10-31T00:00:00.000Z",
+      })),
+    });
+    const saved = () => host.servers.find((server) => server.serverId === serverId)!;
+    const writes = () => host.writeMcpServers.mock.calls.length;
+    const before = writes();
+
+    for (const attempt of [
+      () => updateMcpServer(host, serverId, { label: "Renamed" }),
+      () => updateMcpServer(host, serverId, { enabled: true, url: "https://mcp.example/other" }),
+      () => updateMcpServer(host, serverId, { label: "Renamed" }, { planId: "pack-plan", phase: "apply" }),
+      () => updateMcpServerPolicy(host, serverId, { approvalPosture: "everything_asks" }),
+      () => updateMcpServer(host, serverId, { label: "Renamed" }, undefined, undefined, { ...pass, pluginId: "other" }),
+      () =>
+        updateMcpServer(host, serverId, { label: "Renamed" }, undefined, undefined, { ...pass, installPlanId: "x" }),
+      () => deleteMcpServer(host, serverId),
+      () => deleteMcpServer(host, serverId, { expectedRevision: mcpServerRevision(saved()) }),
+    ]) {
+      await expect(attempt()).rejects.toMatchObject(refusal);
+    }
+    expect(writes()).toBe(before);
+    expect(saved()).toMatchObject({ label: "Linear", pluginOwner });
+
+    // Switching it on and off is not an edit, with or without the reviewed revision the route sends along.
+    const on = await updateMcpServer(host, serverId, { enabled: true });
+    expect(on).toMatchObject({ enabled: true, pluginOwner });
+    const reviewed = { enabled: false, expectedRevision: mcpServerRevision(on) };
+    const off = await updateMcpServer(host, serverId, reviewed, undefined, {
+      expectedRevision: reviewed.expectedRevision,
+    });
+    expect(off).toMatchObject({ enabled: false, pluginOwner });
+
+    // Signing in, connecting and disconnecting stay allowed.
+    const started = await startMcpOAuth(host, serverId);
+    await completeMcpOAuth(host, serverId, "plugin-code", started.state);
+    expect(host.exchangeMcpOAuthCode).toHaveBeenCalledTimes(1);
+    await expect(disconnectMcpServer(host, serverId)).resolves.toMatchObject({ status: "disconnected" });
+    await expect(connectMcpServer(host, serverId)).resolves.toMatchObject({ status: "connected" });
+
+    // The plugin service's own pass edits and removes it.
+    const edited = await updateMcpServerPolicy(host, serverId, { approvalPosture: "everything_asks" }, undefined, pass);
+    expect(edited).toMatchObject({ policy: { approvalPosture: "everything_asks" }, pluginOwner });
+    await expect(deleteMcpServer(host, serverId, undefined, pass)).resolves.toEqual({ deleted: true });
+    expect(host.servers.map((server) => server.serverId)).toEqual(["plain-server"]);
+    // Removing a server nobody added is unchanged.
+    await expect(deleteMcpServer(host, "plain-server")).resolves.toEqual({ deleted: true });
+  });
+
+  it("hands a plugin's connector to the operator only with that plugin's own pass, changing nothing else", async () => {
+    const pluginOwner = { pluginId: "meeting-tools", name: "Meeting tools", installPlanId: "plan-install-1" };
+    const pass = { pluginId: pluginOwner.pluginId, installPlanId: pluginOwner.installPlanId };
+    const serverId = "plugin-server";
+    const host = createHost({
+      servers: [createServer({ serverId, label: "Linear", enabled: true, pluginOwner })],
+    });
+    const saved = () => host.servers.find((server) => server.serverId === serverId)!;
+    const before = saved();
+    const writes = host.writeMcpServers.mock.calls.length;
+
+    for (const wrongPass of [undefined, { ...pass, pluginId: "other" }, { ...pass, installPlanId: "x" }]) {
+      await expect(releaseMcpServerFromPlugin(host, serverId, wrongPass as never)).rejects.toMatchObject({
+        name: "PluginOwnedError",
+        httpStatus: 409,
+      });
+    }
+    expect(host.writeMcpServers.mock.calls.length).toBe(writes);
+    expect(saved()).toEqual(before);
+
+    const released = await releaseMcpServerFromPlugin(host, serverId, pass);
+
+    expect(released.pluginOwner).toBeUndefined();
+    const { pluginOwner: _mark, updatedAt: _updatedAt, ...unchanged } = before;
+    expect(saved()).toMatchObject(unchanged);
+    expect(saved()).not.toHaveProperty("pluginOwner");
+    // Now the operator's own: a plain edit and a plain delete go through.
+    await expect(updateMcpServer(host, serverId, { label: "Renamed" })).resolves.toMatchObject({ label: "Renamed" });
+    await expect(deleteMcpServer(host, serverId)).resolves.toEqual({ deleted: true });
   });
 
   it("deletes servers, tools, approval inbox entries, and emits realtime only when present", async () => {

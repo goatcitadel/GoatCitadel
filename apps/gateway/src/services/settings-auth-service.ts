@@ -127,7 +127,9 @@ import {
   applyToolGroupChange,
   projectGlobalToolAccess,
   projectOperatorWriteRoots,
+  projectPluginToolGroupHolds,
   projectSwitchedOffToolGroups,
+  unionSwitchedOffToolGroups,
 } from "./settings-operator-write-access.js";
 import {
   deriveApprovalResolutionEffectsResult,
@@ -164,6 +166,8 @@ export interface SettingsRuntimeDependencies {
   updateFeatureFlags(patch: Partial<RuntimeSettings["features"]>): Promise<RuntimeSettings["features"]>;
   assertDeploymentProfileUpdate(input: UpdateSettingsInput): void;
   assertFirecrawlRuntimeUpdate(input: UpdateSettingsInput): void;
+  /** The groups installed plugins hold off, as the policy engine holds them. Absent means none are held. */
+  readPluginToolGroupHolds?(): readonly { groupId: string; pluginId: string; pluginName: string }[];
 }
 
 export interface SettingsAuthRuntimeDependencies {
@@ -204,8 +208,11 @@ export interface SettingsAuthRuntimeDependencies {
 
 export async function getSettings(deps: SettingsRuntimeDependencies): Promise<RuntimeSettings> {
   const features = await deps.readFeatureFlags();
-  const toolPolicy = deps.config.toolPolicy;
-  const assistant = deps.config.assistant;
+  const config = deps.config;
+  const toolPolicy = config.toolPolicy;
+  const assistant = config.assistant;
+  const pluginToolGroupHolds = projectPluginToolGroupHolds(deps.readPluginToolGroupHolds?.() ?? []);
+  const operatorSwitchedOffToolGroups = projectSwitchedOffToolGroups(toolPolicy);
   return {
     chatFeatureAvailability: projectChatFeatureAvailability(
       assistant.durable ?? { enabled: false, executionEnabled: false },
@@ -215,14 +222,16 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     environment: assistant.environment,
     deploymentProfile: assistant.deploymentProfile,
     toolApprovalMode: toolPolicy.tools.approvalMode ?? assistant.toolApprovalMode ?? "approve_risky",
-    budgetMode: deps.config.budgets.mode,
+    budgetMode: config.budgets.mode,
     workspaceDir: assistant.workspaceDir,
     ...(assistant.publicWebAddress ? { publicWebAddress: assistant.publicWebAddress } : {}),
     writeJailRoots: toolPolicy.sandbox.writeJailRoots,
     readOnlyRoots: toolPolicy.sandbox.readOnlyRoots,
     operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
     globalToolAccess: projectGlobalToolAccess(toolPolicy),
-    switchedOffToolGroups: projectSwitchedOffToolGroups(toolPolicy),
+    switchedOffToolGroups: unionSwitchedOffToolGroups(operatorSwitchedOffToolGroups, pluginToolGroupHolds),
+    operatorSwitchedOffToolGroups,
+    pluginToolGroupHolds,
     readAccessMode: toolPolicy.sandbox.readAccessMode ?? "roots_only",
     outsideRootWriteMode: toolPolicy.sandbox.outsideRootWriteMode ?? "deny",
     networkAllowlist: toolPolicy.sandbox.networkAllowlist,
@@ -405,6 +414,13 @@ export interface UpdateSettingsInput {
   features?: Partial<RuntimeSettings["features"]>;
 }
 
+/**
+ * A plugin install's own settings write: the hooks allowlist (`toolPolicy.hooks.networkAllowlist`) replaced whole,
+ * beside any settings fields, under the same revision fence, and kept with the tool policy as the sandbox list is. It
+ * is internal only: no route's schema and no `UpdateSettingsInput` field carries it.
+ */
+export type PluginInstallSettingsUpdate = UpdateSettingsInput & { readonly hookNetworkAllowlist?: readonly string[] };
+
 export interface SettingsConfigCandidate {
   config: GatewayRuntimeConfig;
   features: RuntimeSettings["features"];
@@ -488,6 +504,8 @@ export async function buildSettingsCandidate(
     },
     assertDeploymentProfileUpdate: (input) => deps.assertDeploymentProfileUpdate(input),
     assertFirecrawlRuntimeUpdate: (input) => deps.assertFirecrawlRuntimeUpdate(input),
+    // A candidate reads the live holds; a settings change never writes them.
+    readPluginToolGroupHolds: () => deps.readPluginToolGroupHolds?.() ?? [],
   };
 
   let settings: RuntimeSettings;
@@ -533,9 +551,10 @@ export async function updateSettings(
   }
 
   if (input.toolApprovalMode) {
-    deps.config.toolPolicy.tools.approvalMode = input.toolApprovalMode;
-    deps.config.assistant.toolApprovalMode = input.toolApprovalMode;
-    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
+    const config = deps.config;
+    config.toolPolicy.tools.approvalMode = input.toolApprovalMode;
+    config.assistant.toolApprovalMode = input.toolApprovalMode;
+    deps.llmService.updateNetworkAllowlist(config.toolPolicy.sandbox.networkAllowlist, {
       enforce: true,
     });
   }
@@ -548,13 +567,20 @@ export async function updateSettings(
     deps.config.toolPolicy.sandbox.readAccessMode = input.readAccessMode;
   }
 
-  if (input.networkAllowlist) {
-    deps.config.toolPolicy.sandbox.networkAllowlist = input.networkAllowlist
-      .map((host_) => host_.trim())
-      .filter(Boolean);
-    deps.llmService.updateNetworkAllowlist(deps.config.toolPolicy.sandbox.networkAllowlist, {
-      enforce: true,
-    });
+  // The hooks allowlist is a plugin install's own internal write (`PluginInstallSettingsUpdate`), never a route's.
+  const hookNetworkAllowlist = (input as PluginInstallSettingsUpdate).hookNetworkAllowlist;
+  if (input.networkAllowlist || hookNetworkAllowlist) {
+    const toolPolicy = deps.config.toolPolicy;
+    if (input.networkAllowlist) {
+      toolPolicy.sandbox.networkAllowlist = input.networkAllowlist.map((host_) => host_.trim()).filter(Boolean);
+      deps.llmService.updateNetworkAllowlist(toolPolicy.sandbox.networkAllowlist, { enforce: true });
+    }
+    if (hookNetworkAllowlist) {
+      toolPolicy.hooks = {
+        ...toolPolicy.hooks,
+        networkAllowlist: hookNetworkAllowlist.map((host_) => host_.trim()).filter(Boolean),
+      };
+    }
   }
 
   if (
@@ -566,7 +592,9 @@ export async function updateSettings(
     const toolPolicy = deps.config.toolPolicy;
     if (input.operatorWriteRootChange) applyOperatorWriteRootChange(toolPolicy, input.operatorWriteRootChange);
     if (input.globalToolAccessChange) applyGlobalToolAccessChange(toolPolicy, input.globalToolAccessChange);
-    if (input.toolGroupChange) applyToolGroupChange(toolPolicy, input.toolGroupChange);
+    // Switching on a group a plugin holds is refused here, at prepare (through a candidate) and again at apply.
+    if (input.toolGroupChange)
+      applyToolGroupChange(toolPolicy, input.toolGroupChange, deps.readPluginToolGroupHolds?.() ?? []);
     if (input.outsideRootWriteMode) toolPolicy.sandbox.outsideRootWriteMode = input.outsideRootWriteMode;
   }
 

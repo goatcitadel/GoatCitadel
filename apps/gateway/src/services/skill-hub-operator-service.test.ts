@@ -100,6 +100,60 @@ describe("SkillHubOperatorService", () => {
     });
   });
 
+  it("reads a check by its id at its true state after newer checks pushed it out of the newest 100", async () => {
+    const switchedOn = snapshot({ snapshotId: "snapshot-v1", createdAt: "2026-07-14T00:00:00.000Z" });
+    const newer = Array.from({ length: 100 }, (_, index) =>
+      snapshot({
+        snapshotId: `snapshot-newer-${index}`,
+        canonicalSourceKey: `clawhub/newer-${index}`,
+        compatibility: { skillId: `extra:newer-${index}`, compatible: true },
+        createdAt: `2026-07-14T01:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const otherWorkspace = snapshot({ snapshotId: "snapshot-elsewhere", workspaceId: "workspace-2" });
+    const harness = createHarness({
+      snapshots: [...newer, switchedOn, otherWorkspace],
+      candidates: [
+        candidateVersion({
+          versionId: "version-v1",
+          upstreamSnapshotId: switchedOn.snapshotId,
+          sourceFingerprint: switchedOn.contentTreeSha256,
+          lifecycleState: "approved",
+        }),
+      ],
+      lifecycle: activeLifecycle(switchedOn),
+    });
+
+    const listed = await harness.service.list({ workspaceId: "workspace-1", limit: 100 });
+    expect(listed.items.map((item) => item.snapshotId)).not.toContain("snapshot-v1");
+
+    const found = await harness.service.list({
+      workspaceId: "workspace-1",
+      snapshotIds: ["snapshot-v1", "snapshot-v1", "snapshot-elsewhere", "snapshot-missing"],
+    });
+
+    // Another workspace's check and one that isn't there are left out; the same id is read once.
+    expect(found.items.map((item) => item.snapshotId)).toEqual(["snapshot-v1"]);
+    expect(found.page).toMatchObject({ returned: 1, truncated: false });
+    expect(found.items[0]).toMatchObject({
+      skillId: "extra:demo",
+      candidate: { versionId: "version-v1", lifecycleState: "approved" },
+      runtime: { activeVersion: true, inactiveCandidate: false },
+    });
+    expect(
+      (await harness.service.list({ workspaceId: "workspace-1", snapshotIds: ["snapshot-missing"] })).items,
+    ).toEqual([]);
+    // Read by id, no newest page is listed at all.
+    expect(harness.storage.skillHubSnapshots.listByWorkspace).toHaveBeenCalledTimes(1);
+    await expect(
+      harness.service.list({
+        workspaceId: "workspace-1",
+        snapshotIds: Array.from({ length: 101 }, (_, index) => `snapshot-${index}`),
+      }),
+    ).rejects.toThrow("Skill Hub reads at most 100 checks by id at once.");
+    expect(harness.createApproval).not.toHaveBeenCalled();
+  });
+
   it("builds exact server-derived intents for all five lifecycle kinds", async () => {
     const v1Snapshot = snapshot({
       snapshotId: "snapshot-v1",
@@ -247,6 +301,90 @@ describe("SkillHubOperatorService", () => {
         actorId: "operator-1",
       }),
     ).rejects.toThrow(/RUNTIME_LINEAGE_MISSING/u);
+  });
+
+  it("refuses staging an update for a plugin's skill", async () => {
+    const fromPlugin = {
+      sourceProvider: "goatcitadel_plugin",
+      sourceType: "local_path",
+      sourceRef: "plugin:meeting-tools/meeting-notes@content:" + "a".repeat(64),
+      canonicalSourceKey: "plugin:meeting-tools/meeting-notes",
+    };
+    const v1Snapshot = snapshot({ ...fromPlugin, snapshotId: "snapshot-v1", createdAt: "2026-07-14T00:01:00.000Z" });
+    const v2Snapshot = snapshot({
+      ...fromPlugin,
+      snapshotId: "snapshot-v2",
+      contentTreeSha256: "2".repeat(64),
+      declaredVersion: "2.0.0",
+      priorSnapshotId: "snapshot-v1",
+      operation: "update_stage",
+      createdAt: "2026-07-14T00:02:00.000Z",
+    });
+    const rollbackSnapshot = snapshot({
+      ...fromPlugin,
+      snapshotId: "snapshot-rollback",
+      priorSnapshotId: "snapshot-v2",
+      operation: "rollback_check",
+      createdAt: "2026-07-14T00:03:00.000Z",
+    });
+    const v1 = candidateVersion({
+      versionId: "version-v1",
+      upstreamSnapshotId: "snapshot-v1",
+      sourceFingerprint: v1Snapshot.contentTreeSha256,
+    });
+    const harness = createHarness({
+      snapshots: [rollbackSnapshot, v2Snapshot, v1Snapshot],
+      candidates: [v1],
+      lifecycle: activeLifecycle(v1Snapshot),
+    });
+    const request = (snapshotId: string, operationKind: SkillHubOperationIntentTemplate["operationKind"]) => ({
+      workspaceId: "workspace-1",
+      snapshotId,
+      operationKind,
+      actorId: "operator-1",
+    });
+    const refusal = {
+      name: "PluginOwnedError",
+      code: "PLUGIN_OWNED",
+      httpStatus: 409,
+      message: "This skill came with a plugin that isn't installed.",
+      details: { pluginId: "meeting-tools" },
+    };
+
+    for (const [snapshotId, operationKind] of [
+      ["snapshot-v2", "stage_update_candidate"],
+      ["snapshot-rollback", "stage_rollback_candidate"],
+      ["snapshot-v1", "install_inactive"],
+      ["snapshot-v1", "activate"],
+      ["snapshot-v1", "revoke"],
+    ] as const) {
+      await expect(harness.service.createApproval(request(snapshotId, operationKind))).rejects.toMatchObject(refusal);
+      // Another plugin's pass is no pass.
+      await expect(
+        harness.service.createApproval(request(snapshotId, operationKind), {
+          pluginPass: { pluginId: "other-plugin" },
+        }),
+      ).rejects.toMatchObject(refusal);
+    }
+    expect(harness.createApproval).not.toHaveBeenCalled();
+
+    // The list still reads each check's own guards; the refusal is the approval's alone. The plugin's own pass asks
+    // for the approval as before.
+    const passing = createHarness({
+      snapshots: [v2Snapshot, v1Snapshot],
+      candidates: [v1],
+      lifecycle: activeLifecycle(v1Snapshot),
+    });
+    const listed = await passing.service.list({ workspaceId: "workspace-1" });
+    expect(listed.items.find((item) => item.snapshotId === "snapshot-v2")?.actions.stage_update_candidate).toEqual({
+      allowed: true,
+      blockers: [],
+    });
+    const created = await passing.service.createApproval(request("snapshot-v2", "stage_update_candidate"), {
+      pluginPass: { pluginId: "meeting-tools" },
+    });
+    expect(created.reused).toBe(false);
+    expect(passing.createApproval).toHaveBeenCalledTimes(1);
   });
 
   it("rejects turn lineage without a parent session before creating an approval", async () => {

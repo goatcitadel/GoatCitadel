@@ -90,7 +90,8 @@ export type PluginPin = { kind: "commit"; commit: string } | { kind: "content"; 
 // The strict schema (rule 8, after the named refusals)
 // ---------------------------------------------------------------------------
 
-const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/u;
+/** A plugin id in a manifest: 2 to 48 lowercase letters, digits or hyphens, starting with a letter or digit. */
+export const PLUGIN_ID_PATTERN = /^[a-z0-9][a-z0-9-]{1,47}$/u;
 /** A piece id in a plugin manifest. The Skill Hub review checks a plugin skill's id against the same rule. */
 export const PLUGIN_PIECE_ID_PATTERN = /^[a-z0-9-]{1,48}$/u;
 const VERSION_PATTERN = /^[0-9A-Za-z.+-]+$/u;
@@ -98,6 +99,17 @@ const VERSION_PATTERN = /^[0-9A-Za-z.+-]+$/u;
 const REFERENCE_ID_PATTERN = /^[a-z0-9][a-z0-9_.-]{0,63}$/u;
 const MAX_PATH_LENGTH = 512;
 const MAX_URL_LENGTH = 2048;
+
+/*
+ * The characters a manifest's text may not hold (R77), as text holding one could read otherwise than it is. A name or
+ * an author holds none of the C0 or C1 controls, the line and paragraph separators (U+2028, U+2029) or the bidi controls
+ * (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069). A description may keep tabs and line breaks. Every
+ * other format character, such as an emoji's zero-width joiner or a soft hyphen, passes.
+ */
+const NAME_FORBIDDEN = /[\p{Cc}\u2028\u2029\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const DESCRIPTION_FORBIDDEN = /(?![\t\n\r])\p{Cc}|[\u061C\u200E\u200F\u202A-\u202E\u2066-\u2069]/u;
+const CONTROL_CHARACTERS_MESSAGE = "must not hold control characters";
+const withoutForbidden = (forbidden: RegExp) => (value: string) => !forbidden.test(value);
 
 const pieceId = z.string().regex(PLUGIN_PIECE_ID_PATTERN, "must be 1 to 48 lowercase letters, digits or hyphens");
 const referenceId = z.string().regex(REFERENCE_ID_PATTERN, "must be a plain lowercase id");
@@ -140,10 +152,17 @@ export const pluginManifestSchema = z
   .object({
     schemaVersion: z.literal(1),
     pluginId: z.string().regex(PLUGIN_ID_PATTERN, "must be 2 to 48 lowercase letters, digits or hyphens"),
-    name: z.string().min(1).max(80),
-    description: z.string().min(1).max(500),
+    // A name only of spaces would leave every "From <name>" refusal and hold reason with nothing to say. The name, the
+    // description and the author reach approval text, where a control or bidi character could hide what is approved.
+    name: z
+      .string()
+      .min(1)
+      .max(80)
+      .refine((value) => value.trim().length > 0, "must not be blank")
+      .refine(withoutForbidden(NAME_FORBIDDEN), CONTROL_CHARACTERS_MESSAGE),
+    description: z.string().min(1).max(500).refine(withoutForbidden(DESCRIPTION_FORBIDDEN), CONTROL_CHARACTERS_MESSAGE),
     version: z.string().min(1).max(32).regex(VERSION_PATTERN, "may hold only letters, digits and . + -"),
-    author: z.string().max(120).optional(),
+    author: z.string().max(120).refine(withoutForbidden(NAME_FORBIDDEN), CONTROL_CHARACTERS_MESSAGE).optional(),
     homepage: httpsUrl.optional(),
     pieces: z.array(pluginPieceSchema).min(1).max(PLUGIN_LIMITS.maxPieces),
   })

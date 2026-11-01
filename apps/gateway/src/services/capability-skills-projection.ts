@@ -126,12 +126,20 @@ export function buildCapabilitySkillItems(input: {
   /** The ids of the skills the workspace's turns may load. Absent when they couldn't be read. */
   turnSkillIds?: ReadonlySet<string>;
   shippedSkillDirs: ShippedSkillDirs;
+  /** The Skill Hub checks plugin records list as their skills, with the plugin. Absent when they couldn't be read. */
+  pluginSkills?: ReadonlyMap<string, { pluginId: string; name: string }>;
+  /** The skills uninstalls removed, by skill id, with the plugin each went with. Absent when they couldn't be read. */
+  removedPluginSkills?: ReadonlyMap<string, { name: string }>;
   /** The Skill Hub checks that read one of GoatCitadel's own pack folders on this install. */
   packSnapshotIds?: ReadonlySet<string>;
 }): CapabilitySkillItem[] {
   return input.skills
     .map((skill): CapabilitySkillItem => {
       const pendingApprovalId = input.pendingApprovalIds.get(skill.skillId);
+      const fromPlugin = pluginOf(skill, input.pluginSkills);
+      // Only once the AI can't use it: a revoke that hasn't applied yet leaves the skill as it is, switch and all.
+      const removedWith =
+        !fromPlugin && skill.callable !== true ? input.removedPluginSkills?.get(skill.skillId) : undefined;
       return {
         skillId: skill.skillId,
         name: skill.name,
@@ -148,9 +156,24 @@ export function buildCapabilitySkillItems(input: {
         ...(skill.lifecycleState ? { lifecycleState: skill.lifecycleState } : {}),
         tags: [...(skill.tags ?? [])],
         ...(pendingApprovalId ? { pendingApprovalId } : {}),
+        ...(fromPlugin ? { fromPlugin: { pluginId: fromPlugin.pluginId, name: fromPlugin.name } } : {}),
+        ...(removedWith ? { removedWithPlugin: { name: removedWith.name } } : {}),
       };
     })
     .sort((a, b) => compareCodeUnits(a.name, b.name) || compareCodeUnits(a.skillId, b.skillId));
+}
+
+/**
+ * The plugin whose record lists the Skill Hub check a skill was switched on from. Switching on through Skill Hub records
+ * that check's id as the skill's `extra` source; nothing else counts, so a skill a plugin didn't bring is never marked.
+ */
+function pluginOf(
+  skill: Pick<SkillListItem, "lifecycle">,
+  pluginSkills: ReadonlyMap<string, { pluginId: string; name: string }> | undefined,
+): { pluginId: string; name: string } | undefined {
+  const provenance = skill.lifecycle?.provenance;
+  if (provenance?.source !== "extra" || !provenance.sourceRef) return undefined;
+  return pluginSkills?.get(provenance.sourceRef);
 }
 
 /** The panel's details for one skill, with the catalog's `skill:<id>` entry when there is one. */

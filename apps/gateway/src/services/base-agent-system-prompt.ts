@@ -26,6 +26,7 @@ import {
   type ChatNormalizationProfile,
   type ChatWebMode,
 } from "@goatcitadel/contracts";
+import { PLUGIN_HOLDS_UNREADABLE_REMEDY } from "./plugin-tool-group-holds-words.js";
 
 export interface BaseAgentRuntimeInfo {
   /** Human-formatted date, e.g. "Saturday, June 21, 2026". Caller formats it. */
@@ -65,6 +66,16 @@ export interface BaseAgentPromptToolset {
    * because of tools.deny. These are also in policyDeniedToolNames; a tool that is denied as well never appears here.
    */
   switchedOffToolNames?: readonly string[];
+  /**
+   * The switched-off tools whose group only a plugin's hold keeps off, not the operator's switch: uninstalling that
+   * plugin, never the Tools switch, turns them back on. These are also in switchedOffToolNames.
+   */
+  pluginHeldToolNames?: readonly string[];
+  /**
+   * The switched-off tools GoatCitadel keeps off because it can't read which tool groups plugins keep off: nothing the
+   * operator switches lifts them in this turn. These are also in switchedOffToolNames.
+   */
+  pluginHoldsUnreadableToolNames?: readonly string[];
   /** Callable tools the turn's policy probe says ask the operator first; absent when no probe ran. */
   approvalRequiredToolNames?: readonly string[];
 }
@@ -157,6 +168,8 @@ function buildToolCatalogSection(toolset: BaseAgentPromptToolset): string | unde
 function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string | undefined {
   const denied = new Set(toolset.policyDeniedToolNames ?? []);
   const switchedOff = new Set(toolset.switchedOffToolNames ?? []);
+  const held = new Set(toolset.pluginHeldToolNames ?? []);
+  const unreadable = new Set(toolset.pluginHoldsUnreadableToolNames ?? []);
   const writesDenied = denied.has("fs.write");
   const shellDenied = denied.has("shell.exec");
   if (!writesDenied && !shellDenied) return undefined;
@@ -168,9 +181,7 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
     `This workspace's tool policy turns off ${off}, so you cannot create or change code files or run scripts in this turn. If the user asks for that, say so plainly first. Do not save code through document tools, and do not treat a test, lint or build tool as running their code: those only run the project's own package scripts.`,
   ];
   if (writesDenied && switchedOff.has("fs.write")) {
-    lines.push(
-      `To allow file writes, the operator switches the ${switchedOffGroupLabel("fs.write")} tools back on in Capabilities › Tools.`,
-    );
+    lines.push(`To allow file writes, ${switchedOffRemedy("fs.write", held, unreadable)}`);
   } else if (writesDenied) {
     const proposal = toolset.toolNames.includes("change.request")
       ? " You can also offer to propose that change with change.request, which they then confirm."
@@ -180,9 +191,7 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
     );
   }
   if (shellDenied && switchedOff.has("shell.exec")) {
-    lines.push(
-      `To allow shell commands, the operator switches the ${switchedOffGroupLabel("shell.exec")} tools back on in Capabilities › Tools.`,
-    );
+    lines.push(`To allow shell commands, ${switchedOffRemedy("shell.exec", held, unreadable)}`);
   } else if (shellDenied) {
     lines.push("Shell commands can only be turned on by editing the tool policy file; there is no setting for them.");
   }
@@ -197,6 +206,19 @@ const CODE_MODE_REQUEST_PROMPT_SECTION = `## Running code\n${CODE_MODE_REQUEST_P
 /** The label the operator sees on the tool group switch, so the prompt names the control that exists. */
 function switchedOffGroupLabel(toolName: string): string {
   return toolGroupForTool(toolName)?.label ?? "tool group";
+}
+
+/**
+ * What turns a switched-off tool's group back on: the operator's Tools switch, or, for a group a plugin holds off,
+ * uninstalling that plugin, as the Tools switch can't lift a plugin's hold. While GoatCitadel can't read which groups
+ * plugins hold off, nothing lifts it in this turn.
+ */
+function switchedOffRemedy(toolName: string, held: ReadonlySet<string>, unreadable: ReadonlySet<string>): string {
+  if (unreadable.has(toolName)) return PLUGIN_HOLDS_UNREADABLE_REMEDY;
+  const label = switchedOffGroupLabel(toolName);
+  return held.has(toolName)
+    ? `the operator uninstalls the plugin that keeps the ${label} tools off, which turns them back on.`
+    : `the operator switches the ${label} tools back on in Capabilities › Tools.`;
 }
 
 function buildToolsUnavailableSection(reason: BaseAgentToolsUnavailableReason, webMode?: ChatWebMode): string {

@@ -373,6 +373,8 @@ describe("capability skill state route", () => {
       reviewSkillHubSource: vi.fn(),
       listSkillHub: vi.fn(),
       createSkillHubApproval: vi.fn(),
+      findSkillHubSnapshot: vi.fn(),
+      listPluginRecords: vi.fn(),
     });
     const { server } = await build(actions as unknown as Record<string, unknown>);
 

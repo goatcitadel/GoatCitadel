@@ -324,6 +324,51 @@ describe("PluginSnapshotStore.importDirectory", () => {
   });
 });
 
+describe("PluginSnapshotStore.verify", () => {
+  const files = {
+    "goatcitadel-plugin.json": '{"pluginId":"demo"}',
+    "prompt-packs/checks.md": "# Checks",
+  };
+  const CHANGED = "This plugin's files changed on this computer since it was checked. Check it again.";
+
+  it("passes a snapshot whose files still hash to its name", async () => {
+    const snapshot = await store.importDirectory(makeFolder(files));
+    await expect(store.verify(snapshot.treeSha256)).resolves.toBeUndefined();
+  });
+
+  it("refuses a snapshot whose bytes changed on disk, with a plain 409", async () => {
+    const snapshot = await store.importDirectory(makeFolder(files));
+    fs.writeFileSync(path.join(snapshot.dir, "prompt-packs", "checks.md"), "# Checks, edited");
+
+    await expect(store.verify(snapshot.treeSha256)).rejects.toMatchObject({
+      name: "PluginSnapshotChangedError",
+      httpStatus: 409,
+      message: CHANGED,
+    });
+  });
+
+  it("refuses a snapshot that gained or lost a file, or a link, or that is gone", async () => {
+    const added = await store.importDirectory(makeFolder(files));
+    fs.writeFileSync(path.join(added.dir, "extra.md"), "more");
+    await expect(store.verify(added.treeSha256)).rejects.toMatchObject({ message: CHANGED });
+
+    const lost = await store.importDirectory(makeFolder({ ...files, "other.md": "x" }));
+    fs.rmSync(path.join(lost.dir, "other.md"));
+    await expect(store.verify(lost.treeSha256)).rejects.toMatchObject({ message: CHANGED });
+
+    const linked = await store.importDirectory(makeFolder({ ...files, "third.md": "y" }));
+    fs.linkSync(path.join(linked.dir, "third.md"), path.join(scratchRoot, "outside-link.md"));
+    await expect(store.verify(linked.treeSha256)).rejects.toMatchObject({ message: CHANGED });
+
+    await expect(store.verify("f".repeat(64))).rejects.toMatchObject({ message: CHANGED });
+  });
+
+  it("hashes with the same formula as an import", async () => {
+    const snapshot = await store.importDirectory(makeFolder(files));
+    expect(snapshot.treeSha256).toBe(expectedTreeHash(files));
+  });
+});
+
 describe("PluginSnapshotStore.resolve", () => {
   const files = { "goatcitadel-plugin.json": "{}", "skills/one/SKILL.md": "# One" };
 

@@ -22,6 +22,8 @@ import {
   resolveWriteRootPreset,
   type WriteRootSafetyContext,
 } from "@goatcitadel/policy-engine";
+import type { PluginToolGroupHoldSummary } from "./gateway/runtime-settings.js";
+import { PluginOwnedError } from "./plugin-owned-refusal.js";
 
 /**
  * Settings-owner rules for operator write roots, the global posture of the
@@ -49,9 +51,32 @@ export function projectGlobalToolAccess(toolPolicy: ToolPolicyConfig): GlobalToo
  * The switchable groups that are off, once each, in the group map's order. `disabledGroups` can be hand-edited,
  * so a value that is not a list reads as nothing switched off, and Core, unknown ids and non-strings are dropped.
  */
-export function projectSwitchedOffToolGroups(toolPolicy: ToolPolicyConfig): ToolGroupId[] {
+export function projectSwitchedOffToolGroups(toolPolicy: Pick<ToolPolicyConfig, "tools">): ToolGroupId[] {
   const disabled: unknown = toolPolicy.tools.disabledGroups;
   return Array.isArray(disabled) ? SWITCHABLE_TOOL_GROUP_IDS.filter((groupId) => disabled.includes(groupId)) : [];
+}
+
+/**
+ * The holds plugins keep on switchable groups, in the group map's order and then the order given. Core and unknown ids
+ * are never held, as the policy engine ignores them too.
+ */
+export function projectPluginToolGroupHolds(
+  holds: readonly { groupId: string; pluginId: string; pluginName: string }[],
+): PluginToolGroupHoldSummary[] {
+  return SWITCHABLE_TOOL_GROUP_IDS.flatMap((groupId) =>
+    holds
+      .filter((hold) => hold.groupId === groupId)
+      .map((hold) => ({ groupId, pluginId: hold.pluginId, pluginName: hold.pluginName })),
+  );
+}
+
+/** What reads off: the operator's own switch and every held group, once each, in the group map's order. */
+export function unionSwitchedOffToolGroups(
+  switchedOff: readonly ToolGroupId[],
+  holds: readonly PluginToolGroupHoldSummary[],
+): ToolGroupId[] {
+  const off = new Set<ToolGroupId>([...switchedOff, ...holds.map((hold) => hold.groupId)]);
+  return SWITCHABLE_TOOL_GROUP_IDS.filter((groupId) => off.has(groupId));
 }
 
 export function applyOperatorWriteRootChange(
@@ -130,12 +155,20 @@ export function applyGlobalToolAccessChange(toolPolicy: ToolPolicyConfig, change
  * Switches one group off or on. Only `tools.disabledGroups` changes, so tools.allow, tools.deny and every other
  * deny keep their say. The list is rewritten once per group in the group map's order, dropping unusable entries.
  */
-export function applyToolGroupChange(toolPolicy: ToolPolicyConfig, change: ToolGroupChange): void {
+export function applyToolGroupChange(
+  toolPolicy: ToolPolicyConfig,
+  change: ToolGroupChange,
+  holds: readonly { groupId: string; pluginId: string; pluginName: string }[] = [],
+): void {
   if (!isToolGroupChange(change)) {
     throw new ValidationError({
       message: "toolGroupChange must name a tool group other than Core, and say whether to switch it on.",
     });
   }
+  // A group a plugin holds off is that plugin's piece: only uninstalling it switches the group back on, so the first
+  // holder is named. Switching a held group off is the operator's own switch, kept after the hold is released.
+  const holder = change.enabled ? holds.find((hold) => hold.groupId === change.groupId) : undefined;
+  if (holder) throw new PluginOwnedError({ pluginId: holder.pluginId, name: holder.pluginName });
   const switchedOff = new Set(projectSwitchedOffToolGroups(toolPolicy));
   if (change.enabled) switchedOff.delete(change.groupId);
   else switchedOff.add(change.groupId);

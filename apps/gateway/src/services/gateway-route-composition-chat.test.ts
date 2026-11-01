@@ -12,7 +12,9 @@ vi.mock("node:fs/promises", () => ({
   rm: mocks.rm,
 }));
 
-vi.mock("@goatcitadel/policy-engine", () => ({
+// Partial mock: modules this composition imports read engine constants when they load.
+vi.mock("@goatcitadel/policy-engine", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/policy-engine")>()),
   assertWritePathInJail: mocks.assertWritePathInJail,
   // The knowledge facade marks Chat attachment calls as the operator's own.
   createOwnDeliveryMarker: (reason: string) => Object.freeze({ kind: "own_delivery", reason }),

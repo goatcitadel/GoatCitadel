@@ -297,6 +297,23 @@ describe("buildCapabilityConnectors", () => {
     expect(item.serverConnectionRevision).toBe("c-4");
   });
 
+  it("marks a saved server a plugin added with the plugin's name, from the server's own record", () => {
+    const fromPlugin = only(
+      buildCapabilityConnectors(
+        input({
+          servers: [
+            server({ pluginOwner: { pluginId: "browser-checks", name: "Browser checks", installPlanId: "plan-1" } }),
+          ],
+        }),
+      ),
+    );
+    const mine = only(buildCapabilityConnectors(input({ servers: [server()] })));
+
+    // Only the plugin and its name: the install that added it stays in the Gateway.
+    expect(fromPlugin.fromPlugin).toEqual({ pluginId: "browser-checks", name: "Browser checks" });
+    expect("fromPlugin" in mine).toBe(false);
+  });
+
   it("carries a saved server's approval setting so the panel can show what asks first", () => {
     const relaxed = only(
       buildCapabilityConnectors(

@@ -175,16 +175,25 @@ export class EvolutionControlPlaneService {
    * surface; a key reused for anything else is refused. A plan the actor can't see is never returned.
    */
   public async findReplay(actor: EvolutionControlPlaneActor, key: string, request: ChangePlanRequest) {
+    const plan = await this.findByIdempotencyKey(actor, key);
+    if (plan && canonicalJsonString(plan.request) !== canonicalJsonString(request)) throw reusedKeyConflict();
+    return plan;
+  }
+
+  /**
+   * The plan an earlier request with this idempotency key made, by the same actor on the same surface, without
+   * comparing requests: for a route whose plan holds what each try mints anew (a plugin install's key-store
+   * references), which looks its plan up before minting anything. A key the actor used elsewhere is refused, and a plan
+   * the actor can't see is never returned.
+   */
+  public async findByIdempotencyKey(actor: EvolutionControlPlaneActor, key: string) {
     const plan = await this.deps.repository.findByIdempotency?.(
       requireIdentifier(actor.workspaceId, "workspaceId"),
       key,
     );
     if (!plan) return undefined;
     assertVisible(plan, actor);
-    const sameRequest = canonicalJsonString(plan.request) === canonicalJsonString(request);
-    if (!sameRequest || plan.origin.surface !== actor.surface || plan.origin.actorId !== actor.actorId) {
-      throw new ConflictError({ message: "This request was already used for a different change. Try again." });
-    }
+    if (plan.origin.surface !== actor.surface || plan.origin.actorId !== actor.actorId) throw reusedKeyConflict();
     return plan;
   }
 
@@ -495,6 +504,8 @@ export class EvolutionControlPlaneService {
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
     const adapter = this.requireMatchingAdapter(current);
+    // A kind another action undoes says so (a plugin install: uninstall the plugin), rather than "no rollback".
+    if (adapter.rollbackRefusal) throw new ConflictError({ message: adapter.rollbackRefusal });
     if (!adapter.rollback || current.rollbackRefs.length === 0) {
       throw new SemanticValidationError("This Change Plan has no verified rollback operation.");
     }
@@ -947,6 +958,11 @@ function normalizeOrigin(actor: EvolutionControlPlaneActor): ChangePlanOrigin {
     actorId: requireIdentifier(actor.actorId, "actorId"),
     ...(actor.requestId ? { requestId: requireIdentifier(actor.requestId, "requestId") } : {}),
   };
+}
+
+/** A request key already used for a different change, or by another actor or surface. */
+function reusedKeyConflict(): ConflictError {
+  return new ConflictError({ message: "This request was already used for a different change. Try again." });
 }
 
 function assertVisible(plan: ChangePlanRecord, actor: EvolutionControlPlaneActor): void {

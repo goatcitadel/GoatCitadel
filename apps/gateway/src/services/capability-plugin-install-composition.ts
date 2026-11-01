@@ -1,0 +1,196 @@
+import type {
+  ChangePlanRecord,
+  HookCreateInput,
+  HookRecord,
+  McpServerRecord,
+  PluginManifestParse,
+  PromptPackBuiltinImportInput,
+  PromptPackRecord,
+  ToolPolicyConfig,
+} from "@goatcitadel/contracts";
+import type { CapabilityPluginActionSources } from "./capability-plugin-actions-service.js";
+import type { CapabilityPluginSettingRows, StoredPlugin } from "./capability-plugin-store.js";
+import type { EvolutionControlPlaneAdapter } from "./evolution-control-plane-adapter.js";
+import type { ConfirmOptions } from "./evolution-control-plane-operator-approval-skip.js";
+import type {
+  EvolutionControlPlaneActor,
+  EvolutionControlPlaneCreateInput,
+} from "./evolution-control-plane-service.js";
+import type { RuntimeSettings } from "./gateway/runtime-settings.js";
+import { createMcpServer, updateMcpServerPolicy, type McpServerAdminHost } from "./mcp-server-admin-service.js";
+import { mcpServerRevision } from "./mcp-server-revision.js";
+import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
+import type { PluginInstallSources } from "./plugin-install-change-plan-adapter.js";
+import type { PluginPass } from "./plugin-owned-refusal.js";
+import type { KeptPluginInspection } from "./plugin-plan-support.js";
+import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
+import type { PluginInstallSettingsUpdate } from "./settings-auth-service.js";
+
+// How a plugin install reaches its owners: the plain readers and writers its plan (the adapter) and the Capabilities
+// install and uninstall (the actions service) are handed. Every write stays with its owner.
+
+/** The live tool policy: the operator's own tool switches and the hooks allowlist. */
+export interface PluginInstallConfig {
+  toolPolicy: Pick<ToolPolicyConfig, "tools" | "hooks">;
+}
+
+/** The storage parts an install or uninstall reads or writes: the plugin store's row, the prompt packs, the workspaces. */
+export interface PluginRecordsOwner {
+  readonly systemSettings: CapabilityPluginSettingRows;
+  /** A pack, the saved packs, and a pack's delete with every run, score and benchmark, in one transaction. */
+  readonly promptPacks: {
+    getPack(packId: string): Promise<PromptPackRecord>;
+    listPacks(limit?: number): Promise<readonly PromptPackRecord[]>;
+    deletePackCascade(packId: string): Promise<{ deletedRuns: number }>;
+  };
+  readonly workspaces: { find(workspaceId: string): Promise<unknown> };
+  runImmediateTransaction<T>(work: () => T | Promise<T>): Promise<Awaited<T>>;
+}
+
+/** The Change Plan control plane, as an install and an uninstall (and the plugin's detail, reading them) use it. */
+export interface PluginPlansOwner {
+  isEnabled(): Promise<boolean>;
+  get(actor: EvolutionControlPlaneActor, planId: string): Promise<ChangePlanRecord>;
+  findByIdempotencyKey(actor: EvolutionControlPlaneActor, key: string): Promise<ChangePlanRecord | undefined>;
+  create(input: EvolutionControlPlaneCreateInput): Promise<ChangePlanRecord>;
+  confirm(
+    actor: EvolutionControlPlaneActor,
+    planId: string,
+    expectedRevision: number,
+    actionNonce: string,
+    options?: ConfirmOptions,
+  ): Promise<ChangePlanRecord>;
+}
+
+/** The existing owner of each piece an install adds and an uninstall removes, and of the plans that do it. */
+export interface CapabilityPluginInstallOwners {
+  config: PluginInstallConfig;
+  /** The saved connectors. */
+  mcp: { listMcpServers(): Promise<readonly McpServerRecord[]> };
+  /** The settings, and their revision-fenced write. */
+  settings: {
+    getSettings(): Promise<Pick<RuntimeSettings, "revision" | "networkAllowlist" | "deploymentProfile" | "features">>;
+    updateSettings(input: PluginInstallSettingsUpdate): Promise<unknown>;
+  };
+  records: PluginRecordsOwner;
+  plans: PluginPlansOwner;
+  /**
+   * The hooks owner's create, which checks the address, the mode, the scope and the secret's reference; its delete,
+   * which takes the plugin's pass; and its list, which an uninstall reads to keep any secret a hook still uses.
+   */
+  hooks: {
+    createWorkspaceHook(input: HookCreateInput): Promise<HookRecord>;
+    deleteWorkspaceHook(workspaceId: string, hookId: string, pluginPass?: PluginPass): Promise<boolean>;
+    listWorkspaceHooks(workspaceId: string, limit?: number): Promise<HookRecord[]>;
+  };
+  /** The OS key store a hook's signing secret is kept in. */
+  keychain: {
+    setSecret(account: string, secret: string): void;
+    getSecret(account: string): string | undefined;
+    deleteSecret(account: string): void;
+  };
+  /** The MCP owner a plugin's connector is saved and set through. */
+  mcpAdministration: McpServerAdminHost;
+  /** The prompt-pack owner's import; a plugin's pack goes only through its guarded create-if-absent. */
+  promptPackImports: {
+    importPromptPack(
+      input: { content: string; name?: string; sourceLabel?: string; packId?: string },
+      guarded?: PromptPackBuiltinImportInput & { packKey: string },
+    ): Promise<unknown>;
+  };
+  /** The Change Plan adapters, which a plugin's install and uninstall join. */
+  changePlanAdapters: { register(adapter: EvolutionControlPlaneAdapter): void };
+}
+
+/** What the install and its plan share: the plugin store, the snapshots and the key store, as plain functions. */
+export interface PluginInstallShared {
+  readInspection(inspectionId: string): Promise<KeptPluginInspection | undefined>;
+  readPlugin(pluginId: string): Promise<StoredPlugin | undefined>;
+  updatePlugin(
+    pluginId: string,
+    change: (current: StoredPlugin | undefined) => StoredPlugin | undefined,
+  ): Promise<void>;
+  verifySnapshot(treeSha256: string): Promise<void>;
+  readManifest(treeSha256: string): Promise<PluginManifestParse>;
+  readSnapshotText(treeSha256: string, relativePath: string): Promise<string>;
+  listBuiltInPluginIds(): Promise<readonly string[]>;
+  storeHookSecret(value: string): string;
+  deleteHookSecret(secretRef: string): void;
+  reportSecretsKept(error: unknown): void;
+}
+
+/** The install plan's owners. */
+export function pluginInstallSources(
+  shared: PluginInstallShared,
+  {
+    config,
+    mcp,
+    settings,
+    records,
+    hooks,
+    mcpAdministration,
+    promptPackImports,
+  }: Omit<CapabilityPluginInstallOwners, "plans" | "keychain" | "changePlanAdapters">,
+): PluginInstallSources {
+  return {
+    readInspection: (inspectionId) => shared.readInspection(inspectionId),
+    readPlugin: (pluginId) => shared.readPlugin(pluginId),
+    updatePlugin: (pluginId, change) => shared.updatePlugin(pluginId, change),
+    verifySnapshot: (treeSha256) => shared.verifySnapshot(treeSha256),
+    readManifest: (treeSha256) => shared.readManifest(treeSha256),
+    readSnapshotText: (treeSha256, relativePath) => shared.readSnapshotText(treeSha256, relativePath),
+    connectorTemplates: () => MCP_SERVER_TEMPLATES,
+    listSavedConnectors: () => mcp.listMcpServers(),
+    readSettings: async () => {
+      const current = await settings.getSettings();
+      return {
+        revision: current.revision,
+        networkAllowlist: current.networkAllowlist,
+        deploymentProfile: current.deploymentProfile,
+      };
+    },
+    readHookAllowlist: () => config.toolPolicy.hooks?.networkAllowlist ?? [],
+    updateSettings: (input) => settings.updateSettings(input),
+    createConnector: (input, owner, options) =>
+      records.runImmediateTransaction(() =>
+        createMcpServer(mcpAdministration, input, undefined, undefined, undefined, owner, options),
+      ),
+    setConnectorApproval: (server, approvalPosture, pass, actorId) =>
+      updateMcpServerPolicy(
+        mcpAdministration,
+        server.serverId,
+        { approvalPosture },
+        { expectedRevision: mcpServerRevision(server), actorId },
+        pass,
+      ),
+    // The operator's own switch, never the union with holds: a group another plugin holds isn't this plugin's to keep.
+    operatorSwitchedOffToolGroups: () => projectSwitchedOffToolGroups(config.toolPolicy),
+    createHook: (input) => hooks.createWorkspaceHook(input),
+    importPromptPack: (input, guarded) => promptPackImports.importPromptPack(input, guarded),
+    deleteHookSecret: (secretRef) => shared.deleteHookSecret(secretRef),
+    reportSecretsKept: (error) => shared.reportSecretsKept(error),
+  };
+}
+
+/** The Capabilities install's and uninstall's owners, but the approvals reader the composition adds. */
+export function pluginActionSources(
+  shared: PluginInstallShared,
+  { plans, records }: Pick<CapabilityPluginInstallOwners, "plans" | "records">,
+): Omit<CapabilityPluginActionSources, "readApprovalStatus"> {
+  return {
+    changePlansEnabled: () => plans.isEnabled(),
+    findPlan: (actor, idempotencyKey) => plans.findByIdempotencyKey(actor, idempotencyKey),
+    createPlan: (input) => plans.create(input),
+    // The operator's own install route, so it may ask for the opt-in approval skip (#572).
+    confirmPlan: (actor, plan, actionNonce) =>
+      plans.confirm(actor, plan.planId, plan.revision, actionNonce, { operatorSettingsSave: true }),
+    workspaceExists: async (workspaceId) => (await records.workspaces.find(workspaceId)) !== undefined,
+    readInspection: (inspectionId) => shared.readInspection(inspectionId),
+    readPlugin: (pluginId) => shared.readPlugin(pluginId),
+    listBuiltInPluginIds: () => shared.listBuiltInPluginIds(),
+    verifySnapshot: (treeSha256) => shared.verifySnapshot(treeSha256),
+    readManifest: (treeSha256) => shared.readManifest(treeSha256),
+    storeHookSecret: (value) => shared.storeHookSecret(value),
+    deleteHookSecret: (secretRef) => shared.deleteHookSecret(secretRef),
+  };
+}

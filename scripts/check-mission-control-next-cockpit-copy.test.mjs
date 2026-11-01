@@ -216,12 +216,24 @@ describe("glossary and plurals (GL-R02)", () => {
     const shown = COPY_ROOTS.find((root) => root.id === "shown-as-written");
     assert.deepEqual(shown?.files, [
       "packages/contracts/src/hooks.ts",
+      "apps/gateway/src/routes/capability-plugins.ts",
+      "apps/gateway/src/services/capability-plugin-actions-service.ts",
       "apps/gateway/src/services/capability-plugin-inspection-service.ts",
+      "apps/gateway/src/services/capability-plugin-detail.ts",
       "apps/gateway/src/services/capability-plugins-route-service.ts",
+      "apps/gateway/src/services/plugin-owned-refusal.ts",
+      "apps/gateway/src/services/plugin-install-change-plan-adapter.ts",
+      "apps/gateway/src/services/plugin-install-words.ts",
+      "apps/gateway/src/services/plugin-plan-support.ts",
+      "apps/gateway/src/services/plugin-uninstall-change-plan-adapter.ts",
+      "apps/gateway/src/services/plugin-uninstall-scope.ts",
+      "apps/gateway/src/services/plugin-uninstall-words.ts",
       "apps/gateway/src/services/plugin-source-service.ts",
       "apps/gateway/src/services/plugin-snapshot-store.ts",
       "apps/gateway/src/services/plugin-git-messages.ts",
       "apps/gateway/src/services/skill-hub-plugin-skill-source.ts",
+      "apps/gateway/src/services/chat-capability-scout.ts",
+      "apps/gateway/src/services/plugin-tool-group-holds-words.ts",
     ]);
     // The skill import's Git words stay out: only a plugin fetch's own file is read.
     for (const skillWords of ["hardened-git.ts", "hardened-git-wording.ts"]) {

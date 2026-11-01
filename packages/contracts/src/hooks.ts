@@ -219,6 +219,14 @@ export type HookDeliveryStatus =
   | "dead_lettered"
   | "skipped";
 
+/**
+ * The exact shape of a hook signing-secret locator: the hook custody prefix plus a lowercase UUID. The Gateway's hook
+ * custody service mints every locator in this shape, and a plugin install plan accepts nothing else where a secret
+ * belongs, so a raw secret value is never a valid reference.
+ */
+export const HOOK_SECRET_REF_PATTERN =
+  /^keychain:goatcitadel:hook:[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u;
+
 export interface HookWebhookActionConfig {
   url: string;
   /** Opaque keychain locator persisted for newly created or rotated hooks. */

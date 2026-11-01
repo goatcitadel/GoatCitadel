@@ -3,7 +3,10 @@ import type {
   EvolutionControlPlaneRepositoryPort,
   EvolutionControlPlaneServiceDependencies,
 } from "./evolution-control-plane-service.js";
-import { OPERATOR_SAVE_EVIDENCE } from "./evolution-control-plane-operator-approval-skip.js";
+import {
+  OPERATOR_CAPABILITIES_PLAN_KINDS,
+  OPERATOR_SAVE_EVIDENCE,
+} from "./evolution-control-plane-operator-approval-skip.js";
 
 /** Canonical parent settlement after the control plane reads a terminal refusal.
  * Apply and rollback are never invoked. Temporary inputs use their existing
@@ -126,9 +129,9 @@ function isLlamaCppAutoResumePlan(plan: ChangePlanRecord): boolean {
 /**
  * Plans whose approval is the operator's last word, so approving applies them. Besides llama.cpp setup, that is any
  * runtime setting the operator saved in Settings: a separate "Continue approved change" step after approving only
- * made the one decision two (#496). The same holds for a connector the operator installed from Capabilities. A
- * rollback approval, anything proposed from Chat, and a Gateway authentication change (which still needs its
- * credential after approval) keep their explicit continuation.
+ * made the one decision two (#496). The same holds for a connector the operator installed from Capabilities, and a
+ * plugin the operator installed or uninstalled there. A rollback approval, anything proposed from Chat, and a Gateway
+ * authentication change (which still needs its credential after approval) keep their explicit continuation.
  */
 export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
   if (isLlamaCppAutoResumePlan(plan)) return true;
@@ -139,7 +142,7 @@ export function isAutoResumeOnApprovalPlan(plan: ChangePlanRecord): boolean {
     plan.result?.failureCode === "rollback_approval_pending"
   )
     return false;
-  if (plan.origin.surface === "capabilities") return plan.request.kind === "connector_install";
+  if (plan.origin.surface === "capabilities") return OPERATOR_CAPABILITIES_PLAN_KINDS.has(plan.request.kind);
   return (
     plan.origin.surface === "settings" &&
     // Bound to the server-owned Settings save, not the caller-chosen surface the generic create route accepts.

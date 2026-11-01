@@ -6,6 +6,7 @@ import {
   projectHookRecordsForPublicResponse,
   projectHookRunsForPublicResponse,
 } from "../services/hooks-public-projection.js";
+import { sendPluginOwnedRefusal } from "./_plugin-owned-refusal.js";
 
 const workspaceParamsSchema = z.object({
   workspaceId: z.string().min(1),
@@ -139,7 +140,11 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
       );
       return reply.send(projectHookRecordForPublicResponse(updated));
     } catch (error) {
-      return reply.code(400).send({ error: (error as Error).message });
+      // A hook a plugin added only switches on and off here: any other edit is a 409 naming the plugin.
+      return (
+        (await sendPluginOwnedRefusal(fastify, reply, error, request.log)) ??
+        reply.code(400).send({ error: (error as Error).message })
+      );
     }
   });
 
@@ -148,20 +153,29 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success) {
       return reply.code(400).send({ error: params.error.flatten() });
     }
-    return reply.send({
-      deleted: await fastify.services.hooks.deleteWorkspaceHook(params.data.workspaceId, params.data.hookId),
-    });
+    try {
+      return reply.send({
+        deleted: await fastify.services.hooks.deleteWorkspaceHook(params.data.workspaceId, params.data.hookId),
+      });
+    } catch (error) {
+      // Only uninstalling its plugin removes a plugin's hook; anything else fails as it did before.
+      const refused = await sendPluginOwnedRefusal(fastify, reply, error, request.log);
+      if (refused) return refused;
+      throw error;
+    }
   });
 
   fastify.post("/api/v1/workspaces/:workspaceId/hooks/:hookId/test", async (request, reply) => {
     const params = hookParamsSchema.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
-      return reply.code(202).send(
-        projectHookRunsForPublicResponse([
-          await fastify.services.hooks.testWorkspaceHook(params.data.workspaceId, params.data.hookId),
-        ])[0],
-      );
+      return reply
+        .code(202)
+        .send(
+          projectHookRunsForPublicResponse([
+            await fastify.services.hooks.testWorkspaceHook(params.data.workspaceId, params.data.hookId),
+          ])[0],
+        );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }
@@ -171,11 +185,13 @@ export const hooksRoutes: FastifyPluginAsync = async (fastify) => {
     const params = hookRunParamsSchema.safeParse(request.params);
     if (!params.success) return reply.code(400).send({ error: params.error.flatten() });
     try {
-      return reply.code(202).send(
-        projectHookRunsForPublicResponse([
-          await fastify.services.hooks.redriveWorkspaceHookRun(params.data.workspaceId, params.data.runId),
-        ])[0],
-      );
+      return reply
+        .code(202)
+        .send(
+          projectHookRunsForPublicResponse([
+            await fastify.services.hooks.redriveWorkspaceHookRun(params.data.workspaceId, params.data.runId),
+          ])[0],
+        );
     } catch (error) {
       return reply.code(400).send({ error: (error as Error).message });
     }

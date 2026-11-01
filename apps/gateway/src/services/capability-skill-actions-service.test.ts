@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   ConflictError,
+  NotFoundError,
   ValidationError,
   type ApprovalRequest,
   type CapabilitySkillOperationRequest,
@@ -14,8 +15,10 @@ import {
   OPERATOR_SKILL_SKIP_NOTES,
   type CapabilitySkillActionSources,
   type OperatorSkillSkipReason,
+  type PluginSkillListing,
 } from "./capability-skill-actions-service.js";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
+import { PLUGIN_SKILL_STEP_DECLINED_NOTE } from "./plugin-owned-refusal.js";
 import { hubApproval, hubItem } from "./capability-skill-install.test-support.js";
 import type { SkillHubOperatorApprovalSummary } from "./skill-hub-operator-service.js";
 import type { SkillLifecyclePendingApproval, SkillStateMutationOutcome } from "./skill-state-service.js";
@@ -41,10 +44,11 @@ function pending(status: SkillLifecyclePendingApproval["status"] = "pending"): S
   };
 }
 
-type ApprovalRead = Pick<ApprovalRequest, "preview">;
+type ApprovalRead = Pick<ApprovalRequest, "preview" | "status">;
 
 /** The approval as the Inbox reads it. By default it was made while the skill was on. */
 const approvalRead = (overrides: Partial<ApprovalRead> = {}): ApprovalRead => ({
+  status: "pending",
   preview: { title: "Approve skill state change", skillId: SKILL, currentState: "enabled" },
   ...overrides,
 });
@@ -60,6 +64,13 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
     reviewSkillHubSource: vi.fn(async () => ({ snapshot: { snapshotId: "skill-hub-review-1" }, replayed: false })),
     listSkillHub: vi.fn(async () => ({ items: [hubItem()] })),
     createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
+    // An ordinary check: not one a plugin brought, so no plugin record is read.
+    findSkillHubSnapshot: vi.fn(async () => ({
+      sourceProvider: "local",
+      sourceRef: "skills/import-packs/himalaya",
+      workspaceId: "default",
+    })),
+    listPluginRecords: vi.fn(async () => []),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }
@@ -574,5 +585,206 @@ describe("CapabilitySkillActionsService.requestStep", () => {
     await expect(new CapabilitySkillActionsService(parts).requestStep(step("install_inactive"))).rejects.toBe(refusal);
     expect(parts.resolveApproval).not.toHaveBeenCalled();
     expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+  });
+
+  describe("on a plugin's skill whose plugin is uninstalled while the step is asked for (F6)", () => {
+    const listed: PluginSkillListing = {
+      pluginId: "meeting-tools",
+      name: "Meeting tools",
+      workspaceId: "default",
+      state: "installed",
+      pieces: [{ pieceId: "notes", kind: "skill", owned: true, skillSnapshotId: "skill-hub-review-1" }],
+    };
+    const pluginStep = (
+      afterApproval: readonly PluginSkillListing[] | Error,
+      overrides: Partial<CapabilitySkillActionSources> = {},
+    ) =>
+      sources({
+        readApprovalSkipSetting: vi.fn(async () => true),
+        createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("activate", "pending") })),
+        findSkillHubSnapshot: vi.fn(async () => ({
+          sourceProvider: "goatcitadel_plugin",
+          sourceRef: `plugin:meeting-tools/notes@commit:${"c".repeat(40)}`,
+          workspaceId: "default",
+        })),
+        // The first read gives the pass; the read once the approval exists sees what the uninstall did meanwhile.
+        listPluginRecords: vi
+          .fn(async (): Promise<readonly PluginSkillListing[]> => [listed])
+          .mockResolvedValueOnce([listed])
+          .mockImplementationOnce(async () => {
+            if (afterApproval instanceof Error) throw afterApproval;
+            return afterApproval;
+          }),
+        ...overrides,
+      });
+
+    it.each<[string, readonly PluginSkillListing[]]>([
+      ["its record was removed", []],
+      ["its uninstall began", [{ ...listed, state: "uninstalling" }]],
+    ])("declines the step as the operator, never approves it, when %s", async (_case, afterApproval) => {
+      const parts = pluginStep(afterApproval);
+
+      await expect(new CapabilitySkillActionsService(parts).requestStep(step("activate"))).rejects.toMatchObject({
+        httpStatus: 409,
+        code: "PLUGIN_OWNED",
+        message: "This skill came with a plugin. Install the plugin to use it.",
+      });
+      expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
+        pluginPass: { pluginId: "meeting-tools" },
+      });
+      expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-activate", {
+        decision: "reject",
+        resolvedBy: ACTOR,
+        resolutionNote: PLUGIN_SKILL_STEP_DECLINED_NOTE,
+      });
+      expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+    });
+
+    it("approves as before while the record still lists the skill", async () => {
+      const parts = pluginStep([listed]);
+
+      await expect(new CapabilitySkillActionsService(parts).requestStep(step("activate"))).resolves.toEqual({
+        status: "approved",
+        approvalId: "approval-activate",
+      });
+      expect(parts.listPluginRecords).toHaveBeenCalledTimes(2);
+      expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-activate", {
+        decision: "approve",
+        resolvedBy: ACTOR,
+        resolutionNote: OPERATOR_SKILL_SKIP_NOTES.setting,
+      });
+    });
+
+    it("leaves the step waiting for the operator when the records can't be read again, or the decline fails", async () => {
+      const unread = new Error("The saved plugin records can't be read.");
+      const reportFailure = vi.fn();
+      const parts = pluginStep(unread);
+
+      await expect(
+        new CapabilitySkillActionsService(parts, reportFailure).requestStep(step("activate")),
+      ).resolves.toEqual({ status: "waiting", approvalId: "approval-activate" });
+      expect(parts.resolveApproval).not.toHaveBeenCalled();
+      expect(reportFailure).toHaveBeenCalledExactlyOnceWith("plugin_records", unread);
+
+      const locked = new Error("approval store locked");
+      const declineFails = pluginStep([], {
+        resolveApproval: vi.fn(async () => {
+          throw locked;
+        }),
+      });
+      await expect(
+        new CapabilitySkillActionsService(declineFails, reportFailure).requestStep(step("activate")),
+      ).resolves.toEqual({ status: "waiting", approvalId: "approval-activate" });
+      expect(reportFailure).toHaveBeenLastCalledWith("resolve", locked);
+    });
+  });
+});
+
+describe("CapabilitySkillActionsService.revokeForPluginUninstall", () => {
+  const revoke = { workspaceId: "default", snapshotId: "plugin-check-1", pluginId: "meeting-tools", actorId: ACTOR };
+  const revokeSources = (overrides: Partial<CapabilitySkillActionSources> = {}) =>
+    sources({
+      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("revoke", "pending") })),
+      ...overrides,
+    });
+
+  it.each(["trusted_local", "local_dev"] as const)(
+    "revokes a plugin's skill on %s without asking, as the operator, whatever the setting says",
+    async (profile) => {
+      const parts = revokeSources({ deploymentProfile: vi.fn((): DeploymentProfile => profile) });
+
+      const outcome = await new CapabilitySkillActionsService(parts).revokeForPluginUninstall(revoke);
+
+      expect(outcome).toEqual({ status: "approved", approvalId: "approval-revoke" });
+      // Skill Hub's own approval owner is asked for the revoke, with the plugin's pass and the operator as requester.
+      expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(
+        { workspaceId: "default", snapshotId: "plugin-check-1", operationKind: "revoke", actorId: ACTOR },
+        { pluginPass: { pluginId: "meeting-tools" } },
+      );
+      expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-revoke", {
+        decision: "approve",
+        resolvedBy: ACTOR,
+        resolutionNote: OPERATOR_SKILL_SKIP_NOTES.plugin_uninstall,
+      });
+      expect(parts.appendApprovalAudit).toHaveBeenCalledExactlyOnceWith("operator_approval_skipped", {
+        approvalId: "approval-revoke",
+        kind: "skill_hub.lifecycle",
+        reason: "plugin_uninstall",
+        actorId: ACTOR,
+      });
+      // Revoking only takes power away, so the skip setting (off here) is never read.
+      expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
+    },
+  );
+
+  it("waits on remote_hardened, and resolves nothing", async () => {
+    const parts = revokeSources({
+      deploymentProfile: vi.fn((): DeploymentProfile => "remote_hardened"),
+      readApprovalSkipSetting: vi.fn(async () => true),
+    });
+
+    const outcome = await new CapabilitySkillActionsService(parts).revokeForPluginUninstall(revoke);
+
+    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-revoke" });
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
+    expect(parts.appendApprovalAudit).not.toHaveBeenCalled();
+    expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
+  });
+
+  it("reuses the revoke it already asked for while that one waits, and asks again once it is decided or gone", async () => {
+    const hardened = vi.fn((): DeploymentProfile => "remote_hardened");
+    const waiting = revokeSources({ deploymentProfile: hardened });
+    await expect(
+      new CapabilitySkillActionsService(waiting).revokeForPluginUninstall({
+        ...revoke,
+        knownApprovalId: "approval-old",
+      }),
+    ).resolves.toEqual({ status: "waiting", approvalId: "approval-old" });
+    expect(waiting.readApproval).toHaveBeenCalledExactlyOnceWith("approval-old");
+    // Never a second revoke while the first still waits, however far back in the approvals it sits.
+    expect(waiting.createSkillHubApproval).not.toHaveBeenCalled();
+
+    // Approved, refused or gone: whether an approved one revoked the skill is the uninstall's to read, so Skill Hub's
+    // owner is asked again (and hands back that same approval while nothing about the skill changed).
+    for (const gone of [
+      vi.fn(async () => approvalRead({ status: "approved" })),
+      vi.fn(async () => approvalRead({ status: "rejected" })),
+      vi.fn(async (): Promise<ApprovalRead> => {
+        throw new NotFoundError("Approval not found.");
+      }),
+    ]) {
+      const parts = revokeSources({ readApproval: gone });
+      await expect(
+        new CapabilitySkillActionsService(parts).revokeForPluginUninstall({
+          ...revoke,
+          knownApprovalId: "approval-old",
+        }),
+      ).resolves.toEqual({ status: "approved", approvalId: "approval-revoke" });
+      expect(parts.createSkillHubApproval).toHaveBeenCalledOnce();
+    }
+  });
+
+  it("never resolves a revoke the owner already approved, and keeps waiting when resolving fails", async () => {
+    const approved = revokeSources({
+      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("revoke", "approved") })),
+    });
+    await expect(new CapabilitySkillActionsService(approved).revokeForPluginUninstall(revoke)).resolves.toEqual({
+      status: "approved",
+      approvalId: "approval-revoke",
+    });
+    expect(approved.resolveApproval).not.toHaveBeenCalled();
+
+    const failure = new Error("approval store locked");
+    const reportFailure = vi.fn();
+    const failing = revokeSources({
+      resolveApproval: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+    await expect(
+      new CapabilitySkillActionsService(failing, reportFailure).revokeForPluginUninstall(revoke),
+    ).resolves.toEqual({ status: "waiting", approvalId: "approval-revoke" });
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("resolve", failure);
+    expect(failing.appendApprovalAudit).not.toHaveBeenCalled();
   });
 });

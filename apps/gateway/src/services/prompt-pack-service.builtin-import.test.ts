@@ -179,6 +179,78 @@ describe("guarded built-in prompt-pack import owner", () => {
     expect(fixture.create).not.toHaveBeenCalled();
   });
 
+  it("refuses a plugin's pack that declares run variables while typed run variables are off, before writing it", async () => {
+    const fixture = setup();
+    const pluginPackId = "plugin-meeting-tools-topics";
+    const schema = renderPromptPackRunVariableSchema({
+      version: RUN_VARIABLE_SCHEMA_VERSION,
+      fields: [{ id: "topic", label: "Topic", type: "text", required: true }],
+    }).join("\n");
+    const source = { content: `${schema}\n${markdown}`, packId: pluginPackId, sourceLabel: "Plugin Meeting tools" };
+    const prepared = preparePromptPackImport(source).write;
+    // The variables are part of what the install binds, so they can't be dropped without the revision changing.
+    expect(prepared.runVariableSchema?.fields.map((field) => field.id)).toEqual(["topic"]);
+    fixture.requireFeatureEnabled.mockRejectedValueOnce(
+      new Error("Feature flag typedRunVariablesV1Enabled is disabled."),
+    );
+
+    await expect(
+      fixture.service.importPromptPack(source, {
+        packKey: pluginPackId,
+        expectedDefinitionRevision: builtinDefinitionRevision(pluginPackId, prepared),
+      }),
+    ).rejects.toThrow("Feature flag typedRunVariablesV1Enabled is disabled.");
+    expect(fixture.requireFeatureEnabled).toHaveBeenCalledExactlyOnceWith("typedRunVariablesV1Enabled");
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(() => fixture.repository.getPack(pluginPackId)).toThrow(NotFoundError);
+  });
+
+  it("refuses importing over a plugin's prompt pack", async () => {
+    const fixture = setup();
+    const pluginPackId = "plugin-meeting-tools-checks";
+    const source = { content: markdown, packId: pluginPackId, sourceLabel: "Plugin Meeting tools" };
+    const expectedDefinitionRevision = builtinDefinitionRevision(pluginPackId, preparePromptPackImport(source).write);
+    const refusal = {
+      name: "PluginOwnedError",
+      code: "PLUGIN_OWNED",
+      httpStatus: 409,
+      message: "This prompt pack came with a plugin that isn't installed.",
+    };
+
+    // The plugin service's create-if-absent, keyed by the pack's own id, is the only way in.
+    const created = await fixture.service.importPromptPack(source, {
+      packKey: pluginPackId,
+      expectedDefinitionRevision,
+    });
+    expect(created.pack.packId).toBe(pluginPackId);
+    fixture.create.mockClear();
+
+    for (const attempt of [
+      () => fixture.service.importPromptPack({ content: `${markdown}\nOverwritten.\n`, packId: pluginPackId }),
+      () => fixture.service.importPromptPack({ content: markdown, packId: "plugin-anything" }),
+      // A create-only key that isn't the pack's own id is no pass.
+      () =>
+        fixture.service.importPromptPack(
+          { content: markdown, packId: pluginPackId },
+          { packKey: "security-red-team-v6", expectedDefinitionRevision },
+        ),
+      () => fixture.service.resetPromptPackRunsAndScores(pluginPackId),
+      () => fixture.service.resetPromptPackRunsAndScores(pluginPackId, { clearRuns: false, clearScores: true }),
+    ]) {
+      await expect(attempt()).rejects.toMatchObject(refusal);
+    }
+    expect(fixture.replace).not.toHaveBeenCalled();
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(fixture.repository.getPack(pluginPackId)).toEqual(created.pack);
+    expect(fixture.requireFeatureEnabled).not.toHaveBeenCalled();
+
+    // An import with no pack id still gets its own new id, and any other id imports as before.
+    const fresh = await fixture.service.importPromptPack({ content: markdown });
+    expect(fresh.pack.packId).toMatch(/^pack-/u);
+    const named = await fixture.service.importPromptPack({ content: markdown, packId: "my-plugin-checks" });
+    expect(named.pack.packId).toBe("my-plugin-checks");
+  });
+
   it("does not turn an unreadable occupancy owner into an absent-key advertisement", async () => {
     const fixture = setup();
     vi.spyOn(fixture.repository, "getPack").mockImplementation(() => {

@@ -342,6 +342,17 @@ describe("Gateway settings owner transaction", () => {
     ).rejects.toMatchObject({ name: "ValidationError", message: PUBLIC_WEB_ADDRESS_NOT_HTTPS, httpStatus: 400 });
 
     expect(config).toEqual(before);
+
+    // A candidate reads the same plugin holds as the live settings, and a switch in it never writes them.
+    const holds = [{ groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" }];
+    const switched = await buildSettingsCandidate(
+      { ...deps, readPluginToolGroupHolds: () => holds },
+      { expectedRevision: 9, toolGroupChange: { groupId: "browser", enabled: false } },
+    );
+    expect(switched.settings.pluginToolGroupHolds).toEqual(holds);
+    expect(switched.settings.switchedOffToolGroups).toEqual(["git", "browser"]);
+    expect(switched.config.toolPolicy.tools.disabledGroups).toEqual(["browser"]);
+    expect(config).toEqual(before);
   });
 
   it("saves the public web address with the settings, and drops it from the saved config when cleared", async () => {

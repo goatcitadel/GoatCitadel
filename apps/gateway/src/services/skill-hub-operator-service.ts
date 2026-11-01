@@ -22,6 +22,7 @@ import type {
   AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { buildSkillHubLifecycleApprovalInput } from "./skill-hub-lifecycle-service.js";
+import { assertSkillHubSnapshotNotFromPlugin } from "./plugin-owned-refusal.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
 export const SKILL_HUB_OPERATOR_MAX_ITEMS = 100 as const;
@@ -139,6 +140,13 @@ export interface SkillHubOperatorListResponse {
   items: SkillHubOperatorItem[];
 }
 
+/** The newest checks of a workspace, or with `snapshotIds` exactly those checks, read by their ids. */
+export interface SkillHubOperatorListInput {
+  workspaceId: string;
+  limit?: number;
+  snapshotIds?: readonly string[];
+}
+
 export interface CreateSkillHubOperatorApprovalInput {
   workspaceId: string;
   snapshotId: string;
@@ -232,12 +240,16 @@ export class SkillHubOperatorService {
     this.now = options.now ?? (() => new Date().toISOString());
   }
 
-  public async list(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse> {
+  /**
+   * The workspace's newest checks, at most `limit`. With `snapshotIds`, exactly the workspace's checks with those ids
+   * instead, each read by its id whatever its place among the newest, so a newer check never pushes one out (a plugin's
+   * skill pieces are read this way); an id the workspace has no check for is left out. Either way it only reads.
+   */
+  public async list(input: SkillHubOperatorListInput): Promise<SkillHubOperatorListResponse> {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
-    const limit = normalizeLimit(input.limit);
-    const snapshotsWithSentinel = await this.options.storage.skillHubSnapshots.listByWorkspace(workspaceId, limit + 1);
-    const truncated = snapshotsWithSentinel.length > limit;
-    const snapshots = snapshotsWithSentinel.slice(0, limit);
+    const { snapshots, limit, truncated } = input.snapshotIds
+      ? await this.snapshotsByIds(workspaceId, input.snapshotIds)
+      : await this.newestSnapshots(workspaceId, normalizeLimit(input.limit));
     const inventory = await this.loadInventory(workspaceId);
     const items = await Promise.all(
       snapshots.map(async (snapshot) => this.project(await this.contextFor(snapshot, inventory))),
@@ -272,16 +284,23 @@ export class SkillHubOperatorService {
     };
   }
 
+  /**
+   * Every step on a check that came with a plugin is refused (`PluginOwnedError`) unless `options.pluginPass` names that
+   * plugin: only the Capabilities skill actions pass it, once they have checked the plugin's record. The pass is a
+   * separate argument, so no request body can carry it.
+   */
   public async createApproval(
     input: CreateSkillHubOperatorApprovalInput,
+    options: { pluginPass?: { pluginId: string } } = {},
   ): Promise<CreateSkillHubOperatorApprovalResponse> {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
     const snapshotId = normalizeRequired(input.snapshotId, "snapshot ID", 256);
     const actorId = normalizeRequired(input.actorId, "actor ID", 256);
-    const snapshot = await this.options.storage.skillHubSnapshots.find(snapshotId);
-    if (!snapshot || snapshot.workspaceId !== workspaceId) {
+    const snapshot = await this.findWorkspaceSnapshot(workspaceId, snapshotId);
+    if (!snapshot) {
       throw new NotFoundError({ entity: "Skill Hub snapshot", id: snapshotId });
     }
+    assertSkillHubSnapshotNotFromPlugin(snapshot, options.pluginPass);
     const context = await this.contextFor(snapshot, await this.loadInventory(workspaceId));
     const plan = this.plan(input.operationKind, context);
     if (!plan.guard.allowed || !context.skillId || !plan.targetCandidateId || !plan.targetVersionId) {
@@ -362,6 +381,45 @@ export class SkillHubOperatorService {
         this.inFlightApprovalsByFingerprint.delete(fingerprint);
       }
     }
+  }
+
+  /** The workspace's newest checks, with one more read to tell whether more are kept. */
+  private async newestSnapshots(
+    workspaceId: string,
+    limit: number,
+  ): Promise<{ snapshots: SkillHubSnapshotRecord[]; limit: number; truncated: boolean }> {
+    const snapshotsWithSentinel = await this.options.storage.skillHubSnapshots.listByWorkspace(workspaceId, limit + 1);
+    return {
+      snapshots: snapshotsWithSentinel.slice(0, limit),
+      limit,
+      truncated: snapshotsWithSentinel.length > limit,
+    };
+  }
+
+  /** The workspace's checks with these ids, each read by its id; at most the list's largest page of ids. */
+  private async snapshotsByIds(
+    workspaceId: string,
+    snapshotIds: readonly string[],
+  ): Promise<{ snapshots: SkillHubSnapshotRecord[]; limit: number; truncated: boolean }> {
+    const ids = [...new Set(snapshotIds.map((id) => normalizeRequired(id, "snapshot ID", 256)))];
+    if (ids.length > SKILL_HUB_OPERATOR_MAX_ITEMS) {
+      throw new TypeError(`Skill Hub reads at most ${SKILL_HUB_OPERATOR_MAX_ITEMS} checks by id at once.`);
+    }
+    const found = await Promise.all(ids.map((id) => this.findWorkspaceSnapshot(workspaceId, id)));
+    return {
+      snapshots: found.filter((snapshot): snapshot is SkillHubSnapshotRecord => snapshot !== undefined),
+      limit: ids.length,
+      truncated: false,
+    };
+  }
+
+  /** One check by its id, when it is this workspace's. */
+  private async findWorkspaceSnapshot(
+    workspaceId: string,
+    snapshotId: string,
+  ): Promise<SkillHubSnapshotRecord | undefined> {
+    const snapshot = await this.options.storage.skillHubSnapshots.find(snapshotId);
+    return snapshot?.workspaceId === workspaceId ? snapshot : undefined;
   }
 
   private async loadInventory(workspaceId: string): Promise<OperatorInventory> {

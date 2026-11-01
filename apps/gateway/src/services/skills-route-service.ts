@@ -23,7 +23,11 @@ import type {
 } from "@goatcitadel/contracts";
 import type { EffectiveCapabilitySet } from "./capability-scope-resolver.js";
 import type { SkillImportRedirectResult } from "./skill-import-service.js";
-import type { CreateSkillHubOperatorApprovalInput, SkillHubOperatorService } from "./skill-hub-operator-service.js";
+import type {
+  CreateSkillHubOperatorApprovalInput,
+  SkillHubOperatorListInput,
+  SkillHubOperatorService,
+} from "./skill-hub-operator-service.js";
 import type {
   SkillHubReviewService,
   SkillHubRollbackReviewInput,
@@ -59,10 +63,16 @@ export interface SkillsRoutePort {
     force?: boolean;
     confirmHighRisk?: boolean;
   }): Promise<SkillImportInstallResult>;
+  /**
+   * Skill Hub's approval owner. `options.pluginPass` lets a step on a plugin's skill through; only the Capabilities
+   * skill steps pass it, once they have checked the plugin's record. The old Skill Hub routes never do.
+   */
   createSkillHubApproval(
     input: CreateSkillHubOperatorApprovalInput,
+    options?: Parameters<SkillHubOperatorService["createApproval"]>[1],
   ): ReturnType<SkillHubOperatorService["createApproval"]>;
-  listSkillHub(input: { workspaceId: string; limit?: number }): ReturnType<SkillHubOperatorService["list"]>;
+  /** A workspace's newest checks, or with `snapshotIds` exactly those, each read by its id. */
+  listSkillHub(input: SkillHubOperatorListInput): ReturnType<SkillHubOperatorService["list"]>;
   prepareSkillHubRollbackReview(
     input: SkillHubRollbackReviewInput,
   ): ReturnType<SkillHubReviewService["prepareRollbackReview"]>;
@@ -110,12 +120,16 @@ export class SkillsRouteService {
     return effectiveSkills === undefined ? this.skills.listSkills() : this.skills.listSkills(effectiveSkills);
   }
 
-  public listSkillHub(input: { workspaceId: string; limit?: number }) {
+  public listSkillHub(input: SkillHubOperatorListInput) {
     return this.skills.listSkillHub(input);
   }
 
-  public createSkillHubApproval(input: CreateSkillHubOperatorApprovalInput) {
-    return this.skills.createSkillHubApproval(input);
+  /**
+   * Passes what it was given, exactly: the old Skill Hub route never gives a plugin pass, and only the Capabilities
+   * skill steps, through their composition, ever do.
+   */
+  public createSkillHubApproval(...args: Parameters<SkillsRoutePort["createSkillHubApproval"]>) {
+    return this.skills.createSkillHubApproval(...args);
   }
 
   public reviewSkillHubSource(input: SkillHubSourceReviewInput) {

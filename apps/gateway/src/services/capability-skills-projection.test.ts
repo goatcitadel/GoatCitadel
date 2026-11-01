@@ -224,6 +224,61 @@ describe("buildCapabilitySkillItems", () => {
     expect(items.map((item) => item.state)).toEqual(["on", "paused", "off"]);
   });
 
+  it("marks a skill switched on from a plugin's check with the plugin's name, and no other", () => {
+    const lifecycle = (sourceRef: string, source = "extra") => ({
+      skillId: "extra:browser-qa",
+      category: "community_imported" as const,
+      lifecycleState: "approved" as const,
+      trustLabel: "Approved upstream snapshot",
+      provenance: { source, sourceRef },
+      createdAt: "2026-10-31T00:00:00.000Z",
+      updatedAt: "2026-10-31T00:00:00.000Z",
+    });
+    const items = buildCapabilitySkillItems({
+      ...ITEMS_INPUT,
+      skills: [
+        skill({ skillId: "extra:browser-qa", name: "browser-qa", lifecycle: lifecycle("check-plugin") }),
+        skill({ skillId: "extra:other", name: "other", lifecycle: lifecycle("check-other") }),
+        // A recorded source that names the same id but isn't a Skill Hub check's is not the plugin's.
+        skill({ skillId: "extra:local", name: "local", lifecycle: lifecycle("check-plugin", "local") }),
+        skill({ skillId: "extra:none", name: "none" }),
+      ],
+      pluginSkills: new Map([["check-plugin", { pluginId: "browser-checks", name: "Browser checks" }]]),
+    });
+
+    expect(items.map((item) => [item.skillId, item.fromPlugin])).toEqual([
+      ["extra:browser-qa", { pluginId: "browser-checks", name: "Browser checks" }],
+      ["extra:local", undefined],
+      ["extra:none", undefined],
+      ["extra:other", undefined],
+    ]);
+    expect(items.filter((item) => "fromPlugin" in item)).toHaveLength(1);
+  });
+
+  it("reads a skill an uninstall removed as removed with its plugin, once the AI can't use it", () => {
+    const items = buildCapabilitySkillItems({
+      ...ITEMS_INPUT,
+      skills: [
+        // Revoked by the uninstall: the AI can't use it, and it stays until skills can be removed.
+        skill({ skillId: "extra:notes", name: "notes", callable: false, lifecycleState: "revoked" }),
+        // Its revoke hasn't applied yet: the AI can still use it, so it isn't marked.
+        skill({ skillId: "extra:digest", name: "digest", callable: true }),
+        skill({ skillId: "extra:other", name: "other", callable: false }),
+      ],
+      removedPluginSkills: new Map([
+        ["extra:notes", { name: "Meeting tools" }],
+        ["extra:digest", { name: "Meeting tools" }],
+      ]),
+    });
+
+    expect(items.map((item) => [item.skillId, item.removedWithPlugin])).toEqual([
+      ["extra:digest", undefined],
+      ["extra:notes", { name: "Meeting tools" }],
+      ["extra:other", undefined],
+    ]);
+    expect(items.filter((item) => "removedWithPlugin" in item)).toHaveLength(1);
+  });
+
   it("keeps callable false for an enabled skill that isn't reviewed", () => {
     const items = buildCapabilitySkillItems({
       ...ITEMS_INPUT,

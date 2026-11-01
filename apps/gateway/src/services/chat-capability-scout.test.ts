@@ -211,6 +211,14 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     };
 
     expect(await reviewReason(["tool_group_off"])).toBe("This tool's group is switched off in Capabilities › Tools.");
+    // A plugin's hold is lifted by uninstalling the plugin, never by the Tools switch (F9).
+    expect(await reviewReason(["tool_group_off", "plugin_tool_group_hold"])).toBe(
+      "A plugin keeps this tool's group off. Uninstalling that plugin turns the group back on.",
+    );
+    // While the holds can't be read, nothing the operator switches or uninstalls lifts it, so the reason says why.
+    expect(await reviewReason(["tool_group_off", "plugin_tool_group_holds_unavailable"])).toBe(
+      "GoatCitadel can't read which tool groups plugins keep off, so it keeps those tools off until it can.",
+    );
     expect(await reviewReason(["policy_deny", "tool_group_off"])).toBe(
       "This tool's group is switched off in Capabilities › Tools.",
     );

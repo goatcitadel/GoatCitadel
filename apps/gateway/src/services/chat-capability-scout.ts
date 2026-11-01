@@ -1,6 +1,11 @@
 import { createHash } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
+import {
+  PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE,
+  PLUGIN_TOOL_GROUP_HOLD_REASON_CODE,
+} from "@goatcitadel/policy-engine";
 import { detectDocumentArtifactIntent, detectPresentationArtifactIntent } from "./chat-artifact-intent.js";
+import { PLUGIN_HOLDS_UNREADABLE } from "./plugin-tool-group-holds-words.js";
 import type {
   ChatCapabilityUpgradeSuggestion,
   ChatTurnTraceRecord,
@@ -108,8 +113,18 @@ const POLICY_ACCESS_DENIAL_REASONS = new Set([
   "tool_group_off",
 ]);
 
-/** A switched-off tool group gets a plain sentence; every other denial keeps its raw reason codes. */
+/**
+ * A switched-off tool group gets a plain sentence, naming the remedy: the Tools switch, or uninstalling the plugin whose
+ * hold keeps it off, or, while the holds can't be read, why GoatCitadel keeps it off. Every other denial keeps its raw
+ * reason codes.
+ */
 function describeAccessDenial(reasonCodes: readonly string[]): string {
+  if (reasonCodes.includes("tool_group_off") && reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE)) {
+    return PLUGIN_HOLDS_UNREADABLE;
+  }
+  if (reasonCodes.includes("tool_group_off") && reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLD_REASON_CODE)) {
+    return "A plugin keeps this tool's group off. Uninstalling that plugin turns the group back on.";
+  }
   if (reasonCodes.includes("tool_group_off")) return "This tool's group is switched off in Capabilities › Tools.";
   return reasonCodes.length > 0
     ? `Current tool access policy blocked this capability: ${reasonCodes.join(", ")}.`

@@ -4,6 +4,9 @@ import {
   CAPABILITY_PLUGINS_SETTING_KEY,
   CapabilityPluginStore,
   findPluginOwning,
+  pluginToolGroupHolds,
+  readPluginPieceOwner,
+  removedPluginSkills,
   type CapabilityPluginSettingRecord,
   type CapabilityPluginSettingRows,
   type StoredPlugin,
@@ -236,6 +239,41 @@ describe("CapabilityPluginStore", () => {
   });
 });
 
+describe("listReferencedSnapshots", () => {
+  // The startup sweep keeps only these snapshots; an installed plugin's uninstall and detail read its own (F18).
+  it("keeps every installing, installed and uninstalling plugin's snapshot and every kept inspection's, never a removed one's", async () => {
+    const rows = new SettingRows();
+    let now = NOW;
+    const store = new CapabilityPluginStore(rows, () => new Date(now));
+    const snapshot = (letter: string) => letter.repeat(64);
+    await store.update("installing", () =>
+      plugin("installing", { state: "installing", snapshotTreeSha256: snapshot("1") }),
+    );
+    await store.update("installed", () =>
+      plugin("installed", { state: "installed", snapshotTreeSha256: snapshot("2") }),
+    );
+    await store.update("uninstalling", () =>
+      plugin("uninstalling", { state: "uninstalling", snapshotTreeSha256: snapshot("3") }),
+    );
+    await store.update("removed", () => plugin("removed", { snapshotTreeSha256: snapshot("4") }));
+    await store.saveInspection(inspection(1, { pluginId: "checked" }), snapshot("5"));
+    await store.remove("removed", (current) => ({
+      pluginId: current!.pluginId,
+      name: current!.name,
+      skillIds: [],
+      removedAt: new Date(NOW).toISOString(),
+    }));
+    // The inspection runs out of time, but no write has dropped it yet, so its snapshot is still kept.
+    now = Date.parse(inspection(1).expiresAt) + 1;
+    await expect(store.getInspection(inspection(1).inspectionId)).resolves.toBeUndefined();
+
+    const kept = await store.listReferencedSnapshots();
+
+    expect([...kept].sort()).toEqual([snapshot("1"), snapshot("2"), snapshot("3"), snapshot("5")]);
+    expect(kept.has(snapshot("4"))).toBe(false);
+  });
+});
+
 describe("findPluginOwning", () => {
   it("finds the plugin that added a piece, never one that only kept it", () => {
     const adding = plugin("adding", {
@@ -248,5 +286,193 @@ describe("findPluginOwning", () => {
     expect(findPluginOwning([keeping, adding], "connector", "server-1")).toBe(adding);
     expect(findPluginOwning([keeping, adding], "connector", "server-2")).toBeUndefined();
     expect(findPluginOwning([keeping, adding], "hook", "server-1")).toBeUndefined();
+  });
+});
+
+describe("store changes", () => {
+  it("tells each listener after a write lands, never after one that fails", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    const heard: string[] = [];
+    const stop = store.onChange(() => heard.push("first"));
+    store.onChange(() => {
+      heard.push("second");
+      throw new Error("a listener's own failure");
+    });
+
+    await store.update("meeting-tools", () => plugin("meeting-tools"));
+    await store.saveInspection(inspection(1), "1".padStart(64, "0"));
+    expect(heard).toEqual(["first", "second", "first", "second"]);
+
+    stop();
+    await store.update("meeting-tools", () => undefined);
+    expect(heard).toEqual(["first", "second", "first", "second", "second"]);
+
+    rows.compareAndSet = async () => undefined;
+    await expect(store.update("meeting-tools", () => plugin("meeting-tools"))).rejects.toMatchObject({
+      code: "WRITE_CONFLICT",
+    });
+    expect(heard).toHaveLength(5);
+  });
+});
+
+describe("readPluginPieceOwner", () => {
+  it("names the plugin that added a piece from the saved records", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows);
+    await store.update("meeting-tools", () =>
+      plugin("meeting-tools", {
+        name: "Meeting tools",
+        pieces: [
+          { pieceId: "tool-watch", kind: "hook", owned: true, ref: "hook-1" },
+          { pieceId: "kept", kind: "hook", owned: false, ref: "hook-2" },
+        ],
+      }),
+    );
+
+    await expect(readPluginPieceOwner(rows, "hook", "hook-1")).resolves.toEqual({
+      pluginId: "meeting-tools",
+      name: "Meeting tools",
+      installPlanId: "plan-meeting-tools",
+    });
+    await expect(readPluginPieceOwner(rows, "hook", "hook-2")).resolves.toBeUndefined();
+    await expect(readPluginPieceOwner(new SettingRows(), "hook", "hook-1")).resolves.toBeUndefined();
+  });
+});
+
+describe("pluginToolGroupHolds", () => {
+  it("holds each group a plugin switched off itself, in any state, and never one it only kept", () => {
+    const holding = plugin("holding", {
+      name: "Holding",
+      state: "uninstalling",
+      pieces: [
+        { pieceId: "no-git", kind: "tool_group_off", owned: true, ref: "git" },
+        { pieceId: "no-browser", kind: "tool_group_off", owned: false, ref: "browser" },
+        { pieceId: "pending", kind: "tool_group_off", owned: true },
+        { pieceId: "server", kind: "connector", owned: true, ref: "files" },
+      ],
+    });
+    const installing = plugin("installing", {
+      name: "Installing",
+      state: "installing",
+      pieces: [{ pieceId: "no-files", kind: "tool_group_off", owned: true, ref: "files" }],
+    });
+
+    expect(pluginToolGroupHolds([holding, installing])).toEqual([
+      { groupId: "git", pluginId: "holding", pluginName: "Holding" },
+      { groupId: "files", pluginId: "installing", pluginName: "Installing" },
+    ]);
+    expect(pluginToolGroupHolds([])).toEqual([]);
+  });
+});
+
+describe("removed plugins", () => {
+  const removedAt = (index: number) => new Date(NOW + index * 1_000).toISOString();
+
+  it("deletes a record and keeps its tombstone in the same write", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    await store.update("first", () => plugin("first"));
+    await store.update("second", () => plugin("second"));
+    const writes = rows.writes;
+
+    await store.remove("first", (current) => ({
+      pluginId: current!.pluginId,
+      name: current!.name,
+      skillIds: ["extra:notes"],
+      removedAt: removedAt(1),
+    }));
+
+    expect(rows.writes).toBe(writes + 1);
+    await expect(store.get("first")).resolves.toBeUndefined();
+    await expect(store.get("second")).resolves.toEqual(plugin("second"));
+    await expect(store.listRemoved()).resolves.toEqual([
+      { pluginId: "first", name: "Plugin first", skillIds: ["extra:notes"], removedAt: removedAt(1) },
+    ]);
+    // A refused removal writes nothing: the record stays and no tombstone is kept.
+    await expect(
+      store.remove("second", () => {
+        throw new Error("Not this install's record.");
+      }),
+    ).rejects.toThrow("Not this install's record.");
+    expect(rows.writes).toBe(writes + 1);
+    await expect(store.get("second")).resolves.toEqual(plugin("second"));
+  });
+
+  it("drops the removed plugin's kept inspections in the same write, so none of them installs it again", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    await store.update("meeting-tools", () => plugin("meeting-tools"));
+    await store.saveInspection(inspection(1), "1".padStart(64, "0"));
+    const other = inspection(2, { inspectionId: "inspection-other", pluginId: "other-tools" });
+    await store.saveInspection(other, "2".padStart(64, "0"));
+    const writes = rows.writes;
+
+    await store.remove("meeting-tools", (current) => ({
+      pluginId: current!.pluginId,
+      name: current!.name,
+      skillIds: [],
+      removedAt: removedAt(1),
+    }));
+
+    expect(rows.writes).toBe(writes + 1);
+    await expect(store.getInspection("inspection-001")).resolves.toBeUndefined();
+    // Another plugin's inspection stays.
+    await expect(store.getInspection("inspection-other")).resolves.toEqual({
+      inspection: other,
+      snapshotTreeSha256: "2".padStart(64, "0"),
+    });
+  });
+
+  it("keeps the newest 100 tombstones, and reads a row without any as none", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    await store.update("first", () => plugin("first"));
+    // A row written before tombstones existed holds none.
+    await expect(store.listRemoved()).resolves.toEqual([]);
+
+    for (let index = 1; index <= 101; index += 1) {
+      await store.update(`plugin-${index}`, () => plugin(`plugin-${index}`));
+      await store.remove(`plugin-${index}`, () => ({
+        pluginId: `plugin-${index}`,
+        name: `Plugin ${index}`,
+        skillIds: [],
+        removedAt: removedAt(index),
+      }));
+    }
+
+    const removed = await store.listRemoved();
+    expect(removed).toHaveLength(100);
+    expect(removed[0]?.pluginId).toBe("plugin-101");
+    expect(removed.at(-1)?.pluginId).toBe("plugin-2");
+    // Records and inspections are kept as they were.
+    await expect(store.get("first")).resolves.toEqual(plugin("first"));
+  });
+
+  it("refuses a tombstone list it doesn't recognise, rather than reading it as none", async () => {
+    const rows = new SettingRows();
+    rows.record = {
+      key: CAPABILITY_PLUGINS_SETTING_KEY,
+      value: { version: 1, plugins: [], inspections: [], removed: [{ pluginId: 7 }] },
+      updatedAt: "x",
+    };
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+
+    await expect(store.listRemoved()).rejects.toThrow("The saved plugin records can't be read.");
+    await expect(store.list()).rejects.toThrow("The saved plugin records can't be read.");
+  });
+
+  it("names the skills each uninstalled plugin removed, the newest uninstall first", () => {
+    expect(
+      removedPluginSkills([
+        { pluginId: "second", name: "Second", skillIds: ["extra:notes"], removedAt: removedAt(2) },
+        { pluginId: "first", name: "First", skillIds: ["extra:notes", "extra:digest"], removedAt: removedAt(1) },
+      ]),
+    ).toEqual(
+      new Map([
+        ["extra:notes", { name: "Second" }],
+        ["extra:digest", { name: "First" }],
+      ]),
+    );
   });
 });

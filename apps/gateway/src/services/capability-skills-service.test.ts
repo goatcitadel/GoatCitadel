@@ -94,6 +94,8 @@ function sources(overrides: Partial<CapabilitySkillsSources> = {}): CapabilitySk
     readApprovalSkipSetting: vi.fn(async () => false),
     listSkillHub: vi.fn(async () => ({ items: [] })),
     findSkillHubSnapshot: vi.fn(async () => undefined),
+    listPluginSkills: vi.fn(async () => new Map()),
+    listRemovedPluginSkills: vi.fn(async () => new Map()),
     ...overrides,
   };
 }
@@ -264,6 +266,7 @@ describe("CapabilitySkillsService.list", () => {
         listWorkspaceTurnSkills: failing("choices unreadable"),
         listSwitchableSkillIds: failing("skills not loaded"),
         listPendingApprovals: failing("approvals unreadable"),
+        listPluginSkills: failing("plugin records unreadable"),
       }),
     ).list(WORKSPACE_ID);
 
@@ -271,7 +274,69 @@ describe("CapabilitySkillsService.list", () => {
       "Waiting approvals couldn't be read right now.",
       "Which skills can be switched couldn't be read right now.",
       "Which skills this workspace's chats can use couldn't be read right now.",
+      "Which skills came with a plugin couldn't be read right now.",
     ]);
+  });
+
+  it("marks a skill switched on from a plugin's check, and says so when the plugins can't be read", async () => {
+    const fromCheck: SkillListItem = {
+      ...SKILLS[0]!,
+      skillId: "extra:browser-qa",
+      name: "browser-qa",
+      source: "extra",
+      lifecycle: {
+        skillId: "extra:browser-qa",
+        category: "community_imported",
+        lifecycleState: "approved",
+        trustLabel: "Approved upstream snapshot",
+        provenance: { source: "extra", sourceRef: "check-plugin" },
+        createdAt: "2026-10-31T00:00:00.000Z",
+        updatedAt: "2026-10-31T00:00:00.000Z",
+      },
+    };
+    const listPluginSkills = vi.fn(
+      async () => new Map([["check-plugin", { pluginId: "browser-checks", name: "Browser checks" }]]),
+    );
+    const marked = await new CapabilitySkillsService(
+      sources({ listSkills: vi.fn(async () => [...SKILLS, fromCheck]), listPluginSkills }),
+    ).list(WORKSPACE_ID);
+
+    expect(marked.items.filter((item) => item.fromPlugin).map((item) => [item.skillId, item.fromPlugin])).toEqual([
+      ["extra:browser-qa", { pluginId: "browser-checks", name: "Browser checks" }],
+    ]);
+    expect(marked.issues).toEqual([]);
+
+    const reportFailure = vi.fn();
+    const unread = await new CapabilitySkillsService(
+      sources({ listSkills: vi.fn(async () => [...SKILLS, fromCheck]), listPluginSkills: failing("locked") }),
+      reportFailure,
+    ).list(WORKSPACE_ID);
+
+    // The list is still answered; no skill is marked, and the issue says why.
+    expect(unread.items).toHaveLength(SKILLS.length + 1);
+    expect(unread.items.some((item) => "fromPlugin" in item)).toBe(false);
+    expect(unread.issues).toEqual(["Which skills came with a plugin couldn't be read right now."]);
+    expect(reportFailure).toHaveBeenCalledWith("plugins", expect.objectContaining({ message: "locked" }));
+  });
+
+  it("reads a skill its plugin's uninstall removed as removed with it, and marks none when that can't be read", async () => {
+    const revoked: SkillListItem = { ...SKILLS[0]!, skillId: "extra:notes", name: "notes", callable: false };
+    const listRemovedPluginSkills = vi.fn(async () => new Map([["extra:notes", { name: "Meeting tools" }]]));
+    const marked = await new CapabilitySkillsService(
+      sources({ listSkills: vi.fn(async () => [...SKILLS, revoked]), listRemovedPluginSkills }),
+    ).list(WORKSPACE_ID);
+
+    expect(marked.items.find((item) => item.skillId === "extra:notes")?.removedWithPlugin).toEqual({
+      name: "Meeting tools",
+    });
+    expect(marked.issues).toEqual([]);
+
+    const unread = await new CapabilitySkillsService(
+      sources({ listSkills: vi.fn(async () => [...SKILLS, revoked]), listRemovedPluginSkills: failing("locked") }),
+      vi.fn(),
+    ).list(WORKSPACE_ID);
+    expect(unread.items.some((item) => "removedWithPlugin" in item)).toBe(false);
+    expect(unread.issues).toEqual(["Which skills came with a plugin couldn't be read right now."]);
   });
 
   it("reports the operator skip, and false under remote_hardened", async () => {

@@ -301,7 +301,15 @@ export function connectorInstallDependencies(
     updateSettings: (input) => gateway.updateSettings(input),
     createMcpServer: (input, options) =>
       gateway.storage.runImmediateTransaction(() =>
-        mcpServerAdminService.createMcpServer(mcpAdministration, input, undefined, undefined, undefined, options),
+        mcpServerAdminService.createMcpServer(
+          mcpAdministration,
+          input,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          options,
+        ),
       ),
     setReadsFree: (server, actorId) =>
       mcpServerAdminService.updateMcpServerPolicy(

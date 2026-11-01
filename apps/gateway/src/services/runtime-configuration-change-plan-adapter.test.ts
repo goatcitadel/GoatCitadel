@@ -432,11 +432,15 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
   describe("runtime write access", () => {
     const outside = process.platform === "win32" ? "D:\\scratch\\out" : "/srv/scratch/out";
 
+    /** By default every group that is off is the operator's own switch, with no plugin holding one. */
     function writeAccessSettings(overrides: Record<string, unknown> = {}) {
+      const switchedOff = overrides.switchedOffToolGroups ?? [];
       return settings({
         operatorWriteRoots: [],
         globalToolAccess: { allow: ["fs.read"], deny: ["fs.write", "fs.delete"] },
-        switchedOffToolGroups: [],
+        switchedOffToolGroups: switchedOff,
+        operatorSwitchedOffToolGroups: switchedOff,
+        pluginToolGroupHolds: [],
         ...overrides,
       });
     }
@@ -589,6 +593,36 @@ describe("RuntimeConfigurationChangePlanAdapter", () => {
       current = writeAccessSettings({ switchedOffToolGroups: ["git"] });
       expect((await adapter.verify(context, offPlan)).status).toBe("manual_required");
       expect((await adapter.verify(context, onPlan)).status).toBe("completed");
+    });
+
+    it("never reads a plugin's hold as the operator's own switch, so an interrupted switch-off isn't taken as written (F8)", async () => {
+      // A plugin holds Browser off; the operator's own switch for it was never written.
+      const held = writeAccessSettings({
+        switchedOffToolGroups: ["browser"],
+        operatorSwitchedOffToolGroups: [],
+        pluginToolGroupHolds: [{ groupId: "browser", pluginId: "meeting-tools", pluginName: "Meeting tools" }],
+      });
+      let current = held;
+      const { adapter } = writeAccessAdapter(() => current);
+      const request = {
+        kind: "runtime_configuration" as const,
+        change: { operation: "tool_group_access" as const, groupId: "browser" as const, enabled: false },
+      };
+      const plan = { request, target: (await adapter.prepare(context, request)).target } as ChangePlanRecord;
+
+      // The Gateway stopped before the write: recovery reports it, rather than marking the plan done.
+      await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({
+        effectObserved: false,
+        status: "manual_required",
+      });
+      expect((await adapter.verify(context, plan)).status).toBe("manual_required");
+
+      // Once the operator's own switch is written, it reads as done, hold or not.
+      current = { ...held, operatorSwitchedOffToolGroups: ["browser"] };
+      await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({
+        effectObserved: true,
+        status: "completed",
+      });
     });
 
     it.each([

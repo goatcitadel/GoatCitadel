@@ -69,6 +69,8 @@ export interface CapabilityConnectorItem {
   hiddenInWorkspace: boolean;
   /** Shown only inside TechnicalDetails. */
   lastError?: string;
+  /** A saved server a plugin added: only uninstalling that plugin removes it. Absent for every other connector. */
+  fromPlugin?: { pluginId: string; name: string };
 }
 
 export interface CapabilityConnectorsIssue {

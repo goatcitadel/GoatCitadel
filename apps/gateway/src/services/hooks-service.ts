@@ -25,6 +25,7 @@ import { readBoundedResponseText } from "./bounded-response-reader.js";
 import { isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { preserveHookSecretsForPublicUpdate } from "./hooks-public-projection.js";
+import { assertNotPluginOwned, switchesOnlyOnOrOff, type PluginPass } from "./plugin-owned-refusal.js";
 import {
   buildToolCallBeforeHookInterpositionBinding,
   TOOL_CALL_BEFORE_HOOK_BINDING_LIMIT,
@@ -108,6 +109,13 @@ export class HooksService {
       storeWebhookSecret?: (value: string) => string;
       resolveWebhookSecret?: (secretRef: string) => string;
       deleteWebhookSecret?: (secretRef: string) => void;
+      /**
+       * The plugin that added this hook, if one did, read from the plugin store. Such a hook only switches on and off
+       * here; the plugin service passes its own pass to change or remove it.
+       */
+      findPluginOwningHook?: (
+        hookId: string,
+      ) => Promise<{ pluginId: string; name: string; installPlanId: string } | undefined>;
       executeManagedPackage?: (
         hook: HookRecord,
         input: { payload: Record<string, unknown>; run: HookRunRecord; signal?: AbortSignal },
@@ -220,19 +228,27 @@ export class HooksService {
     return created;
   }
 
-  public async updateWorkspaceHook(workspaceId: string, hookId: string, input: HookUpdateInput): Promise<HookRecord> {
+  /** A hook a plugin added only switches on or off, unless the plugin service passes its own `pluginPass`. */
+  public async updateWorkspaceHook(
+    workspaceId: string,
+    hookId: string,
+    input: HookUpdateInput,
+    pluginPass?: PluginPass,
+  ): Promise<HookRecord> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
-    const current = await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+    const storage = this.ctx.storage;
+    const current = await storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+    if (!switchesOnlyOnOrOff(input)) await assertNotPluginOwned(this.deps.findPluginOwningHook, hookId, pluginPass);
     const nextMode = current.mode;
     await this.assertModeAllowed(normalizedWorkspaceId, nextMode);
     this.assertTriggerModeSupported(current.trigger, nextMode);
     this.assertDataScopeAllowed(input.dataScope ?? current.dataScope);
     const action = input.action ? this.prepareActionForPersistence(input.action) : undefined;
-    const updated = await this.ctx.storage.workspaceHooks.update(normalizedWorkspaceId, hookId, {
+    const updated = await storage.workspaceHooks.update(normalizedWorkspaceId, hookId, {
       ...input,
       ...(action ? { action } : {}),
     });
-    void (await this.ctx.storage.audit.append("hooks", {
+    void (await storage.audit.append("hooks", {
       event: "hook.update",
       hookId: updated.hookId,
       workspaceId: normalizedWorkspaceId,
@@ -265,11 +281,13 @@ export class HooksService {
     );
   }
 
-  public async deleteWorkspaceHook(workspaceId: string, hookId: string): Promise<boolean> {
+  /** A hook a plugin added is removed only with the plugin service's own `pluginPass`. */
+  public async deleteWorkspaceHook(workspaceId: string, hookId: string, pluginPass?: PluginPass): Promise<boolean> {
     const normalizedWorkspaceId = this.ctx.normalizeWorkspaceId(workspaceId);
+    const storage = this.ctx.storage;
     let current: HookRecord;
     try {
-      current = await this.ctx.storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
+      current = await storage.workspaceHooks.get(normalizedWorkspaceId, hookId);
     } catch (error) {
       // Deleting an already-deleted hook is idempotent: report false rather
       // than escaping as an error (the repository throws on unknown ids).
@@ -278,7 +296,8 @@ export class HooksService {
       }
       throw error;
     }
-    const deleted = await this.ctx.storage.workspaceHooks.delete(normalizedWorkspaceId, hookId);
+    await assertNotPluginOwned(this.deps.findPluginOwningHook, hookId, pluginPass);
+    const deleted = await storage.workspaceHooks.delete(normalizedWorkspaceId, hookId);
     if (deleted) {
       if (current.action.type === "webhook" && current.action.webhook.secretRef) {
         // The hook record is already gone, so a custody deletion failure cannot
@@ -292,7 +311,7 @@ export class HooksService {
           // never returned publicly.
         }
       }
-      void (await this.ctx.storage.audit.append("hooks", {
+      void (await storage.audit.append("hooks", {
         event: "hook.delete",
         hookId,
         workspaceId: normalizedWorkspaceId,

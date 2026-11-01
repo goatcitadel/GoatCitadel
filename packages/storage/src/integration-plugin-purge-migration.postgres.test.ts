@@ -62,8 +62,11 @@ async function readSettings(admin: Pool, schema: string): Promise<SettingRow[]> 
 test("real PostgreSQL fresh installs run the purge as a no-op", { skip }, async () => {
   await withSchema("plugin_purge_fresh", async ({ admin, schema, migrations }) => {
     const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-    assert.equal(migrated.latestVersion, 222);
-    assert.equal(POSTGRES_MIGRATIONS.at(-1)?.name, "purge_integration_plugin_records");
+    assert.equal(migrated.latestVersion, 223);
+    assert.equal(
+      POSTGRES_MIGRATIONS.find((migration) => migration.version === 222)?.name,
+      "purge_integration_plugin_records",
+    );
     assert.equal(
       (await readSettings(admin, schema)).some((row) => row.setting_key === PLUGIN_SETTING_KEY),
       false,
@@ -88,8 +91,8 @@ test("real PostgreSQL deletes the integration plugin setting and keeps every oth
     assert.ok(before.some((row) => row.setting_key === PLUGIN_SETTING_KEY));
 
     const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-    assert.deepEqual(migrated.appliedVersions, [222]);
-    assert.equal(migrated.latestVersion, 222);
+    assert.deepEqual(migrated.appliedVersions, [222, 223]);
+    assert.equal(migrated.latestVersion, 223);
 
     const after = await readSettings(admin, schema);
     assert.equal(

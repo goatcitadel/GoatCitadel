@@ -70,6 +70,65 @@ describe("filterBasePromptToolsetByPolicy", () => {
     // Switched-off names are also denied names, so existing "what is off" wording keeps working.
     expect(filtered.policyDeniedToolNames).toEqual(["fs.write", "shell.exec", "channel.send"]);
     expect(filtered.switchedOffToolNames).toEqual(["fs.write", "channel.send"]);
+    expect(filtered.pluginHeldToolNames).toEqual([]);
+  });
+
+  it("reports the switched-off tools a plugin's hold keeps off, from the engine's second reason code (F9)", async () => {
+    const reasons: Record<string, string[]> = {
+      "fs.write": ["tool_group_off", "plugin_tool_group_hold"],
+      "channel.send": ["tool_group_off"],
+    };
+    const inspect = vi.fn(async (request: ToolAccessEvaluateRequest) => {
+      const reasonCodes = reasons[request.toolName];
+      return reasonCodes
+        ? ({
+            toolName: request.toolName,
+            allowed: false,
+            requiresApproval: false,
+            reasonCodes,
+            riskLevel: "safe",
+          } as ToolAccessEvaluateResponse)
+        : decision(request.toolName, true);
+    });
+    const filtered = await filterBasePromptToolsetByPolicy(
+      { toolNames: ["fs.read", "fs.write", "channel.send"] },
+      SCOPE,
+      inspect,
+    );
+
+    expect(filtered.switchedOffToolNames).toEqual(["fs.write", "channel.send"]);
+    expect(filtered.pluginHeldToolNames).toEqual(["fs.write"]);
+    expect(filtered.pluginHoldsUnreadableToolNames).toEqual([]);
+  });
+
+  it("reports the switched-off tools kept off because the plugin holds can't be read, apart from a plugin's hold", async () => {
+    const reasons: Record<string, string[]> = {
+      "fs.write": ["tool_group_off", "plugin_tool_group_holds_unavailable"],
+      "shell.exec": ["tool_group_off", "plugin_tool_group_hold"],
+      "channel.send": ["tool_group_off"],
+    };
+    const inspect = vi.fn(async (request: ToolAccessEvaluateRequest) => {
+      const reasonCodes = reasons[request.toolName];
+      return reasonCodes
+        ? ({
+            toolName: request.toolName,
+            allowed: false,
+            requiresApproval: false,
+            reasonCodes,
+            riskLevel: "safe",
+          } as ToolAccessEvaluateResponse)
+        : decision(request.toolName, true);
+    });
+    const filtered = await filterBasePromptToolsetByPolicy(
+      { toolNames: ["fs.read", "fs.write", "shell.exec", "channel.send"] },
+      SCOPE,
+      inspect,
+    );
+
+    expect(filtered.toolNames).toEqual(["fs.read"]);
+    expect(filtered.switchedOffToolNames).toEqual(["fs.write", "shell.exec", "channel.send"]);
+    expect(filtered.pluginHeldToolNames).toEqual(["shell.exec"]);
+    expect(filtered.pluginHoldsUnreadableToolNames).toEqual(["fs.write"]);
   });
 
   it("reports no switched-off tools when nothing is switched off, or when the policy check itself fails", async () => {

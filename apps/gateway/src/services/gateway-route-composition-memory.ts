@@ -111,7 +111,8 @@ export function composeMemoryKnowledgeRouteDependencies(
         gateway.bulkSetSkillState(skillIds, state, note, expectedRevisionsBySkillId),
       getSkillActivationPolicy: () => gateway.getSkillActivationPolicy(),
       installSkillImport: (input) => gateway.installSkillImport(input),
-      createSkillHubApproval: (input) => skillHubOperator.createApproval(input),
+      // The plugin pass, when given, reaches the owner as it was given: only the Capabilities skill steps give it.
+      createSkillHubApproval: (...args) => skillHubOperator.createApproval(...args),
       listSkillHub: (input) => skillHubOperator.list(input),
       prepareSkillHubRollbackReview: (input) => gateway.prepareSkillHubRollbackReview(input),
       reviewSkillHubSource: (input) => gateway.reviewSkillHubSource(input),

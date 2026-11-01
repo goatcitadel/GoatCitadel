@@ -1298,6 +1298,88 @@ describe("HooksService", () => {
     expect(resolveWebhookSecret).not.toHaveBeenCalled();
   });
 
+  it("refuses editing a plugin's hook", async () => {
+    const owners = new Map<string, { pluginId: string; name: string; installPlanId: string }>();
+    const findPluginOwningHook = vi.fn(async (hookId: string) => owners.get(hookId));
+    const deleteWebhookSecret = vi.fn();
+    const { service, workspaceId, hooks } = createHarness({
+      findPluginOwningHook,
+      deleteWebhookSecret,
+      resolveWebhookSecret: () => "resolved-signing-secret",
+    });
+    const create = (label: string) =>
+      service.createWorkspaceHook({
+        workspaceId,
+        label,
+        trigger: "tool.call.after",
+        mode: "observe",
+        action: {
+          type: "webhook",
+          webhook: { url: "https://hooks.example.test/plugin", secretRef: "keychain:goatcitadel:hook:plugin" },
+        },
+      });
+    const pluginHook = await create("Tool watch");
+    const operatorHook = await create("Mine");
+    owners.set(pluginHook.hookId, { pluginId: "meeting-tools", name: "Meeting tools", installPlanId: "plan-1" });
+    const refusal = {
+      name: "PluginOwnedError",
+      code: "PLUGIN_OWNED",
+      httpStatus: 409,
+      message: "From Meeting tools. Uninstall it to remove this.",
+      details: { pluginId: "meeting-tools" },
+    };
+
+    for (const attempt of [
+      () => service.updateWorkspaceHook(workspaceId, pluginHook.hookId, { label: "Renamed" }),
+      () => service.updateWorkspaceHook(workspaceId, pluginHook.hookId, { enabled: false, priority: 5 }),
+      () => service.updateWorkspaceHookFromPublicProjection(workspaceId, pluginHook.hookId, { dataScope: "metadata" }),
+      () =>
+        service.updateWorkspaceHook(
+          workspaceId,
+          pluginHook.hookId,
+          { label: "Renamed" },
+          { pluginId: "other-plugin", installPlanId: "plan-1" },
+        ),
+      () => service.deleteWorkspaceHook(workspaceId, pluginHook.hookId),
+      () =>
+        service.deleteWorkspaceHook(workspaceId, pluginHook.hookId, { pluginId: "meeting-tools", installPlanId: "x" }),
+    ]) {
+      await expect(attempt()).rejects.toMatchObject(refusal);
+    }
+    expect(hooks.get(pluginHook.hookId)).toMatchObject({ label: "Tool watch", enabled: true, priority: 100 });
+    expect(deleteWebhookSecret).not.toHaveBeenCalled();
+
+    // Switching it off and on is not an edit, so it needs no lookup at all.
+    findPluginOwningHook.mockClear();
+    await expect(
+      service.updateWorkspaceHookFromPublicProjection(workspaceId, pluginHook.hookId, { enabled: false }),
+    ).resolves.toMatchObject({ enabled: false });
+    await expect(service.updateWorkspaceHook(workspaceId, pluginHook.hookId, { enabled: true })).resolves.toMatchObject(
+      {
+        enabled: true,
+      },
+    );
+    expect(findPluginOwningHook).not.toHaveBeenCalled();
+
+    // A hook nobody added edits and deletes as before.
+    await expect(
+      service.updateWorkspaceHook(workspaceId, operatorHook.hookId, { label: "Still mine" }),
+    ).resolves.toMatchObject({ label: "Still mine" });
+    await expect(service.deleteWorkspaceHook(workspaceId, operatorHook.hookId)).resolves.toBe(true);
+
+    // The plugin service's own pass edits and removes its hook.
+    const pass = { pluginId: "meeting-tools", installPlanId: "plan-1" };
+    await expect(
+      service.updateWorkspaceHook(workspaceId, pluginHook.hookId, { label: "Tool watch 2" }, pass),
+    ).resolves.toMatchObject({ label: "Tool watch 2" });
+    await expect(service.deleteWorkspaceHook(workspaceId, pluginHook.hookId, pass)).resolves.toBe(true);
+    expect(deleteWebhookSecret).toHaveBeenCalledWith("keychain:goatcitadel:hook:plugin");
+    // An unknown hook still reports false without asking who added it.
+    findPluginOwningHook.mockClear();
+    await expect(service.deleteWorkspaceHook(workspaceId, "never-existed")).resolves.toBe(false);
+    expect(findPluginOwningHook).not.toHaveBeenCalled();
+  });
+
   it("deletes idempotently and reports false for an unknown hook", async () => {
     const deleteWebhookSecret = vi.fn();
     const { service, workspaceId } = createHarness({ deleteWebhookSecret });
@@ -1419,6 +1501,9 @@ function createHarness(input?: {
   storeWebhookSecret?: (value: string) => string;
   resolveWebhookSecret?: (reference: string) => string;
   deleteWebhookSecret?: (reference: string) => void;
+  findPluginOwningHook?: (
+    hookId: string,
+  ) => Promise<{ pluginId: string; name: string; installPlanId: string } | undefined>;
   auditAppend?: (category: string, entry: Record<string, unknown>) => Promise<void>;
 }) {
   const workspaceId = "ws_test";
@@ -1694,6 +1779,7 @@ function createHarness(input?: {
     storeWebhookSecret: input?.storeWebhookSecret,
     resolveWebhookSecret: input?.resolveWebhookSecret,
     deleteWebhookSecret: input?.deleteWebhookSecret,
+    findPluginOwningHook: input?.findPluginOwningHook,
   });
 
   return {

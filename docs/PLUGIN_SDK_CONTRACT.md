@@ -79,7 +79,7 @@ Integration plugins were removed. GoatCitadel no longer installs, lists, enables
 
 This does not touch integrations in general. Connections to services and MCP servers are not plugins and are not affected.
 
-### 3. Plugins (inspection only so far)
+### 3. Plugins
 
 A plugin is a bundle of pieces that runs no code. Its manifest, `goatcitadel-plugin.json`, lists them. Five kinds of piece exist:
 
@@ -89,9 +89,9 @@ A plugin is a bundle of pieces that runs no code. Its manifest, `goatcitadel-plu
 - `hook`: a webhook that only watches one event
 - `prompt_pack`: a `.md` file
 
-A manifest can add pieces and tighten rules. It cannot loosen anything. `parsePluginManifest` refuses, by name and before the strict schema runs: feature flags and runtime presets, chat instructions outside a skill, a hook that changes what happens or runs code, a connector that asks first about nothing, a tool group turned on, a piece kind it does not know, and a piece path that is absolute, climbs out of the folder, is not NFC, or that GoatCitadel's copy of the plugin can't hold (an empty or `.` part, a `:`, a name that ends in a dot or a space, a `.git` folder or a Windows device name; `isPortablePluginPath`, the rule the Gateway's copy uses too). Unknown keys, a duplicate piece id and a manifest over 64 KiB are refused too. The hook triggers are the ones in `HOOK_TRIGGER_VALUES`.
+A manifest can add pieces and tighten rules. It cannot loosen anything. `parsePluginManifest` refuses, by name and before the strict schema runs: feature flags and runtime presets, chat instructions outside a skill, a hook that changes what happens or runs code, a connector that asks first about nothing, a tool group turned on, a piece kind it does not know, and a piece path that is absolute, climbs out of the folder, is not NFC, or that GoatCitadel's copy of the plugin can't hold (an empty or `.` part, a `:`, a name that ends in a dot or a space, a `.git` folder or a Windows device name; `isPortablePluginPath`, the rule the Gateway's copy uses too). Unknown keys, a duplicate piece id and a manifest over 64 KiB are refused too. The `name` and `author` may not hold a control character, a line or paragraph separator (U+2028, U+2029) or a bidi control (U+061C, U+200E, U+200F, U+202A to U+202E, U+2066 to U+2069), and the `description` may not hold a control character other than a tab or a line break, or a bidi control; any other character, such as an emoji's zero-width joiner, is allowed. The hook triggers are the ones in `HOOK_TRIGGER_VALUES`.
 
-What exists today is the manifest, its check and the Gateway's inspection: the Gateway fetches a plugin into a snapshot and checks every piece with its owner's normal check, and that installs nothing. Passing the manifest check installs nothing and grants nothing either. Installing plugins comes later.
+The Gateway inspects, installs and uninstalls plugins through its Capabilities API, governed by Change Plans. Mission Control has no Plugins tab yet, and GoatCitadel has no plugin trust or marketplace surface. Passing the manifest check installs nothing and grants nothing.
 
 ### 4. Skill Bundles
 
@@ -128,12 +128,12 @@ These are still true after this document lands:
 
 - GoatCitadel publishes `@goatcitadel/extensions-sdk`; `1.0.0` is the last published version.
 - The workspace version, `2.0.0`, keeps the effective-tool snapshot helpers and adds the plugin manifest validator, with `loadPluginManifest` and the `goatcitadel-plugin-preflight` command, and is not published yet.
-- Add-ons and integration plugins are removed. The Gateway inspects plugins, but GoatCitadel has no plugin install, trust or marketplace surface today.
+- Add-ons and integration plugins are removed. The Gateway inspects, installs and uninstalls plugins through its Capabilities API, governed by Change Plans. Mission Control has no Plugins tab yet, and GoatCitadel has no plugin trust or marketplace surface.
 - The SDK can check a plugin manifest. A manifest that passes the check has not been installed, approved or granted anything.
 - Skill bundles keep their review-only manifest contract.
 
 ## Recommended Next Slice
 
-1. Let the Gateway install and uninstall plugins it has inspected, behind its own checks and approvals.
+1. Add the Capabilities › Plugins tab to Mission Control over the Gateway's plugin routes, so an operator can inspect, install and uninstall a plugin without calling the API.
 2. Publish `@goatcitadel/extensions-sdk@2.0.0`, so the published line moves off the retired helpers. Bump and publish `@goatcitadel/contracts` in step: the packed SDK depends on the published contracts version, and `@goatcitadel/contracts@1.0.0` has no plugin exports.
 3. Keep `@goatcitadel/extensions-sdk` versioned and prepublish-checked as the public author boundary.

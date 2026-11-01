@@ -72,6 +72,16 @@ export interface CapabilitySkillItem {
   tags: string[];
   /** A `skill.lifecycle` approval for this skill that is still waiting. */
   pendingApprovalId?: string;
+  /**
+   * The plugin whose record lists the GoatCitadel check this skill was switched on from. Absent for every other skill,
+   * and when the plugin records couldn't be read (an issue line says so).
+   */
+  fromPlugin?: { pluginId: string; name: string };
+  /**
+   * The plugin whose uninstall removed this skill: it was revoked, or left switched off, so the AI can't use it, and it
+   * stays until skills can be removed. Absent while the AI can still use it, and when the plugin records couldn't be read.
+   */
+  removedWithPlugin?: { name: string };
 }
 
 export interface CapabilitySkillsResponse {

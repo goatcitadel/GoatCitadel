@@ -1,8 +1,11 @@
+/* eslint-disable max-lines -- Every Change Plan kind's request type and validator stays in this one audited contract boundary. */
 import type { ChatThinkingLevel } from "./chat.js";
 import { CHAT_RESTORATION_FEATURE_FLAGS } from "./chat-feature-references.js";
 import { LLM_API_STYLES, LLM_PROVIDER_AUTH_MODES } from "./llm.js";
 import type { LlmApiStyle, LlmProviderAuthMode, LlmProviderCapabilities, LlmProviderGoogleCloudConfig } from "./llm.js";
+import { HOOK_SECRET_REF_PATTERN } from "./hooks.js";
 import { isRuntimeWriteAccessOperation, type RuntimeWriteAccessOperation } from "./operator-write-access.js";
+import { PLUGIN_ID_PATTERN, PLUGIN_LIMITS, PLUGIN_PIECE_ID_PATTERN } from "./plugins.js";
 import { isPublicWebAddressRuntimeOperation, type PublicWebAddressRuntimeOperation } from "./public-web-address.js";
 import { isWebSearchRuntimeOperation, type WebSearchRuntimeOperation } from "./web-search.js";
 
@@ -26,6 +29,8 @@ export const CHANGE_PLAN_KINDS = [
   "capability_candidate",
   "capability_pack",
   "connector_install",
+  "plugin_install",
+  "plugin_uninstall",
   "improvement_candidate",
   "managed_source_registration",
   "product_source_update",
@@ -334,6 +339,31 @@ export interface ChangePlanConnectorInstallRequest {
   readonly enableChatConnectors: boolean;
 }
 
+/**
+ * Installs one inspected plugin snapshot: its pieces go through their owners' normal checks. The plan names the
+ * inspection and the exact bytes it installs; it never carries a source, a path or a secret value. A hook's signing
+ * secret is stored first and the plan holds only its key-store reference. Only the operator's own Capabilities
+ * install route creates one.
+ */
+export interface ChangePlanPluginInstallRequest {
+  readonly kind: "plugin_install";
+  readonly inspectionId: string;
+  /** 64 lowercase hex: the manifest that was inspected. */
+  readonly manifestSha256: string;
+  /** 64 lowercase hex: the exact bytes the plan installs. */
+  readonly snapshotTreeSha256: string;
+  readonly workspaceId: string;
+  /** Piece id to key-store reference, one per hook that signs its calls. */
+  readonly hookSecretRefs?: Readonly<Record<string, string>>;
+}
+
+/** Removes the pieces one plugin install added. It names the install plan, never a piece list or a path. */
+export interface ChangePlanPluginUninstallRequest {
+  readonly kind: "plugin_uninstall";
+  readonly pluginId: string;
+  readonly installPlanId: string;
+}
+
 export interface ChangePlanImprovementCandidateRequest {
   readonly kind: "improvement_candidate";
   readonly candidateId: string;
@@ -364,6 +394,8 @@ export type ChangePlanRequest =
   | ChangePlanCapabilityCandidateRequest
   | ChangePlanCapabilityPackRequest
   | ChangePlanConnectorInstallRequest
+  | ChangePlanPluginInstallRequest
+  | ChangePlanPluginUninstallRequest
   | ChangePlanImprovementCandidateRequest
   | ChangePlanManagedSourceRegistrationRequest
   | ChangePlanProductSourceUpdateRequest;
@@ -567,6 +599,8 @@ export function changePlanScopeForKind(kind: ChangePlanKind): ChangePlanScope {
     case "capability_candidate":
     case "capability_pack":
     case "connector_install":
+    case "plugin_install":
+    case "plugin_uninstall":
       return "capability";
     case "improvement_candidate":
       return "improvement";
@@ -690,6 +724,29 @@ export function isChangePlanRequest(value: unknown): value is ChangePlanRequest 
         hasOnlyKeys(value, ["kind", "templateId", "enableChatConnectors"]) &&
         isIdentifier(value.templateId) &&
         typeof value.enableChatConnectors === "boolean"
+      );
+    case "plugin_install":
+      return (
+        hasOnlyKeys(value, [
+          "kind",
+          "inspectionId",
+          "manifestSha256",
+          "snapshotTreeSha256",
+          "workspaceId",
+          "hookSecretRefs",
+        ]) &&
+        isIdentifier(value.inspectionId) &&
+        isSha256Hex(value.manifestSha256) &&
+        isSha256Hex(value.snapshotTreeSha256) &&
+        isIdentifier(value.workspaceId) &&
+        (value.hookSecretRefs === undefined || isPluginHookSecretRefs(value.hookSecretRefs))
+      );
+    case "plugin_uninstall":
+      return (
+        hasOnlyKeys(value, ["kind", "pluginId", "installPlanId"]) &&
+        typeof value.pluginId === "string" &&
+        PLUGIN_ID_PATTERN.test(value.pluginId) &&
+        isIdentifier(value.installPlanId)
       );
     case "capability_candidate":
       return (
@@ -1070,6 +1127,24 @@ function isIdentifier(value: unknown): value is string {
 
 function isOptionalIdentifier(value: unknown): value is string | undefined {
   return value === undefined || isIdentifier(value);
+}
+
+function isSha256Hex(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/u.test(value);
+}
+
+/** One to `PLUGIN_LIMITS.maxPieces` entries: a piece id to the key-store reference the hook custody minted. */
+function isPluginHookSecretRefs(value: unknown): value is Readonly<Record<string, string>> {
+  if (!isPlainObject(value)) return false;
+  const entries = Object.entries(value);
+  return (
+    entries.length >= 1 &&
+    entries.length <= PLUGIN_LIMITS.maxPieces &&
+    entries.every(
+      ([pieceId, ref]) =>
+        PLUGIN_PIECE_ID_PATTERN.test(pieceId) && typeof ref === "string" && HOOK_SECRET_REF_PATTERN.test(ref),
+    )
+  );
 }
 
 function isBoundedText(value: unknown, max: number): value is string {

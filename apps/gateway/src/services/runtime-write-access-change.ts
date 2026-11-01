@@ -119,8 +119,15 @@ export function matchesGlobalToolAccessChange(change: GlobalToolAccessChange, se
   return currentPosture(change.toolName, settings) === change.posture;
 }
 
-export function matchesToolGroupChange(change: ToolGroupChange, settings: RuntimeSettings): boolean {
-  return settings.switchedOffToolGroups.includes(change.groupId) === !change.enabled;
+/**
+ * Whether the operator's own switch reads as the plan set it. A plugin's hold is never the operator's switch, so a group
+ * a plugin holds off doesn't make an unwritten switch-off read as written (F8).
+ */
+export function matchesToolGroupChange(
+  change: ToolGroupChange,
+  settings: Pick<RuntimeSettings, "operatorSwitchedOffToolGroups">,
+): boolean {
+  return settings.operatorSwitchedOffToolGroups.includes(change.groupId) === !change.enabled;
 }
 
 export function matchesOperatorWriteRootChange(change: OperatorWriteRootChange, settings: RuntimeSettings): boolean {

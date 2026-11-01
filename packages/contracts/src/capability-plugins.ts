@@ -75,6 +75,49 @@ export interface CapabilityPluginListItem {
 }
 
 /**
+ * Where one installed plugin's piece is.
+ * - `added`: the plugin added it, and a skill is switched on. `kept`: it was already there, so uninstalling leaves it.
+ * - A skill's own steps: `check_passed` (not installed yet), `waiting_for_approval` (`pendingApprovalId`), `installing`
+ *   (a step was approved and is being applied, or the install plan is still applying), `installed_off` (installed, not
+ *   switched on, so the AI can't use it yet).
+ * - `removed`: removed while the plugin is uninstalled. `removing`: its removal was approved and is still being
+ *   applied (a skill whose revoke isn't in effect yet). `failed`: its step stopped, or the install stopped before it.
+ * - `unknown`: its state can't be read right now. It is never read as added.
+ */
+export type CapabilityPluginPieceState =
+  | "added"
+  | "kept"
+  | "check_passed"
+  | "installing"
+  | "installed_off"
+  | "waiting_for_approval"
+  | "removed"
+  | "removing"
+  | "failed"
+  | "unknown";
+
+/** One installed plugin's piece: what it is, where it is, and a link to its own item, all written by the Gateway. */
+export type CapabilityPluginDetailPiece = CapabilityPluginPieceView & {
+  state: CapabilityPluginPieceState;
+  /** The approval it waits for, while `waiting_for_approval`. */
+  pendingApprovalId?: string;
+  /** The piece's own item in its tab, when it has one. */
+  href?: string;
+};
+
+/**
+ * `GET /api/v1/capabilities/plugins/detail?pluginId=&workspaceId=`: one installed plugin and each of its pieces. Its
+ * `state` follows the same rule as the list's: `installed` only once every piece is added or kept.
+ */
+export interface CapabilityPluginDetail extends CapabilityPluginListItem {
+  author?: string;
+  pin: PluginPin;
+  installPlanId: string;
+  installedAt: string;
+  pieces: CapabilityPluginDetailPiece[];
+}
+
+/**
  * `GET /api/v1/capabilities/plugins`. `installed` lists the plugins GoatCitadel has a record of, install-wide.
  * `builtIn` lists the plugins that ship with GoatCitadel and aren't installed; listing them fetches and checks nothing.
  */
@@ -87,6 +130,39 @@ export interface CapabilityPluginListResponse {
 export interface CapabilityPluginInspectionRequest {
   workspaceId: string;
   source: PluginSource;
+}
+
+/**
+ * `POST /api/v1/capabilities/plugins/install`: install the pieces an inspection checked, from one confirmation.
+ * `hookSecrets` holds one signing secret per hook piece, by piece id, and nothing else: GoatCitadel keeps each one in
+ * the key store and the install plan holds only a reference to it.
+ */
+export interface CapabilityPluginInstallRequest {
+  workspaceId: string;
+  inspectionId: string;
+  hookSecrets?: Record<string, string>;
+}
+
+/**
+ * `POST /api/v1/capabilities/plugins/uninstall`: remove exactly the pieces the plugin added, from one confirmation.
+ * What was already there stays, and so do the hosts it allowed.
+ */
+export interface CapabilityPluginUninstallRequest {
+  workspaceId: string;
+  pluginId: string;
+}
+
+/**
+ * The answer to a plugin install or uninstall (202). `applied`: the plan finished, and an uninstalled plugin is gone.
+ * `waiting`: it waits, for its approval in the Inbox (`approvalId`) or for a step still under way; an uninstall also
+ * waits while one of its skills isn't removed yet (`approvalId` names the approval that skill waits for). `failed`: it
+ * stopped, and `summary` says what was done and what to do next. `summary` is the plan's plain summary.
+ */
+export interface PluginActionOutcome {
+  planId: string;
+  outcome: "applied" | "waiting" | "failed";
+  approvalId?: string;
+  summary: string;
 }
 
 export const CAPABILITY_PLUGIN_REFUSED_CODE = "PLUGIN_REFUSED" as const;

@@ -99,6 +99,17 @@ function isActiveLocalOperatorOverride(
   );
 }
 
+/**
+ * The config as the resolver reads it while plugins hold groups off: each held group is added to the operator's own
+ * `tools.disabledGroups`, which is never written. A hand-edited switch that isn't a list adds nothing, as it switches
+ * nothing off on its own. Core and unknown ids stay ignored, through the same `toolNamesSwitchedOff`.
+ */
+export function withHeldToolGroups(config: ToolPolicyConfig, heldGroupIds: readonly string[]): ToolPolicyConfig {
+  if (heldGroupIds.length === 0) return config;
+  const own: readonly string[] = Array.isArray(config.tools.disabledGroups) ? config.tools.disabledGroups : [];
+  return { ...config, tools: { ...config.tools, disabledGroups: [...own, ...heldGroupIds] } };
+}
+
 export function isToolAllowed(policy: EffectiveToolPolicy, toolName: string): boolean {
   if (policy.switchedOffTools?.has(toolName) || matchesPatternSet(policy.denySet, toolName)) {
     return false;

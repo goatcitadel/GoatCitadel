@@ -25,6 +25,12 @@ import { HostLookupError, HostNotPublicError, assertHostResolvesPublic } from ".
 import { parseHookWebhookUrl } from "./hooks-service.js";
 import { mcpServerLabelKey } from "./mcp-money-moving.js";
 import { readPluginManifestFile } from "./plugin-manifest-file.js";
+import {
+  distinctPluginPromptPackNames,
+  pluginPromptPackId,
+  pluginPromptPackSourceLabel,
+} from "./plugin-prompt-packs.js";
+import type { PluginSkillCheck } from "./plugin-skill-checks.js";
 import { PluginSnapshotPathError } from "./plugin-snapshot-store.js";
 import type { FetchedPluginSource } from "./plugin-source-service.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
@@ -57,6 +63,12 @@ export const ASKS_FIRST = {
 
 const SKILL_BLOCKED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
+const SKILL_REMOVED_EARLIER_MESSAGE =
+  "This skill was removed with an earlier install. It can't come back until skills can be removed.";
+const SKILL_NAME_TAKEN_MESSAGE = "A skill with this name is already installed.";
+/** What GoatCitadel's checks say when this copy's skill is already installed, or was installed and removed. */
+const LEFT_OVER_BLOCKERS: ReadonlySet<string> = new Set(["SOURCE_ALREADY_INSTALLED", "CANDIDATE_ALREADY_EXISTS"]);
+const NAME_TAKEN_BLOCKER = "RUNTIME_ALREADY_EXISTS";
 const KEY_REUSED_MESSAGE = "This request's key was already used for a different plugin check. Check it with a new key.";
 const ANSWER_GONE_MESSAGE =
   "This plugin check is no longer kept, so its answer can't be sent again. Check the plugin again.";
@@ -130,6 +142,11 @@ export interface CapabilityPluginInspectionSources {
   promptPackExists(packId: string): Promise<boolean>;
   /** Every address a host name resolves to. */
   lookupHost(hostname: string): Promise<Array<{ address: string }>>;
+  /**
+   * One Skill Hub check by its id, as a plugin's skill piece reads it: whether installing it would be refused, and why.
+   * Undefined when the workspace has no check with that id.
+   */
+  readSkillCheck(workspaceId: string, snapshotId: string): Promise<PluginSkillCheck | undefined>;
   /** The plugin store's record of an installed plugin. */
   findInstalled(pluginId: string): Promise<StoredPlugin | undefined>;
   /** The kept inspection that answered this key in this scope, with its request's fingerprint. */
@@ -253,9 +270,10 @@ export class CapabilityPluginInspectionService {
       ),
       settings: once(() => this.sources.readSettings()),
     };
-    const pieces: CapabilityPluginPieceView[] = [];
+    const checked: CapabilityPluginPieceView[] = [];
     // One at a time, in manifest order: a skill's review writes its own record, and the answer keeps that order.
-    for (const piece of manifest.pieces) pieces.push(await this.checkPiece(piece, context));
+    for (const piece of manifest.pieces) checked.push(await this.checkPiece(piece, context));
+    const pieces = withDistinctPromptPackNames(checked);
 
     const inspection: CapabilityPluginInspection = {
       ...frame,
@@ -332,12 +350,46 @@ export class CapabilityPluginInspectionService {
     }
     const skillName = reviewed.snapshot.provenance.skillName;
     const blocker = reviewed.snapshot.blockerCodes[0];
+    const snapshotId = reviewed.snapshot.snapshotId;
     return {
       ...view,
       label: typeof skillName === "string" && skillName ? skillName : piece.id,
-      check: blocker ? blocked(blocker, SKILL_BLOCKED_MESSAGE) : READY,
-      skillSnapshotId: reviewed.snapshot.snapshotId,
+      check: blocker
+        ? blocked(blocker, SKILL_BLOCKED_MESSAGE)
+        : await this.installableSkill(snapshotId, piece.id, input),
+      skillSnapshotId: snapshotId,
     };
+  }
+
+  /**
+   * Whether the reviewed skill can be installed now, read from its check by id. Checking the same copy again replays
+   * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused: it
+   * can't come back until skills can be removed. Another installed skill of that name refuses it too. A check that
+   * can't be read is never taken as installable.
+   */
+  private async installableSkill(
+    snapshotId: string,
+    pieceId: string,
+    input: CapabilityPluginInspectInput,
+  ): Promise<CapabilityPluginPieceCheck> {
+    let check: PluginSkillCheck | undefined;
+    try {
+      check = await this.sources.readSkillCheck(input.workspaceId, snapshotId);
+    } catch (error) {
+      warn(input.log, pieceId, error, "a plugin skill's check couldn't be read");
+      return blocked("SKILL_CHECK_UNREADABLE", SKILL_UNREADABLE_MESSAGE);
+    }
+    if (!check) return blocked("SKILL_CHECK_UNREADABLE", SKILL_UNREADABLE_MESSAGE);
+    const { allowed, blockers } = check.installInactive;
+    if (allowed) return READY;
+    const leftOver = blockers.find((code) => LEFT_OVER_BLOCKERS.has(code));
+    const runtimeLive = blockers.includes(NAME_TAKEN_BLOCKER) && !check.revoked && !check.runtimeRevoked;
+    // Removed earlier only when what's left of it is revoked (through this check or another), or nothing of it runs; a
+    // live one is installed now.
+    if (runtimeLive) return blocked(NAME_TAKEN_BLOCKER, SKILL_NAME_TAKEN_MESSAGE);
+    if (leftOver) return blocked(leftOver, SKILL_REMOVED_EARLIER_MESSAGE);
+    if (blockers.includes(NAME_TAKEN_BLOCKER)) return blocked(NAME_TAKEN_BLOCKER, SKILL_REMOVED_EARLIER_MESSAGE);
+    return blocked(blockers[0] ?? "SKILL_CHECK_BLOCKED", SKILL_BLOCKED_MESSAGE);
   }
 
   /**
@@ -392,11 +444,15 @@ export class CapabilityPluginInspectionService {
     const content = await readSnapshotText(file);
     if (typeof content !== "string") return unread(content);
 
-    const packId = `plugin-${context.manifest.pluginId}-${piece.id}`;
+    const packId = pluginPromptPackId(context.manifest.pluginId, piece.id);
     let prepared: ReturnType<typeof preparePromptPackImport>;
     try {
       // The label an install saves it under, so the name shown here is the name it gets.
-      prepared = preparePromptPackImport({ content, packId, sourceLabel: `Plugin ${context.manifest.name}` });
+      prepared = preparePromptPackImport({
+        content,
+        packId,
+        sourceLabel: pluginPromptPackSourceLabel(context.manifest.name),
+      });
     } catch (error) {
       // The parser's own words quote the file; the operator gets a plain line, and the detail stays in the log.
       warn(context.input.log, piece.id, error, "a plugin's prompt pack couldn't be read");
@@ -511,6 +567,19 @@ function isKeyBoundToOtherMaterial(error: unknown): boolean {
 function refuseOtherBuiltInId(parsed: PluginManifestParse, source: PluginSource): PluginManifestParse {
   if (!parsed.ok || source.kind !== "built_in" || parsed.manifest.pluginId === source.pluginId) return parsed;
   return { ok: false, code: "MANIFEST_INVALID", message: BUILT_IN_ID_MISMATCH_MESSAGE, field: "pluginId" };
+}
+
+/**
+ * The pieces with each prompt pack labelled by the name an install saves it under: two of the plugin's packs that would
+ * share a name get one each (`distinctPluginPromptPackNames`, the install's own rule).
+ */
+function withDistinctPromptPackNames(pieces: readonly CapabilityPluginPieceView[]): CapabilityPluginPieceView[] {
+  const names = distinctPluginPromptPackNames(
+    pieces.filter((item) => item.kind === "prompt_pack").map((item) => ({ pieceId: item.pieceId, name: item.label })),
+  );
+  return pieces.map((item) =>
+    item.kind === "prompt_pack" ? { ...item, label: names.get(item.pieceId) ?? item.label } : item,
+  );
 }
 
 /** The kept answer again: the inspection, or its manifest refusal. */

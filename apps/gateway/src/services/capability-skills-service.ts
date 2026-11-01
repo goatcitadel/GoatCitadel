@@ -55,6 +55,13 @@ export interface CapabilitySkillsSources {
   listSkillHub(input: { workspaceId: string; limit: number }): Promise<{ items: readonly SkillHubOperatorItem[] }>;
   /** One Skill Hub check by its id, in any workspace: what source it read. */
   findSkillHubSnapshot(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined>;
+  /**
+   * The Skill Hub checks plugin records list as their skills, by check id, with the plugin that lists each: what marks
+   * a skill switched on from one of them.
+   */
+  listPluginSkills(): Promise<ReadonlyMap<string, { pluginId: string; name: string }>>;
+  /** The skills uninstalls removed, by skill id, with the plugin each went with: what reads one as removed with it. */
+  listRemovedPluginSkills(): Promise<ReadonlyMap<string, { name: string }>>;
 }
 
 export type CapabilitySkillsSource =
@@ -65,7 +72,8 @@ export type CapabilitySkillsSource =
   | "turn_skills"
   | "approval_skip"
   | "skill_hub"
-  | "skill_hub_check";
+  | "skill_hub_check"
+  | "plugins";
 
 /** Called with the real error of a failed read, so the response can carry plain wording only. */
 export type CapabilitySkillsFailureReporter = (source: CapabilitySkillsSource, error: unknown) => void;
@@ -76,6 +84,7 @@ const ISSUE_MESSAGES = {
   approvals: "Waiting approvals couldn't be read right now.",
   switchable: "Which skills can be switched couldn't be read right now.",
   turnSkills: "Which skills this workspace's chats can use couldn't be read right now.",
+  plugins: "Which skills came with a plugin couldn't be read right now.",
 } as const;
 
 /**
@@ -90,13 +99,17 @@ export class CapabilitySkillsService {
   ) {}
 
   public async list(workspaceId: string): Promise<CapabilitySkillsResponse> {
-    const [skills, catalog, approvals, switchable, turnSkills, operatorApprovalSkip] = await Promise.all([
+    const [skills, catalog, approvals, switchable, turnSkills, operatorApprovalSkip, pluginSkills] = await Promise.all([
       this.readSkills(workspaceId),
       this.attempt("catalog", () => this.sources.listInspectableCatalog(workspaceId)),
       this.attempt("approvals", () => this.sources.listPendingApprovals()),
       this.attempt("switchable", () => this.sources.listSwitchableSkillIds()),
       this.attempt("turn_skills", () => this.sources.listWorkspaceTurnSkills(workspaceId)),
       this.readOperatorApprovalSkip(),
+      this.attempt("plugins", async () => ({
+        fromPlugin: await this.sources.listPluginSkills(),
+        removed: await this.sources.listRemovedPluginSkills(),
+      })),
     ]);
     const packSnapshotIds = await this.readPackSnapshotIds(skills);
 
@@ -105,6 +118,7 @@ export class CapabilitySkillsService {
       ...(approvals.ok ? [] : [ISSUE_MESSAGES.approvals]),
       ...(switchable.ok ? [] : [ISSUE_MESSAGES.switchable]),
       ...(turnSkills.ok ? [] : [ISSUE_MESSAGES.turnSkills]),
+      ...(pluginSkills.ok ? [] : [ISSUE_MESSAGES.plugins]),
     ];
     const candidatesWaiting = catalog.ok ? countWaitingCandidates(catalog.value) : undefined;
     return {
@@ -117,6 +131,10 @@ export class CapabilitySkillsService {
         // A list that can't be read marks no row, rather than guessing which skills the workspace's turns may load.
         ...(turnSkills.ok ? { turnSkillIds: new Set(turnSkills.value.map((skill) => skill.skillId)) } : {}),
         shippedSkillDirs: this.sources.shippedSkillDirs(),
+        // Plugin records that can't be read mark no skill, rather than guessing which came with a plugin.
+        ...(pluginSkills.ok
+          ? { pluginSkills: pluginSkills.value.fromPlugin, removedPluginSkills: pluginSkills.value.removed }
+          : {}),
         packSnapshotIds,
       }),
       // Absent when the catalog couldn't be read, or when it cut its candidate list off.

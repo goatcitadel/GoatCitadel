@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import { PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON } from "@goatcitadel/policy-engine";
 import {
   MEMORY_CONSENT_BLOCKED_REASON,
   answerCoversMemoryConsentBlocks,
@@ -185,6 +186,42 @@ describe("buildGovernanceBlockGuidance", () => {
     expect(guidance).not.toMatch(RETRY_INVITATION);
   });
 
+  it("names the plugin that keeps a group off and points to uninstalling it, not to the Tools switch", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "git.status",
+      status: "blocked",
+      error: "blocked: tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+    });
+
+    expect(guidance).toContain("git.status is switched off: the plugin Meeting tools keeps its tool group off.");
+    expect(guidance).toContain("Uninstalling Meeting tools turns the group back on, and only the operator can do that");
+    expect(guidance).toMatch(/not a pending approval/i);
+    expect(guidance).not.toContain("Capabilities › Tools");
+    expect(guidance).not.toContain("the operator turned off");
+    expect(guidance).not.toContain("tools.deny");
+    expect(guidance).not.toMatch(RETRY_INVITATION);
+  });
+
+  it("points to uninstalling a plugin when the engine couldn't name the one that keeps the group off", () => {
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "git.status",
+      status: "blocked",
+      error: "blocked: tool git.status is in a tool group switched off by a plugin (Git)",
+    });
+
+    expect(guidance).toContain("git.status is switched off: a plugin keeps its tool group off.");
+    expect(guidance).toContain("Uninstalling that plugin turns the group back on, and only the operator can do that");
+    expect(guidance).not.toContain("Capabilities › Tools");
+    expect(guidance).not.toContain("the operator turned off");
+
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "git.status", error: "tool git.status is in a tool group switched off by a plugin" }),
+    ]);
+    expect(text).toContain("a plugin keeps its tool group off");
+    expect(text).toContain("uninstall the plugin that keeps a group off, which turns that group back on");
+    expect(text).not.toContain("Capabilities › Tools");
+  });
+
   it("tells the model a switched-off group is the operator's switch, not tools.deny", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "channel.send",
@@ -218,6 +255,79 @@ describe("buildGovernanceBlockGuidance", () => {
       expect(guidance, error).toContain("Capabilities › Tools");
       expect(guidance, error).not.toContain("tools.deny");
     }
+  });
+
+  it("says uninstalling the plugin turns a group it holds back on, from the runner's own re-check (F9, Q11)", () => {
+    // The runner's re-check writes its own error and keeps only the engine's reason codes, which say it is a hold.
+    const result = {
+      policyRevalidation: { status: "blocked", reasonCodes: ["tool_group_off", "plugin_tool_group_hold"] },
+    };
+    const guidance = buildGovernanceBlockGuidance({
+      toolName: "fs.write",
+      status: "blocked",
+      error: "Current deny-wins policy blocks fs.write.",
+      result,
+    });
+
+    expect(guidance).toContain("fs.write is switched off: a plugin keeps its tool group off.");
+    expect(guidance).toContain("Uninstalling that plugin turns the group back on, and only the operator can do that");
+    expect(guidance).not.toContain("Capabilities › Tools");
+
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({ toolName: "fs.write", error: "Current deny-wins policy blocks fs.write.", result }),
+    ]);
+    expect(text).toContain("uninstall the plugin that keeps a group off, which turns that group back on");
+    expect(text).not.toContain("Capabilities › Tools");
+  });
+
+  it("says GoatCitadel keeps the tool off while it can't read which groups plugins keep off, from the engine's reason and the re-check", () => {
+    const unreadable =
+      "GoatCitadel can't read which tool groups plugins keep off, so it keeps those tools off until it can.";
+    const engineError = `blocked: tool fs.write is in a tool group kept off (Files): ${PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON}`;
+    const recheck = {
+      policyRevalidation: { status: "blocked", reasonCodes: ["tool_group_off", "plugin_tool_group_holds_unavailable"] },
+    };
+    for (const run of [
+      { error: engineError },
+      { error: "Current deny-wins policy blocks fs.write.", result: recheck },
+    ]) {
+      const guidance = buildGovernanceBlockGuidance({ toolName: "fs.write", status: "blocked", ...run });
+      expect(guidance, run.error).toBe(
+        `fs.write is off. ${unreadable} This is not a pending approval, and different input will not help; tell the operator which tool you needed.`,
+      );
+      // Nothing the operator switches or uninstalls lifts it, so neither is offered.
+      expect(guidance, run.error).not.toContain("Capabilities › Tools");
+      expect(guidance, run.error).not.toContain("ninstall");
+      expect(guidance, run.error).not.toMatch(RETRY_INVITATION);
+
+      const text = buildPolicyBlockedRecoveryText([toolRun({ toolName: "fs.write", ...run })]);
+      expect(text, run.error).toContain(`Why: fs.write is off. ${unreadable}`);
+      expect(text, run.error).toContain(
+        "Once GoatCitadel can read which tool groups plugins keep off, ask again and I'll retry.",
+      );
+      expect(text, run.error).not.toContain("Capabilities › Tools");
+      expect(text, run.error).not.toContain("ninstall");
+    }
+  });
+
+  it("names both the operator's switch and the unread holds when a turn met both", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "fs.write",
+        error: `tool fs.write is in a tool group kept off (Files): ${PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON}`,
+      }),
+      toolRun({
+        toolRunId: "run-2",
+        toolName: "channel.send",
+        error: "tool channel.send is in a tool group switched off by the operator (Messaging)",
+      }),
+    ]);
+
+    expect(text).toContain("Why: fs.write is off. GoatCitadel can't read which tool groups plugins keep off");
+    expect(text).toContain("Why: channel.send is switched off: the operator turned off its tool group");
+    expect(text).toContain(
+      "The operator can switch tool groups back on in Capabilities › Tools. Once the group is on, ask again and I'll retry. GoatCitadel keeps the other tools off until it can read which tool groups plugins keep off.",
+    );
   });
 
   it("keeps the tools.deny wording when the tool is denied as well as switched off", () => {
@@ -368,6 +478,41 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).toContain("browser.interact is switched off");
     expect(text).toContain("switch tool groups back on in Capabilities › Tools");
     expect(text).not.toMatch(/narrower|specific URL/i);
+  });
+
+  it("says uninstalling the plugin turns the group back on when every block is a group a plugin keeps off", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "git.status",
+        error: "blocked: tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+      }),
+    ]);
+
+    expect(text).toContain("the plugin Meeting tools keeps its tool group off");
+    expect(text).toContain("uninstall the plugin that keeps a group off, which turns that group back on");
+    expect(text).not.toContain("Capabilities › Tools");
+    expect(text).not.toContain("Settings > Tools");
+  });
+
+  it("names both places when a plugin's hold and the operator's switch stop tools together", () => {
+    const text = buildPolicyBlockedRecoveryText([
+      toolRun({
+        toolName: "git.status",
+        error: "blocked: tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+      }),
+      toolRun({
+        toolRunId: "run-2",
+        toolName: "channel.send",
+        error: "blocked: tool channel.send is in a tool group switched off by the operator (Messaging)",
+      }),
+    ]);
+
+    expect(text).toContain("Uninstalling Meeting tools turns the group back on");
+    expect(text).toContain("the operator turned off its tool group in Capabilities › Tools");
+    expect(text).toContain("switch tool groups back on in Capabilities › Tools");
+    expect(text).toContain("which turns that group back on");
+    expect(text).not.toContain("Capabilities › Plugins");
+    expect(text).not.toContain("Settings > Tools");
   });
 
   it("keeps the Settings > Tools pointer when a switched-off block is mixed with another policy block", () => {

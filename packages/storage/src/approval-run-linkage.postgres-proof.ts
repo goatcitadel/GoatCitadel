@@ -242,7 +242,7 @@ test("PostgreSQL canonical execution linkage migrates, backfills, indexes and pa
           assertPages();
           const migrated = await runPostgresMigrations(migrationClient);
           assert.deepEqual(migrated.appliedVersions, [210]);
-          assert.equal(migrated.latestVersion, 222);
+          assert.equal(migrated.latestVersion, 223);
           await assertDirections();
           assert.deepEqual(scope.db.prepare("SELECT * FROM approvals ORDER BY approval_id").all(), retained.approvals);
           assert.deepEqual(

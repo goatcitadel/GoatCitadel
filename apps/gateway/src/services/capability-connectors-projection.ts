@@ -156,6 +156,10 @@ function serverParts(
     ...(isMoneyMovingCatalogServer(server) ? { movesMoney: true } : {}),
     chat: mcpChat(input.chat),
     ...(server.lastError ? { lastError: server.lastError } : {}),
+    // The plugin that saved it, from the server's own record; the install that added it stays in the Gateway.
+    ...(server.pluginOwner
+      ? { fromPlugin: { pluginId: server.pluginOwner.pluginId, name: server.pluginOwner.name } }
+      : {}),
   };
 }
 

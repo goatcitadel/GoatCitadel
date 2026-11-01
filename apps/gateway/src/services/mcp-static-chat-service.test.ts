@@ -12,6 +12,7 @@ import {
 } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage } from "@goatcitadel/storage";
 import { McpServerStore } from "./mcp-server-store.js";
+import { mcpServerRevision } from "./mcp-server-revision.js";
 import { normalizeMcpPolicy } from "./mcp-server-policy.js";
 import { McpStaticEnvironmentService } from "./mcp-static-environment-service.js";
 import { McpStaticChatService, type McpStaticChatServiceOptions } from "./mcp-static-chat-service.js";
@@ -100,6 +101,33 @@ it("rebuilds invocation authority from the durable profile after the owner resta
   const f = await fixture();
   const profile = await f.freeze();
   f.service = new McpStaticChatService(f.options);
+  const result = await f.invoke(profile);
+  expect(result.ok, result.error).toBe(true);
+  expect(f.calls).toHaveLength(1);
+});
+
+it("keeps a frozen binding current when the plugin that added the connector hands it to the operator", async () => {
+  const f = await fixture();
+  const mark = (pluginOwner: McpServerRecord["pluginOwner"]) => async () => {
+    const servers = await f.store.readServers();
+    const target = servers.find((server) => server.serverId === "static.with.dots")!;
+    await f.store.writeServers(
+      servers.map((server) => {
+        if (server.serverId !== "static.with.dots") return server;
+        const { pluginOwner: _previous, ...rest } = server;
+        return pluginOwner ? { ...rest, pluginOwner } : rest;
+      }),
+      servers,
+      { serverId: target.serverId, expectedRevision: mcpServerRevision(target) },
+    );
+  };
+  // A plugin added it, and a Chat turn froze it.
+  await mark({ pluginId: "meeting-tools", name: "Meeting tools", installPlanId: "plan-install-1" })();
+  const profile = await f.freeze();
+
+  // The plugin's uninstall hands it to the operator: only its mark goes.
+  await mark(undefined)();
+
   const result = await f.invoke(profile);
   expect(result.ok, result.error).toBe(true);
   expect(f.calls).toHaveLength(1);

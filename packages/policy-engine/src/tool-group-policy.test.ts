@@ -9,10 +9,15 @@ import {
   type ToolPolicyConfig,
 } from "@goatcitadel/contracts";
 import { Storage, createSqliteAsyncStorage, type AsyncStorage } from "@goatcitadel/storage";
-import { ToolPolicyEngine } from "./engine.js";
+import {
+  PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON,
+  PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE,
+  PLUGIN_TOOL_GROUP_HOLD_REASON_CODE,
+  ToolPolicyEngine,
+} from "./engine.js";
 import { createMcpToolPolicyBinding } from "./mcp-tool-policy-binding.js";
 import { createMeshToolPolicyBinding } from "./mesh-tool-policy-binding.js";
-import { isToolAllowed, resolveEffectivePolicy } from "./policy-resolver.js";
+import { isToolAllowed, resolveEffectivePolicy, withHeldToolGroups } from "./policy-resolver.js";
 
 const SWITCHED_OFF_PHRASE = "tool group switched off";
 
@@ -259,6 +264,208 @@ describe("switched-off tool groups in the policy engine", () => {
     expect(blocked?.outcome).toBe("blocked");
     expect(blocked?.policyReason).toContain(SWITCHED_OFF_PHRASE);
     await expect(fs.stat(blockedFile)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  describe("plugin holds", () => {
+    const meetingTools = { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" };
+
+    it("denies a held group in every chat even when the operator's switch is on", async () => {
+      const policy = config();
+      policy.tools.allow = [...ALLOWED_TOOLS, "git.*"];
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+
+      engine.setPluginToolGroupHolds([meetingTools]);
+
+      for (const sessionId of ["chat-one", "chat-two"]) {
+        const held = await engine.inspectAccess({ ...request("git.status"), sessionId });
+        expect(held.allowed).toBe(false);
+        // The second code says it is a plugin's hold, for a reader that keeps only the codes (F9).
+        expect(held.reasonCodes).toEqual(["tool_group_off", PLUGIN_TOOL_GROUP_HOLD_REASON_CODE]);
+        const blocked = await engine.invoke({ ...request("git.status"), sessionId });
+        expect(blocked.outcome).toBe("blocked");
+        expect(blocked.policyReason).toContain("tool group switched off by the plugin Meeting tools (Git)");
+      }
+      // A local operator override can't lift a hold either.
+      const overridden = await engine.inspectAccess({
+        ...request("git.status"),
+        policyContext: { localOperatorOverride: activeOverride() },
+      });
+      expect(overridden.reasonCodes).toEqual(["tool_group_off", "plugin_tool_group_hold"]);
+      expect(engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
+      expect(engine.listPluginToolGroupHolds()).toEqual([meetingTools]);
+      // The resolver reads the same union, so isToolAllowed agrees with the engine.
+      const effective = resolveEffectivePolicy(withHeldToolGroups(policy, ["git"]), "assistant");
+      expect(isToolAllowed(effective, "git.status")).toBe(false);
+      expect(isToolAllowed(effective, "session.status")).toBe(true);
+      // The operator's own switch is never written by a hold.
+      expect(policy.tools.disabledGroups).toBeUndefined();
+      // Other groups and Core stay on.
+      expect((await engine.inspectAccess(request("session.status"))).allowed).toBe(true);
+    });
+
+    it("keeps a group off after a hold is released if the operator switched it off", async () => {
+      const policy = config();
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      engine.setPluginToolGroupHolds([meetingTools]);
+      policy.tools.disabledGroups = ["git"];
+
+      engine.setPluginToolGroupHolds([]);
+
+      expect((await engine.inspectAccess(request("git.status"))).reasonCodes).toEqual(["tool_group_off"]);
+      expect(engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
+      expect(engine.listPluginToolGroupHolds()).toEqual([]);
+      expect(policy.tools.disabledGroups).toEqual(["git"]);
+
+      // Without the operator's switch, the released group is back on.
+      policy.tools.disabledGroups = [];
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+    });
+
+    it("names the first plugin that holds the group, on one line, and the operator when it's their switch too", async () => {
+      const policy = config();
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      engine.setPluginToolGroupHolds([
+        { ...meetingTools, pluginName: "  Meeting\n\ttools " },
+        { ...meetingTools, pluginId: "repo-rules", pluginName: "Repo rules" },
+      ]);
+
+      expect((await engine.invoke(request("git.status"))).policyReason).toContain(
+        "tool git.status is in a tool group switched off by the plugin Meeting tools (Git)",
+      );
+
+      policy.tools.disabledGroups = ["git"];
+      expect((await engine.invoke(request("git.status"))).policyReason).toContain(
+        "tool group switched off by the operator (Git)",
+      );
+      // The operator set the switch, so it isn't read as only a plugin's hold.
+      expect((await engine.inspectAccess(request("git.status"))).reasonCodes).toEqual(["tool_group_off"]);
+    });
+
+    it("ignores a hold on Core or an unknown group, and a hand-edited switch beside a hold", async () => {
+      const policy = config();
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      engine.setPluginToolGroupHolds([
+        { ...meetingTools, groupId: "core" },
+        { ...meetingTools, groupId: "nope" },
+      ]);
+      expect((await engine.inspectAccess(request("session.status"))).allowed).toBe(true);
+      expect(engine.listSwitchedOffToolNames().size).toBe(0);
+
+      policy.tools.disabledGroups = "git" as never;
+      engine.setPluginToolGroupHolds([{ ...meetingTools, groupId: "files" }]);
+      expect(engine.listSwitchedOffToolNames().has("fs.write")).toBe(true);
+      expect(engine.listSwitchedOffToolNames().has("git.status")).toBe(false);
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+    });
+  });
+
+  describe("while the plugin holds can't be read", () => {
+    const meetingTools = { groupId: "git", pluginId: "meeting-tools", pluginName: "Meeting tools" };
+    const unavailable = ["tool_group_off", PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE];
+
+    it("denies every tool in a group a plugin could hold, with its own code and reason", async () => {
+      const policy = config();
+      policy.tools.allow = [...ALLOWED_TOOLS, "git.*"];
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      // Before any read the engine starts with this state off: nothing is held.
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+
+      engine.setPluginToolGroupHoldsUnavailable();
+
+      for (const toolName of ["git.status", "fs.stat", "fs.write"]) {
+        const access = await engine.inspectAccess(request(toolName, { path: root, content: "x" }));
+        expect(access.allowed, toolName).toBe(false);
+        expect(access.reasonCodes, toolName).toEqual(unavailable);
+      }
+      const blocked = await engine.invoke(request("git.status"));
+      expect(blocked.outcome).toBe("blocked");
+      expect(blocked.policyReason).toContain(
+        `tool git.status is in a tool group kept off (Git): ${PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON}`,
+      );
+      expect(PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON).toBe(
+        "GoatCitadel can't read which tool groups plugins keep off, so it keeps those tools off until it can",
+      );
+      // Deny-wins: a local operator override can't lift it either.
+      const overridden = await engine.inspectAccess({
+        ...request("git.status"),
+        policyContext: { localOperatorOverride: activeOverride() },
+      });
+      expect(overridden.reasonCodes).toEqual(unavailable);
+      // Every switchable group reads off, through the same union the resolver reads.
+      const everyHoldable = resolveEffectivePolicy(withHeldToolGroups(policy, SWITCHABLE_TOOL_GROUP_IDS));
+      expect(engine.listSwitchedOffToolNames()).toEqual(new Set(everyHoldable.switchedOffTools?.keys()));
+      expect(engine.listSwitchedOffToolNames().has("browser.navigate")).toBe(true);
+      // The operator's own switch is never written, and no plugin is named as holding anything.
+      expect(policy.tools.disabledGroups).toBeUndefined();
+      expect(engine.listPluginToolGroupHolds()).toEqual([]);
+    });
+
+    it("leaves Core, MCP and mesh tools, which belong to no group a plugin can hold, as they are", async () => {
+      const engine = new ToolPolicyEngine(config(), asyncStorage);
+      engine.setPluginToolGroupHoldsUnavailable();
+
+      expect((await engine.inspectAccess(request("session.status"))).allowed).toBe(true);
+      const wrapper = await engine.inspectAccess(
+        request("mcp.invoke", { serverId: "docs", toolName: "read", arguments: {} }),
+      );
+      expect(wrapper.allowed).toBe(true);
+      const mcp: ToolInvokeRequest = { ...request("mcp.docs.read"), externalRuntime: true };
+      const mcpEvaluation = await engine.inspectAccess(mcp, {
+        mcpToolBinding: createMcpToolPolicyBinding({
+          canonicalName: "mcp.docs.read",
+          serverId: "docs",
+          nativeToolName: "read",
+        }),
+      });
+      expect(mcpEvaluation.allowed).toBe(true);
+      const meshName = "mesh:node-a:tool:project.status";
+      const mesh: ToolInvokeRequest = { ...request(meshName), externalRuntime: true };
+      const meshEvaluation = await engine.inspectAccess(mesh, {
+        meshToolBinding: createMeshToolPolicyBinding({
+          canonicalName: meshName,
+          nodeId: "node-a",
+          kind: "tool",
+          localId: "project.status",
+        }),
+      });
+      expect(meshEvaluation.allowed).toBe(true);
+      expect(engine.listSwitchedOffToolNames().has("session.status")).toBe(false);
+    });
+
+    it("names the operator's switch when the group is off by their own switch too", async () => {
+      const policy = config();
+      policy.tools.disabledGroups = ["git"];
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+      engine.setPluginToolGroupHoldsUnavailable();
+
+      expect((await engine.inspectAccess(request("git.status"))).reasonCodes).toEqual(["tool_group_off"]);
+      expect((await engine.invoke(request("git.status"))).policyReason).toContain(
+        "tool group switched off by the operator (Git)",
+      );
+      expect((await engine.inspectAccess(request("fs.stat", { path: root }))).reasonCodes).toEqual(unavailable);
+    });
+
+    it("ends when the holds are set, whatever they are", async () => {
+      const policy = config();
+      const engine = new ToolPolicyEngine(policy, asyncStorage);
+
+      engine.setPluginToolGroupHoldsUnavailable();
+      engine.setPluginToolGroupHolds([]);
+      expect((await engine.inspectAccess(request("git.status"))).allowed).toBe(true);
+      expect(engine.listSwitchedOffToolNames().size).toBe(0);
+
+      engine.setPluginToolGroupHoldsUnavailable();
+      engine.setPluginToolGroupHolds([meetingTools]);
+      expect((await engine.inspectAccess(request("git.status"))).reasonCodes).toEqual([
+        "tool_group_off",
+        PLUGIN_TOOL_GROUP_HOLD_REASON_CODE,
+      ]);
+      expect((await engine.inspectAccess(request("fs.stat", { path: root }))).reasonCodes).not.toContain(
+        "tool_group_off",
+      );
+      expect([...engine.listSwitchedOffToolNames()].every((name) => name.startsWith("git."))).toBe(true);
+    });
   });
 
   describe("policy resolver", () => {

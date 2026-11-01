@@ -121,6 +121,11 @@ export interface EvolutionControlPlaneAdapter<Request extends ChangePlanRequest 
   readonly adapterId: string;
   readonly version: number;
   readonly kinds: readonly Request["kind"][];
+  /**
+   * Set when this kind's plans are never rolled back because another action undoes them: a rollback request is then a
+   * 409 with these plain words, which say what to do instead.
+   */
+  readonly rollbackRefusal?: string;
   /** Inspect the exact owner snapshot prepared for persistence without mutating it. */
   inspect?(
     context: EvolutionControlPlaneAdapterContext,

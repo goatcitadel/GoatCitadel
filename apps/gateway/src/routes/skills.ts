@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 import { projectImportProvenanceReferencesForPublic } from "../services/import-provenance-public-projection.js";
 import { sendRouteError } from "./_error-handler.js";
+import { sendPluginOwnedRefusal } from "./_plugin-owned-refusal.js";
 import { withRouteAccess } from "./route-access.js";
 
 const skillsListQuerySchema = z.object({
@@ -211,7 +212,10 @@ export const skillsRoutes: FastifyPluginAsync = async (fastify) => {
         }),
       );
     } catch (error) {
-      return sendRouteError(reply, error, request.log);
+      // A check that came with a plugin is the plugin's to change: 409, named after the plugin when it's installed.
+      return (
+        (await sendPluginOwnedRefusal(fastify, reply, error, request.log)) ?? sendRouteError(reply, error, request.log)
+      );
     }
   });
 
