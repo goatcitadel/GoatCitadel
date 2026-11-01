@@ -6,6 +6,7 @@ import {
   type ChatThreadTurnRecord,
   type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
+import { plural } from "../../content/format.js";
 
 export type ChatTraceTone = "muted" | "warning" | "critical" | "success";
 
@@ -24,7 +25,7 @@ export function formatAnswerReviewLabel(trace: Pick<ChatTurnTraceRecord, "reflec
   if (review.outcome === "passed") {
     return "Reviewed: no issues";
   }
-  const count = review.issues.length === 1 ? "1 issue" : `${review.issues.length} issues`;
+  const count = plural(review.issues.length, "issue");
   return review.action === "noted_in_answer" ? `Reviewed: ${count}, noted in the answer` : `Reviewed: ${count}`;
 }
 

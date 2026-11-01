@@ -856,7 +856,7 @@ describe("streamPreparedAgentChatTurn", () => {
       expect(chunks.some((chunk) => chunk.type === "error")).toBe(false);
       expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
         status: "completed",
-        reflection: { answerReview: { outcome: "unavailable", reason: "provider timeout" } },
+        reflection: { answerReview: { outcome: "unavailable", reason: "The reviewer call timed out." } },
       });
     });
 

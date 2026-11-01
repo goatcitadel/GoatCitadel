@@ -2,7 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionResponse } from "@goatcitadel/contracts";
 import {
   buildStrictReviewNote,
+  classifyReviewFailure,
   parseReviewVerdict,
+  type ChatAnswerReviewDeps,
   reviewPreparedTurnAnswer,
   runChatAnswerReview,
   shouldReviewChatAnswer,
@@ -75,7 +77,7 @@ describe("runChatAnswerReview", () => {
     ];
     expect(request).toMatchObject({ providerId: "openai", model: "gpt-5.4", stream: false });
     expect(request.tools).toBeUndefined();
-    expect(request.memory).toEqual({ enabled: false, mode: "off" });
+    expect(request.memory).toEqual({ enabled: false, mode: "off", sessionId: "session-1", workspace: "default" });
     const userPayload = JSON.parse((request.messages as Array<{ content: string }>)[1]!.content);
     expect(userPayload).toMatchObject({
       request: "What is the capital of France?",
@@ -126,11 +128,42 @@ describe("runChatAnswerReview", () => {
     );
     expect(review).toMatchObject({
       outcome: "unavailable",
-      reason: "provider returned 503",
+      reason: "The model provider returned an error (HTTP 503).",
       issues: [],
       action: "recorded",
     });
     expect(buildStrictReviewNote(review)).toBeUndefined();
+  });
+
+  it("never records the raw provider error, which can echo credentials or request content", async () => {
+    const leaky = 'HTTP 401: invalid key sk-live-abcdef0123456789 for request {"messages":["secret prompt"]}';
+    const review = await runChatAnswerReview(
+      {
+        createChatCompletion: async () => {
+          throw new Error(leaky);
+        },
+      },
+      reviewInput(),
+    );
+    expect(review.reason).toBe("The model provider returned an error (HTTP 401).");
+    expect(JSON.stringify(review)).not.toContain("sk-live");
+    expect(JSON.stringify(review)).not.toContain("secret prompt");
+    expect(classifyReviewFailure(new Error("answer review timed out"))).toBe("The reviewer call timed out.");
+    expect(classifyReviewFailure(new Error("socket hang up"))).toBe("The reviewer call failed.");
+  });
+
+  it("binds the reviewer call to the conversation's workspace and session with memory off", async () => {
+    let request: Parameters<ChatAnswerReviewDeps["createChatCompletion"]>[0] | undefined;
+    await runChatAnswerReview(
+      {
+        createChatCompletion: async (sent) => {
+          request = sent;
+          return completion('{"verdict":"pass","issues":[]}');
+        },
+      },
+      { ...reviewInput(), workspaceId: "ws-other", sessionId: "session-9" },
+    );
+    expect(request?.memory).toMatchObject({ enabled: false, workspace: "ws-other", sessionId: "session-9" });
   });
 
   it("records an unreadable verdict as unavailable", async () => {

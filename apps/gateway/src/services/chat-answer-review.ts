@@ -33,7 +33,20 @@ const MAX_ISSUE_CHARS = 280;
 const MAX_REQUEST_CHARS = 8_000;
 const MAX_ANSWER_CHARS = 24_000;
 const MAX_EVIDENCE_ITEMS = 12;
-const MAX_REASON_CHARS = 300;
+
+/**
+ * A fixed, safe reason for a failed review. Provider errors can echo response bodies, request content or credentials,
+ * and this reason is persisted in the trace and shown to the operator, so the raw message is never recorded.
+ */
+export function classifyReviewFailure(error: unknown, signal?: AbortSignal): string {
+  const message = error instanceof Error ? error.message : "";
+  const name = error instanceof Error ? error.name : "";
+  if (signal?.aborted || name === "AbortError") return "The reviewer call was stopped.";
+  if (name === "TimeoutError" || /\btimed out\b|\btimeout\b/iu.test(message)) return "The reviewer call timed out.";
+  const status = /\b(4\d\d|5\d\d)\b/u.exec(message)?.[1];
+  if (status) return `The model provider returned an error (HTTP ${status}).`;
+  return "The reviewer call failed.";
+}
 
 export interface ChatAnswerReviewEligibility {
   depth: ChatOrchestrationReviewDepth | undefined;
@@ -142,12 +155,11 @@ export async function runChatAnswerReview(
     if (isAuthoritativeModelUsageAccountingError(error)) {
       throw error;
     }
-    const message = error instanceof Error && error.message.trim() ? error.message.trim() : "Reviewer call failed.";
     return {
       ...base,
       outcome: "unavailable",
       issues: [],
-      reason: message.slice(0, MAX_REASON_CHARS),
+      reason: classifyReviewFailure(error, input.signal),
       action: "recorded",
       reviewedAt: reviewedAt(),
     };
@@ -254,7 +266,13 @@ function buildReviewRequest(input: ChatAnswerReviewInput): ChatCompletionRequest
     model: input.model,
     stream: false,
     timeoutMs: CHAT_ANSWER_REVIEW_TIMEOUT_MS,
-    memory: { enabled: false, mode: "off" },
+    // Memory stays off; the workspace and session still bind the call so that conversation's hooks govern it.
+    memory: {
+      enabled: false,
+      mode: "off",
+      sessionId: input.sessionId,
+      ...(input.workspaceId ? { workspace: input.workspaceId } : {}),
+    },
     response_format: { type: "json_object" },
     max_tokens: REVIEW_MAX_TOKENS,
     messages: [
