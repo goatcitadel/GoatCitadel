@@ -171,6 +171,17 @@ export class ConnectorInstallChangePlanAdapter implements EvolutionControlPlaneA
         result: { summary: finishedSentences(template, allowed, true, chatTurnedOn).join(" ") },
       };
     } catch (error) {
+      // Another install saved the app between this one's check and its save: this one saved nothing, so it is refused
+      // like a check at apply, and the other install's server is never named as its own.
+      if (step === "save" && isAlreadyInstalled(error)) {
+        return {
+          status: "failed" as const,
+          result: {
+            summary: [...finishedSentences(template, allowed, false, false), error.message].join(" "),
+            failureCode: "connector_install_refused",
+          },
+        };
+      }
       // Nothing was written before the allowed-host write landed. After it, what the owners hold decides the summary:
       // a save can report a failed follow-up after it landed, or be rolled back with its transaction.
       const observed =
@@ -337,6 +348,11 @@ function assertLabelFree(template: McpServerTemplateRecord, servers: readonly Mc
 
 function refusal(field: string, message: string): ConflictError {
   return new ConflictError({ message, details: { field } });
+}
+
+/** Whether a save was refused by `assertLabelFree` because a server with the template's label is saved. */
+function isAlreadyInstalled(error: unknown): error is ConflictError {
+  return error instanceof ConflictError && error.details?.field === "alreadyInstalled";
 }
 
 /**

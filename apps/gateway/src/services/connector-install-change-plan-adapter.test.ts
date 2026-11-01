@@ -410,8 +410,30 @@ describe("installing a connector through one Change Plan", () => {
     expect(h.state.servers.filter((server) => server.label === "Example")).toHaveLength(1);
     const completed = settled.filter((plan) => plan.status === "completed");
     expect(completed).toHaveLength(1);
+    // The loser saved nothing, so it says it was refused and doesn't claim the winner's server as its own.
     const other = settled.find((plan) => plan.status !== "completed")!;
-    expect(other.evidenceRefs).toContain(`mcp_server:${h.state.servers[0]!.serverId}`);
+    expect(other.status).toBe("failed");
+    expect(other.result).toEqual({ summary: "Example is already saved.", failureCode: "connector_install_refused" });
+    expect(other.evidenceRefs).toEqual(["mcp_template:example"]);
+  });
+
+  it("names the hosts it allowed when its save is refused because another install saved the app first", async () => {
+    const h = harness();
+    h.deps.createMcpServer.mockImplementationOnce(async () => {
+      h.state.servers = [savedServer("Example")];
+      throw new ConflictError({ message: "Example is already saved.", details: { field: "alreadyInstalled" } });
+    });
+
+    const settled = await h.install(installRequest("example", true));
+
+    expect(settled.status).toBe("failed");
+    expect(settled.result).toEqual({
+      summary: "Allowed mcp.example.test, auth.example.test. Example is already saved.",
+      failureCode: "connector_install_refused",
+    });
+    expect(settled.evidenceRefs).toEqual(["mcp_template:example"]);
+    expect(h.deps.setReadsFree).not.toHaveBeenCalled();
+    expect(h.state.settings.features.chatStaticMcpV1Enabled).toBe(false);
   });
 
   it("refuses a template already saved under a different letter case", async () => {
