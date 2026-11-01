@@ -252,7 +252,7 @@ export function ChatTranscript({
   }, [onNewConversation]);
   const startNewConversation = useCallback(() => newConversation.current?.(), []);
   const offerNewConversation = onNewConversation ? startNewConversation : undefined;
-  const turnActions = useTurnActions(props);
+  const turnActions = useTurnActions(props, onReviewPlan);
 
   if (props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError)
     return (
@@ -307,7 +307,6 @@ export function ChatTranscript({
       newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
       onInspectTurn={onInspectTurn}
       onOpenArtifact={onOpenArtifact}
-      onReviewPlan={onReviewPlan}
       onNewConversation={offerNewConversation}
     />
   );

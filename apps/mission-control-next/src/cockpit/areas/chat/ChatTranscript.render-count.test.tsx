@@ -149,6 +149,8 @@ describe("ChatTranscript turn memo across composer and record changes", () => {
           onInspectTurn={onInspectTurn}
           onOpenArtifact={onOpenArtifact}
           onNewConversation={onNewConversation}
+          // A fresh arrow on each render, as the production host passes it.
+          onReviewPlan={() => undefined}
         />,
       ),
     );

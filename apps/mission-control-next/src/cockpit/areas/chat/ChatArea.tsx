@@ -34,7 +34,7 @@ import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { ChatTimerPanel } from "../../../features/threaded-surface/ChatTimerPanel";
 import { ChatSessionStatusPanel } from "../../../features/threaded-surface/ChatSessionStatusPanel";
-import { useStableHandler } from "../../../features/threaded-surface/useStableHandler";
+import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
 
@@ -267,6 +267,7 @@ export function ChatAreaView({
   const inspectRun = useStableHandler((turnId: string) => openInspector(turnId, "run"));
   const openTranscriptArtifact = useStableHandler(openArtifact);
   const startNewConversation = useStableHandler(() => void input.sessionRail.onCreateSession());
+  const reviewChangePlan = useOptionalStableHandler(input.onReviewChangePlan);
   const openProjects = () => navigate("/chat/projects");
   // Messaging lists this workspace's channels under the conversations; a channel row opens that channel's page.
   const messaging = {
@@ -382,7 +383,7 @@ export function ChatAreaView({
               props={active}
               channel={channel}
               receipt={input.changePlanReceipt}
-              onReviewPlan={input.onReviewChangePlan}
+              onReviewPlan={reviewChangePlan}
               onNewConversation={startNewConversation}
               onInspectTurn={inspectTurn}
               onInspectRun={inspectRun}

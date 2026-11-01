@@ -90,7 +90,6 @@ export const Turn = memo(function Turn({
   newMessageCount,
   onInspectTurn,
   onOpenArtifact,
-  onReviewPlan,
   onNewConversation,
 }: {
   turn: ChatThreadTurnRecord;
@@ -114,7 +113,6 @@ export const Turn = memo(function Turn({
   newMessageCount?: number;
   onInspectTurn?: (turnId: string) => void;
   onOpenArtifact?: (turnId: string, artifactId?: string) => void;
-  onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
   /** Opens a fresh conversation, offered when this one has grown too long for the model. Callers keep it stable. */
   onNewConversation?: () => void;
 }) {
@@ -265,7 +263,7 @@ export const Turn = memo(function Turn({
               actions.onDraftChange(prompt);
               actions.composerRef.current?.focus();
             }}
-            onReviewPlan={onReviewPlan}
+            onReviewPlan={actions.onReviewPlan}
           />
         </Suspense>
       ) : null}

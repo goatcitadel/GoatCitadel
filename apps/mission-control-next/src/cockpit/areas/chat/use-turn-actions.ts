@@ -1,6 +1,9 @@
 import { useMemo } from "react";
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
-import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
+import type {
+  MissionThreadedActiveSessionSurfaceProps,
+  MissionThreadedRenderSurfaceInput,
+} from "@goatcitadel/threaded-surface-core";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 /**
@@ -26,7 +29,10 @@ export type TurnActions = Pick<
   | "onOpenRunDetails"
   | "onCreateGeneratedArtifact"
   | "onOpenGeneratedArtifact"
->;
+> & {
+  /** Opens a change plan for review; hosts may rebuild it on every render, so it is held stable here too. */
+  onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
+};
 
 /** A completed turn with a complete answer offers workflow-skill capture, the one turn control that reads the draft. */
 export function turnReadsDraft(turn: ChatThreadTurnRecord): boolean {
@@ -34,7 +40,10 @@ export function turnReadsDraft(turn: ChatThreadTurnRecord): boolean {
 }
 
 /** The surface props a turn reads, as one object that changes only when one of its values does. */
-export function useTurnActions(props: MissionThreadedActiveSessionSurfaceProps): TurnActions {
+export function useTurnActions(
+  props: MissionThreadedActiveSessionSurfaceProps,
+  reviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"],
+): TurnActions {
   const { historicalReadOnly, workspaceId, selectedSessionId, selectedTurnId, capabilitySuggestions, composerRef } =
     props;
   const onRefreshThread = useStableHandler(props.onRefreshThread);
@@ -48,6 +57,7 @@ export function useTurnActions(props: MissionThreadedActiveSessionSurfaceProps):
   const onOpenRunDetails = useStableHandler(props.onOpenRunDetails);
   const onCreateGeneratedArtifact = useStableHandler(props.onCreateGeneratedArtifact);
   const onOpenGeneratedArtifact = useStableHandler(props.onOpenGeneratedArtifact);
+  const onReviewPlan = useOptionalStableHandler(reviewPlan);
   return useMemo(
     () => ({
       historicalReadOnly,
@@ -67,6 +77,7 @@ export function useTurnActions(props: MissionThreadedActiveSessionSurfaceProps):
       onOpenRunDetails,
       onCreateGeneratedArtifact,
       onOpenGeneratedArtifact,
+      onReviewPlan,
     }),
     [
       historicalReadOnly,
@@ -86,6 +97,7 @@ export function useTurnActions(props: MissionThreadedActiveSessionSurfaceProps):
       onOpenRunDetails,
       onCreateGeneratedArtifact,
       onOpenGeneratedArtifact,
+      onReviewPlan,
     ],
   );
 }
