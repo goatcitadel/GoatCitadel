@@ -30,6 +30,7 @@ import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
 import { ChatCapabilitySuggestionLine } from "./ChatCapabilitySuggestionLine";
 import { ChatCodeModeRequestCard } from "./ChatCodeModeRequestCard";
+import { ChatBrowserErrandCards } from "./ChatBrowserErrandCard";
 import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
 import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
@@ -228,6 +229,7 @@ export const Turn = memo(function Turn({
         workspaceId={actions.workspaceId}
         onRefreshThread={actions.onRefreshThread}
       />
+      <ChatBrowserErrandCards toolRuns={turn.toolRuns} />
       {actions.onCapabilitySuggestionAction && actions.onDismissCapabilitySuggestion ? (
         <ChatCapabilitySuggestionLine
           suggestions={capabilitySuggestions}

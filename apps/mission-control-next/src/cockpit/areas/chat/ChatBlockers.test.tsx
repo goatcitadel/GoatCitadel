@@ -24,6 +24,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", () => ({
   fetchWorkspaces: vi.fn(async () => ({ items: [] })),
 }));
+// The image fetch is the shared AttachmentImage's; this file covers which attachment the blocker asks for.
+vi.mock("../../ui/AttachmentImage", () => ({
+  AttachmentImage: ({ attachmentId, alt }: { attachmentId: string; alt: string }) => (
+    <img data-attachment={attachmentId} alt={alt} />
+  ),
+}));
 const specialist = vi.hoisted(() => ({ read: vi.fn() }));
 vi.mock("../inbox/specialist-approval-evidence", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../inbox/specialist-approval-evidence")>()),
@@ -574,4 +580,37 @@ it("does not send a second specialist read while Check again is still reading", 
   expect(specialist.read).toHaveBeenCalledTimes(reads);
   await act(async () => release(evidence));
   await vi.waitFor(() => expect(findButton("Check again")).toBeUndefined());
+});
+
+it("approval blocker shows the errand screenshot", async () => {
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "approval/1",
+    kind: "browser.errand.action",
+    status: "pending",
+    riskLevel: "caution",
+    payload: {},
+    preview: {
+      summary: "Click Place order",
+      url: "https://shop.example/checkout",
+      title: "Checkout",
+      screenshotAttachmentId: "shot-1",
+      screenshotSha256: "a".repeat(64),
+    },
+    createdAt: "2026-10-01T00:00:00Z",
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({
+            pendingApproval: { approvalId: "approval/1", kind: "browser.errand.action", riskLevel: "caution" },
+          })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.querySelector("img")).not.toBeNull());
+  expect(container.querySelector("img")?.getAttribute("data-attachment")).toBe("shot-1");
+  expect(container.textContent).toContain("Browser errand step");
+  expect(container.textContent).not.toContain("browser.errand.action");
 });

@@ -8,6 +8,7 @@ import type {
   DurableRunStatus,
   TaskStatus,
 } from "@goatcitadel/contracts";
+import type { BrowserErrandOutcome, BrowserErrandState } from "../api/browser-errands.js";
 
 export type StatusTone = "running" | "waiting" | "done" | "failed" | "neutral";
 export interface StatusPresentation {
@@ -101,6 +102,29 @@ const taskStatuses: Record<TaskStatus, StatusPresentation> = {
   done: status("Done", "done"),
   blocked: status("Blocked", "failed"),
 };
+
+const browserErrandStates: Record<Exclude<BrowserErrandState, "finished">, StatusPresentation> = {
+  running: status("Running", "running"),
+  waiting_on_you: status("Waiting on you", "waiting"),
+  taken_over: status("Paused", "neutral"),
+};
+
+const browserErrandOutcomes: Record<BrowserErrandOutcome, StatusPresentation> = {
+  done: status("Done", "done"),
+  stopped: status("Cancelled", "neutral"),
+  declined: status("Cancelled", "neutral"),
+  window_closed: status("Cancelled", "neutral"),
+  expired: status("Failed", "failed"),
+  failed: status("Failed", "failed"),
+  step_limit: status("Failed", "failed"),
+  time_limit: status("Failed", "failed"),
+};
+
+/** A browser errand's label: its live state while it runs, its outcome once it has finished. */
+export function presentBrowserErrand(state: BrowserErrandState, outcome?: BrowserErrandOutcome): StatusPresentation {
+  if (state !== "finished") return browserErrandStates[state];
+  return outcome ? browserErrandOutcomes[outcome] : status("Done", "done");
+}
 
 export function humanizeToken(value: string): string {
   const words = value

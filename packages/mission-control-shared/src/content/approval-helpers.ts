@@ -354,6 +354,10 @@ export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalReques
     const planEvidence = changePlanEffectApprovalEvidence(approval);
     if (planEvidence) return planEvidence;
   }
+  if (approval.kind === "browser.errand.action") {
+    const errandEvidence = browserErrandActionApprovalEvidence(approval);
+    if (errandEvidence) return errandEvidence;
+  }
   if (approval.kind === "skill.lifecycle") {
     const skillEvidence = skillStateApprovalEvidence(approval);
     if (skillEvidence) return skillEvidence;
@@ -437,6 +441,31 @@ export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): Appr
         ? "GoatCitadel lets it read only what is listed under Reads. "
         : "GoatCitadel lets it read no files. ") +
       "Denying keeps it from running.",
+  };
+}
+
+/**
+ * A browser errand's risky step (a click or entry the errand wants to make). The preview names the step, the page it
+ * is on (the target) and that page's address (supporting); the screenshot the Gateway captured with it is shown beside
+ * the decision. Without a step or a page title there is nothing exact to review here, so the generic model applies.
+ */
+export function browserErrandActionApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
+  const preview = approval.preview as Record<string, unknown> | undefined;
+  const summary = nonEmptyText(preview?.summary);
+  const title = nonEmptyText(preview?.title);
+  if (!summary && !title) return null;
+  const url = nonEmptyText(preview?.url);
+  const entries: ApprovalTargetEntry[] = [
+    ...(summary ? [{ label: "Step", value: summary }] : []),
+    ...(title ? [{ label: "Page", value: title }] : []),
+  ];
+  return {
+    targets: entries.map((entry) => `${entry.label}: ${entry.value}`),
+    targetEntries: entries,
+    commands: [],
+    changes: [],
+    supporting: url ? [url] : [],
+    consequence: "Approving lets the browser errand take this one step. Denying ends the errand.",
   };
 }
 
