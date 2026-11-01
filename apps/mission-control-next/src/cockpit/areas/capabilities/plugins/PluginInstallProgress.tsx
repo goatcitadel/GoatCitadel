@@ -1,3 +1,4 @@
+import { useEffect, useRef } from "react";
 import { Button } from "../../../ui/Button";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
 import { CANT_BE_INSTALLED } from "./plugin-check-copy";
@@ -106,6 +107,7 @@ export function PluginInstallProgress({
   const { state } = flow;
   const stops = stopLines(flow);
   const done = state.phase === "done" && state.detail ? changesNewChats(state.detail.pieces) : false;
+  const { status, pressed } = useFocusKept(actionOf(flow, Boolean(onCheckAgain)));
   return (
     <div className="space-y-3">
       <ApprovalInPlace flow={flow} name={name} />
@@ -119,13 +121,49 @@ export function PluginInstallProgress({
         </div>
       ) : null}
       {done ? <p>{NEW_CHATS_NOTE}</p> : null}
-      <ProgressAction flow={flow} secretsReady={secretsReady} onInstall={onInstall} onCheckAgain={onCheckAgain} />
+      <ProgressAction
+        flow={flow}
+        secretsReady={secretsReady}
+        onInstall={onInstall}
+        onCheckAgain={onCheckAgain}
+        onPressed={pressed}
+      />
       {/* Always in place, so each new line is read out; the pieces' rows carry it on screen too. */}
-      <p role="status" className="text-fg">
+      <p ref={status} tabIndex={-1} role="status" className="text-fg focus:outline-none">
         {progressLine(flow, name)}
       </p>
     </div>
   );
+}
+
+type ProgressActionKind = "install" | "continue" | "check_again" | undefined;
+
+/** Which one action the install offers now, if any. */
+function actionOf(flow: PluginInstall, canCheckAgain: boolean): ProgressActionKind {
+  const { state } = flow;
+  if (state.phase === "ready" && state.inspection.installable) return "install";
+  if (canContinue(flow)) return "continue";
+  const stopped =
+    (state.phase === "check_failed" && !state.inspectionId) || (state.phase === "failed" && !state.detail);
+  return stopped && canCheckAgain ? "check_again" : undefined;
+}
+
+/**
+ * Keeps keyboard focus in the panel: when the button the operator pressed goes away (the install moved on), focus moves
+ * to the progress line, which says where it stands, instead of falling to the page.
+ */
+function useFocusKept(action: ProgressActionKind) {
+  const status = useRef<HTMLParagraphElement>(null);
+  const pressedRef = useRef(false);
+  const last = useRef(action);
+  useEffect(() => {
+    if (last.current === action) return;
+    last.current = action;
+    const lost = document.activeElement === null || document.activeElement === document.body;
+    if (pressedRef.current && lost) status.current?.focus();
+    pressedRef.current = false;
+  }, [action]);
+  return { status, pressed: () => (pressedRef.current = true) };
 }
 
 /** The one action where the install stands: Install, Continue or Check again, or none. */
@@ -134,35 +172,38 @@ function ProgressAction({
   secretsReady,
   onInstall,
   onCheckAgain,
+  onPressed,
 }: {
   flow: PluginInstall;
   secretsReady: boolean;
   onInstall: () => void;
   onCheckAgain?: () => void;
+  onPressed: () => void;
 }) {
-  const { state } = flow;
-  const installable = state.phase === "ready" && state.inspection.installable;
-  const checkAgain =
-    (state.phase === "check_failed" && !state.inspectionId) || (state.phase === "failed" && !state.detail);
+  const action = actionOf(flow, Boolean(onCheckAgain));
+  const press = (run: () => void) => () => {
+    onPressed();
+    run();
+  };
   return (
     <>
-      {installable ? (
+      {action === "install" ? (
         <Button
           variant="primary"
           disabled={!secretsReady}
           loading={flow.asking}
           loadingLabel="Asking…"
-          onClick={onInstall}
+          onClick={press(onInstall)}
         >
           Install
         </Button>
       ) : null}
-      {canContinue(flow) ? (
-        <Button variant="primary" onClick={() => void flow.confirm({})}>
+      {action === "continue" ? (
+        <Button variant="primary" onClick={press(() => void flow.confirm({}))}>
           Continue
         </Button>
       ) : null}
-      {checkAgain && onCheckAgain ? <Button onClick={onCheckAgain}>Check again</Button> : null}
+      {action === "check_again" && onCheckAgain ? <Button onClick={press(onCheckAgain)}>Check again</Button> : null}
     </>
   );
 }

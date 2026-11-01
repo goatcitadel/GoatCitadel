@@ -153,7 +153,7 @@ describe("plugin install words", () => {
   it("words each check, a kept group as off rather than installed", () => {
     expect(checkLine({ status: "ready" }, "connector")).toBe("Passed GoatCitadel's checks");
     expect(checkLine({ status: "already_there" }, "connector")).toBe("Already installed. Stays when you uninstall.");
-    expect(checkLine({ status: "already_there" }, "tool_group_off")).toBe("Already off. Stays off when you uninstall.");
+    expect(checkLine({ status: "already_there" }, "tool_group_off")).toBe("Stays off when you uninstall.");
     expect(
       checkLine({ status: "blocked", code: "HOST_NOT_PUBLIC", message: "That address isn't a public host." }, "hook"),
     ).toBe("That address isn't a public host.");

@@ -60,6 +60,8 @@ function usePanelTarget(search: string, list: CapabilityPluginListResponse | und
     ...pluginInspectionQuery(inspectionId ?? ""),
     enabled: inspectionId !== undefined && !inspectionEntry,
   });
+  // A folder form opens only where a folder may be added, whatever the address says: never before the list says so.
+  if (form === "folder" && list?.folderSourcesAllowed !== true) return undefined;
   if (form) return { key: draftPluginInstallKey(form), title: FORM_TITLES[form], form };
   if (inspectionId) {
     const name = shownOf(inspectionEntry?.state)?.name || inspectionRead.data?.name;
@@ -172,9 +174,11 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
   return {
     install: (item) => {
       const key = draftPluginInstallKey(`built_in:${item.pluginId}`);
-      // A second press while the first check runs shows that check rather than making another.
-      if (readPluginInstall(key)?.state.phase !== "checking") {
-        resetPluginInstall(key);
+      const before = readPluginInstall(key);
+      // A second press while the first check runs shows that check rather than making another; one after a check whose
+      // answer never came sends it again under its own key, so the Gateway hands that check back.
+      if (before?.state.phase !== "checking") {
+        if (!(before?.state.phase === "check_failed" && before.lost)) resetPluginInstall(key);
         startPluginInspection(key, { kind: "built_in", pluginId: item.pluginId }, { client, workspaceId });
       }
       panels.show(key, item.name);

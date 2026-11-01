@@ -8,6 +8,7 @@ import type {
   CapabilityPluginListResponse,
   CapabilitySkillOperationRequest,
 } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CockpitNavigationProvider } from "../../../app/CockpitNavigationProvider";
 import { InspectorPanel, InspectorProvider } from "../../../app/inspector";
@@ -238,6 +239,25 @@ describe("Plugins tab install panel", () => {
       snapshotId: "snap-notes",
       operationKind: "activate",
     });
+  });
+
+  it("opens no folder form where a folder can't be added, even from its address", async () => {
+    list = { ...list, folderSourcesAllowed: false };
+    await renderTab("/capabilities/plugins?shell=cockpit&item=plugin-source%3Afolder");
+    expect(body()).toBeNull();
+    expect(document.body.textContent).not.toContain("Folder path");
+  });
+
+  it("sends a built-in check whose answer never came again under its own key", async () => {
+    api.inspectCapabilityPlugin.mockRejectedValueOnce(
+      new ApiRequestError("Failed to fetch", { kind: "network", method: "POST", path: "/api/v1/capabilities/plugins" }),
+    );
+    await renderTab("/capabilities/plugins?shell=cockpit");
+    await press(button("Install Meeting tools"));
+    await press(button("Install Meeting tools"));
+    const keys = api.inspectCapabilityPlugin.mock.calls.map(([, options]) => options.attemptKey);
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
   });
 
   it("leaves an installed plugin's address to its own panel", async () => {

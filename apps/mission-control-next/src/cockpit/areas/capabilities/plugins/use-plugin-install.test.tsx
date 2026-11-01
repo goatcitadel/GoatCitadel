@@ -258,10 +258,31 @@ describe("usePluginInstall", () => {
     expect(skills.requestCapabilitySkillOperation).toHaveBeenCalledTimes(1);
     // Not a refusal the operator has to act on: no line, and the confirmation goes on.
     expect(shown[PLUGIN_KEY]!.notice).toBeUndefined();
-    await beat(1_000);
+    await beat(5_000);
     expect(skills.requestCapabilitySkillOperation).toHaveBeenCalledTimes(2);
-    await follow();
+    for (let read = 0; read < 30 && shown[PLUGIN_KEY]?.state.phase !== "done"; read += 1) await beat(1_000);
     expect(shown[PLUGIN_KEY]!.state.phase).toBe("done");
+  });
+
+  it("backs off while the rate limit keeps refusing a step, and refreshes nothing for a refusal", async () => {
+    skills.requestCapabilitySkillOperation.mockImplementation(async () => {
+      throw httpError(429, { error: "Too many requests." });
+    });
+    await render();
+    await inspect();
+    await confirm();
+    const invalidate = vi.spyOn(client, "invalidateQueries");
+    const reads = api.fetchCapabilityPluginDetail.mock.calls.length;
+
+    for (let second = 0; second < 60; second += 1) await beat(1_000);
+
+    // The waiting pace: 5, 5, 5, 10, 20 and then every 30 seconds, never once a second.
+    expect(skills.requestCapabilitySkillOperation.mock.calls.length).toBeLessThanOrEqual(7);
+    expect(skills.requestCapabilitySkillOperation.mock.calls.length).toBeGreaterThanOrEqual(5);
+    // One detail read per retry, far below the 60-a-minute detail limit, and no list refetch for a refusal.
+    expect(api.fetchCapabilityPluginDetail.mock.calls.length - reads).toBeLessThanOrEqual(7);
+    expect(invalidate).not.toHaveBeenCalled();
+    expect(shown[PLUGIN_KEY]!.notice).toBeUndefined();
   });
 
   it("stops following a plugin plan that was declined or ran out of time", async () => {
@@ -340,6 +361,19 @@ describe("usePluginInstall", () => {
     ).map(([body, options]) => [body.hookSecrets, options.attemptKey]);
     expect(sent[1]).toEqual(sent[0]);
     expect(sent[0]![0]).toEqual({ watch: "s3cret" });
+  });
+
+  it("sends a secret typed again differently after a lost answer under a new key", async () => {
+    await render();
+    await inspect();
+    api.installCapabilityPlugin.mockRejectedValueOnce(networkError());
+    expect(await confirm(INSPECTION_ID, { watch: "first-secret" })).toBe(false);
+    // Under the lost request's key the first secret would be what the Gateway keeps, so this one goes out afresh.
+    expect(await confirm(INSPECTION_ID, { watch: "second-secret" })).toBe(true);
+    const [first, second] = (
+      api.installCapabilityPlugin.mock.calls as [CapabilityPluginInstallRequest, { attemptKey: string }][]
+    ).map(([, options]) => options.attemptKey);
+    expect(second).not.toBe(first);
   });
 
   it("says a refused install in its own words and keeps the check", async () => {

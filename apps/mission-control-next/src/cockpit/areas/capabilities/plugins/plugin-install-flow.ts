@@ -94,6 +94,8 @@ const misses = new Map<string, number>();
 const stepLookups = new Set<string>();
 
 type Pace = "applying" | "waiting";
+/** The stage of a step the rate limit refused. */
+const LIMITED = "limited:";
 
 export const installContext = (key: string) => contexts.get(key);
 export const setInstallContext = (key: string, context: PluginInstallContext) => contexts.set(key, context);
@@ -230,9 +232,20 @@ function moveToPlugin(key: string, entry: PluginInstallEntry, detail: Capability
   receiveDetail(target, detail);
 }
 
-/** Takes on a plugin's detail when nothing here follows it yet (after a reload, say). */
-export function adoptPluginDetail(key: string, detail: CapabilityPluginDetail, context: PluginInstallContext) {
-  if (readPluginInstall(key)) return;
+/**
+ * Takes on a plugin's detail when nothing here follows it yet (after a reload, say), or, with `reread`, a detail read
+ * afresh for an install this session saw finish or stop: the Gateway may have moved on since (a skill switched off).
+ */
+export function adoptPluginDetail(
+  key: string,
+  detail: CapabilityPluginDetail,
+  context: PluginInstallContext,
+  reread = false,
+) {
+  const state = readPluginInstall(key)?.state;
+  if (state && !(reread && (state.phase === "done" || state.phase === "failed"))) return;
+  // The same answer again (a refresh the finish itself asked for) changes nothing.
+  if (state && "detail" in state && stateLine(state.detail) === stateLine(detail)) return;
   contexts.set(key, context);
   bump(key);
   setPluginInstall(key, { state: { phase: "following", detail } });
@@ -364,14 +377,12 @@ function otherPiece(
 async function readPlanSummary(key: string, detail: CapabilityPluginDetail) {
   const context = contexts.get(key);
   if (!context) return;
-  try {
-    const summary = (await fetchChangePlan(detail.installPlanId, { workspaceId: context.workspaceId })).result?.summary;
-    const entry = readPluginInstall(key);
-    if (summary?.trim() && entry?.state.phase === "failed" && entry.state.detail?.pluginId === detail.pluginId) {
-      setPluginInstall(key, { ...entry, state: { ...entry.state, message: summary.trim() } });
-    }
-  } catch {
-    // The panel's own line stands.
+  // A plan that can't be read leaves the panel's own line.
+  const plan = await fetchChangePlan(detail.installPlanId, { workspaceId: context.workspaceId }).catch(() => undefined);
+  const summary = plan?.result?.summary?.trim();
+  const entry = readPluginInstall(key);
+  if (summary && entry?.state.phase === "failed" && entry.state.detail?.pluginId === detail.pluginId) {
+    setPluginInstall(key, { ...entry, state: { ...entry.state, message: summary } });
   }
 }
 
@@ -391,7 +402,8 @@ async function lookUpWaitingStep(key: string, piece: CapabilityPluginDetailPiece
     const entry = readPluginInstall(key);
     if (kind && entry) setPluginInstall(key, { ...entry, waitingStep: { approvalId, kind } });
   } catch {
-    // Its approval is titled by the skill alone.
+    // Its approval is titled by the skill alone until a later wait looks it up again.
+    stepLookups.delete(approvalId);
   }
 }
 
@@ -403,7 +415,8 @@ async function requestStep(key: string, piece: CapabilityPluginDetailPiece, kind
   bump(key);
   cancelPluginInstallTick(key);
   misses.delete(key);
-  beats.delete(key);
+  // A step asked again after the rate limit refused it keeps counting its waits, so the retries slow down.
+  if (!beats.get(key)?.stage.startsWith(LIMITED)) beats.delete(key);
   setPluginInstall(key, { ...entry, asking: true, asked: { pieceId: piece.pieceId, kind }, notice: undefined });
   sending.add(key);
   try {
@@ -414,10 +427,10 @@ async function requestStep(key: string, piece: CapabilityPluginDetailPiece, kind
     });
   } catch (error) {
     sending.delete(key);
-    refreshInstall(key);
     return refusedStep(key, kind, error);
   }
   sending.delete(key);
+  beats.delete(key);
   refreshInstall(key);
   const current = readPluginInstall(key);
   if (!current?.asking || current.asked?.kind !== kind) return;
@@ -431,11 +444,13 @@ function refusedStep(key: string, kind: PluginSkillStepKind, error: unknown) {
   if (!current?.asking || current.asked?.kind !== kind) return;
   bump(key);
   const status = isApiRequestError(error) ? error.status : undefined;
-  // The 20-a-minute step limit: asked again on the paced schedule, and the confirmation goes on.
+  // The 20-a-minute step limit: asked again on the waiting pace (5 seconds, slowing to every 30), and the confirmation
+  // goes on. Nothing changed, so nothing is refreshed, and the detail is read only as often as the step is asked.
   if (status === 429) {
     setPluginInstall(key, { ...current, asking: false, asked: undefined });
-    return paced(key, `limited:${kind}`, "applying");
+    return paced(key, `${LIMITED}${kind}`, "waiting");
   }
+  refreshInstall(key);
   const detail = current.state.phase === "following" ? current.state.detail : undefined;
   if (status === 404) {
     return setPluginInstall(key, {

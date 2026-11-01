@@ -59,6 +59,8 @@ export interface PluginInstallEntry {
   readonly unreadable?: boolean;
   /** The key this panel should move to, once. */
   readonly movedTo?: string;
+  /** When the entry reached `done` or `failed` (`Date.now()`): only a read after that can say the Gateway moved on. */
+  readonly endedAt?: number;
 }
 
 const DRAFT_PREFIX = "draft:";
@@ -152,8 +154,9 @@ export function readPluginInstall(key: string): PluginInstallEntry | undefined {
 }
 
 /** Replaces the key's entry; `undefined` forgets it. An entry that reached an end stops its reads. */
-export function setPluginInstall(key: string, entry: PluginInstallEntry | undefined) {
-  if (entries.get(key) === entry) return;
+export function setPluginInstall(key: string, next: PluginInstallEntry | undefined) {
+  if (entries.get(key) === next) return;
+  const entry = next ? stampEnd(entries.get(key), next) : undefined;
   if (entry) entries.set(key, entry);
   else entries.delete(key);
   const phase = entry?.state.phase;
@@ -161,6 +164,16 @@ export function setPluginInstall(key: string, entry: PluginInstallEntry | undefi
     stopFollowing(key);
   }
   publish();
+}
+
+const isEnd = (entry: PluginInstallEntry | undefined) =>
+  entry?.state.phase === "done" || entry?.state.phase === "failed";
+
+/** Marks when an entry reached an end, once; an entry that goes on from there loses the mark. */
+function stampEnd(before: PluginInstallEntry | undefined, next: PluginInstallEntry): PluginInstallEntry {
+  if (!isEnd(next)) return next.endedAt === undefined ? next : { ...next, endedAt: undefined };
+  if (next.endedAt !== undefined) return next;
+  return { ...next, endedAt: isEnd(before) && before?.endedAt !== undefined ? before.endedAt : Date.now() };
 }
 
 export function usePluginInstallEntry(key: string | undefined): PluginInstallEntry | undefined {

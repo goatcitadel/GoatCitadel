@@ -52,10 +52,8 @@ export function skipOffNext(skills: number): string {
 export function checkLine(check: CapabilityPluginPieceCheck, kind: PluginPieceKind): string {
   if (check.status === "ready") return "Passed GoatCitadel's checks";
   if (check.status === "blocked") return check.message;
-  // A group already off is the operator's own switch, never "installed".
-  return kind === "tool_group_off"
-    ? "Already off. Stays off when you uninstall."
-    : "Already installed. Stays when you uninstall.";
+  // A group already off is the operator's own switch, never "installed"; its line above already says it is off.
+  return kind === "tool_group_off" ? "Stays off when you uninstall." : "Already installed. Stays when you uninstall.";
 }
 
 /** Where a plugin comes from: shipped, a Git repository at a pinned commit, or a folder on this computer. */

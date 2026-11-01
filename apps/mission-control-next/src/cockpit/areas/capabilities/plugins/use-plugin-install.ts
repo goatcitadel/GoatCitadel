@@ -167,9 +167,11 @@ export async function confirmPluginInstall(key: string, hookSecrets: Readonly<Re
   const context = installContext(key);
   if (entry?.state.phase !== "ready" || entry.asking || !entry.state.inspection.installable || !context) return false;
   const { inspection } = entry.state;
-  const installKey = entry.lost && entry.installKey ? entry.installKey : crypto.randomUUID();
   bump(key);
-  setPluginInstall(key, { ...entry, asking: true, chain: true, installKey, lost: false, notice: undefined });
+  setPluginInstall(key, { ...entry, asking: true, chain: true, lost: false, notice: undefined });
+  const installKey = await attemptKeyFor(key, entry, hookSecrets);
+  const asking = readPluginInstall(key);
+  if (asking) setPluginInstall(key, { ...asking, installKey });
   const secrets = Object.keys(hookSecrets).length > 0 ? { hookSecrets: { ...hookSecrets } } : {};
   let outcome: PluginActionOutcome;
   try {
@@ -178,11 +180,41 @@ export async function confirmPluginInstall(key: string, hookSecrets: Readonly<Re
       { attemptKey: installKey },
     );
   } catch (error) {
+    if (wasAnswered(error)) lostSecrets.delete(key);
+    else lostSecrets.set(key, await digestOf(hookSecrets));
     return installRefused(key, error);
   }
+  lostSecrets.delete(key);
   refreshInstall(key);
   receiveOutcome(key, outcome);
   return true;
+}
+
+/**
+ * A digest of the signing secrets an install request carried whose answer never came, by key. Only the digest is kept,
+ * here and never in the store, so a retry can tell whether it sends the same secrets.
+ */
+const lostSecrets = new Map<string, string>();
+
+async function digestOf(secrets: Readonly<Record<string, string>>): Promise<string> {
+  const text = JSON.stringify(Object.entries(secrets).sort(([left], [right]) => left.localeCompare(right)));
+  const bytes = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(text)));
+  return [...bytes].map((byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+/**
+ * The install's attempt key. A retry after an answer that never came reuses the lost request's key only when it sends
+ * the same secrets: under that key the Gateway answers from the first request, which holds the first secrets, so a
+ * secret typed again differently goes out as a new request with a new key instead.
+ */
+async function attemptKeyFor(
+  key: string,
+  entry: PluginInstallEntry,
+  hookSecrets: Readonly<Record<string, string>>,
+): Promise<string> {
+  if (!entry.lost || !entry.installKey) return crypto.randomUUID();
+  const same = lostSecrets.get(key) === (await digestOf(hookSecrets));
+  return same ? entry.installKey : crypto.randomUUID();
 }
 
 function installRefused(key: string, error: unknown): boolean {
@@ -223,6 +255,7 @@ function receiveOutcome(key: string, outcome: PluginActionOutcome) {
 
 /** Forgets a panel's flow, so it starts again in the workspace active then. */
 export function resetPluginInstall(key: string) {
+  lostSecrets.delete(key);
   forgetFlow(key);
   setPluginInstall(key, undefined);
 }
@@ -277,17 +310,19 @@ function waitingStepOf(entry: PluginInstallEntry | undefined): PluginSkillStepKi
 /**
  * One install panel's flow: checking a source, then installing every piece from one confirmation, or carrying on with
  * one that isn't finished. `seed` is the inspection or the plugin's detail as the Gateway read it, taken on when nothing
- * here follows the key yet (after a reload). Every view of the same key reads the same entry, which outlasts each.
+ * here follows the key yet (after a reload); with `reread`, a detail read afresh replaces an install this session saw
+ * finish or stop. Every view of the same key reads the same entry, which outlasts each.
  */
 export function usePluginInstall(
   key: string,
-  seed?: { inspection?: CapabilityPluginInspection | null; detail?: CapabilityPluginDetail | null },
+  seed?: { inspection?: CapabilityPluginInspection | null; detail?: CapabilityPluginDetail | null; reread?: boolean },
 ): PluginInstall {
   const client = useQueryClient();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
   const entry = usePluginInstallEntry(key);
   const inspection = seed?.inspection;
   const detail = seed?.detail;
+  const reread = seed?.reread === true;
 
   useEffect(() => {
     if (inspection && inspection.inspectionId === key) {
@@ -296,9 +331,9 @@ export function usePluginInstall(
   }, [key, inspection, client]);
   useEffect(() => {
     if (detail && pluginInstallKey(detail.pluginId) === key) {
-      adoptPluginDetail(key, detail, { client, workspaceId: detail.workspaceId });
+      adoptPluginDetail(key, detail, { client, workspaceId: detail.workspaceId }, reread);
     }
-  }, [key, detail, client]);
+  }, [key, detail, client, reread]);
 
   return {
     state: entry?.state ?? IDLE,
@@ -319,5 +354,6 @@ export function usePluginInstall(
 }
 
 export function __resetPluginInstallsForTests() {
+  lostSecrets.clear();
   __resetPluginInstallFlowForTests();
 }

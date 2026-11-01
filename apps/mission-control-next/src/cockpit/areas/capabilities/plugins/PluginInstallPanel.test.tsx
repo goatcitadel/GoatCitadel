@@ -464,6 +464,56 @@ describe("Plugin install panel: installing", () => {
     expect(rows.every((row) => row?.includes("Added"))).toBe(true);
   });
 
+  it("reads a finished install again when its panel opens, and offers Continue once a skill was switched off", async () => {
+    await render(INSPECTION_ID);
+    await press(button("Install"));
+    await render(PLUGIN_KEY);
+    for (let read = 0; read < 10 && !text().includes("is installed"); read += 1) await beat(1_000);
+    expect(text()).toContain("Meeting tools is installed.");
+
+    // Later, in the Skills tab, the skill is switched off: the Gateway reads the plugin as not finished.
+    act(() => root.unmount());
+    root = createRoot(container);
+    gateway.pieces = { ...gateway.pieces, notes: "installed_off" };
+    await render(PLUGIN_KEY);
+
+    expect(text()).not.toContain("is installed.");
+    expect(text()).toContain("Meeting notes is installed, not switched on.");
+    expect(button("Continue")).toBeDefined();
+    await press(button("Continue"));
+    expect(skills.requestCapabilitySkillOperation).toHaveBeenLastCalledWith(
+      expect.objectContaining({ snapshotId: "snap-notes", operationKind: "activate" }),
+    );
+  });
+
+  it("keeps focus in the panel when the button pressed goes away", async () => {
+    list = listAnswer(false);
+    gateway.skip = false;
+    // No dialog takes focus here: the approval reads as decided elsewhere already.
+    approvals.fetchApproval.mockImplementation(async (approvalId: string) => ({
+      ...stored[approvalId]!,
+      status: "approved",
+    }));
+    await render(INSPECTION_ID);
+    await press(button("Install"));
+    // The plugin's plan waits; Install is gone, and focus is on the line that says so rather than on the page.
+    expect(button("Install")).toBeUndefined();
+    expect(dialog()).toBeNull();
+    const status = container.querySelector<HTMLElement>('[role="status"]');
+    expect(status?.textContent).toBe("Waiting for your approval to install Meeting tools.");
+    expect(document.activeElement).toBe(status);
+  });
+
+  it("names each hook's signing secret for its hook", async () => {
+    await renderInspection(
+      inspectionOf([WATCH, { ...WATCH, pieceId: "approvals", label: "After an approval is decided" }]),
+    );
+    const names = [...container.querySelectorAll('input[type="password"]')].map((input) =>
+      input.getAttribute("aria-label"),
+    );
+    expect(names).toEqual(["Signing secret for After a tool call", "Signing secret for After an approval is decided"]);
+  });
+
   it("continues an install left unfinished after a reload, from its first unfinished piece", async () => {
     gateway.installed = true;
     gateway.workspaceId = "ws-plugin";

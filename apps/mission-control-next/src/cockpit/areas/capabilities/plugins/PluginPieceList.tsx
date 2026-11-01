@@ -43,7 +43,11 @@ export function PluginPieceList({
             {checkLine(piece.check, piece.kind)}
           </p>
           {piece.needsSecret && secrets && onSecret ? (
-            <SecretField value={secrets[piece.pieceId] ?? ""} onChange={(value) => onSecret(piece.pieceId, value)} />
+            <SecretField
+              pieceLabel={piece.label}
+              value={secrets[piece.pieceId] ?? ""}
+              onChange={(value) => onSecret(piece.pieceId, value)}
+            />
           ) : null}
         </li>
       ))}
@@ -52,13 +56,23 @@ export function PluginPieceList({
 }
 
 /** A hook's signing secret. The rule is GoatCitadel's own, so a secret it would refuse never enables Install. */
-function SecretField({ value, onChange }: { value: string; onChange: (value: string) => void }) {
+function SecretField({
+  pieceLabel,
+  value,
+  onChange,
+}: {
+  pieceLabel: string;
+  value: string;
+  onChange: (value: string) => void;
+}) {
   const problem = value === "" ? undefined : signingSecretProblem(value);
   return (
     <Field label="Signing secret" help={SIGNING_SECRET_HINT} {...(problem ? { error: problem } : {})} required>
       {(props) => (
         <input
           {...props}
+          // Each hook's field is named for its hook, so several are told apart; the name starts with the visible label.
+          aria-label={`Signing secret for ${pieceLabel}`}
           type="password"
           autoComplete="new-password"
           spellCheck={false}
