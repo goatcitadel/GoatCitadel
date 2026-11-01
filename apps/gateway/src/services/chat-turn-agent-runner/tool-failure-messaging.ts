@@ -80,17 +80,19 @@ function isWebTool(toolName: string): boolean {
 }
 
 const WEB_PAGE_READ_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+const WEB_LOOKUP_TOOL_NAMES = new Set(["browser.search", ...WEB_PAGE_READ_TOOL_NAMES]);
 
 /**
- * A failed or blocked web lookup the turn worked around: another page read in the same turn succeeded,
- * so the answer rests on sources it did open and reports its own gaps. A switched-off group is still a
- * policy block the operator can lift, so it is never recovered.
+ * A failed or blocked web lookup (a search or page read) the turn worked around: another page read in the
+ * same turn succeeded, so the answer rests on sources it did open and reports its own gaps. Reading a page
+ * never recovers a failed web action such as a post or a click, and a switched-off group is still a policy
+ * block the operator can lift, so neither is ever recovered.
  */
 export function isRecoveredWebReadFailure(
   failedRun: ChatToolRunRecord,
   toolRuns: readonly ChatToolRunRecord[],
 ): boolean {
-  if (!isWebTool(failedRun.toolName) || isSwitchedOffRun(failedRun)) {
+  if (!WEB_LOOKUP_TOOL_NAMES.has(failedRun.toolName) || isSwitchedOffRun(failedRun)) {
     return false;
   }
   return toolRuns.some(

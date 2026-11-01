@@ -91,13 +91,28 @@ const isQuietWebLookupEffect = (tool: ChatToolRunRecord, tone: "none" | "uncerta
   tone === "uncertain" && (tool.toolName === "browser.search" || WEB_PAGE_READ_TOOL_NAMES.has(tool.toolName));
 
 /**
- * A web lookup that failed, or was skipped, in a turn that still read another page. A switched-off tool group
- * is a switch the operator can turn back on, so it still opens the list.
+ * True when the operator's tool group switch stopped the tool: named in its error, or, when the runner's policy
+ * re-check wrote its own error, in the re-check's reason codes (as the Gateway's isSwitchedOffGroupBlock reads it).
+ */
+const isSwitchedOffGroupBlock = (tool: ChatToolRunRecord): boolean => {
+  if (/tool group switched off/i.test(tool.error ?? "")) return true;
+  const revalidation = tool.result?.policyRevalidation;
+  const codes =
+    revalidation && typeof revalidation === "object"
+      ? (revalidation as { reasonCodes?: unknown }).reasonCodes
+      : undefined;
+  return Array.isArray(codes) && codes.includes("tool_group_off");
+};
+
+/**
+ * A search or page read that failed, or was skipped, in a turn that still read another page. A failed web
+ * action (a post or a click) is not recovered by reading a page, and a switched-off tool group is a switch the
+ * operator can turn back on, so both still open the list.
  */
 const isRecoveredWebRead = (tool: ChatToolRunRecord, toolRuns: readonly ChatToolRunRecord[]): boolean =>
-  (tool.toolName.startsWith("browser.") || tool.toolName.startsWith("http.")) &&
+  (tool.toolName === "browser.search" || WEB_PAGE_READ_TOOL_NAMES.has(tool.toolName)) &&
   (tool.status === "failed" || tool.status === "blocked") &&
-  !/tool group switched off/i.test(tool.error ?? "") &&
+  !isSwitchedOffGroupBlock(tool) &&
   toolRuns.some((run) => run !== tool && run.status === "executed" && WEB_PAGE_READ_TOOL_NAMES.has(run.toolName));
 
 /** The failed tries before a tool's latest one: folded under its row, never dropped. */

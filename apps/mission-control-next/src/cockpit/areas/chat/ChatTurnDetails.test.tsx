@@ -213,6 +213,29 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     expect(tools().open).toBe(true);
   });
 
+  it("opens a completed turn's list for a failed web action even after a page read", () => {
+    const web = (toolName: string, status: string, extra: Partial<ChatToolRunRecord> = {}) =>
+      ({ ...toolRun({}), toolRunId: `${toolName}-${status}`, toolName, status, ...extra }) as ChatToolRunRecord;
+    const read = web("browser.navigate", "executed");
+
+    render(turnWith([web("http.post", "failed", { error: "source returned HTTP 500" }), read]));
+    expect(tools().open).toBe(true);
+  });
+
+  it("opens a completed turn's list for a policy re-check that names a switched-off group by reason code", () => {
+    const read = { ...toolRun({}), toolRunId: "read", toolName: "browser.navigate" } as ChatToolRunRecord;
+    const switchedOff = {
+      ...toolRun({ policyRevalidation: { reasonCodes: ["tool_group_off"] } }),
+      toolRunId: "off",
+      toolName: "browser.navigate",
+      status: "blocked",
+      error: "Current deny-wins policy blocks browser.navigate.",
+    } as ChatToolRunRecord;
+
+    render(turnWith([switchedOff, read]));
+    expect(tools().open).toBe(true);
+  });
+
   it("leaves the list folded for a Code Mode request the card above reports", () => {
     const request = { ...toolRun({}), toolName: "code_mode.request", args: { goal: "read a file" } };
     // A turn parked on the request: the card asks, so the list does not open beside it.

@@ -583,8 +583,10 @@ describe("isRecoveredWebReadFailure", () => {
     expect(isRecoveredWebReadFailure(skippedHost, runs)).toBe(true);
   });
 
-  it("keeps the failure when no page was read, or the failure is not a web tool or is a switched-off group", () => {
+  it("keeps the failure when no page was read, or the failure is not a web lookup or is a switched-off group", () => {
     const shell = toolRun({ toolRunId: "shell", toolName: "shell.exec", status: "blocked" });
+    const post = toolRun({ toolRunId: "post", toolName: "http.post", status: "failed" });
+    const click = toolRun({ toolRunId: "click", toolName: "browser.interact", status: "failed" });
     const switchedOff = toolRun({
       toolRunId: "off",
       toolName: "browser.navigate",
@@ -595,6 +597,9 @@ describe("isRecoveredWebReadFailure", () => {
 
     expect(isRecoveredWebReadFailure(blockedPage, [search, blockedPage])).toBe(false);
     expect(isRecoveredWebReadFailure(shell, [shell, readPage])).toBe(false);
+    // A failed web action is not recovered by reading another page.
+    expect(isRecoveredWebReadFailure(post, [post, readPage])).toBe(false);
+    expect(isRecoveredWebReadFailure(click, [click, readPage])).toBe(false);
     expect(isRecoveredWebReadFailure(switchedOff, [switchedOff, readPage])).toBe(false);
   });
 });
