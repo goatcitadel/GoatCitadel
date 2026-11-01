@@ -2,7 +2,7 @@ import type { CapabilityPluginListItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { LetterIcon } from "../LetterIcon";
-import { PLUGIN_TRUST_LABELS, pluginRowAction, presentPluginState } from "./plugin-view";
+import { PLUGIN_TRUST_LABELS, pluginRowAction, pluginStateNote, presentPluginState } from "./plugin-view";
 
 export interface PluginRowProps {
   /** The row as the Gateway sent it. */
@@ -22,6 +22,7 @@ export interface PluginRowProps {
  */
 export function PluginRow({ item, onInstall, onContinue, onView }: PluginRowProps) {
   const action = pluginRowAction(item.state);
+  const note = pluginStateNote(item);
   return (
     <li className="min-w-0 rounded-lg border border-line-subtle bg-raised p-3">
       <div className="flex min-w-0 items-start gap-3">
@@ -32,8 +33,15 @@ export function PluginRow({ item, onInstall, onContinue, onView }: PluginRowProp
             <span className="shrink-0 text-xs text-fg-muted">{PLUGIN_TRUST_LABELS[item.trust]}</span>
           </div>
           {item.description ? <p className="mt-0.5 truncate text-sm text-fg-secondary">{item.description}</p> : null}
-          <div className="mt-2">
+          {/* The badge holds the state; the pieces sit beside it, so the badge never wraps at phone width. */}
+          <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">
             <StatusBadge status={presentPluginState(item)} />
+            {note ? (
+              <>
+                {" "}
+                <span className="text-sm text-fg-secondary">{`· ${note}`}</span>
+              </>
+            ) : null}
           </div>
         </div>
         {/* The name comes last so the accessible name starts with the visible word. */}

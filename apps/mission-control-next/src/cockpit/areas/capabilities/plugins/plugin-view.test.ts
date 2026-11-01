@@ -8,6 +8,7 @@ import {
   pluginPiecesSummary,
   pluginRowAction,
   pluginSearchPlaceholder,
+  pluginStateNote,
   pluginTrustOptions,
   presentPluginState,
 } from "./plugin-view";
@@ -63,17 +64,28 @@ describe("pluginPiecesSummary", () => {
 
 describe("presentPluginState", () => {
   it.each<[CapabilityPluginState, string, string]>([
-    ["installed", "Installed · 2 skills, 1 connector", "done"],
+    // The badge holds the state alone; the pieces go beside it (pluginStateNote).
+    ["installed", "Installed", "done"],
     ["install_not_finished", "Install not finished", "waiting"],
     // A stopped removal keeps this state, so it never reads as running work.
     ["uninstalling", "Removing…", "waiting"],
     ["available", "Ready to install", "neutral"],
   ])("words %s as %j", (state, label, tone) => {
-    expect(presentPluginState({ state, pieceCounts: { connector: 1, skill: 2 } })).toEqual({ label, tone });
+    expect(presentPluginState({ state })).toEqual({ label, tone });
   });
 
   it("reads Installed alone when the pieces can't be named", () => {
-    expect(presentPluginState({ state: "installed", pieceCounts: {} })).toEqual({ label: "Installed", tone: "done" });
+    expect(presentPluginState({ state: "installed" })).toEqual({ label: "Installed", tone: "done" });
+    expect(pluginStateNote({ state: "installed", pieceCounts: {} })).toBe("");
+  });
+
+  it("names an installed plugin's pieces beside its badge, and nothing for any other state", () => {
+    expect(pluginStateNote({ state: "installed", pieceCounts: { connector: 1, skill: 2 } })).toBe(
+      "2 skills, 1 connector",
+    );
+    for (const state of ["install_not_finished", "uninstalling", "available"] as const) {
+      expect(pluginStateNote({ state, pieceCounts: { connector: 1, skill: 2 } }), state).toBe("");
+    }
   });
 });
 

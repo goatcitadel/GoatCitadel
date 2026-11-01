@@ -57,7 +57,9 @@ const ROW_ACTIONS: Readonly<Record<CapabilityPluginState, PluginRowAction>> = {
 
 /**
  * What an installed plugin's pieces are, such as "2 skills, 1 connector": every kind the Gateway counted, in a fixed
- * order, through `plural()`. A kind it didn't send, or counted 0, is left out; with none, the summary is empty.
+ * order, through `plural()`. A kind it didn't send, or counted 0, is left out; with none, the summary is empty. The
+ * counts take in every piece, the ones that were already there (and stay when it is uninstalled) too, so this never
+ * says what a plugin added, or what uninstalling it would remove.
  */
 export function pluginPiecesSummary(counts: Partial<Record<PluginPieceKind, number>>): string {
   return (Object.keys(PLUGIN_PIECE_NOUNS) as PluginPieceKind[])
@@ -68,11 +70,17 @@ export function pluginPiecesSummary(counts: Partial<Record<PluginPieceKind, numb
     .join(", ");
 }
 
-/** A row's state line and the tone it reads in. An installed plugin's line says what it added. */
-export function presentPluginState(item: Pick<CapabilityPluginListItem, "state" | "pieceCounts">): StatusPresentation {
-  const label = STATE_LABELS[item.state];
-  const summary = item.state === "installed" ? pluginPiecesSummary(item.pieceCounts) : "";
-  return { label: summary ? `${label} · ${summary}` : label, tone: STATE_TONES[item.state] };
+/** A row's state badge and the tone it reads in: the state alone, so the badge stays one short word or two. */
+export function presentPluginState(item: Pick<CapabilityPluginListItem, "state">): StatusPresentation {
+  return { label: STATE_LABELS[item.state], tone: STATE_TONES[item.state] };
+}
+
+/**
+ * What sits beside an installed plugin's badge: its pieces (`pluginPiecesSummary`, which counts the ones that were
+ * already there too). Empty for any other state, and for pieces that can't be named.
+ */
+export function pluginStateNote(item: Pick<CapabilityPluginListItem, "state" | "pieceCounts">): string {
+  return item.state === "installed" ? pluginPiecesSummary(item.pieceCounts) : "";
 }
 
 export function pluginRowAction(state: CapabilityPluginState): PluginRowAction {

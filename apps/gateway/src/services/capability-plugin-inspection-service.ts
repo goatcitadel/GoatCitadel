@@ -56,6 +56,8 @@ export const ASKS_FIRST = {
   /** A connector already saved, which the install keeps as it is and never changes. */
   connectorKept: "Already saved. It keeps its own setting for what asks first.",
   toolGroupOff: (groupLabel: string) => `Turns ${groupLabel} off in every chat while installed.`,
+  /** A group the operator already switched off: the install doesn't hold it, so it stays their switch. */
+  toolGroupKept: "Already off. It stays your own switch.",
   hook: (host: string, triggerLabel: string) => `Sends event details, never message text, to ${host}: ${triggerLabel}.`,
   promptPack: (tests: number) =>
     `Adds ${tests} ${tests === 1 ? "test" : "tests"} to Library › Prompt packs. Nothing runs until you press Run.`,
@@ -528,7 +530,9 @@ async function checkToolGroup(
   }
   if (!group) return { ...view, check: blocked("UNKNOWN_TOOL_GROUP", UNKNOWN_GROUP_MESSAGE) };
   const switchedOff = (await context.settings()).switchedOffToolGroups.includes(group.id);
-  return { ...view, check: switchedOff ? ALREADY_THERE : READY };
+  return switchedOff
+    ? { ...view, asksFirst: ASKS_FIRST.toolGroupKept, check: ALREADY_THERE }
+    : { ...view, check: READY };
 }
 
 /**

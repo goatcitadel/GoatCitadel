@@ -14,9 +14,10 @@ import { CapabilitySearch } from "../CapabilitySearch";
 import { CategoryFilter } from "../CategoryFilter";
 import { NoticeLine } from "../NoticeLine";
 import { PluginRow } from "./PluginRow";
-import { pluginItemHref, pluginSourceItemHref, type PluginSourceFormKind } from "./plugin-links";
+import { pluginItemHref, type PluginSourceFormKind } from "./plugin-links";
 import { filterPlugins, noPluginsDescription, pluginSearchPlaceholder, pluginTrustOptions } from "./plugin-view";
 import { usePluginFilters, type PluginFilterState } from "./use-plugin-filters";
+import { usePluginInstallPanel, type PluginInstallPanelOpener } from "./use-plugin-install-panel";
 
 type PluginListQuery = UseQueryResult<CapabilityPluginListResponse>;
 type PluginListView = RecordView<CapabilityPluginListResponse>;
@@ -28,8 +29,8 @@ type OpenPlugin = (item: CapabilityPluginListItem) => void;
  * may be added) sit beside the search box. The tab only lists and words what the Gateway returned: it never decides
  * whether a plugin is installed, finished or installable, and it never reads another catalog.
  *
- * A row's button and a source button move the address (`?item=plugin:<id>`, `?item=plugin-source:<kind>`); the
- * panels that open there belong to the install flow and the plugin's panel.
+ * Install (a built-in plugin), Continue (an install that isn't finished) and the source buttons open the install panel;
+ * View moves the address to the plugin's own panel (`?item=plugin:<id>`).
  */
 export function PluginsTab() {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
@@ -39,6 +40,7 @@ export function PluginsTab() {
   // The loaded list stays while it is read again, and beside a failed recheck.
   const view = recordView(query);
   const filters = usePluginFilters();
+  const installPanel = usePluginInstallPanel(view.record);
   const response = view.record;
   if (!response) return <FirstRead query={query} view={view} />;
   return (
@@ -47,8 +49,7 @@ export function PluginsTab() {
       view={view}
       response={response}
       filters={filters}
-      onOpen={(item) => navigate(pluginItemHref(item.pluginId))}
-      onSource={(kind) => navigate(pluginSourceItemHref(kind))}
+      actions={{ ...installPanel, view: (item) => navigate(pluginItemHref(item.pluginId)) }}
     />
   );
 }
@@ -71,17 +72,21 @@ function FirstRead({ query, view }: { query: PluginListQuery; view: PluginListVi
   );
 }
 
+/** What a row and a source button do. */
+interface PluginActions extends PluginInstallPanelOpener {
+  view: OpenPlugin;
+}
+
 interface PluginsListProps {
   query: PluginListQuery;
   view: PluginListView;
   response: CapabilityPluginListResponse;
   filters: PluginFilterState;
-  onOpen: OpenPlugin;
-  onSource: (kind: PluginSourceFormKind) => void;
+  actions: PluginActions;
 }
 
 /** The answered list: search and filter, the lines about what couldn't be read, then the two sections. */
-function PluginsList({ query, view, response, filters, onOpen, onSource }: PluginsListProps) {
+function PluginsList({ query, view, response, filters, actions }: PluginsListProps) {
   const filtersRegion = useRef<HTMLDivElement>(null);
   const all = [...response.installed, ...response.builtIn];
   const trustOptions = pluginTrustOptions(all);
@@ -94,33 +99,16 @@ function PluginsList({ query, view, response, filters, onOpen, onSource }: Plugi
     // The button that was pressed is about to leave, so focus goes to the search box.
     filtersRegion.current?.querySelector("input")?.focus();
   };
-  const sourceButtons = (
-    <>
-      <Button onClick={() => onSource("git")}>Install from Git</Button>
-      {response.folderSourcesAllowed ? <Button onClick={() => onSource("folder")}>Add from folder</Button> : null}
-    </>
-  );
-
   return (
     <div className="space-y-4">
-      {/* The box and its buttons stay with an empty list: they are where a first plugin is added from. */}
-      <div ref={filtersRegion} className="space-y-3">
-        <CapabilitySearch
-          tabLabel="Plugins"
-          value={filters.search}
-          onChange={filters.setSearch}
-          placeholder={pluginSearchPlaceholder(all)}
-          actions={sourceButtons}
+      <div ref={filtersRegion}>
+        <PluginsSearchBar
+          all={all}
+          filters={filters}
+          trusts={trusts}
+          folders={response.folderSourcesAllowed}
+          onSource={actions.openSource}
         />
-        {trustOptions.length >= 2 ? (
-          <CategoryFilter
-            label="Where it comes from"
-            options={trustOptions}
-            selected={trusts}
-            onChange={filters.setTrusts}
-            visibleCount={trustOptions.length}
-          />
-        ) : null}
       </div>
       {lastVersion ? (
         <NoticeLine>
@@ -136,9 +124,56 @@ function PluginsList({ query, view, response, filters, onOpen, onSource }: Plugi
         response={response}
         installed={filterPlugins(response.installed, narrowing)}
         builtIn={filterPlugins(response.builtIn, narrowing)}
-        onOpen={onOpen}
+        actions={actions}
         onClear={clearFilters}
       />
+    </div>
+  );
+}
+
+/**
+ * The search box with the source buttons beside it, and the "Where it comes from" filter when both labels are present.
+ * The box and its buttons stay with an empty list: they are where a first plugin is added from.
+ */
+function PluginsSearchBar({
+  all,
+  filters,
+  trusts,
+  folders,
+  onSource,
+}: {
+  all: readonly CapabilityPluginListItem[];
+  filters: PluginFilterState;
+  /** The chosen labels that still have a plugin. */
+  trusts: string[];
+  folders: boolean;
+  onSource: (kind: PluginSourceFormKind) => void;
+}) {
+  const trustOptions = pluginTrustOptions(all);
+  const sourceButtons = (
+    <>
+      <Button onClick={() => onSource("git")}>Install from Git</Button>
+      {folders ? <Button onClick={() => onSource("folder")}>Add from folder</Button> : null}
+    </>
+  );
+  return (
+    <div className="space-y-3">
+      <CapabilitySearch
+        tabLabel="Plugins"
+        value={filters.search}
+        onChange={filters.setSearch}
+        placeholder={pluginSearchPlaceholder(all)}
+        actions={sourceButtons}
+      />
+      {trustOptions.length >= 2 ? (
+        <CategoryFilter
+          label="Where it comes from"
+          options={trustOptions}
+          selected={trusts}
+          onChange={filters.setTrusts}
+          visibleCount={trustOptions.length}
+        />
+      ) : null}
     </div>
   );
 }
@@ -149,7 +184,7 @@ interface PluginSectionsProps {
   installed: readonly CapabilityPluginListItem[];
   /** The built-in plugins the search and filter leave. */
   builtIn: readonly CapabilityPluginListItem[];
-  onOpen: OpenPlugin;
+  actions: PluginActions;
   onClear: () => void;
 }
 
@@ -157,7 +192,7 @@ interface PluginSectionsProps {
  * "Installed", then "Built in". With nothing installed, the empty state stands in for Installed and names only the
  * places this install offers. A section the search empties is hidden; when it empties both, one no-match state shows.
  */
-function PluginSections({ response, installed, builtIn, onOpen, onClear }: PluginSectionsProps) {
+function PluginSections({ response, installed, builtIn, actions, onClear }: PluginSectionsProps) {
   const anyPlugin = response.installed.length + response.builtIn.length > 0;
   if (anyPlugin && installed.length + builtIn.length === 0) {
     return (
@@ -180,10 +215,10 @@ function PluginSections({ response, installed, builtIn, onOpen, onClear }: Plugi
         />
       ) : null}
       {installed.length > 0 ? (
-        <PluginSection title="Installed" shown={installed} total={response.installed.length} onOpen={onOpen} />
+        <PluginSection title="Installed" shown={installed} total={response.installed.length} actions={actions} />
       ) : null}
       {builtIn.length > 0 ? (
-        <PluginSection title="Built in" shown={builtIn} total={response.builtIn.length} onOpen={onOpen} />
+        <PluginSection title="Built in" shown={builtIn} total={response.builtIn.length} actions={actions} />
       ) : null}
     </>
   );
@@ -193,12 +228,12 @@ function PluginSection({
   title,
   shown,
   total,
-  onOpen,
+  actions,
 }: {
   title: string;
   shown: readonly CapabilityPluginListItem[];
   total: number;
-  onOpen: OpenPlugin;
+  actions: PluginActions;
 }) {
   return (
     <Section
@@ -211,8 +246,13 @@ function PluginSection({
     >
       <ul className="grid grid-cols-1 gap-2 sm:grid-cols-2">
         {shown.map((item) => (
-          // Until the install flow and the plugin's panel arrive, every action opens the plugin's own address.
-          <PluginRow key={item.pluginId} item={item} onInstall={onOpen} onContinue={onOpen} onView={onOpen} />
+          <PluginRow
+            key={item.pluginId}
+            item={item}
+            onInstall={actions.install}
+            onContinue={actions.resume}
+            onView={actions.view}
+          />
         ))}
       </ul>
     </Section>

@@ -12,7 +12,7 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { pluginListQuery } from "../../../data/capability-plugins-query";
 import { PluginsTab } from "./PluginsTab";
-import { pluginItemHref, pluginSourceItemHref } from "./plugin-links";
+import { pluginItemHref } from "./plugin-links";
 
 const api = vi.hoisted(() => ({
   fetchCapabilityPlugins: vi.fn(),
@@ -23,9 +23,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/capability-plugins", () => api)
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeCitadelId: "default", activeWorkspaceId: "ws-1" }),
 }));
-// The panels arrive with the install flow and the plugin panel; here a row or a source button only moves the address.
+// View moves the address to the plugin's panel; Install, Continue and the source buttons open the install panel.
 const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
 vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
+const opener = vi.hoisted(() => ({ install: vi.fn(), resume: vi.fn(), openSource: vi.fn() }));
+vi.mock("./use-plugin-install-panel", () => ({ usePluginInstallPanel: () => opener }));
 
 const LIST_KEY = pluginListQuery("ws-1").queryKey;
 
@@ -152,6 +154,9 @@ beforeEach(() => {
   api.fetchCapabilityPlugins.mockReset().mockResolvedValue(listOf());
   route.navigate.mockReset();
   route.search = "";
+  opener.install.mockReset();
+  opener.resume.mockReset();
+  opener.openSource.mockReset();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   container = document.createElement("div");
   document.body.append(container);
@@ -178,6 +183,9 @@ describe("Plugins tab", () => {
     const release = rowOf("Release notes");
     expect(release.textContent).toContain("Drafts notes from merged work.");
     expect(release.textContent).toContain("Installed · 2 skills, 1 connector");
+    // The badge holds the state alone, and the pieces sit beside it, so the badge never wraps.
+    expect(release.querySelector("[data-tone]")?.textContent).toBe("Installed");
+    expect(release.querySelector("[data-tone] + span")?.textContent).toBe("· 2 skills, 1 connector");
     expect(button("View Release notes", release)?.textContent).toBe("View");
     expect(release.querySelectorAll("button")).toHaveLength(1);
     const browser = rowOf("Browser checks");
@@ -191,11 +199,12 @@ describe("Plugins tab", () => {
     expect(searchBox().placeholder).toBe('Try "release notes"');
     expect(container.querySelector('[role="search"] label')?.textContent).toBe("Plugins search");
 
-    // Until the panels arrive, a row's button only moves the address to the plugin.
+    // View moves the address to the plugin's own panel; Install checks the plugin in the install panel.
     await click(button("View Release notes"));
     expect(route.navigate).toHaveBeenLastCalledWith(pluginItemHref("release-notes"));
     await click(button("Install Browser checks"));
-    expect(route.navigate).toHaveBeenLastCalledWith(pluginItemHref("browser-checks"));
+    expect(opener.install).toHaveBeenCalledExactlyOnceWith(BROWSER_CHECKS);
+    expect(route.navigate).toHaveBeenCalledTimes(1);
   });
 
   it("labels unverified plugins", async () => {
@@ -225,6 +234,24 @@ describe("Plugins tab", () => {
     expect(names()).toEqual(["Release notes", "Team kit", "Browser checks"]);
   });
 
+  it("drops a chosen trust label once no plugin has it", async () => {
+    api.fetchCapabilityPlugins.mockResolvedValue(
+      listOf({ installed: [RELEASE_NOTES, TEAM_KIT], builtIn: [BROWSER_CHECKS] }),
+    );
+    await render();
+    await click(button("Unverified", trustGroup()!));
+    expect(names()).toEqual(["Release notes"]);
+
+    // The last unverified plugin goes: the filter has nothing left to choose between, so it goes too, and so does
+    // the choice, rather than hiding every row behind a button no one can see.
+    api.fetchCapabilityPlugins.mockResolvedValue(listOf({ installed: [TEAM_KIT], builtIn: [BROWSER_CHECKS] }));
+    await act(async () => client.invalidateQueries({ queryKey: LIST_KEY }));
+    await settle();
+    expect(trustGroup()).toBeNull();
+    expect(names()).toEqual(["Team kit", "Browser checks"]);
+    expect(headings()).not.toContain("No plugins match");
+  });
+
   it("shows no trust filter when every plugin has the same label", async () => {
     api.fetchCapabilityPlugins.mockResolvedValue(listOf({ installed: [TEAM_KIT], builtIn: [BROWSER_CHECKS] }));
     await render();
@@ -248,9 +275,10 @@ describe("Plugins tab", () => {
     expect(half.textContent).not.toContain("Installed ·");
     expect(button("Continue Half done", half)?.textContent).toBe("Continue");
     expect(half.querySelectorAll("button")).toHaveLength(1);
-    // Continue opens the plugin, whose panel carries on from the first piece that isn't done.
+    // Continue opens the install panel, which carries on from the first piece that isn't done.
     await click(button("Continue Half done"));
-    expect(route.navigate).toHaveBeenLastCalledWith(pluginItemHref("half-done"));
+    expect(opener.resume).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ pluginId: "half-done" }));
+    expect(route.navigate).not.toHaveBeenCalled();
 
     // A plugin on its way out is viewed; its panel says how to finish.
     const going = rowOf("Going away");
@@ -280,11 +308,11 @@ describe("Plugins tab", () => {
     const actions = [...container.querySelectorAll('[role="search"] button')].map((entry) => entry.textContent);
     expect(actions).toEqual(["Install from Git", "Add from folder"]);
 
-    // Until the install panel arrives, each only moves the address to its form.
+    // Each opens its form in the install panel.
     await click(button("Install from Git"));
-    expect(route.navigate).toHaveBeenLastCalledWith(pluginSourceItemHref("git"));
+    expect(opener.openSource).toHaveBeenLastCalledWith("git");
     await click(button("Add from folder"));
-    expect(route.navigate).toHaveBeenLastCalledWith(pluginSourceItemHref("folder"));
+    expect(opener.openSource).toHaveBeenLastCalledWith("folder");
   });
 
   it("shows Try again when the list fails, never an empty list", async () => {

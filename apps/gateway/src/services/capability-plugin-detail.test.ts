@@ -429,6 +429,8 @@ describe("a plugin's detail", () => {
     ]);
     // The manifest asks for everything to ask first, but a kept server keeps its own setting.
     expect(detail.pieces[1]?.asksFirst).toBe("Already saved. It keeps its own setting for what asks first.");
+    // A kept group was already off and isn't held by the plugin, so it is the operator's own switch.
+    expect(detail.pieces[2]?.asksFirst).toBe("Already off. It stays your own switch.");
     expect(detail.state).toBe("installed");
   });
 

@@ -567,6 +567,36 @@ describe("CapabilityPluginInspectionService", () => {
     expect(inspection.installable).toBe(false);
   });
 
+  it("says a group the operator already switched off stays their own switch, never that the plugin holds it", async () => {
+    const pieces: Pieces = [
+      { kind: "tool_group_off", id: "web", groupId: "web_search" },
+      { kind: "tool_group_off", id: "browser", groupId: "browser" },
+    ];
+    const { inspect } = await harness({
+      pieces,
+      overrides: {
+        readSettings: vi.fn(async () => ({
+          switchedOffToolGroups: ["web_search"],
+          networkAllowlist: [],
+          typedRunVariablesEnabled: false,
+        })),
+      },
+    });
+
+    const inspection = await inspect();
+
+    // Kept, like a connector already saved: installing doesn't hold it off, so it isn't off "while installed".
+    expect(piece(inspection, "web")).toMatchObject({
+      check: { status: "already_there" },
+      asksFirst: "Already off. It stays your own switch.",
+    });
+    expect(piece(inspection, "browser")).toMatchObject({
+      check: { status: "ready" },
+      asksFirst: "Turns Browser off in every chat while installed.",
+    });
+    expect(inspection.installable).toBe(true);
+  });
+
   it("refuses a hook to a private address", async () => {
     const pieces: Pieces = [
       { kind: "hook", id: "literal", trigger: "session.start", url: "https://10.0.0.5/hook" },

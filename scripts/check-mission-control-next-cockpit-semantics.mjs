@@ -42,7 +42,9 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // needs failed (the request, Code Mode readiness), why a click was not sent, and why Keep as a tool did not save (+5);
 // its loading lines are not announced. A code_mode.run approval in Chat says why Approve waits, as Inbox does (+1).
 // 905: the Capabilities Plugins tab announces the one outcome that replaces its whole page, a first read that failed.
-export const LIVE_REGION_BUDGET = 905;
+// 907: a plugin's install panel announces its progress line and why a check, the install or a skill's step stopped
+// (+2). The source form's refusal and a signing secret's rule use Field's own alert.
+export const LIVE_REGION_BUDGET = 907;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

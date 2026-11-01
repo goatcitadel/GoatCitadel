@@ -9,6 +9,7 @@ import {
   type ChangePlanStatus,
   type PluginManifest,
   type PluginPiece,
+  type PluginPieceKind,
 } from "@goatcitadel/contracts";
 import type { StoredPlugin, StoredPluginPiece } from "./capability-plugin-store.js";
 import { ASKS_FIRST } from "./capability-plugin-inspection-service.js";
@@ -52,6 +53,14 @@ const SKILL_STEP_STATES: Readonly<Record<CapabilitySkillInstallStep, CapabilityP
   failed: "failed",
 };
 const UNREAD_DETAILS = "Its details can't be read right now.";
+/**
+ * The line for a piece that was already there, whatever the manifest asked for: a connector it kept (or handed over)
+ * keeps its own approval setting, and a group already off isn't held, so it stays the operator's switch.
+ */
+const KEPT_LINES: Partial<Readonly<Record<PluginPieceKind, string>>> = {
+  connector: ASKS_FIRST.connectorKept,
+  tool_group_off: ASKS_FIRST.toolGroupKept,
+};
 const READY: CapabilityPluginPieceCheck = { status: "ready" };
 const ALREADY_THERE: CapabilityPluginPieceCheck = { status: "already_there" };
 
@@ -169,8 +178,7 @@ export function buildPluginDetailPieces(
       pieceId: piece.pieceId,
       kind: piece.kind,
       label: piece.kind === "skill" && check ? check.title : described.label,
-      // A connector it kept (or handed over) keeps its own approval setting, whatever the manifest asked for.
-      asksFirst: piece.kind === "connector" && !piece.owned ? ASKS_FIRST.connectorKept : described.asksFirst,
+      asksFirst: piece.owned ? described.asksFirst : (KEPT_LINES[piece.kind] ?? described.asksFirst),
       check: piece.owned ? READY : ALREADY_THERE,
       ...(described.hosts ? { hosts: [...described.hosts] } : {}),
       ...(piece.skillSnapshotId ? { skillSnapshotId: piece.skillSnapshotId } : {}),
