@@ -187,7 +187,8 @@ export function useSettingsChange<T, R extends SettingsAcknowledgement = Runtime
         ...next,
         blocking: !stopped(plan.status),
         message: stopped(plan.status)
-          ? "Change " +
+          ? (plan.result?.summary ? `${plan.result.summary} ` : "") +
+            "Change " +
             plan.status.replaceAll("_", " ") +
             ". Your draft is preserved. Refresh the current settings before trying again."
           : next.message,

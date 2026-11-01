@@ -171,6 +171,21 @@ describe("Settings save settlement", () => {
       vi.useRealTimers();
     }
   });
+  it.each(["manual_required", "rollback_failed"])("names the Gateway's own outcome after %s", async (status) => {
+    await mount();
+    await submit();
+    mocks.plan.mockResolvedValue({
+      ...plan(status),
+      result: { status, summary: "Restart the Gateway to finish this change." },
+    });
+    await act(async () => {
+      await change.refresh();
+    });
+    expect(change.change?.message).toBe(
+      `Restart the Gateway to finish this change. Change ${status.replaceAll("_", " ")}. Your draft is preserved. ` +
+        "Refresh the current settings before trying again.",
+    );
+  });
   it.each(["manual_required", "rollback_failed"])(
     "does not lock a fresh session whose receipt is already %s",
     async (status) => {
