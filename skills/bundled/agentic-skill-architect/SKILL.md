@@ -181,7 +181,7 @@ Return these sections:
 
 ## GoatCitadel Appendix
 
-Chat is the only primary operator surface; the older Cowork and Code routes open Chat. Map the framework onto Chat like this:
+Chat is the only primary operator surface; older Cowork and Code routes open Chat, except `/cowork/tasks` and `/cowork/board`, which open Ops Kanban. Map the framework onto Chat like this:
 
 ### Conversation
 - prefer lightweight, advisory, low-ceremony skill behavior

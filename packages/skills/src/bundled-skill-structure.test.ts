@@ -32,18 +32,42 @@ function read(name: string): string {
   return fs.readFileSync(path.join(bundledDir, name, "SKILL.md"), "utf8");
 }
 
+/** Drop fenced code blocks (``` or ~~~, closed by the same character at least as long), so examples cannot satisfy a check. */
+function withoutFencedCode(markdown: string): string {
+  const kept: string[] = [];
+  let fence: string | undefined;
+  for (const line of markdown.split(/\r?\n/u)) {
+    const marker = /^ {0,3}(`{3,}|~{3,})/u.exec(line)?.[1];
+    if (fence === undefined) {
+      if (marker) fence = marker;
+      else kept.push(line);
+    } else if (marker && marker[0] === fence[0] && marker.length >= fence.length && line.trim() === marker) {
+      fence = undefined;
+    }
+  }
+  return kept.join("\n");
+}
+
 describe("adapted bundled skill structure", () => {
+  it("does not count headings or the shell policy line inside fenced code", () => {
+    const fenced = ["```", "## Output", SHELL_POLICY_LINE, "```", "~~~~md", "## Boundaries", "~~~~"].join("\n");
+    const prose = withoutFencedCode(`${fenced}\n## Output\n`);
+    expect(prose).not.toContain("## Boundaries");
+    expect(prose).not.toContain(SHELL_POLICY_LINE);
+    expect(prose).toMatch(/^## Output$/mu);
+  });
+
   it.each(ADAPTED_SKILLS)("%s has every skeleton section", (name) => {
-    const raw = read(name);
+    const prose = withoutFencedCode(read(name));
     for (const section of REQUIRED_SECTIONS) {
-      expect(raw, `${name} is missing ${section}`).toMatch(new RegExp(`^${section}$`, "mu"));
+      expect(prose, `${name} is missing ${section}`).toMatch(new RegExp(`^${section}$`, "mu"));
     }
   });
 
   it.each(ADAPTED_SKILLS)("%s states the shell policy when it declares shell.exec", (name) => {
     const raw = read(name);
     if (parseSkillMarkdown(raw).frontmatter.metadata?.tools?.includes("shell.exec")) {
-      expect(raw).toContain(SHELL_POLICY_LINE);
+      expect(withoutFencedCode(raw)).toContain(SHELL_POLICY_LINE);
     }
   });
 });
