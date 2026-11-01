@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { ValidationError, type ToolPolicyConfig } from "@goatcitadel/contracts";
 import { effectiveToolWriteRoots } from "@goatcitadel/policy-engine";
@@ -41,9 +42,7 @@ export async function resolveToolRequestPathsForSessionScope<TRequest extends To
   const rootDir = configuredRootDir.trim() ? configuredRootDir : process.cwd();
   const workspaceDir = configuredWorkspaceDir.trim() ? configuredWorkspaceDir : "workspace";
   const workspaceRoot = path.resolve(rootDir, workspaceDir);
-  const projectId = (await storage.chatSessionProjects.get(request.sessionId))?.projectId;
-  const project = projectId ? await storage.chatProjects.find(projectId) : undefined;
-  const { delegatedParent, delegatedScope } = await readDelegationScope(request.sessionId, storage);
+  const { project, delegatedParent, delegatedScope } = await readSessionPathScope(request.sessionId, storage);
   if (delegatedScope) {
     return resolveToolRequestPaths(request, {
       workspaceRoot,
@@ -82,6 +81,47 @@ export async function resolveToolRequestPathsForSessionScope<TRequest extends To
 }
 
 type DelegationStepsStorage = SessionToolPathScopeDeps["storage"]["chatDelegationSteps"];
+type SessionPathScopeStorage = SessionToolPathScopeDeps["storage"];
+type SessionPathScope = Awaited<ReturnType<typeof readSessionPathScopeUncached>>;
+
+interface SessionPathScopeCache {
+  storage: SessionPathScopeStorage;
+  entries: Map<string, Promise<SessionPathScope>>;
+}
+
+const sessionPathScopeCache = new AsyncLocalStorage<SessionPathScopeCache>();
+
+/**
+ * Run `fn` with the session path-scope reads (the session's project and its delegation scope) shared by every path
+ * resolution inside it that uses `storage`: one read per session. Only for a batch of read-only access probes, such
+ * as the base prompt's catalog build, that should see one consistent snapshot; tool invocation never runs inside it.
+ * A failed read is shared too, so every request in the batch is refused: the same fail-closed outcome as before.
+ */
+export async function withSharedSessionPathScopeReads<T>(
+  storage: SessionPathScopeStorage,
+  fn: () => Promise<T>,
+): Promise<T> {
+  return await sessionPathScopeCache.run({ storage, entries: new Map() }, fn);
+}
+
+async function readSessionPathScope(sessionId: string, storage: SessionPathScopeStorage): Promise<SessionPathScope> {
+  const cache = sessionPathScopeCache.getStore();
+  if (!cache || cache.storage !== storage) {
+    return await readSessionPathScopeUncached(sessionId, storage);
+  }
+  let entry = cache.entries.get(sessionId);
+  if (!entry) {
+    entry = readSessionPathScopeUncached(sessionId, storage);
+    cache.entries.set(sessionId, entry);
+  }
+  return await entry;
+}
+
+async function readSessionPathScopeUncached(sessionId: string, storage: SessionPathScopeStorage) {
+  const projectId = (await storage.chatSessionProjects.get(sessionId))?.projectId;
+  const project = projectId ? await storage.chatProjects.find(projectId) : undefined;
+  return { project, ...(await readDelegationScope(sessionId, storage)) };
+}
 
 /**
  * Read whether the session is a delegated child and its approved scope. A

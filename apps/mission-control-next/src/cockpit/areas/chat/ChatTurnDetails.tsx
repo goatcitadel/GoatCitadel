@@ -6,7 +6,10 @@ import {
   type DesignAdvisory,
 } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
-import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
+import {
+  getChatToolRunDiagnostics,
+  isFailedCodeModeRequest,
+} from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 const ChatOpenCodeEvidence = lazy(async () => ({
@@ -20,6 +23,7 @@ import { groupToolRunRetries } from "./chat-tool-run-groups";
 import { summarizeTurnToolRuns, toolRunTarget, type ToolRunTarget } from "./chat-tool-run-summary";
 import { toolRunDuration, toolRunLineChanges } from "./chat-tool-run-change-stats";
 import { presentToolRunStatus } from "./chat-vocabulary";
+import { failureLine, failureReason } from "./code-mode-request-copy";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { presentErrorText } from "../../lib/present-error";
 import { RecordedErrorDetails } from "../../ui/RecordedErrorDetails";
@@ -41,6 +45,8 @@ type TurnActions = Pick<
   | "onOpenGeneratedArtifact"
 >;
 
+const isCodeModeRequest = (tool: ChatToolRunRecord): boolean => tool.toolName === "code_mode.request";
+
 function activityLabel(tool: ChatToolRunRecord): string {
   return presentToolRunStatus(tool).label;
 }
@@ -58,13 +64,75 @@ function readDesignAdvisories(tool: ChatToolRunRecord): DesignAdvisory[] {
   });
 }
 
+/** A Code Mode request whose code failed settles as a call, so its recorded error is in its result. */
+const failedRequestError = (tool: ChatToolRunRecord): string =>
+  isFailedCodeModeRequest(tool) ? failureReason(tool) : "";
+
 function toolRunSummaryText(tool: ChatToolRunRecord): string {
+  const requestError = failedRequestError(tool);
   return (
-    tool.failureGuidance ??
-    getChatToolRunDiagnostics(tool).summary ??
+    // An approved call that settled records empty guidance, which is no guidance.
+    tool.failureGuidance ||
+    // A failed Code Mode request reads as its card says it; the recorded error stays under technical details.
+    (requestError ? failureLine(requestError) : "") ||
+    getChatToolRunDiagnostics(tool).summary ||
     (tool.error ? presentErrorText(tool.error).summary : "")
   );
 }
+
+const WEB_PAGE_READ_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+// The Gateway's floor for useful page text.
+const MIN_USABLE_PAGE_TEXT_CHARS = 40;
+
+/**
+ * The Gateway records every browser call's effect as uncertain, because a signed-in browser could act on a site,
+ * and that keeps automatic replay off. On a search or page read the line would repeat on every row, so it moves
+ * under technical details there; any other tool's uncertain effect stays on its row.
+ */
+const isQuietWebLookupEffect = (tool: ChatToolRunRecord, tone: "none" | "uncertain" | "concrete"): boolean =>
+  tone === "uncertain" && (tool.toolName === "browser.search" || WEB_PAGE_READ_TOOL_NAMES.has(tool.toolName));
+
+/**
+ * True when operator policy stopped the tool: a switched-off group named in its error, or, when the runner's
+ * policy re-check wrote its own error, a group switch-off or deny in the re-check's reason codes (the codes the
+ * Gateway's switch-off and policy-block checks read).
+ */
+const isOperatorPolicyBlock = (tool: ChatToolRunRecord): boolean => {
+  if (/tool group switched off/i.test(tool.error ?? "")) return true;
+  const revalidation = tool.result?.policyRevalidation;
+  const codes =
+    revalidation && typeof revalidation === "object"
+      ? (revalidation as { reasonCodes?: unknown }).reasonCodes
+      : undefined;
+  return Array.isArray(codes) && (codes.includes("tool_group_off") || codes.includes("policy_deny"));
+};
+
+/** The page text a read brought back; one that returned only a URL read nothing. */
+const readPageTextLength = (run: ChatToolRunRecord): number =>
+  Math.max(
+    0,
+    ...["textSnippet", "bodySnippet", "contentText", "text"].map((key) => {
+      const value = run.result?.[key];
+      return typeof value === "string" ? value.trim().length : 0;
+    }),
+  );
+
+/**
+ * A search or page read that failed, or was skipped, in a turn that still read another page's text. A failed
+ * web action (a post or a click) is not recovered by reading a page, and an operator policy block is the
+ * operator's to lift, so both still open the list.
+ */
+const isRecoveredWebRead = (tool: ChatToolRunRecord, toolRuns: readonly ChatToolRunRecord[]): boolean =>
+  (tool.toolName === "browser.search" || WEB_PAGE_READ_TOOL_NAMES.has(tool.toolName)) &&
+  (tool.status === "failed" || tool.status === "blocked") &&
+  !isOperatorPolicyBlock(tool) &&
+  toolRuns.some(
+    (run) =>
+      run !== tool &&
+      run.status === "executed" &&
+      WEB_PAGE_READ_TOOL_NAMES.has(run.toolName) &&
+      readPageTextLength(run) >= MIN_USABLE_PAGE_TEXT_CHARS,
+  );
 
 /** The failed tries before a tool's latest one: folded under its row, never dropped. */
 /** What a call touched, after its name. The leading space keeps name and target apart for screen readers too. */
@@ -163,10 +231,29 @@ export function ChatTurnDetails({
   // the turn without a browser stream, and the turn is still working.
   const turnLive = streaming || !isChatTurnTerminalStatus(turn.trace.status);
   // CH-39: opens while the turn is live or when a tool needs attention, and stays open once the operator opened it.
-  // A list that only opened for a live turn folds shut when the turn settles cleanly.
+  // A list that only opened for a live turn folds shut when the turn settles cleanly. A Code Mode request is the
+  // Code Mode card's: the card asks for it and states its outcome, so neither the request nor a turn parked on it
+  // opens the list. Nor does the turn that continues after Deny or Run it, when its one tool is that request: the
+  // card reports only the latest request, so with more than one an earlier outcome would be hidden. The rows stay
+  // here for an operator who opens it.
+  const parkedOnCodeModeCard =
+    !streaming &&
+    turn.trace.status === "waiting_for_approval" &&
+    turn.toolRuns.some(
+      (tool) => isCodeModeRequest(tool) && (tool.status === "approval_required" || tool.status === "started"),
+    );
+  const onlyCodeModeCard = !streaming && turn.toolRuns.length === 1 && turn.toolRuns.every(isCodeModeRequest);
+  // A completed turn that read other pages already worked around a page it could not open and says so in its
+  // answer, so those rows stay folded below it instead of pushing the answer away from the composer.
+  const turnCompleted = !turnLive && turn.trace.status === "completed";
   const toolDisclosure = useAutoOpenDisclosure(
-    turnLive ||
-      turn.toolRuns.some((tool) => tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+    (turnLive && !parkedOnCodeModeCard && !onlyCodeModeCard) ||
+      turn.toolRuns.some(
+        (tool) =>
+          !isCodeModeRequest(tool) &&
+          (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal) &&
+          !(turnCompleted && isRecoveredWebRead(tool, turn.toolRuns)),
+      ),
     { closeWhenSettled: true },
   );
   const counts = new Map<string, number>();
@@ -221,6 +308,7 @@ export function ChatTurnDetails({
               const target = toolRunTarget(tool);
               const changes = toolRunLineChanges(tool);
               const duration = toolRunDuration(tool);
+              const requestError = failedRequestError(tool);
               return (
                 <li key={key} data-tool-run-id={tool.toolRunId} className="flex flex-wrap justify-between gap-2 py-2">
                   <span className="min-w-0 text-fg-secondary">
@@ -254,12 +342,24 @@ export function ChatTurnDetails({
                       <RecordedErrorDetails error={tool.error} />
                     </div>
                   ) : null}
-                  {effect ? <p className="w-full">{effect.plainSummary}</p> : null}
+                  {requestError && requestError !== tool.error && requestError !== failureLine(requestError) ? (
+                    <div className="w-full">
+                      <TechnicalDetails label="Recorded error">
+                        <p className="break-all font-mono text-xs">{requestError}</p>
+                      </TechnicalDetails>
+                    </div>
+                  ) : null}
+                  {effect && !isQuietWebLookupEffect(tool, effect.tone) ? (
+                    <p className="w-full">{effect.plainSummary}</p>
+                  ) : null}
                   {/* The row names the tool; its registry name stays reachable for technical review. */}
                   {showTechnicalDetails ? (
                     <div className="w-full">
                       <TechnicalDetails>
                         <p className="break-all font-mono text-xs">Tool {tool.toolName}</p>
+                        {effect && isQuietWebLookupEffect(tool, effect.tone) ? (
+                          <p className="text-xs">{effect.plainSummary}</p>
+                        ) : null}
                       </TechnicalDetails>
                     </div>
                   ) : null}

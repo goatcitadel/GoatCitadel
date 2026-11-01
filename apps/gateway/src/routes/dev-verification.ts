@@ -31,7 +31,54 @@ const seedScenarioSchema = z.object({
 const chatApprovalScenarioSchema = z.object({
   sessionId: z.string().trim().min(1),
   workspaceId: z.string().trim().min(1),
+  /** The tool the seeded turn waits on: the governed shell command, or a Chat Code Mode request. */
+  tool: z.enum(["shell.exec", "code_mode.request"]).default("shell.exec"),
 });
+
+const chatCodeModeRanScenarioSchema = z.object({
+  sessionId: z.string().trim().min(1),
+  workspaceId: z.string().trim().min(1),
+});
+
+/**
+ * The Code Mode request the verification scenarios show. Nothing runs it: the pending scenario only parks a turn on
+ * its approval, and the ran scenario records a finished run without executing code.
+ */
+const VERIFICATION_CODE_MODE_REQUEST_ARGS = Object.freeze({
+  goal: "read the text of saturday-plan.pdf",
+  language: "javascript",
+  source: "const doc = await capabilities.docs.extract_text({ path: input.path });\nreturn doc.text;",
+  input: { path: "verification/saturday-plan.pdf" },
+  reads: ["verification/saturday-plan.pdf"],
+});
+
+/**
+ * The seeded turn's approval shape for each tool. A code_mode.request approval carries the tool's arguments as its
+ * payload and names the tool in its linkage, as the policy engine writes it, so the Chat card can review the exact code.
+ */
+function chatApprovalScenarioTool(
+  tool: "shell.exec" | "code_mode.request",
+  scope: { sessionId: string; turnId: string; workspaceId: string },
+) {
+  if (tool === "code_mode.request") {
+    return {
+      riskLevel: "caution" as const,
+      args: { ...VERIFICATION_CODE_MODE_REQUEST_ARGS },
+      payload: { ...VERIFICATION_CODE_MODE_REQUEST_ARGS },
+      preview: { title: `Run code to ${VERIFICATION_CODE_MODE_REQUEST_ARGS.goal}` },
+      linkage: { ...scope, toolName: tool },
+      content: "Read saturday-plan.pdf and review it.",
+    };
+  }
+  return {
+    riskLevel: "danger" as const,
+    args: { command: "pnpm test" },
+    payload: { ...scope, command: "pnpm test" },
+    preview: { title: "Verification chat approval", command: "pnpm test" },
+    linkage: { ...scope },
+    content: "Run the governed verification command.",
+  };
+}
 
 const chatUserInputScenarioSchema = z.object({
   sessionId: z.string().trim().min(1),
@@ -282,25 +329,19 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
     const turnId = randomUUID();
     const userMessageId = randomUUID();
     const storage = fastify.services.devVerification.storage;
+    const toolName = parsed.data.tool;
+    const scenarioTool = chatApprovalScenarioTool(toolName, {
+      sessionId: parsed.data.sessionId,
+      turnId,
+      workspaceId: parsed.data.workspaceId,
+    });
 
     const approval = await fastify.services.devVerification.createApproval({
-      kind: "shell.exec",
-      riskLevel: "danger",
-      payload: {
-        sessionId: parsed.data.sessionId,
-        turnId,
-        workspaceId: parsed.data.workspaceId,
-        command: "pnpm test",
-      },
-      preview: {
-        title: "Verification chat approval",
-        command: "pnpm test",
-      },
-      linkage: {
-        sessionId: parsed.data.sessionId,
-        turnId,
-        workspaceId: parsed.data.workspaceId,
-      },
+      kind: toolName,
+      riskLevel: scenarioTool.riskLevel,
+      payload: scenarioTool.payload,
+      preview: scenarioTool.preview,
+      linkage: scenarioTool.linkage,
     });
     const approvalWaitRunId = await storage.approvalWaitRuns.getRunId(approval.approvalId);
     const chatTurnDurableWait = await fastify.services.devVerification.seedDurableChatWait({
@@ -308,7 +349,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       sessionId: parsed.data.sessionId,
       turnId,
       userMessageId,
-      content: "Run the governed verification command.",
+      content: scenarioTool.content,
       authActorId: request.authActorId,
       authActorSource: request.authActorSource,
       traceStatus: "waiting_for_approval",
@@ -326,7 +367,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       actorType: "user",
       actorId: "verification-operator",
       sourceAuthority: "operator",
-      content: "Run the governed verification command.",
+      content: scenarioTool.content,
       timestamp: now,
     });
     await storage.chatTurnTraces.create({
@@ -362,10 +403,10 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       toolRunId: randomUUID(),
       turnId,
       sessionId: parsed.data.sessionId,
-      toolName: "shell.exec",
+      toolName,
       status: "approval_required",
       approvalId: approval.approvalId,
-      args: { command: "pnpm test" },
+      args: scenarioTool.args,
       startedAt: now,
     });
     await storage.chatInlineApprovals.upsert({
@@ -373,7 +414,7 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       sessionId: parsed.data.sessionId,
       turnId,
       kind: approval.kind,
-      toolName: "shell.exec",
+      toolName,
       status: "pending",
       reason: "Waiting for verification chat approval.",
       riskLevel: approval.riskLevel,
@@ -394,6 +435,83 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       approvalId: approval.approvalId,
       approvalWaitRunId,
       chatTurnDurableRunId: chatTurnDurableWait.runId,
+    });
+  });
+
+  fastify.post("/api/v1/dev/verification/chat-code-mode-ran-scenario", async (request, reply) => {
+    if (!devVerificationEnabled()) {
+      return reply.code(404).send({ error: "Development verification endpoints are disabled." });
+    }
+    const parsed = chatCodeModeRanScenarioSchema.safeParse(request.body ?? {});
+    if (!parsed.success) {
+      return reply.code(400).send({ error: parsed.error.flatten() });
+    }
+
+    // A finished turn whose Code Mode request already ran. No code runs here and no approval is created: the
+    // recorded tool run carries the result the Chat card reads.
+    const finished = Date.now();
+    const startedAt = new Date(finished - 4_000).toISOString();
+    const finishedAt = new Date(finished).toISOString();
+    const turnId = randomUUID();
+    const userMessageId = randomUUID();
+    const assistantMessageId = randomUUID();
+    const toolRunId = randomUUID();
+    const codeModeRunId = `verification-code-mode-run-${turnId}`;
+    const storage = fastify.services.devVerification.storage;
+
+    await storage.chatMessages.upsert({
+      messageId: userMessageId,
+      sessionId: parsed.data.sessionId,
+      role: "user",
+      actorType: "user",
+      actorId: "verification-operator",
+      sourceAuthority: "operator",
+      content: "Read saturday-plan.pdf and review it.",
+      timestamp: startedAt,
+    });
+    await storage.chatMessages.upsert({
+      messageId: assistantMessageId,
+      sessionId: parsed.data.sessionId,
+      role: "assistant",
+      actorType: "agent",
+      actorId: "goatherder",
+      sourceAuthority: "agent_proposed",
+      content: "The plan's Timeline section is clear. Two activities overlap at 2 pm, so move one of them.",
+      timestamp: finishedAt,
+    });
+    await storage.chatTurnTraces.create({
+      turnId,
+      sessionId: parsed.data.sessionId,
+      userMessageId,
+      assistantMessageId,
+      status: "completed",
+      mode: "chat",
+      model: "verification-seed",
+      webMode: "auto",
+      memoryMode: "auto",
+      thinkingLevel: "standard",
+      startedAt,
+      finishedAt,
+    });
+    await storage.chatToolRuns.create({
+      toolRunId,
+      turnId,
+      sessionId: parsed.data.sessionId,
+      toolName: "code_mode.request",
+      status: "executed",
+      args: { ...VERIFICATION_CODE_MODE_REQUEST_ARGS },
+      result: { status: "completed", runId: codeModeRunId, durationMs: 1_800 },
+      startedAt,
+      finishedAt,
+    });
+    await storage.chatSessionBranchState.setActiveLeaf(parsed.data.sessionId, turnId);
+
+    return reply.code(201).send({
+      sessionId: parsed.data.sessionId,
+      workspaceId: parsed.data.workspaceId,
+      turnId,
+      toolRunId,
+      codeModeRunId,
     });
   });
 

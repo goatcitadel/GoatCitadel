@@ -48,7 +48,7 @@ const BANNED_WORDS = [
 
 describe("tool labels", () => {
   it("has a plain label for every grouped tool", () => {
-    expect(GROUPED_TOOLS).toHaveLength(101);
+    expect(GROUPED_TOOLS).toHaveLength(105);
     for (const { group, toolName } of GROUPED_TOOLS) {
       const label = TOOL_LABELS[toolName];
       expect(label, `${group}: ${toolName}`).toBeTruthy();

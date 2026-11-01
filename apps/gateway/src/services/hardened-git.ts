@@ -41,6 +41,9 @@ const GIT_COMMAND_TIMEOUT_MS = 15_000;
 export const GIT_TREE_OUTPUT_MAX_BYTES = 2 * 1024 * 1024;
 const GIT_METADATA_MAX_BYTES = 16 * 1024 * 1024;
 const GIT_METADATA_MAX_ENTRIES = 2_048;
+/** The most one `cat-file` batch frame adds around a blob's content: "<oid> blob <size>\n" before it, "\n" after. */
+const GIT_BATCH_FRAME_OVERHEAD_BYTES = 128;
+const GIT_BLOB_SIZE_PATTERN = /^(?:0|[1-9]\d*)$/u;
 /** How a temp folder is removed: with a few retries, since Windows briefly holds files that were just closed. */
 export const TEMP_REMOVAL_OPTIONS = { recursive: true, force: true, maxRetries: 5, retryDelay: 100 } as const;
 
@@ -270,6 +273,31 @@ function runBoundedGit(
   return execGit(cwd, [...hardenedGitConfigArgs(), ...args], { ...options, timeoutMs: GIT_COMMAND_TIMEOUT_MS });
 }
 
+/**
+ * One local `git` command with `input` on its standard input, under the same hardened settings, environment and time
+ * limit as `runBoundedGit`, and the caller's shared deadline. Its standard output comes back as bytes.
+ */
+async function runHardenedGitWithInput(
+  args: string[],
+  input: string,
+  options: { cwd: string; signal: AbortSignal; maxBuffer: number },
+): Promise<Buffer> {
+  const pending = execFileAsync("git", [...hardenedGitConfigArgs(), ...args], {
+    cwd: options.cwd,
+    windowsHide: true,
+    env: buildSanitizedGitEnvironment(),
+    signal: options.signal,
+    timeout: GIT_COMMAND_TIMEOUT_MS,
+    maxBuffer: options.maxBuffer,
+    encoding: "buffer",
+  });
+  // Git can exit before it has read all of its input. That failure comes back through `pending`, not the pipe.
+  pending.child.stdin?.on("error", () => undefined);
+  pending.child.stdin?.end(input);
+  const { stdout } = await pending;
+  return stdout;
+}
+
 export async function resolveGitHeadRevision(repoDir: string): Promise<string | undefined> {
   const result = await execFileAsync("git", [...hardenedGitConfigArgs(), "rev-parse", "HEAD"], {
     cwd: repoDir,
@@ -395,55 +423,125 @@ function inGitWords(error: unknown): unknown {
 // The tree: bounded reads from Git objects, never a checkout
 // ---------------------------------------------------------------------------
 
+/**
+ * Writes a tree's files from Git objects with three commands whatever its size: the listing, every blob's size in one
+ * `cat-file --batch-check`, and, once every size is within the limits, every blob's content in one `cat-file --batch`.
+ * Nothing is written until every file has been read in full.
+ */
 export async function materializeBoundedGitTree(
   repoDir: string,
   signal: AbortSignal,
   options: BoundedGitTreeOptions,
   destDir: string = repoDir,
 ): Promise<void> {
-  const { limits, limitError } = options;
-  const words = treeWording(options);
   const listing = await runBoundedGit(repoDir, ["ls-tree", "-r", "-z", "--full-tree", "HEAD"], {
     signal,
     encoding: "utf8",
     maxBuffer: GIT_TREE_OUTPUT_MAX_BYTES,
   });
-  const files = parseBoundedGitTree(String(listing.stdout ?? ""), options);
+  const listed = parseBoundedGitTree(String(listing.stdout ?? ""), options);
+  if (listed.length === 0) return;
+  const files = await readBoundedBlobSizes(repoDir, signal, listed, options);
+  const contents = await readBoundedBlobContents(repoDir, signal, files, options);
+  for (const [index, file] of files.entries()) {
+    const destination = path.resolve(destDir, ...file.relativePath.split("/"));
+    assertWritePathInJail(destination, [destDir]);
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.writeFile(destination, contents[index]!, { flag: "wx" });
+  }
+}
+
+/** What `cat-file --batch` and `--batch-check` are asked for: one object id a line. */
+function gitBatchRequest(files: readonly MaterializedGitTreeFile[]): string {
+  return files.map((file) => `${file.objectId}\n`).join("");
+}
+
+/** Every listed file with its size, each held to the per-file limit and all of them to the total, before any read. */
+async function readBoundedBlobSizes(
+  repoDir: string,
+  signal: AbortSignal,
+  files: readonly MaterializedGitTreeFile[],
+  options: BoundedGitTreeOptions,
+): Promise<MaterializedGitTreeFile[]> {
+  const { limits, limitError } = options;
+  const words = treeWording(options);
+  const output = await runHardenedGitWithInput(["cat-file", "--batch-check"], gitBatchRequest(files), {
+    cwd: repoDir,
+    signal,
+    maxBuffer: files.length * GIT_BATCH_FRAME_OVERHEAD_BYTES,
+  });
+  const lines = output.toString("utf8").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines.length !== files.length) throw new GitFetchFailedError(words.listingUnreadable);
   let totalBytes = 0;
-  for (const file of files) {
-    const sizeResult = await runBoundedGit(repoDir, ["cat-file", "-s", file.objectId], {
-      signal,
-      encoding: "utf8",
-      maxBuffer: 4_096,
-    });
-    const rawSize = String(sizeResult.stdout ?? "").trim();
-    if (!/^(?:0|[1-9]\d*)$/u.test(rawSize)) {
-      throw new limitError(words.fileUnavailable(file.relativePath, limits.maxFileBytes));
-    }
-    const bytes = Number(rawSize);
-    if (!Number.isSafeInteger(bytes) || bytes > limits.maxFileBytes) {
-      throw new limitError(words.fileTooLarge(file.relativePath, limits.maxFileBytes));
-    }
+  return files.map((file, index) => {
+    const bytes = parseBlobSizeLine(lines[index]!, file, options);
     totalBytes += bytes;
     if (!Number.isSafeInteger(totalBytes) || totalBytes > limits.maxTotalBytes) {
       throw new limitError(words.tooManyBytes(limits.maxTotalBytes));
     }
-    file.bytes = bytes;
-  }
+    return { ...file, bytes };
+  });
+}
 
-  for (const file of files) {
-    const blob = await runBoundedGit(repoDir, ["cat-file", "blob", file.objectId], {
-      signal,
-      encoding: "buffer",
-      maxBuffer: limits.maxFileBytes + 1_024,
-    });
-    const content = Buffer.isBuffer(blob.stdout) ? blob.stdout : Buffer.from(blob.stdout ?? "");
-    if (content.byteLength !== file.bytes) throw new GitFetchFailedError(words.fileChanged(file.relativePath));
-    const destination = path.resolve(destDir, ...file.relativePath.split("/"));
-    assertWritePathInJail(destination, [destDir]);
-    await fs.mkdir(path.dirname(destination), { recursive: true });
-    await fs.writeFile(destination, content, { flag: "wx" });
+/** One `<oid> <type> <size>` line: the blob that was asked for, and a size within the per-file limit. */
+function parseBlobSizeLine(line: string, file: MaterializedGitTreeFile, options: BoundedGitTreeOptions): number {
+  const { limits, limitError } = options;
+  const words = treeWording(options);
+  const [objectId, objectType, rawSize, ...rest] = line.split(" ");
+  if (
+    objectId !== file.objectId ||
+    objectType !== "blob" ||
+    rest.length > 0 ||
+    !GIT_BLOB_SIZE_PATTERN.test(rawSize ?? "")
+  ) {
+    throw new limitError(words.fileUnavailable(file.relativePath, limits.maxFileBytes));
   }
+  const bytes = Number(rawSize);
+  if (!Number.isSafeInteger(bytes) || bytes > limits.maxFileBytes) {
+    throw new limitError(words.fileTooLarge(file.relativePath, limits.maxFileBytes));
+  }
+  return bytes;
+}
+
+/** Every file's content, in the order asked, each frame matching the size `--batch-check` gave for it. */
+async function readBoundedBlobContents(
+  repoDir: string,
+  signal: AbortSignal,
+  files: readonly MaterializedGitTreeFile[],
+  options: BoundedGitTreeOptions,
+): Promise<Buffer[]> {
+  const words = treeWording(options);
+  const output = await runHardenedGitWithInput(["cat-file", "--batch"], gitBatchRequest(files), {
+    cwd: repoDir,
+    signal,
+    maxBuffer: options.limits.maxTotalBytes + files.length * GIT_BATCH_FRAME_OVERHEAD_BYTES,
+  });
+  const contents: Buffer[] = [];
+  let offset = 0;
+  for (const file of files) {
+    const frame = readGitBatchFrame(output, offset, file);
+    if (!frame) throw new GitFetchFailedError(words.fileChanged(file.relativePath));
+    contents.push(frame.content);
+    offset = frame.next;
+  }
+  if (offset !== output.byteLength) throw new GitFetchFailedError(words.listingUnreadable);
+  return contents;
+}
+
+/** The frame at `offset`, `<oid> blob <size>\n<content>\n`, or nothing when it isn't exactly the one expected. */
+function readGitBatchFrame(
+  output: Buffer,
+  offset: number,
+  file: MaterializedGitTreeFile,
+): { content: Buffer; next: number } | undefined {
+  const headerEnd = output.indexOf(0x0a, offset);
+  if (headerEnd < 0 || headerEnd - offset > GIT_BATCH_FRAME_OVERHEAD_BYTES) return undefined;
+  if (output.toString("latin1", offset, headerEnd) !== `${file.objectId} blob ${file.bytes}`) return undefined;
+  const start = headerEnd + 1;
+  const end = start + file.bytes;
+  if (end >= output.byteLength || output[end] !== 0x0a) return undefined;
+  return { content: output.subarray(start, end), next: end + 1 };
 }
 
 export function parseBoundedGitTree(output: string, options: BoundedGitTreeOptions): MaterializedGitTreeFile[] {

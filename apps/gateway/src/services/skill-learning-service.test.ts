@@ -879,7 +879,7 @@ describe("SkillLearningService HX-401", () => {
     ).toHaveLength(4);
   });
 
-  it("quarantines literal, foreign, and content-mismatched operator projections without a verified receipt", async () => {
+  it("quarantines literal operator projections without a verified receipt", async () => {
     const literalHarness = await createHarness();
     seedHistoryPair(literalHarness.storage, "session-literal-operator", "operator");
     const literalDryRun = await literalHarness.service.createHistoryDryRun({
@@ -898,7 +898,9 @@ describe("SkillLearningService HX-401", () => {
         actor: ACTOR,
       }),
     ).resolves.toMatchObject({ outcome: "quarantined", candidateId: undefined });
+  });
 
+  it("quarantines foreign operator projections without a verified receipt", async () => {
     const foreignHarness = await createHarness();
     seedMessage(
       foreignHarness.storage,
@@ -937,7 +939,9 @@ describe("SkillLearningService HX-401", () => {
         actor: ACTOR,
       }),
     ).resolves.toMatchObject({ outcome: "quarantined", candidateId: undefined });
+  });
 
+  it("quarantines content-mismatched operator projections without a verified receipt", async () => {
     const mismatchHarness = await createHarness();
     seedHistoryPair(mismatchHarness.storage, "session-content-mismatch", "operator");
     await seedCorrectionAuthentication(

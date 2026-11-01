@@ -855,3 +855,84 @@ describe("client-core", () => {
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
+
+describe("request without AbortSignal.any", () => {
+  const stalledFetch = () =>
+    vi.fn(
+      (_url: string, init?: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+        }),
+    );
+  const realAny = (AbortSignal as { any?: unknown }).any;
+  const realTimeout = AbortSignal.timeout;
+
+  beforeEach(() => {
+    vi.stubGlobal("crypto", { randomUUID: vi.fn(() => "uuid-1") });
+    vi.stubGlobal("btoa", (value: string) => Buffer.from(value, "utf8").toString("base64"));
+    installWindow();
+    Object.defineProperty(AbortSignal, "any", { value: undefined, configurable: true, writable: true });
+  });
+
+  afterEach(() => {
+    Object.defineProperty(AbortSignal, "any", { value: realAny, configurable: true, writable: true });
+    Object.defineProperty(AbortSignal, "timeout", { value: realTimeout, configurable: true, writable: true });
+    setGatewayCallerScope("");
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
+    vi.restoreAllMocks();
+  });
+
+  it("resolves a GET that carries a caller signal", async () => {
+    expect((AbortSignal as { any?: unknown }).any).toBeUndefined();
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse({ success: true, data: { ok: true } })));
+    const caller = new AbortController();
+    await expect(request("/api/v1/any-free", { signal: caller.signal })).resolves.toEqual({ ok: true });
+  });
+
+  it("surfaces a caller abort mid-fetch as an AbortError, not a network error", async () => {
+    vi.stubGlobal("fetch", stalledFetch());
+    const caller = new AbortController();
+    const pending = request("/api/v1/any-free-abort", { signal: caller.signal });
+    caller.abort();
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("still surfaces the 30 s timeout as a timed-out network error", async () => {
+    vi.useFakeTimers();
+    // Node's AbortSignal.timeout runs on an internal timer the fake clock cannot advance, so drive it from setTimeout.
+    Object.defineProperty(AbortSignal, "timeout", {
+      configurable: true,
+      writable: true,
+      value: (ms: number) => {
+        const controller = new AbortController();
+        setTimeout(() => controller.abort(new DOMException("The operation timed out.", "TimeoutError")), ms);
+        return controller.signal;
+      },
+    });
+    vi.stubGlobal("fetch", stalledFetch());
+    const caller = new AbortController();
+    const pending = request("/api/v1/any-free-timeout", { signal: caller.signal });
+    const assertion = expect(pending).rejects.toMatchObject({
+      kind: "network",
+      message: expect.stringContaining("no response within 30 s"),
+    });
+    await vi.advanceTimersByTimeAsync(30_000);
+    await assertion;
+  });
+
+  it("leaves no listeners on a long-lived caller signal after 20 GETs", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockImplementation(async () => jsonResponse({ success: true, data: { ok: true } })),
+    );
+    const caller = new AbortController();
+    const add = vi.spyOn(caller.signal, "addEventListener");
+    const remove = vi.spyOn(caller.signal, "removeEventListener");
+    for (let i = 0; i < 20; i += 1) {
+      await request(`/api/v1/any-free-leak/${i}`, { signal: caller.signal });
+    }
+    expect(add.mock.calls.length).toBeGreaterThan(0);
+    expect(remove.mock.calls.length).toBe(add.mock.calls.length);
+  });
+});

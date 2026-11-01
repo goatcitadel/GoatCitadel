@@ -1,4 +1,5 @@
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import { readLongestPageTextLength } from "../chat-agent-browser-results.js";
 
 const PATH_BRIDGE_POLICY_REASON = "workspace path was not freshly verified for execution";
 const WEB_TOOL_PREFIXES = ["browser.", "http."];
@@ -77,6 +78,40 @@ export function buildPathBridgeFailureGuidance(input: {
 
 function isWebTool(toolName: string): boolean {
   return WEB_TOOL_PREFIXES.some((prefix) => toolName.startsWith(prefix));
+}
+
+const WEB_PAGE_READ_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+const WEB_LOOKUP_TOOL_NAMES = new Set(["browser.search", ...WEB_PAGE_READ_TOOL_NAMES]);
+// The browser result classifier's own floor for useful page text.
+const MIN_USABLE_PAGE_TEXT_CHARS = 40;
+
+/**
+ * A failed or blocked web lookup (a search or page read) the turn worked around: another page read in the
+ * same turn succeeded, so the answer rests on sources it did open and reports its own gaps. Reading a page
+ * never recovers a failed web action such as a post or a click, and a switched-off group is still a policy
+ * block the operator can lift, so neither is ever recovered.
+ */
+export function isRecoveredWebReadFailure(
+  failedRun: ChatToolRunRecord,
+  toolRuns: readonly ChatToolRunRecord[],
+): boolean {
+  if (!WEB_LOOKUP_TOOL_NAMES.has(failedRun.toolName) || isSwitchedOffRun(failedRun) || isPolicyReasonBlock(failedRun)) {
+    return false;
+  }
+  // Only a read that brought back page text counts; one that returned just a URL read nothing.
+  return toolRuns.some(
+    (run) =>
+      run !== failedRun &&
+      run.status === "executed" &&
+      WEB_PAGE_READ_TOOL_NAMES.has(run.toolName) &&
+      readLongestPageTextLength(readRecord(run.result) ?? {}) >= MIN_USABLE_PAGE_TEXT_CHARS,
+  );
+}
+
+/** A policy re-check that denied the tool or found its group off: the operator's to lift, never worked around. */
+function isPolicyReasonBlock(run: ChatToolRunRecord): boolean {
+  const codes = readPolicyRevalidationReasonCodes(readRecord(run.result));
+  return codes.includes(TOOL_GROUP_OFF_REASON_CODE) || codes.includes(POLICY_DENY_REASON_CODE);
 }
 
 const OPERATOR_BOUNDARY_NEXT_STEP =

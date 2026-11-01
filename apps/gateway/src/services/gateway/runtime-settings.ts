@@ -134,6 +134,8 @@ export interface RuntimeSettings {
     cronReviewQueueV1Enabled: boolean;
     replayRegressionV1Enabled: boolean;
     codeModeV1Enabled: boolean;
+    /** Runtime switch for the Code Mode host sandbox. Overrides config bestEffortHostEnabled. */
+    codeModeHostSandboxEnabled?: boolean;
     improvementLedgerV1Enabled: boolean;
     improvementActivationV1Enabled: boolean;
     promptRetuneCampaignV1Enabled: boolean;

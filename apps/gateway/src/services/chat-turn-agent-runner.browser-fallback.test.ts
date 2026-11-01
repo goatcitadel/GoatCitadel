@@ -2247,7 +2247,7 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
       invokeTool,
     });
 
-    await orchestrator.run({
+    const result = await orchestrator.run({
       sessionId: "sess-explicit-browser-search-1",
       turnId: randomUUID(),
       userMessageId: "msg-explicit-browser-search-1",
@@ -2282,6 +2282,11 @@ describe("ChatTurnAgentRunner browser fallback behavior", () => {
       }),
     });
     expect(fallbackSearchCall.args.query).toBe(initialSearchCall.args.query);
+    // The run keeps the alternate engine result but records that the search fell back to it.
+    expect(result.turnTrace.toolRuns.find((run) => run.toolName === "browser.search")?.result).toMatchObject({
+      fallbackUsed: true,
+      fallbackReason: "no usable search results were returned",
+    });
   });
 
   it("exposes memory write and lookup tools for explicit save-and-confirm chat prompts", async () => {

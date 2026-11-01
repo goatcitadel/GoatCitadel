@@ -1,5 +1,6 @@
 import type {
   ChatAttachmentRecord,
+  ChatCapabilityUpgradeSuggestion,
   ChatDelegationSuggestionRecord,
   ChatGeneratedArtifactRecord,
   ChatHistoryWindowResponse,
@@ -215,6 +216,10 @@ export interface MissionControlActiveSessionSurfaceProps {
   onOpenOpsRuntime?: () => void;
   onAcceptDelegation: () => Promise<void>;
   onDismissDelegationSuggestion: () => void;
+  /** Capability suggestions for the selected turn, offered inline under its reply. */
+  capabilitySuggestions?: ChatCapabilityUpgradeSuggestion[];
+  onCapabilitySuggestionAction?: (suggestion: ChatCapabilityUpgradeSuggestion) => void;
+  onDismissCapabilitySuggestion?: (suggestion: ChatCapabilityUpgradeSuggestion) => void;
   onApprovePending: (allowScope: "once" | "session" | "workspace") => void;
   onDenyPending: () => void;
   onOpenApprovals: () => void;

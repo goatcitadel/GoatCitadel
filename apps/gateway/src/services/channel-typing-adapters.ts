@@ -2,6 +2,7 @@ import { createHash } from "node:crypto";
 import type { ChannelTypingInput, ChannelTypingResult, IntegrationConnection } from "@goatcitadel/contracts";
 import { readBoundedResponseText } from "./bounded-response-reader.js";
 import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
+import { isConnectionUrlRemoteSafe } from "./connection-url-helpers.js";
 
 /**
  * Provider typing indicators for channels that have no dedicated runtime service.
@@ -114,6 +115,9 @@ export async function emitMatrixTyping(args: ChannelTypingAdapterArgs): Promise<
       return unsupported(args, "Matrix typing needs a room id target such as !room or !room:example.com.");
     }
     const apiBase = `${homeserver.replace(/\/+$/, "")}/_matrix/client/v3`;
+    if (!isConnectionUrlRemoteSafe(apiBase)) {
+      return unsupported(args, "Matrix homeserver must use HTTPS (plain HTTP is only allowed for localhost)");
+    }
     const authHeaders = { Authorization: `Bearer ${token}` };
 
     const cacheKey = `${connection.connectionId}:${createHash("sha256").update(token).digest("hex")}`;
@@ -168,6 +172,9 @@ export async function emitMattermostTyping(args: ChannelTypingAdapterArgs): Prom
       return unsupported(args, "Mattermost typing needs a channel id target (channel:<id> or a 26-character id).");
     }
     const apiBase = `${serverUrl.replace(/\/+$/, "")}/api/v4`;
+    if (!isConnectionUrlRemoteSafe(apiBase)) {
+      return unsupported(args, "Mattermost server must use HTTPS (plain HTTP is only allowed for localhost)");
+    }
     const authHeaders = { Authorization: `Bearer ${token}` };
 
     const cacheKey = `${connection.connectionId}:${createHash("sha256").update(token).digest("hex")}`;

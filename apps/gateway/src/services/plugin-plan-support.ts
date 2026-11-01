@@ -7,8 +7,12 @@ import {
   type CapabilityPluginInspection,
   type ChangePlanOrigin,
   type ChangePlanRecord,
+  type McpServerRecord,
+  type McpServerTemplateRecord,
 } from "@goatcitadel/contracts";
 import type { StoredPlugin } from "./capability-plugin-store.js";
+import { mcpServerLabelKey } from "./mcp-money-moving.js";
+import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
 
 // What the plugin plans (install and uninstall) and the Capabilities plugin actions share: the checks an install is
 // bound by, the origin rule both plans keep, and the plain-copy helpers their summaries use. One copy, so the refusal
@@ -114,4 +118,39 @@ export function failureDetail(error: unknown): string | undefined {
   const message = error instanceof Error ? error.message.replace(/[\s\p{Cc}]+/gu, " ").trim() : "";
   const detail = redactSecretText(message).value.slice(0, 300).trim();
   return detail || undefined;
+}
+
+/** Whether a connector with the template's label is in the list, matched as the connector install matches labels. */
+export function isConnectorLabelSaved(
+  servers: readonly Pick<McpServerRecord, "label">[],
+  template: Pick<McpServerTemplateRecord, "label">,
+): boolean {
+  const label = mcpServerLabelKey(template.label);
+  return servers.some((server) => mcpServerLabelKey(server.label) === label);
+}
+
+/** Refuses a connector's save when the list it reads has the label: another install saved it after the check. */
+class ConnectorSavedMeanwhileError extends Error {}
+
+/**
+ * Saves a template's connector through `save` unless one with its label is saved, and then answers undefined. The
+ * label is checked again on the list the save itself reads (`assertUnique`), so a connector another install saves
+ * meanwhile is kept, never saved twice.
+ */
+export async function saveConnectorUnlessSaved(
+  template: Pick<McpServerTemplateRecord, "label">,
+  listSaved: () => Promise<readonly Pick<McpServerRecord, "label">[]>,
+  save: (options: McpServerCreateOptions) => Promise<McpServerRecord>,
+): Promise<McpServerRecord | undefined> {
+  if (isConnectorLabelSaved(await listSaved(), template)) return undefined;
+  try {
+    return await save({
+      assertUnique: (saved) => {
+        if (isConnectorLabelSaved(saved, template)) throw new ConnectorSavedMeanwhileError();
+      },
+    });
+  } catch (error) {
+    if (error instanceof ConnectorSavedMeanwhileError) return undefined;
+    throw error;
+  }
 }

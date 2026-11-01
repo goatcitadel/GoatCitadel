@@ -1,6 +1,10 @@
 import type { ToolAccessEvaluateRequest, ToolAccessEvaluateResponse } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
-import { filterBasePromptToolsetByPolicy, withoutUnadmittedFanout } from "./base-prompt-capability-catalog.js";
+import {
+  filterBasePromptToolsetByPolicy,
+  withoutUnadmittedFanout,
+  withoutUnofferedCodeModeTools,
+} from "./base-prompt-capability-catalog.js";
 
 const SCOPE = { sessionId: "session-1", workspaceId: "workspace-1", mode: "chat" } as const;
 
@@ -115,5 +119,57 @@ describe("withoutUnadmittedFanout", () => {
     expect(withoutUnadmittedFanout(toolset, "ask_when_useful").toolNames).toEqual(["fs.list"]);
     expect(withoutUnadmittedFanout(toolset, "off").toolNames).toEqual(["fs.list"]);
     expect(withoutUnadmittedFanout(toolset, undefined).toolNames).toEqual(["fs.list"]);
+  });
+});
+
+describe("withoutUnofferedCodeModeTools", () => {
+  const CODE_MODE_ONLY = ["docs.read_bytes", "docs.extract_text", "docs.decompress"];
+  function toolset() {
+    return {
+      toolNames: ["fs.read", ...CODE_MODE_ONLY, "code_mode.request"],
+      approvalRequiredToolNames: ["docs.extract_text", "code_mode.request"],
+      policyDeniedToolNames: ["docs.decompress", "shell.exec"],
+      switchedOffToolNames: ["docs.read_bytes"],
+      skills: [{ name: "pdf" }],
+    };
+  }
+
+  it("never lists the Code Mode script-only tools, which no Chat step offers", () => {
+    for (const eligible of [true, false]) {
+      const filtered = withoutUnofferedCodeModeTools(toolset(), eligible);
+      for (const name of CODE_MODE_ONLY) {
+        expect(filtered.toolNames).not.toContain(name);
+        expect(filtered.approvalRequiredToolNames).not.toContain(name);
+        expect(filtered.policyDeniedToolNames).not.toContain(name);
+        expect(filtered.switchedOffToolNames).not.toContain(name);
+      }
+      expect(filtered.toolNames).toContain("fs.read");
+      expect(filtered.policyDeniedToolNames).toEqual(["shell.exec"]);
+      expect(filtered.skills).toEqual([{ name: "pdf" }]);
+    }
+  });
+
+  it("keeps code_mode.request only on a turn the runner offers it", () => {
+    const offered = withoutUnofferedCodeModeTools(toolset(), true);
+    expect(offered.toolNames).toEqual(["fs.read", "code_mode.request"]);
+    expect(offered.approvalRequiredToolNames).toEqual(["code_mode.request"]);
+
+    const notOffered = withoutUnofferedCodeModeTools(toolset(), false);
+    expect(notOffered.toolNames).toEqual(["fs.read"]);
+    expect(notOffered.approvalRequiredToolNames).toEqual([]);
+  });
+
+  it("returns a new toolset and leaves its input alone", () => {
+    const input = toolset();
+    const snapshot = structuredClone(input);
+    const filtered = withoutUnofferedCodeModeTools(input, false);
+    expect(filtered).not.toBe(input);
+    expect(input).toEqual(snapshot);
+  });
+
+  it("leaves absent name lists absent", () => {
+    expect(withoutUnofferedCodeModeTools({ toolNames: ["fs.read", "docs.extract_text"] }, true)).toEqual({
+      toolNames: ["fs.read"],
+    });
   });
 });

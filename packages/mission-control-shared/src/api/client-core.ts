@@ -189,12 +189,42 @@ function resolveAttemptTimeoutMs(method: string, timeoutMs: number | undefined):
   return timeoutMs === 0 ? undefined : timeoutMs;
 }
 
-function combineSignals(
-  caller: AbortSignal | null | undefined,
-  timeout: AbortSignal | undefined,
-): AbortSignal | null | undefined {
-  if (!timeout) return caller;
-  return caller ? AbortSignal.any([caller, timeout]) : timeout;
+interface CombinedSignal {
+  signal: AbortSignal | null | undefined;
+  /** Releases the listeners a fallback combination holds on its sources; a no-op when none were added. */
+  dispose(): void;
+}
+
+const NOOP_DISPOSE = () => undefined;
+
+/**
+ * Joins the caller's signal with the attempt timeout. `AbortSignal.any` is missing from Firefox before 124 and Safari
+ * before 17.4, so those browsers get an equivalent controller whose listeners `dispose` removes, keeping a long-lived
+ * caller signal from accumulating one listener per request. The abort `reason` is carried across either way.
+ */
+function combineSignals(caller: AbortSignal | null | undefined, timeout: AbortSignal | undefined): CombinedSignal {
+  if (!timeout) return { signal: caller, dispose: NOOP_DISPOSE };
+  if (!caller) return { signal: timeout, dispose: NOOP_DISPOSE };
+  if (typeof AbortSignal.any === "function")
+    return { signal: AbortSignal.any([caller, timeout]), dispose: NOOP_DISPOSE };
+  const controller = new AbortController();
+  const sources = [caller, timeout];
+  const aborted = sources.find((source) => source.aborted);
+  if (aborted) {
+    controller.abort(aborted.reason);
+    return { signal: controller.signal, dispose: NOOP_DISPOSE };
+  }
+  const listeners = sources.map((source) => {
+    const onAbort = () => controller.abort(source.reason);
+    source.addEventListener("abort", onAbort, { once: true });
+    return { source, onAbort };
+  });
+  return {
+    signal: controller.signal,
+    dispose: () => {
+      for (const { source, onAbort } of listeners) source.removeEventListener("abort", onAbort);
+    },
+  };
 }
 const ATTEMPT_KEY_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/iu;
 
@@ -296,6 +326,7 @@ async function requestUncoalesced<T>(
   for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
     init?.signal?.throwIfAborted();
     const timeoutSignal = attemptTimeoutMs ? AbortSignal.timeout(attemptTimeoutMs) : undefined;
+    const combined = combineSignals(init?.signal, timeoutSignal);
     try {
       const res = await fetchStartupRead(
         buildGatewayUrl(path),
@@ -305,7 +336,7 @@ async function requestUncoalesced<T>(
             ...headers,
           },
           method,
-          signal: combineSignals(init?.signal, timeoutSignal),
+          signal: combined.signal,
         },
         { installation, accessRevision, caller: getGatewayCallerScope(), callerRevision },
         scopeCurrent,
@@ -464,6 +495,8 @@ async function requestUncoalesced<T>(
         });
       }
       throw lastError;
+    } finally {
+      combined.dispose();
     }
   }
 

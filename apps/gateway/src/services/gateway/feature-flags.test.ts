@@ -63,3 +63,23 @@ describe("claudeCliWarmContinuationEnabled feature flag", () => {
     expect(buildUpdatedFeatureFlags(defaults, stored).claudeCliWarmContinuationEnabled).toBe(true);
   });
 });
+
+describe("codeModeHostSandboxEnabled feature flag", () => {
+  const defaults = resolveGatewayFeatureFlags(undefined, {} as GatewayFeatureFlags);
+
+  it("defaults to false and merges a patch", () => {
+    expect(defaults.codeModeHostSandboxEnabled).toBe(false);
+    expect(buildUpdatedFeatureFlags(defaults, {}).codeModeHostSandboxEnabled).toBe(false);
+    expect(buildUpdatedFeatureFlags(defaults, { codeModeHostSandboxEnabled: true }).codeModeHostSandboxEnabled).toBe(
+      true,
+    );
+  });
+
+  it("prefers a stored value over the configured default", () => {
+    const configuredOn = { ...defaults, codeModeHostSandboxEnabled: true };
+    expect(resolveGatewayFeatureFlags(undefined, configuredOn).codeModeHostSandboxEnabled).toBe(true);
+    expect(
+      resolveGatewayFeatureFlags({ codeModeHostSandboxEnabled: false }, configuredOn).codeModeHostSandboxEnabled,
+    ).toBe(false);
+  });
+});

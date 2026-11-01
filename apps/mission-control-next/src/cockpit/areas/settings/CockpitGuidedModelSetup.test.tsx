@@ -292,6 +292,34 @@ describe("shared guided model setup", () => {
     expect(container.querySelector('[role="status"]')?.textContent).toBe("Change applied and verified.");
     expect(mocks.reload).toHaveBeenCalled();
   });
+  it("creates the model plan on Confirm even while a connection plan for the provider is pending", async () => {
+    catalog("ready");
+    mocks.plans.mockResolvedValue({
+      items: [
+        {
+          planId: "plan-connect",
+          kind: "provider_connection",
+          status: "awaiting_input",
+          revision: 1,
+          origin: { workspaceId: "default", surface: "settings" },
+          request: { kind: "provider_connection", providerId: "test" },
+        },
+      ],
+    });
+    await mount();
+    const model = container.querySelectorAll("select")[1]!;
+    await vi.waitFor(() => expect(model.querySelector('option[value="other-model"]')).not.toBeNull());
+    await act(async () => {
+      model.value = "other-model";
+      model.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    await act(async () => button("Confirm model")!.click());
+    expect(mocks.create).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      surface: "settings",
+      request: expect.objectContaining({ kind: "installation_default_model", providerId: "test" }),
+    });
+  });
   it("leaves no unsaved draft after saving the clamped effort of a provider without reasoning", async () => {
     catalog("ready", { capabilities: { reasoning: false } });
     await mount();

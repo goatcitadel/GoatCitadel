@@ -39,6 +39,12 @@ export const RUNTIME_CONFIGURE_TOOL_NAME = "runtime.configure";
 /** Model-callable, plan-creation-only entry to the Evolution Control Plane. */
 export const CHANGE_REQUEST_TOOL_NAME = "change.request";
 
+/**
+ * Model-callable request to run a short Code Mode script in the current Chat turn. It always needs an explicit
+ * operator approval: no grant, relief, bypass mode or profile skips it.
+ */
+export const CODE_MODE_REQUEST_TOOL_NAME = "code_mode.request";
+
 /** tests.run, lint.run and build.run only ever run a package script; they accept no command. */
 const RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA = {
   type: "object",
@@ -622,6 +628,50 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     usageHints: [
       "Use this only to create a Change Plan; tell the operator that Chat will show the exact confirmation action.",
       "Never include credentials, OAuth values, filesystem paths, patches, commands, arbitrary setting keys, or delegated-agent requests.",
+    ],
+  },
+  {
+    name: CODE_MODE_REQUEST_TOOL_NAME,
+    category: "ops",
+    riskLevel: "caution",
+    requiresApproval: true,
+    description:
+      "Ask the operator to run a short script on this computer in a restricted sandbox, then continue with its result. The operator approves every run. The docs.* helpers (capabilities.docs.read_bytes, extract_text, decompress) exist only inside the script; never call them as tools.",
+    argSchema: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          minLength: 1,
+          maxLength: 120,
+          description: 'A plain verb phrase shown to the operator, such as "read the text of saturday-plan.pdf".',
+        },
+        source: {
+          type: "string",
+          minLength: 1,
+          maxLength: 20_000,
+          description:
+            "The script body. It reads `input`, may await helpers, and returns the answer. Long documents come back in pages: call again with `offset: nextOffset` while nextOffset is set.",
+        },
+        language: { type: "string", enum: ["javascript", "typescript"] },
+        input: { type: "object", description: "File paths and values the script uses." },
+        reads: {
+          type: "array",
+          maxItems: 10,
+          items: { type: "string", minLength: 1, maxLength: 1_024 },
+          description:
+            "Every file path, folder path (for fs.list) and attachment ID the script reads. The operator sees this list, and each helper call must name one of these; with none the script reads no files.",
+        },
+      },
+      required: ["goal", "source"],
+      additionalProperties: false,
+    },
+    pack: "core",
+    recommendedContexts: ["chat"],
+    codeModeAllowed: false,
+    usageHints: [
+      "Use only when no available tool can do a step, such as reading a binary file. Put paths and values in `input`, list every file, folder or attachment the script reads in `reads`, return the answer, and keep the script short.",
+      "Inside the script call helpers as `await capabilities.docs.extract_text({ path: input.path })`. Each call names its target: fs.read, file.read_range, fs.stat, docs.extract_text or docs.read_bytes on a path listed in `reads` (the docs.* helpers also take a listed attachmentId), and fs.list on a folder listed in `reads`; docs.decompress works on bytes the script already has.",
     ],
   },
   {
@@ -1919,6 +1969,75 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
     },
   },
   {
+    name: "docs.read_bytes",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Read a file or chat attachment as base64 bytes for Code Mode runs, up to 64 KiB per call. Page with offset and length; nextOffset is set while bytes remain. Provide exactly one of path or attachmentId.",
+    pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        attachmentId: { type: "string" },
+        offset: { type: "integer", minimum: 0 },
+        length: { type: "integer", minimum: 1, maximum: 65_536 },
+      },
+      additionalProperties: false,
+    },
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
+    recommendedContexts: [],
+  },
+  {
+    name: "docs.extract_text",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Extract plain text from a PDF, DOCX or text file or chat attachment for Code Mode runs, up to 60000 characters (and 96 KiB) per call. Page with offset (characters); nextOffset is set while text remains. Provide exactly one of path or attachmentId.",
+    pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        path: { type: "string" },
+        attachmentId: { type: "string" },
+        offset: { type: "integer", minimum: 0 },
+        maxChars: { type: "integer", minimum: 1, maximum: 60_000 },
+      },
+      additionalProperties: false,
+    },
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
+    recommendedContexts: [],
+  },
+  {
+    name: "docs.decompress",
+    category: "knowledge",
+    riskLevel: "safe",
+    requiresApproval: false,
+    description:
+      "Decompress base64 gzip, deflate, raw-deflate or brotli data for Code Mode runs, with a hard output cap of 64 KiB.",
+    pack: "knowledge",
+    argSchema: {
+      type: "object",
+      properties: {
+        base64: { type: "string", minLength: 1 },
+        format: { type: "string", enum: ["gzip", "deflate", "raw-deflate", "brotli"] },
+        maxOutputBytes: { type: "integer", minimum: 1, maximum: 65_536 },
+      },
+      required: ["base64", "format"],
+      additionalProperties: false,
+    },
+    readOnly: true,
+    deterministic: true,
+    codeModeAllowed: true,
+    recommendedContexts: [],
+  },
+  {
     name: "docs.search",
     category: "knowledge",
     riskLevel: "safe",
@@ -2063,7 +2182,7 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
       "For non-plain DOCX, PDF, HTML, reports, briefs, and handouts, set design.skillId to impeccable so Design Quality V1 is reflected in the artifact design report.",
       "Keep renderer provenance in the design report rather than visible document body copy unless the user explicitly asks for an evidence appendix.",
       "For format html under a design receipt, you may author the whole page yourself in the html argument; the design report records markup: model-authored and the artifact can be rendered to PNG evidence from Chat.",
-      "A non-plain PDF renders as a portrait report in the design colors (design.preset, or design.brand.colors with the first color as the accent): a colored cover band, the summary in a callout box, accented section headings, marked bullets, and rows (an array of objects with the same keys) as a table after the sections. Put tabular data in rows, not in section text; keep each bullet under 220 characters, since longer bullets are cut. It embeds no photos or custom fonts; for slide-style visuals with provider images, use presentations.create with format pdf.",
+      "A non-plain PDF renders as a portrait report in the design colors (design.preset, or design.brand.colors with the first color as the accent): a colored cover band, the summary in a callout box, accented section headings, marked bullets, and rows (an array of objects with the same keys) as a table after the sections. Put tabular data in rows, not in section text; keep each bullet to a sentence or two (over 1200 characters is cut), and if the result has warnings, text was cut: split it and write again. It embeds no photos or custom fonts; for slide-style visuals with provider images, use presentations.create with format pdf.",
       "Describe the result from designReport.layouts, which lists only what the renderer drew, and from designReport.validation; do not claim a design skill was applied when design-skill-applied is a warning.",
     ],
   },

@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { generateKeyPairSync, randomUUID } from "node:crypto";
+import { createHash, generateKeyPairSync, randomUUID } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage, Storage } from "@goatcitadel/storage";
@@ -5963,7 +5963,8 @@ describe("executeTool", () => {
     ] as const) {
       const filePath = path.join(testWorkspaceRoot, name);
       await fs.writeFile(filePath, bytes);
-      const before = await executeTool(toolRequest("fs.read", { path: filePath }), policyConfig, storageStub);
+      // fs.read reports UTF-16 (NUL bytes) as binary without a digest, so hash the bytes directly.
+      const before = { sha256: createHash("sha256").update(bytes).digest("hex") };
       await expect(
         executeTool(
           toolRequest("fs.patch", {

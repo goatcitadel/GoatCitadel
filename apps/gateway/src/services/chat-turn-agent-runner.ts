@@ -56,6 +56,7 @@ import { assertMeshChatToolSchema, type MeshChatToolSchema } from "./gateway/mes
 import { type MeshChatTurnContextHandle } from "./gateway/mesh-chat-binding.js";
 import type {
   CapabilityCatalogEntry,
+  CodeModeReadiness,
   ChatCitationRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
@@ -143,11 +144,13 @@ import {
 } from "./prompt-pack-harness-normalization.js";
 import { resolveChatReasoningEffort, resolvePromptLabReasoningEffort } from "./chat-reasoning-controls.js";
 import {
+  CODE_MODE_ONLY_TOOL_NAMES,
   LOCAL_PATH_TOOL_NAMES,
   LOCAL_QUERY_TOOL_NAMES,
   MCP_BROWSER_FALLBACK_TOOL_NAMES,
   WEB_TOOL_NAMES,
 } from "./chat-tool-families.js";
+import { loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
 import {
   buildAnswerRecoveryNudge,
   buildDegradedAnswerFooter,
@@ -237,6 +240,7 @@ import {
   buildPathBridgeFailureGuidance,
   buildPolicyBlockedRecoveryText,
   buildToolFailureAppendixText,
+  isRecoveredWebReadFailure,
 } from "./chat-turn-agent-runner/tool-failure-messaging.js";
 import { repairToolCalls, type ToolCallRepairFeedback } from "./chat-agent-tool-call-repair.js";
 import { MAX_INLINE_FILE_DOWNLOAD_BYTES } from "./files-route-service.js";
@@ -264,6 +268,7 @@ import {
   listReadOnlyBuiltinToolNames,
   validateResearchPresentationArgs,
   RUNTIME_CONFIGURE_TOOL_NAME,
+  CODE_MODE_REQUEST_TOOL_NAME,
   SUBAGENT_FANOUT_TOOL_NAME,
   SUBMIT_WORK_RESULT_TOOL_NAME,
   type RuntimeConfigurationTargetId,
@@ -900,6 +905,8 @@ export interface ChatTurnAgentRunnerDeps {
   ): Promise<ChatCompletionRequest>;
   /** Rollout-gated ordinary Chat schema exposure. Historical profiles retain their frozen schemas. */
   boundedToolExposureV1Enabled?: () => Promise<boolean>;
+  /** Whether Code Mode can run now, or why not. Absent means `code_mode.request` is never offered. */
+  getCodeModeReadiness?: () => Promise<CodeModeReadiness>;
   observeToolSchemaSelection?: (diagnostics: Readonly<ToolSchemaSelectionDiagnostics>) => void;
   assertFeatureReferencesCurrent?(
     input: Pick<
@@ -1456,6 +1463,26 @@ export class ChatTurnAgentRunner {
 
   private async isOptionalUserInputEnabled(): Promise<boolean> {
     return (await this.deps.chatAsyncClarificationV1Enabled?.()) === true;
+  }
+
+  /** Whether this turn offers `code_mode.request`, by the rule turn preparation also applies to the base prompt. */
+  private async isCodeModeRequestEligible(
+    input: Pick<
+      ChatTurnAgentRunnerInput,
+      "mode" | "parentDelegationStepId" | "authActorSource" | "policyContext" | "serverOnlyPosture"
+    >,
+    restrictedAutonomousProfile: boolean,
+  ): Promise<boolean> {
+    return await loadCodeModeRequestEligibility(
+      {
+        mode: input.mode,
+        parentDelegationStepId: input.parentDelegationStepId,
+        serverOnlyPosture: Boolean(input.serverOnlyPosture),
+        restrictedAutonomousProfile,
+        actorSource: input.authActorSource ?? input.policyContext?.authActorSource,
+      },
+      this.deps.getCodeModeReadiness,
+    );
   }
 
   /** Reads the turn's optional-input mailbox under its write fence; undefined when no reader is wired. */
@@ -6925,7 +6952,10 @@ export class ChatTurnAgentRunner {
       !input.parentDelegationStepId &&
       !restrictedAutonomousProfile &&
       (await this.isOptionalUserInputEnabled());
+    const codeModeRequestEligible = await this.isCodeModeRequestEligible(input, restrictedAutonomousProfile);
     for (const tool of catalog) {
+      if (CODE_MODE_ONLY_TOOL_NAMES.has(tool.toolName)) continue;
+      if (tool.toolName === CODE_MODE_REQUEST_TOOL_NAME && !codeModeRequestEligible) continue;
       if ((tool.toolName === "capabilities.search" || tool.toolName === "skills.read") && !boundedExposure) continue;
       if (tool.toolName === "user_input.request" && !optionalInputToolEligible) continue;
       if (quickWebProfile && !QUICK_WEB_ALLOWED_TOOL_NAMES.has(tool.toolName)) {
@@ -7119,6 +7149,7 @@ export class ChatTurnAgentRunner {
       subagentFanoutEligible,
       routedContextToolsEligible,
       delegatedWorkResultEligible,
+      codeModeRequestEligible,
     });
     if (boundedExposure) {
       essentialToolNames.push("capabilities.search", "skills.read");
@@ -10074,6 +10105,7 @@ function buildEssentialToolSet(input: {
   subagentFanoutEligible?: boolean;
   routedContextToolsEligible?: boolean;
   delegatedWorkResultEligible?: boolean;
+  codeModeRequestEligible?: boolean;
 }): string[] {
   if (input.quickWebProfile) {
     return input.webMode === "off" ? [] : ["browser.search"];
@@ -10115,6 +10147,10 @@ function buildEssentialToolSet(input: {
   }
   if (input.delegatedWorkResultEligible) {
     tools.add(SUBMIT_WORK_RESULT_TOOL_NAME);
+  }
+  if (input.codeModeRequestEligible) {
+    // The model reaches for it only when no other tool fits, which scoring cannot foresee.
+    tools.add(CODE_MODE_REQUEST_TOOL_NAME);
   }
   if (
     input.memoryLookupIntent ||
@@ -10168,6 +10204,7 @@ function buildEssentialToolSet(input: {
 export function buildToolAccessProbeArgs(toolName: string, safeWriteFallbackDir?: string): Record<string, unknown> {
   if (toolName === "user_input.request")
     return { title: "Clarification", question: "Which preference applies to this task?" };
+  if (toolName === CODE_MODE_REQUEST_TOOL_NAME) return { goal: "probe", source: "return null;" };
   if (toolName === "presentations.create") {
     return {
       path: buildSafeWritePath("tool-access-probe.pptx", safeWriteFallbackDir),
@@ -15966,7 +16003,8 @@ function buildToolFailureAppendix(toolRuns: ChatToolRunRecord[]): string | undef
     toolRuns.filter(
       (run) =>
         (run.status === "failed" || run.status === "blocked") &&
-        !isRecoveredMissingLocalPathSearchFailure(run, toolRuns),
+        !isRecoveredMissingLocalPathSearchFailure(run, toolRuns) &&
+        !isRecoveredWebReadFailure(run, toolRuns),
     ),
   );
 }

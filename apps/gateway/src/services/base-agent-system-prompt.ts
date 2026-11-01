@@ -189,6 +189,11 @@ function buildWriteAndRunPolicySection(toolset: BaseAgentPromptToolset): string 
   return lines.join("\n");
 }
 
+/** Offered only when the turn's toolset has `code_mode.request`, so it lives in the volatile tail. */
+export const CODE_MODE_REQUEST_PROMPT_LINE =
+  "- When no available tool can do a needed step, call code_mode.request with a short goal and script instead of saying you can't. List in `reads` every file, folder or attachment the script reads; it can read only those, and cannot search. The operator approves it with one click and you continue with the result.";
+const CODE_MODE_REQUEST_PROMPT_SECTION = `## Running code\n${CODE_MODE_REQUEST_PROMPT_LINE}`;
+
 /** The label the operator sees on the tool group switch, so the prompt names the control that exists. */
 function switchedOffGroupLabel(toolName: string): string {
   return toolGroupForTool(toolName)?.label ?? "tool group";
@@ -290,8 +295,9 @@ export const DEEP_RESEARCH_PROMPT_SECTION = [
   "## Web research: deep",
   "The operator turned on Deep research for this message.",
   "When this message needs information from the web:",
-  "- Run 2–4 differently worded searches before answering; do not stop at the first result page.",
-  "- Open at least two relevant pages from different sites before relying on them, preferring primary sources.",
+  "- Search each part of the question with differently worded queries; do not stop at the first result page.",
+  "- Open and read the pages behind each key claim (usually five or more, from different sites), preferring primary sources over summaries, and ask browser.navigate for enough characters (maxChars 12000 or more) to read past the introduction.",
+  "- Keep researching while the tool budget allows and a key claim still rests only on a search snippet.",
   "- Cross-check key facts across sources and say which claims you could not verify.",
   "- Cite the pages you relied on by URL.",
   "Skip web research for greetings and for questions about local files or this workspace.",
@@ -387,6 +393,9 @@ export function buildBaseAgentSystemPrompt(input: BuildBaseAgentSystemPromptInpu
   }
   const writeAndRunSection = toolsCallable ? buildWriteAndRunPolicySection(toolset) : undefined;
   if (writeAndRunSection) tailSections.push(writeAndRunSection);
+  if (toolsCallable && toolset.toolNames.includes("code_mode.request")) {
+    tailSections.push(CODE_MODE_REQUEST_PROMPT_SECTION);
+  }
 
   // Skills are read through a tool, so a turn without callable tools cannot draw on them either.
   const skills = toolsCallable

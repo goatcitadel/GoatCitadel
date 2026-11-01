@@ -51,6 +51,8 @@ import type { AsyncGatewaySqlRepository, AsyncStorage } from "@goatcitadel/stora
 const VOICE_STATUS_SETTING_KEY = "voice_status_v1";
 const VOICE_WAKE_STATUS_SETTING_KEY = "voice_wake_status_v1";
 const VOICE_REALTIME_STATUS_SETTING_KEY = "voice_realtime_status_v1";
+const OPENAI_REALTIME_MISSING_KEY_MESSAGE =
+  "No OpenAI API key: add one under Settings › Providers › OpenAI, or set OPENAI_API_KEY.";
 const GOOGLE_MEET_SESSIONS_SETTING_KEY = "google_meet_voice_sessions_v1";
 const DEFAULT_VOICE_PROVIDER: VoiceTranscribeResponse["provider"] = "whisper.cpp";
 
@@ -121,6 +123,8 @@ export interface MediaVoiceDeps {
     bytes: Buffer;
   }>;
   readonly getChatAttachment: (attachmentId: string) => Promise<ChatAttachmentRecord>;
+  /** The OpenAI provider's key as chat resolves it (keychain, then its env var, then inline config). */
+  readonly resolveOpenAIApiKey?: () => string | undefined;
 }
 
 // ---------------------------------------------------------------------------
@@ -965,10 +969,11 @@ export class MediaVoiceService {
     input: OpenAIRealtimeClientSecretRequest,
   ): Promise<OpenAIRealtimeClientSecretResponse> {
     const now = new Date().toISOString();
-    const apiKey = process.env.OPENAI_API_KEY?.trim();
+    const apiKey = this.resolveOpenAIApiKey();
     const model = normalizeRealtimeModel(input.model);
     const voice = normalizeRealtimeVoice(input.voice);
     const voiceSessionId = randomUUID();
+    const systemSettings = this.deps.storage.systemSettings;
 
     if (!apiKey) {
       const status: OpenAIRealtimeVoiceStatus = {
@@ -978,10 +983,10 @@ export class MediaVoiceService {
         model,
         voice,
         updatedAt: now,
-        lastError: "OPENAI_API_KEY is not configured.",
+        lastError: OPENAI_REALTIME_MISSING_KEY_MESSAGE,
       };
-      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
-      throw new OpenAIRealtimeVoiceError("OpenAI Realtime voice requires OPENAI_API_KEY.", 400);
+      await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      throw new OpenAIRealtimeVoiceError(OPENAI_REALTIME_MISSING_KEY_MESSAGE, 400);
     }
 
     if (input.surface === "google-meet" && input.meetingSessionId) {
@@ -994,7 +999,7 @@ export class MediaVoiceService {
       }
     }
 
-    await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+    await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
       provider: "openai-realtime",
       state: "connecting",
       apiKeyReady: true,
@@ -1023,7 +1028,7 @@ export class MediaVoiceService {
         updatedAt: createdAt,
         activeVoiceSessionId: voiceSessionId,
       };
-      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
+      await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, status);
       await this.markGoogleMeetRealtimeSessionStarted(input, createdAt);
       await this.deps.publishRealtime("system", "voice", {
         type: "openai_realtime_client_secret_created",
@@ -1067,7 +1072,7 @@ export class MediaVoiceService {
       };
     } catch (error) {
       const message = error instanceof Error ? error.message : "OpenAI Realtime voice failed.";
-      await this.deps.storage.systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
+      await systemSettings.set(VOICE_REALTIME_STATUS_SETTING_KEY, {
         provider: "openai-realtime",
         state: "error",
         apiKeyReady: true,
@@ -1099,7 +1104,7 @@ export class MediaVoiceService {
     const status: OpenAIRealtimeVoiceStatus = {
       provider: "openai-realtime",
       state: "stopped",
-      apiKeyReady: Boolean(process.env.OPENAI_API_KEY?.trim()),
+      apiKeyReady: Boolean(this.resolveOpenAIApiKey()),
       model: current.model,
       voice: current.voice,
       updatedAt: now,
@@ -1336,7 +1341,7 @@ export class MediaVoiceService {
     const existing = (
       await this.deps.storage.systemSettings.get<OpenAIRealtimeVoiceStatus>(VOICE_REALTIME_STATUS_SETTING_KEY)
     )?.value;
-    const apiKeyReady = Boolean(process.env.OPENAI_API_KEY?.trim());
+    const apiKeyReady = Boolean(this.resolveOpenAIApiKey());
     const model = normalizeRealtimeModel(existing?.model);
     const voice = normalizeRealtimeVoice(existing?.voice);
     if (!apiKeyReady) {
@@ -1347,7 +1352,7 @@ export class MediaVoiceService {
         model,
         voice,
         updatedAt: existing?.updatedAt ?? now,
-        lastError: "OPENAI_API_KEY is not configured.",
+        lastError: OPENAI_REALTIME_MISSING_KEY_MESSAGE,
       };
     }
     return {
@@ -1366,6 +1371,11 @@ export class MediaVoiceService {
       activeVoiceSessionId: existing?.activeVoiceSessionId,
       lastError: existing?.lastError,
     };
+  }
+
+  // The provider lookup misses when the config has no `openai` entry; OPENAI_API_KEY still works then.
+  private resolveOpenAIApiKey(): string | undefined {
+    return this.deps.resolveOpenAIApiKey?.()?.trim() || process.env.OPENAI_API_KEY?.trim() || undefined;
   }
 
   private buildOpenAIRealtimeSafetyIdentifier(): string {
@@ -1405,6 +1415,7 @@ export class MediaVoiceService {
     input: GoogleMeetSessionStartRequest,
   ): GoogleMeetSessionRecord["prerequisites"] {
     const provider = input.provider ?? "openai-realtime";
+    const openAIKeyReady = provider === "local-transcription" || Boolean(this.resolveOpenAIApiKey());
     const browserTransportReady =
       input.browserTransportReady === true || process.env.GOATCITADEL_MEET_BROWSER_TRANSPORT === "ready";
     const audioTransportReady =
@@ -1419,11 +1430,10 @@ export class MediaVoiceService {
       },
       {
         id: "provider_key",
-        ready: provider === "local-transcription" || Boolean(process.env.OPENAI_API_KEY?.trim()),
-        message:
-          provider === "local-transcription" || process.env.OPENAI_API_KEY?.trim()
-            ? "Realtime provider prerequisite is available."
-            : "OpenAI Realtime requires OPENAI_API_KEY before meeting voice can start.",
+        ready: openAIKeyReady,
+        message: openAIKeyReady
+          ? "Realtime provider prerequisite is available."
+          : `OpenAI Realtime needs a key before meeting voice can start. ${OPENAI_REALTIME_MISSING_KEY_MESSAGE}`,
       },
       {
         id: "browser_transport",

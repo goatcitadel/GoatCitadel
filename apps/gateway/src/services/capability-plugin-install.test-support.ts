@@ -22,6 +22,7 @@ import {
 } from "./capability-plugin-store.js";
 import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-adapter.js";
 import { EvolutionControlPlaneService, type EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
+import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { PluginInstallChangePlanAdapter, type PluginInstallSources } from "./plugin-install-change-plan-adapter.js";
 import { PluginSnapshotChangedError } from "./plugin-snapshot-store.js";
@@ -258,27 +259,35 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
         };
       },
     ),
-    createConnector: vi.fn(async (create: McpServerCreateInput, owner: NonNullable<McpServerRecord["pluginOwner"]>) => {
-      step("connector");
-      const server: McpServerRecord = {
-        serverId: `server-${state.servers.length + 1}`,
-        label: create.label,
-        transport: create.transport,
-        url: create.url,
-        authType: create.authType ?? "none",
-        enabled: create.enabled ?? true,
-        category: create.category ?? "data",
-        trustTier: create.trustTier ?? "restricted",
-        costTier: create.costTier ?? "unknown",
-        policy: { ...POLICY, ...create.policy },
-        status: "disconnected",
-        pluginOwner: { ...owner },
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      };
-      state.servers = [server, ...state.servers];
-      return server;
-    }),
+    createConnector: vi.fn(
+      async (
+        create: McpServerCreateInput,
+        owner: NonNullable<McpServerRecord["pluginOwner"]>,
+        options?: McpServerCreateOptions,
+      ) => {
+        step("connector");
+        // As the save does: the uniqueness check runs on the list the write itself reads.
+        options?.assertUnique?.(state.servers);
+        const server: McpServerRecord = {
+          serverId: `server-${state.servers.length + 1}`,
+          label: create.label,
+          transport: create.transport,
+          url: create.url,
+          authType: create.authType ?? "none",
+          enabled: create.enabled ?? true,
+          category: create.category ?? "data",
+          trustTier: create.trustTier ?? "restricted",
+          costTier: create.costTier ?? "unknown",
+          policy: { ...POLICY, ...create.policy },
+          status: "disconnected",
+          pluginOwner: { ...owner },
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+        state.servers = [server, ...state.servers];
+        return server;
+      },
+    ),
     setConnectorApproval: vi.fn(
       async (
         server: McpServerRecord,

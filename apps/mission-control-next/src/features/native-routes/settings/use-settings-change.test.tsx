@@ -1,14 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  useSettingsChange,
-  __resetSettingsChangesForTests,
-  settingsChangeIsConfirmed,
-} from "./use-settings-change";
-import {
-  useSessionDraft,
-  __resetSessionDraftsForTests,
-} from "../library/session-drafts";
+import { useSettingsChange, __resetSettingsChangesForTests, settingsChangeIsConfirmed } from "./use-settings-change";
+import { useSessionDraft, __resetSessionDraftsForTests } from "../library/session-drafts";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/client";
 const mocks = vi.hoisted(() => ({ plan: vi.fn(), settings: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
@@ -22,11 +15,7 @@ const receipt = {
   risk: "caution" as const,
   summary: "Approval required",
 };
-function settings(
-  revision = 1,
-  budgetMode = "balanced",
-  changePlanReceipt?: unknown,
-) {
+function settings(revision = 1, budgetMode = "balanced", changePlanReceipt?: unknown) {
   return {
     revision,
     budgetMode,
@@ -54,7 +43,13 @@ describe("Settings save settlement", () => {
   it("does not hide pending, failed, or unknown settlement evidence", () => {
     expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "completed" }, blocking: false })).toBe(true);
     expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "completed" }, blocking: true })).toBe(false);
-    expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "completed" }, blocking: false, error: "Readback failed" })).toBe(false);
+    expect(
+      settingsChangeIsConfirmed({
+        receipt: { ...receipt, status: "completed" },
+        blocking: false,
+        error: "Readback failed",
+      }),
+    ).toBe(false);
     expect(settingsChangeIsConfirmed({ receipt: { ...receipt, status: "failed" }, blocking: false })).toBe(false);
     expect(settingsChangeIsConfirmed({ receipt, blocking: true })).toBe(false);
   });
@@ -125,7 +120,7 @@ describe("Settings save settlement", () => {
     expect(editor.isDirty).toBe(true);
     expect(editor.baseRevision).toBe(2);
   });
-  it.each(["failed", "cancelled", "rolled_back"])(
+  it.each(["failed", "cancelled", "rolled_back", "manual_required", "rollback_failed"])(
     "preserves input and releases the save after %s",
     async (status) => {
       await mount();
@@ -140,7 +135,7 @@ describe("Settings save settlement", () => {
       expect(mocks.settings).not.toHaveBeenCalled();
     },
   );
-  it.each(["manual_required", "rollback_failed", "applying", "verifying"])(
+  it.each(["applying", "verifying"])(
     "does not allow another mutation while %s needs reconciliation",
     async (status) => {
       await mount();
@@ -151,6 +146,58 @@ describe("Settings save settlement", () => {
       });
       expect(change.hasPending).toBe(true);
       expect(editor.isDirty).toBe(true);
+    },
+  );
+  it.each(["manual_required", "rollback_failed"])("stops polling and unlocks the control after %s", async (status) => {
+    vi.useFakeTimers();
+    try {
+      await mount();
+      await submit();
+      mocks.plan.mockResolvedValue(plan(status));
+      await act(async () => {
+        await change.refresh();
+      });
+      expect(change.change?.blocking).toBe(false);
+      expect(change.hasPending).toBe(false);
+      expect(reload).toHaveBeenCalledTimes(1);
+      mocks.plan.mockClear();
+      await act(async () => {
+        vi.advanceTimersByTime(30_000);
+      });
+      expect(mocks.plan).not.toHaveBeenCalled();
+      expect(change.beginSave()).toBe(true);
+      change.endSave();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it.each(["manual_required", "rollback_failed"])("names the Gateway's own outcome after %s", async (status) => {
+    await mount();
+    await submit();
+    mocks.plan.mockResolvedValue({
+      ...plan(status),
+      result: { status, summary: "Restart the Gateway to finish this change." },
+    });
+    await act(async () => {
+      await change.refresh();
+    });
+    expect(change.change?.message).toBe(
+      `Restart the Gateway to finish this change. Change ${status.replaceAll("_", " ")}. Your draft is preserved. ` +
+        "Refresh the current settings before trying again.",
+    );
+  });
+  it.each(["manual_required", "rollback_failed"])(
+    "does not lock a fresh session whose receipt is already %s",
+    async (status) => {
+      await mount();
+      await act(async () => {
+        change.receive(settings(1, "balanced", { ...receipt, status }), "power", 1);
+      });
+      expect(change.change?.blocking).toBe(false);
+      expect(change.hasPending).toBe(false);
+      expect(change.beginSave()).toBe(true);
+      change.endSave();
+      expect(mocks.plan).not.toHaveBeenCalled();
     },
   );
   it("does not clear a draft for mismatched plan evidence or a completed plan with contradictory settings", async () => {
@@ -184,12 +231,8 @@ describe("Settings save settlement", () => {
   it("rejects unchanged revisions and false direct-save acknowledgement", async () => {
     await mount();
     await act(async () => editor.setValue("power"));
-    expect(() => change.receive(settings(1, "power"), "power", 1)).toThrow(
-      "do not confirm",
-    );
-    expect(() => change.receive(settings(2, "balanced"), "power", 1)).toThrow(
-      "do not confirm",
-    );
+    expect(() => change.receive(settings(1, "power"), "power", 1)).toThrow("do not confirm");
+    expect(() => change.receive(settings(2, "balanced"), "power", 1)).toThrow("do not confirm");
     expect(editor.isDirty).toBe(true);
     await act(async () => {
       expect(change.receive(settings(2, "power"), "power", 1)).toBe(true);
@@ -198,7 +241,9 @@ describe("Settings save settlement", () => {
   });
   it("keeps an in-flight save blocked after the editor unmounts", async () => {
     await mount();
-    await act(async () => { expect(change.beginSave()).toBe(true); });
+    await act(async () => {
+      expect(change.beginSave()).toBe(true);
+    });
     const original = change;
     await act(async () => renderer.unmount());
     await mount();
@@ -212,20 +257,28 @@ describe("Settings save settlement", () => {
     let scopedChange!: ReturnType<typeof useSettingsChange<string>>;
     function Scoped({ id }: { id: string }) {
       scopedEditor = useSessionDraft("settings-scope:" + id, "balanced", 1, { label: id });
-      scopedChange = useSettingsChange({ key: scopedEditor.key, operation: "budget_mode",
-        matches: (value, submitted) => value.budgetMode === submitted, acceptSaved: scopedEditor.acceptSaved, reload });
+      scopedChange = useSettingsChange({
+        key: scopedEditor.key,
+        operation: "budget_mode",
+        matches: (value, submitted) => value.budgetMode === submitted,
+        acceptSaved: scopedEditor.acceptSaved,
+        reload,
+      });
       return null;
     }
-    await act(async () => { renderer = create(<Scoped id="first" />); });
+    await act(async () => {
+      renderer = create(<Scoped id="first" />);
+    });
     await act(async () => scopedEditor.setValue("power"));
     const submittedChange = scopedChange;
     await act(async () => renderer.update(<Scoped id="second" />));
     await act(async () => scopedEditor.setValue("saver"));
-    await act(async () => { expect(submittedChange.receive(settings(2, "power"), "power", 1)).toBe(true); });
+    await act(async () => {
+      expect(submittedChange.receive(settings(2, "power"), "power", 1)).toBe(true);
+    });
     expect(scopedEditor.value).toBe("saver");
     expect(scopedEditor.baseRevision).toBe(1);
     await act(async () => renderer.update(<Scoped id="first" />));
     expect(scopedEditor.isDirty).toBe(false);
   });
-
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { ChatMode } from "@goatcitadel/contracts";
 import {
   buildBaseAgentSystemPrompt,
+  CODE_MODE_REQUEST_PROMPT_LINE,
   DEEP_RESEARCH_PROMPT_SECTION,
   type BaseAgentRuntimeInfo,
   type BuildBaseAgentSystemPromptInput,
@@ -247,6 +248,28 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).not.toContain("tool policy file");
   });
 
+  it("offers code_mode.request only when it is in the toolset", () => {
+    const withTool = buildBaseAgentSystemPrompt(
+      input({ toolset: { toolNames: ["fs.read", "code_mode.request"], skills: [] } }),
+    );
+    const without = buildBaseAgentSystemPrompt(input({ toolset: { toolNames: ["fs.read"], skills: [] } }));
+    const toolsOff = buildBaseAgentSystemPrompt(
+      input({
+        toolsUnavailableReason: "manual_autonomy",
+        toolset: { toolNames: ["fs.read", "code_mode.request"], skills: [] },
+      }),
+    );
+    expect(withTool.volatileTail).toContain(CODE_MODE_REQUEST_PROMPT_LINE);
+    expect(without.volatileTail).not.toContain(CODE_MODE_REQUEST_PROMPT_LINE);
+    expect(toolsOff.volatileTail).not.toContain(CODE_MODE_REQUEST_PROMPT_LINE);
+    expect(withTool.stablePrefix).not.toContain("code_mode.request");
+    expect(withTool.stablePrefix).toBe(without.stablePrefix);
+    // The run can read only the files, folders and attachments the model lists, so the prompt says to list them all.
+    expect(CODE_MODE_REQUEST_PROMPT_LINE).toMatch(
+      /List in `reads` every file, folder or attachment the script reads; it can read only those, and cannot search\./,
+    );
+  });
+
   it("points at Capabilities › Tools when Files is switched off", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({
@@ -362,8 +385,9 @@ describe("buildBaseAgentSystemPrompt", () => {
         "## Web research: deep",
         "The operator turned on Deep research for this message.",
         "When this message needs information from the web:",
-        "- Run 2–4 differently worded searches before answering; do not stop at the first result page.",
-        "- Open at least two relevant pages from different sites before relying on them, preferring primary sources.",
+        "- Search each part of the question with differently worded queries; do not stop at the first result page.",
+        "- Open and read the pages behind each key claim (usually five or more, from different sites), preferring primary sources over summaries, and ask browser.navigate for enough characters (maxChars 12000 or more) to read past the introduction.",
+        "- Keep researching while the tool budget allows and a key claim still rests only on a search snippet.",
         "- Cross-check key facts across sources and say which claims you could not verify.",
         "- Cite the pages you relied on by URL.",
         "Skip web research for greetings and for questions about local files or this workspace.",

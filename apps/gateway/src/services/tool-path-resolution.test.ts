@@ -13,6 +13,34 @@ afterEach(async () => {
 });
 
 describe("resolveToolRequestPaths", () => {
+  it.each(["docs.read_bytes", "docs.extract_text", "docs.decompress"])(
+    "anchors a relative %s path to the workspace root, as fs.read does",
+    async (toolName) => {
+      const { workspaceRoot } = await createWorkspaceFixture();
+      const request: ToolInvokeRequest = {
+        toolName,
+        args: { path: "artifacts/plan.pdf" },
+        agentId: "agent",
+        sessionId: "session",
+      };
+
+      const resolved = resolveToolRequestPaths(request, { workspaceRoot });
+
+      expect(resolved.args.path).toBe(path.join(workspaceRoot, "artifacts", "plan.pdf"));
+    },
+  );
+
+  it("leaves a docs helper request that names an attachment unchanged", () => {
+    const request: ToolInvokeRequest = {
+      toolName: "docs.extract_text",
+      args: { attachmentId: "att_1" },
+      agentId: "agent",
+      sessionId: "session",
+    };
+
+    expect(resolveToolRequestPaths(request, { workspaceRoot: os.tmpdir() })).toBe(request);
+  });
+
   it("maps the prompt-pack repo sentinel back to the repository root", async () => {
     const { workspaceRoot, repoRoot } = await createWorkspaceFixture();
 

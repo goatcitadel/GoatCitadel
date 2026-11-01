@@ -61,10 +61,15 @@ export async function resolveMessageAttachments(
   return (await deps.storage.chatAttachments.listByIds([...attachmentIds])).slice(0, 6);
 }
 
+/**
+ * `codeModeRequestEligible` says whether this turn is offered `code_mode.request`. docs.extract_text runs only inside
+ * a Code Mode script, so an unextracted attachment names it only then.
+ */
 export async function buildAttachmentPromptContext(
   deps: ChatTurnUserMessageDependencies,
   input: unknown,
   supportsVision = false,
+  codeModeRequestEligible = false,
 ): Promise<string | undefined> {
   if (!Array.isArray(input) || input.length === 0) {
     return undefined;
@@ -88,7 +93,10 @@ export async function buildAttachmentPromptContext(
       return `${descriptor}\n  Preview: sent directly to a vision-capable model.`;
     }
     if (!attachment.extractPreview?.trim()) {
-      return `${descriptor}\n  Preview: unavailable for this file type in current pipeline.`;
+      const notExtracted = `${descriptor}\n  Preview: not extracted. attachmentId: ${attachment.attachmentId}.`;
+      return codeModeRequestEligible
+        ? `${notExtracted} Code Mode can read it with docs.extract_text({ attachmentId }).`
+        : notExtracted;
     }
     const preview = attachment.extractPreview
       .replace(/\r\n/g, "\n")
@@ -152,6 +160,7 @@ export async function buildUserMessageContent(
   deps: ChatTurnUserMessageDependencies,
   message: ChatMessageRecord,
   supportsVision: boolean,
+  codeModeRequestEligible: boolean,
 ): Promise<string | Array<Record<string, unknown>>> {
   const prompt = buildUserMessagePrompt(message);
   const attachments = await resolveMessageAttachments(deps, message);
@@ -159,6 +168,11 @@ export async function buildUserMessageContent(
   if (contentParts) {
     return contentParts;
   }
-  const attachmentContext = await buildAttachmentPromptContext(deps, attachments, supportsVision);
+  const attachmentContext = await buildAttachmentPromptContext(
+    deps,
+    attachments,
+    supportsVision,
+    codeModeRequestEligible,
+  );
   return attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
 }

@@ -8,6 +8,7 @@ import {
   buildPathBridgeFailureGuidance,
   buildPolicyBlockedRecoveryText,
   buildToolFailureAppendixText,
+  isRecoveredWebReadFailure,
 } from "./tool-failure-messaging.js";
 
 const PATH_BRIDGE_REASON = "blocked: workspace path was not freshly verified for execution";
@@ -636,5 +637,63 @@ describe("buildPolicyBlockedRecoveryText guidance for several blocks", () => {
     expect(text).toContain("Why: fs.delete is denied by the operator's tool policy.");
     expect(text).toContain("Why: memory.write is denied by a Citadel Ward.");
     expect(text?.match(/Why: fs\.delete/g)).toHaveLength(1);
+  });
+});
+
+describe("isRecoveredWebReadFailure", () => {
+  const blockedPage = toolRun({ toolRunId: "gallup", toolName: "browser.navigate", status: "failed" });
+  const skippedHost = toolRun({ toolRunId: "skip", toolName: "browser.navigate", status: "blocked" });
+  const readPage = toolRun({
+    toolRunId: "adp",
+    toolName: "browser.navigate",
+    status: "executed",
+    result: { url: "https://www.adpresearch.com/a", textSnippet: "People are working less. Who and why? ".repeat(4) },
+  });
+  const search = toolRun({ toolRunId: "search", toolName: "browser.search", status: "executed" });
+
+  it("treats failed web reads as recovered once another page in the turn was read", () => {
+    const runs = [search, blockedPage, skippedHost, readPage];
+
+    expect(isRecoveredWebReadFailure(blockedPage, runs)).toBe(true);
+    expect(isRecoveredWebReadFailure(skippedHost, runs)).toBe(true);
+  });
+
+  it("keeps the failure when no page was read, or the failure is not a web lookup or is a switched-off group", () => {
+    const shell = toolRun({ toolRunId: "shell", toolName: "shell.exec", status: "blocked" });
+    const post = toolRun({ toolRunId: "post", toolName: "http.post", status: "failed" });
+    const click = toolRun({ toolRunId: "click", toolName: "browser.interact", status: "failed" });
+    const switchedOff = toolRun({
+      toolRunId: "off",
+      toolName: "browser.navigate",
+      status: "blocked",
+      error: "blocked: tool group switched off",
+      result: { policyRevalidation: { reasonCodes: ["tool_group_off"] } },
+    });
+
+    expect(isRecoveredWebReadFailure(blockedPage, [search, blockedPage])).toBe(false);
+    expect(isRecoveredWebReadFailure(shell, [shell, readPage])).toBe(false);
+    // A failed web action is not recovered by reading another page.
+    expect(isRecoveredWebReadFailure(post, [post, readPage])).toBe(false);
+    expect(isRecoveredWebReadFailure(click, [click, readPage])).toBe(false);
+    expect(isRecoveredWebReadFailure(switchedOff, [switchedOff, readPage])).toBe(false);
+  });
+
+  it("keeps the failure when the only other read returned no page text, or policy denied the lookup", () => {
+    const urlOnly = toolRun({
+      toolRunId: "url-only",
+      toolName: "browser.navigate",
+      status: "executed",
+      result: { url: "https://example.com/empty", finalUrl: "https://example.com/empty" },
+    });
+    const denied = toolRun({
+      toolRunId: "denied",
+      toolName: "browser.navigate",
+      status: "blocked",
+      error: "Current deny-wins policy blocks browser.navigate.",
+      result: { policyRevalidation: { reasonCodes: ["policy_deny"] } },
+    });
+
+    expect(isRecoveredWebReadFailure(blockedPage, [blockedPage, urlOnly])).toBe(false);
+    expect(isRecoveredWebReadFailure(denied, [denied, readPage])).toBe(false);
   });
 });

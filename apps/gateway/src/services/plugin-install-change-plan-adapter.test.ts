@@ -299,6 +299,49 @@ describe("installing a plugin through one Change Plan", () => {
     ]);
   });
 
+  it("keeps a connector another install saves while this one saves it, and never saves it twice", async () => {
+    const h = harness();
+    const plan = await planFor(h);
+    const winner = {
+      serverId: "winner-issues",
+      label: "Issues",
+      transport: "http" as const,
+      authType: "none" as const,
+      enabled: false,
+      category: "data" as const,
+      trustTier: "restricted" as const,
+      costTier: "unknown" as const,
+      policy: {
+        requireFirstToolApproval: true,
+        redactionMode: "basic" as const,
+        allowedToolPatterns: [],
+        blockedToolPatterns: [],
+      },
+      status: "disconnected" as const,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+    // The other install's save lands after this install's last read of the saved list, before its own write reads it.
+    const save = h.sources.createConnector.getMockImplementation()!;
+    h.sources.createConnector.mockImplementationOnce(async (...args) => {
+      h.state.servers = [winner, ...h.state.servers];
+      return await save(...args);
+    });
+
+    const settled = await h.confirm(plan);
+
+    expect(settled.status).toBe("completed");
+    expect(h.sources.createConnector).toHaveBeenCalledOnce();
+    expect(h.sources.setConnectorApproval).not.toHaveBeenCalled();
+    expect(h.state.servers).toEqual([winner]);
+    expect((await h.store.get(PLUGIN_ID))?.pieces.find((piece) => piece.pieceId === "issues")).toEqual({
+      pieceId: "issues",
+      kind: "connector",
+      owned: false,
+    });
+    expect(settled.result?.summary).toContain("Kept Issues, which was already saved.");
+  });
+
   it("asks for everything when the piece says so", async () => {
     const manifest = {
       ...FULL_MANIFEST,

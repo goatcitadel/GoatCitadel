@@ -13,6 +13,7 @@ import {
   type DocumentArtifactFormat,
   type DocumentArtifactSection,
 } from "../document-artifacts.js";
+import { formatLocalDate } from "../document-pdf.js";
 import { analyzePresentationDeckQuality, type PresentationDeckQualitySummary } from "../presentation-layout.js";
 import {
   normalizePresentationResearch,
@@ -39,6 +40,17 @@ import { assertToolWritePath } from "../sandbox/tool-write-gate.js";
 
 const ARTIFACT_TOOL_NAMES = new Set(["artifacts.create", "documents.create", "presentations.create"]);
 const DESIGN_SKILL_NAMES = new Set(["impeccable", "design-intelligence"]);
+// Every renderer wraps and paginates bullets, so the bullet cap only guards against runaway input;
+// anything still cut or dropped is reported back in the result's warnings.
+const DOCUMENT_TEXT_LIMITS = {
+  title: 120,
+  body: 12000,
+  heading: 100,
+  sectionBody: 2000,
+  bullet: 1200,
+  sections: 40,
+  bulletsPerSection: 12,
+} as const;
 
 interface PresentationArtifactRuntime {
   request?: ToolInvokeRequest;
@@ -86,7 +98,7 @@ async function artifactsCreate(args: Record<string, unknown>, config: ToolPolicy
     `# ${title}`,
     "",
     `Template: ${template}`,
-    `Date: ${new Date().toISOString().slice(0, 10)}`,
+    `Date: ${formatLocalDate(new Date())}`,
     "",
     body || "_No content provided._",
     "",
@@ -115,8 +127,9 @@ async function documentsCreate(
   const p = ensureDocumentPath(requestedPath, format);
   assertToolWritePath(p, config.sandbox);
   const full = path.resolve(p);
-  let title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", 120);
-  let body = truncateText(asString(args.body) ?? asString(args.content) ?? "", 12000);
+  let title = truncateText(asString(args.title) ?? inferTitleFromPath(full) ?? "Document", DOCUMENT_TEXT_LIMITS.title);
+  let body = truncateText(asString(args.body) ?? asString(args.content) ?? "", DOCUMENT_TEXT_LIMITS.body);
+  const truncationWarnings = documentTruncationWarnings(args);
   let sections = normalizeDocumentSections(args.sections, body);
   // With no usable sections, the body is also repeated as a generated "Summary" section; renderers
   // that already show the body (the PDF cover callout) skip that one section.
@@ -151,6 +164,7 @@ async function documentsCreate(
   } else {
     await fs.writeFile(full, artifact.data, "utf8");
   }
+  const warnings = [...truncationWarnings, ...(artifact.warnings ?? [])];
   return {
     path: full,
     bytesWritten: Buffer.isBuffer(artifact.data) ? artifact.data.length : Buffer.byteLength(artifact.data, "utf8"),
@@ -158,13 +172,13 @@ async function documentsCreate(
     mimeType: artifact.mimeType,
     title,
     sectionCount: sections.length,
-    ...(artifact.warnings && artifact.warnings.length > 0 ? { warnings: artifact.warnings } : {}),
+    ...(warnings.length > 0 ? { warnings } : {}),
     designReport: buildArtifactDesignReport(design, {
       localPath: full,
       markup: artifact.markup,
       usedAssetIds: usedDocumentAssetIds(format, design.mode),
       ...(artifact.renderedLayouts ? { renderedLayouts: artifact.renderedLayouts } : {}),
-      residualRisks: artifact.warnings ?? [],
+      residualRisks: warnings,
       designQuality: {
         retryAttempted: design.mode !== "minimal" && design.mode !== "plain",
         findings: [
@@ -757,13 +771,19 @@ function normalizeDocumentSections(value: unknown, fallbackBody: string): Docume
   const sections = rawSections
     .map((item, index) => {
       const section = record(item);
-      const heading = truncateText(asString(section.heading) ?? asString(section.title) ?? `Section ${index + 1}`, 100);
-      const body = truncateText(asString(section.body) ?? asString(section.content) ?? "", 2000);
+      const heading = truncateText(
+        asString(section.heading) ?? asString(section.title) ?? `Section ${index + 1}`,
+        DOCUMENT_TEXT_LIMITS.heading,
+      );
+      const body = truncateText(
+        asString(section.body) ?? asString(section.content) ?? "",
+        DOCUMENT_TEXT_LIMITS.sectionBody,
+      );
       const bullets = normalizeDocumentBullets(section.bullets);
       return { heading, body, bullets };
     })
     .filter((section) => section.heading || section.body || section.bullets.length > 0)
-    .slice(0, 40);
+    .slice(0, DOCUMENT_TEXT_LIMITS.sections);
   if (sections.length > 0) {
     return sections;
   }
@@ -780,12 +800,67 @@ function normalizeDocumentRows(value: unknown): Array<Record<string, unknown> | 
     .slice(0, 500);
 }
 
+function rawDocumentBullets(value: unknown): unknown[] {
+  return Array.isArray(value) ? value : typeof value === "string" ? value.split(/\r?\n|;/g) : [];
+}
+
 function normalizeDocumentBullets(value: unknown): string[] {
-  const rawItems = Array.isArray(value) ? value : typeof value === "string" ? value.split(/\r?\n|;/g) : [];
-  return rawItems
-    .map((item) => truncateText(asString(item) ?? "", 220))
+  return rawDocumentBullets(value)
+    .map((item) => truncateText(asString(item) ?? "", DOCUMENT_TEXT_LIMITS.bullet))
     .filter((item) => item.length > 0)
-    .slice(0, 12);
+    .slice(0, DOCUMENT_TEXT_LIMITS.bulletsPerSection);
+}
+
+/** Length a field has after truncateText's whitespace collapse, before any cut. */
+function normalizedTextLength(value: unknown): number {
+  return (asString(value) ?? "").trim().replace(/\s+/g, " ").length;
+}
+
+/**
+ * Names every limit that cut or dropped text from a documents.create call, so the model can split
+ * the content and write again instead of reporting a complete document.
+ */
+function documentTruncationWarnings(args: Record<string, unknown>): string[] {
+  const rawSections = Array.isArray(args.sections) ? args.sections.map(record) : [];
+  const limits = DOCUMENT_TEXT_LIMITS;
+  const counts = {
+    title: normalizedTextLength(args.title) > limits.title ? 1 : 0,
+    body: normalizedTextLength(args.body ?? args.content) > limits.body ? 1 : 0,
+    headings: rawSections.filter((s) => normalizedTextLength(s.heading ?? s.title) > limits.heading).length,
+    sectionBodies: rawSections.filter((s) => normalizedTextLength(s.body ?? s.content) > limits.sectionBody).length,
+    bullets: rawSections.reduce(
+      (total, s) =>
+        total + rawDocumentBullets(s.bullets).filter((item) => normalizedTextLength(item) > limits.bullet).length,
+      0,
+    ),
+    droppedBullets: rawSections.reduce(
+      (total, s) =>
+        total +
+        Math.max(
+          0,
+          rawDocumentBullets(s.bullets).filter((item) => normalizedTextLength(item) > 0).length -
+            limits.bulletsPerSection,
+        ),
+      0,
+    ),
+    droppedSections: Math.max(0, rawSections.length - limits.sections),
+  };
+  const cut = (count: number, what: string, limit: number) =>
+    count > 0 ? [`Cut ${count} ${what} to ${limit} characters.`] : [];
+  const parts = [
+    ...cut(counts.title, "title", limits.title),
+    ...cut(counts.body, "body", limits.body),
+    ...cut(counts.headings, "section heading(s)", limits.heading),
+    ...cut(counts.sectionBodies, "section body(ies)", limits.sectionBody),
+    ...cut(counts.bullets, "bullet(s)", limits.bullet),
+    ...(counts.droppedBullets > 0
+      ? [`Dropped ${counts.droppedBullets} bullet(s) past ${limits.bulletsPerSection} per section.`]
+      : []),
+    ...(counts.droppedSections > 0 ? [`Dropped ${counts.droppedSections} section(s) past ${limits.sections}.`] : []),
+  ];
+  return parts.length > 0
+    ? [`Some text is missing from the document: ${parts.join(" ")} Split the content and write the document again.`]
+    : [];
 }
 
 function ensurePresentationPath(value: string, format: PresentationArtifactFormat): string {

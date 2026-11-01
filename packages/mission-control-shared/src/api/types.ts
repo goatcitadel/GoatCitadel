@@ -601,6 +601,7 @@ export interface RuntimeSettingsResponse {
     cronReviewQueueV1Enabled: boolean;
     replayRegressionV1Enabled: boolean;
     codeModeV1Enabled?: boolean;
+    codeModeHostSandboxEnabled?: boolean;
     improvementLedgerV1Enabled?: boolean;
     improvementActivationV1Enabled?: boolean;
     promptRetuneCampaignV1Enabled?: boolean;

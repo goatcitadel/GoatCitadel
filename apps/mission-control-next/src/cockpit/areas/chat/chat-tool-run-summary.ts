@@ -1,6 +1,7 @@
 // After hermes-agent's run-summary (https://github.com/nousresearch/hermes-agent, MIT, Copyright (c) 2025 Nous
 // Research), keyed to GoatCitadel's own tool names and argument shapes.
 import type { ChatToolRunRecord } from "@goatcitadel/contracts";
+import { isFailedCodeModeRequest } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-effect-truth";
 import { summarizeShellCommand } from "./summarize-shell-command";
 
@@ -38,7 +39,8 @@ const CATEGORY_COPY: Record<ToolCategory, CategoryCopy> = {
  * anything else (failed, blocked, waiting on approval, or left unfinished by a settled turn) as not having happened.
  * For calls whose whole point is an outside effect (edits, sends, creates), recorded effect truth wins over status:
  * an uncertain effect reads "may have", and an executed call that recorded no effect reads as tried. A row with no
- * effect record keeps its executed status as the evidence, as older rows carry none.
+ * effect record keeps its executed status as the evidence, as older rows carry none. A Code Mode request whose code
+ * failed settles as executed too, and reads as tried.
  */
 type Outcome = "done" | "running" | "uncertain" | "awaiting" | "tried";
 const OUTCOME_ORDER: readonly Outcome[] = ["done", "running", "uncertain", "awaiting", "tried"];
@@ -50,6 +52,7 @@ function outcomeOf(run: ChatToolRunRecord, live: boolean): Outcome {
     return "uncertain";
   }
   if (run.status === "executed") {
+    if (isFailedCodeModeRequest(run)) return "tried";
     return EFFECT_CATEGORIES.has(toolCategory(run.toolName)) && run.effectOutcomeKind === "none" ? "tried" : "done";
   }
   return run.status === "approval_required" ? "awaiting" : "tried";

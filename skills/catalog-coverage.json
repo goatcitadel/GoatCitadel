@@ -11,11 +11,27 @@
       "catalogExposure": "suggestable"
     },
     {
+      "skillId": "bundled:codebase-design",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "bundled:coding",
       "owner": "code",
       "source": "bundled",
       "riskTier": "medium",
       "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:debugging",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
       "catalogExposure": "suggestable"
     },
     {
@@ -33,6 +49,14 @@
       "riskTier": "high",
       "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
       "catalogExposure": "inspectable"
+    },
+    {
+      "skillId": "bundled:grilling",
+      "owner": "chat",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
     },
     {
       "skillId": "bundled:impeccable",
@@ -99,11 +123,35 @@
       "catalogExposure": "suggestable"
     },
     {
+      "skillId": "bundled:ponytail",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:receiving-code-review",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
       "skillId": "bundled:research",
       "owner": "cowork",
       "source": "bundled",
       "riskTier": "low",
       "expectedTests": ["packages/skills/src/bundled-skill.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:secure-coding",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
       "catalogExposure": "suggestable"
     },
     {
@@ -113,6 +161,30 @@
       "riskTier": "high",
       "expectedTests": ["scripts/check-skill-catalog.mjs"],
       "catalogExposure": "inspectable"
+    },
+    {
+      "skillId": "bundled:source-driven-development",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:spec-driven-development",
+      "owner": "cowork",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
+    },
+    {
+      "skillId": "bundled:tdd",
+      "owner": "code",
+      "source": "bundled",
+      "riskTier": "low",
+      "expectedTests": ["packages/skills/src/bundled-skill-routing.test.ts"],
+      "catalogExposure": "suggestable"
     },
     {
       "skillId": "extra:genie-npu-ir20",

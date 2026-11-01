@@ -127,6 +127,42 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     });
   }
 
+  // A line indented four or more spaces reads as a list or paragraph
+  // continuation only beside the line above it; finalized alone it would parse
+  // as indented code and keep its math unconverted.
+  it.each([
+    ["ordered-list continuation", "1. Item\n    where $x$ is the input\n"],
+    ["nested bullet", "- a\n    - $x$ nested\n"],
+    ["lazy paragraph continuation", "Intro line\n    \\(y\\) lazy continuation\n"],
+    ["indented code after a blank line", "Text\n\n    $x$ code\n"],
+    // A line indented 1-3 spaces, or a column-0 lazy line, can still sit
+    // inside a list item: cut there and the tail loses the list context.
+    ["loose bullet continuation paragraph", "- a\n\n  b\n\n    where $x$ is\n"],
+    ["loose ordered continuation paragraph", "1. Item\n\n   Detail para.\n\n    Where $x$ is the input\n"],
+    ["lazy list line before a blank", "- a\nlazy\n\n    where $x$ is\n"],
+  ])("matches the from-scratch normalizer under indented continuations: %s", (_name, content) => {
+    const lineByLine = content.split(/(?<=\n)/).map((line) => line.length);
+    const charByChar = Array.from({ length: content.length }, () => 1);
+    for (const plan of [charByChar, lineByLine]) {
+      const state = createIncrementalDisplayTextState();
+      let streamed = "";
+      for (const size of plan) {
+        streamed = content.slice(0, streamed.length + size);
+        expect(normalizeAssistantDisplayTextIncremental(state, streamed), `prefix length ${streamed.length}`).toBe(
+          normalizeAssistantDisplayText(streamed),
+        );
+      }
+    }
+  });
+
+  it("keeps math in indented code shielded on both paths", () => {
+    const content = "Text\n\n    $x$ code\n";
+    const state = createIncrementalDisplayTextState();
+    normalizeAssistantDisplayTextIncremental(state, "Text\n\n");
+    expect(normalizeAssistantDisplayText(content)).toContain("    $x$ code");
+    expect(normalizeAssistantDisplayTextIncremental(state, content)).toBe(normalizeAssistantDisplayText(content));
+  });
+
   it("self-heals on a non-append delta (edit / retry / shrink)", () => {
     const state = createIncrementalDisplayTextState();
     normalizeAssistantDisplayTextIncremental(state, "first answer\n\nwith <b>tags</b> and more\n");
@@ -147,7 +183,8 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     // not from index 0.
     expect(state.lastWalkStart).toBe(first.length);
     // And the finalized prefix was consumed, so the recomputed tail excludes it.
-    expect(state.consumedEnd).toBe(first.length);
+    // The last completed line stays in the tail: the next line may continue it.
+    expect(state.consumedEnd).toBe(first.length - "para two\n".length);
   });
 
   it("detects a JSON escape split across pushes via the boundary window", () => {
@@ -166,7 +203,8 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
 
   it("keeps equivalence while finalization is blocked by an unclosed block element", () => {
     const state = createIncrementalDisplayTextState();
-    const parts = ["safe intro\n", "<script>\n", "inside\n", "</script>\n", "outro line\n", "more after\n"];
+    // Cuts land only at a column-0 line after a blank one, so the parts are paragraphs.
+    const parts = ["safe intro\n", "\n", "<script>\n", "inside\n", "</script>\n", "\n", "outro line\n", "more after\n"];
     let streamed = "";
     for (const part of parts) {
       streamed += part;
@@ -177,20 +215,20 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
   });
 
   it.each([
-    ["raw script block", "intro\n<script>\nbody()\n</script>\n"],
-    ["raw comment block", "intro\n<!-- note\nspanning -->\n"],
-    ["entity-encoded script block", "intro\n&lt;script&gt;\nbody()\n&lt;/script&gt;\n"],
-    ["entity-encoded comment block", "intro\n&lt;!-- note\nspanning --&gt;\n"],
-    ["inline open+close on one line", "intro\n<script>x()</script> same line\n"],
-    ["nested multi-pass comment", "intro\na<!<!-- inner -->-- outer -->b\n"],
+    ["raw script block", "intro\n\n<script>\nbody()\n</script>\n"],
+    ["raw comment block", "intro\n\n<!-- note\nspanning -->\n"],
+    ["entity-encoded script block", "intro\n\n&lt;script&gt;\nbody()\n&lt;/script&gt;\n"],
+    ["entity-encoded comment block", "intro\n\n&lt;!-- note\nspanning --&gt;\n"],
+    ["inline open+close on one line", "intro\n\n<script>x()</script> same line\n"],
+    ["nested multi-pass comment", "intro\n\na<!<!-- inner -->-- outer -->b\n"],
     // RAW_HTML_BLOCK_RE tolerates whitespace (including newlines) between the
     // closing tag name and its `>`: the terminator arriving on a later line
     // must still resume finalization.
-    ["raw closing tag split before >", "intro\n<script>\nbody()\n</script\n>\nrest\n"],
-    ["encoded closing tag split before >", "intro\n&lt;script&gt;\nbody()\n&lt;/script\n&gt;\nrest\n"],
+    ["raw closing tag split before >", "intro\n\n<script>\nbody()\n</script\n>\nrest\n"],
+    ["encoded closing tag split before >", "intro\n\n&lt;script&gt;\nbody()\n&lt;/script\n&gt;\nrest\n"],
   ])("resumes prefix finalization after a closed blocker: %s", (_name, blocked) => {
     const state = createIncrementalDisplayTextState();
-    const followUp = "later prose line one\nlater prose line two\n";
+    const followUp = "\nlater prose line one\n\nlater prose line two\n";
     const full = blocked + followUp;
     // Stream in small chunks; equivalence must hold throughout.
     let streamed = "";
@@ -200,14 +238,15 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     }
     // The blocked region closed, so finalization resumed: the consumed prefix
     // advanced past the whole blocked construct instead of anchoring the
-    // mutable tail at the opener for the rest of the stream.
+    // mutable tail at the opener for the rest of the stream. Only the last
+    // paragraph stays in the tail, since the next line may continue it.
     expect(state.textBlocked).toBe(false);
-    expect(state.consumedEnd).toBe(full.length);
+    expect(state.consumedEnd).toBe(full.length - "later prose line two\n".length);
   });
 
   it("stays blocked (and correct) while a block element never closes", () => {
     const state = createIncrementalDisplayTextState();
-    const full = "intro\n<script>\nnever closes\nmore inside\n";
+    const full = "intro\n\n<script>\nnever closes\nmore inside\n";
     let streamed = "";
     while (streamed.length < full.length) {
       streamed = full.slice(0, streamed.length + 4);
@@ -215,6 +254,6 @@ describe("normalizeAssistantDisplayTextIncremental", () => {
     }
     expect(state.textBlocked).toBe(true);
     // Only the pre-blocker prefix was consumed.
-    expect(state.consumedEnd).toBe("intro\n".length);
+    expect(state.consumedEnd).toBe("intro\n\n".length);
   });
 });

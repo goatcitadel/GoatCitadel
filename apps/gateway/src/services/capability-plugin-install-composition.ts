@@ -151,9 +151,9 @@ export function pluginInstallSources(
     },
     readHookAllowlist: () => config.toolPolicy.hooks?.networkAllowlist ?? [],
     updateSettings: (input) => settings.updateSettings(input),
-    createConnector: (input, owner) =>
+    createConnector: (input, owner, options) =>
       records.runImmediateTransaction(() =>
-        createMcpServer(mcpAdministration, input, undefined, undefined, undefined, owner),
+        createMcpServer(mcpAdministration, input, undefined, undefined, undefined, owner, options),
       ),
     setConnectorApproval: (server, approvalPosture, pass, actorId) =>
       updateMcpServerPolicy(

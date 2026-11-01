@@ -445,3 +445,18 @@ describe("listReadOnlyBuiltinToolNames", () => {
     }
   });
 });
+
+describe("document helper tools", () => {
+  it("document helpers are Code Mode-allowed and read-only", () => {
+    const catalog = createDefaultToolRegistry().toCatalog();
+    for (const name of ["docs.read_bytes", "docs.extract_text", "docs.decompress"]) {
+      const tool = catalog.find((item) => item.toolName === name);
+      expect(tool, name).toBeDefined();
+      expect(tool?.readOnly, name).toBe(true);
+      expect(tool?.deterministic, name).toBe(true);
+      expect(tool?.codeModeAllowed, name).toBe(true);
+      expect(tool?.riskLevel, name).toBe("safe");
+      expect(tool?.requiresApproval, name).toBe(false);
+    }
+  });
+});

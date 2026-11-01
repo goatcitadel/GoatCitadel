@@ -432,7 +432,7 @@ import {
 import { AssemblyService, bindAssemblyChatCompletion } from "./assembly-service.js";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
 import { ApprovalWaitRunService } from "./approval-wait-run-service.js";
-import { scoutCapabilityUpgradeSuggestions } from "./chat-capability-scout.js";
+import { scoutCapabilityUpgradeSuggestions, withUnreadableTurnAttachments } from "./chat-capability-scout.js";
 import { classifyCapabilityGapFromTrace } from "./capability-gap-classifier.js";
 import { collectMcpBrowserFallbackTargets, invokeMcpRuntimeTool, type StdioClient } from "./mcp-runtime.js";
 import { McpStdioSessionPool } from "./mcp-stdio-session-pool.js";
@@ -784,7 +784,7 @@ import {
   ChatTurnWriteConflictError,
 } from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
-import { resolveToolRequestPathsForSessionScope } from "./tool-path-session-scope.js";
+import { resolveToolRequestPathsForSessionScope, withSharedSessionPathScopeReads } from "./tool-path-session-scope.js";
 import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
 import { isOutsideRootWriteEligible } from "./outside-root-write-eligibility.js";
 import {
@@ -872,6 +872,7 @@ import { MeshCapabilityInvocationService } from "./mesh-capability-invocation-se
 import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { filterBasePromptToolsetByPolicy, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
+import { withBasePromptPolicyScope } from "./base-prompt-policy-scope.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
@@ -1353,6 +1354,7 @@ export class GatewayService {
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
       readChatAttachmentContent: async (id) => await this.readChatAttachmentContent(id),
       getChatAttachment: (id) => this.getChatAttachment(id),
+      resolveOpenAIApiKey: () => this.llmService.resolveProviderApiKeyForOrigin("openai", "https://api.openai.com"),
     });
     this.channelVoiceInboundService = new ChannelVoiceInboundService({
       fetchWithTimeout: async (url, init) => await this.fetchWithDiagnosticsTimeout(url, init),
@@ -1472,6 +1474,12 @@ export class GatewayService {
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
+      readAttachmentBytes: async (request, attachmentId, window) => {
+        // Session-scoped (checked before any bytes are read) and ranged: only the call's window is read.
+        const loaded = await this.readChatAttachmentContent(attachmentId, { sessionId: request.sessionId, window });
+        const { fileName, mimeType, sizeBytes: totalBytes } = loaded.record;
+        return { fileName, mimeType, bytes: loaded.bytes, totalBytes };
+      },
       resolveCredential: (provider) => this.runtimeConfigurationService.resolveOfficialSearchCredential(provider),
       resolveFirecrawlCredential: (baseUrl) => this.webSearchCredentials.resolveFirecrawlCredential(baseUrl),
       // Live Settings value: a tool call that names another Firecrawl endpoint or key variable is blocked.
@@ -1488,6 +1496,7 @@ export class GatewayService {
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
       requestChangePlan: async (request, intent) => await this.requestChangePlanFromTool(request, intent),
+      runCodeModeRequest: (request) => this.capabilitySystemService.runCodeModeRequestTool(request),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -1629,6 +1638,7 @@ export class GatewayService {
         features: await this.readFeatureFlags(),
         runtimeExposure: this.buildRuntimeExposureSnapshot(),
       }),
+      resolveToolRequestPaths: (request) => this.resolveToolInvokeRequestPaths(request),
       resolvePolicyContext: async (input) => await this.resolveToolPolicyContext(input),
       getChatSessionWorkbench: async (sessionId) => this.routeServices.chatSessions.getChatSessionWorkbench(sessionId),
       applyChatSessionWorkbenchPatch: (sessionId, input) =>
@@ -1952,6 +1962,7 @@ export class GatewayService {
       chatThinkingStreamV1Enabled: async () => await this.isFeatureEnabled("chatThinkingStreamV1Enabled"),
       attachedContextToolsV1Enabled: async () => await this.isFeatureEnabled("attachedContextToolsV1Enabled"),
       boundedToolExposureV1Enabled: async () => await this.isFeatureEnabled("boundedToolExposureV1Enabled"),
+      getCodeModeReadiness: async () => await this.capabilitySystemService.getCodeModeReadiness(),
       observeToolSchemaSelection: (diagnostics) => log.debug("Chat tool schema selection metrics", diagnostics),
       parallelToolExecutionV1Disabled: async () => await this.isFeatureEnabled("parallelToolExecutionV1Disabled"),
       promptContextBudgetReceiptEnabled: () => process.env.GOATCITADEL_DEBUG_PROMPT_CONTEXT_BUDGET_RECEIPTS === "1",
@@ -3727,6 +3738,7 @@ export class GatewayService {
         await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
       composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
       resolveBasePromptCapabilityCatalog: (scope) => this.resolveBasePromptCapabilityCatalog(scope),
+      getCodeModeReadiness: async () => await this.capabilitySystemService.getCodeModeReadiness(),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       collectCapabilityUpgradeSuggestions: async (input) => await this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
@@ -4628,22 +4640,19 @@ export class GatewayService {
   }
 
   private async prewarmLlmModelCatalogs(): Promise<void> {
-    const config = this.llmService.getRuntimeConfig({ useCache: true });
-    const providersToWarm = config.providers.filter((p) => p.hasApiKey);
-    if (providersToWarm.length === 0) {
+    const { activeProviderId, providerIds } = await this.llmService.resolveCatalogPrewarmTargets();
+    if (providerIds.length === 0) {
       return;
     }
-    log.info("pre-warming LLM model catalogs in background", {
-      providerIds: providersToWarm.map((p) => p.providerId),
-    });
+    log.info("pre-warming LLM model catalogs in background", { activeProviderId, providerIds });
     await Promise.allSettled(
-      providersToWarm.map(async (p) => {
+      providerIds.map(async (providerId) => {
         try {
-          await this.llmService.listModels(p.providerId);
-          log.debug("pre-warmed LLM model catalog", { providerId: p.providerId });
+          await this.llmService.listModels(providerId);
+          log.debug("pre-warmed LLM model catalog", { providerId });
         } catch (error) {
           log.debug("failed to pre-warm LLM model catalog", {
-            providerId: p.providerId,
+            providerId,
             error: error instanceof Error ? error.message : String(error),
           });
         }
@@ -8403,7 +8412,7 @@ export class GatewayService {
       }
     }
     return scoutCapabilityUpgradeSuggestions({
-      ...input,
+      ...(await withUnreadableTurnAttachments(this.storage, input)),
       policyContext,
       deps: {
         listToolCatalog: () => this.listToolCatalog(),
@@ -9139,12 +9148,11 @@ export class GatewayService {
     return await chatAttachmentService.getChatAttachment(this.buildChatAttachmentHost(), attachmentId);
   }
 
-  private async readChatAttachmentContent(attachmentId: string): Promise<{
-    record: ChatAttachmentRecord;
-    fullPath: string;
-    bytes: Buffer;
-  }> {
-    return chatAttachmentService.readChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId);
+  private async readChatAttachmentContent(
+    attachmentId: string,
+    options?: Parameters<typeof chatAttachmentService.readChatAttachmentContent>[2],
+  ): Promise<{ record: ChatAttachmentRecord; fullPath: string; bytes: Buffer }> {
+    return chatAttachmentService.readChatAttachmentContent(this.buildChatAttachmentHost(), attachmentId, options);
   }
 
   private buildChatAttachmentHost(): chatAttachmentService.ChatAttachmentHost {
@@ -10646,9 +10654,7 @@ export class GatewayService {
       const skills: BaseAgentPromptSkill[] = [];
       for (const entry of catalog) {
         if (entry.kind === "tool") {
-          if (entry.toolName) {
-            toolNames.push(entry.toolName);
-          }
+          if (entry.toolName) toolNames.push(entry.toolName);
           continue;
         }
         if (entry.kind === "skill") {
@@ -10657,10 +10663,13 @@ export class GatewayService {
         }
       }
       const safeWriteDir = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out");
-      const probe = (request: ToolAccessEvaluateRequest) => this.inspectToolAccess(request);
-      return scope
-        ? await filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir)
-        : { toolNames, skills };
+      if (!scope) return { toolNames, skills };
+      const inspect = (request: ToolAccessEvaluateRequest) => this.inspectToolAccess(request);
+      const find = async (id: string) => await this.storage.workspaces?.find(id);
+      const probe = withBasePromptPolicyScope(scope, inspect, (input) => this.resolveToolPolicyContext(input), find);
+      return await withSharedSessionPathScopeReads(this.storage, () =>
+        filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir),
+      );
     } catch (error) {
       log.warn("resolveBasePromptCapabilityCatalog failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -12873,6 +12882,7 @@ export class GatewayService {
       compactionDimension?: chatMessageHistoryService.ChatCompactionDimension;
       agenticStateCapsule?: string;
       protectedTurnIds?: readonly string[];
+      codeModeRequestEligible?: boolean;
     },
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
   ): Promise<ChatCompletionRequest["messages"]> {
@@ -12889,11 +12899,13 @@ export class GatewayService {
   private buildUserMessageContent(
     message: ChatMessageRecord,
     supportsVision: boolean,
+    codeModeRequestEligible: boolean,
   ): Promise<string | Array<Record<string, unknown>>> {
     return chatTurnUserMessage.buildUserMessageContent(
       this.buildChatTurnUserMessageDependencies(),
       message,
       supportsVision,
+      codeModeRequestEligible,
     );
   }
 
@@ -12939,7 +12951,8 @@ export class GatewayService {
       llmService: this.llmService,
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
-      buildUserMessageContent: (message, supportsVision) => this.buildUserMessageContent(message, supportsVision),
+      buildUserMessageContent: (message, supportsVision, codeModeRequestEligible) =>
+        this.buildUserMessageContent(message, supportsVision, codeModeRequestEligible),
       getModelTokenMultiplier: (providerId, model) => this.llmService.getModelTokenMultiplier(providerId, model),
       onCompaction: async (input) => {
         // Both compaction triggers are record_only observers. Failures were

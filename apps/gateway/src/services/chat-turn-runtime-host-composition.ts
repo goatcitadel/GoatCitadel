@@ -73,6 +73,7 @@ function composeSessionPreparation(
   | "composeFrozenOperatorProfileDigest"
   | "ensureChatSessionModelDefaults"
   | "ensureChatSessionRuntimeGrants"
+  | "getCodeModeReadiness"
   | "getSession"
   | "getSessionAutonomyPrefs"
   | "llmService"
@@ -104,6 +105,7 @@ function composeSessionPreparation(
       : undefined,
     ensureChatSessionModelDefaults: (sessionId, prefs) => source.ensureChatSessionModelDefaults(sessionId, prefs),
     ensureChatSessionRuntimeGrants: (sessionId) => source.ensureChatSessionRuntimeGrants(sessionId),
+    getCodeModeReadiness: source.getCodeModeReadiness ? () => source.getCodeModeReadiness!() : undefined,
     getSession: (sessionId) => source.getSession(sessionId),
     getSessionAutonomyPrefs: (sessionId) => source.getSessionAutonomyPrefs(sessionId),
     loadChatTurnSessionState: (sessionId) => source.loadChatTurnSessionState(sessionId),

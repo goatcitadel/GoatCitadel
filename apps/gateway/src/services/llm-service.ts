@@ -557,6 +557,19 @@ export class LlmService {
     return this.listProviders(options);
   }
 
+  /** Providers whose model catalogs boot warming loads, active first. The quick listing sees neither saved keychain
+   * keys nor an unprobed Claude Code CLI login, so both are added for the active provider only: on Windows each
+   * keychain read is a blocking PowerShell call, so other providers' saved keys stay unread. */
+  public async resolveCatalogPrewarmTargets(): Promise<{ activeProviderId: string; providerIds: string[] }> {
+    const activeProviderId = this.activeProviderId;
+    await this.ensureProviderReadiness(activeProviderId);
+    const providerIds = this.getRuntimeConfig({ includeKeychainForActiveProvider: true, useCache: true })
+      .providers.filter((provider) => provider.hasApiKey)
+      .map((provider) => provider.providerId)
+      .sort((left, right) => Number(right === activeProviderId) - Number(left === activeProviderId));
+    return { activeProviderId, providerIds };
+  }
+
   /** Re-probe `claude auth status` for the local Claude Code CLI provider; listings only read the cache. */
   public async refreshClaudeCodeCliReadiness(): Promise<LlmProviderAuthReadiness> {
     return projectClaudeCodeCliAuthReadiness(await checkClaudeCodeCliReadiness(this.claudeCodeCli, { refresh: true }));
@@ -956,6 +969,20 @@ export class LlmService {
       throw new Error("OpenAI Codex uses ChatGPT OAuth. Connect it through the OpenAI Codex OAuth flow.");
     }
     return this.secretStore.getProviderApiKey(providerId);
+  }
+
+  /**
+   * @internal Secret-owner seam for in-process consumers (OpenAI Realtime voice) that call a
+   * provider's API outside chat dispatch. Same order as dispatch: keychain, env var, inline config.
+   * Returns nothing unless the provider's baseUrl has `origin`, so a key for another endpoint never
+   * reaches the caller's fixed host. Never expose the returned value through a route or projection.
+   */
+  public resolveProviderApiKeyForOrigin(providerId: string, origin: string): string | undefined {
+    const provider = this.providers.get(providerId);
+    if (!provider || !URL.canParse(provider.baseUrl) || new URL(provider.baseUrl).origin !== origin) {
+      return undefined;
+    }
+    return this.resolveApiKey(provider);
   }
 
   /** @internal Read-only availability probe used to choose an explicit secret owner. */

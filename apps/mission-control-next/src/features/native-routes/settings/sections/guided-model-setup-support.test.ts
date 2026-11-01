@@ -281,6 +281,42 @@ describe("pending setup plan reuse", () => {
   });
 });
 
+describe("pending setup plan reuse by kind and model", () => {
+  const connect = { planId: "k", request: { kind: "provider_connection", providerId: "test" } } as never;
+  const modelA = {
+    planId: "m",
+    request: { kind: "installation_default_model", providerId: "test", model: "a" },
+  } as never;
+
+  it("does not reopen a connection plan when the default-model plan is wanted", () => {
+    expect(pendingPlanForSelection([connect], "test", { kind: "installation_default_model", model: "a" })).toBeNull();
+  });
+
+  it("does not reuse a default-model plan for a different model", () => {
+    expect(pendingPlanForSelection([modelA], "test", { kind: "installation_default_model", model: "b" })).toBeNull();
+  });
+
+  it("does not reuse a default-model plan for a different thinking level", () => {
+    expect(
+      pendingPlanForSelection([modelA], "test", {
+        kind: "installation_default_model",
+        model: "a",
+        thinkingLevel: "high",
+      }),
+    ).toBeNull();
+  });
+
+  it("reuses the default-model plan on an exact kind, model and level match", () => {
+    expect(
+      pendingPlanForSelection([connect, modelA], "test", {
+        kind: "installation_default_model",
+        model: "a",
+        thinkingLevel: "standard",
+      }),
+    ).toBe(modelA);
+  });
+});
+
 describe("addable built-in providers need a loaded catalog", () => {
   it("offers nothing while the catalog is loading or failed", () => {
     expect(withAddableBuiltinProviders([], false)).toEqual([]);

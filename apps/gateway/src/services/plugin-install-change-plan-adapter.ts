@@ -27,7 +27,7 @@ import type {
   EvolutionControlPlaneAdapterContext,
   EvolutionControlPlaneAdapterOutcome,
 } from "./evolution-control-plane-adapter.js";
-import { mcpServerLabelKey } from "./mcp-money-moving.js";
+import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
 import {
   OTHER_WORKSPACE_MESSAGE,
@@ -37,11 +37,13 @@ import {
   failureDetail,
   groupLabel,
   hookHost,
+  isConnectorLabelSaved,
   planPluginId,
   pluginAlreadyInstalled,
   pluginChanged,
   requireCapabilitiesOrigin,
   requireInstallableInspection,
+  saveConnectorUnlessSaved,
   type KeptPluginInspection,
 } from "./plugin-plan-support.js";
 import {
@@ -110,8 +112,12 @@ export interface PluginInstallSources {
   /** The hooks allowlist as it is now. Empty allows every public https host. */
   readHookAllowlist(): readonly string[];
   updateSettings(input: PluginInstallSettingsWrite): Promise<unknown>;
-  /** Saves a connector marked as the plugin's. */
-  createConnector(input: McpServerCreateInput, owner: PluginConnectorOwner): Promise<McpServerRecord>;
+  /** Saves a connector marked as the plugin's. `options.assertUnique` runs on the list the save itself reads. */
+  createConnector(
+    input: McpServerCreateInput,
+    owner: PluginConnectorOwner,
+    options: McpServerCreateOptions,
+  ): Promise<McpServerRecord>;
   /** The audited approval-setting write, with the plugin's own pass. */
   setConnectorApproval(
     server: McpServerRecord,
@@ -414,13 +420,17 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       }
       progress.current = piece;
       const template = requireTemplate(this.sources.connectorTemplates(), piece.templateId);
-      if (await this.isLabelSaved(template)) {
-        // Saved since the check: the operator's own, which this install keeps and never changes.
+      const created = await saveConnectorUnlessSaved(
+        template,
+        () => this.sources.listSavedConnectors(),
+        (options) => this.sources.createConnector(connectorInput(template), owner, options),
+      );
+      if (!created) {
+        // Saved since the check, or during this save: the operator's own, which this install keeps and never changes.
         await this.savePiece(binding, plan, piece.id, { owned: false });
         progress.done.push(`Kept ${template.label}, which was already saved.`);
         continue;
       }
-      const created = await this.sources.createConnector(connectorInput(template), owner);
       await this.savePiece(binding, plan, piece.id, { ref: created.serverId });
       const wanted = piece.asksFirst === "everything" ? "everything_asks" : "reads_free";
       // Written out even when it is what an unset value means, so the saved server says what the plugin asked for.
@@ -608,8 +618,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
   }
 
   private async isLabelSaved(template: McpServerTemplateRecord): Promise<boolean> {
-    const label = mcpServerLabelKey(template.label);
-    return (await this.sources.listSavedConnectors()).some((server) => mcpServerLabelKey(server.label) === label);
+    return isConnectorLabelSaved(await this.sources.listSavedConnectors(), template);
   }
 
   /** Saves what one piece became in this install's own record. */

@@ -13,7 +13,10 @@ import type {
   ChatWebMode,
 } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
-import { getChatToolRunDiagnostics } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
+import {
+  getChatToolRunDiagnostics,
+  isFailedCodeModeRequest,
+} from "@goatcitadel/mission-control-shared/components/chat/chat-tool-diagnostics";
 import {
   humanizeToken,
   presentChatTurnStatus,
@@ -33,6 +36,8 @@ const toolRunStatuses: Record<ChatToolRunRecord["status"], StatusPresentation> =
 
 /** A tool call's status, the same in the transcript, its details and the inspector. */
 export function presentToolRunStatus(tool: ChatToolRunRecord): StatusPresentation {
+  // The request settled so its turn could resume, but its code did not run to the end.
+  if (tool.status === "executed" && isFailedCodeModeRequest(tool)) return toolRunStatuses.failed;
   if (tool.status === "executed" && getChatToolRunDiagnostics(tool).hasFailureSignal)
     return status("Needs review", "waiting");
   return toolRunStatuses[tool.status] ?? status("Unknown", "neutral");
@@ -169,6 +174,7 @@ export function presentAttachmentType(file: { fileName: string; mimeType?: strin
 
 const actionKinds: Record<string, string> = {
   "code_mode.run": "Run code (Code Mode)",
+  "code_mode.request": "Run code",
   "remote_worker.native_runtime": "Run on a remote worker",
   change_plan_effect: "Apply a change plan",
   "tool.invoke": "Use a tool",

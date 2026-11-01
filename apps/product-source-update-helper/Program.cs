@@ -52,7 +52,7 @@ internal static partial class Program
             Console.Error.WriteLine($"{error.Code}: {error.Message}");
             return 2;
         }
-        catch (Exception error)
+        catch (Exception error) when (IsRecoverable(error))
         {
             Console.Error.WriteLine($"helper_unhandled: {error.GetType().Name}: {error.Message}");
             return 3;
@@ -120,7 +120,7 @@ internal static partial class Program
             WriteResult(request, requestSha256, successStatus, applied.Head, applied.Tree, null, journal);
             return 0;
         }
-        catch (Exception error)
+        catch (Exception error) when (IsRecoverable(error))
         {
             journal.Append("apply_failed", new { code = FailureCode(error) });
             if (!mutationStarted)
@@ -146,7 +146,7 @@ internal static partial class Program
                 WriteResult(request, requestSha256, "rolled_back", restored.Head, restored.Tree, null, journal);
                 return 6;
             }
-            catch (Exception rollbackError)
+            catch (Exception rollbackError) when (IsRecoverable(rollbackError))
             {
                 journal.Append("automatic_rollback_failed", new { code = FailureCode(rollbackError) });
                 WriteResult(request, requestSha256, "rollback_failed", null, null, FailureCode(rollbackError), journal);
@@ -478,7 +478,7 @@ internal static partial class Program
     private static void TryStartRuntime(RestartDescriptor restart, DurableJournal journal)
     {
         try { StartRuntime(restart, journal); }
-        catch (Exception error) { journal.Append("runtime_restart_recovery_failed", new { code = FailureCode(error) }); }
+        catch (Exception error) when (IsRecoverable(error)) { journal.Append("runtime_restart_recovery_failed", new { code = FailureCode(error) }); }
     }
 
     private static async Task SmokeAsync(RestartDescriptor restart, DurableJournal journal)
@@ -580,7 +580,7 @@ internal static partial class Program
         {
             Task.WaitAll(stdoutTask, stderrTask);
         }
-        catch (AggregateException error) when (error.InnerExceptions.OfType<HelperException>().FirstOrDefault() is { } limit)
+        catch (AggregateException error) when (IsRecoverable(error) && error.InnerExceptions.OfType<HelperException>().FirstOrDefault() is { } limit)
         {
             throw limit;
         }
@@ -821,6 +821,17 @@ internal static partial class Program
     }
 
     private static string Sha256(byte[] value) => Convert.ToHexString(SHA256.HashData(value)).ToLowerInvariant();
+
+    // cs/catch-of-all-exceptions: the helper's outcome boundaries catch every recoverable failure so the
+    // journal and result file always record one, but a fatal runtime failure must crash the process
+    // (non-zero exit, no result file) instead of journaling and rolling back on a corrupt runtime.
+    // Task.WaitAll wraps reader failures, so a fatal failure inside an aggregate is fatal too.
+    private static bool IsRecoverable(Exception error) => error switch
+    {
+        OutOfMemoryException or StackOverflowException or AccessViolationException => false,
+        AggregateException aggregate => aggregate.Flatten().InnerExceptions.All(IsRecoverable),
+        _ => true,
+    };
 
     private static string FailureCode(Exception error) => error is HelperException helper ? helper.Code : "native_helper_failed";
 

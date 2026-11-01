@@ -52,6 +52,8 @@ export interface DocumentPdfInput {
   rows?: Array<Record<string, unknown> | unknown[]>;
   design: ArtifactDesignPlan;
   createdAt?: Date;
+  /** IANA zone for the cover date; defaults to the host's zone, which is the operator's on a local install. */
+  timeZone?: string;
 }
 
 export interface DocumentPdfResult {
@@ -223,10 +225,23 @@ function drawCover(flow: ReportFlow, input: DocumentPdfInput, summary: string): 
       color: theme.onBand,
     });
   });
-  const date = (input.createdAt ?? new Date()).toISOString().slice(0, 10);
+  const date = formatLocalDate(input.createdAt ?? new Date(), input.timeZone);
   page.text(MARGIN_X, COVER_BAND_H + 28, date, { font: "regular", size: 10, color: theme.muted });
   flow.y = COVER_BAND_H + 52;
   if (summary) drawCallout(flow, summary);
+}
+
+/** YYYY-MM-DD for the calendar day in `timeZone` (host zone when absent or unknown), not the UTC day. */
+export function formatLocalDate(date: Date, timeZone?: string): string {
+  const format = (zone: string | undefined) =>
+    new Intl.DateTimeFormat("en-CA", { timeZone: zone, year: "numeric", month: "2-digit", day: "2-digit" }).format(
+      date,
+    );
+  try {
+    return format(timeZone);
+  } catch {
+    return format(undefined);
+  }
 }
 
 function drawCallout(flow: ReportFlow, text: string): void {

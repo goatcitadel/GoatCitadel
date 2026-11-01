@@ -191,9 +191,169 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     render(turnWith([executed]));
     expect(tools().open).toBe(false);
   });
+
+  describe("research turns with failed web lookups", () => {
+    const pageText = { textSnippet: "People are working less. Who and why? ".repeat(4) };
+    const web = (toolName: string, status: string, extra: Partial<ChatToolRunRecord> = {}) =>
+      ({ ...toolRun({}), toolRunId: `${toolName}-${status}`, toolName, status, ...extra }) as ChatToolRunRecord;
+    const failedRead = web("browser.navigate", "failed", {
+      error: "remote site blocked automation (automation block 403)",
+    });
+    const read = web("browser.navigate", "executed", { result: pageText });
+    const search = web("browser.search", "executed");
+
+    it("keeps a completed turn's list folded when it read another page's text past a failed one", () => {
+      const skippedHost = web("browser.navigate", "blocked", { error: "execution skipped: host was already blocked" });
+      render(turnWith([search, failedRead, skippedHost, read]));
+      expect(tools().open).toBe(false);
+    });
+
+    it("opens the list with no page text read, or while the turn still runs", () => {
+      render(turnWith([search, failedRead]));
+      expect(tools().open).toBe(true);
+      // A read that came back with only a URL read nothing.
+      const urlOnly = web("browser.navigate", "executed", { toolRunId: "url-only", result: { url: "https://x.test" } });
+      render(turnWith([search, failedRead, urlOnly]));
+      expect(tools().open).toBe(true);
+      const running = { ...turnWith([search, failedRead, read]), trace: { status: "running" } };
+      render(running as unknown as ChatThreadTurnRecord);
+      expect(tools().open).toBe(true);
+    });
+
+    it("opens the list for a failed web action even after a page read", () => {
+      render(turnWith([web("http.post", "failed", { error: "source returned HTTP 500" }), read]));
+      expect(tools().open).toBe(true);
+    });
+
+    it.each([
+      ["a switched-off group named in the error", "blocked: tool group switched off", undefined],
+      [
+        "a switched-off group named by reason code",
+        "Current deny-wins policy blocks browser.navigate.",
+        "tool_group_off",
+      ],
+      ["a policy deny named by reason code", "Current deny-wins policy blocks browser.navigate.", "policy_deny"],
+    ])("opens the list for %s after a page read", (_label, error, reasonCode) => {
+      const blocked = web("browser.navigate", "blocked", {
+        toolRunId: "policy",
+        error,
+        result: reasonCode ? { policyRevalidation: { reasonCodes: [reasonCode] } } : {},
+      });
+      render(turnWith([blocked, read]));
+      expect(tools().open).toBe(true);
+    });
+  });
+
+  it("leaves the list folded for a Code Mode request the card above reports", () => {
+    const request = { ...toolRun({}), toolName: "code_mode.request", args: { goal: "read a file" } };
+    // A turn parked on the request: the card asks, so the list does not open beside it.
+    const parked = {
+      ...turnWith([{ ...request, status: "approval_required" } as ChatToolRunRecord]),
+      trace: { status: "waiting_for_approval" },
+    } as unknown as ChatThreadTurnRecord;
+    render(parked);
+    expect(tools().open).toBe(false);
+    // After Deny or Run it the same turn continues without a browser stream; the card already states the request.
+    const continuing = (run: ChatToolRunRecord) =>
+      ({ ...turnWith([run]), trace: { status: "running" } }) as unknown as ChatThreadTurnRecord;
+    const denied = { ...request, status: "blocked", error: "Denied by the operator." } as ChatToolRunRecord;
+    render(continuing(denied));
+    expect(tools().open).toBe(false);
+    // Denied (blocked) and failed requests are already stated by the Code Mode card in the reply.
+    render(turnWith([denied]));
+    expect(tools().open).toBe(false);
+    render(parked);
+    const ran = { ...request, result: { status: "completed", value: 3 } } as ChatToolRunRecord;
+    render(continuing({ ...ran, status: "started" } as ChatToolRunRecord));
+    expect(tools().open).toBe(false);
+    render(continuing(ran));
+    expect(tools().open).toBe(false);
+    render(turnWith([ran]));
+    expect(tools().open).toBe(false);
+    render(turnWith([{ ...request, result: { status: "failed", error: "Code Mode is off." } } as ChatToolRunRecord]));
+    expect(tools().open).toBe(false);
+    // Another tool that needs attention still opens it.
+    render(turnWith([{ ...toolRun({}), status: "blocked" } as ChatToolRunRecord]));
+    expect(tools().open).toBe(true);
+  });
+
+  it.each([
+    ["denied", { status: "blocked", error: "Denied by the operator." }, "started"],
+    ["failed", { result: { status: "failed", error: "Code Mode is off." } }, "approval_required"],
+  ])(
+    "opens the list while a turn with a %s and a later Code Mode request continues, as the card reports only the later",
+    (_label, earlier, laterStatus) => {
+      const request = { ...toolRun({}), toolName: "code_mode.request", args: { goal: "read a file" } };
+      const runs = [
+        { ...request, ...earlier },
+        { ...request, toolRunId: "tool-run-2", status: laterStatus },
+      ] as ChatToolRunRecord[];
+      render({ ...turnWith(runs), trace: { status: "running" } } as unknown as ChatThreadTurnRecord);
+      expect(tools().open).toBe(true);
+    },
+  );
 });
 
 describe("ChatTurnDetails tool rows", () => {
+  it("reads a Code Mode request whose code failed as Failed, with its reason", () => {
+    const failed = {
+      ...toolRun({ runId: "r1", status: "failed", error: "Code Mode is off.", durationMs: 0 }),
+      toolName: "code_mode.request",
+      args: { goal: "read a file" },
+      // An approved tool call that settled records empty guidance.
+      failureGuidance: "",
+    } as ChatToolRunRecord;
+    render(turnWith([failed]));
+    const summary = container.querySelector('details[aria-label="Tool activity for this turn"] > summary')!;
+    expect(summary.textContent).toContain("Tried to use 1 tool");
+    expect(summary.textContent).not.toContain("done");
+    const row = container.querySelector('[data-tool-run-id="tool-run-1"]')!;
+    expect(row.textContent).toContain("Failed");
+    expect(row.textContent).toContain("Code Mode is off.");
+  });
+
+  it("says why a Code Mode request failed in plain words, with its recorded error under technical details", () => {
+    const error =
+      "WRAPPER_EXECUTION_FAILED: Wrapper docs.extract_text did not execute: execution error: Path is outside read allowlist: /tmp/a.pdf";
+    const failed = {
+      ...toolRun({ runId: "r1", status: "failed", error, durationMs: 0 }),
+      toolName: "code_mode.request",
+      args: { goal: "read a file" },
+    } as ChatToolRunRecord;
+    const row = () => container.querySelector('[data-tool-run-id="tool-run-1"]')!;
+    render(turnWith([failed]));
+    expect(row().textContent).toContain("The code couldn't read a file.");
+    expect(row().textContent).not.toContain("WRAPPER_EXECUTION_FAILED");
+    preferences.showTechnicalDetails = true;
+    try {
+      render(turnWith([{ ...failed }]));
+      expect(row().textContent).toContain("Recorded error");
+      expect(row().textContent).toContain(error);
+    } finally {
+      preferences.showTechnicalDetails = false;
+    }
+  });
+
+  it("keeps the uncertain-effect line off search and page-read rows, under technical details", () => {
+    const uncertain = (toolName: string) =>
+      ({ ...toolRun({}), toolRunId: toolName, toolName, effectOutcomeKind: "uncertain" }) as ChatToolRunRecord;
+    const row = (id: string) => container.querySelector(`[data-tool-run-id="${id}"]`)!;
+    const turn = () => turnWith([uncertain("browser.search"), uncertain("browser.navigate"), uncertain("shell.exec")]);
+
+    render(turn());
+    expect(row("browser.search").textContent).not.toContain("Automatic replay is suppressed.");
+    expect(row("browser.navigate").textContent).not.toContain("Automatic replay is suppressed.");
+    // A tool that can change things keeps the line on its row.
+    expect(row("shell.exec").textContent).toContain("Automatic replay is suppressed.");
+    preferences.showTechnicalDetails = true;
+    try {
+      render(turn());
+      expect(row("browser.search").textContent).toContain("Automatic replay is suppressed.");
+    } finally {
+      preferences.showTechnicalDetails = false;
+    }
+  });
+
   it("names what a call touched, how long it took and the lines it changed", () => {
     const edit = {
       ...toolRun({ bytesWritten: 1 }),
