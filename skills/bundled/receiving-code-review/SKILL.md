@@ -32,7 +32,7 @@ Treat each review comment as a technical claim to check against the code, not a 
 
 ## When not to use
 
-- Reviewing someone else's code (use `qa`).
+- Reviewing someone else's code: review it directly, with `secure-coding` for trust-boundary code and `codebase-design` for module shape.
 - The operator directing their own design: the decision is theirs, so check the scope and act.
 
 ## Workflow

@@ -181,17 +181,17 @@ Return these sections:
 
 ## GoatCitadel Appendix
 
-In GoatCitadel, map the same framework like this:
+Chat is the only primary operator surface; older Cowork and Code routes open Chat, except `/cowork/tasks` and `/cowork/board`, which open Ops Kanban. Map the framework onto Chat like this:
 
-### Chat
+### Conversation
 - prefer lightweight, advisory, low-ceremony skill behavior
 - avoid hidden orchestration or autonomous branching
 
-### Cowork
-- this is the right place for visible decomposition, checkpoints, approvals, and structured delegation
+### Agentic work
+- visible decomposition, checkpoints, approvals, and delegation run on durable execution and show in the Chat turn
 
-### Code
-- prefer bounded, correctness-first skill behavior with explicit validation and proof expectations
+### Code capability
+- prefer bounded, correctness-first behavior with explicit validation and proof; governed Code Mode runs are launched and reviewed from Chat
 
 ### GoatCitadel Trust Model
 
@@ -225,14 +225,12 @@ When the review covers a `SKILL.md` itself, check these, most important first:
 ### Builder-focused
 
 - "Design an agentic skill for incident triage and tell me what belongs in the skill versus the runtime."
-- "Review this skill architecture and tell me whether it is actually a runtime feature."
 - "Help me create a shareable skill for agentic research without embedding policy logic inside it."
 
 ### Practical-user-focused
 
 - "Is this actually a skill, or am I overcomplicating it?"
 - "Audit this skill draft for safety and missing runtime requirements."
-- "Give me a cleaner skill concept I can share with people."
 
 ## Failure Modes and Boundaries
 

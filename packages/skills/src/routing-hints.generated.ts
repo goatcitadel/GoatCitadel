@@ -193,12 +193,36 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenNotToUse: ["Do not stop at planning when the user explicitly requested implementation and scope is clear."],
     confidenceBoost: 0.08,
   },
+  // Explicit-only: no phrases or keywords, so it loads only for `use ponytail`, `@skill ponytail`, or `$bundled:ponytail`.
+  ponytail: {
+    phrases: [],
+    keywords: [],
+    surfaces: ["code"],
+    whenToUse: ["Make the smallest complete change when the operator names ponytail."],
+    whenNotToUse: ["Never selected automatically."],
+  },
   qa: {
     phrases: ["verify", "regression", "test plan", "repro"],
     keywords: ["test", "qa", "verify", "regression", "repro"],
     surfaces: ["code", "ops"],
     whenToUse: ["Build focused validation matrices and capture regression evidence."],
     whenNotToUse: ["Do not replace code fixes with test descriptions when a confirmed bug is in scope."],
+    confidenceBoost: 0.08,
+  },
+  "receiving-code-review": {
+    phrases: ["address the review", "reviewer said"],
+    keywords: ["reviewer suggested", "pr comments from"],
+    surfaces: ["code"],
+    whenToUse: ["Evaluate review feedback before acting on it."],
+    whenNotToUse: ["Do not use to perform a review of someone else's code."],
+    confidenceBoost: 0.1,
+  },
+  research: {
+    phrases: ["research", "compare", "source analysis", "benchmark review"],
+    keywords: ["research", "compare", "source", "benchmark"],
+    surfaces: ["chat", "cowork"],
+    whenToUse: ["Analyze external sources or compare repos with confidence labels and evidence."],
+    whenNotToUse: ["Do not present stale external claims without current verification."],
     confidenceBoost: 0.08,
   },
   "secure-coding": {
@@ -232,30 +256,6 @@ export const GENERATED_SKILL_ROUTING_HINTS: Record<string, SkillRoutingHints> = 
     whenToUse: ["Drive a change with a failing test written first."],
     whenNotToUse: ["Do not use to run or triage an existing suite."],
     confidenceBoost: 0.1,
-  },
-  // Explicit-only: no phrases or keywords, so it loads only for `use ponytail`, `@skill ponytail`, or `$bundled:ponytail`.
-  ponytail: {
-    phrases: [],
-    keywords: [],
-    surfaces: ["code"],
-    whenToUse: ["Make the smallest complete change when the operator names ponytail."],
-    whenNotToUse: ["Never selected automatically."],
-  },
-  "receiving-code-review": {
-    phrases: ["address the review", "reviewer said"],
-    keywords: ["reviewer suggested", "pr comments from"],
-    surfaces: ["code"],
-    whenToUse: ["Evaluate review feedback before acting on it."],
-    whenNotToUse: ["Do not use to perform a review of someone else's code."],
-    confidenceBoost: 0.1,
-  },
-  research: {
-    phrases: ["research", "compare", "source analysis", "benchmark review"],
-    keywords: ["research", "compare", "source", "benchmark"],
-    surfaces: ["chat", "cowork"],
-    whenToUse: ["Analyze external sources or compare repos with confidence labels and evidence."],
-    whenNotToUse: ["Do not present stale external claims without current verification."],
-    confidenceBoost: 0.08,
   },
 };
 
