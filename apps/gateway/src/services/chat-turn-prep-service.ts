@@ -24,10 +24,8 @@ import {
   canonicalJsonString,
   DEFAULT_CITADEL_ID,
   ConflictError,
-  HEARTBEAT_PERMISSION_PROFILE_ID,
   NotFoundError,
   redactStructuredSecrets,
-  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "@goatcitadel/contracts";
 import type {
   CapabilityCatalogSnapshotRecord,
@@ -84,7 +82,7 @@ import {
   withoutUnofferedCodeModeTools,
   type BasePromptCatalogScope,
 } from "./base-prompt-capability-catalog.js";
-import { loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
+import { buildCodeModeRequestTurnShape, loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -1108,17 +1106,15 @@ export async function prepareAgentChatTurn(
       : undefined;
   // The runner offers code_mode.request by the same rule; the prompt and attachment hints must not name it otherwise.
   const codeModeRequestEligible = await loadCodeModeRequestEligibility(
-    {
+    buildCodeModeRequestTurnShape({
       mode: effectiveMode,
       parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
-      serverOnlyPosture: Boolean(systemHeartbeatPosture),
-      restrictedAutonomousProfile:
-        input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
-        input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID,
-      actorSource:
-        input.authActorSource ??
-        (input as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }).policyContext?.authActorSource,
-    },
+      permissionProfileId: input.permissionProfileId,
+      serverOnlyPosture: systemHeartbeatPosture,
+      authActorSource: input.authActorSource,
+      // Autonomous enqueue passes its policy context on the request, past this signature's type.
+      policyContext: (input as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }).policyContext,
+    }),
     host.getCodeModeReadiness ? () => host.getCodeModeReadiness!() : undefined,
   );
   let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;

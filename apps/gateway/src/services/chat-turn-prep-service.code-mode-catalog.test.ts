@@ -4,9 +4,13 @@ import type {
   ChatSendMessageRequest,
   ChatSessionPrefsRecord,
   CodeModeReadiness,
+  ToolCatalogEntry,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
-import { SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
+import { HEARTBEAT_PERMISSION_PROFILE_ID, SCHEDULED_TURN_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 import { CODE_MODE_REQUEST_PROMPT_LINE } from "./base-agent-system-prompt.js";
+import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
+import { createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
 import { prepareAgentChatTurn, type ChatTurnPrepHost } from "./chat-turn-prep-service.js";
 
 // A delegated child's admission authority has its own suite; here it only has to let the child turn through.
@@ -120,7 +124,7 @@ function createHost(readiness: CodeModeReadiness | "missing" | "throws") {
 
 async function prepare(
   readiness: CodeModeReadiness | "missing" | "throws",
-  request: Partial<ChatSendMessageRequest> = {},
+  request: Partial<ChatSendMessageRequest> & { policyContext?: ToolPolicyActorContext } = {},
 ) {
   const harness = createHost(readiness);
   await prepareAgentChatTurn(harness.host, "session-1", { content: "read the attached plan", ...request });
@@ -184,5 +188,116 @@ describe("prepareAgentChatTurn Code Mode tool catalog", () => {
       expect(guidance).not.toContain("docs.extract_text");
       expect(harness.historyOptions.every((options) => options?.codeModeRequestEligible === false)).toBe(true);
     }
+  });
+});
+
+/**
+ * Turn preparation tells the model which tools it can call; the runner builds the step schema it is actually offered.
+ * For every turn shape both drive, the two must agree on `code_mode.request`, or the prompt names a tool the step
+ * never offers (or hides one it does).
+ */
+describe("code_mode.request eligibility parity between turn preparation and the runner", () => {
+  const OFF: CodeModeReadiness = {
+    enabled: false,
+    sandboxEnabled: true,
+    sandboxSupported: true,
+    canRun: false,
+    reason: "code_mode_off",
+  };
+  const delegated = { parentDelegationStepId: "step-1", policyRunId: "run-1", policyTaskId: "task-1" };
+  type ParityRequest = Partial<ChatSendMessageRequest> & { policyContext?: ToolPolicyActorContext };
+  type Row = { name: string; readiness: CodeModeReadiness; request: ParityRequest; expected: boolean };
+  const rows: Row[] = [
+    { name: "operator chat (token)", readiness: READY, request: { authActorSource: "token" }, expected: true },
+    { name: "operator chat (no actor)", readiness: READY, request: {}, expected: true },
+    { name: "operator turn-on path", readiness: OFF, request: { authActorSource: "loopback" }, expected: true },
+    { name: "turn-on path without an operator", readiness: OFF, request: {}, expected: false },
+    { name: "turn-on path for an sse actor", readiness: OFF, request: { authActorSource: "sse" }, expected: false },
+    {
+      name: "operator actor only in the policy context",
+      readiness: OFF,
+      request: { policyContext: { authActorSource: "device" } },
+      expected: true,
+    },
+    {
+      name: "excluded actor only in the policy context",
+      readiness: READY,
+      request: { policyContext: { authActorSource: "companion" } },
+      expected: false,
+    },
+    { name: "delegated child", readiness: READY, request: { authActorSource: "token", ...delegated }, expected: false },
+    {
+      name: "scheduled profile",
+      readiness: READY,
+      request: { authActorSource: "none", permissionProfileId: SCHEDULED_TURN_PERMISSION_PROFILE_ID },
+      expected: false,
+    },
+    {
+      name: "heartbeat profile",
+      readiness: READY,
+      request: { authActorSource: "none", permissionProfileId: HEARTBEAT_PERMISSION_PROFILE_ID },
+      expected: false,
+    },
+    ...(["companion", "a2a_peer", "mesh_node"] as const).map((authActorSource) => ({
+      name: `excluded actor ${authActorSource}`,
+      readiness: READY,
+      request: { authActorSource },
+      expected: false,
+    })),
+  ];
+
+  async function runnerOffers(readiness: CodeModeReadiness, request: ParityRequest): Promise<boolean> {
+    const catalog = ["fs.read", "code_mode.request"].map((toolName) => ({
+      toolName,
+      description: "Useful operation",
+      category: "knowledge",
+      pack: "core",
+      riskLevel: "safe",
+      requiresApproval: toolName === "code_mode.request",
+      argSchema: { type: "object", properties: {} },
+      examples: [],
+    })) as ToolCatalogEntry[];
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => catalog,
+      inspectToolAccess: vi.fn(async () => ({ allowed: true, requiresApproval: false, reasonCodes: [] })),
+      getCodeModeReadiness: async () => readiness,
+      createChatCompletion: vi.fn(),
+      invokeTool: vi.fn(),
+    });
+    const content = "read the attached plan";
+    const input: ChatTurnAgentRunnerInput = {
+      sessionId: "session-1",
+      turnId: "turn-1",
+      userMessageId: "message-1",
+      content,
+      // Turn preparation always prepares a Chat turn (resolvePreparedTurnMode), so the runner it hands off to sees "chat".
+      mode: "chat",
+      providerId: "openai",
+      model: "gpt-5.4-mini",
+      webMode: "auto",
+      memoryMode: "off",
+      thinkingLevel: "standard",
+      toolAutonomy: "safe_auto",
+      historyMessages: [{ role: "user", content }],
+      executionProfile: "standard",
+      ...(request.authActorSource ? { authActorSource: request.authActorSource } : {}),
+      ...(request.permissionProfileId ? { permissionProfileId: request.permissionProfileId } : {}),
+      ...(request.parentDelegationStepId ? { parentDelegationStepId: request.parentDelegationStepId } : {}),
+      ...(request.policyContext ? { policyContext: request.policyContext } : {}),
+    };
+    const schema = await runner.resolveCapabilityToolSchema(input);
+    return schema.canonicalToModel.has("code_mode.request");
+  }
+
+  it.each(rows)("$name", async ({ readiness, request, expected }) => {
+    const harness = await prepare(readiness, request);
+    expect(harness.historyOptions.length).toBeGreaterThan(0);
+    const prepEligible = harness.historyOptions[0]?.codeModeRequestEligible === true;
+    expect(harness.historyOptions.every((options) => options?.codeModeRequestEligible === prepEligible)).toBe(true);
+
+    const runnerEligible = await runnerOffers(readiness, request);
+
+    expect({ prepEligible, runnerEligible }).toEqual({ prepEligible: expected, runnerEligible: expected });
   });
 });

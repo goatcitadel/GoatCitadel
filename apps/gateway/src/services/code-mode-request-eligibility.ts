@@ -4,7 +4,12 @@
  * that names a tool the step never offers invites a call the Claude Code CLI bridge fails closed.
  */
 
-import type { CodeModeReadiness, ToolPolicyActorContext } from "@goatcitadel/contracts";
+import {
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type CodeModeReadiness,
+  type ToolPolicyActorContext,
+} from "@goatcitadel/contracts";
 
 type ToolPolicyActorSource = NonNullable<ToolPolicyActorContext["authActorSource"]>;
 /** Actors that never see `code_mode.request`: they cannot give the operator's approval in this Chat. */
@@ -27,6 +32,40 @@ export interface CodeModeRequestTurnShape {
   serverOnlyPosture: boolean;
   restrictedAutonomousProfile: boolean;
   actorSource?: ToolPolicyActorSource;
+}
+
+/** The turn fields turn preparation and the runner both hold, from which each derives the same turn shape. */
+export interface CodeModeRequestTurnFields {
+  mode: string;
+  parentDelegationStepId?: string;
+  permissionProfileId?: string;
+  /** Present only for an exact server-only (system heartbeat) turn. */
+  serverOnlyPosture?: unknown;
+  authActorSource?: ToolPolicyActorContext["authActorSource"];
+  /** Autonomous turns also carry their actor here; the request's own actor wins. */
+  policyContext?: Pick<ToolPolicyActorContext, "authActorSource">;
+}
+
+/** The scheduled and heartbeat profiles that restrict an autonomous turn. */
+export function isRestrictedAutonomousPermissionProfile(permissionProfileId: string | undefined): boolean {
+  return (
+    permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
+    permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID
+  );
+}
+
+/**
+ * The one derivation of a turn's shape, so the prompt (what the model is told it can call) and the step schema (what
+ * it is offered) cannot drift apart.
+ */
+export function buildCodeModeRequestTurnShape(turn: CodeModeRequestTurnFields): CodeModeRequestTurnShape {
+  return {
+    mode: turn.mode,
+    parentDelegationStepId: turn.parentDelegationStepId,
+    serverOnlyPosture: Boolean(turn.serverOnlyPosture),
+    restrictedAutonomousProfile: isRestrictedAutonomousPermissionProfile(turn.permissionProfileId),
+    actorSource: turn.authActorSource ?? turn.policyContext?.authActorSource,
+  };
 }
 
 export interface CodeModeRequestEligibilityInput extends CodeModeRequestTurnShape {
