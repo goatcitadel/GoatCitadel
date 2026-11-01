@@ -35,6 +35,11 @@ export interface ErrandTargetInfo {
   /** The element is editable rich text (contenteditable, including its descendants), such as a chat message box. */
   isContentEditable?: boolean;
   rect: { x: number; y: number; width: number; height: number };
+  /**
+   * The element's CDP backend node id, stable for the life of its document and out of page script's reach. Set for the
+   * focused element, so a check can tell a different field with the same text, role and box apart.
+   */
+  backendNodeId?: number;
 }
 
 /** Model-facing key names to Playwright key names. Looked up by upper-cased name; other keys pass through. */

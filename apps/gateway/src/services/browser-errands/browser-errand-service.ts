@@ -35,6 +35,8 @@ export const ERRAND_SIGN_IN_BANNER_TEXT = "Sign in, then press Hand back";
 export const ERRAND_TAKEN_OVER_BANNER_TEXT = "You're in control. Press Hand back when you're done";
 /** A step thumbnail is uploaded at most this often, so Chat shows progress without storing every screenshot. */
 export const ERRAND_THUMBNAIL_EVERY_STEPS = 3;
+export const ERRAND_PLANNED_BEFORE_TAKEOVER_MESSAGE =
+  "The operator took over after that screenshot, so nothing was run. Look at the screen again.";
 /** The window stays on the final page this long after an errand, then closes. */
 export const ERRAND_IDLE_CLOSE_MS = 15 * 60_000;
 const ERRAND_GOAL_MAX_CHARS = 2_000;
@@ -94,6 +96,10 @@ interface ActiveErrand {
   handBackWaiters: Set<(answer: "resumed" | "stopped") => void>;
   takenOverSince?: number;
   takenOverMs: number;
+  /** Counts the operator's Take overs; a batch planned from a screenshot taken before the latest one never runs. */
+  takeovers: number;
+  /** `takeovers` when the latest screenshot for the model was taken. */
+  takeoversAtCapture: number;
   windowClosed: boolean;
   /** The gate could not record (or withdraw) an approval, so the errand was stopped without one. */
   approvalUnrecorded: boolean;
@@ -177,6 +183,8 @@ export class BrowserErrandService {
       controller: new AbortController(),
       handBackWaiters: new Set(),
       takenOverMs: 0,
+      takeovers: 0,
+      takeoversAtCapture: 0,
       windowClosed: false,
       approvalUnrecorded: false,
     };
@@ -416,10 +424,16 @@ export class BrowserErrandService {
       captureForPeople: () => browser.captureForPeople(),
       captureForModel: async () => {
         await untilHandedBack();
+        errand.takeoversAtCapture = errand.takeovers;
         return await browser.captureForModel();
       },
       runActions: async (actions, beforeAction) => {
         await untilHandedBack();
+        if (errand.takeovers !== errand.takeoversAtCapture) {
+          // The operator took over after the screenshot this batch was planned from, so the page may have changed:
+          // none of it runs, and the loop looks again before the next plan.
+          return { ran: 0, halted: true, error: ERRAND_PLANNED_BEFORE_TAKEOVER_MESSAGE };
+        }
         return await browser.runActions(actions, async (action, index) => {
           // A Take over mid-batch stops the rest of it: wait for Hand back, then let the model look again.
           if (errand.takenOverSince !== undefined) {
@@ -440,6 +454,7 @@ export class BrowserErrandService {
       case "take_over":
         if (errand.takenOverSince === undefined && errand.handBackWaiters.size === 0) {
           errand.takenOverSince = now();
+          errand.takeovers += 1;
           errand.view.state = "taken_over";
           void browser.overlay
             .render({ mode: "taken_over", bannerText: ERRAND_TAKEN_OVER_BANNER_TEXT })
@@ -471,6 +486,8 @@ export class BrowserErrandService {
       return "stopped";
     }
     errand.view.state = reason === "operator" ? "taken_over" : "waiting_on_you";
+    // Wait before drawing the banner, so a Stop, window close or Hand back during the render still reaches this wait.
+    const handedBack = new Promise<"resumed" | "stopped">((resolve) => errand.handBackWaiters.add(resolve));
     await browser.overlay
       .render(
         reason === "sign_in"
@@ -478,7 +495,10 @@ export class BrowserErrandService {
           : { mode: "taken_over", bannerText: ERRAND_TAKEN_OVER_BANNER_TEXT },
       )
       .catch(() => undefined);
-    return await new Promise((resolve) => errand.handBackWaiters.add(resolve));
+    if (errand.controller.signal.aborted) {
+      this.resolveHandBack(errand, "stopped");
+    }
+    return await handedBack;
   }
 
   private resolveHandBack(errand: ActiveErrand, answer: "resumed" | "stopped"): void {

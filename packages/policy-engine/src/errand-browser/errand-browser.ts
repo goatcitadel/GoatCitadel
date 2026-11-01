@@ -67,6 +67,11 @@ export interface ErrandBrowser {
    */
   describeFocused(): Promise<ErrandTargetInfo | null>;
   /**
+   * Like describeFocused, but with GoatCitadel's overlay verified hidden for the read, the way an approval re-check reads
+   * the page. Null when the overlay could not be hidden or nothing focused could be inspected.
+   */
+  describeFocusedBeneathOverlay(): Promise<ErrandTargetInfo | null>;
+  /**
    * Runs the actions in order, moving the overlay cursor to each action's point first. `beforeAction` is asked before
    * every action and may halt the batch. Never call this while an approval is pending.
    */
@@ -98,12 +103,17 @@ export async function launchErrandBrowser(options: ErrandBrowserLaunchOptions): 
   const playwright = await loadPlaywright<typeof import("playwright")>();
 
   const releaseLock = acquireProfileLock(options.profileDir);
+  // The proxy lives as long as the browser, which outlives the errand that launched it (the next errand reuses the
+  // window). The launch signal only aborts a launch still in progress; once launched, close() ends the proxy.
+  const proxyLifetime = new AbortController();
+  const abortLaunch = (): void => proxyLifetime.abort();
+  options.signal?.addEventListener("abort", abortLaunch, { once: true });
   let egress: BrowserEgressProxy | undefined;
   let context: BrowserContext | undefined;
   try {
     egress = await startBrowserEgressProxy({
       allowlist: options.networkAllowlist,
-      signal: options.signal,
+      signal: proxyLifetime.signal,
     });
     const { proxy, serviceWorkers } = buildPlaywrightContextOptions({}, undefined, egress.serverUrl);
     context = await playwright.chromium.launchPersistentContext(options.profileDir, {
@@ -117,12 +127,18 @@ export async function launchErrandBrowser(options: ErrandBrowserLaunchOptions): 
     });
     await installBrowserRequestGuards(context, [options.networkAllowlist]);
     const firstPage = context.pages()[0] ?? (await context.newPage());
-    return await createErrandBrowser(context, firstPage, egress, releaseLock);
+    const browser = await createErrandBrowser(context, firstPage, egress, releaseLock);
+    if (proxyLifetime.signal.aborted) {
+      throw new ErrandBrowserLaunchError("launch_failed", "The errand browser launch was aborted.");
+    }
+    return browser;
   } catch (error) {
     await context?.close().catch(() => undefined);
     await egress?.close().catch(() => undefined);
     releaseLock();
     throw classifyLaunchError(error, options.channel);
+  } finally {
+    options.signal?.removeEventListener("abort", abortLaunch);
   }
 }
 
@@ -364,6 +380,11 @@ async function createErrandBrowser(
         // Fallback: an overlay that cannot be hidden leaves the target unknown, which callers never treat as safe.
         .catch(() => null),
     describeFocused: () => describeFocusedOverCdp(context, activePage),
+    describeFocusedBeneathOverlay: () =>
+      overlay
+        .withOverlayHidden((page) => describeFocusedOverCdp(context, page))
+        // Fallback: an overlay that cannot be hidden leaves the focused element unknown, which callers never treat as safe.
+        .catch(() => null),
     async runActions(actions, beforeAction) {
       let ran = 0;
       for (const [index, action] of actions.entries()) {

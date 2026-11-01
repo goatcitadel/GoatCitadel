@@ -1,3 +1,4 @@
+import type { ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ErrandBrowserLaunchError, type ComputerAction, type ErrandBrowser } from "@goatcitadel/policy-engine";
 import {
@@ -9,6 +10,7 @@ import {
   BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE,
   BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE,
   BROWSER_ERRAND_WINDOW_CLOSED_SUMMARY,
+  ERRAND_PLANNED_BEFORE_TAKEOVER_MESSAGE,
 } from "./browser-errand-service.js";
 import {
   buildService,
@@ -17,7 +19,24 @@ import {
   fakeGate,
   outcome,
   untilAborted,
+  type FakeBrowser,
 } from "./browser-errand-test-fixtures.js";
+
+function computerReply(actions: ComputerAction[]): ChatCompletionResponse {
+  const args = JSON.stringify({ actions, about_to: "Wait for the page" });
+  return {
+    choices: [
+      {
+        index: 0,
+        message: {
+          role: "assistant",
+          content: "",
+          tool_calls: [{ id: "call_1", type: "function", function: { name: "computer", arguments: args } }],
+        },
+      },
+    ],
+  };
+}
 
 describe("BrowserErrandService", () => {
   it("refuses when the flag is off", async () => {
@@ -162,6 +181,59 @@ describe("BrowserErrandService", () => {
     browser.fireOverlay({ type: "hand_back" });
     await expect(running).resolves.toMatchObject({ outcome: "done", summary: "ran 1" });
     expect(asked).toEqual([0]);
+    await service.dispose();
+  });
+
+  it("still stops a hand-back wait when Stop lands while its banner is being drawn", async () => {
+    let releaseRender!: () => void;
+    const rendering = new Promise<void>((resolve) => (releaseRender = resolve));
+    let runs = 0;
+    const { service, browser } = buildService(vi.fn, {
+      runLoop: async (deps) =>
+        (runs += 1) > 1
+          ? outcome("done")
+          : outcome((await deps.waitForHandBack("sign_in")) === "stopped" ? "stopped" : "done"),
+    });
+    const draw = browser.overlay.render.bind(browser.overlay);
+    browser.overlay.render = async (state) => {
+      await draw(state);
+      if (state.mode === "sign_in") await rendering;
+    };
+    const running = service.run(errandRequest());
+    await vi.waitFor(() => expect(browser.renders).toContainEqual(expect.objectContaining({ mode: "sign_in" })));
+    await service.stop(service.getStatus("tool-run-1")!.errandId, "operator");
+    releaseRender();
+    await expect(running).resolves.toMatchObject({ outcome: "stopped" });
+    // The single errand slot is free again.
+    await expect(service.run(errandRequest({ toolRunId: "tool-run-2" }))).resolves.toMatchObject({ outcome: "done" });
+    await service.dispose();
+  });
+
+  it("runs none of a batch planned before a Take over and looks again before the next plan", async () => {
+    const requests: ChatCompletionRequest[] = [];
+    const errandWindow: { browser?: FakeBrowser } = {};
+    const callModel = vi.fn(async (request: ChatCompletionRequest): Promise<ChatCompletionResponse> => {
+      requests.push(request);
+      if (requests.length === 1) {
+        // The operator takes over and hands back while the model is still planning from the first screenshot.
+        errandWindow.browser?.fireOverlay({ type: "take_over" });
+        errandWindow.browser?.fireOverlay({ type: "hand_back" });
+        return computerReply([{ type: "wait" }, { type: "wait" }]);
+      }
+      return { choices: [{ index: 0, message: { role: "assistant", content: "Found one." } }] };
+    });
+    const { service, browser } = buildService(vi.fn, { runLoop: undefined, callModel });
+    errandWindow.browser = browser;
+    let captures = 0;
+    browser.captureForModel = async () => Buffer.from(`model-${(captures += 1)}`);
+    const runActions = vi.fn(async (actions: ComputerAction[]) => ({ ran: actions.length, halted: false }));
+    browser.runActions = runActions;
+    await expect(service.run(errandRequest())).resolves.toMatchObject({ outcome: "done", answer: "Found one." });
+    expect(runActions).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(2);
+    const followUp = JSON.stringify(requests[1]!.messages.at(-1));
+    expect(followUp).toContain(ERRAND_PLANNED_BEFORE_TAKEOVER_MESSAGE);
+    expect(followUp).toContain(Buffer.from("model-2").toString("base64"));
     await service.dispose();
   });
 

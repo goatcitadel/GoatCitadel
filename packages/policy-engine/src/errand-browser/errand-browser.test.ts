@@ -100,6 +100,22 @@ describe("errand browser launcher", () => {
     expect(await second.page().evaluate(() => localStorage.getItem("k"))).toBe("v");
   }, 90_000);
 
+  it("keeps the egress proxy up after the launch signal aborts, so a reused browser still loads pages", async () => {
+    const launchSignal = new AbortController();
+    const browser = await launchErrandBrowser({
+      profileDir: makeProfileDir(),
+      headless: HEADLESS,
+      networkAllowlist: ["127.0.0.1"],
+      signal: launchSignal.signal,
+    });
+    openBrowsers.push(browser);
+    // The errand that launched the browser is stopped; the next errand reuses the same window.
+    launchSignal.abort();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await browser.page().goto(baseUrl, { timeout: 10_000 });
+    expect(await browser.page().textContent("h1")).toBe("errand");
+  }, 60_000);
+
   it("blocks a private LAN address", async () => {
     const browser = await launch(makeProfileDir());
     await expect(browser.page().goto("http://10.0.0.1/", { timeout: 10_000 })).rejects.toThrow();

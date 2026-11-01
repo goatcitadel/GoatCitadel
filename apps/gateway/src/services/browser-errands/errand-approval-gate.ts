@@ -58,7 +58,10 @@ export interface ErrandApprovalGateDeps {
   durableRunId?: string;
   toolRunId: string;
   workspaceId?: string;
-  browser: Pick<ErrandBrowser, "overlay" | "describeTargetBeneathOverlay" | "currentUrl" | "captureForPeople">;
+  browser: Pick<
+    ErrandBrowser,
+    "overlay" | "describeTargetBeneathOverlay" | "describeFocusedBeneathOverlay" | "currentUrl" | "captureForPeople"
+  >;
   approvals: ErrandApprovalRuntime;
   /** The authority for decisions (`approvals.get`), plus the event log and Chat's inline approval rows. */
   storage: Pick<AsyncStorage, "approvals" | "approvalEvents" | "chatInlineApprovals">;
@@ -102,10 +105,14 @@ function isReadable(target: ErrandTargetInfo): boolean {
 }
 
 function sameTarget(expected: ErrandTargetInfo, actual: ErrandTargetInfo | null): boolean {
-  if (!isReadable(expected)) {
+  if (!isReadable(expected) && expected.backendNodeId === undefined) {
     return true;
   }
   if (!actual || actual.text !== expected.text || actual.role !== expected.role) {
+    return false;
+  }
+  // Another element with the same text, role and box (a second, identical field) is still a different target.
+  if (expected.backendNodeId !== undefined && actual.backendNodeId !== expected.backendNodeId) {
     return false;
   }
   const a = expected.rect;
@@ -367,14 +374,18 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
     if (originOf(browser.currentUrl()) !== asked.origin) {
       return { unchanged: false, originChanged: true, target: null };
     }
-    if (!isReadable(asked.input.target)) {
+    const expected = asked.input.target;
+    if (!isReadable(expected) && expected.backendNodeId === undefined) {
       return { unchanged: true, originChanged: false, target: null };
     }
-    // Read beneath the approval card: the card and its blocker cover the page until the driving banner is back.
-    const target = await browser
-      .describeTargetBeneathOverlay(asked.input.target.x, asked.input.target.y)
-      .catch(() => null);
-    return { unchanged: sameTarget(asked.input.target, target), originChanged: false, target };
+    // Read beneath the approval card: the card and its blocker cover the page until the driving banner is back. A
+    // keyboard action lands on whatever has focus, so it re-reads focus, not the point: page script may have moved it.
+    const target = await (
+      asked.input.targetsFocus
+        ? browser.describeFocusedBeneathOverlay()
+        : browser.describeTargetBeneathOverlay(expected.x, expected.y)
+    ).catch(() => null);
+    return { unchanged: sameTarget(expected, target), originChanged: false, target };
   };
 
   let lastReason: string | undefined;

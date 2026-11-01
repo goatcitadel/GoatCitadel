@@ -157,9 +157,7 @@ export async function describeFocusedOverCdp(context: BrowserContext, page: Page
     if (!info) {
       return null;
     }
-    if (FORM_CONTROL_TAGS.has(info.tagName)) {
-      return info;
-    }
+    const formControl = FORM_CONTROL_TAGS.has(info.tagName);
     try {
       const element = await world.session.send("Runtime.callFunctionOn", {
         objectId: holderId,
@@ -167,28 +165,35 @@ export async function describeFocusedOverCdp(context: BrowserContext, page: Page
         returnByValue: false,
       });
       if (!element.result.objectId) {
-        return { ...info, isOpaque: true };
+        return formControl ? info : { ...info, isOpaque: true };
       }
+      // A form control has no shadow content worth scanning; its node is described only for its identity.
       const { node } = await world.session.send("DOM.describeNode", {
         objectId: element.result.objectId,
-        depth: -1,
-        pierce: true,
+        depth: formControl ? 0 : -1,
+        pierce: !formControl,
       });
+      const identity = typeof node.backendNodeId === "number" ? { backendNodeId: node.backendNodeId } : {};
+      if (formControl) {
+        return { ...info, ...identity };
+      }
       const hidden = scanShadowContent(node);
       return {
         ...info,
+        ...identity,
         isPasswordLike: info.isPasswordLike || hidden.password,
         isOneTimeCode: info.isOneTimeCode || hidden.oneTimeCode,
       };
     } catch {
-      // The host could not be inspected, so a closed root may hide a field.
-      return { ...info, isOpaque: true };
+      // Without identity a later check fails closed. A host that could not be inspected may hide a field in a closed root.
+      return formControl ? info : { ...info, isOpaque: true };
     }
   });
   return result ?? null;
 }
 
 interface CdpNode {
+  backendNodeId?: number;
   nodeType?: number;
   attributes?: string[];
   children?: CdpNode[];

@@ -20,6 +20,8 @@ export interface ErrandApprovalInput {
   title: string;
   body: string;
   target: ErrandTargetInfo;
+  /** A keyboard action: it lands on whatever has focus, so `target` is the focused element, not a point. */
+  targetsFocus?: boolean;
   pageUrl: string;
   peopleScreenshotPng: Buffer;
 }
@@ -470,6 +472,7 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
             title: approvalTitle(action, subject),
             body: `${aboutTo || verdict.reason} on ${hostOf(pageUrl)}`,
             target: subject ?? unknownTarget(point?.x ?? 0, point?.y ?? 0),
+            ...(isKeyboard ? { targetsFocus: true } : {}),
             pageUrl,
             peopleScreenshotPng: await browser.captureForPeople(),
           }),

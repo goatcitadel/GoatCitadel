@@ -39,6 +39,7 @@ export function fakeBrowser(spy: Spy): FakeBrowser {
     describeTarget: async () => null,
     describeTargetBeneathOverlay: async () => null,
     describeFocused: async () => null,
+    describeFocusedBeneathOverlay: async () => null,
     runActions: async () => ({ ran: 0, halted: false }),
     overlay: {
       render: async (state: unknown) => {

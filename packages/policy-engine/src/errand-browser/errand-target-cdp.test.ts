@@ -60,4 +60,27 @@ describe("errand target inspection fault handling", () => {
     const info = await describeFocusedOverCdp(context, page);
     expect(info).toMatchObject({ tagName: "div", isOpaque: true });
   });
+
+  it("gives the focused element its backend node id, form controls included", async () => {
+    const input = { ...BASE_INFO, tagName: "input", role: "textbox" };
+    const { context, page } = fakeContext([], {
+      ...COMMON,
+      "Runtime.evaluate": { result: { objectId: "holder" } },
+      "Runtime.callFunctionOn": { result: { value: input, objectId: "obj" } },
+      "DOM.describeNode": { node: { backendNodeId: 41, nodeType: 1 } },
+    });
+    expect(await describeFocusedOverCdp(context, page)).toMatchObject({ tagName: "input", backendNodeId: 41 });
+  });
+
+  it("leaves a focused form control without identity when its node cannot be described", async () => {
+    const input = { ...BASE_INFO, tagName: "input", role: "textbox" };
+    const { context, page } = fakeContext(["DOM.describeNode"], {
+      ...COMMON,
+      "Runtime.evaluate": { result: { objectId: "holder" } },
+      "Runtime.callFunctionOn": { result: { value: input, objectId: "obj" } },
+    });
+    const info = await describeFocusedOverCdp(context, page);
+    expect(info).toMatchObject({ tagName: "input", isOpaque: false });
+    expect(info?.backendNodeId).toBeUndefined();
+  });
 });

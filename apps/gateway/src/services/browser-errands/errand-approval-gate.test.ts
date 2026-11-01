@@ -154,10 +154,11 @@ function createHost(db: Storage) {
 
 function createFakeBrowser(url = "https://shop.example/checkout") {
   const listeners = new Set<(event: ErrandOverlayEvent) => void>();
-  const state = { url, target: target() as ErrandTargetInfo | null };
+  const state = { url, target: target() as ErrandTargetInfo | null, focused: null as ErrandTargetInfo | null };
   const browser = {
     currentUrl: vi.fn(() => state.url),
     describeTargetBeneathOverlay: vi.fn(async () => state.target),
+    describeFocusedBeneathOverlay: vi.fn(async () => state.focused),
     captureForPeople: vi.fn(async () => BEFORE_PNG),
     overlay: {
       render: vi.fn(async () => undefined),
@@ -529,6 +530,63 @@ describe("errand approval gate", () => {
     await expect(answer).resolves.toBe("denied");
   });
 
+  it("re-reads focus, not the point, after approving a keyboard action", async () => {
+    const { host, fake, gate, waitForPending } = setup();
+    const field = target({ tagName: "INPUT", role: "textbox", text: "Card number", backendNodeId: 41 });
+    fake.state.focused = field;
+    // The element at the field's old point changed; a keyboard action does not land there, so it does not matter.
+    fake.state.target = target({ text: "Something else" });
+    const answer = gate.request(approvalInput({ target: field, targetsFocus: true }));
+    const approvalId = await waitForPending();
+    await resolveApproval(host, approvalId, { decision: "approve", resolvedBy: "operator" });
+    await expect(answer).resolves.toBe("approved");
+    expect(fake.browser.describeFocusedBeneathOverlay).toHaveBeenCalled();
+    expect(fake.browser.describeTargetBeneathOverlay).not.toHaveBeenCalled();
+  });
+
+  it("asks again when focus moved to an identical-looking field during a keyboard approval", async () => {
+    const { host, fake, gate, waitForPending, SESSION_ID } = setup();
+    const field = target({ tagName: "INPUT", role: "textbox", text: "Card number", backendNodeId: 41 });
+    fake.state.focused = field;
+    const answer = gate.request(approvalInput({ target: field, targetsFocus: true }));
+    const first = await waitForPending();
+    // Page script moves focus to another field with the same text, role and box: only its identity differs.
+    fake.state.focused = { ...field, backendNodeId: 77 };
+    await resolveApproval(host, first, { decision: "approve", resolvedBy: "operator" });
+    await vi.waitFor(
+      async () => {
+        const pending = await host.storage.approvals.listPendingBySession(SESSION_ID);
+        expect(pending).toHaveLength(1);
+        expect(pending[0]!.approvalId).not.toBe(first);
+      },
+      { timeout: 5_000, interval: 20 },
+    );
+    const second = (await host.storage.approvals.listPendingBySession(SESSION_ID))[0]!;
+    await resolveApproval(host, second.approvalId, { decision: "approve", resolvedBy: "operator" });
+    await expect(answer).resolves.toBe("approved");
+  });
+
+  it("asks again when nothing readable has focus after a keyboard approval", async () => {
+    const { host, fake, gate, waitForPending, SESSION_ID } = setup();
+    const field = target({ tagName: "INPUT", role: "textbox", text: "Card number", backendNodeId: 41 });
+    fake.state.focused = field;
+    const answer = gate.request(approvalInput({ target: field, targetsFocus: true }));
+    const first = await waitForPending();
+    fake.state.focused = null;
+    await resolveApproval(host, first, { decision: "approve", resolvedBy: "operator" });
+    await vi.waitFor(
+      async () => {
+        const pending = await host.storage.approvals.listPendingBySession(SESSION_ID);
+        expect(pending.some((approval) => approval.approvalId !== first)).toBe(true);
+      },
+      { timeout: 5_000, interval: 20 },
+    );
+    const second = (await host.storage.approvals.listPendingBySession(SESSION_ID)).find(
+      (approval) => approval.approvalId !== first,
+    )!;
+    await resolveApproval(host, second.approvalId, { decision: "reject", resolvedBy: "operator" });
+    await expect(answer).resolves.toBe("denied");
+  });
   it("treats the same origin as enough for a target it could not read", async () => {
     const { host, fake, gate, waitForPending } = setup();
     const unknown = target({ role: "", text: "", tagName: "", rect: { x: 0, y: 0, width: 0, height: 0 } });
