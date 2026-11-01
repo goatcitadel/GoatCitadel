@@ -3,6 +3,8 @@
 Date: 2026-11-01
 Status: draft for operator review
 
+Delivery status: PR 1 delivered the errand browser, the Gateway errand loop and Chat tool (behind the "Browser errands" flag), approval integrity, the Chat card with approvals, and the safety doc section plus a local proof script (`scripts/dev/errand-local-proof.mjs`). PR 2 and PR 3 remain. The live proof and the live Codex acceptance check are run by the operator.
+
 ## Intent
 
 The operator wants GoatCitadel to "use my computer like a person would at the end of the day, smooth, seamless." This document covers the first step toward that: **browser errands**. You ask for something in Chat, from a channel, or from the phone. GoatCitadel opens its own browser window on your PC and does the errand by looking at the screen and using a mouse and keyboard, the way a person would. You can watch it work, stop it at any time, and approve the steps that matter.
