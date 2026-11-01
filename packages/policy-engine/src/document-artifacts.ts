@@ -30,6 +30,8 @@ export interface DocumentArtifactInput {
   bodySummaryIsFallback?: boolean;
   rows?: Array<Record<string, unknown> | unknown[]>;
   createdAt?: Date;
+  /** IANA zone for visible dates (the PDF cover); defaults to the host's zone. */
+  timeZone?: string;
   design?: ArtifactDesignPlan;
   /**
    * A complete HTML document authored by the model (only honored for the `html` format, only when

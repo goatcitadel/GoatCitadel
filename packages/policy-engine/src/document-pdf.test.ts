@@ -6,7 +6,7 @@ import { inflateSync } from "node:zlib";
 import { afterEach, describe, expect, it } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import { createArtifactDesignPlan } from "./artifact-design.js";
-import { createDocumentPdf, createPlainDocumentPdf, type DocumentPdfSection } from "./document-pdf.js";
+import { createDocumentPdf, createPlainDocumentPdf, formatLocalDate, type DocumentPdfSection } from "./document-pdf.js";
 import { executeArtifactTool } from "./tool-executor/artifact-executor.js";
 
 const createdRoots: string[] = [];
@@ -46,6 +46,30 @@ describe("createDocumentPdf", () => {
     expect(streams).toContain("(Hollywood Sign: about 6 miles, moderate) Tj");
     expect(pdf.layouts).toEqual(["report-cover", "callout-box", "title-body"]);
     expect(pdf.warnings).toEqual([]);
+  });
+
+  it("prints the cover date as the local day, not the UTC day", () => {
+    const design = createArtifactDesignPlan({
+      kind: "pdf",
+      title: "Late",
+      format: "pdf",
+      design: { mode: "polished" },
+    });
+    // 01:32Z on Nov 1 is still the evening of Oct 31 in Los Angeles.
+    const createdAt = new Date("2026-11-01T01:32:00Z");
+    const pdf = createDocumentPdf({
+      title: "Late",
+      sections: SECTIONS,
+      design,
+      createdAt,
+      timeZone: "America/Los_Angeles",
+    });
+    const streams = contentStreams(pdf.buffer).join("\n");
+
+    expect(streams).toContain("(2026-10-31) Tj");
+    expect(streams).not.toContain("(2026-11-01) Tj");
+    expect(formatLocalDate(createdAt, "UTC")).toBe("2026-11-01");
+    expect(formatLocalDate(createdAt, "Not/AZone")).toBe(formatLocalDate(createdAt));
   });
 
   it("darkens a light accent until white cover text reaches 4.5:1", () => {

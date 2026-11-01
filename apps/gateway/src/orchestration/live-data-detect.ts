@@ -57,7 +57,7 @@ const EXTERNAL_RESEARCH_ACTION_REGEX =
   /\b(?:(?:do|conduct|perform|undertake|carry\s+out)\s+(?:some\s+)?(?:independent\s+|external\s+|deep\s+)?(?:market\s+)?research\s+(?:on|about|into|regarding)\s+|research\s+(?=(?:whether|which|what|who|where|when|why|how|the|a|an)\b))([^\n]+)/iu;
 
 const RESEARCH_DELIVERY_SUFFIX_REGEX =
-  /(?:\s+(?:and(?:\s+then)?|then)\s+|[.!?]\s+(?:please\s+)?)(?:put\s+together|put\s+(?:it|that|them|this)\s+(?:in|into|as)|create|make|build|produce|draft|generate|present\s+(?:it|that|them|this|the\s+(?:findings|results|research))\s+(?:in|as)|turn\s+(?:it|that)\s+into)\b[\s\S]*$/iu;
+  /(?:\s+(?:and(?:\s+then)?|then)\s+|[.!?]\s+(?:please\s+)?)(?:put\s+together|(?:put|save|export|format|compile)\s+(?:it|that|them|this|(?:the|these|those|your|my)(?:\s+[\w-]+){1,2}?)\s+(?:in|into|as)|create|make|build|produce|draft|generate|present\s+(?:it|that|them|this|the\s+(?:findings|results|research))\s+(?:in|as)|turn\s+(?:it|that)\s+into)\b[\s\S]*$/iu;
 
 export { EXPLICIT_WEB_PHRASES };
 
