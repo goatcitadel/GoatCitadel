@@ -23,6 +23,9 @@ export const ERRAND_APPROVAL_POLL_MS = 500;
 /** How far the target's box may move between the request and the decision and still count as the same target. */
 export const ERRAND_TARGET_RECT_TOLERANCE_PX = 24;
 const APPROVAL_BANNER_TEXT = "Waiting for your OK";
+/** How many times the gate asks again after the page changed under an approval before it gives up. */
+export const ERRAND_MAX_PAGE_CHANGED_REASKS = 3;
+export const ERRAND_PAGE_KEPT_CHANGING_REASON = "The page kept changing, so GoatCitadel didn't act.";
 
 export type ErrandApprovalAnswer = "approved" | "denied" | "expired" | "stopped";
 
@@ -70,6 +73,8 @@ export interface ErrandApprovalGate {
   withdrawPending(actorId: string): Promise<void>;
   /** Records the after screenshot against the most recently approved request. */
   recordAfterScreenshot(png: Buffer): Promise<void>;
+  /** Why the last `request` returned "denied" without an operator deny, for the errand summary; else undefined. */
+  readonly lastReason: string | undefined;
 }
 
 interface Asked {
@@ -195,37 +200,77 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
     }
   };
 
-  /**
-   * Draws the window's approval card and returns a function that puts the driving banner back. The card is a
-   * convenience: when the overlay cannot draw (render rejects), Chat still shows the approval.
-   */
-  const showCard = (approvalId: string, input: ErrandApprovalInput, title: string): (() => void) => {
-    const cursor: ErrandOverlayPoint = { x: input.target.x, y: input.target.y };
-    const shown = browser.overlay
+  /** Reads the driving banner shown before the first card, so it can be put back once the operator approves. */
+  const readDrivingBanner = (): Promise<string | null> =>
+    browser.overlay
       .snapshot()
       .then((snapshot) => (snapshot.mode === "driving" ? snapshot.bannerText : null))
-      .catch(() => null)
-      .then(async (drivingBanner) => {
-        await browser.overlay
-          .render({
-            mode: "approval",
-            bannerText: APPROVAL_BANNER_TEXT,
-            cursor,
-            requestId: approvalId,
-            title,
-            body: input.body,
-            targetRect: input.target.rect,
-          })
-          .catch(() => undefined);
-        return drivingBanner;
-      });
-    return () => {
-      void shown.then(async (drivingBanner) => {
-        if (drivingBanner !== null) {
-          await browser.overlay.render({ mode: "driving", bannerText: drivingBanner, cursor }).catch(() => undefined);
-        }
-      });
+      .catch(() => null);
+
+  /**
+   * Draws the window's approval card once the driving banner was read. The card is a convenience: when the overlay
+   * cannot draw (render rejects), Chat still shows the approval. Returns a function that cancels a card not yet drawn.
+   */
+  const showCard = (
+    drivingBanner: Promise<string | null>,
+    approvalId: string,
+    input: ErrandApprovalInput,
+    title: string,
+  ): { shown: Promise<void>; cancel: () => void } => {
+    let cancelled = false;
+    const shown = drivingBanner.then(async () => {
+      if (cancelled) {
+        return;
+      }
+      await browser.overlay
+        .render({
+          mode: "approval",
+          bannerText: APPROVAL_BANNER_TEXT,
+          cursor: { x: input.target.x, y: input.target.y },
+          requestId: approvalId,
+          title,
+          body: input.body,
+          targetRect: input.target.rect,
+        })
+        .catch(() => undefined);
+    });
+    return {
+      shown,
+      cancel: () => {
+        cancelled = true;
+      },
     };
+  };
+
+  /** Puts the driving banner back after an approval, before the loop acts. */
+  const restoreDriving = async (
+    drivingBanner: Promise<string | null>,
+    shown: Promise<void>,
+    input: ErrandApprovalInput,
+  ): Promise<void> => {
+    await shown;
+    const bannerText = await drivingBanner;
+    if (bannerText !== null) {
+      const cursor: ErrandOverlayPoint = { x: input.target.x, y: input.target.y };
+      await browser.overlay.render({ mode: "driving", bannerText, cursor }).catch(() => undefined);
+    }
+  };
+
+  /** Inbox evidence: the operator approved, but the page changed, so the action was not taken. */
+  const recordSuperseded = async (asked: Asked, originChanged: boolean, reasked: boolean): Promise<void> => {
+    await storage.approvalEvents.append({
+      approvalId: asked.approvalId,
+      eventType: "superseded",
+      actorId: "system:errand",
+      payload: {
+        reason: "page_changed",
+        actedOn: false,
+        originChanged,
+        approvedOrigin: asked.origin,
+        pageUrl: browser.currentUrl(),
+        reasked,
+      },
+    });
   };
 
   const ask = async (input: ErrandApprovalInput, title: string): Promise<Asked> => {
@@ -297,47 +342,63 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
   };
 
   /** True when the page still shows what the operator approved. */
-  const pageUnchanged = async (asked: Asked): Promise<{ unchanged: boolean; target: ErrandTargetInfo | null }> => {
+  const pageUnchanged = async (
+    asked: Asked,
+  ): Promise<{ unchanged: boolean; originChanged: boolean; target: ErrandTargetInfo | null }> => {
     if (originOf(browser.currentUrl()) !== asked.origin) {
-      return { unchanged: false, target: null };
+      return { unchanged: false, originChanged: true, target: null };
     }
     if (!isReadable(asked.input.target)) {
-      return { unchanged: true, target: null };
+      return { unchanged: true, originChanged: false, target: null };
     }
     const target = await browser.describeTarget(asked.input.target.x, asked.input.target.y).catch(() => null);
-    return { unchanged: sameTarget(asked.input.target, target), target };
+    return { unchanged: sameTarget(asked.input.target, target), originChanged: false, target };
   };
 
+  let lastReason: string | undefined;
+
   const request = async (initial: ErrandApprovalInput): Promise<ErrandApprovalAnswer> => {
+    lastReason = undefined;
     let input = initial;
     let title = initial.title;
-    for (;;) {
+    let drivingBanner: Promise<string | null> | undefined;
+    for (let reasks = 0; ; reasks += 1) {
       if (signal.aborted) {
         return "stopped";
       }
       const asked = await ask(input, title);
       pendingId = asked.approvalId;
       const stopListening = listen(asked.approvalId);
-      const hideCard = showCard(asked.approvalId, input, title);
+      drivingBanner ??= readDrivingBanner();
+      const card = showCard(drivingBanner, asked.approvalId, input, title);
       let decided: ApprovalRequest | undefined;
       try {
         decided = await waitForDecision(asked.approvalId);
       } finally {
         pendingId = undefined;
         stopListening();
-        hideCard();
+        // A card not drawn yet must never land after the errand moved on.
+        card.cancel();
       }
       if (!decided) {
         return "stopped";
       }
       const answer = answerFor(decided);
       if (answer !== "approved") {
+        // Leave the overlay to the loop: it hides or ends it for a stopped, denied or expired errand.
         return answer;
       }
       const check = await pageUnchanged(asked);
       if (check.unchanged) {
         lastApproved = asked;
+        await restoreDriving(drivingBanner, card.shown, input);
         return "approved";
+      }
+      const giveUp = reasks >= ERRAND_MAX_PAGE_CHANGED_REASKS;
+      await recordSuperseded(asked, check.originChanged, !giveUp);
+      if (giveUp) {
+        lastReason = ERRAND_PAGE_KEPT_CHANGING_REASON;
+        return "denied";
       }
       const pageUrl = browser.currentUrl();
       const peopleScreenshotPng = await browser.captureForPeople().catch(() => input.peopleScreenshotPng);
@@ -379,7 +440,14 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
     });
   };
 
-  return { request, withdrawPending, recordAfterScreenshot };
+  return {
+    request,
+    withdrawPending,
+    recordAfterScreenshot,
+    get lastReason() {
+      return lastReason;
+    },
+  };
 }
 
 /** Wires a gate into the errand loop's approval hooks. */

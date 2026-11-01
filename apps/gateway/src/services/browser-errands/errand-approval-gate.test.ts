@@ -20,7 +20,9 @@ import type { ErrandApprovalInput } from "./errand-loop.js";
 import {
   createErrandApprovalGate,
   errandLoopApprovalHooks,
+  ERRAND_MAX_PAGE_CHANGED_REASKS,
   ERRAND_PAGE_CHANGED_TITLE,
+  ERRAND_PAGE_KEPT_CHANGING_REASON,
   type ErrandApprovalGateDeps,
 } from "./errand-approval-gate.js";
 
@@ -321,10 +323,9 @@ describe("errand approval gate", () => {
     fake.emit({ type: "approve", requestId: approvalId });
     await expect(answer).resolves.toBe("approved");
     expect(db.approvals.get(approvalId).resolvedBy).toBe("operator:errand-window");
-    await vi.waitFor(() =>
-      expect(fake.browser.overlay.render).toHaveBeenLastCalledWith(
-        expect.objectContaining({ mode: "driving", bannerText: "GoatCitadel is working" }),
-      ),
+    // Restored before `request` returned, so the loop acts under the driving banner.
+    expect(fake.browser.overlay.render).toHaveBeenLastCalledWith(
+      expect.objectContaining({ mode: "driving", bannerText: "GoatCitadel is working" }),
     );
   });
 
@@ -357,6 +358,102 @@ describe("errand approval gate", () => {
     await resolveApproval(host, second.approvalId, { decision: "approve", resolvedBy: "operator" });
     await expect(answer).resolves.toBe("approved");
     expect(db.approvals.get(first).status).toBe("approved");
+    const superseded = db.approvalEvents.listByApprovalId(first).filter((event) => event.eventType === "superseded");
+    expect(superseded).toHaveLength(1);
+    expect(superseded[0]!.payload).toMatchObject({
+      reason: "page_changed",
+      actedOn: false,
+      originChanged: true,
+      approvedOrigin: "https://shop.example",
+      reasked: true,
+    });
+    expect(
+      db.approvalEvents.listByApprovalId(second.approvalId).some((event) => event.eventType === "superseded"),
+    ).toBe(false);
+    expect(gate.lastReason).toBeUndefined();
+  });
+
+  it("gives up after the page keeps changing through every re-ask", async () => {
+    const { db, host, fake, gate, SESSION_ID } = setup();
+    const answer = gate.request(approvalInput());
+    const decided = new Set<string>();
+    for (let round = 0; round <= ERRAND_MAX_PAGE_CHANGED_REASKS; round += 1) {
+      let approvalId = "";
+      await vi.waitFor(
+        async () => {
+          const pending = (await host.storage.approvals.listPendingBySession(SESSION_ID)).filter(
+            (item) => !decided.has(item.approvalId),
+          );
+          expect(pending).toHaveLength(1);
+          approvalId = pending[0]!.approvalId;
+        },
+        { timeout: 5_000, interval: 20 },
+      );
+      decided.add(approvalId);
+      fake.state.url = `https://shop-${round}.example/checkout`;
+      await resolveApproval(host, approvalId, { decision: "approve", resolvedBy: "operator" });
+    }
+    await expect(answer).resolves.toBe("denied");
+    expect(gate.lastReason).toBe(ERRAND_PAGE_KEPT_CHANGING_REASON);
+    expect(decided.size).toBe(ERRAND_MAX_PAGE_CHANGED_REASKS + 1);
+    const reasked = [...decided].map(
+      (id) => db.approvalEvents.listByApprovalId(id).find((event) => event.eventType === "superseded")?.payload.reasked,
+    );
+    expect(reasked).toEqual([true, true, true, false]);
+    expect(db.approvals.listPendingBySession(SESSION_ID)).toHaveLength(0);
+    // The next request starts with no stale reason.
+    const next = gate.request(approvalInput({ pageUrl: fake.state.url }));
+    await vi.waitFor(async () => expect(await host.storage.approvals.listPendingBySession(SESSION_ID)).toHaveLength(1));
+    expect(gate.lastReason).toBeUndefined();
+    const nextId = (await host.storage.approvals.listPendingBySession(SESSION_ID))[0]!.approvalId;
+    await resolveApproval(host, nextId, { decision: "approve", resolvedBy: "operator" });
+    await expect(next).resolves.toBe("approved");
+  });
+
+  for (const ending of ["denied", "stopped"] as const) {
+    it(`does not put the driving banner back after a ${ending} answer`, async () => {
+      const { host, fake, gate, controller, waitForPending } = setup();
+      const answer = gate.request(approvalInput());
+      const approvalId = await waitForPending();
+      await vi.waitFor(() =>
+        expect(fake.browser.overlay.render).toHaveBeenCalledWith(expect.objectContaining({ mode: "approval" })),
+      );
+      if (ending === "denied") {
+        await resolveApproval(host, approvalId, { decision: "reject", resolvedBy: "operator" });
+      } else {
+        controller.abort();
+      }
+      await expect(answer).resolves.toBe(ending);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(fake.browser.overlay.render).not.toHaveBeenCalledWith(expect.objectContaining({ mode: "driving" }));
+    });
+  }
+
+  it("never draws a card that was still waiting when the errand stopped", async () => {
+    const { fake, gate, controller, waitForPending } = setup();
+    let releaseSnapshot!: () => void;
+    fake.browser.overlay.snapshot.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseSnapshot = () =>
+            resolve({
+              connected: true,
+              displayed: true,
+              mode: "driving",
+              bannerText: "GoatCitadel is working",
+              notice: null,
+              cursor: null,
+              controls: {},
+            });
+        }),
+    );
+    const answer = gate.request(approvalInput());
+    await waitForPending();
+    controller.abort();
+    await expect(answer).resolves.toBe("stopped");
+    releaseSnapshot();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(fake.browser.overlay.render).not.toHaveBeenCalled();
   });
 
   it("asks again when the target moved or changed after approval", async () => {
