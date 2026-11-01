@@ -53,9 +53,11 @@ export interface ChatMessageHistoryDependencies {
   readonly llmService: Pick<LlmService, "getRuntimeConfig">;
   readTranscriptOrEmpty(sessionId: string): Promise<TranscriptEvent[]>;
   loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
+  /** `codeModeRequestEligible`: whether this turn is offered `code_mode.request` (attachment hints name its tools). */
   buildUserMessageContent(
     message: ChatMessageRecord,
     supportsVision: boolean,
+    codeModeRequestEligible: boolean,
   ): Promise<string | Array<Record<string, unknown>>>;
   /**
    * Resolves the per-model token-estimate multiplier (from model metadata) used
@@ -125,7 +127,7 @@ export async function buildLlmMessagesFromTranscript(
           };
           return {
             role: "user" as const,
-            content: await deps.buildUserMessageContent(userMessage, supportsVision),
+            content: await deps.buildUserMessageContent(userMessage, supportsVision, false),
           };
         }
         return {
@@ -162,6 +164,8 @@ export async function buildLlmMessagesFromBranchPath(
     agenticStateCapsule?: string;
     /** Turn ids that must remain verbatim while their durable aggregate is active. */
     protectedTurnIds?: readonly string[];
+    /** Whether this turn is offered `code_mode.request`; absent means not offered. */
+    codeModeRequestEligible?: boolean;
   },
   state?: ChatTurnSessionState,
 ): Promise<ChatCompletionRequest["messages"]> {
@@ -266,6 +270,7 @@ async function buildLlmMessagesFromRecords(
     compactionDimension?: ChatCompactionDimension;
     agenticStateCapsule?: string;
     protectedTurnIds?: readonly string[];
+    codeModeRequestEligible?: boolean;
   },
 ): Promise<ChatCompletionRequest["messages"]> {
   const runtime = deps.llmService.getRuntimeConfig();
@@ -290,7 +295,7 @@ async function buildLlmMessagesFromRecords(
       }
       return {
         role: "user" as const,
-        content: await deps.buildUserMessageContent(message, supportsVision),
+        content: await deps.buildUserMessageContent(message, supportsVision, options?.codeModeRequestEligible === true),
       };
     }),
   );

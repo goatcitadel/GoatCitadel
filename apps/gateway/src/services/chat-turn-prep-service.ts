@@ -24,8 +24,10 @@ import {
   canonicalJsonString,
   DEFAULT_CITADEL_ID,
   ConflictError,
+  HEARTBEAT_PERMISSION_PROFILE_ID,
   NotFoundError,
   redactStructuredSecrets,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
 } from "@goatcitadel/contracts";
 import type {
   CapabilityCatalogSnapshotRecord,
@@ -46,9 +48,11 @@ import type {
   ChatTurnTraceRecord,
   ChatTurnCapabilityProfileRecord,
   ChatTurnExecutionProfile,
+  CodeModeReadiness,
   ModelUsageAttributionContext,
   RuntimeDecisionTraceAppendInput,
   SessionMeta,
+  ToolPolicyActorContext,
 } from "@goatcitadel/contracts";
 import {
   HEARTBEAT_SYSTEM_ACTOR_ID,
@@ -75,7 +79,12 @@ import {
   type BaseAgentPromptToolset,
   type BaseAgentToolsUnavailableReason,
 } from "./base-agent-system-prompt.js";
-import { withoutUnadmittedFanout, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
+import {
+  withoutUnadmittedFanout,
+  withoutUnofferedCodeModeTools,
+  type BasePromptCatalogScope,
+} from "./base-prompt-capability-catalog.js";
+import { loadCodeModeRequestEligibility } from "./code-mode-request-eligibility.js";
 import { buildProviderCapabilityRegistry } from "../orchestration/providers/capability-registry.js";
 import { buildOrchestrationPlan, resolveModePolicy, shouldUseModeOrchestration } from "../orchestration/router.js";
 import type {
@@ -272,6 +281,8 @@ export interface ChatTurnPrepHost {
       compactionDimension?: ChatCompactionDimension;
       agenticStateCapsule?: string;
       protectedTurnIds?: readonly string[];
+      /** Whether this turn is offered `code_mode.request`; attachment hints name its tools only then. */
+      codeModeRequestEligible?: boolean;
     },
     state?: ChatTurnSessionState,
   ): Promise<ChatCompletionRequest["messages"]>;
@@ -311,6 +322,11 @@ export interface ChatTurnPrepHost {
    * Returns empty names when unavailable; never throws on the prep path.
    */
   resolveBasePromptCapabilityCatalog?(scope?: BasePromptCatalogScope): Promise<BaseAgentPromptToolset>;
+  /**
+   * Code Mode readiness, read once per turn to decide whether the prompt may name `code_mode.request`, the same rule
+   * the runner applies to the step tool schema. Optional: without it the turn is treated as not eligible.
+   */
+  getCodeModeReadiness?(): Promise<CodeModeReadiness>;
   resolveChatTurnEffectiveRoute?(
     sessionId: string,
     input: ChatSendMessageRequest,
@@ -1090,6 +1106,21 @@ export async function prepareAgentChatTurn(
     : baseSystemPromptEnabled || effectiveMode === "chat"
       ? await host.buildDefaultChatPersonalityOverlay()
       : undefined;
+  // The runner offers code_mode.request by the same rule; the prompt and attachment hints must not name it otherwise.
+  const codeModeRequestEligible = await loadCodeModeRequestEligibility(
+    {
+      mode: effectiveMode,
+      parentDelegationStepId: userMessage.parentDelegationStepId ?? input.parentDelegationStepId,
+      serverOnlyPosture: Boolean(systemHeartbeatPosture),
+      restrictedAutonomousProfile:
+        input.permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
+        input.permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID,
+      actorSource:
+        input.authActorSource ??
+        (input as ChatSendMessageRequest & { policyContext?: ToolPolicyActorContext }).policyContext?.authActorSource,
+    },
+    host.getCodeModeReadiness ? () => host.getCodeModeReadiness!() : undefined,
+  );
   let baseAgentInstruction: ChatCompletionRequest["messages"][number]["content"] | undefined;
   if (baseSystemPromptEnabled) {
     const now = new Date();
@@ -1112,9 +1143,12 @@ export async function prepareAgentChatTurn(
     let promptCapabilityCatalog: BaseAgentPromptToolset = { toolNames: [] };
     if (!quickWebTurn && host.resolveBasePromptCapabilityCatalog) {
       try {
-        promptCapabilityCatalog = withoutUnadmittedFanout(
-          await host.resolveBasePromptCapabilityCatalog({ sessionId, workspaceId, mode: effectiveMode }),
-          prefs.subagentPolicy,
+        promptCapabilityCatalog = withoutUnofferedCodeModeTools(
+          withoutUnadmittedFanout(
+            await host.resolveBasePromptCapabilityCatalog({ sessionId, workspaceId, mode: effectiveMode }),
+            prefs.subagentPolicy,
+          ),
+          codeModeRequestEligible,
         );
       } catch {
         promptCapabilityCatalog = { toolNames: [] };
@@ -1242,6 +1276,7 @@ export async function prepareAgentChatTurn(
       compactionDimension,
       agenticStateCapsule: agenticStateCapsule.instruction,
       protectedTurnIds: agenticStateCapsule.protectedTurnIds,
+      codeModeRequestEligible,
     },
     sessionState,
   );
@@ -1392,6 +1427,7 @@ export async function prepareAgentChatTurn(
         compactionDimension,
         agenticStateCapsule: agenticStateCapsule.instruction,
         protectedTurnIds: agenticStateCapsule.protectedTurnIds,
+        codeModeRequestEligible,
       },
       sessionState,
     );

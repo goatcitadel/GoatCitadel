@@ -783,7 +783,7 @@ import {
   ChatTurnWriteConflictError,
 } from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
-import { resolveToolRequestPathsForSessionScope } from "./tool-path-session-scope.js";
+import { resolveToolRequestPathsForSessionScope, withSharedSessionPathScopeReads } from "./tool-path-session-scope.js";
 import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
 import { isOutsideRootWriteEligible } from "./outside-root-write-eligibility.js";
 import {
@@ -871,6 +871,7 @@ import { MeshCapabilityInvocationService } from "./mesh-capability-invocation-se
 import { MeshCapabilityPublicationService } from "./mesh-capability-publication-service.js";
 import type { BaseAgentPromptSkill, BaseAgentPromptToolset } from "./base-agent-system-prompt.js";
 import { filterBasePromptToolsetByPolicy, type BasePromptCatalogScope } from "./base-prompt-capability-catalog.js";
+import { withBasePromptPolicyScope } from "./base-prompt-policy-scope.js";
 import { TaskLifecycleService } from "./task-lifecycle-service.js";
 import { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
 import { ReviewReadinessService } from "./review-readiness-service.js";
@@ -3735,6 +3736,7 @@ export class GatewayService {
         await this.buildLlmMessagesFromBranchPath(sessionId, pathTurnIds, currentUserMessage, options, state),
       composeFrozenOperatorProfileDigest: (workspaceId) => this.composeFrozenOperatorProfileDigest(workspaceId),
       resolveBasePromptCapabilityCatalog: (scope) => this.resolveBasePromptCapabilityCatalog(scope),
+      getCodeModeReadiness: async () => await this.capabilitySystemService.getCodeModeReadiness(),
       closeActiveChatTurnStream: (turnId, registrationId) => this.closeActiveChatTurnStream(turnId, registrationId),
       collectCapabilityUpgradeSuggestions: async (input) => await this.collectCapabilityUpgradeSuggestions(input),
       collectSpecialistCandidateSuggestions: (input) => this.collectSpecialistCandidateSuggestions(input),
@@ -10648,9 +10650,7 @@ export class GatewayService {
       const skills: BaseAgentPromptSkill[] = [];
       for (const entry of catalog) {
         if (entry.kind === "tool") {
-          if (entry.toolName) {
-            toolNames.push(entry.toolName);
-          }
+          if (entry.toolName) toolNames.push(entry.toolName);
           continue;
         }
         if (entry.kind === "skill") {
@@ -10659,10 +10659,13 @@ export class GatewayService {
         }
       }
       const safeWriteDir = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out");
-      const probe = (request: ToolAccessEvaluateRequest) => this.inspectToolAccess(request);
-      return scope
-        ? await filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir)
-        : { toolNames, skills };
+      if (!scope) return { toolNames, skills };
+      const inspect = (request: ToolAccessEvaluateRequest) => this.inspectToolAccess(request);
+      const find = async (id: string) => await this.storage.workspaces?.find(id);
+      const probe = withBasePromptPolicyScope(scope, inspect, (input) => this.resolveToolPolicyContext(input), find);
+      return await withSharedSessionPathScopeReads(this.storage, () =>
+        filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir),
+      );
     } catch (error) {
       log.warn("resolveBasePromptCapabilityCatalog failed", {
         error: error instanceof Error ? error.message : String(error),
@@ -12875,6 +12878,7 @@ export class GatewayService {
       compactionDimension?: chatMessageHistoryService.ChatCompactionDimension;
       agenticStateCapsule?: string;
       protectedTurnIds?: readonly string[];
+      codeModeRequestEligible?: boolean;
     },
     state?: Awaited<ReturnType<GatewayService["loadChatTurnSessionState"]>>,
   ): Promise<ChatCompletionRequest["messages"]> {
@@ -12891,11 +12895,13 @@ export class GatewayService {
   private buildUserMessageContent(
     message: ChatMessageRecord,
     supportsVision: boolean,
+    codeModeRequestEligible: boolean,
   ): Promise<string | Array<Record<string, unknown>>> {
     return chatTurnUserMessage.buildUserMessageContent(
       this.buildChatTurnUserMessageDependencies(),
       message,
       supportsVision,
+      codeModeRequestEligible,
     );
   }
 
@@ -12941,7 +12947,8 @@ export class GatewayService {
       llmService: this.llmService,
       readTranscriptOrEmpty: async (sessionId) => await this.readTranscriptOrEmpty(sessionId),
       loadChatTurnSessionState: async (sessionId) => await this.loadChatTurnSessionState(sessionId),
-      buildUserMessageContent: (message, supportsVision) => this.buildUserMessageContent(message, supportsVision),
+      buildUserMessageContent: (message, supportsVision, codeModeRequestEligible) =>
+        this.buildUserMessageContent(message, supportsVision, codeModeRequestEligible),
       getModelTokenMultiplier: (providerId, model) => this.llmService.getModelTokenMultiplier(providerId, model),
       onCompaction: async (input) => {
         // Both compaction triggers are record_only observers. Failures were

@@ -102,11 +102,41 @@ describe("chat-turn-user-message", () => {
       }),
     ]);
 
-    const context = await buildAttachmentPromptContext(deps, [{ attachmentId: "att-plan-pdf" }], false);
+    const context = await buildAttachmentPromptContext(deps, [{ attachmentId: "att-plan-pdf" }], false, true);
 
     expect(context).toContain("- saturday-plan.pdf (application/pdf, 2048 bytes)");
     expect(context).toContain(
       "Preview: not extracted. attachmentId: att-plan-pdf. Code Mode can read it with docs.extract_text({ attachmentId }).",
+    );
+  });
+
+  it("names docs.extract_text only on a turn that is offered code_mode.request", async () => {
+    // docs.extract_text runs only inside a Code Mode script, so a turn without code_mode.request cannot reach it.
+    const deps = createDeps([
+      createAttachment({
+        attachmentId: "att-plan-pdf",
+        fileName: "saturday-plan.pdf",
+        mimeType: "application/pdf",
+        sizeBytes: 2048,
+        extractPreview: "",
+      }),
+    ]);
+    const message = createMessage({
+      content: "Read this",
+      attachments: [
+        { attachmentId: "att-plan-pdf", fileName: "saturday-plan.pdf", mimeType: "application/pdf", sizeBytes: 2048 },
+      ],
+    });
+
+    const notOffered = await buildAttachmentPromptContext(deps, [{ attachmentId: "att-plan-pdf" }], false, false);
+    expect(notOffered).toContain("Preview: not extracted. attachmentId: att-plan-pdf.");
+    expect(notOffered).not.toContain("docs.extract_text");
+    expect(await buildAttachmentPromptContext(deps, [{ attachmentId: "att-plan-pdf" }], false)).not.toContain(
+      "docs.extract_text",
+    );
+    expect(await buildUserMessageContent(deps, message, false, false)).not.toContain("docs.extract_text");
+    expect(await buildUserMessageContent(deps, message, false, true)).toContain(
+      "Code Mode can read it with docs.extract_text({ attachmentId }).",
     );
   });
 
@@ -167,6 +197,7 @@ describe("chat-turn-user-message", () => {
         content: "Summarize this",
         attachments: [{ attachmentId: "doc-1", fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 64 }],
       }),
+      false,
       false,
     );
 
