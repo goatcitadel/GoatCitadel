@@ -874,7 +874,7 @@ describe("Postgres migration ledger compatibility", () => {
     // (14 columns, one index); v219 adds idx_chat_turn_traces_user_message; v215 is data-only; v216 adds external_side_effect_runs.replay_record_json;
     // v217/v218 add Vault per-Chamber keys (3 tables, 3 secret columns, 38 columns, 5 indexes);
     // v220 only widens two change_plans CHECKs; v221 adds chat_turn_traces.reasoning_text; v222 is data-only;
-    // v223 only widens the change_plans kind CHECK.
+    // v223 only widens the change_plans kind CHECK; v224 is data-only.
     // Keep independent drift tripwires for the complete current shape.
     assert.equal(manifest.tables.length, 372);
     assert.equal(

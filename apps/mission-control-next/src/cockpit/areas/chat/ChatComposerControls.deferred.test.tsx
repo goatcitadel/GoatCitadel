@@ -175,8 +175,8 @@ describe("deferred public model options Popover", () => {
     native.focus();
     expect(load.started).not.toHaveBeenCalled();
     expect(dialog()).toBeNull();
-    await change(host.querySelector<HTMLSelectElement>('select[aria-label="Web search"]')!, "quick");
-    expect(input.onSetWebMode).toHaveBeenCalledExactlyOnceWith("quick");
+    await change(host.querySelector<HTMLSelectElement>('select[aria-label="Web search"]')!, "deep");
+    expect(input.onSetWebMode).toHaveBeenCalledExactlyOnceWith("deep");
     const plan = [...host.querySelectorAll<HTMLButtonElement>("button")].find(
       (node) => node.textContent === "Plan first",
     )!;

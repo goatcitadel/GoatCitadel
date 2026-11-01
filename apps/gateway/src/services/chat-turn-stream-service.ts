@@ -2735,6 +2735,20 @@ export async function* streamPreparedAgentChatTurn(
     if (finalText.trim()) {
       await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
       const currentTraceBeforeWrite = await readTurnTrace();
+      const answerReview = await reviewPreparedTurnAnswer(host, prepared, {
+        answer: finalText,
+        status: runnerTerminalStatus ?? "completed",
+        trace: currentTraceBeforeWrite,
+        citations: resolveTurnCitations(),
+        repaired: streamLayerRepaired,
+        remoteWorker: Boolean(options?.remoteWorkerExecution),
+        signal: controller.signal,
+      });
+      if (answerReview?.note) {
+        finalText = `${finalText}${answerReview.note}`;
+        yield { type: "delta", sessionId, turnId, messageId: assistantMessageId, delta: answerReview.note };
+      }
+      await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
       await observeBeforeAssistantMessageWrite(host, {
         workspaceId: prepared.workspaceId,
         sessionId,
@@ -2779,6 +2793,7 @@ export async function* streamPreparedAgentChatTurn(
           attempted: false,
           attemptCount: 0,
           outcome: "not_needed",
+          ...(answerReview ? { answerReview: answerReview.record } : {}),
         },
         proactive: {
           runId: prepared.autonomy.lastProactiveRunId,
@@ -3089,3 +3104,4 @@ function bindExternalAbortToController(
   };
 }
 import { readFanoutCompletionTrace } from "./chat-fanout-wait-evidence.js";
+import { reviewPreparedTurnAnswer } from "./chat-answer-review.js";

@@ -1635,6 +1635,15 @@ describe("chat routes additional coverage", () => {
       expectedRevision: 1,
       planningMode: "advisory",
     });
+
+    // Quick is retired: an older client that still sends it saves Auto.
+    const quickResponse = await app.inject({
+      method: "PATCH",
+      url: "/api/v1/chat/sessions/sess-1/prefs",
+      payload: { expectedRevision: 2, webMode: "quick" },
+    });
+    expect(quickResponse.statusCode).toBe(200);
+    expect(updateChatSessionPrefs).toHaveBeenLastCalledWith("sess-1", { expectedRevision: 2, webMode: "auto" });
   });
 
   it("streams large attachments as raw bytes and caps base64 JSON at 1 MiB", async () => {

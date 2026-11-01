@@ -3,6 +3,7 @@ import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL } from "../approva
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
 import { MAIL_DRAFTS_POSTGRES_SQL, MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL } from "../mail-draft-schema.js";
 import { PAUSE_DORMANT_NO_AGENT_CRON_JOBS_POSTGRES_SQL } from "../pause-dormant-no-agent-cron.js";
+import { RESET_CHAT_REVIEW_DEPTH_POSTGRES_SQL } from "../chat-review-depth-reset-migration.js";
 import { CHAT_ROUTED_CONTEXT_ADMISSION_POSTGRES_SQL } from "../chat-routed-context-admission-schema.js";
 import { HEARTBEAT_FEATURE_BINDING_POSTGRES_SQL } from "../heartbeat-feature-binding-schema.js";
 import { COMMITMENT_OCCURRENCE_POSTGRES_SQL } from "../commitment-occurrence-schema.js";
@@ -15284,6 +15285,14 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "plugin_install_change_plans",
     sql: CHANGE_PLAN_PLUGIN_INSTALL_POSTGRES_SQL,
     integritySha256: "65aa2f48688d429fe57c21a721a6d328bff49fa30577ec1ce612c30a26155269",
+  },
+  {
+    // Parity with SQLite v275: answer review now costs a model call per turn; reset the never-read
+    // old 'standard' default once. Data only; the column and its DEFAULT are unchanged.
+    version: 224,
+    name: "reset_chat_review_depth",
+    sql: RESET_CHAT_REVIEW_DEPTH_POSTGRES_SQL,
+    integritySha256: "90755f8452ff43ef7527bed0e7d77311fdaaf271da4e524bde3227f42bbcdbf5",
   },
 ];
 

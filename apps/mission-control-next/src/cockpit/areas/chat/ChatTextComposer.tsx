@@ -1,9 +1,11 @@
 import type { ComposerProps } from "./ChatTextComposer.types";
 export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
-import { useEffect, useId, useState, type FormEvent, type KeyboardEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
-import { ChatComposerPhoneActions, ChatComposerTools } from "./ChatComposerTools";
+import { ChatComposerPhoneActions, ChatComposerTools, composerControlsProps } from "./ChatComposerTools";
+import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatComposerControls";
+import { ChatComposerModePills, ChatComposerPlusMenu } from "./ChatComposerPlusMenu";
 import { ChatComposerPalette } from "./ChatComposerPalette";
 import { channelReplyBlock, channelReplyPlaceholder, channelReplySubmitLabel } from "./channel-composer";
 import { ChatRunVariables } from "./ChatRunVariables";
@@ -69,6 +71,8 @@ export function ChatTextComposer({
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const coarse = useCoarsePointer();
   const [optionsOpen, setOptionsOpen] = useState(false);
+  const modelOptionsRequest: ModelOptionsRequest = useRef(null);
+  const channelConversation = Boolean(props.channelReply || props.channelCheck);
   const openSourcePicker = () => {
     setSourcesOpen(true);
     if (phone) setOptionsOpen(true);
@@ -81,6 +85,13 @@ export function ChatTextComposer({
     if (sources.attachments.length === 0) openSourcePicker();
     else setSourcesOpen(true);
   };
+  const sources = {
+    open: sourcesOpen,
+    panelId: sourcesPanelId,
+    openToken: externalSourceOpenToken,
+    onToggle: toggleSources,
+  };
+  const controlsProps = composerControlsProps(props);
   const [composing, setComposing] = useState(false);
   const projectReview = useProjectSwitchReview(props, composing);
   const reviewTransition = useChatSelectionReview(projectReview.identity);
@@ -266,19 +277,21 @@ export function ChatTextComposer({
           props={props}
           phone={phone}
           reasoningEfforts={reasoningEfforts}
-          sources={{
-            open: sourcesOpen,
-            panelId: sourcesPanelId,
-            openToken: externalSourceOpenToken,
-            onToggle: toggleSources,
-          }}
+          sources={sources}
           optionsOpen={optionsOpen}
           onOptionsOpenChange={setOptionsOpen}
+          onChooseModel={() => modelOptionsRequest.current?.()}
         />
         <label htmlFor="cockpit-chat-draft" className="sr-only">
           Message
         </label>
-        <div className={phone ? "mt-2 flex items-end gap-1" : undefined}>
+        <div
+          className={
+            phone
+              ? "mt-2 flex items-end gap-1"
+              : "mt-2 rounded-md border border-line-control bg-canvas focus-within:border-accent"
+          }
+        >
           <textarea
             id="cockpit-chat-draft"
             ref={props.composerRef}
@@ -307,8 +320,10 @@ export function ChatTextComposer({
             onCompositionStart={() => setComposing(true)}
             onCompositionEnd={() => setComposing(false)}
             onPaste={props.onComposerPaste}
-            placeholder={channelReplyPlaceholder(props.channelReply, props.channelCheck)}
-            className={`cockpit-chat-draft block min-h-16 resize-none field-sizing-content rounded-md border border-line-control bg-canvas px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted focus:border-accent disabled:opacity-60 ${phone ? "min-w-0 flex-1" : "mt-2 w-full"}`}
+            placeholder={`${channelReplyPlaceholder(props.channelReply, props.channelCheck)}${
+              coarse || channelConversation ? "" : " Shift+Enter for a new line."
+            }`}
+            className={`cockpit-chat-draft block min-h-16 resize-none field-sizing-content px-3 py-2 text-md text-fg outline-none placeholder:text-fg-muted disabled:opacity-60 ${phone ? "min-w-0 flex-1 rounded-md border border-line-control bg-canvas focus:border-accent" : "w-full rounded-t-md bg-transparent"}`}
           />
           {phone ? (
             <ChatComposerPhoneActions
@@ -318,7 +333,50 @@ export function ChatTextComposer({
               optionsOpen={optionsOpen}
               onOpenOptions={() => setOptionsOpen(true)}
             />
-          ) : null}
+          ) : (
+            <div
+              role="group"
+              aria-label="Composer controls"
+              className="flex flex-wrap items-center gap-2 px-2 pb-2 text-xs text-fg-muted"
+            >
+              <ChatComposerPlusMenu props={controlsProps} channelConversation={channelConversation} sources={sources} />
+              {channelConversation ? null : <ChatComposerModePills props={controlsProps} sources={sources} />}
+              <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-2">
+                {reasonBesideSend ? reasonNode : null}
+                {channelConversation ? null : (
+                  <ChatModelOptionsButton
+                    props={controlsProps}
+                    reasoningEfforts={reasoningEfforts}
+                    scopeKey={props.selectedSessionId ?? ""}
+                    requestRef={modelOptionsRequest}
+                  />
+                )}
+                {props.hasActiveStream ? (
+                  <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
+                    {submitLabel}
+                  </Button>
+                ) : null}
+                {props.hasActiveStream ? (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="sm"
+                    disabled={props.isStopPending}
+                    onClick={() => {
+                      props.onStopActiveTurn();
+                      props.composerRef.current?.focus();
+                    }}
+                  >
+                    {props.isStopPending ? "Stopping…" : "Stop response"}
+                  </Button>
+                ) : (
+                  <Button type="submit" variant="primary" size="sm" className="max-w-64" disabled={!canSubmit}>
+                    <span className="truncate">{submitLabel}</span>
+                  </Button>
+                )}
+              </div>
+            </div>
+          )}
         </div>
         {capture ? (
           <section
@@ -344,52 +402,6 @@ export function ChatTextComposer({
             </Button>
           </section>
         ) : null}
-        {phone ? null : (
-          <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
-            <p className="min-w-0 text-xs text-fg-muted">
-              <button
-                type="button"
-                onClick={() => props.composerPalette?.onOpen()}
-                disabled={!props.composerPalette?.enabled}
-                className="inline-flex min-h-8 items-center font-medium text-accent hover:underline disabled:text-fg-muted max-sm:min-h-11"
-              >
-                Commands and context
-              </button>
-              {coarse ? null : " · Shift+Enter for a new line"}
-            </p>
-            {reasonBesideSend ? reasonNode : null}
-            {props.hasActiveStream ? (
-              <Button type="submit" variant="primary" size="sm" disabled={!canSubmit}>
-                {submitLabel}
-              </Button>
-            ) : null}
-            {props.hasActiveStream ? (
-              <Button
-                type="button"
-                variant="secondary"
-                size="sm"
-                className="max-sm:h-11 max-sm:px-4"
-                disabled={props.isStopPending}
-                onClick={() => {
-                  props.onStopActiveTurn();
-                  props.composerRef.current?.focus();
-                }}
-              >
-                {props.isStopPending ? "Stopping…" : "Stop response"}
-              </Button>
-            ) : (
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                className="max-w-64 max-sm:h-11 max-sm:px-4"
-                disabled={!canSubmit}
-              >
-                <span className="truncate">{submitLabel}</span>
-              </Button>
-            )}
-          </div>
-        )}
         {/* A phone keeps no empty reserved line under the draft; wider layouts keep it so the row never jumps. */}
         <div className={phone ? "mt-1 empty:hidden" : "mt-2 min-h-5"}>
           {localReady ? (
