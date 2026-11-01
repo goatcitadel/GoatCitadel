@@ -10,15 +10,16 @@
 import type { PermissionSurface, ToolAccessEvaluateRequest, ToolPolicyActorContext } from "@goatcitadel/contracts";
 import type { BasePromptCatalogScope, BasePromptToolAccessProbe } from "./base-prompt-capability-catalog.js";
 
-export interface BasePromptPolicyScopeHost {
-  resolveToolPolicyContext(input: {
-    operatorId: string;
-    workspaceId: string;
-    sessionId: string;
-    surface: PermissionSurface;
-  }): Promise<ToolPolicyActorContext>;
-  findWorkspace(id: string): Promise<{ citadelId?: string } | undefined>;
-}
+/** Resolves the actor context evaluation would resolve for a probe that carries none. */
+export type BasePromptPolicyContextResolver = (input: {
+  operatorId: string;
+  workspaceId: string;
+  sessionId: string;
+  surface: PermissionSurface;
+}) => Promise<ToolPolicyActorContext>;
+
+/** Reads the scope's workspace, for its Citadel. */
+export type BasePromptWorkspaceReader = (id: string) => Promise<{ citadelId?: string } | undefined>;
 
 export interface BasePromptPolicyScope {
   workspaceId: string;
@@ -27,12 +28,13 @@ export interface BasePromptPolicyScope {
 }
 
 export async function resolveBasePromptPolicyScope(
-  host: BasePromptPolicyScopeHost,
+  resolvePolicyContext: BasePromptPolicyContextResolver,
+  findWorkspace: BasePromptWorkspaceReader,
   scope: { sessionId: string; workspaceId: string; mode: PermissionSurface },
 ): Promise<BasePromptPolicyScope> {
   const [workspace, policyContext] = await Promise.all([
-    host.findWorkspace(scope.workspaceId),
-    host.resolveToolPolicyContext({
+    findWorkspace(scope.workspaceId),
+    resolvePolicyContext({
       operatorId: "system",
       workspaceId: scope.workspaceId,
       sessionId: scope.sessionId,
@@ -54,19 +56,19 @@ export async function resolveBasePromptPolicyScope(
  */
 export function withBasePromptPolicyScope(
   scope: BasePromptCatalogScope,
-  host: Pick<BasePromptPolicyScopeHost, "resolveToolPolicyContext"> & { inspectToolAccess: BasePromptToolAccessProbe },
-  findWorkspace: BasePromptPolicyScopeHost["findWorkspace"],
+  inspect: BasePromptToolAccessProbe,
+  resolvePolicyContext: BasePromptPolicyContextResolver,
+  findWorkspace: BasePromptWorkspaceReader,
 ): BasePromptToolAccessProbe {
   const workspaceId = scope.workspaceId;
-  if (!workspaceId) return (request) => host.inspectToolAccess(request);
-  const scopeHost: BasePromptPolicyScopeHost = {
-    resolveToolPolicyContext: (input) => host.resolveToolPolicyContext(input),
-    findWorkspace,
-  };
+  if (!workspaceId) return inspect;
   let resolved: Promise<BasePromptPolicyScope> | undefined;
   return async (request: ToolAccessEvaluateRequest) =>
-    host.inspectToolAccess({
+    inspect({
       ...request,
-      ...(await (resolved ??= resolveBasePromptPolicyScope(scopeHost, { ...scope, workspaceId }))),
+      ...(await (resolved ??= resolveBasePromptPolicyScope(resolvePolicyContext, findWorkspace, {
+        ...scope,
+        workspaceId,
+      }))),
     });
 }

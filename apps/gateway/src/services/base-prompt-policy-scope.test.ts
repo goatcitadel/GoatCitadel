@@ -160,14 +160,11 @@ describe("resolveBasePromptPolicyScope", () => {
   it("returns the workspace, its Citadel and the resolved context, and leaves out an absent Citadel", async () => {
     const resolveToolPolicyContext = vi.fn(async () => policyContext);
     await expect(
-      resolveBasePromptPolicyScope(
-        { resolveToolPolicyContext, findWorkspace: async () => ({ citadelId: "c1" }) },
-        SCOPE,
-      ),
+      resolveBasePromptPolicyScope(resolveToolPolicyContext, async () => ({ citadelId: "c1" }), SCOPE),
     ).resolves.toEqual({ workspaceId: "workspace-1", citadelId: "c1", policyContext });
-    await expect(
-      resolveBasePromptPolicyScope({ resolveToolPolicyContext, findWorkspace: async () => undefined }, SCOPE),
-    ).resolves.toEqual({ workspaceId: "workspace-1", policyContext });
+    await expect(resolveBasePromptPolicyScope(resolveToolPolicyContext, async () => undefined, SCOPE)).resolves.toEqual(
+      { workspaceId: "workspace-1", policyContext },
+    );
   });
 });
 
@@ -178,7 +175,8 @@ describe("withBasePromptPolicyScope", () => {
     const findWorkspace = vi.fn();
     const probe = withBasePromptPolicyScope(
       { sessionId: "session-1", mode: "chat" },
-      { inspectToolAccess, resolveToolPolicyContext },
+      inspectToolAccess,
+      resolveToolPolicyContext,
       findWorkspace,
     );
     const request = { toolName: "fs.read", agentId: "assistant", sessionId: "session-1" };

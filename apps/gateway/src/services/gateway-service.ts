@@ -10660,7 +10660,9 @@ export class GatewayService {
       }
       const safeWriteDir = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out");
       if (!scope) return { toolNames, skills };
-      const probe = withBasePromptPolicyScope(scope, this, async (id) => await this.storage.workspaces?.find(id));
+      const inspect = (request: ToolAccessEvaluateRequest) => this.inspectToolAccess(request);
+      const find = async (id: string) => await this.storage.workspaces?.find(id);
+      const probe = withBasePromptPolicyScope(scope, inspect, (input) => this.resolveToolPolicyContext(input), find);
       return await withSharedSessionPathScopeReads(this.storage, () =>
         filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir),
       );
