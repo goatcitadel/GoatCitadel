@@ -301,6 +301,18 @@ export function citadelWardUrlOrigin(url: string): string {
   }
 }
 
+/**
+ * Whether a push approval was opened for this push config: a config deleted and set again gets a
+ * new `createdAt`, so an approval of the old one cannot settle it. An approval opened before its
+ * request recorded `configCreatedAt` matches any config.
+ */
+export function isCitadelWardApprovedPushConfig(
+  config: { createdAt: string },
+  configCreatedAt: string | undefined,
+): boolean {
+  return configCreatedAt === undefined || config.createdAt === configCreatedAt;
+}
+
 export function isCitadelWardApprovalKind(kind: string): kind is CitadelWardApprovalKind {
   return WARD_KINDS.includes(kind);
 }

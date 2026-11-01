@@ -26,6 +26,7 @@ import {
   buildCitadelWardRequestSummary,
   CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
   citadelWardUrlOrigin,
+  isCitadelWardApprovedPushConfig,
   type CitadelWardApprovalRef,
 } from "./citadel-ward-approval.js";
 import { DRY_RUN_APPROVAL_TTL_MS } from "./integration-dry-run-gate.js";
@@ -39,6 +40,7 @@ interface ApprovedPendingEvent {
   urlHash: string;
   citadelId: string;
   workspaceId?: string;
+  configCreatedAt?: string;
 }
 
 export interface A2AApprovedPushInput {
@@ -53,6 +55,8 @@ export interface A2AApprovedPushInput {
   citadelId: string;
   /** The workspace the approval was minted under (absent = unbound); the binding must still match it. */
   workspaceId?: string;
+  /** `request.configCreatedAt` from the approval payload; absent on approvals opened before it was recorded. */
+  configCreatedAt?: string;
 }
 
 export interface A2ARefusedPushApprovalInput {
@@ -63,6 +67,8 @@ export interface A2ARefusedPushApprovalInput {
   /** `failed`: approved, but the approved push could not be delivered (`reason` says why). */
   disposition: "rejected" | "expired" | "failed";
   reason?: string;
+  /** `request.configCreatedAt` from the approval payload; absent on approvals opened before it was recorded. */
+  configCreatedAt?: string;
 }
 
 export interface A2APeerAuthContext {
@@ -211,13 +217,15 @@ export class A2APushNotificationService {
       urlHash: input.urlHash,
       citadelId: input.citadelId,
       ...(input.workspaceId !== undefined ? { workspaceId: input.workspaceId } : {}),
+      ...(input.configCreatedAt !== undefined ? { configCreatedAt: input.configCreatedAt } : {}),
     });
   }
 
   /**
    * Record a rejected, expired or undeliverable (failed) push approval as a blocked delivery of
    * that event, so the config never stays deferred, then resume later queued events (each still
-   * under the live ward). A config already past the event is left alone.
+   * under the live ward). A config already past the event, or re-created after the approval
+   * was opened, is left alone.
    */
   public async recordRefusedPushApproval(
     input: A2ARefusedPushApprovalInput,
@@ -225,7 +233,11 @@ export class A2APushNotificationService {
   ): Promise<void> {
     const pushConfigs = this.deps.storage.a2aTaskPushConfigs;
     const config = await pushConfigs.find(input.taskId, input.peerId);
-    if (!config || config.lastEventSequence >= input.eventSequence) {
+    if (
+      !config ||
+      config.lastEventSequence >= input.eventSequence ||
+      !isCitadelWardApprovedPushConfig(config, input.configCreatedAt)
+    ) {
       return;
     }
     await pushConfigs.recordDelivery(
@@ -268,7 +280,7 @@ export class A2APushNotificationService {
    * Deliver every subscribed event after the config's last sequence, in order. A deferred event
    * waits on its Citadel Ward approval and later events queue behind it instead of opening more
    * approvals. `approved` names the deferred event an operator approved: it must be the next
-   * pending event, and only that event carries the ward approval.
+   * pending event of the config it was opened for, and only that event carries the ward approval.
    */
   private async deliverPendingEvents(
     peerId: string,
@@ -281,6 +293,9 @@ export class A2APushNotificationService {
     const pushConfigs = storage.a2aTaskPushConfigs;
     const config = await pushConfigs.find(binding.a2aTaskId, peerId);
     if (!config?.enabled || (config.lastDeliveryStatus === "deferred_pending_approval" && !approved)) {
+      return [];
+    }
+    if (approved && !isCitadelWardApprovedPushConfig(config, approved.configCreatedAt)) {
       return [];
     }
     const events = (await this.deps.buildEventsForTask(task, config.lastEventSequence, checkedAt)).filter((event) =>
@@ -540,6 +555,7 @@ export class A2APushNotificationService {
         eventSequence: event.sequence,
         eventKind: event.kind,
         urlHash: hashStableJson(config.url),
+        configCreatedAt: config.createdAt,
       },
     });
     try {

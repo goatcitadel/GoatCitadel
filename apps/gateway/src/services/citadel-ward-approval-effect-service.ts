@@ -18,6 +18,7 @@ import {
   computeCitadelWardIntegrationTargetFingerprint,
   computeCitadelWardPayloadHash,
   isCitadelWardApprovalKind,
+  isCitadelWardApprovedPushConfig,
   readCitadelWardApprovalPayload,
   type CitadelWardApprovalPayload,
   type CitadelWardApprovalRef,
@@ -204,7 +205,7 @@ export class CitadelWardApprovalEffectService {
 
   private async recordPushRefusal(
     approvalId: string,
-    push: { taskId: string; peerId: string; eventSequence: number },
+    push: PushEventIdentity,
     disposition: "rejected" | "expired" | "failed",
     reason?: string,
   ): Promise<void> {
@@ -215,6 +216,7 @@ export class CitadelWardApprovalEffectService {
       eventSequence: push.eventSequence,
       disposition,
       ...(reason ? { reason } : {}),
+      ...(push.configCreatedAt !== undefined ? { configCreatedAt: push.configCreatedAt } : {}),
     });
   }
 
@@ -304,6 +306,7 @@ export class CitadelWardApprovalEffectService {
       urlHash: push.urlHash,
       citadelId: payload.citadelId,
       ...(payload.workspaceId !== undefined ? { workspaceId: payload.workspaceId } : {}),
+      ...(push.configCreatedAt !== undefined ? { configCreatedAt: push.configCreatedAt } : {}),
     });
     const [first] = results;
     return first ? mapPushResult(first) : this.readSettledPush(push, wardApproval.approvalId);
@@ -312,14 +315,18 @@ export class CitadelWardApprovalEffectService {
   /**
    * The push owner returns no result both when the approved event already settled (a retry
    * after delivery or refusal) and when its config or binding is gone or the event is no longer
-   * next. Only a config that already moved past the event is settled; anything else delivered
-   * nothing and fails closed.
+   * next. Only the approved config that already moved past the event is settled; anything else
+   * delivered nothing and fails closed. A config re-created after approval is never settled by it,
+   * and the refusal this raises does not advance that config.
    */
-  private async readSettledPush(
-    push: { taskId: string; peerId: string; eventSequence: number },
-    approvalId: string,
-  ): Promise<Record<string, unknown>> {
+  private async readSettledPush(push: PushEventIdentity, approvalId: string): Promise<Record<string, unknown>> {
     const config = await this.deps.storage.a2aTaskPushConfigs.find(push.taskId, push.peerId);
+    if (config && !isCitadelWardApprovedPushConfig(config, push.configCreatedAt)) {
+      throw new CitadelWardApprovalEffectError(
+        "blocked",
+        `The push config approved by ${approvalId} was deleted and set again after approval; nothing was delivered.`,
+      );
+    }
     if (config && config.lastEventSequence >= push.eventSequence) {
       return { disposition: "already_settled", eventSequence: push.eventSequence };
     }
@@ -423,19 +430,23 @@ function readOutboundRequest(request: Record<string, unknown>): {
   return { outbound: outbound as unknown as A2AOutboundPreviewRequest, actorId: readString(request.actorId) };
 }
 
-function readPushRequest(request: Record<string, unknown>): {
+/** The push event an approval names; `configCreatedAt` is absent on approvals opened before it was recorded. */
+interface PushEventIdentity {
   taskId: string;
   peerId: string;
   eventSequence: number;
-  urlHash: string;
-} {
-  const eventSequence = request.eventSequence;
+  configCreatedAt?: string;
+}
+
+function readPushRequest(request: Record<string, unknown>): PushEventIdentity & { urlHash: string } {
+  const { eventSequence, configCreatedAt } = request;
   if (typeof eventSequence !== "number" || !Number.isInteger(eventSequence)) throw invalidPayload();
   return {
     taskId: readString(request.taskId),
     peerId: readString(request.peerId),
     eventSequence,
     urlHash: readString(request.urlHash),
+    ...(configCreatedAt !== undefined ? { configCreatedAt: readString(configCreatedAt) } : {}),
   };
 }
 
@@ -445,13 +456,15 @@ function readWardRequest(approval: ApprovalRequest): Record<string, unknown> | u
 }
 
 /** The push event identity for recording a failure; undefined when the request does not name one. */
-function readPushRequestOrUndefined(
-  request: Record<string, unknown>,
-): { taskId: string; peerId: string; eventSequence: number } | undefined {
-  const { taskId, peerId, eventSequence } = request;
+function readPushRequestOrUndefined(request: Record<string, unknown>): PushEventIdentity | undefined {
+  const { taskId, peerId, eventSequence, configCreatedAt } = request;
   if (typeof taskId !== "string" || !taskId.trim() || typeof peerId !== "string" || !peerId.trim()) return undefined;
+  // A malformed config binding cannot say which config it names, so nothing is recorded.
+  if (configCreatedAt !== undefined && (typeof configCreatedAt !== "string" || !configCreatedAt.trim())) {
+    return undefined;
+  }
   return typeof eventSequence === "number" && Number.isInteger(eventSequence)
-    ? { taskId, peerId, eventSequence }
+    ? { taskId, peerId, eventSequence, ...(configCreatedAt !== undefined ? { configCreatedAt } : {}) }
     : undefined;
 }
 
