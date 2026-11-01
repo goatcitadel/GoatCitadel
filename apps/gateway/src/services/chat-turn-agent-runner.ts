@@ -662,6 +662,9 @@ interface CoworkContinuationProgressSnapshot {
   readonly localBusinessUnresolvedNextStepKeys: ReadonlySet<string>;
 }
 
+/** Feature flags that decide whether a tool is offered to the model at all. */
+export type ChatToolExposureFlag = "delegationScopeExpansionV1Enabled" | "browserErrandsEnabled";
+
 export interface ChatTurnAgentRunnerInput {
   sessionId: string;
   /** Canonical workspace scope, independent of historical capability profiles. */
@@ -1129,8 +1132,6 @@ export interface ChatTurnAgentRunnerDeps {
    * an in-flight call cannot slip through a mid-turn flag flip).
    */
   subagentFanoutV1Disabled?: () => Promise<boolean>;
-  /** The `browserErrandsEnabled` flag, read live. Absent or false hides `browser.errand` from every tool schema. */
-  browserErrandsEnabled?: () => Promise<boolean>;
   /** Default-disabled durable aggregate gate. Without it, agent.fanout is omitted rather than using a legacy path. */
   durableChatFanoutV1Enabled?: () => Promise<boolean>;
   /**
@@ -1139,8 +1140,11 @@ export interface ChatTurnAgentRunnerDeps {
    * `auto_when_useful` preference never becomes authority on its own.
    */
   isDurableFanoutAvailable?: (input: { sessionId: string; workspaceId?: string }) => Promise<boolean>;
-  /** Default-off delegated result/scope-expansion envelope exposure gate. */
-  delegationScopeExpansionV1Enabled?: () => Promise<boolean>;
+  /**
+   * Default-off tool exposure flags, read live: `delegationScopeExpansionV1Enabled` gates the delegated
+   * result/scope-expansion envelope, and `browserErrandsEnabled` gates `browser.errand`. Absent means off.
+   */
+  toolExposureFlagEnabled?: (flag: ChatToolExposureFlag) => Promise<boolean>;
   /** Override only for deterministic liveness tests; production defaults to 5 seconds. */
   toolActivityHeartbeatMs?: number;
 }
@@ -6906,6 +6910,8 @@ export class ChatTurnAgentRunner {
       !restrictedAutonomousProfile &&
       Boolean(this.toolAccessProbe) &&
       (await this.deps.boundedToolExposureV1Enabled?.()) === true;
+    const exposureFlag = (flag: ChatToolExposureFlag): Promise<boolean> =>
+      this.deps.toolExposureFlagEnabled?.(flag) ?? Promise.resolve(false);
     const [
       subagentFanoutDisabled,
       durableChatFanoutEnabled,
@@ -6922,8 +6928,8 @@ export class ChatTurnAgentRunner {
           input.workspaceId ?? input.capabilityProfile?.identity.workspaceId ?? input.policyContext?.workspaceId,
       }) ?? Promise.resolve(false),
       this.deps.attachedContextToolsV1Enabled?.() ?? Promise.resolve(false),
-      this.deps.delegationScopeExpansionV1Enabled?.() ?? Promise.resolve(false),
-      this.deps.browserErrandsEnabled?.() ?? Promise.resolve(false),
+      exposureFlag("delegationScopeExpansionV1Enabled"),
+      exposureFlag("browserErrandsEnabled"),
     ]);
     // R3-8 `agent.fanout` exposure gate: only interactive Chat-normalized turns
     // whose session subagentPolicy explicitly allows automatic subagents may

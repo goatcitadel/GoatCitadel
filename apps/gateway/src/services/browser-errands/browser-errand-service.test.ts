@@ -1,14 +1,22 @@
 import { describe, expect, it, vi } from "vitest";
-import { ErrandBrowserLaunchError } from "@goatcitadel/policy-engine";
+import { ErrandBrowserLaunchError, type ErrandBrowser } from "@goatcitadel/policy-engine";
 import {
   BROWSER_ERRAND_BUSY_MESSAGE,
   BROWSER_ERRAND_CHANNEL_MESSAGE,
   BROWSER_ERRAND_DISABLED_MESSAGE,
   BROWSER_ERRAND_PROFILE_LOCKED_MESSAGE,
   BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE,
+  BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE,
   BROWSER_ERRAND_WINDOW_CLOSED_SUMMARY,
 } from "./browser-errand-service.js";
-import { buildService, errandRequest, fakeGate, outcome, untilAborted } from "./browser-errand-test-fixtures.js";
+import {
+  buildService,
+  errandRequest,
+  fakeBrowser,
+  fakeGate,
+  outcome,
+  untilAborted,
+} from "./browser-errand-test-fixtures.js";
 
 describe("BrowserErrandService", () => {
   it("refuses when the flag is off", async () => {
@@ -160,5 +168,65 @@ describe("BrowserErrandService", () => {
     expect(browser.close).not.toHaveBeenCalled();
     await service.dispose();
     expect(browser.close).toHaveBeenCalled();
+  });
+});
+
+describe("BrowserErrandService dispose", () => {
+  it("withdraws a pending approval before dispose resolves, then closes the window", async () => {
+    const order: string[] = [];
+    let asked!: () => void;
+    const approvalAsked = new Promise<void>((resolve) => (asked = resolve));
+    const gate = fakeGate(vi.fn, {
+      withdrawPending: vi.fn(async () => {
+        order.push("withdraw");
+      }),
+    });
+    const built = buildService(vi.fn, {
+      createGate: (deps) => {
+        gate.request = vi.fn(
+          () =>
+            new Promise<"stopped">((resolve) => {
+              asked();
+              deps.signal.addEventListener("abort", () => resolve("stopped"), { once: true });
+            }),
+        );
+        return gate;
+      },
+      runLoop: async (deps) => outcome((await deps.requestApproval({} as never)) === "stopped" ? "stopped" : "done"),
+    });
+    built.browser.close = vi.fn(async () => {
+      order.push("close");
+    });
+    const running = built.service.run(errandRequest());
+    await approvalAsked;
+    await built.service.dispose();
+    expect(gate.withdrawPending).toHaveBeenCalledWith("system:errand-stopped");
+    expect(order).toEqual(["withdraw", "close"]);
+    await expect(running).resolves.toMatchObject({ outcome: "stopped" });
+  });
+
+  it("closes a browser whose launch finishes after dispose", async () => {
+    let finishLaunch!: () => void;
+    const late = fakeBrowser(vi.fn);
+    const built = buildService(vi.fn, {
+      disposeSettleMs: 20,
+      launchBrowser: () =>
+        new Promise<ErrandBrowser>((resolve) => {
+          finishLaunch = () => resolve(late);
+        }),
+    });
+    const running = built.service.run(errandRequest());
+    await vi.waitFor(() => expect(finishLaunch).toBeTypeOf("function"));
+    await built.service.dispose();
+    finishLaunch();
+    await expect(running).rejects.toThrow(BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE);
+    expect(late.close).toHaveBeenCalled();
+  });
+
+  it("refuses a run after dispose", async () => {
+    const { service, launchBrowser } = buildService(vi.fn);
+    await service.dispose();
+    await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE);
+    expect(launchBrowser).not.toHaveBeenCalled();
   });
 });

@@ -53,7 +53,9 @@ function buildHarness(enabled: boolean | undefined) {
     createChatCompletion: createChatCompletion as never,
     invokeTool: vi.fn(async () => ({ outcome: "executed", result: {} }) as ToolInvokeResult) as never,
     evaluateToolAccess: () => ({ allowed: true, requiresApproval: false, reasonCodes: [] }),
-    ...(enabled === undefined ? {} : { browserErrandsEnabled: async () => enabled }),
+    ...(enabled === undefined
+      ? {}
+      : { toolExposureFlagEnabled: async (flag: string) => flag === "browserErrandsEnabled" && enabled }),
   } as never);
   return { orchestrator, completionRequests };
 }
@@ -81,6 +83,23 @@ describe("ChatTurnAgentRunner browser.errand exposure", () => {
     const harness = buildHarness(true);
     await harness.orchestrator.run(turnInput({ sessionSuffix: "on" }));
     expect(exposedToolNames(harness.completionRequests[0])).toContain(ERRAND_MODEL_TOOL_NAME);
+  });
+});
+
+describe("ChatTurnAgentRunner tool exposure flags", () => {
+  it("reads the delegation and browser errand flags through one dependency", async () => {
+    const toolExposureFlagEnabled = vi.fn(async () => false);
+    const orchestrator = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => [],
+      createChatCompletion: vi.fn(async () => finalResponse()) as never,
+      invokeTool: vi.fn() as never,
+      evaluateToolAccess: () => ({ allowed: true, requiresApproval: false, reasonCodes: [] }),
+      toolExposureFlagEnabled,
+    } as never);
+    await orchestrator.run(turnInput({ sessionSuffix: "flags" }));
+    expect(toolExposureFlagEnabled).toHaveBeenCalledWith("delegationScopeExpansionV1Enabled");
+    expect(toolExposureFlagEnabled).toHaveBeenCalledWith("browserErrandsEnabled");
   });
 });
 

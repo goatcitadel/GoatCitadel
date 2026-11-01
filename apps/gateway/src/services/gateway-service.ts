@@ -1977,10 +1977,9 @@ export class GatewayService {
       readOptionalUserInput: (input) => readChatOptionalInput(this.storage, input),
       getModelContextWindow: (providerId, model) => this.llmService.getModelContextWindow(providerId, model),
       subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
-      browserErrandsEnabled: async () => await this.isFeatureEnabled("browserErrandsEnabled"),
       durableChatFanoutV1Enabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
       isDurableFanoutAvailable: async (input) => await this.isDurableFanoutAvailable(input),
-      delegationScopeExpansionV1Enabled: async () => await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
+      toolExposureFlagEnabled: async (flag) => await this.isFeatureEnabled(flag),
     });
     this.researchService = new ResearchService({
       storage: this.storage,

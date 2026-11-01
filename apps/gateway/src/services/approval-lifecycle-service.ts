@@ -744,7 +744,7 @@ export async function createApproval(
   const transactionalCreateInput = approvalLinkage ? { ...createInput, linkage: approvalLinkage } : createInput;
 
   let approval!: ApprovalRequest;
-  await host.storage.runImmediateTransaction(async () => {
+  await commitThenProcessEffects(host, async () => {
     await assertLinkedChatTurnActive(host, transactionalCreateInput);
     approval =
       authority?.ttlMs !== undefined
@@ -792,7 +792,6 @@ export async function createApproval(
       }
     }
   });
-  host.requestApprovalEffectProcessing();
 
   if (!policyOutcome.autoReject) {
     try {
@@ -1099,7 +1098,7 @@ export async function withdrawApproval(
   approvalId: string,
   actorId: string,
 ): Promise<void> {
-  await host.storage.runImmediateTransaction(async () => {
+  await commitThenProcessEffects(host, async () => {
     await commitStandardApprovalResolution(
       host,
       approvalId,
@@ -1111,6 +1110,11 @@ export async function withdrawApproval(
       { allowExpired: true, outcome: "withdrawn" },
     );
   });
+}
+
+/** Runs `work` in one immediate transaction, then wakes approval effect processing for what it committed. */
+async function commitThenProcessEffects(host: ApprovalLifecycleHost, work: () => Promise<void>): Promise<void> {
+  await host.storage.runImmediateTransaction(work);
   host.requestApprovalEffectProcessing();
 }
 

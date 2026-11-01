@@ -24,6 +24,9 @@ export const BROWSER_ERRAND_PROFILE_LOCKED_MESSAGE =
 export const BROWSER_ERRAND_CHROME_MISSING_MESSAGE =
   "GoatCitadel couldn't find Google Chrome on this PC. Install Chrome and try again.";
 export const BROWSER_ERRAND_LAUNCH_FAILED_MESSAGE = "The errand browser didn't start. Try again.";
+export const BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE = "GoatCitadel is shutting down, so the errand can't start.";
+/** How long Gateway shutdown waits for a running errand to withdraw its approval and settle before closing Chrome. */
+export const ERRAND_DISPOSE_SETTLE_MS = 5_000;
 export const BROWSER_ERRAND_WINDOW_CLOSED_SUMMARY = "The errand window was closed.";
 
 export const ERRAND_BANNER_TEXT = "GoatCitadel is using this browser";
@@ -80,6 +83,7 @@ export interface BrowserErrandServiceDeps {
   runLoop?: typeof runErrandLoop;
   createGate?: (deps: ErrandApprovalGateDeps) => ErrandApprovalGate;
   idleCloseMs?: number;
+  disposeSettleMs?: number;
 }
 
 interface ActiveErrand {
@@ -90,6 +94,8 @@ interface ActiveErrand {
   takenOverSince?: number;
   takenOverMs: number;
   windowClosed: boolean;
+  /** Resolves once the run has finished its cleanup, whatever its outcome. */
+  settled?: Promise<void>;
 }
 
 /** Runs one browser errand at a time in GoatCitadel's own Chrome window, for the `browser.errand` tool. */
@@ -98,6 +104,7 @@ export class BrowserErrandService {
   private browser: ErrandBrowser | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly views = new Map<string, ErrandStatusView>();
+  private disposed = false;
 
   public constructor(private readonly deps: BrowserErrandServiceDeps) {}
 
@@ -118,11 +125,17 @@ export class BrowserErrandService {
     return true;
   }
 
+  /** Gateway shutdown: refuses new errands, stops the running one (withdrawing its approval), then closes Chrome. */
   public async dispose(): Promise<void> {
+    this.disposed = true;
     this.clearIdleTimer();
-    if (this.active) {
-      this.active.controller.abort();
-      this.resolveHandBack(this.active, "stopped");
+    const errand = this.active;
+    if (errand) {
+      // Withdraw while storage is still open, so no approval is left pending after shutdown.
+      await errand.gate?.withdrawPending(ERRAND_STOPPED_ACTOR_ID).catch(() => undefined);
+      errand.controller.abort();
+      this.resolveHandBack(errand, "stopped");
+      await this.settleWithin(errand.settled, this.deps.disposeSettleMs ?? ERRAND_DISPOSE_SETTLE_MS);
     }
     const browser = this.browser;
     this.browser = undefined;
@@ -130,6 +143,9 @@ export class BrowserErrandService {
   }
 
   public async run(request: ToolInvokeRequest): Promise<BrowserErrandToolResult> {
+    if (this.disposed) {
+      throw new Error(BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE);
+    }
     const goal = typeof request.args.goal === "string" ? request.args.goal.trim().slice(0, ERRAND_GOAL_MAX_CHARS) : "";
     const turnId = request.turnId?.trim();
     const toolRunId = request.toolRunId?.trim();
@@ -139,6 +155,9 @@ export class BrowserErrandService {
     }
     if (!goal) {
       throw new Error(BROWSER_ERRAND_NO_GOAL_MESSAGE);
+    }
+    if (this.disposed) {
+      throw new Error(BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE);
     }
     if (this.active) {
       throw new Error(BROWSER_ERRAND_BUSY_MESSAGE);
@@ -160,6 +179,20 @@ export class BrowserErrandService {
     // Claimed before any await, so a second call in the same tick is refused.
     this.active = errand;
     this.remember(errand.view);
+    const work = this.runClaimed(errand, request, { goal, turnId, toolRunId });
+    errand.settled = work.then(
+      () => undefined,
+      () => undefined,
+    );
+    return await work;
+  }
+
+  private async runClaimed(
+    errand: ActiveErrand,
+    request: ToolInvokeRequest,
+    ids: { goal: string; turnId: string; toolRunId: string },
+  ): Promise<BrowserErrandToolResult> {
+    const { goal, turnId, toolRunId } = ids;
     const onTurnAbort = (): void =>
       void this.stop(errand.view.errandId, ERRAND_STOPPED_ACTOR_ID).catch(() => undefined);
     request.signal?.addEventListener("abort", onTurnAbort, { once: true });
@@ -201,8 +234,14 @@ export class BrowserErrandService {
     }
     this.browser = undefined;
     try {
-      this.browser = await this.deps.launchBrowser(signal);
-      return this.browser;
+      const launched = await this.deps.launchBrowser(signal);
+      if (this.disposed) {
+        // Shutdown began while Chrome was starting: close it now so it never holds the profile past shutdown.
+        await launched.close().catch(() => undefined);
+        throw new Error(BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE);
+      }
+      this.browser = launched;
+      return launched;
     } catch (error) {
       if (error instanceof ErrandBrowserLaunchError) {
         throw new Error(
@@ -213,6 +252,9 @@ export class BrowserErrandService {
               : BROWSER_ERRAND_LAUNCH_FAILED_MESSAGE,
           { cause: error },
         );
+      }
+      if (error instanceof Error && error.message === BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE) {
+        throw error;
       }
       throw new Error(BROWSER_ERRAND_LAUNCH_FAILED_MESSAGE, { cause: error });
     }
@@ -452,6 +494,17 @@ export class BrowserErrandService {
     }
   }
 
+  private async settleWithin(settled: Promise<void> | undefined, ms: number): Promise<void> {
+    if (!settled) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const bound = new Promise<void>((resolve) => {
+      timer = setTimeout(resolve, ms);
+      timer.unref?.();
+    });
+    await Promise.race([settled, bound]);
+    clearTimeout(timer);
+  }
+
   private clearIdleTimer(): void {
     if (this.idleTimer) {
       clearTimeout(this.idleTimer);
@@ -461,7 +514,7 @@ export class BrowserErrandService {
 
   private scheduleIdleClose(): void {
     this.clearIdleTimer();
-    if (!this.browser || this.active) {
+    if (!this.browser || this.active || this.disposed) {
       return;
     }
     this.idleTimer = setTimeout(() => {
