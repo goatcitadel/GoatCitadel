@@ -1,10 +1,7 @@
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import {
-  completeChangePlanProviderOAuth,
   confirmChangePlan,
-  pollChangePlanProviderOAuth,
   respondToChangePlan,
-  startChangePlanProviderOAuth,
   submitChangePlanProviderSecret,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
@@ -28,12 +25,13 @@ export function GuidedModelPlanDialog({
   workspaceId: string;
 }) {
   const { navigate } = useCockpitRoute();
-  const { dialogPlan, busy, actionError, setActionError, setDialogPlan, runAction } = control;
+  const { dialogPlan, busy, signingIn, actionError, setActionError, setDialogPlan, runAction } = control;
   const selection = { providerId: control.providerId, model: control.model, thinkingLevel: control.thinkingLevel };
   return (
     <ChatChangePlanActionDialog
       plan={dialogPlan}
-      pending={busy}
+      // A polling sign-in waits on the user's browser, so the dialog stays closable to stop it.
+      pending={busy && !signingIn}
       error={actionError}
       renderApprovalAction={(plan, pending) => (
         <SettingsApprovalOwnerAction
@@ -45,10 +43,10 @@ export function GuidedModelPlanDialog({
         />
       )}
       onClose={() => {
-        if (!busy) {
-          setDialogPlan(null);
-          setActionError(null);
-        }
+        control.cancelProviderSignIn();
+        if (busy && !signingIn) return;
+        setDialogPlan(null);
+        setActionError(null);
       }}
       onConfirm={(plan) => {
         const action = plan.requiredAction;
@@ -93,32 +91,7 @@ export function GuidedModelPlanDialog({
           }),
         );
       }}
-      onContinueOAuth={async (plan) => {
-        const action = plan.requiredAction;
-        if (action?.kind !== "oauth" || plan.request.kind !== "provider_connection") {
-          setActionError("This sign-in action changed. Reopen the setup request.");
-          return;
-        }
-        await runAction(async () => {
-          const context = actionContext(workspaceId, plan);
-          const exact = { expectedRevision: plan.revision, actionId: action.actionId, actionNonce: action.actionNonce };
-          const flow = await startChangePlanProviderOAuth(plan.planId, context, exact);
-          globalThis.open?.(flow.verificationUrl, "_blank", "noopener,noreferrer");
-          let pollAfterMs = flow.pollAfterMs;
-          for (;;) {
-            await new Promise((resolve) => globalThis.setTimeout(resolve, Math.max(1_000, pollAfterMs)));
-            const result = await pollChangePlanProviderOAuth(plan.planId, context, { ...exact, flowId: flow.flowId });
-            if (result.status === "pending") {
-              pollAfterMs = result.retryAfterMs ?? flow.pollAfterMs;
-              continue;
-            }
-            if (result.status !== "connected") {
-              throw new Error(result.error ?? `Provider sign-in ${result.status}. Start it again.`);
-            }
-            return await completeChangePlanProviderOAuth(plan.planId, context, exact);
-          }
-        });
-      }}
+      onContinueOAuth={control.continueProviderSignIn}
       onOpenApproval={(plan) => {
         const action = plan.requiredAction;
         if (action?.kind !== "approval" || !action.approvalId) {

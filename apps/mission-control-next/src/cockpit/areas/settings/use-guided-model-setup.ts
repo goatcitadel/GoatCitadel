@@ -18,6 +18,7 @@ import {
   supportedGuidedThinkingLevels,
   withAddableBuiltinProviders,
 } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
+import { runProviderSignIn } from "./guided-provider-sign-in";
 
 export const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
   "completed",
@@ -85,6 +86,8 @@ export function useGuidedModelSetup({
   // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
   const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
+  // The running provider sign-in poll, if any; aborted on close, unmount and workspace change.
+  const signInRef = useRef<AbortController | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
   const [activePlans, setActivePlans] = useState<ChangePlanRecord[]>([]);
@@ -92,6 +95,7 @@ export function useGuidedModelSetup({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [recheckingEndpoint, setRecheckingEndpoint] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
 
   const selectedProvider = useMemo(
     () => providers.find((provider) => provider.providerId === providerId) ?? null,
@@ -163,6 +167,7 @@ export function useGuidedModelSetup({
     const generation = ++planLoadGeneration.current;
     busyRef.current = false;
     setBusy(false);
+    setSigningIn(false);
     setActionError(null);
     setLatestPlan(null);
     setActivePlans([]);
@@ -187,6 +192,8 @@ export function useGuidedModelSetup({
     return () => {
       cancelled = true;
       planLoadGeneration.current += 1;
+      signInRef.current?.abort();
+      signInRef.current = null;
     };
   }, [workspaceId]);
 
@@ -243,6 +250,41 @@ export function useGuidedModelSetup({
     },
     [recordPlan],
   );
+
+  const continueProviderSignIn = useCallback(
+    async (plan: ChangePlanRecord) => {
+      if (plan.requiredAction?.kind !== "oauth" || plan.request.kind !== "provider_connection") {
+        setActionError("This sign-in action changed. Reopen the setup request.");
+        return;
+      }
+      await runAction(async () => {
+        const controller = new AbortController();
+        signInRef.current = controller;
+        setSigningIn(true);
+        try {
+          return await runProviderSignIn(plan, workspaceId, controller.signal);
+        } finally {
+          if (signInRef.current === controller) {
+            signInRef.current = null;
+            setSigningIn(false);
+          }
+        }
+      });
+    },
+    [runAction, workspaceId],
+  );
+  /** Stops a running sign-in poll and releases the busy state it held; a no-op when none runs. */
+  const cancelProviderSignIn = useCallback(() => {
+    const controller = signInRef.current;
+    if (!controller) return;
+    signInRef.current = null;
+    controller.abort();
+    // Discards the cancelled run's late result or error.
+    planLoadGeneration.current += 1;
+    busyRef.current = false;
+    setBusy(false);
+    setSigningIn(false);
+  }, []);
 
   const pendingSetupPlan = pendingPlanForSelection(
     [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
@@ -343,12 +385,16 @@ export function useGuidedModelSetup({
     defaultPlanCompleted,
     progress,
     busy,
+    /** True while a provider sign-in polls; the review dialog stays dismissible so the user can stop it. */
+    signingIn,
     actionError,
     setActionError,
     latestPlan,
     dialogPlan,
     setDialogPlan,
     runAction,
+    continueProviderSignIn,
+    cancelProviderSignIn,
     createProviderPlan,
     cancelPlan,
     primary,
