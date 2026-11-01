@@ -284,4 +284,79 @@ describe("runErrandLoop", () => {
     expect(browser.captureForModel).toHaveBeenCalledTimes(2);
     expect(deps.callModel).not.toHaveBeenCalled();
   });
+
+  it("refuses a risky batch with several click or key actions and asks for the risky one on its own", async () => {
+    const batch = toolReply("computer", {
+      actions: [
+        { type: "click", x: 1, y: 1, button: "left" },
+        { type: "type", text: "hi" },
+        { type: "keypress", keys: ["Enter"] },
+      ],
+      about_to: "Send the message",
+      risk: "send",
+    });
+    const single = toolReply(
+      "computer",
+      { actions: [{ type: "keypress", keys: ["Enter"] }], about_to: "Send the message", risk: "send" },
+      "call_2",
+    );
+    const { deps, ran, requests } = makeDeps([batch, single, textReply("sent")]);
+    const outcome = await runErrandLoop(deps, { goal: "x" });
+    const first = requests[1]!.messages.find((m) => m.role === "tool")!;
+    const text = String((first.content as Array<Record<string, unknown>>)[0]!.text);
+    expect(text).toContain(
+      "Send the risky action in its own computer call so it can be shown to the user before it runs.",
+    );
+    expect(first.content as unknown[]).toHaveLength(2);
+    expect(deps.requestApproval).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.requestApproval).mock.calls[0]![0].category).toBe("send");
+    expect(ran.map((a) => a.type)).toEqual(["keypress"]);
+    expect(outcome.steps).toBe(2);
+  });
+
+  it("spends a step on an empty reply and continues", async () => {
+    const empty: ChatCompletionResponse = { choices: [{ index: 0, message: { role: "assistant", content: "" } }] };
+    const { deps, requests } = makeDeps([empty, textReply("answer")]);
+    const outcome = await runErrandLoop(deps, { goal: "x" });
+    expect(outcome.status).toBe("done");
+    expect(outcome.steps).toBe(1);
+    expect(outcome.modelRequests).toBe(2);
+    const last = requests[1]!.messages.at(-1)!;
+    expect(last.role).toBe("user");
+    expect(JSON.stringify(last.content)).toContain("Reply with a computer or hand_over call, or a final answer.");
+  });
+
+  it("keeps only the 3 most recent screenshots and keeps tool calls paired", async () => {
+    const replies = [1, 2, 3, 4, 5, 6].map((n) =>
+      toolReply("computer", { actions: [{ type: "wait" }], about_to: "wait" }, "call_" + n),
+    );
+    const { deps, requests } = makeDeps([...replies, textReply("ok")]);
+    await runErrandLoop(deps, { goal: "x" });
+    const last = requests.at(-1)!;
+    const images = last.messages.flatMap((m) =>
+      Array.isArray(m.content) ? m.content.filter((part) => part.type === "input_image") : [],
+    );
+    expect(images).toHaveLength(3);
+    const calls = last.messages.flatMap((m) =>
+      ((m as unknown as { tool_calls?: Array<{ id: string }> }).tool_calls ?? []).map((c) => c.id),
+    );
+    const results = last.messages.filter((m) => m.role === "tool").map((m) => m.tool_call_id);
+    expect(results).toEqual(calls);
+    expect(calls).toHaveLength(6);
+  });
+
+  it("does not run an approved action when the signal aborts during the approval wait", async () => {
+    const controller = new AbortController();
+    const { deps, browser, ran } = makeDeps([click()], {
+      signal: controller.signal,
+      requestApproval: vi.fn(async () => {
+        controller.abort();
+        return "approved" as const;
+      }),
+    });
+    browser.describeTarget.mockResolvedValue(target({ text: "Place your order" }));
+    const outcome = await runErrandLoop(deps, { goal: "buy" });
+    expect(ran).toHaveLength(0);
+    expect(outcome.status).toBe("stopped");
+  });
 });

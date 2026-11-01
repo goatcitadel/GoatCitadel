@@ -169,6 +169,33 @@ function carriesDeclaredRisk(action: ComputerAction): boolean {
   return action.type === "click" || action.type === "double_click" || action.type === "keypress";
 }
 
+const MAX_MODEL_SCREENSHOTS = 3;
+
+/** Returns a copy of the history that keeps only the most recent screenshots; stored history is untouched. */
+function withRecentScreenshots(messages: ChatCompletionMessage[]): ChatCompletionMessage[] {
+  let remaining = MAX_MODEL_SCREENSHOTS;
+  const trimmed = [...messages];
+  for (let i = trimmed.length - 1; i >= 0; i -= 1) {
+    const message = trimmed[i]!;
+    if (!Array.isArray(message.content)) {
+      continue;
+    }
+    const content = [...message.content];
+    for (let j = content.length - 1; j >= 0; j -= 1) {
+      if (content[j]!.type !== "input_image") {
+        continue;
+      }
+      if (remaining > 0) {
+        remaining -= 1;
+      } else {
+        content[j] = { type: "input_text", text: "(earlier screenshot omitted)" };
+      }
+    }
+    trimmed[i] = { ...message, content };
+  }
+  return trimmed;
+}
+
 export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string }): Promise<ErrandOutcome> {
   const { browser, signal } = deps;
   const startedAt = deps.now();
@@ -247,7 +274,7 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
       const response = await deps.callModel({
         providerId: ERRAND_DEFAULT_PROVIDER_ID,
         model: ERRAND_DEFAULT_MODEL,
-        messages,
+        messages: withRecentScreenshots(messages),
         tools: ERRAND_TOOLS,
         memory: { enabled: false, mode: "off" },
         stream: false,
@@ -261,7 +288,16 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
       if (calls.length === 0) {
         const answer = text.trim();
         if (!answer) {
-          return await finish("failed", "The model returned no answer and no action.");
+          // Spend the step and nudge the model; the step limit still caps this.
+          steps += 1;
+          messages.push({
+            role: "user",
+            content: imageContent(
+              "Reply with a computer or hand_over call, or a final answer.",
+              await captureForModel(),
+            ),
+          });
+          continue;
         }
         return await finish("done", answer, answer);
       }
@@ -353,10 +389,17 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
       return imageContent(`Nothing was run. ${errors.join(" ")}`, await captureForModel());
     }
     const aboutTo = typeof parsed.about_to === "string" ? parsed.about_to.trim() : "";
-    let declared: ErrandRiskCategory | undefined =
+    const declaredRisk: ErrandRiskCategory | undefined =
       parsed.risk === "spend" || parsed.risk === "send" || parsed.risk === "delete" || parsed.risk === "settings"
         ? parsed.risk
         : undefined;
+    if (declaredRisk && actions.filter(carriesDeclaredRisk).length > 1) {
+      return imageContent(
+        "Nothing was run. You marked this step as risky. Send the risky action in its own computer call so it can be shown to the user before it runs.",
+        await captureForModel(),
+      );
+    }
+    let declared: ErrandRiskCategory | undefined = declaredRisk;
     deps.onProgress({ step, text: aboutTo || "Working on the page" });
 
     let terminal: StopErrand | null = null;
@@ -394,7 +437,7 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
 
       if (verdict.kind === "handover") {
         const answer = await paused(() => deps.waitForHandBack("sign_in"));
-        if (answer === "stopped") {
+        if (answer === "stopped" || signal.aborted) {
           terminal = new StopErrand("stopped", "The operator stopped the errand.");
         } else {
           handedBack = true;
@@ -414,6 +457,10 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
             peopleScreenshotPng: await browser.captureForPeople(),
           }),
         );
+        if (signal.aborted) {
+          terminal = new StopErrand("stopped", "The errand was stopped.");
+          return "halt";
+        }
         if (answer !== "approved") {
           const status: TerminalStatus = answer === "denied" ? "declined" : answer;
           const summary =
