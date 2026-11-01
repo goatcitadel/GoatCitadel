@@ -192,6 +192,27 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
     expect(tools().open).toBe(false);
   });
 
+  it("keeps a completed research turn's list folded when it read other pages past a failed one", () => {
+    const web = (toolName: string, status: string, error?: string) =>
+      ({ ...toolRun({}), toolRunId: `${toolName}-${status}`, toolName, status, error }) as ChatToolRunRecord;
+    const failedRead = web("browser.navigate", "failed", "remote site blocked automation (automation block 403)");
+    const skippedHost = web("browser.navigate", "blocked", "execution skipped: host was already blocked");
+    const read = web("browser.navigate", "executed");
+    const search = web("browser.search", "executed");
+
+    render(turnWith([search, failedRead, skippedHost, read]));
+    expect(tools().open).toBe(false);
+
+    // With no page read, or while the turn still runs, or for a switched-off tool group, the list opens.
+    render(turnWith([search, failedRead]));
+    expect(tools().open).toBe(true);
+    const running = { ...turnWith([search, failedRead, read]), trace: { status: "running" } };
+    render(running as unknown as ChatThreadTurnRecord);
+    expect(tools().open).toBe(true);
+    render(turnWith([web("browser.navigate", "blocked", "blocked: tool group switched off"), read]));
+    expect(tools().open).toBe(true);
+  });
+
   it("leaves the list folded for a Code Mode request the card above reports", () => {
     const request = { ...toolRun({}), toolName: "code_mode.request", args: { goal: "read a file" } };
     // A turn parked on the request: the card asks, so the list does not open beside it.
@@ -277,6 +298,26 @@ describe("ChatTurnDetails tool rows", () => {
       render(turnWith([{ ...failed }]));
       expect(row().textContent).toContain("Recorded error");
       expect(row().textContent).toContain(error);
+    } finally {
+      preferences.showTechnicalDetails = false;
+    }
+  });
+
+  it("keeps the uncertain-effect line off search and page-read rows, under technical details", () => {
+    const uncertain = (toolName: string) =>
+      ({ ...toolRun({}), toolRunId: toolName, toolName, effectOutcomeKind: "uncertain" }) as ChatToolRunRecord;
+    const row = (id: string) => container.querySelector(`[data-tool-run-id="${id}"]`)!;
+    const turn = () => turnWith([uncertain("browser.search"), uncertain("browser.navigate"), uncertain("shell.exec")]);
+
+    render(turn());
+    expect(row("browser.search").textContent).not.toContain("Automatic replay is suppressed.");
+    expect(row("browser.navigate").textContent).not.toContain("Automatic replay is suppressed.");
+    // A tool that can change things keeps the line on its row.
+    expect(row("shell.exec").textContent).toContain("Automatic replay is suppressed.");
+    preferences.showTechnicalDetails = true;
+    try {
+      render(turn());
+      expect(row("browser.search").textContent).toContain("Automatic replay is suppressed.");
     } finally {
       preferences.showTechnicalDetails = false;
     }

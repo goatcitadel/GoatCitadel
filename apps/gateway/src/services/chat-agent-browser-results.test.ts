@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildBrowserFallbackChainEntry, normalizeBrowserToolResult } from "./chat-agent-browser-results.js";
+import {
+  buildBrowserFallbackChainEntry,
+  classifyBrowserToolResult,
+  normalizeBrowserToolResult,
+} from "./chat-agent-browser-results.js";
 
 const BUILTIN = { engineTier: "builtin", engineLabel: "Built-in browser" };
 
@@ -25,5 +29,36 @@ describe("browser engine labels", () => {
 
     expect(normalized).toMatchObject(BUILTIN);
     expect(entry).toMatchObject(BUILTIN);
+  });
+});
+
+describe("remote block detection", () => {
+  const article = `Why Americans Are Working Less. ${"Average weekly hours fell for full-time employees. ".repeat(60)}`;
+
+  it("reads a full article as content even when its footer mentions reCAPTCHA", () => {
+    const result = {
+      url: "https://www.gallup.com/workplace/658235/why-americans-working-less.aspx",
+      title: "Why Americans Are Working Less",
+      status: 200,
+      textSnippet: `${article}\n\nThis site is protected by reCAPTCHA and the Google Privacy Policy and Terms of Service apply.`,
+    };
+
+    expect(classifyBrowserToolResult("browser.navigate", result)).toEqual({});
+  });
+
+  it("still blocks a short challenge page, and a long page whose title is the challenge", () => {
+    const challenge = {
+      url: "https://example.com/a",
+      title: "Verify you are human",
+      status: 200,
+      textSnippet: "Please complete the captcha below to continue.",
+    };
+    const titled = { url: "https://example.com/b", title: "Just a moment...", status: 200, textSnippet: article };
+
+    expect(classifyBrowserToolResult("browser.navigate", challenge)).toEqual({
+      failureClass: "remote_blocked",
+      error: "remote site blocked automation (captcha challenge 200)",
+    });
+    expect(classifyBrowserToolResult("browser.navigate", titled)).toMatchObject({ failureClass: "remote_blocked" });
   });
 });

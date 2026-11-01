@@ -80,6 +80,26 @@ function toolRunSummaryText(tool: ChatToolRunRecord): string {
   );
 }
 
+const WEB_PAGE_READ_TOOL_NAMES = new Set(["browser.navigate", "browser.extract", "http.get"]);
+
+/**
+ * The Gateway records every browser call's effect as uncertain, because a signed-in browser could act on a site,
+ * and that keeps automatic replay off. On a search or page read the line would repeat on every row, so it moves
+ * under technical details there; any other tool's uncertain effect stays on its row.
+ */
+const isQuietWebLookupEffect = (tool: ChatToolRunRecord, tone: "none" | "uncertain" | "concrete"): boolean =>
+  tone === "uncertain" && (tool.toolName === "browser.search" || WEB_PAGE_READ_TOOL_NAMES.has(tool.toolName));
+
+/**
+ * A web lookup that failed, or was skipped, in a turn that still read another page. A switched-off tool group
+ * is a switch the operator can turn back on, so it still opens the list.
+ */
+const isRecoveredWebRead = (tool: ChatToolRunRecord, toolRuns: readonly ChatToolRunRecord[]): boolean =>
+  (tool.toolName.startsWith("browser.") || tool.toolName.startsWith("http.")) &&
+  (tool.status === "failed" || tool.status === "blocked") &&
+  !/tool group switched off/i.test(tool.error ?? "") &&
+  toolRuns.some((run) => run !== tool && run.status === "executed" && WEB_PAGE_READ_TOOL_NAMES.has(run.toolName));
+
 /** The failed tries before a tool's latest one: folded under its row, never dropped. */
 /** What a call touched, after its name. The leading space keeps name and target apart for screen readers too. */
 function ToolTarget({ target }: { target: ToolRunTarget }) {
@@ -189,11 +209,16 @@ export function ChatTurnDetails({
       (tool) => isCodeModeRequest(tool) && (tool.status === "approval_required" || tool.status === "started"),
     );
   const onlyCodeModeCard = !streaming && turn.toolRuns.length === 1 && turn.toolRuns.every(isCodeModeRequest);
+  // A completed turn that read other pages already worked around a page it could not open and says so in its
+  // answer, so those rows stay folded below it instead of pushing the answer away from the composer.
+  const turnCompleted = !turnLive && turn.trace.status === "completed";
   const toolDisclosure = useAutoOpenDisclosure(
     (turnLive && !parkedOnCodeModeCard && !onlyCodeModeCard) ||
       turn.toolRuns.some(
         (tool) =>
-          !isCodeModeRequest(tool) && (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal),
+          !isCodeModeRequest(tool) &&
+          (tool.status !== "executed" || getChatToolRunDiagnostics(tool).hasFailureSignal) &&
+          !(turnCompleted && isRecoveredWebRead(tool, turn.toolRuns)),
       ),
     { closeWhenSettled: true },
   );
@@ -290,12 +315,17 @@ export function ChatTurnDetails({
                       </TechnicalDetails>
                     </div>
                   ) : null}
-                  {effect ? <p className="w-full">{effect.plainSummary}</p> : null}
+                  {effect && !isQuietWebLookupEffect(tool, effect.tone) ? (
+                    <p className="w-full">{effect.plainSummary}</p>
+                  ) : null}
                   {/* The row names the tool; its registry name stays reachable for technical review. */}
                   {showTechnicalDetails ? (
                     <div className="w-full">
                       <TechnicalDetails>
                         <p className="break-all font-mono text-xs">Tool {tool.toolName}</p>
+                        {effect && isQuietWebLookupEffect(tool, effect.tone) ? (
+                          <p className="text-xs">{effect.plainSummary}</p>
+                        ) : null}
                       </TechnicalDetails>
                     </div>
                   ) : null}
