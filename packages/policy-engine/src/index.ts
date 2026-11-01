@@ -40,6 +40,7 @@ export {
   type BrowserEgressProxyOptions,
 } from "./browser-egress-proxy.js";
 export * from "./errand-browser/errand-browser.js";
+export * from "./errand-browser/errand-overlay.js";
 export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
 export type { FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";

@@ -9,6 +9,7 @@ import {
   isMissingPlaywrightBrowserError,
   loadPlaywright,
 } from "../playwright-runtime.js";
+import { createErrandOverlay, type ErrandOverlay } from "./errand-overlay.js";
 
 export type ErrandBrowserLaunchErrorCode = "profile_locked" | "chrome_missing" | "launch_failed";
 
@@ -37,14 +38,16 @@ export interface ErrandBrowserLaunchOptions {
 export interface ErrandBrowser {
   page(): Page;
   currentUrl(): string;
-  /** A PNG of the page for the model. The errand overlay is hidden for this capture (wired in a later task). */
+  /** A PNG of the page for the model. GoatCitadel's overlay is hidden for this capture, so the model sees the page. */
   captureForModel(): Promise<Buffer>;
-  /** A PNG of the page as the operator sees it. */
+  /** A PNG of the page as the operator sees it, overlay included. */
   captureForPeople(): Promise<Buffer>;
   isClosed(): boolean;
   /** Registers a listener for the browser going away; returns an unsubscribe function. */
   onClosed(listener: () => void): () => void;
   close(): Promise<void>;
+  /** The banner, cursor and approval card GoatCitadel draws over the page, out of the page's reach. */
+  overlay: ErrandOverlay;
 }
 
 const VIEWPORT = { width: 1280, height: 800 } as const;
@@ -78,7 +81,7 @@ export async function launchErrandBrowser(options: ErrandBrowserLaunchOptions): 
     });
     await installBrowserRequestGuards(context, [options.networkAllowlist]);
     const firstPage = context.pages()[0] ?? (await context.newPage());
-    return createErrandBrowser(context, firstPage, egress, releaseLock);
+    return await createErrandBrowser(context, firstPage, egress, releaseLock);
   } catch (error) {
     await context?.close().catch(() => undefined);
     await egress?.close().catch(() => undefined);
@@ -202,13 +205,14 @@ function classifyLaunchError(error: unknown, channel: string | undefined): Erran
   });
 }
 
-function createErrandBrowser(
+async function createErrandBrowser(
   context: BrowserContext,
   firstPage: Page,
   egress: BrowserEgressProxy,
   releaseLock: () => void,
-): ErrandBrowser {
+): Promise<ErrandBrowser> {
   let activePage = firstPage;
+  const overlay = createErrandOverlay(() => activePage);
   let closed = false;
   const listeners = new Set<() => void>();
 
@@ -235,6 +239,7 @@ function createErrandBrowser(
   });
   context.on("page", (page) => {
     page.on("close", () => onPageClosed(page));
+    void overlay.attach(page).catch(() => undefined);
   });
   firstPage.on("close", () => onPageClosed(firstPage));
 
@@ -271,12 +276,15 @@ function createErrandBrowser(
     return activePage.screenshot({ type: "png" });
   }
 
+  await overlay.attach(firstPage);
+
   return {
+    overlay,
     page: () => activePage,
     currentUrl: () => (activePage.isClosed() ? "" : activePage.url()),
     async captureForModel() {
-      // Hook point: the errand overlay is hidden here before the capture and restored after it (wired in Task 2).
-      return screenshot();
+      await ensureWindowVisible();
+      return overlay.withOverlayHidden(() => activePage.screenshot({ type: "png" }));
     },
     captureForPeople: () => screenshot(),
     isClosed: () => closed,
