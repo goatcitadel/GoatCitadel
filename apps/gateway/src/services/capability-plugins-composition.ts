@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   NotFoundError,
   redactStructuredSecrets,
+  type ApprovalRequest,
   type DeploymentProfile,
   type ToolGroupId,
   type ToolPolicyConfig,
@@ -28,6 +29,7 @@ import {
 import { pluginUninstallSources } from "./capability-plugin-uninstall-composition.js";
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
 import type { PluginUninstallRevokeInput, PluginUninstallRevokeOutcome } from "./capability-skill-actions-service.js";
+import type { CapabilitySkillsOwners } from "./capability-skills-composition.js";
 import { lookUpHostAddresses } from "./hardened-git.js";
 import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
@@ -81,6 +83,11 @@ export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
    * the plugin switched on, and never asks Skill Hub or approves anything itself.
    */
   revokeSkill(input: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome>;
+  /**
+   * The Inbox's owner: one approval, to tell whether a skill's removal still waits for it, and the waiting approvals,
+   * page by page, where a skill's own step left waiting is found.
+   */
+  approvals: CapabilitySkillsOwners["approvals"];
 }
 
 /** Where plugins live on this install. Snapshots and their temp copies share a volume, since a snapshot is renamed in. */
@@ -119,7 +126,7 @@ export interface CapabilityPlugins {
  * every write either plan makes reaches the tool-group holds as an inspection's does.
  */
 export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): CapabilityPlugins {
-  const { config, mcp, settings, skillHub, records, policy, plans, keychain, changePlanAdapters } = owners;
+  const { config, mcp, settings, skillHub, records, policy, plans, keychain, changePlanAdapters, approvals } = owners;
   const paths = pluginDataPaths(config);
   const snapshots = new PluginSnapshotStore(paths.snapshots);
   const store = new CapabilityPluginStore(records.systemSettings);
@@ -161,16 +168,29 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
       pluginUninstallSources(
         {
           ...shared,
+          listPlugins: () => store.list(),
           removePlugin: (pluginId, remember) => store.remove(pluginId, remember),
           readSkillChecks,
           revokeSkill: (input) => owners.revokeSkill(input),
+          connectorTemplates: () => MCP_SERVER_TEMPLATES,
+          listPendingApprovals: (input) => approvals.listApprovalsPage(input),
           reportExportFileKept: reportKeptExportFile,
+          reportUndecidedSecrets,
         },
         { ...owners, rootDir: config.rootDir },
       ),
     ),
   );
-  const actions = new CapabilityPluginActionsService(pluginActionSources(shared, owners));
+  // Where an approval stands; one that can't be read answers undefined, and no one is sent to it.
+  const readApprovalStatus = async (approvalId: string): Promise<ApprovalRequest["status"] | undefined> => {
+    try {
+      return (await approvals.getApproval(approvalId)).status;
+    } catch (error) {
+      reportFailedRead("approval", error);
+      return undefined;
+    }
+  };
+  const actions = new CapabilityPluginActionsService({ ...pluginActionSources(shared, owners), readApprovalStatus });
   const inspection = new CapabilityPluginInspectionService({
     fetchSource: (source) =>
       fetchPluginSource(source, {
@@ -217,6 +237,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     readSkillChecks,
     readInstallPlanStatus: async (workspaceId, planId, actorId) =>
       (await plans.get({ workspaceId, actorId, surface: "capabilities" }, planId)).status,
+    readApprovalStatus,
     readManifest: (treeSha256) => shared.readManifest(treeSha256),
     readSnapshotText: (treeSha256, relativePath) => shared.readSnapshotText(treeSha256, relativePath),
     inspect: (input) => inspection.inspect(input),
@@ -380,12 +401,25 @@ function reportKeptExportFile(packId: string, error: unknown): void {
   });
 }
 
+/** An uninstall that couldn't tell which stored secrets are in use kept them: logged by plugin and reference. */
+function reportUndecidedSecrets(pluginId: string, secretRefs: readonly string[], error: unknown): void {
+  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+  log.error("a plugin uninstall kept its stored signing secrets, as it couldn't tell whether a hook still uses them", {
+    pluginId,
+    secretRefs: [...secretRefs],
+    err: redactStructuredSecrets(diagnostic).value,
+  });
+}
+
 /** A signing secret that couldn't be deleted is logged by its reference, so it can be found and removed. */
 function reportKeptSecrets(error: unknown): void {
   const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
-  log.error("a plugin plan kept stored signing secrets, as it couldn't tell whether a hook still uses them", {
-    err: redactStructuredSecrets(diagnostic).value,
-  });
+  log.error(
+    "a plugin install plan ended unapplied, and its stored signing secrets were kept: its record can't be read",
+    {
+      err: redactStructuredSecrets(diagnostic).value,
+    },
+  );
 }
 
 function reportFailedSecretDelete(secretRef: string, error: unknown): void {

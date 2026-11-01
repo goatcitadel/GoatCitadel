@@ -349,9 +349,24 @@ describe("CapabilityPluginInspectionService", () => {
   it.each<[string, Partial<PluginSkillCheck>, string, string]>([
     [
       "removed with an earlier install",
-      { installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"] } },
+      {
+        revoked: true,
+        installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"] },
+      },
       "SOURCE_ALREADY_INSTALLED",
       "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+    ],
+    [
+      "left by an earlier install, with nothing of it running",
+      { installInactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED"] } },
+      "SOURCE_ALREADY_INSTALLED",
+      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+    ],
+    [
+      "installed by an earlier install and still running, not revoked",
+      { installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"] } },
+      "RUNTIME_ALREADY_EXISTS",
+      "A skill with this name is already installed.",
     ],
     [
       "revoked, with only its name left installed",

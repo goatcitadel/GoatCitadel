@@ -1,6 +1,7 @@
 import {
   ConflictError,
   GoatError,
+  type ApprovalRequest,
   NotFoundError,
   ServiceUnavailableError,
   ValidationError,
@@ -22,17 +23,16 @@ import {
 import {
   PLUGIN_IN_OTHER_WORKSPACE_MESSAGE,
   PLUGIN_NOT_INSTALLED_MESSAGE,
+  UNINSTALL_ANSWER_GONE_MESSAGE,
+  UNINSTALL_CHANGE_PLANS_OFF_MESSAGE,
 } from "./plugin-uninstall-change-plan-adapter.js";
 import { isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 
 const MAX_SECRET_LENGTH = 512;
 const CHANGE_PLANS_OFF_MESSAGE = "Installing plugins needs Change Plans, which are off on this install.";
-const UNINSTALL_CHANGE_PLANS_OFF_MESSAGE = "Uninstalling plugins needs Change Plans, which are off on this install.";
 const WORKSPACE_MISSING_MESSAGE = "That workspace isn't on this install.";
 const ANSWER_GONE_MESSAGE =
   "This install's first answer is no longer kept, so it can't be sent again. Install the plugin again.";
-const UNINSTALL_ANSWER_GONE_MESSAGE =
-  "This uninstall's first answer is no longer kept, so it can't be sent again. Uninstall the plugin again.";
 const MISSING_SECRET_MESSAGE = "Every hook needs its own signing secret.";
 const EXTRA_SECRET_MESSAGE = "Only a hook takes a signing secret.";
 const SECRET_SHAPE_MESSAGE = "A signing secret is 1 to 512 characters, with no space at either end.";
@@ -78,6 +78,8 @@ export interface CapabilityPluginActionSources {
   storeHookSecret(value: string): string;
   /** Deletes a secret this install stored. It reports its own failure and never throws. */
   deleteHookSecret(secretRef: string): void;
+  /** Where an approval stands; undefined when it can't be read. */
+  readApprovalStatus(approvalId: string): Promise<ApprovalRequest["status"] | undefined>;
 }
 
 export interface CapabilityPluginInstallInput {
@@ -247,7 +249,8 @@ export class CapabilityPluginActionsService {
 
   /**
    * An uninstall that finished is `applied` once the plugin is gone. While its record is left, a skill's removal still
-   * waits: `waiting`, with the approval that skill waits for when there is one.
+   * waits: `waiting`, with the approval that skill waits for only while that approval still waits (one already approved
+   * is being applied, and the Inbox has nothing left to approve).
    */
   private async uninstallOutcomeOf(
     plan: ChangePlanRecord,
@@ -257,7 +260,14 @@ export class CapabilityPluginActionsService {
     if (outcome.outcome !== "applied") return outcome;
     const left = await this.sources.readPlugin(request.pluginId);
     if (left?.installPlanId !== request.installPlanId) return outcome;
-    const approvalId = left.pieces.find((piece) => piece.waiting)?.waiting?.approvalId;
+    let approvalId: string | undefined;
+    for (const piece of left.pieces) {
+      const waitingFor = piece.waiting?.approvalId;
+      if (waitingFor && (await this.sources.readApprovalStatus(waitingFor)) === "pending") {
+        approvalId = waitingFor;
+        break;
+      }
+    }
     return { planId: plan.planId, outcome: "waiting", ...(approvalId ? { approvalId } : {}), summary: outcome.summary };
   }
 }

@@ -7,6 +7,7 @@ import {
   createMcpServer,
   deleteMcpServer,
   disconnectMcpServer,
+  releaseMcpServerFromPlugin,
   resolveConnectedMcpTools,
   startMcpOAuth,
   updateMcpServer,
@@ -916,6 +917,37 @@ describe("mcp-server-admin-service", () => {
     expect(host.servers.map((server) => server.serverId)).toEqual(["plain-server"]);
     // Removing a server nobody added is unchanged.
     await expect(deleteMcpServer(host, "plain-server")).resolves.toEqual({ deleted: true });
+  });
+
+  it("hands a plugin's connector to the operator only with that plugin's own pass, changing nothing else", async () => {
+    const pluginOwner = { pluginId: "meeting-tools", name: "Meeting tools", installPlanId: "plan-install-1" };
+    const pass = { pluginId: pluginOwner.pluginId, installPlanId: pluginOwner.installPlanId };
+    const serverId = "plugin-server";
+    const host = createHost({
+      servers: [createServer({ serverId, label: "Linear", enabled: true, pluginOwner })],
+    });
+    const saved = () => host.servers.find((server) => server.serverId === serverId)!;
+    const before = saved();
+    const writes = host.writeMcpServers.mock.calls.length;
+
+    for (const wrongPass of [undefined, { ...pass, pluginId: "other" }, { ...pass, installPlanId: "x" }]) {
+      await expect(releaseMcpServerFromPlugin(host, serverId, wrongPass as never)).rejects.toMatchObject({
+        name: "PluginOwnedError",
+        httpStatus: 409,
+      });
+    }
+    expect(host.writeMcpServers.mock.calls.length).toBe(writes);
+    expect(saved()).toEqual(before);
+
+    const released = await releaseMcpServerFromPlugin(host, serverId, pass);
+
+    expect(released.pluginOwner).toBeUndefined();
+    const { pluginOwner: _mark, updatedAt: _updatedAt, ...unchanged } = before;
+    expect(saved()).toMatchObject(unchanged);
+    expect(saved()).not.toHaveProperty("pluginOwner");
+    // Now the operator's own: a plain edit and a plain delete go through.
+    await expect(updateMcpServer(host, serverId, { label: "Renamed" })).resolves.toMatchObject({ label: "Renamed" });
+    await expect(deleteMcpServer(host, serverId)).resolves.toEqual({ deleted: true });
   });
 
   it("deletes servers, tools, approval inbox entries, and emits realtime only when present", async () => {

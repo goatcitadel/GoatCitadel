@@ -80,7 +80,8 @@ export interface CapabilityPluginListItem {
  * - A skill's own steps: `check_passed` (not installed yet), `waiting_for_approval` (`pendingApprovalId`), `installing`
  *   (a step was approved and is being applied, or the install plan is still applying), `installed_off` (installed, not
  *   switched on, so the AI can't use it yet).
- * - `removed`: removed while the plugin is uninstalled. `failed`: its step stopped, or the install stopped before it.
+ * - `removed`: removed while the plugin is uninstalled. `removing`: its removal was approved and is still being
+ *   applied (a skill whose revoke isn't in effect yet). `failed`: its step stopped, or the install stopped before it.
  * - `unknown`: its state can't be read right now. It is never read as added.
  */
 export type CapabilityPluginPieceState =
@@ -91,6 +92,7 @@ export type CapabilityPluginPieceState =
   | "installed_off"
   | "waiting_for_approval"
   | "removed"
+  | "removing"
   | "failed"
   | "unknown";
 

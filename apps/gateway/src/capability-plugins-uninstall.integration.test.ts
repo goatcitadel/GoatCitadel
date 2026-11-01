@@ -249,6 +249,8 @@ describe("uninstalling a plugin over the real Gateway", { timeout: 300_000 }, ()
   });
 
   it("revokes a plugin's switched-on skill without asking, names it after the plugin, and blocks a reinstall", async () => {
+    // A check kept from before the uninstall.
+    const kept = await inspect("reference-plugin");
     await install("reference-plugin");
     const detailUrl = `/api/v1/capabilities/plugins/detail?pluginId=reference-plugin&workspaceId=${WORKSPACE_ID}`;
     const readDetail = async () => (await inject("GET", detailUrl)).json<CapabilityPluginDetail>();
@@ -288,6 +290,13 @@ describe("uninstalling a plugin over the real Gateway", { timeout: 300_000 }, ()
     ).toMatchObject({
       kind: "skill_hub.lifecycle",
       status: "approved",
+    });
+
+    // A check from before the uninstall went with the plugin: it can't install it again past the block.
+    const stale = await inject("POST", INSTALL_URL, { workspaceId: WORKSPACE_ID, inspectionId: kept.inspectionId });
+    expect(stale.statusCode, stale.body).toBe(404);
+    expect(stale.json()).toMatchObject({
+      error: "That plugin check wasn't found, or it ran out of time. Check the plugin again.",
     });
 
     // Checking the same copy again replays the same check, whose skill can't come back yet.

@@ -637,7 +637,7 @@ describe("CapabilitySkillActionsService.revokeForPluginUninstall", () => {
     expect(parts.readApprovalSkipSetting).not.toHaveBeenCalled();
   });
 
-  it("reuses the revoke it already asked for while that one waits, and asks again only once it is gone", async () => {
+  it("reuses the revoke it already asked for while that one waits, and asks again once it is decided or gone", async () => {
     const hardened = vi.fn((): DeploymentProfile => "remote_hardened");
     const waiting = revokeSources({ deploymentProfile: hardened });
     await expect(
@@ -650,17 +650,10 @@ describe("CapabilitySkillActionsService.revokeForPluginUninstall", () => {
     // Never a second revoke while the first still waits, however far back in the approvals it sits.
     expect(waiting.createSkillHubApproval).not.toHaveBeenCalled();
 
-    const approved = revokeSources({ readApproval: vi.fn(async () => approvalRead({ status: "approved" })) });
-    await expect(
-      new CapabilitySkillActionsService(approved).revokeForPluginUninstall({
-        ...revoke,
-        knownApprovalId: "approval-old",
-      }),
-    ).resolves.toEqual({ status: "approved", approvalId: "approval-old" });
-    expect(approved.createSkillHubApproval).not.toHaveBeenCalled();
-    expect(approved.resolveApproval).not.toHaveBeenCalled();
-
+    // Approved, refused or gone: whether an approved one revoked the skill is the uninstall's to read, so Skill Hub's
+    // owner is asked again (and hands back that same approval while nothing about the skill changed).
     for (const gone of [
+      vi.fn(async () => approvalRead({ status: "approved" })),
       vi.fn(async () => approvalRead({ status: "rejected" })),
       vi.fn(async (): Promise<ApprovalRead> => {
         throw new NotFoundError("Approval not found.");

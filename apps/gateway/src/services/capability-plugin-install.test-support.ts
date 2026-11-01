@@ -3,6 +3,7 @@ import { vi, type Mock } from "vitest";
 import {
   ConflictError,
   parsePluginManifest,
+  type ApprovalRequest,
   type CapabilityPluginInspection,
   type CapabilityPluginPieceView,
   type ChangePlanRecord,
@@ -207,6 +208,8 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
     packs: [] as Array<{ packId: string; name: string; sourceLabel: string; content: string; revision: string }>,
     keychain: new Map<string, string>(),
     deletedSecrets: [] as string[],
+    /** Where each approval stands, as the Inbox would read it; one not listed can't be read. */
+    approvalStatuses: new Map<string, ApprovalRequest["status"]>(),
     order: [] as string[],
     failAt: undefined as string | undefined,
   };
@@ -359,6 +362,7 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
     readManifest: (treeSha256) => sources.readManifest(treeSha256),
     storeHookSecret: (value) => storeHookSecret(value),
     deleteHookSecret: (secretRef) => sources.deleteHookSecret(secretRef),
+    readApprovalStatus: async (approvalId) => state.approvalStatuses.get(approvalId),
   });
 
   const pluginRequest = (hookSecretRefs?: Record<string, string>) => ({

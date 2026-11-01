@@ -1,5 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ApprovalRequest, ChangePlanRecord, DeploymentProfile, McpServerRecord } from "@goatcitadel/contracts";
+import type {
+  ApprovalRequest,
+  ChangePlanRecord,
+  DeploymentProfile,
+  HookCreateInput,
+  McpServerRecord,
+} from "@goatcitadel/contracts";
 import {
   CapabilitySkillActionsService,
   OPERATOR_SKILL_SKIP_NOTES,
@@ -18,6 +24,7 @@ import {
 } from "./capability-plugin-install.test-support.js";
 import {
   HOOK_SECRET,
+  REVOKED,
   SKILL_CHECK_ID,
   SKILL_ID,
   pluginUninstallHarness,
@@ -25,6 +32,7 @@ import {
   type PluginUninstallFixture,
 } from "./capability-plugin-uninstall.test-support.js";
 import { isAutoResumeOnApprovalPlan } from "./evolution-control-plane-approval-reconciliation.js";
+import { assertMcpServerRemovalAllowed } from "./plugin-owned-refusal.js";
 
 const harnesses: Array<ReturnType<typeof pluginUninstallHarness>> = [];
 afterEach(() => {
@@ -63,18 +71,57 @@ async function planAwaitsApproval(h: ReturnType<typeof harness>, planId: string)
   return (await h.plans.get(OPERATOR, planId)).status === "awaiting_approval";
 }
 
+/** What an approved revoke's effect does to the skill's check, as Skill Hub's would. */
+type RevokeEffect = (h: ReturnType<typeof harness>, approvalId: string) => void;
+
+/** It revokes the skill. */
+const revokes: RevokeEffect = (h, approvalId) =>
+  h.removal.skillChecks.set(
+    SKILL_CHECK_ID,
+    REVOKED({ revokeApproval: { approvalId, status: "approved", settled: "applied" } }),
+  );
+/** It settles blocked: the skill stays switched on. */
+const blocks: RevokeEffect = (h, approvalId) =>
+  h.removal.skillChecks.set(
+    SKILL_CHECK_ID,
+    skillCheck({ revokeApproval: { approvalId, status: "approved", settled: "blocked" } }),
+  );
+/** It hasn't applied yet. */
+const inFlight: RevokeEffect = (h, approvalId) =>
+  h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ revokeApproval: { approvalId, status: "approved" } }));
+
+/**
+ * A harness whose revoke is the Skills tab's own, over a Skill Hub owner kept in memory. The Inbox reads the same
+ * approvals, and an approved revoke's effect is the tab's `effect`: by default it revokes the skill.
+ */
+function withSkillsTab(profile: DeploymentProfile, fixture: PluginUninstallFixture = {}) {
+  const h = harness({
+    ...fixture,
+    ...(profile === "remote_hardened" ? { profile } : {}),
+    // Called only once the tab below exists.
+    revokeSkill: (input) => tab.revokeSkill(input),
+  });
+  const tab = skillActions(profile, h.state.approvalStatuses, (approvalId) => tab.effect(h, approvalId));
+  return { h, tab };
+}
+
 /**
  * The Skills tab's own revoke over a Skill Hub owner kept in memory: its approval waits until it is resolved, and the
- * profile decides as the Gateway's does.
+ * profile decides as the Gateway's does. Once approved, its effect applies.
  */
-function skillActions(profile: DeploymentProfile = "trusted_local") {
-  const approvals = new Map<string, ApprovalRequest["status"]>();
+function skillActions(
+  profile: DeploymentProfile,
+  approvals: Map<string, ApprovalRequest["status"]>,
+  applyEffect: (approvalId: string) => void,
+) {
   let asked = 0;
+  const approve = (approvalId: string) => {
+    approvals.set(approvalId, "approved");
+    applyEffect(approvalId);
+  };
   const sources = {
     setSkillState: vi.fn(),
-    resolveApproval: vi.fn(async (approvalId: string) => {
-      approvals.set(approvalId, "approved");
-    }),
+    resolveApproval: vi.fn(async (approvalId: string) => approve(approvalId)),
     readApproval: vi.fn(async (approvalId: string) => ({ preview: {}, status: approvals.get(approvalId)! })),
     appendApprovalAudit: vi.fn(async () => undefined),
     deploymentProfile: () => profile,
@@ -93,8 +140,24 @@ function skillActions(profile: DeploymentProfile = "trusted_local") {
   return {
     sources,
     approvals,
+    /** What an approved revoke does to the check; a test changes it. */
+    effect: revokes as RevokeEffect,
+    /** The operator approves a revoke in the Inbox. */
+    approve,
     revokeSkill: (input: Parameters<typeof actions.revokeForPluginUninstall>[0]) =>
       actions.revokeForPluginUninstall(input),
+  };
+}
+
+/** The record with one piece's ref dropped, as an install that stopped before saving it leaves it. */
+function withoutRef(record: StoredPlugin, pieceId: string): StoredPlugin {
+  return {
+    ...record,
+    pieces: record.pieces.map((piece) => {
+      if (piece.pieceId !== pieceId) return piece;
+      const { ref: _ref, ...unnamed } = piece;
+      return unnamed;
+    }),
   };
 }
 
@@ -138,7 +201,15 @@ describe("uninstalling a plugin through one Change Plan", () => {
       ].join(" "),
     );
     // In reverse install order, each through its own owner with the plugin's pass.
-    expect(h.removal.order).toEqual(["hook", "prompt_pack", "connector_disconnect", "connector_delete", "revoke"]);
+    expect(h.removal.order).toEqual([
+      "hook",
+      "prompt_pack",
+      "hold_release",
+      "connector_disconnect",
+      "connector_delete",
+      "revoke",
+      "remove_record",
+    ]);
     expect(h.uninstallSources.deleteHook).toHaveBeenCalledWith(WORKSPACE_ID, "hook-1", {
       pluginId: PLUGIN_ID,
       installPlanId: record.installPlanId,
@@ -242,9 +313,9 @@ describe("uninstalling a plugin through one Change Plan", () => {
   });
 
   it("revokes its skills without asking, except on remote_hardened", async () => {
-    // With the setting on, the plan applies at once and the revoke is approved as the operator, with its note.
-    const local = skillActions("trusted_local");
-    const h = harness({ revokeSkill: local.revokeSkill });
+    // With the setting on, the plan applies at once and the revoke is approved as the operator, with its note. Its
+    // effect lands while the approval resolves, so one pass finishes.
+    const { h, tab: local } = withSkillsTab("trusted_local");
     await installed(h);
 
     await expect(h.uninstall()).resolves.toMatchObject({ outcome: "applied" });
@@ -260,8 +331,7 @@ describe("uninstalling a plugin through one Change Plan", () => {
     await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
 
     // remote_hardened: the plan asks, and so does the revoke; the record stays, with the revoke it waits for.
-    const hardened = skillActions("remote_hardened");
-    const r = harness({ profile: "remote_hardened", revokeSkill: hardened.revokeSkill });
+    const { h: r, tab: hardened } = withSkillsTab("remote_hardened");
     await installed(r);
 
     const waiting = await uninstalled(r, "uninstall-hardened");
@@ -294,12 +364,11 @@ describe("uninstalling a plugin through one Change Plan", () => {
     await expect(r.store.listRemoved()).resolves.toEqual([]);
   });
 
-  it("finishes a waiting one when uninstalled again, never asking for a second revoke", async () => {
-    const hardened = skillActions("remote_hardened");
-    const h = harness({ profile: "remote_hardened", revokeSkill: hardened.revokeSkill });
+  it("finishes a waiting one only once its check reads revoked, never asking for a second revoke", async () => {
+    const { h, tab } = withSkillsTab("remote_hardened");
     await installed(h);
     await uninstalled(h, "first");
-    // Many newer approvals later, the check's own window no longer shows the revoke as waiting.
+    // Many newer approvals later, the check's own window no longer shows the revoke at all.
     h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ pendingApprovals: {} }));
 
     const again = await uninstalled(h, "second");
@@ -314,28 +383,157 @@ describe("uninstalling a plugin through one Change Plan", () => {
         "Then uninstall Meeting tools again to finish.",
       ].join(" "),
     );
-    expect(hardened.sources.createSkillHubApproval).toHaveBeenCalledOnce();
-    expect(hardened.sources.readApproval).toHaveBeenCalledWith("approval-revoke-1");
+    expect(tab.sources.createSkillHubApproval).toHaveBeenCalledOnce();
+    expect(tab.sources.readApproval).toHaveBeenCalledWith("approval-revoke-1");
 
-    // The operator approves the revoke, and its effect revokes the skill.
-    hardened.approvals.set("approval-revoke-1", "approved");
-    h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ revoked: true }));
+    // The operator approves the revoke, and its effect is still being applied: the plugin stays.
+    tab.effect = inFlight;
+    tab.approve("approval-revoke-1");
 
-    const finished = await uninstalled(h, "third");
+    const applying = await uninstalled(h, "third");
+
+    expect(applying.outcome).toBe("waiting");
+    // Nothing is left to approve, so no approval is named.
+    expect(applying).not.toHaveProperty("approvalId");
+    expect(applying.summary).toBe(
+      [
+        "Removed 0 pieces.",
+        "Hosts it allowed stay in your allowlist.",
+        "The skill Meeting notes is still being removed.",
+        "Then uninstall Meeting tools again to finish.",
+      ].join(" "),
+    );
+    const left = await h.store.get(PLUGIN_ID);
+    expect(left?.state).toBe("uninstalling");
+    expect(left?.pieces[0]).toMatchObject({
+      pieceId: "meeting-notes",
+      waiting: { approvalId: "approval-revoke-1", operation: "revoke" },
+    });
+    await expect(h.store.listRemoved()).resolves.toEqual([]);
+
+    // Its effect revokes the skill.
+    revokes(h, "approval-revoke-1");
+
+    const finished = await uninstalled(h, "fourth");
 
     expect(finished).toMatchObject({
       outcome: "applied",
       summary: "Removed 1 piece. Hosts it allowed stay in your allowlist.",
     });
-    expect(hardened.sources.createSkillHubApproval).toHaveBeenCalledOnce();
+    expect(tab.sources.createSkillHubApproval).toHaveBeenCalledOnce();
     await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
     await expect(h.store.listRemoved()).resolves.toMatchObject([{ pluginId: PLUGIN_ID, skillIds: [SKILL_ID] }]);
+  });
+
+  it("keeps the plugin when a revoke's effect didn't take, and asks again when uninstalled again", async () => {
+    const { h, tab } = withSkillsTab("trusted_local");
+    tab.effect = blocks;
+    await installed(h);
+
+    const first = await h.uninstall();
+
+    // Approved, but its effect settled blocked: the skill is still switched on, so the record stays.
+    expect(first).toEqual({
+      planId: expect.any(String),
+      outcome: "waiting",
+      summary: [
+        "Removed 4 pieces.",
+        "Hosts it allowed stay in your allowlist.",
+        "The skill Meeting notes is still being removed.",
+        "Then uninstall Meeting tools again to finish.",
+      ].join(" "),
+    });
+    const left = await h.store.get(PLUGIN_ID);
+    expect(left?.state).toBe("uninstalling");
+    expect(left?.pieces[0]).toMatchObject({
+      pieceId: "meeting-notes",
+      waiting: { approvalId: "approval-revoke-1", operation: "revoke" },
+    });
+    await expect(h.store.listRemoved()).resolves.toEqual([]);
+
+    tab.effect = revokes;
+    const second = await h.uninstall(OPERATOR, "again");
+
+    // The settled one can't revoke it, so a fresh revoke is asked for, and this one takes.
+    expect(second).toMatchObject({
+      outcome: "applied",
+      summary: "Removed 1 piece. Hosts it allowed stay in your allowlist.",
+    });
+    expect(tab.sources.createSkillHubApproval).toHaveBeenCalledTimes(2);
+    expect(tab.sources.resolveApproval).toHaveBeenLastCalledWith("approval-revoke-2", expect.anything());
+    await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
+  });
+
+  it("reads the check again while an approved revoke's effect runs, and keeps the plugin if it never lands", async () => {
+    // The effect lands a moment after the approval resolved: the uninstall still finishes in one pass.
+    const { h, tab } = withSkillsTab("trusted_local");
+    tab.effect = inFlight;
+    await installed(h);
+    let pauses = 0;
+    h.uninstallSources.pause.mockImplementation(async () => {
+      if (++pauses === 2) revokes(h, "approval-revoke-1");
+    });
+
+    await expect(h.uninstall()).resolves.toMatchObject({
+      outcome: "applied",
+      summary: "Removed 5 pieces. Hosts it allowed stay in your allowlist.",
+    });
+    expect(h.uninstallSources.pause.mock.calls).toEqual([[250], [250]]);
+
+    // It never lands while the uninstall reads: the skill is still being removed, and the plugin stays.
+    const { h: slow, tab: slowTab } = withSkillsTab("trusted_local");
+    slowTab.effect = inFlight;
+    await installed(slow);
+
+    await expect(slow.uninstall()).resolves.toMatchObject({
+      outcome: "waiting",
+      summary: [
+        "Removed 4 pieces.",
+        "Hosts it allowed stay in your allowlist.",
+        "The skill Meeting notes is still being removed.",
+        "Then uninstall Meeting tools again to finish.",
+      ].join(" "),
+    });
+    // About ten seconds of reads, a quarter second apart.
+    expect(slow.uninstallSources.pause).toHaveBeenCalledTimes(39);
+    expect(await slow.store.get(PLUGIN_ID)).toMatchObject({ state: "uninstalling" });
+  });
+
+  it("stops plainly when Skill Hub hands back the approved revoke that didn't take, keeping the plugin", async () => {
+    const { h, tab } = withSkillsTab("trusted_local");
+    tab.effect = blocks;
+    await installed(h);
+    await h.uninstall();
+    // Skill Hub matches the fresh ask to the revoke it already approved.
+    tab.sources.createSkillHubApproval.mockImplementationOnce(async () => ({
+      approval: { ...hubApproval("revoke", "approved"), approvalId: "approval-revoke-1" },
+    }));
+
+    const stopped = await h.uninstall(OPERATOR, "again");
+
+    expect(stopped).toMatchObject({
+      outcome: "failed",
+      summary:
+        "Couldn't remove the skill Meeting notes: its removal was approved, but it didn't take effect. " +
+        "Uninstall Meeting tools again to finish.",
+    });
+    expect(await h.plans.get(OPERATOR, stopped.planId)).toMatchObject({
+      status: "manual_required",
+      result: {
+        failureCode: "plugin_uninstall_skills_failed",
+        failureDetail: "Revoke approval approval-revoke-1 settled blocked.",
+      },
+    });
+    expect(tab.sources.resolveApproval).toHaveBeenCalledOnce();
+    expect(await h.store.get(PLUGIN_ID)).toMatchObject({ state: "uninstalling" });
+    await expect(h.store.listRemoved()).resolves.toEqual([]);
   });
 
   it("waits for a skill still taking one of its own steps, so nothing switches it on once the plugin is gone", async () => {
     const h = harness();
     await installed(h);
     // Its switch-on step waits for the operator's approval.
+    h.state.approvalStatuses.set("approval-activate", "pending");
     h.removal.skillChecks.set(
       SKILL_CHECK_ID,
       skillCheck({
@@ -354,8 +552,19 @@ describe("uninstalling a plugin through one Change Plan", () => {
       waiting: { approvalId: "approval-activate", operation: "activate" },
     });
 
-    // Declined: it stays installed and switched off, inert, so the next uninstall removes the plugin.
+    // Many newer approvals later, the check's own window no longer shows it, but the read of every waiting approval
+    // still finds it.
     h.removal.skillChecks.set(SKILL_CHECK_ID, skillCheck({ version: "installed_off", step: "installed_off" }));
+    h.removal.pendingSteps.set(SKILL_CHECK_ID, { approvalId: "approval-activate", operation: "activate" });
+    await expect(h.uninstall(OPERATOR, "window")).resolves.toMatchObject({
+      outcome: "waiting",
+      approvalId: "approval-activate",
+    });
+    expect(h.uninstallSources.listPendingSkillSteps).toHaveBeenLastCalledWith(WORKSPACE_ID, [SKILL_CHECK_ID]);
+
+    // Declined: it stays installed and switched off, inert, so the next uninstall removes the plugin.
+    h.removal.pendingSteps.clear();
+    h.state.approvalStatuses.set("approval-activate", "rejected");
     await expect(h.uninstall(OPERATOR, "again")).resolves.toMatchObject({
       outcome: "applied",
       summary: "Removed 1 piece. Hosts it allowed stay in your allowlist.",
@@ -364,7 +573,7 @@ describe("uninstalling a plugin through one Change Plan", () => {
     await expect(h.store.listRemoved()).resolves.toMatchObject([{ skillIds: [SKILL_ID] }]);
   });
 
-  it("cleans up after a failed install", async () => {
+  it("cleans up after a failed install, counting only what it added", async () => {
     const h = harness();
     // The install stops at its prompt pack: the hook, connector and hold were added, the pack and skill weren't.
     h.state.failAt = "prompt_pack";
@@ -381,9 +590,19 @@ describe("uninstalling a plugin through one Change Plan", () => {
 
     expect(outcome).toMatchObject({
       outcome: "applied",
-      summary: "Removed 4 pieces. Hosts it allowed stay in your allowlist.",
+      summary: "Removed 3 pieces. Hosts it allowed stay in your allowlist.",
     });
-    expect(h.removal.order).toEqual(["hook", "connector_disconnect", "connector_delete"]);
+    // The plan never promises to remove a skill that was never installed, nor warns about installing it again.
+    const plan = await h.plans.get(OPERATOR, outcome.planId);
+    expect(plan.summary).not.toContain("the skill");
+    expect(plan.impact).not.toContain("installed again");
+    expect(h.removal.order).toEqual([
+      "hook",
+      "hold_release",
+      "connector_disconnect",
+      "connector_delete",
+      "remove_record",
+    ]);
     expect(h.uninstallSources.deletePromptPack).not.toHaveBeenCalled();
     expect(h.revokeSkill).not.toHaveBeenCalled();
     expect(h.state.servers).toEqual([]);
@@ -391,44 +610,219 @@ describe("uninstalling a plugin through one Change Plan", () => {
     await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
   });
 
-  it("deletes the secrets of an install that stopped before its hooks, but never one a hook still uses", async () => {
+  it("removes what an install that stopped before its hooks left: its secrets, and a hook it made holding one", async () => {
     for (const orphanHook of [false, true]) {
-      const h = harness();
-      const refs = { "tool-watch": "keychain:goatcitadel:hook:00000000-0000-4000-8000-000000000009" };
-      h.state.keychain.set(refs["tool-watch"], HOOK_SECRET);
-      // The install plan stored its secret and the process stopped mid-apply, before its hook step.
-      const plan = await h.plans.create({
-        actor: OPERATOR,
-        request: h.pluginRequest(refs),
-        idempotencyKey: "capabilities:plugin-install:crashed:inspection",
-      });
-      await interrupt(h, plan);
-      await h.store.update(PLUGIN_ID, () => crashedRecord(plan.planId));
+      const { h, plan, secretRef } = await crashedBeforeHooks();
       // A hook made just before the stop, whose piece the record never got to name, holds the secret.
+      if (orphanHook) h.state.hooks.push(hookHolding(secretRef, "https://hooks.example.com/goat"));
+
+      await expect(h.uninstall(), String(orphanHook)).resolves.toMatchObject({
+        outcome: "applied",
+        summary: `Removed ${orphanHook ? "1 piece" : "0 pieces"}. Hosts it allowed stay in your allowlist.`,
+      });
+
+      expect(h.state.keychain.has(secretRef)).toBe(false);
       if (orphanHook) {
-        h.state.hooks.push({
-          workspaceId: WORKSPACE_ID,
-          label: "After a tool call",
-          trigger: "tool.call.after",
-          mode: "observe",
-          dataScope: "metadata",
-          action: {
-            type: "webhook",
-            webhook: { url: "https://hooks.example.com/goat", secretRef: refs["tool-watch"] },
-          },
+        // Through the hooks owner, with the plugin's pass; it deletes the hook's secret with it.
+        expect(h.uninstallSources.deleteHook).toHaveBeenCalledExactlyOnceWith(WORKSPACE_ID, "hook-1", {
+          pluginId: PLUGIN_ID,
+          installPlanId: plan.planId,
         });
+        expect([...h.removal.deletedHooks]).toEqual(["hook-1"]);
+      } else {
+        expect(h.uninstallSources.deleteHook).not.toHaveBeenCalled();
       }
-
-      await expect(h.uninstall()).resolves.toMatchObject({ outcome: "applied" });
-
-      expect(h.state.keychain.has(refs["tool-watch"]), String(orphanHook)).toBe(orphanHook);
-      expect(h.uninstallSources.deleteHook).not.toHaveBeenCalled();
+      await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
     }
   });
 
+  it("stops plainly at a hook holding its secret that doesn't match its hook, keeping both", async () => {
+    const { h, secretRef } = await crashedBeforeHooks();
+    h.state.hooks.push(hookHolding(secretRef, "https://elsewhere.example/goat"));
+
+    const stopped = await h.uninstall();
+
+    expect(stopped).toMatchObject({
+      outcome: "failed",
+      summary:
+        "A hook that sends event details to elsewhere.example uses a signing secret this plugin stored, and doesn't " +
+        "match its hook, so it was kept. Uninstall Meeting tools again to finish.",
+    });
+    expect(await h.plans.get(OPERATOR, stopped.planId)).toMatchObject({
+      status: "manual_required",
+      result: {
+        failureCode: "plugin_uninstall_hooks_failed",
+        failureDetail: "Hook hook-1 holds the secret stored for piece tool-watch.",
+      },
+    });
+    expect(h.uninstallSources.deleteHook).not.toHaveBeenCalled();
+    expect(h.state.keychain.has(secretRef)).toBe(true);
+    expect(await h.store.get(PLUGIN_ID)).toMatchObject({ state: "uninstalling" });
+  });
+
+  it("deletes a hook's signing secret its owner left behind", async () => {
+    const h = harness();
+    await installed(h);
+    expect(h.state.keychain.size).toBe(1);
+    // The hooks owner deletes the hook, but its key store is briefly unavailable, so the secret stays.
+    h.uninstallSources.deleteHook.mockImplementationOnce(async (_workspaceId, hookId) => {
+      h.removal.order.push("hook");
+      h.removal.deletedHooks.add(hookId);
+    });
+
+    await expect(h.uninstall()).resolves.toMatchObject({
+      outcome: "applied",
+      summary: "Removed 5 pieces. Hosts it allowed stay in your allowlist.",
+    });
+
+    expect(h.state.keychain.size).toBe(0);
+  });
+
+  it.each([
+    ["the hooks list may have been cut off", "The workspace has too many hooks to read them all at once.", true],
+    ["the install plan can't be read", "The install plan can't be read.", false],
+  ])(
+    "keeps the plugin when it can't tell which stored secrets a hook still uses: %s",
+    async (_case, detail, listed) => {
+      const h = harness();
+      const record = await installed(h);
+      const install = await h.plans.get(OPERATOR, record.installPlanId);
+      const secretRefs = install.request.kind === "plugin_install" ? install.request.hookSecretRefs : undefined;
+      expect(Object.values(secretRefs ?? {})).toHaveLength(1);
+      if (listed) {
+        // The workspace has as many hooks as one read returns.
+        h.uninstallSources.listHookSecrets.mockResolvedValueOnce(undefined);
+      } else {
+        h.uninstallSources.readInstallSecretRefs.mockRejectedValueOnce(new Error(detail));
+      }
+
+      const stopped = await h.uninstall();
+
+      expect(stopped).toMatchObject({
+        outcome: "failed",
+        summary: [
+          "Removed 1 piece.",
+          "Couldn't tell whether its hooks still use the signing secrets it stored, so they were kept.",
+          "Uninstall Meeting tools again to finish.",
+        ].join(" "),
+      });
+      expect(await h.plans.get(OPERATOR, stopped.planId)).toMatchObject({
+        status: "manual_required",
+        result: {
+          failureCode: "plugin_uninstall_hooks_failed",
+          failureDetail: detail,
+        },
+      });
+      // Logged by plugin and by the references it read (none when the plan couldn't be read), never a value.
+      expect(h.uninstallSources.reportUndecidedSecrets).toHaveBeenCalledExactlyOnceWith(
+        PLUGIN_ID,
+        listed ? Object.values(secretRefs ?? {}) : [],
+        expect.any(Error),
+      );
+      expect(await h.store.get(PLUGIN_ID)).toMatchObject({ state: "uninstalling" });
+
+      await expect(h.uninstall(OPERATOR, "again")).resolves.toMatchObject({
+        outcome: "applied",
+        summary: "Removed 4 pieces. Hosts it allowed stay in your allowlist.",
+      });
+    },
+  );
+
+  it("removes a connector this install saved before its record named it", async () => {
+    const h = harness();
+    await installed(h);
+    const [server] = h.state.servers;
+    // The install stopped between saving the connector, marked as its own, and naming it on its record.
+    await h.store.update(PLUGIN_ID, (current) => current && withoutRef(current, "issues"));
+    // Another plugin's connector, marked as that plugin's, stays.
+    const others: McpServerRecord = {
+      ...server!,
+      serverId: "server-other",
+      pluginOwner: { pluginId: "other-tools", name: "Other tools", installPlanId: "plan-other" },
+    };
+    h.state.servers.push(others);
+
+    await expect(h.uninstall()).resolves.toMatchObject({
+      outcome: "applied",
+      summary: "Removed 5 pieces. Hosts it allowed stay in your allowlist.",
+    });
+
+    expect(h.uninstallSources.deleteConnector).toHaveBeenCalledExactlyOnceWith(server!.serverId, {
+      pluginId: PLUGIN_ID,
+      installPlanId: expect.any(String),
+    });
+    expect(h.state.servers).toEqual([others]);
+  });
+
+  it("hands a connector another plugin uses to the operator instead of deleting it", async () => {
+    const h = harness();
+    const record = await installed(h);
+    const [server] = h.state.servers;
+    // Another plugin, installed later, found the connector already saved and kept it.
+    await h.store.update("other-tools", () => ({
+      ...record,
+      pluginId: "other-tools",
+      name: "Other tools",
+      installPlanId: "plan-other",
+      pieces: [{ pieceId: "issues", kind: "connector", owned: false }],
+    }));
+    expect(() => assertMcpServerRemovalAllowed(server, undefined)).toThrow();
+
+    const outcome = await h.uninstall();
+
+    expect(outcome).toMatchObject({
+      outcome: "applied",
+      summary: "Removed 4 pieces. Kept Issues, which Other tools uses. Hosts it allowed stay in your allowlist.",
+    });
+    const plan = await h.plans.get(OPERATOR, outcome.planId);
+    expect(plan.summary).toContain("Keep Issues, which Other tools uses.");
+    expect(plan.summary).not.toContain("Remove the connector");
+    expect(h.uninstallSources.releaseConnector).toHaveBeenCalledExactlyOnceWith(server!.serverId, {
+      pluginId: PLUGIN_ID,
+      installPlanId: record.installPlanId,
+    });
+    expect(h.uninstallSources.disconnectConnector).not.toHaveBeenCalled();
+    expect(h.uninstallSources.deleteConnector).not.toHaveBeenCalled();
+    // It stays as it was, now the operator's own: nobody's later delete is refused as the gone plugin's.
+    const { pluginOwner: _released, ...unmarked } = server!;
+    expect(h.state.servers).toEqual([unmarked]);
+    expect(() => assertMcpServerRemovalAllowed(h.state.servers[0], undefined)).not.toThrow();
+  });
+
+  it.each([
+    ["prompt_pack", "prompt_packs", "Removed 1 piece. Couldn't delete the prompt pack Meeting checks."],
+    ["hold_release", "tool_groups", "Removed 2 pieces. Couldn't stop holding its tool groups off."],
+    ["connector_delete", "connectors", "Removed 3 pieces. Couldn't remove the connector issues."],
+    ["revoke", "skills", "Removed 4 pieces. Couldn't remove the skill meeting-notes."],
+    ["remove_record", "finish", "Removed 5 pieces. Couldn't finish uninstalling Meeting tools."],
+  ])("stops plainly when its %s owner fails, and finishes when uninstalled again", async (owner, step, words) => {
+    const h = harness();
+    await installed(h);
+    h.removal.failAt = owner;
+
+    const stopped = await h.uninstall();
+
+    expect(stopped).toMatchObject({
+      outcome: "failed",
+      summary: `${words} Uninstall Meeting tools again to finish.`,
+    });
+    expect(await h.plans.get(OPERATOR, stopped.planId)).toMatchObject({
+      status: "manual_required",
+      result: {
+        failureCode: `plugin_uninstall_${step}_failed`,
+        failureDetail: `The ${owner} owner failed at C:\\goat\\data.`,
+      },
+    });
+    expect(await h.store.get(PLUGIN_ID)).toMatchObject({ state: "uninstalling" });
+
+    h.removal.failAt = undefined;
+    await expect(h.uninstall(OPERATOR, "again")).resolves.toMatchObject({ outcome: "applied" });
+    await expect(h.store.get(PLUGIN_ID)).resolves.toBeUndefined();
+    await expect(h.store.listRemoved()).resolves.toMatchObject([{ pluginId: PLUGIN_ID, skillIds: [SKILL_ID] }]);
+  });
+
   it("asks once when the setting is off", async () => {
-    const local = skillActions("trusted_local");
-    const h = harness({ skip: false, revokeSkill: local.revokeSkill });
+    const { h, tab: local } = withSkillsTab("trusted_local", { skip: false });
     await installed(h);
     const asked = h.createApproval.mock.calls.length;
 
@@ -458,7 +852,15 @@ describe("uninstalling a plugin through one Change Plan", () => {
     const retried = await h.uninstall(OPERATOR, "uninstall-retried");
 
     expect(retried).toEqual(first);
-    expect(h.removal.order).toEqual(["hook", "prompt_pack", "connector_disconnect", "connector_delete", "revoke"]);
+    expect(h.removal.order).toEqual([
+      "hook",
+      "prompt_pack",
+      "hold_release",
+      "connector_disconnect",
+      "connector_delete",
+      "revoke",
+      "remove_record",
+    ]);
     expect(
       (await h.sync.list({ workspaceId: WORKSPACE_ID, limit: 50 })).filter((plan) => plan.kind === "plugin_uninstall"),
     ).toHaveLength(1);
@@ -590,6 +992,33 @@ describe("uninstalling a plugin through one Change Plan", () => {
   });
 });
 
+/** An install plan that stored its hook's signing secret and stopped mid-apply, before its hook step. */
+async function crashedBeforeHooks() {
+  const h = harness();
+  const secretRef = "keychain:goatcitadel:hook:00000000-0000-4000-8000-000000000009";
+  h.state.keychain.set(secretRef, HOOK_SECRET);
+  const plan = await h.plans.create({
+    actor: OPERATOR,
+    request: h.pluginRequest({ "tool-watch": secretRef }),
+    idempotencyKey: "capabilities:plugin-install:crashed:inspection",
+  });
+  await interrupt(h, plan);
+  await h.store.update(PLUGIN_ID, () => crashedRecord(plan.planId, h.state.inspection.manifestSha256));
+  return { h, plan, secretRef };
+}
+
+/** A hook in the workspace that signs what it sends to `url` with the stored secret. */
+function hookHolding(secretRef: string, url: string): HookCreateInput {
+  return {
+    workspaceId: WORKSPACE_ID,
+    label: "After a tool call",
+    trigger: "tool.call.after",
+    mode: "observe",
+    dataScope: "metadata",
+    action: { type: "webhook", webhook: { url, secretRef } },
+  };
+}
+
 /** The plan as the control plane leaves it after a restart found its apply interrupted. */
 async function interrupt(h: ReturnType<typeof harness>, plan: ChangePlanRecord): Promise<void> {
   h.sync.transition(plan.planId, {
@@ -600,8 +1029,8 @@ async function interrupt(h: ReturnType<typeof harness>, plan: ChangePlanRecord):
   });
 }
 
-/** What an install that stopped before its hook step left: its connector's piece named, nothing else. */
-function crashedRecord(installPlanId: string): StoredPlugin {
+/** What an install that stopped before its hook step left: its pieces listed, none of them named yet. */
+function crashedRecord(installPlanId: string, manifestSha256: string): StoredPlugin {
   return {
     pluginId: PLUGIN_ID,
     name: "Meeting tools",
@@ -611,7 +1040,7 @@ function crashedRecord(installPlanId: string): StoredPlugin {
     sourceKind: "built_in",
     sourceDisplay: "Ships with GoatCitadel",
     pin: { kind: "content", treeSha256: TREE_SHA256 },
-    manifestSha256: "0".repeat(64),
+    manifestSha256,
     snapshotTreeSha256: TREE_SHA256,
     workspaceId: WORKSPACE_ID,
     installPlanId,

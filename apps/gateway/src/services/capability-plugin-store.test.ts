@@ -364,6 +364,31 @@ describe("removed plugins", () => {
     await expect(store.get("second")).resolves.toEqual(plugin("second"));
   });
 
+  it("drops the removed plugin's kept inspections in the same write, so none of them installs it again", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    await store.update("meeting-tools", () => plugin("meeting-tools"));
+    await store.saveInspection(inspection(1), "1".padStart(64, "0"));
+    const other = inspection(2, { inspectionId: "inspection-other", pluginId: "other-tools" });
+    await store.saveInspection(other, "2".padStart(64, "0"));
+    const writes = rows.writes;
+
+    await store.remove("meeting-tools", (current) => ({
+      pluginId: current!.pluginId,
+      name: current!.name,
+      skillIds: [],
+      removedAt: removedAt(1),
+    }));
+
+    expect(rows.writes).toBe(writes + 1);
+    await expect(store.getInspection("inspection-001")).resolves.toBeUndefined();
+    // Another plugin's inspection stays.
+    await expect(store.getInspection("inspection-other")).resolves.toEqual({
+      inspection: other,
+      snapshotTreeSha256: "2".padStart(64, "0"),
+    });
+  });
+
   it("keeps the newest 100 tombstones, and reads a row without any as none", async () => {
     const rows = new SettingRows();
     const store = new CapabilityPluginStore(rows, () => new Date(NOW));

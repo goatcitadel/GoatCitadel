@@ -278,8 +278,10 @@ export class CapabilitySkillActionsService {
    * `revoke` approval with the plugin's pass and the operator as requester, and this resolves that same approval as the
    * operator, so its own effect revokes the skill. Revoking only takes power away (Phase 3, Q1 A), so the skip setting
    * isn't read; `remote_hardened` always asks, and then it answers `waiting`. A revoke the uninstall already asked for
-   * that still waits, or was approved, is answered again rather than asked for twice (Skill Hub finds a duplicate only
-   * among a workspace's newest approvals). A failed resolve leaves it waiting.
+   * that still waits is answered again rather than asked for twice (Skill Hub finds a duplicate only among a
+   * workspace's newest approvals). One already approved is never taken as the answer here: whether its effect revoked
+   * the skill is the uninstall's to read. `approved` says only that the approval was given; the skill is revoked once
+   * its check reads so. A failed resolve leaves it waiting.
    */
   public async revokeForPluginUninstall(input: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome> {
     const known = input.knownApprovalId ? await this.readKnownRevoke(input.knownApprovalId) : undefined;
@@ -319,10 +321,8 @@ export class CapabilitySkillActionsService {
     return { status: "approved", approvalId };
   }
 
-  /** A revoke asked for before, while it still waits or once approved; undefined once it was refused or is gone. */
-  private async readKnownRevoke(
-    approvalId: string,
-  ): Promise<{ approvalId: string; status: "pending" | "approved" } | undefined> {
+  /** A revoke asked for before, while it still waits; undefined once it was decided or is gone. */
+  private async readKnownRevoke(approvalId: string): Promise<{ approvalId: string; status: "pending" } | undefined> {
     let status: ApprovalRequest["status"];
     try {
       ({ status } = await this.sources.readApproval(approvalId));
@@ -330,7 +330,7 @@ export class CapabilitySkillActionsService {
       if (error instanceof NotFoundError) return undefined;
       throw error;
     }
-    return status === "pending" || status === "approved" ? { approvalId, status } : undefined;
+    return status === "pending" ? { approvalId, status } : undefined;
   }
 
   /**

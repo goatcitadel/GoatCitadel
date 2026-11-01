@@ -159,7 +159,9 @@ export class CapabilityPluginStore {
 
   /**
    * Deletes one plugin's record and keeps the tombstone `remember` answers for it, in the same write, with the newest
-   * 100 tombstones. `remember` may run more than once, each time on the newest record, and may throw to refuse.
+   * 100 tombstones. The plugin's kept inspections go too: each was checked before the uninstall, so none can install it
+   * past the checks a fresh inspection now makes. `remember` may run more than once, each time on the newest record,
+   * and may throw to refuse.
    */
   public async remove(pluginId: string, remember: (current: StoredPlugin | undefined) => RemovedPlugin): Promise<void> {
     await this.write((value) => {
@@ -167,6 +169,7 @@ export class CapabilityPluginStore {
       return {
         ...value,
         plugins: value.plugins.filter((plugin) => plugin.pluginId !== pluginId),
+        inspections: value.inspections.filter((kept) => kept.inspection.pluginId !== pluginId),
         removed: [tombstone, ...(value.removed ?? [])].slice(0, MAX_REMOVED_PLUGINS),
       };
     });

@@ -1,21 +1,24 @@
 import { vi } from "vitest";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
-import { readPluginPieceOwner } from "./capability-plugin-store.js";
+import { readPluginPieceOwner, type StoredPlugin } from "./capability-plugin-store.js";
 import type { PluginUninstallRevokeInput, PluginUninstallRevokeOutcome } from "./capability-skill-actions-service.js";
 import type { EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
 import {
-  pluginInstallHarness,
+  ISSUES_TEMPLATE,
   OPERATOR,
   PLUGIN_ID,
   WORKSPACE_ID,
+  pluginInstallHarness,
   type PluginInstallFixture,
 } from "./capability-plugin-install.test-support.js";
 import { assertMcpServerRemovalAllowed, assertNotPluginOwned } from "./plugin-owned-refusal.js";
 import type { PluginSkillCheck } from "./plugin-skill-checks.js";
 import {
   PluginUninstallChangePlanAdapter,
+  type HookSecretHolder,
   type PluginUninstallSources,
 } from "./plugin-uninstall-change-plan-adapter.js";
+import type { PendingSkillStep } from "./plugin-uninstall-skills.js";
 
 // One plugin install and then its uninstall, over the real Change Plan control plane and the plugin store's real
 // compare-and-set rules, with every other owner kept in memory. Each owner checks the plugin's pass as the real one
@@ -40,8 +43,12 @@ export function skillCheck(overrides: Partial<PluginSkillCheck> = {}): PluginSki
   };
 }
 
+/** The check once its revoke's effect applied. */
+export const REVOKED = (overrides: Partial<PluginSkillCheck> = {}) =>
+  skillCheck({ revoked: true, version: "installed_off", step: "installed_off", ...overrides });
+
 export interface PluginUninstallFixture extends PluginInstallFixture {
-  /** The Skills tab's revoke; by default an approved one. */
+  /** The Skills tab's revoke; by default one approved whose effect revokes the skill at once. */
   revokeSkill?: (input: PluginUninstallRevokeInput) => Promise<PluginUninstallRevokeOutcome>;
 }
 
@@ -54,6 +61,9 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
     disconnected: [] as string[],
     /** The plugin's skill checks, by id; a test changes them as Skill Hub would. */
     skillChecks: new Map<string, PluginSkillCheck>([[SKILL_CHECK_ID, skillCheck()]]),
+    /** Own install steps still waiting, as the full read of waiting approvals finds them. */
+    pendingSteps: new Map<string, PendingSkillStep>(),
+    /** The owner that fails: `hook`, `prompt_pack`, `hold_release`, `connector_delete`, `revoke` or `remove_record`. */
     failAt: undefined as string | undefined,
   };
   const step = (name: string) => {
@@ -64,6 +74,8 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
     input.revokeSkill ??
       (async (revoke: PluginUninstallRevokeInput): Promise<PluginUninstallRevokeOutcome> => {
         step("revoke");
+        // Approved, and its effect lands while the approval resolves.
+        removal.skillChecks.set(revoke.snapshotId, REVOKED({ snapshotId: revoke.snapshotId }));
         return { status: "approved", approvalId: `approval-revoke-${revoke.snapshotId}` };
       }),
   );
@@ -71,10 +83,26 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
     h.state.hooks
       .map((hook, index) => ({ hookId: `hook-${index + 1}`, hook }))
       .filter(({ hookId }) => !removal.deletedHooks.has(hookId));
+  const releasesHold = (current: StoredPlugin | undefined, next: StoredPlugin | undefined) =>
+    current?.pieces.some(
+      (piece) =>
+        piece.kind === "tool_group_off" &&
+        piece.ref !== undefined &&
+        next?.pieces.find((item) => item.pieceId === piece.pieceId)?.ref === undefined,
+    ) === true;
   const sources = {
     readPlugin: (pluginId: string) => h.store.get(pluginId),
-    updatePlugin: (pluginId, change) => h.store.update(pluginId, change),
-    removePlugin: (pluginId, remember) => h.store.remove(pluginId, remember),
+    listPlugins: () => h.store.list(),
+    updatePlugin: (pluginId, change) =>
+      h.store.update(pluginId, (current) => {
+        const next = change(current);
+        if (releasesHold(current, next)) step("hold_release");
+        return next;
+      }),
+    removePlugin: async (pluginId, remember) => {
+      step("remove_record");
+      await h.store.remove(pluginId, remember);
+    },
     readManifest: (treeSha256) => h.sources.readManifest(treeSha256),
     readSnapshotText: (treeSha256, relativePath) => h.sources.readSnapshotText(treeSha256, relativePath),
     deleteHook: vi.fn(async (_workspaceId: string, hookId: string, pass) => {
@@ -88,24 +116,26 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
       const secretRef = found.hook.action.type === "webhook" ? found.hook.action.webhook.secretRef : undefined;
       if (secretRef) h.state.keychain.delete(secretRef);
     }),
-    listHookSecretRefs: vi.fn(
-      async () =>
-        new Set(
-          liveHooks().flatMap(({ hook }) =>
-            hook.action.type === "webhook" && hook.action.webhook.secretRef ? [hook.action.webhook.secretRef] : [],
-          ),
+    listHookSecrets: vi.fn(
+      async (_workspaceId: string): Promise<readonly HookSecretHolder[] | undefined> =>
+        liveHooks().flatMap(({ hookId, hook }) =>
+          hook.action.type === "webhook" && hook.action.webhook.secretRef
+            ? [{ hookId, secretRef: hook.action.webhook.secretRef, url: hook.action.webhook.url }]
+            : [],
         ),
     ),
-    readInstallSecretRefs: async (workspaceId, installPlanId, actorId) => {
+    readInstallSecretRefs: vi.fn(async (workspaceId: string, installPlanId: string, actorId: string) => {
       const plan = await h.plans.get({ workspaceId, actorId, surface: "capabilities" }, installPlanId);
       return plan.request.kind === "plugin_install" ? (plan.request.hookSecretRefs ?? {}) : {};
-    },
+    }),
     deleteHookSecret: (secretRef) => h.sources.deleteHookSecret(secretRef),
     deletePromptPack: vi.fn(async (packId: string) => {
       step("prompt_pack");
       h.state.packs = h.state.packs.filter((pack) => pack.packId !== packId);
       removal.deletedPacks.push(packId);
     }),
+    listSavedConnectors: async () => [...h.state.servers],
+    connectorTemplates: () => [ISSUES_TEMPLATE],
     disconnectConnector: vi.fn(async (serverId: string) => {
       step("connector_disconnect");
       removal.disconnected.push(serverId);
@@ -119,6 +149,16 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
       );
       h.state.servers = h.state.servers.filter((server) => server.serverId !== serverId);
     }),
+    releaseConnector: vi.fn(async (serverId: string, pass) => {
+      step("connector_release");
+      const server = h.state.servers.find((item) => item.serverId === serverId);
+      assertMcpServerRemovalAllowed(server, pass);
+      h.state.servers = h.state.servers.map((item) => {
+        if (item.serverId !== serverId) return item;
+        const { pluginOwner: _released, ...unmarked } = item;
+        return unmarked;
+      });
+    }),
     readSkillChecks: vi.fn(
       async (_workspaceId: string, snapshotIds: readonly string[]) =>
         new Map(
@@ -128,8 +168,16 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
           }),
         ),
     ),
+    listPendingSkillSteps: vi.fn(
+      async (_workspaceId: string, snapshotIds: readonly string[]) =>
+        new Map(
+          snapshotIds.flatMap((id) => (removal.pendingSteps.has(id) ? [[id, removal.pendingSteps.get(id)!]] : [])),
+        ),
+    ),
     revokeSkill,
-    reportSecretsKept: vi.fn((_error: unknown) => undefined),
+    reportUndecidedSecrets: vi.fn((_pluginId: string, _secretRefs: readonly string[], _error: unknown) => undefined),
+    // No real wait: a test changes the check between reads instead.
+    pause: vi.fn(async (_ms: number) => undefined),
     now: () => new Date("2026-10-31T12:00:00.000Z"),
   } satisfies PluginUninstallSources;
   const adapter = new PluginUninstallChangePlanAdapter(sources);
@@ -143,15 +191,15 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
       idempotencyKey,
     });
   /** Installs the plugin as the Capabilities route does: its hook's secret stored, then one confirmation. */
-  const install = () =>
+  const install = (inspectionId = h.state.inspection.inspectionId) =>
     h.actions.install({
       workspaceId: WORKSPACE_ID,
-      inspectionId: h.state.inspection.inspectionId,
+      inspectionId,
       ...(h.state.inspection.pieces.some((piece) => piece.kind === "hook")
         ? { hookSecrets: { "tool-watch": HOOK_SECRET } }
         : {}),
       actorId: OPERATOR.actorId,
-      idempotencyKey: "install-1",
+      idempotencyKey: `install-${inspectionId}-${Math.random()}`,
     });
   const confirm = (plan: ChangePlanRecord) => h.confirm(plan);
 

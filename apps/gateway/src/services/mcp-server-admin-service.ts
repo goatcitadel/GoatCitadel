@@ -208,6 +208,7 @@ export async function createMcpServer(
 /**
  * A server a plugin added only switches on or off here, unless the plugin service passes its own `pluginPass`. Every
  * other edit, its approval setting included, is refused with `PluginOwnedError`, decided from the record it loads.
+ * `releasePluginOwner`, with that same pass, also clears the plugin's mark, so the server becomes the operator's own.
  */
 export async function updateMcpServer(
   host: McpServerAdminHost,
@@ -216,6 +217,7 @@ export async function updateMcpServer(
   packOwner?: { planId: string; phase: "apply" | "compensate" },
   review?: McpServerEditReview,
   pluginPass?: PluginPass,
+  releasePluginOwner = false,
 ): Promise<McpServerRecord> {
   if (isInternalMcpServerUrl(input.url)) {
     throw new ValidationError({ message: buildInternalMcpServerCreateBlockedMessage() });
@@ -226,14 +228,17 @@ export async function updateMcpServer(
   const original = previous.find((server) => server.serverId === serverId);
   if (!original) throw new NotFoundError(`Unknown MCP server: ${serverId}`);
   assertMcpServerEditAllowed(original, input, pluginPass);
+  // Releasing a plugin's mark takes that plugin's own pass, whatever else the edit changes.
+  if (releasePluginOwner) assertMcpServerRemovalAllowed(original, pluginPass);
   if (review) assertMcpServerReview(original, review.expectedRevision);
   const closeOwnedSessions = host.captureMcpServerSessionCloser?.(serverId);
   const servers = previous.map((item) => {
     if (item.serverId !== serverId) {
       return item;
     }
+    const { pluginOwner: _released, ...unmarked } = item;
     updated = {
-      ...item,
+      ...(releasePluginOwner ? unmarked : item),
       packChange: packOwner
         ? {
             planId: packOwner.planId,
@@ -281,6 +286,19 @@ export async function updateMcpServer(
     }
   });
   return acknowledgement;
+}
+
+/**
+ * Hands a plugin's server to the operator: its plugin mark is cleared and nothing else changes, so a later edit or
+ * removal is the operator's own. Only that plugin's own pass may (an uninstall that leaves the server to another plugin
+ * that kept it).
+ */
+export async function releaseMcpServerFromPlugin(
+  host: McpServerAdminHost,
+  serverId: string,
+  pluginPass: PluginPass,
+): Promise<McpServerRecord> {
+  return await updateMcpServer(host, serverId, {}, undefined, undefined, pluginPass, true);
 }
 
 export async function updateMcpServerPolicy(

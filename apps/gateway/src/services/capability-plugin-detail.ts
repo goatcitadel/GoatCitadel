@@ -1,6 +1,7 @@
 import {
   HOOK_TRIGGER_LABELS,
   TOOL_GROUPS,
+  type ApprovalRequest,
   type CapabilityPluginDetailPiece,
   type CapabilityPluginPieceCheck,
   type CapabilityPluginPieceState,
@@ -63,6 +64,8 @@ export interface PluginPieceReadings {
   installEnded?: boolean;
   /** While it is uninstalled: whether its uninstall plan is done with it. Undefined when it wasn't read, or couldn't be. */
   uninstallEnded?: boolean;
+  /** While it is uninstalled: where each approval a skill's removal waits for stands, by id. Missing when unread. */
+  approvalStatuses?: ReadonlyMap<string, ApprovalRequest["status"]>;
 }
 
 /** Where one piece is. */
@@ -91,7 +94,7 @@ export function readPluginPiece(
   readings: PluginPieceReadings,
 ): PluginPieceReading {
   if (!piece.owned) return { state: "kept" };
-  if (piece.kind === "skill") return readSkillPiece(plugin, piece, readings.skillChecks);
+  if (piece.kind === "skill") return readSkillPiece(plugin, piece, readings);
   if (plugin.state === "uninstalling") {
     if (piece.ref === undefined) return { state: "removed" };
     if (readings.uninstallEnded === undefined) return { state: "unknown" };
@@ -210,25 +213,49 @@ export async function describePluginPieces(
 function readSkillPiece(
   plugin: StoredPlugin,
   piece: StoredPluginPiece,
-  checks: ReadonlyMap<string, PluginSkillCheck> | undefined,
+  readings: PluginPieceReadings,
 ): PluginPieceReading {
+  const checks = readings.skillChecks;
   // The uninstall removed it (revoked, or left switched off for good).
   if (plugin.state === "uninstalling" && piece.removed) return { state: "removed" };
   const check = piece.skillSnapshotId ? checks?.get(piece.skillSnapshotId) : undefined;
   if (!check) return { state: "unknown" };
   if (check.revoked) return { state: "removed" };
   if (plugin.state === "uninstalling") {
-    // The revoke the uninstall asked for, as the check reads it, or as the record kept it when the check's window
-    // no longer holds it.
-    const revoke =
-      check.pendingApprovals.revoke ?? (piece.waiting?.operation === "revoke" ? piece.waiting.approvalId : undefined);
-    if (revoke) return { state: "waiting_for_approval", pendingApprovalId: revoke };
+    const removing = readRevoke(piece, check, readings.approvalStatuses);
+    if (removing) return removing;
   }
   const state = SKILL_STEP_STATES[check.step];
   if (state !== "waiting_for_approval") return { state };
   const pendingApprovalId =
     check.step === "waiting_install" ? check.pendingApprovals.install_inactive : check.pendingApprovals.activate;
   return { state, ...(pendingApprovalId ? { pendingApprovalId } : {}) };
+}
+
+/**
+ * A skill's removal while its plugin is uninstalled: waiting for its revoke's approval (as the check reads it, or as the
+ * record kept it while that approval still reads pending), or being removed once that revoke is approved and isn't in
+ * effect yet. Undefined when no revoke was asked for, or the one asked for was refused: then it reads as its check does.
+ */
+function readRevoke(
+  piece: StoredPluginPiece,
+  check: PluginSkillCheck,
+  statuses: ReadonlyMap<string, ApprovalRequest["status"]> | undefined,
+): PluginPieceReading | undefined {
+  if (check.pendingApprovals.revoke) {
+    return { state: "waiting_for_approval", pendingApprovalId: check.pendingApprovals.revoke };
+  }
+  const asked = piece.waiting?.operation === "revoke" ? piece.waiting.approvalId : undefined;
+  const status =
+    (asked ? statuses?.get(asked) : undefined) ??
+    (check.revokeApproval && check.revokeApproval.approvalId === asked ? check.revokeApproval.status : undefined);
+  if (asked && status === "pending") return { state: "waiting_for_approval", pendingApprovalId: asked };
+  if (asked && status === "approved") return { state: "removing" };
+  // Approved and not in effect yet, whoever asked.
+  if (check.revokeApproval?.status === "approved" && check.revokeApproval.settled === undefined) {
+    return { state: "removing" };
+  }
+  return undefined;
 }
 
 /**

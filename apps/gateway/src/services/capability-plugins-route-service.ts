@@ -1,5 +1,6 @@
 import {
   NotFoundError,
+  type ApprovalRequest,
   type CapabilityPluginDetail,
   type CapabilityPluginInspection,
   type CapabilityPluginListItem,
@@ -38,7 +39,13 @@ const MANIFEST_NOT_INSTALLED_ONE = "The plugin's stored copy doesn't hold the ma
  * A source that can fail on its own, leaving its part out rather than the whole answer: the list's built-in plugins and
  * Skill Hub checks, the plugin store a refusal reads its plugin's name from, and a detail's install plan and snapshot.
  */
-export type CapabilityPluginsSource = "built_in" | "skill_hub" | "plugin_store" | "install_plan" | "snapshot";
+export type CapabilityPluginsSource =
+  | "built_in"
+  | "skill_hub"
+  | "plugin_store"
+  | "install_plan"
+  | "snapshot"
+  | "approval";
 
 /** One reader per place the Plugins tab is built from, each through its existing owner. Only `inspect` keeps anything. */
 export interface CapabilityPluginsRouteSources {
@@ -53,6 +60,8 @@ export interface CapabilityPluginsRouteSources {
   readSkillChecks(workspaceId: string, snapshotIds: readonly string[]): Promise<ReadonlyMap<string, PluginSkillCheck>>;
   /** A plugin plan's status (its install's, or its uninstall's), read in the plugin's workspace as the operator who asked. */
   readInstallPlanStatus(workspaceId: string, planId: string, actorId: string): Promise<ChangePlanStatus>;
+  /** Where an approval stands; undefined when it can't be read (the failure is reported by the reader). */
+  readApprovalStatus(approvalId: string): Promise<ApprovalRequest["status"] | undefined>;
   /** The manifest in a snapshot, read again. */
   readManifest(treeSha256: string): Promise<PluginManifestParse>;
   /** A file in a snapshot, as text. */
@@ -131,7 +140,12 @@ export class CapabilityPluginsRouteService {
         : undefined,
       this.readInstalledManifest(plugin),
     ]);
-    const readings = { skillChecks, installEnded, uninstallEnded };
+    const readings = {
+      skillChecks,
+      installEnded,
+      uninstallEnded,
+      approvalStatuses: await this.readWaitingApprovals(plugin),
+    };
     const labels = manifest ? await this.describePieces(plugin, manifest) : undefined;
     return {
       ...listItem(plugin, pluginPublicState(plugin, readings)),
@@ -236,6 +250,20 @@ export class CapabilityPluginsRouteService {
       this.sources.reportFailure("skill_hub", error);
       return undefined;
     }
+  }
+
+  /** While a plugin is uninstalled: where each approval a skill's removal waits for stands, by its id. */
+  private async readWaitingApprovals(
+    plugin: StoredPlugin,
+  ): Promise<ReadonlyMap<string, ApprovalRequest["status"]> | undefined> {
+    if (plugin.state !== "uninstalling") return undefined;
+    const ids = plugin.pieces.flatMap((piece) => (piece.waiting ? [piece.waiting.approvalId] : []));
+    const statuses = new Map<string, ApprovalRequest["status"]>();
+    for (const approvalId of ids) {
+      const status = await this.sources.readApprovalStatus(approvalId);
+      if (status) statuses.set(approvalId, status);
+    }
+    return statuses;
   }
 
   /** Whether one of the plugin's plans is done with the record; undefined when it can't be read. */

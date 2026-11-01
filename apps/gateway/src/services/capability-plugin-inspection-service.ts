@@ -383,12 +383,11 @@ export class CapabilityPluginInspectionService {
     const { allowed, blockers } = check.installInactive;
     if (allowed) return READY;
     const leftOver = blockers.find((code) => LEFT_OVER_BLOCKERS.has(code));
+    const runtimeLive = blockers.includes(NAME_TAKEN_BLOCKER) && !check.revoked;
+    // Removed earlier only when what's left of it is revoked, or nothing of it runs; a live one is installed now.
+    if (runtimeLive) return blocked(NAME_TAKEN_BLOCKER, SKILL_NAME_TAKEN_MESSAGE);
     if (leftOver) return blocked(leftOver, SKILL_REMOVED_EARLIER_MESSAGE);
-    if (blockers.includes(NAME_TAKEN_BLOCKER)) {
-      return check.revoked
-        ? blocked(NAME_TAKEN_BLOCKER, SKILL_REMOVED_EARLIER_MESSAGE)
-        : blocked(NAME_TAKEN_BLOCKER, SKILL_NAME_TAKEN_MESSAGE);
-    }
+    if (blockers.includes(NAME_TAKEN_BLOCKER)) return blocked(NAME_TAKEN_BLOCKER, SKILL_REMOVED_EARLIER_MESSAGE);
     return blocked(blockers[0] ?? "SKILL_CHECK_BLOCKED", SKILL_BLOCKED_MESSAGE);
   }
 

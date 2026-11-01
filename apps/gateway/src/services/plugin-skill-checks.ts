@@ -1,4 +1,9 @@
-import type { CapabilitySkillInstallStep, SkillHubOperationKind } from "@goatcitadel/contracts";
+import type {
+  ApprovalRequest,
+  CapabilitySkillInstallStep,
+  SkillHubOperationKind,
+  SkillHubOperationSettlementDisposition,
+} from "@goatcitadel/contracts";
 import { skillHubInstallStep } from "./capability-skill-install-projection.js";
 import { SKILL_HUB_OPERATOR_MAX_ITEMS, type SkillHubOperatorItem } from "./skill-hub-operator-service.js";
 
@@ -19,6 +24,15 @@ export interface PluginSkillCheck {
   revoked: boolean;
   /** The approval each step still waits for, by the step. */
   pendingApprovals: Partial<Record<SkillHubOperationKind, string>>;
+  /**
+   * The newest revoke approval among the workspace's newest approvals: where it stands, and how its effect settled once
+   * it did (`applied`, or `blocked` when it didn't revoke). Absent when none is in that window.
+   */
+  revokeApproval?: {
+    approvalId: string;
+    status: ApprovalRequest["status"];
+    settled?: SkillHubOperationSettlementDisposition;
+  };
   /** Whether installing it is allowed now, and the codes that refuse it (a reinstall's included). */
   installInactive: { allowed: boolean; blockers: string[] };
   /** Where its install is, read exactly as the Skills tab reads a check. */
@@ -36,6 +50,7 @@ export function pluginSkillCheck(item: SkillHubOperatorItem): PluginSkillCheck {
   const step = skillHubInstallStep(item);
   // Installed once a version exists, or once switching it on settled (the Skills tab's own `installedSkillId` rule).
   const installed = item.candidate !== undefined || item.runtime.activeVersion || step === "done";
+  const revoke = item.approvals.revoke;
   const pendingApprovals: Partial<Record<SkillHubOperationKind, string>> = {};
   for (const [kind, approval] of Object.entries(item.approvals) as Array<
     [SkillHubOperationKind, SkillHubOperatorItem["approvals"][SkillHubOperationKind]]
@@ -49,6 +64,15 @@ export function pluginSkillCheck(item: SkillHubOperatorItem): PluginSkillCheck {
     version: item.runtime.activeVersion ? "switched_on" : item.candidate ? "installed_off" : "none",
     revoked: item.candidate?.lifecycleState === "revoked",
     pendingApprovals,
+    ...(revoke
+      ? {
+          revokeApproval: {
+            approvalId: revoke.approvalId,
+            status: revoke.status,
+            ...(revoke.settlement ? { settled: revoke.settlement.disposition } : {}),
+          },
+        }
+      : {}),
     installInactive: {
       allowed: item.actions.install_inactive.allowed,
       blockers: [...item.actions.install_inactive.blockers],

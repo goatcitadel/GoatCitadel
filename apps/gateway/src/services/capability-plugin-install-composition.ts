@@ -37,9 +37,10 @@ export interface PluginInstallConfig {
 /** The storage parts an install or uninstall reads or writes: the plugin store's row, the prompt packs, the workspaces. */
 export interface PluginRecordsOwner {
   readonly systemSettings: CapabilityPluginSettingRows;
-  /** A pack, and its delete with every run, score and benchmark, in one transaction. */
+  /** A pack, the saved packs, and a pack's delete with every run, score and benchmark, in one transaction. */
   readonly promptPacks: {
     getPack(packId: string): Promise<PromptPackRecord>;
+    listPacks(limit?: number): Promise<readonly PromptPackRecord[]>;
     deletePackCascade(packId: string): Promise<{ deletedRuns: number }>;
   };
   readonly workspaces: { find(workspaceId: string): Promise<unknown> };
@@ -171,11 +172,11 @@ export function pluginInstallSources(
   };
 }
 
-/** The Capabilities install's owners. */
+/** The Capabilities install's and uninstall's owners, but the approvals reader the composition adds. */
 export function pluginActionSources(
   shared: PluginInstallShared,
   { plans, records }: Pick<CapabilityPluginInstallOwners, "plans" | "records">,
-): CapabilityPluginActionSources {
+): Omit<CapabilityPluginActionSources, "readApprovalStatus"> {
   return {
     changePlansEnabled: () => plans.isEnabled(),
     findPlan: (actor, idempotencyKey) => plans.findByIdempotencyKey(actor, idempotencyKey),

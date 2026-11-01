@@ -216,6 +216,8 @@ describe("glossary and plurals (GL-R02)", () => {
     const shown = COPY_ROOTS.find((root) => root.id === "shown-as-written");
     assert.deepEqual(shown?.files, [
       "packages/contracts/src/hooks.ts",
+      "apps/gateway/src/routes/capability-plugins.ts",
+      "apps/gateway/src/services/capability-plugin-actions-service.ts",
       "apps/gateway/src/services/capability-plugin-inspection-service.ts",
       "apps/gateway/src/services/capability-plugin-detail.ts",
       "apps/gateway/src/services/capability-plugins-route-service.ts",

@@ -17,9 +17,9 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 /**
  * Every tree that renders operator copy in the cockpit: its own areas, the native routes and shared components. A root
  * with `files` reads just those files (relative to `dir`): copy written outside the cockpit that the cockpit shows as
- * written, such as the hook trigger labels, the plugin checks' lines, the plugin source refusals and a plugin
- * uninstall's summaries. A plugin fetch's Git words sit in `plugin-git-messages.ts`, apart from `hardened-git.ts` and
- * `hardened-git-wording.ts`, which hold the skill import's.
+ * written, such as the hook trigger labels, the plugin checks' lines, the plugin source refusals, the plugin install
+ * and uninstall refusals, and a plugin uninstall's summaries. A plugin fetch's Git words sit in `plugin-git-messages.ts`,
+ * apart from `hardened-git.ts` and `hardened-git-wording.ts`, which hold the skill import's.
  */
 export const COPY_ROOTS = [
   { id: "cockpit", dir: cockpitRoot },
@@ -30,6 +30,8 @@ export const COPY_ROOTS = [
     dir: repoRoot,
     files: [
       "packages/contracts/src/hooks.ts",
+      "apps/gateway/src/routes/capability-plugins.ts",
+      "apps/gateway/src/services/capability-plugin-actions-service.ts",
       "apps/gateway/src/services/capability-plugin-inspection-service.ts",
       "apps/gateway/src/services/capability-plugin-detail.ts",
       "apps/gateway/src/services/capability-plugins-route-service.ts",
