@@ -73,15 +73,36 @@ function createGateway(profile: { profileId: string; deny: string[]; askFirst: s
 describe("resolveBasePromptCapabilityCatalog policy scope", () => {
   const profile = { profileId: "custom", deny: ["fs.write"], askFirst: ["shell.exec"] };
 
-  it("resolves the turn's policy context and Citadel once for the whole catalog", async () => {
+  it("resolves the turn's policy context, Citadel and session project once for the whole catalog", async () => {
     const { gateway, counters } = createGateway(profile);
     const catalog = await gateway.resolveBasePromptCapabilityCatalog(SCOPE);
 
     expect(catalog.toolNames).toHaveLength(TOOL_NAMES.length - 1);
     expect(counters.resolveContext).toHaveBeenCalledTimes(1);
     expect(counters.findWorkspace).toHaveBeenCalledTimes(1);
-    // Path resolution still reads the session's project per probe: the probe arguments differ per tool.
-    expect(counters.sessionProject).toHaveBeenCalled();
+    expect(counters.sessionProject).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps one session project read per probe outside a catalog build", async () => {
+    const { gateway, counters } = createGateway(profile);
+    await filterBasePromptToolsetByPolicy(
+      { toolNames: TOOL_NAMES, skills: [] },
+      SCOPE,
+      (request) => gateway.inspectToolAccess(request),
+      "/repo/workspace/goatcitadel_out",
+    );
+
+    expect(counters.sessionProject).toHaveBeenCalledTimes(TOOL_NAMES.length);
+  });
+
+  it("lists no tool when the session's project cannot be read", async () => {
+    const { gateway, counters } = createGateway(profile);
+    counters.sessionProject.mockRejectedValue(new Error("project store unavailable"));
+    const catalog = await gateway.resolveBasePromptCapabilityCatalog(SCOPE);
+
+    expect(catalog.toolNames).toEqual([]);
+    expect(catalog.policyDeniedToolNames).toEqual(TOOL_NAMES);
+    expect(counters.sessionProject).toHaveBeenCalledTimes(1);
   });
 
   it("resolves the context the per-tool path resolves for a probe without one", async () => {

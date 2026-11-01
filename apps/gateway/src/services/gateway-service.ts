@@ -783,7 +783,7 @@ import {
   ChatTurnWriteConflictError,
 } from "./chat-turn-execution-registry.js";
 import { buildDelegatedSessionToolGrantCopies } from "./delegated-session-tool-grants.js";
-import { resolveToolRequestPathsForSessionScope } from "./tool-path-session-scope.js";
+import { resolveToolRequestPathsForSessionScope, withSharedSessionPathScopeReads } from "./tool-path-session-scope.js";
 import { buildToolRuntimeOwnerBinding } from "./tool-runtime-interposition.js";
 import { isOutsideRootWriteEligible } from "./outside-root-write-eligibility.js";
 import {
@@ -10661,7 +10661,9 @@ export class GatewayService {
       const safeWriteDir = path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out");
       if (!scope) return { toolNames, skills };
       const probe = withBasePromptPolicyScope(scope, this, async (id) => await this.storage.workspaces?.find(id));
-      return await filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir);
+      return await withSharedSessionPathScopeReads(this.storage, () =>
+        filterBasePromptToolsetByPolicy({ toolNames, skills }, scope, probe, safeWriteDir),
+      );
     } catch (error) {
       log.warn("resolveBasePromptCapabilityCatalog failed", {
         error: error instanceof Error ? error.message : String(error),
