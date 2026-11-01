@@ -3,7 +3,7 @@
 Date: 2026-11-01
 Status: draft for operator review
 
-Delivery status: PR 1 delivered the errand browser, the Gateway errand loop and Chat tool (behind the "Browser errands" flag), approval integrity, the Chat card with approvals, and the safety doc section plus a local proof script (`scripts/dev/errand-local-proof.mjs`). PR 2 and PR 3 remain. The live proof and the live Codex acceptance check are run by the operator.
+Delivery status: PR 1 delivered the errand browser, the Gateway errand loop and Chat tool (behind the "Browser errands" flag), approval integrity, the Chat card with approvals, and the safety doc section plus a local proof script (`scripts/dev/errand-local-proof.mjs`). PR 2 and PR 3 remain. Not yet run: the local proof script and the live Codex acceptance check have not been run; the operator is to run them.
 
 ## Intent
 

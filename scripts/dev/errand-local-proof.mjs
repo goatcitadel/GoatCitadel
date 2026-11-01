@@ -5,10 +5,13 @@
 //
 // Environment (or flags):
 //   GOATCITADEL_GATEWAY_URL   default http://127.0.0.1:8787   (--gateway <url>)
-//   GOATCITADEL_AUTH_TOKEN    bearer token, if the Gateway uses token auth   (--token <token>)
+//   GOATCITADEL_AUTH_TOKEN    bearer token, if the Gateway uses token auth (preferred over --token, which shows in
+//                             your shell history)
+//   GOATCITADEL_WORKSPACE_ID  workspace for the Chat session (--workspace <id>), default "default"
 //
 // Expected: search and "Add to Cart" run without asking; "Place your order" asks for approval (approve it in the
 // window, or answer "Not now" in Chat to see `declined`); the sign-in scenario hands the window to you.
+import { randomUUID } from "node:crypto";
 import http from "node:http";
 
 const args = process.argv.slice(2);
@@ -24,7 +27,8 @@ const gatewayUrl = option("--gateway", process.env.GOATCITADEL_GATEWAY_URL ?? "h
   /\/+$/u,
   "",
 );
-const token = option("--token", process.env.GOATCITADEL_AUTH_TOKEN ?? "");
+const token = process.env.GOATCITADEL_AUTH_TOKEN ?? option("--token", "");
+const workspaceOverride = option("--workspace", process.env.GOATCITADEL_WORKSPACE_ID ?? "default");
 const base = `http://127.0.0.1:${port}`;
 
 const page = (title, body) =>
@@ -86,7 +90,12 @@ if (flag("--fixtures-only")) {
 }
 
 async function api(path, init = {}) {
-  const headers = { "content-type": "application/json", ...(token ? { authorization: `Bearer ${token}` } : {}) };
+  const mutating = init.method !== undefined && init.method !== "GET";
+  const headers = {
+    "content-type": "application/json",
+    ...(mutating ? { "idempotency-key": randomUUID() } : {}),
+    ...(token ? { authorization: `Bearer ${token}` } : {}),
+  };
   const response = await fetch(`${gatewayUrl}${path}`, { ...init, headers });
   const text = await response.text();
   if (!response.ok) {
@@ -112,7 +121,7 @@ async function driveErrand() {
     method: "POST",
     body: JSON.stringify({ title: "Browser errand local proof" }),
   });
-  const sessionId = session.sessionId ?? session.id;
+  const sessionId = session.sessionId;
   if (!sessionId) throw new Error("Gateway did not return a session id.");
   console.log(`Chat session: ${sessionId}`);
 
@@ -125,7 +134,18 @@ async function driveErrand() {
     (error) => ({ ok: false, error }),
   );
 
+  const workspaceId = session.workspaceId ?? workspaceOverride;
   const seen = new Set();
+  const printNew = async () => {
+    const history = await api(
+      `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/history?workspaceId=${encodeURIComponent(workspaceId)}&limit=100`,
+    );
+    for (const message of history.items ?? []) {
+      if (seen.has(message.messageId)) continue;
+      seen.add(message.messageId);
+      console.log(`[${message.role}] ${String(message.content).slice(0, 400)}`);
+    }
+  };
   const deadline = Date.now() + 25 * 60 * 1000;
   let sendResult;
   send.then((result) => {
@@ -134,18 +154,15 @@ async function driveErrand() {
   while (Date.now() < deadline && !sendResult) {
     await new Promise((resolve) => setTimeout(resolve, 3000));
     try {
-      const history = await api(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/history`);
-      const messages = Array.isArray(history) ? history : (history.items ?? history.messages ?? []);
-      for (const message of messages) {
-        const id = message.messageId ?? message.id ?? JSON.stringify(message).slice(0, 80);
-        if (seen.has(id)) continue;
-        seen.add(id);
-        const text = typeof message.content === "string" ? message.content : JSON.stringify(message.content);
-        console.log(`[${message.role ?? "message"}] ${String(text).slice(0, 400)}`);
-      }
+      await printNew();
     } catch (error) {
       console.log(`(history poll failed: ${error.message})`);
     }
+  }
+  try {
+    await printNew();
+  } catch (error) {
+    console.log(`(final history read failed: ${error.message})`);
   }
   if (sendResult && !sendResult.ok) {
     console.error(`Send failed: ${sendResult.error.message}`);
