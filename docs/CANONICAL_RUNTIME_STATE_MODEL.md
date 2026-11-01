@@ -180,7 +180,7 @@ Authority:
 - Detailed contract: [docs/EVOLUTION_CONTROL_PLANE.md](./EVOLUTION_CONTROL_PLANE.md)
 
 Notes:
-- One singleton Control Plane serves Chat, Settings, the Capabilities connector install, compatibility routes, startup reconciliation, and local observers. Mission Control never writes canonical owner state directly.
+- One singleton Control Plane serves Chat, Settings, the Capabilities connector install and plugin install and uninstall, compatibility routes, startup reconciliation, and local observers. Mission Control never writes canonical owner state directly.
 - The model-facing `change.request` tool creates only a bounded, secret-free plan. Confirmation, canonical approval, apply, activation, rollback, restart, and external-effect authority remain server-owned.
 - Every transition uses revision CAS. Effectful actions additionally bind an action nonce, immutable form snapshot, target revision or hash, idempotency key, expiry, and one active target claim.
 - Provider/channel credentials, OAuth values, and native paths use dedicated owner routes. Plans and model context retain only sanitized state and opaque owner links.
@@ -328,7 +328,7 @@ Notes:
   - An uninstall that can't decide stays `uninstalling` and says so. For a plugin with hooks, when the hooks list or the install plan can't be read, or the workspace has 1,000 or more hooks, it removes nothing: "Couldn't tell whether its hooks still use the signing secrets it stored, so they were kept.". For a plugin with a connector to remove, when another installed plugin that kept a connector has a manifest that can't be read, it removes no connector. Uninstalling again once they can be read goes on from there.
   - Prompt-pack export file names can collide for similar plugins' packs. The uninstall keeps a file another saved pack also writes, and keeps every export file when 1,000 or more packs are saved.
   - A skill's own waiting step is found through the paged read of waiting approvals, 200 a page and at most 25 pages. With more waiting approvals than that, the read fails and the uninstall stops at its skills.
-  - A prompt pack an install created in the moment before its record named it (a crash, or a record write that failed right then) is not found by the uninstall.
+  - A prompt pack an install created in the moment before its record named it (a crash, or a record write that failed right then) is found by the uninstall under the id the install gives it (`plugin-<pluginId>-<pieceId>`), and deleted only when its source label is `Plugin <name>` and no other plugin's record lists that id, because two plugins' ids can make the same pack id. A pack that fails either test is left as it is.
   - If the plugin records can't be read at startup (after two retries), no plugin hold applies until a later store write can be read. That is logged as an error.
 
 ### Chat Workspace Exploration and Delegated Scope

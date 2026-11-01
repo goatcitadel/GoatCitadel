@@ -79,7 +79,7 @@ Integration plugins were removed. GoatCitadel no longer installs, lists, enables
 
 This does not touch integrations in general. Connections to services and MCP servers are not plugins and are not affected.
 
-### 3. Plugins (inspection only so far)
+### 3. Plugins
 
 A plugin is a bundle of pieces that runs no code. Its manifest, `goatcitadel-plugin.json`, lists them. Five kinds of piece exist:
 
@@ -91,7 +91,7 @@ A plugin is a bundle of pieces that runs no code. Its manifest, `goatcitadel-plu
 
 A manifest can add pieces and tighten rules. It cannot loosen anything. `parsePluginManifest` refuses, by name and before the strict schema runs: feature flags and runtime presets, chat instructions outside a skill, a hook that changes what happens or runs code, a connector that asks first about nothing, a tool group turned on, a piece kind it does not know, and a piece path that is absolute, climbs out of the folder, is not NFC, or that GoatCitadel's copy of the plugin can't hold (an empty or `.` part, a `:`, a name that ends in a dot or a space, a `.git` folder or a Windows device name; `isPortablePluginPath`, the rule the Gateway's copy uses too). Unknown keys, a duplicate piece id and a manifest over 64 KiB are refused too. The hook triggers are the ones in `HOOK_TRIGGER_VALUES`.
 
-What exists today is the manifest, its check and the Gateway's inspection: the Gateway fetches a plugin into a snapshot and checks every piece with its owner's normal check, and that installs nothing. Passing the manifest check installs nothing and grants nothing either. Installing plugins comes later.
+The Gateway inspects, installs and uninstalls plugins through its Capabilities API, each through a Change Plan. An inspection fetches a plugin into a snapshot and checks every piece with its owner's normal check, and installs nothing; an install adds the checked pieces from that snapshot, and an uninstall removes the pieces the install added. Mission Control has no Plugins tab yet, and GoatCitadel has no plugin trust or marketplace surface. Passing the manifest check installs nothing and grants nothing.
 
 ### 4. Skill Bundles
 

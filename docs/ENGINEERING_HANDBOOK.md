@@ -156,7 +156,7 @@ Mission Control is an API client, not a backend extension. It:
 - `@goatcitadel/skills`: skill loading and activation.
 - `@goatcitadel/orchestration`: orchestration run state transitions.
 
-Arena, the add-on machinery and integration plugins were removed; a new plugin model replaces them in a later release. Settings › Advanced keeps capability packs as an experimental local/operator-reviewed surface for `1.0`, not a public marketplace. Keep claims conservative until permission grants, durable logs, rollback/version proof, runtime health, and local-vs-marketplace boundaries are implemented.
+Arena, the add-on machinery and integration plugins were removed. Plugins replace them: they are inspected, installed and uninstalled only through the Gateway's Capabilities API (`/api/v1/capabilities/plugins`), each install and uninstall under a Change Plan, and Mission Control has no Plugins tab yet. Settings › Advanced keeps capability packs as an experimental local/operator-reviewed surface for `1.0`, not a public marketplace. Keep claims conservative until permission grants, durable logs, rollback/version proof, runtime health, and local-vs-marketplace boundaries are implemented.
 
 Desktop/mobile continuity must stay gateway-owned: signed device grants, install-token/device-request flows, desktop daemon/runtime state, and session/project/artifact/approval handoffs are the source of truth. Do not imply companion apps can bypass auth, policy, approvals, or the desktop runtime boundary.
 
