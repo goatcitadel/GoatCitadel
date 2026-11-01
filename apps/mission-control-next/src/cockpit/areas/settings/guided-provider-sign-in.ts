@@ -29,9 +29,17 @@ const throwIfAborted = (signal: AbortSignal) => {
 
 /**
  * Starts the provider's device sign-in, opens its verification page and polls until it connects, fails, expires
- * or `signal` aborts. Every await is followed by an abort check, so a cancelled run never completes the plan.
+ * or `signal` aborts. Every await before completion is followed by an abort check, so a run cancelled while
+ * polling never completes the plan. `hooks.onCompleting` fires synchronously right before the Gateway consumes
+ * the sign-in action; from then on the run cannot be cancelled and returns the completed record regardless of
+ * `signal`, so the caller never discards a plan the Gateway already advanced.
  */
-export async function runProviderSignIn(plan: ChangePlanRecord, workspaceId: string, signal: AbortSignal) {
+export async function runProviderSignIn(
+  plan: ChangePlanRecord,
+  workspaceId: string,
+  signal: AbortSignal,
+  hooks: { onCompleting?: () => void } = {},
+) {
   const action = plan.requiredAction;
   if (action?.kind !== "oauth") throw new Error("This sign-in action changed. Reopen the setup request.");
   const context = {
@@ -59,8 +67,7 @@ export async function runProviderSignIn(plan: ChangePlanRecord, workspaceId: str
     if (result.status !== "connected") {
       throw new Error(result.error ?? `Provider sign-in ${result.status}. Start it again.`);
     }
-    const completed = await completeChangePlanProviderOAuth(plan.planId, context, exact);
-    throwIfAborted(signal);
-    return completed;
+    hooks.onCompleting?.();
+    return completeChangePlanProviderOAuth(plan.planId, context, exact);
   }
 }

@@ -333,7 +333,13 @@ export function GuidedModelSetup({
       signInRef.current = controller;
       setSigningIn(true);
       try {
-        return await runProviderSignIn(plan, workspaceId, controller.signal);
+        return await runProviderSignIn(plan, workspaceId, controller.signal, {
+          // Past this point the Gateway consumes the sign-in, so closing the dialog must no longer cancel the run.
+          onCompleting: () => {
+            if (signInRef.current === controller) signInRef.current = null;
+            setSigningIn(false);
+          },
+        });
       } finally {
         if (signInRef.current === controller) {
           signInRef.current = null;

@@ -42,7 +42,12 @@ vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActio
     onContinueOAuth: (plan: ChangePlanRecord) => void | Promise<void>;
   }) =>
     props.plan ? (
-      <div role="dialog" data-pending={String(props.pending)} data-waiting={String(Boolean(props.waiting))}>
+      <div
+        role="dialog"
+        data-revision={props.plan.revision}
+        data-pending={String(props.pending)}
+        data-waiting={String(Boolean(props.waiting))}
+      >
         {props.contextNote ? <p role="note">{props.contextNote}</p> : null}
         {props.error ? <p role="alert">{props.error}</p> : null}
         <button type="button" onClick={() => void props.onContinueOAuth(props.plan!)}>
@@ -147,6 +152,31 @@ afterEach(() => {
 });
 
 describe("guided setup provider sign-in polling", () => {
+  it("cannot be cancelled once completion begins, and records the completed plan", async () => {
+    let resolveComplete!: (plan: unknown) => void;
+    mocks.complete.mockReturnValue(new Promise((resolve) => (resolveComplete = resolve)));
+    mocks.poll.mockResolvedValue({ flowId: "flow-1", providerId: "openai-codex", status: "connected" });
+    await render();
+    await act(async () => button("Connect provider")!.click());
+    await act(async () => button("Continue sign-in")!.click());
+    await advance(1_000);
+    expect(mocks.complete).toHaveBeenCalledOnce();
+    // Completion owns the plan now: Close neither dismisses the dialog nor aborts the run.
+    expect(dialog()?.getAttribute("data-pending")).toBe("true");
+    expect(dialog()?.getAttribute("data-waiting")).toBe("false");
+    await act(async () => button("Close")!.click());
+    expect(dialog()).not.toBeNull();
+    await act(async () => {
+      resolveComplete({
+        ...oauthPlan,
+        revision: 2,
+        requiredAction: { kind: "confirmation", actionId: "confirm-1", actionNonce: "nonce-2", title: "Confirm" },
+      });
+    });
+    expect(dialog()?.getAttribute("data-revision")).toBe("2");
+    expect(dialog()?.getAttribute("data-pending")).toBe("false");
+    expect(container.querySelector('[role="alert"]')).toBeNull();
+  });
   it("closes while the sign-in is still pending and stops polling", async () => {
     await startSignIn();
     // The shared dialog refuses to close while pending, so a polling sign-in leaves it dismissible.
