@@ -100,6 +100,60 @@ describe("SkillHubOperatorService", () => {
     });
   });
 
+  it("reads a check by its id at its true state after newer checks pushed it out of the newest 100", async () => {
+    const switchedOn = snapshot({ snapshotId: "snapshot-v1", createdAt: "2026-07-14T00:00:00.000Z" });
+    const newer = Array.from({ length: 100 }, (_, index) =>
+      snapshot({
+        snapshotId: `snapshot-newer-${index}`,
+        canonicalSourceKey: `clawhub/newer-${index}`,
+        compatibility: { skillId: `extra:newer-${index}`, compatible: true },
+        createdAt: `2026-07-14T01:${String(index % 60).padStart(2, "0")}:00.000Z`,
+      }),
+    );
+    const otherWorkspace = snapshot({ snapshotId: "snapshot-elsewhere", workspaceId: "workspace-2" });
+    const harness = createHarness({
+      snapshots: [...newer, switchedOn, otherWorkspace],
+      candidates: [
+        candidateVersion({
+          versionId: "version-v1",
+          upstreamSnapshotId: switchedOn.snapshotId,
+          sourceFingerprint: switchedOn.contentTreeSha256,
+          lifecycleState: "approved",
+        }),
+      ],
+      lifecycle: activeLifecycle(switchedOn),
+    });
+
+    const listed = await harness.service.list({ workspaceId: "workspace-1", limit: 100 });
+    expect(listed.items.map((item) => item.snapshotId)).not.toContain("snapshot-v1");
+
+    const found = await harness.service.list({
+      workspaceId: "workspace-1",
+      snapshotIds: ["snapshot-v1", "snapshot-v1", "snapshot-elsewhere", "snapshot-missing"],
+    });
+
+    // Another workspace's check and one that isn't there are left out; the same id is read once.
+    expect(found.items.map((item) => item.snapshotId)).toEqual(["snapshot-v1"]);
+    expect(found.page).toMatchObject({ returned: 1, truncated: false });
+    expect(found.items[0]).toMatchObject({
+      skillId: "extra:demo",
+      candidate: { versionId: "version-v1", lifecycleState: "approved" },
+      runtime: { activeVersion: true, inactiveCandidate: false },
+    });
+    expect(
+      (await harness.service.list({ workspaceId: "workspace-1", snapshotIds: ["snapshot-missing"] })).items,
+    ).toEqual([]);
+    // Read by id, no newest page is listed at all.
+    expect(harness.storage.skillHubSnapshots.listByWorkspace).toHaveBeenCalledTimes(1);
+    await expect(
+      harness.service.list({
+        workspaceId: "workspace-1",
+        snapshotIds: Array.from({ length: 101 }, (_, index) => `snapshot-${index}`),
+      }),
+    ).rejects.toThrow("Skill Hub reads at most 100 checks by id at once.");
+    expect(harness.createApproval).not.toHaveBeenCalled();
+  });
+
   it("builds exact server-derived intents for all five lifecycle kinds", async () => {
     const v1Snapshot = snapshot({
       snapshotId: "snapshot-v1",

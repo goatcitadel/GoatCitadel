@@ -322,7 +322,7 @@ export interface GatewayRouteServices {
    */
   capabilityPlugins?: Pick<
     CapabilityPluginsRouteService,
-    "list" | "inspect" | "inspection" | "namePluginOwnedError" | "install" | "loadToolGroupHolds"
+    "list" | "detail" | "inspect" | "inspection" | "namePluginOwnedError" | "install" | "loadToolGroupHolds"
   >;
   /** The Capabilities Tools tab's tool groups. Composed by the gateway service over the policy probe and the switches. */
   capabilityTools?: Pick<CapabilityToolsService, "list">;

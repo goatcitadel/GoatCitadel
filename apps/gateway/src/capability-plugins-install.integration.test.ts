@@ -5,8 +5,12 @@ import { fileURLToPath } from "node:url";
 import type { FastifyInstance } from "fastify";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
+  CapabilityConnectorItem,
+  CapabilityPluginDetail,
   CapabilityPluginInspection,
   CapabilityPluginListResponse,
+  CapabilitySkillItem,
+  CapabilityToolGroupItem,
   HookRecord,
   McpServerRecord,
   PluginActionOutcome,
@@ -27,6 +31,8 @@ const TOKEN = "capability-plugins-install-test-operator-1234567890";
 const WORKSPACE_ID = "default";
 const INSPECTIONS_URL = "/api/v1/capabilities/plugins/inspections";
 const INSTALL_URL = "/api/v1/capabilities/plugins/install";
+const SKILL_STEPS_URL = "/api/v1/capabilities/skills/operations";
+const STEP_WAIT = { timeout: 120_000, interval: 250 } as const;
 const HOOK_SECRET = "whsec-meeting-tools-integration-0123456789";
 const PROMPT_PACK_MD = [
   "# Meeting checks",
@@ -55,6 +61,15 @@ const MEETING_TOOLS = {
     { kind: "hook", id: "tool-watch", trigger: "tool.call.after", url: "https://1.1.1.1/goatcitadel" },
     { kind: "prompt_pack", id: "checks", path: "prompt-packs/checks.md" },
   ],
+};
+
+const NOTES_KIT = {
+  schemaVersion: 1,
+  pluginId: "notes-kit",
+  name: "Notes kit",
+  description: "One skill for notes.",
+  version: "1.0.0",
+  pieces: [{ kind: "skill", id: "notes", path: "skills/notes" }],
 };
 
 const ENV: Record<string, string> = {
@@ -88,6 +103,12 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     root = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-install-"));
     writeConfig(path.join(root, "config"));
     fs.cpSync(REFERENCE_PLUGIN, path.join(root, "plugins", "reference-plugin"), { recursive: true });
+    // A plugin that is only ever checked here, never installed, with its own copy of the reference skill.
+    writePlugin(path.join(root, "plugins", "notes-kit"), NOTES_KIT, {
+      "skills/notes/SKILL.md": fs
+        .readFileSync(path.join(REFERENCE_PLUGIN, "skills", "meeting-notes", "SKILL.md"), "utf8")
+        .replace("name: meeting-notes", "name: notes-kit-notes"),
+    });
     writePlugin(path.join(root, "plugins", "meeting-tools"), MEETING_TOOLS, {
       "prompt-packs/checks.md": PROMPT_PACK_MD,
     });
@@ -300,6 +321,86 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     expect(again.statusCode, again.body).toBe(409);
     expect(again.json()).toMatchObject({ error: "Meeting tools is already installed." });
     expect(keychain.size).toBe(1);
+  });
+
+  it("follows a plugin's skill through its own steps, then reads the plugin installed and marks its pieces", async () => {
+    // Continues from the two installs above: the reference plugin's skill still needs its own steps, and Meeting
+    // tools saved a connector and holds Browser off.
+    const detailUrl = `/api/v1/capabilities/plugins/detail?pluginId=reference-plugin&workspaceId=${WORKSPACE_ID}`;
+    const readDetail = async () => {
+      const response = await inject("GET", detailUrl);
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json<CapabilityPluginDetail>();
+    };
+    const before = await readDetail();
+    expect(before.state).toBe("install_not_finished");
+    expect(before.author).toBe("GoatCitadel");
+    expect(before.pieces.map((piece) => [piece.pieceId, piece.state])).toEqual([
+      ["meeting-notes", "check_passed"],
+      ["meeting-notes-check", "added"],
+    ]);
+    const snapshotId = before.pieces[0]!.skillSnapshotId!;
+
+    // A plugin's check that no installed plugin lists is refused: its plugin was only checked, never installed.
+    const checkedOnly = await inspect("notes-kit");
+    const refused = await inject("POST", SKILL_STEPS_URL, {
+      workspaceId: WORKSPACE_ID,
+      snapshotId: checkedOnly.pieces[0]!.skillSnapshotId,
+      operationKind: "install_inactive",
+    });
+    expect(refused.statusCode, refused.body).toBe(409);
+    expect(refused.json()).toMatchObject({
+      code: "PLUGIN_OWNED",
+      error: "This skill came with a plugin. Install the plugin to use it.",
+    });
+
+    // The installed plugin's skill goes through the Skills tab's own two steps, each with its own approval, which the
+    // operator's skip setting approves here.
+    for (const [operationKind, settled] of [
+      ["install_inactive", "installed_off"],
+      ["activate", "added"],
+    ] as const) {
+      const step = await inject("POST", SKILL_STEPS_URL, { workspaceId: WORKSPACE_ID, snapshotId, operationKind });
+      expect(step.statusCode, step.body).toBe(202);
+      expect(step.json()).toMatchObject({ status: "approved" });
+      await vi.waitFor(async () => expect((await readDetail()).pieces[0]?.state).toBe(settled), STEP_WAIT);
+    }
+
+    const after = await readDetail();
+    expect(after.state).toBe("installed");
+    expect(after.pieces[0]).toMatchObject({
+      state: "added",
+      href: "/capabilities/skills?item=skill:extra:meeting-notes",
+    });
+    const listed = (
+      await inject("GET", `/api/v1/capabilities/plugins?workspaceId=${WORKSPACE_ID}`)
+    ).json<CapabilityPluginListResponse>();
+    expect(listed.installed.find((item) => item.pluginId === "reference-plugin")?.state).toBe("installed");
+
+    // Each piece is marked in its own tab with the plugin that added it.
+    await vi.waitFor(async () => {
+      const skills = (await inject("GET", `/api/v1/capabilities/skills?workspaceId=${WORKSPACE_ID}`)).json<{
+        items: CapabilitySkillItem[];
+      }>().items;
+      expect(skills.find((item) => item.skillId === "extra:meeting-notes")?.fromPlugin).toEqual({
+        pluginId: "reference-plugin",
+        name: "Reference plugin",
+      });
+    }, STEP_WAIT);
+    const connectors = (await inject("GET", `/api/v1/capabilities/connectors?workspaceId=${WORKSPACE_ID}`)).json<{
+      items: CapabilityConnectorItem[];
+    }>().items;
+    expect(connectors.find((item) => item.name === "Linear")?.fromPlugin).toEqual({
+      pluginId: "meeting-tools",
+      name: "Meeting tools",
+    });
+    const tools = (await inject("GET", `/api/v1/capabilities/tools?workspaceId=${WORKSPACE_ID}`)).json<{
+      groups: CapabilityToolGroupItem[];
+    }>().groups;
+    expect(tools.find((group) => group.groupId === "browser")).toMatchObject({
+      state: "off",
+      heldOffBy: [{ pluginId: "meeting-tools", name: "Meeting tools" }],
+    });
   });
 
   it("can't be created from Chat or the generic plan route", async () => {

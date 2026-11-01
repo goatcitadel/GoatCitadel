@@ -12,8 +12,11 @@ import {
   SemanticValidationError,
   ServiceUnavailableError,
   ValidationError,
+  type CapabilityPluginDetail,
   type CapabilityPluginInspection,
   type CapabilityPluginListResponse,
+  type ChangePlanStatus,
+  type PluginManifestParse,
 } from "@goatcitadel/contracts";
 import { PluginIdReservedError } from "../services/capability-plugin-actions-service.js";
 import { PluginOwnedError } from "../services/plugin-owned-refusal.js";
@@ -34,6 +37,8 @@ import {
   type CapabilityPluginsRouteSources,
 } from "../services/capability-plugins-route-service.js";
 import { hubApproval, hubItem } from "../services/capability-skill-install.test-support.js";
+import { pluginSkillCheck } from "../services/plugin-skill-checks.js";
+import type { SkillHubOperatorItem } from "../services/skill-hub-operator-service.js";
 import { listBuiltInPluginManifests } from "../services/plugin-manifest-file.js";
 import { PluginSourceError } from "../services/plugin-source-service.js";
 import { capabilityPluginsRoutes } from "./capability-plugins.js";
@@ -82,7 +87,12 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
   const sources: CapabilityPluginsRouteSources = {
     listInstalled: vi.fn(async () => []),
     listBuiltIn: vi.fn(async () => []),
-    listSkillHubChecks: vi.fn(async () => []),
+    readSkillChecks: vi.fn(async () => new Map()),
+    readInstallPlanStatus: vi.fn(async (): Promise<ChangePlanStatus> => "completed"),
+    readManifest: vi.fn(
+      async (): Promise<PluginManifestParse> => ({ ok: false, code: "MANIFEST_MISSING", message: "No manifest." }),
+    ),
+    readSnapshotText: vi.fn(async () => ""),
     inspect: vi.fn(async () => INSPECTION),
     readInspection: vi.fn(async () => INSPECTION),
     install: vi.fn(async () => ({ planId: "plan-install-1", outcome: "applied" as const, summary: "Installed it." })),
@@ -342,7 +352,7 @@ describe("capability plugin routes", () => {
     // Listing reads manifests only: nothing is fetched, checked or kept, and no Skill Hub check is read.
     expect(inspect).not.toHaveBeenCalled();
     expect(readInspection).not.toHaveBeenCalled();
-    expect(sources.listSkillHubChecks).not.toHaveBeenCalled();
+    expect(sources.readSkillChecks).not.toHaveBeenCalled();
     expect(sources.reportFailure).not.toHaveBeenCalled();
   });
 
@@ -353,27 +363,31 @@ describe("capability plugin routes", () => {
       stored("all-on", {
         pieces: [skillPiece("a", "check-done"), { pieceId: "c", kind: "connector", owned: true, ref: "server-1" }],
       }),
-      stored("gone-from-list", { pieces: [skillPiece("a", "check-older")] }),
+      // Read by its id, a check that newer checks pushed out of the workspace's newest still reads switched on.
+      stored("older-check", { pieces: [skillPiece("a", "check-older")] }),
+      stored("check-gone", { pieces: [skillPiece("a", "check-missing")] }),
       stored("removing", { state: "uninstalling", pieces: [skillPiece("a", "check-done")] }),
       stored("elsewhere", { workspaceId: "lab", pieces: [skillPiece("a", "check-lab")] }),
     ];
-    const listSkillHubChecks = vi.fn(async (workspaceId: string) =>
-      workspaceId === "lab"
-        ? [
-            hubItem({
-              snapshotId: "check-lab",
-              approvals: { activate: hubApproval("activate", "approved", "applied") },
-            }),
-          ]
-        : [
-            hubItem({
-              snapshotId: "check-done",
-              approvals: { activate: hubApproval("activate", "approved", "applied") },
-            }),
-            hubItem({ snapshotId: "check-waiting", approvals: { activate: hubApproval("activate", "pending") } }),
-          ],
+    const switchedOn = (snapshotId: string): SkillHubOperatorItem =>
+      hubItem({ snapshotId, approvals: { activate: hubApproval("activate", "approved", "applied") } });
+    const checks: Record<string, SkillHubOperatorItem[]> = {
+      lab: [switchedOn("check-lab")],
+      default: [
+        switchedOn("check-done"),
+        switchedOn("check-older"),
+        hubItem({ snapshotId: "check-waiting", approvals: { activate: hubApproval("activate", "pending") } }),
+      ],
+    };
+    const readSkillChecks = vi.fn(
+      async (workspaceId: string, snapshotIds: readonly string[]) =>
+        new Map(
+          (checks[workspaceId] ?? [])
+            .filter((item) => snapshotIds.includes(item.snapshotId))
+            .map((item) => [item.snapshotId, pluginSkillCheck(item)]),
+        ),
     );
-    const { service } = routeService({ listInstalled: vi.fn(async () => plugins), listSkillHubChecks });
+    const { service } = routeService({ listInstalled: vi.fn(async () => plugins), readSkillChecks });
 
     const listed = await service.list();
 
@@ -381,7 +395,8 @@ describe("capability plugin routes", () => {
       installing: "install_not_finished",
       "half-on": "install_not_finished",
       "all-on": "installed",
-      "gone-from-list": "install_not_finished",
+      "older-check": "installed",
+      "check-gone": "install_not_finished",
       removing: "uninstalling",
       elsewhere: "installed",
     });
@@ -389,15 +404,18 @@ describe("capability plugin routes", () => {
       skill: 1,
       connector: 1,
     });
-    // Each workspace's checks are read once, from the workspace each plugin was installed in.
-    expect(listSkillHubChecks.mock.calls.map(([workspaceId]) => workspaceId).sort()).toEqual(["default", "lab"]);
+    // Each workspace's installed plugins' checks are read once, by their ids, in the workspace each was installed in.
+    expect(readSkillChecks.mock.calls.map(([workspaceId, ids]) => [workspaceId, [...ids].sort()]).sort()).toEqual([
+      ["default", ["check-done", "check-missing", "check-older", "check-waiting"]],
+      ["lab", ["check-lab"]],
+    ]);
   });
 
   it("never reads a plugin as installed when its skills' checks can't be read", async () => {
     const failure = new Error("database is locked");
     const { service, sources } = routeService({
       listInstalled: vi.fn(async () => [stored("all-on", { pieces: [skillPiece("a", "check-done")] })]),
-      listSkillHubChecks: vi.fn(async () => {
+      readSkillChecks: vi.fn(async () => {
         throw failure;
       }),
       listBuiltIn: vi.fn(async () => {
@@ -721,6 +739,103 @@ describe("capability plugin routes", () => {
 
     expect(response.statusCode).toBe(503);
     expect(response.json()).toEqual({ error: "Plugins can't be read right now.", code: "EXTERNAL_SERVICE_FAILED" });
+  });
+
+  describe("GET /api/v1/capabilities/plugins/detail", () => {
+    const DETAIL_URL = `/api/v1/capabilities/plugins/detail?pluginId=browser-checks&workspaceId=default`;
+    const installed = () =>
+      stored("browser-checks", {
+        pieces: [
+          skillPiece("browser-qa", "check-done"),
+          { pieceId: "no-git", kind: "tool_group_off", owned: true, ref: "git" },
+        ],
+      });
+
+    it("answers one installed plugin with each piece's state, 60 a minute, never kept", async () => {
+      const { service, sources } = routeService({
+        listInstalled: vi.fn(async () => [installed()]),
+        readSkillChecks: vi.fn(
+          async () =>
+            new Map([
+              [
+                "check-done",
+                pluginSkillCheck(
+                  hubItem({
+                    snapshotId: "check-done",
+                    approvals: { activate: hubApproval("activate", "approved", "applied") },
+                  }),
+                ),
+              ],
+            ]),
+        ),
+      });
+      const { server, requireOperatorAuth } = await build(service);
+
+      const response = await server.inject({ method: "GET", url: DETAIL_URL });
+
+      expect(response.statusCode, response.body).toBe(200);
+      expect(response.headers["x-ratelimit-limit"]).toBe("60");
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(requireOperatorAuth).toHaveBeenCalledOnce();
+      const detail = response.json<CapabilityPluginDetail>();
+      expect(detail).toMatchObject({
+        pluginId: "browser-checks",
+        state: "installed",
+        installPlanId: "plan-browser-checks",
+      });
+      expect(detail.pieces.map((piece) => [piece.pieceId, piece.state, piece.href])).toEqual([
+        ["browser-qa", "added", "/capabilities/skills?item=skill:extra:himalaya"],
+        ["no-git", "added", "/capabilities/tools?item=group:git"],
+      ]);
+      // The operator who asked reads the plan, never another; nothing is fetched, checked or installed.
+      expect(sources.inspect).not.toHaveBeenCalled();
+      expect(sources.install).not.toHaveBeenCalled();
+    });
+
+    it("answers 404 for a plugin that isn't installed, and 400 for a bad or extra query", async () => {
+      const { service, sources } = routeService({ listInstalled: vi.fn(async () => [installed()]) });
+      const { server } = await build(service);
+
+      const missing = await server.inject({
+        method: "GET",
+        url: "/api/v1/capabilities/plugins/detail?pluginId=other-plugin&workspaceId=default",
+      });
+      expect(missing.statusCode, missing.body).toBe(404);
+      expect(missing.json()).toMatchObject({ error: "This plugin isn't installed." });
+
+      for (const url of [
+        "/api/v1/capabilities/plugins/detail?workspaceId=default",
+        "/api/v1/capabilities/plugins/detail?pluginId=browser-checks",
+        "/api/v1/capabilities/plugins/detail?pluginId=../x&workspaceId=default",
+        "/api/v1/capabilities/plugins/detail?pluginId=browser-checks&workspaceId=%20default",
+        `${DETAIL_URL}&refresh=true`,
+      ]) {
+        expect((await server.inject({ method: "GET", url })).statusCode, url).toBe(400);
+      }
+      expect(sources.listInstalled).toHaveBeenCalledOnce();
+    });
+
+    it("answers a store it can't read with plain words only", async () => {
+      const { service } = routeService({
+        listInstalled: vi.fn(async () => {
+          throw new Error("The saved plugin records can't be read.");
+        }),
+      });
+      const { server } = await build(service);
+
+      const response = await server.inject({ method: "GET", url: DETAIL_URL });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.json()).toMatchObject({ error: "Plugins can't be read right now." });
+    });
+
+    it("refuses a caller without operator access", async () => {
+      const { service, sources } = routeService({ listInstalled: vi.fn(async () => [installed()]) });
+      const { server } = await build(service, { operator: false });
+
+      expect((await server.inject({ method: "GET", url: DETAIL_URL })).statusCode).toBe(403);
+      expect(sources.listInstalled).not.toHaveBeenCalled();
+    });
   });
 
   describe("POST /api/v1/capabilities/plugins/install", () => {

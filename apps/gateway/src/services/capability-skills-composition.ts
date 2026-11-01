@@ -13,7 +13,12 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
-import { CapabilitySkillActionsService, type CapabilitySkillActionStep } from "./capability-skill-actions-service.js";
+import { pluginsBySkillCheck } from "./capability-plugin-store.js";
+import {
+  CapabilitySkillActionsService,
+  type CapabilitySkillActionStep,
+  type PluginSkillListing,
+} from "./capability-skill-actions-service.js";
 import { CapabilitySkillDiscoverService } from "./capability-skill-discover-service.js";
 import { CapabilitySkillUsageService } from "./capability-skill-usage-service.js";
 import type { ShippedSkillDirs } from "./capability-skills-projection.js";
@@ -92,10 +97,22 @@ export interface CapabilitySkillsOwners {
   skillHub: {
     reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult>;
     listSkillHub(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse>;
-    createSkillHubApproval(input: CreateSkillHubOperatorApprovalInput): Promise<CreateSkillHubOperatorApprovalResponse>;
+    /** `options.pluginPass` is given only for a plugin's skill whose record the install steps have checked. */
+    createSkillHubApproval(
+      input: CreateSkillHubOperatorApprovalInput,
+      options?: { pluginPass: { pluginId: string } },
+    ): Promise<CreateSkillHubOperatorApprovalResponse>;
   };
-  /** Skill Hub's checks, read one at a time to tell GoatCitadel's own pack from an import (Ruling R43). */
-  skillHubSnapshots: { find(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined> };
+  /**
+   * Skill Hub's checks, read one at a time: to tell GoatCitadel's own pack from an import (Ruling R43), and a plugin's
+   * skill from any other.
+   */
+  skillHubSnapshots: { find(snapshotId: string): Promise<SkillHubCheckSource | undefined> };
+  /**
+   * The plugin records, read through the Plugins tab's one store (never a second one): which plugin lists a check as
+   * its skill, for a step on that skill and for the Skills tab's marks.
+   */
+  pluginRecords: { list(): Promise<readonly PluginSkillListing[]> };
   /**
    * The skill import owner's source reads, which Discover lists from: the curated entries and the marketplaces' listings
    * (the marketplaces only when asked), a catalog ranked by a search term, and the skills installed at runtime with the
@@ -110,6 +127,15 @@ export interface CapabilitySkillsOwners {
     ): SkillSourceListResponse;
     listInstalledSources(): readonly InstalledSkillSource[];
   };
+}
+
+/** Where one Skill Hub check read its skill from, and the workspace it belongs to. */
+export interface SkillHubCheckSource {
+  sourceType: string;
+  sourceRef: string;
+  /** `goatcitadel_plugin` for a skill a plugin brought. */
+  sourceProvider: string;
+  workspaceId: string;
 }
 
 /**
@@ -140,6 +166,7 @@ export function composeCapabilitySkills({
   rootDir,
   skillHub,
   skillHubSnapshots,
+  pluginRecords,
   skillSources,
 }: CapabilitySkillsOwners): CapabilitySkills {
   const readApprovalSkipSetting = () => features.isFeatureEnabled("settingsApprovalSkipEnabled");
@@ -158,6 +185,7 @@ export function composeCapabilitySkills({
       readApprovalSkipSetting,
       listSkillHub: (input) => skillHub.listSkillHub(input),
       findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
+      listPluginSkills: async () => pluginsBySkillCheck(await pluginRecords.list()),
     },
     reportFailedRead,
   );
@@ -175,7 +203,10 @@ export function composeCapabilitySkills({
         readApprovalSkipSetting,
         reviewSkillHubSource: (input) => skillHub.reviewSkillHubSource(input),
         listSkillHub: (input) => skillHub.listSkillHub(input),
-        createSkillHubApproval: (input) => skillHub.createSkillHubApproval(input),
+        // The plugin's pass, when the step gives one, reaches Skill Hub's owner exactly as given.
+        createSkillHubApproval: (...args) => skillHub.createSkillHubApproval(...args),
+        findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
+        listPluginRecords: () => pluginRecords.list(),
       },
       reportFailedStep,
     ),

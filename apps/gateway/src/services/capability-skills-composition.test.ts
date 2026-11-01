@@ -101,6 +101,7 @@ function owners(overrides: Partial<CapabilitySkillsOwners> = {}): CapabilitySkil
       createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
     },
     skillHubSnapshots: { find: vi.fn(async () => undefined) },
+    pluginRecords: { list: vi.fn(async () => []) },
     skillSources: {
       readSourceCatalog: vi.fn(async () => ({ providers: [], items: [] })),
       presentSourceCatalog: vi.fn(
@@ -549,6 +550,52 @@ describe("composeCapabilitySkills install steps", () => {
       reason: "setting",
       actorId: "operator-1",
     });
+  });
+
+  it("hands a plugin's skill step to Skill Hub's owner with the plugin's pass once its record lists the check", async () => {
+    const plugin = {
+      pluginId: "browser-checks",
+      name: "Browser checks",
+      workspaceId: "workspace-a",
+      state: "installed" as const,
+      pieces: [{ pieceId: "browser-qa", kind: "skill" as const, owned: true, skillSnapshotId: "skill-hub-review-1" }],
+    };
+    const parts = owners({
+      skillHubSnapshots: {
+        find: vi.fn(async () => ({
+          sourceType: "local_path",
+          sourceRef: `plugin:browser-checks/browser-qa@commit:${"c".repeat(40)}`,
+          sourceProvider: "goatcitadel_plugin",
+          workspaceId: "workspace-a",
+        })),
+      },
+      pluginRecords: { list: vi.fn(async () => [plugin as never]) },
+    });
+    const step = {
+      workspaceId: "workspace-a",
+      snapshotId: "skill-hub-review-1",
+      operationKind: "install_inactive" as const,
+      actorId: "operator-1",
+    };
+
+    await composeCapabilitySkills(parts).actions.requestStep(step);
+
+    expect(parts.skillHub.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(step, {
+      pluginPass: { pluginId: "browser-checks" },
+    });
+    // The Skills list marks the skill switched on from that check with the plugin's name.
+    const listed = await composeCapabilitySkills(
+      owners({
+        skills: {
+          listSkills: vi.fn(async () => [
+            installedFrom("browser-qa", path.join(ROOT_DIR, "skills", "extra", "browser-qa"), "skill-hub-review-1"),
+          ]),
+          setSkillState: vi.fn(),
+        },
+        pluginRecords: { list: vi.fn(async () => [plugin as never]) },
+      }),
+    ).skills.list("workspace-a");
+    expect(listed.items[0]).toMatchObject({ skillId: "extra:browser-qa", fromPlugin: { pluginId: "browser-checks" } });
   });
 
   it("lists the workspace's installs in progress from Skill Hub's list", async () => {

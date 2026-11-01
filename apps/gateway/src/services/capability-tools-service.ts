@@ -40,6 +40,13 @@ const BLOCK_BY_REASON_CODE: ReadonlyMap<string, CapabilityToolBlock> = new Map([
 
 type CatalogTool = Pick<ToolCatalogEntry, "toolName" | "description" | "riskLevel">;
 
+/** The Settings switches a list is built at. */
+interface ToolSettings {
+  revision: number;
+  switchedOffToolGroups: readonly ToolGroupId[];
+  pluginToolGroupHolds?: readonly { groupId: ToolGroupId; pluginId: string; pluginName: string }[];
+}
+
 /** The caller whose permission profile the probes use. These come from the request's own auth, never from its query. */
 export interface CapabilityToolsActor {
   operatorId?: string;
@@ -51,7 +58,11 @@ export interface CapabilityToolsActor {
 export interface CapabilityToolsSources {
   /** The tools this install offers, in registry order. */
   listToolCatalog(): readonly CatalogTool[];
-  readSettings(): Promise<{ revision: number; switchedOffToolGroups: readonly ToolGroupId[] }>;
+  /**
+   * The switches, and each plugin that holds a group off (`switchedOffToolGroups` already holds those groups). Without
+   * `pluginToolGroupHolds` no group names a plugin.
+   */
+  readSettings(): Promise<ToolSettings>;
   resolvePolicyContext(
     input: { workspaceId: string; surface: "chat" } & CapabilityToolsActor,
   ): Promise<ToolPolicyActorContext>;
@@ -118,9 +129,10 @@ export class CapabilityToolsService {
   private async build(
     workspaceId: string,
     actor: CapabilityToolsActor,
-    settings: { revision: number; switchedOffToolGroups: readonly ToolGroupId[] },
+    settings: ToolSettings,
   ): Promise<CapabilityToolsResponse> {
     const switchedOff = new Set<ToolGroupId>(settings.switchedOffToolGroups);
+    const heldOffBy = holdersByGroup(settings.pluginToolGroupHolds ?? []);
     const stateOf = (group: ToolGroupDefinition): CapabilityToolGroupState =>
       !group.switchable ? "always_on" : switchedOff.has(group.id) ? "off" : "on";
 
@@ -161,6 +173,7 @@ export class CapabilityToolsService {
         risk: riskiestOf(tools),
         tools,
         blockedToolCount: tools.filter((tool) => tool.blockedBy !== undefined).length,
+        ...(heldOffBy.has(group.id) ? { heldOffBy: heldOffBy.get(group.id) } : {}),
       };
     });
 
@@ -227,6 +240,21 @@ function verdictFor(access: ToolAccessEvaluateResponse): ToolVerdict {
     if (blockedBy) return { asks: "unknown", blockedBy };
   }
   return UNKNOWN_VERDICT;
+}
+
+/** Each held group's plugins, in the order the holds list them, each plugin once per group. */
+function holdersByGroup(
+  holds: NonNullable<ToolSettings["pluginToolGroupHolds"]>,
+): Map<ToolGroupId, Array<{ pluginId: string; name: string }>> {
+  const byGroup = new Map<ToolGroupId, Array<{ pluginId: string; name: string }>>();
+  for (const hold of holds) {
+    const holders = byGroup.get(hold.groupId) ?? [];
+    if (!holders.some((holder) => holder.pluginId === hold.pluginId)) {
+      holders.push({ pluginId: hold.pluginId, name: hold.pluginName });
+    }
+    byGroup.set(hold.groupId, holders);
+  }
+  return byGroup;
 }
 
 function riskiestOf(tools: readonly CapabilityToolItem[]): ToolRiskLevel {

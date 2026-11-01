@@ -33,7 +33,9 @@ export interface CapabilityToolListOwners {
     inspectToolAccess(request: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse>;
     resolveToolPolicyContext: CapabilityToolsSources["resolvePolicyContext"];
   };
-  settings: { getSettings(): Promise<Pick<RuntimeSettings, "revision" | "switchedOffToolGroups">> };
+  settings: {
+    getSettings(): Promise<Pick<RuntimeSettings, "revision" | "switchedOffToolGroups" | "pluginToolGroupHolds">>;
+  };
   /** The install's deployment profile, read on every list. */
   deploymentProfile(): DeploymentProfile;
   /** The folder the write tools' probes aim at, the way Chat's own probes do. */
@@ -51,7 +53,12 @@ export function composeCapabilityTools({
     listToolCatalog: () => tools.listToolCatalog(),
     readSettings: async () => {
       const current = await settings.getSettings();
-      return { revision: current.revision, switchedOffToolGroups: current.switchedOffToolGroups };
+      return {
+        revision: current.revision,
+        switchedOffToolGroups: current.switchedOffToolGroups,
+        // Each plugin that holds a group off, so the group can name it.
+        pluginToolGroupHolds: current.pluginToolGroupHolds,
+      };
     },
     resolvePolicyContext: (input) => tools.resolveToolPolicyContext(input),
     inspectAccess: (request) => tools.inspectToolAccess(request),

@@ -21,12 +21,12 @@ import {
 import { CapabilityPluginInspectionService } from "./capability-plugin-inspection-service.js";
 import { CapabilityPluginStore, pluginToolGroupHolds, type StoredPlugin } from "./capability-plugin-store.js";
 import { CapabilityPluginsRouteService, type CapabilityPluginsSource } from "./capability-plugins-route-service.js";
-import { SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
 import { lookUpHostAddresses } from "./hardened-git.js";
 import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { PluginInstallChangePlanAdapter } from "./plugin-install-change-plan-adapter.js";
 import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-manifest-file.js";
+import { readPluginSkillChecks, type FindSkillHubChecks } from "./plugin-skill-checks.js";
 import { PluginSnapshotChangedError, PluginSnapshotPathError, PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { fetchPluginSource } from "./plugin-source-service.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
@@ -60,10 +60,10 @@ export interface PluginToolGroupHoldsTarget {
 export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
   /** `<rootDir>/plugins` holds the plugins that ship; `<data>/plugins` holds the snapshots and their temp copies. */
   config: CapabilityPluginsConfig;
-  /** Skill Hub's source review and its operator list, as the Skills tab reaches them. */
+  /** Skill Hub's source review, and its operator list, which a plugin's skills are read from by their checks' ids. */
   skillHub: {
     reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult>;
-    listSkillHub(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse>;
+    listSkillHub(input: { workspaceId: string; snapshotIds: readonly string[] }): Promise<SkillHubOperatorListResponse>;
   };
   /** Takes the groups plugins hold off, loaded at startup and again after every write to the plugin store. */
   policy: PluginToolGroupHoldsTarget;
@@ -91,12 +91,19 @@ export function pluginSnapshotResolver(
   return (treeSha256, relativePath) => snapshots.resolve(treeSha256, relativePath);
 }
 
+/** The Plugins tab's routes, and the plugin records as a plain read for the other tabs that mark a plugin's pieces. */
+export interface CapabilityPlugins {
+  routes: CapabilityPluginsRouteService;
+  /** Every plugin record, read through the one plugin store. It writes nothing. */
+  readPlugins(): Promise<readonly StoredPlugin[]>;
+}
+
 /**
  * Wires the Plugins tab and the plugin install plan to their owners. Both share one plugin store, so every write the
  * install makes reaches the tool-group holds as an inspection's does.
  */
-export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): CapabilityPluginsRouteService {
-  const { config, mcp, settings, skillHub, records, policy, keychain, changePlanAdapters } = owners;
+export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): CapabilityPlugins {
+  const { config, mcp, settings, skillHub, records, policy, plans, keychain, changePlanAdapters } = owners;
   const paths = pluginDataPaths(config);
   const snapshots = new PluginSnapshotStore(paths.snapshots);
   const store = new CapabilityPluginStore(records.systemSettings);
@@ -109,6 +116,9 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     wait: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
   });
   const custody = new HookSecretCustodyService(keychain);
+  // The one per-id read of a plugin's skill checks: by each check's own id, never through a workspace's newest checks.
+  const readSkillChecks = (workspaceId: string, snapshotIds: readonly string[]) =>
+    readPluginSkillChecks(findSkillHubChecks(skillHub), workspaceId, snapshotIds);
   const shared: PluginInstallShared = {
     readInspection: (inspectionId) => store.getInspection(inspectionId),
     readPlugin: (pluginId) => store.get(pluginId),
@@ -169,18 +179,29 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     newInspectionId: () => randomUUID(),
     gatewayVersion: gatewayVersionForReviewKeys(),
   });
-  return new CapabilityPluginsRouteService({
+  const routes = new CapabilityPluginsRouteService({
     listInstalled: () => store.list(),
     listBuiltIn: () => listBuiltInPluginManifests(paths.builtIn),
-    // The list the Skills tab's installs read, so a plugin's skill reads switched on exactly when that check does.
-    listSkillHubChecks: async (workspaceId) =>
-      (await skillHub.listSkillHub({ workspaceId, limit: SKILL_HUB_LIST_LIMIT })).items,
+    readSkillChecks,
+    readInstallPlanStatus: async (workspaceId, planId, actorId) =>
+      (await plans.get({ workspaceId, actorId, surface: "capabilities" }, planId)).status,
+    readManifest: (treeSha256) => shared.readManifest(treeSha256),
+    readSnapshotText: (treeSha256, relativePath) => shared.readSnapshotText(treeSha256, relativePath),
     inspect: (input) => inspection.inspect(input),
     readInspection: async (inspectionId) => (await store.getInspection(inspectionId))?.inspection,
     install: (input) => actions.install(input),
     loadToolGroupHolds: () => holds.load(),
     reportFailure: reportFailedRead,
   });
+  return { routes, readPlugins: () => store.list() };
+}
+
+/**
+ * A workspace's checks by their ids, through Skill Hub's operator list: the one per-id read a plugin's skill pieces are
+ * read with (here for the detail and the list, and for the uninstall's revokes and a reinstall's refusal).
+ */
+function findSkillHubChecks(skillHub: Pick<CapabilityPluginsOwners["skillHub"], "listSkillHub">): FindSkillHubChecks {
+  return async ({ workspaceId, snapshotIds }) => (await skillHub.listSkillHub({ workspaceId, snapshotIds })).items;
 }
 
 /**

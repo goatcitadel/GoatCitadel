@@ -15,8 +15,10 @@ import {
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
+import type { StoredPlugin } from "./capability-plugin-store.js";
 import { buildCapabilitySkillInstall, SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
+import { PluginSkillNeedsInstallError, pluginSkillSource } from "./plugin-owned-refusal.js";
 import type {
   CreateSkillHubOperatorApprovalInput,
   SkillHubOperatorApprovalSummary,
@@ -104,8 +106,21 @@ export interface CapabilitySkillActionSources {
    */
   createSkillHubApproval(
     input: CreateSkillHubOperatorApprovalInput,
+    options?: { pluginPass: { pluginId: string } },
   ): Promise<{ approval: Pick<SkillHubOperatorApprovalSummary, "approvalId" | "status"> }>;
+  /** One Skill Hub check by its id, in any workspace: what source it read, so a plugin's skill is told apart. */
+  findSkillHubSnapshot(
+    snapshotId: string,
+  ): Promise<{ sourceProvider: string; sourceRef: string; workspaceId: string } | undefined>;
+  /** The plugin records, read through the Plugins tab's one store: which plugin lists a check as its skill. */
+  listPluginRecords(): Promise<readonly PluginSkillListing[]>;
 }
+
+/** What a plugin record says about its skills, for a step on one of them. */
+export type PluginSkillListing = Pick<StoredPlugin, "pluginId" | "name" | "workspaceId" | "state" | "pieces">;
+
+/** A plugin whose skills may take their steps: its install is under way, or done. Never while it is uninstalled. */
+const PLUGIN_STATES_TAKING_SKILL_STEPS: ReadonlySet<StoredPlugin["state"]> = new Set(["installing", "installed"]);
 
 export type CapabilitySkillActionStep = "approval_skip" | "current_state" | "resolve" | "audit";
 
@@ -195,17 +210,23 @@ export class CapabilitySkillActionsService {
    * operator as requester. The skip applies only for the operator's setting (never on `remote_hardened`); installing a
    * skill never only takes power away. It resolves that same approval through the Inbox's own resolve, so the
    * approval's effect applies the step. Hub approvals never expire, and a declined one is asked for afresh, so this
-   * answers only `approved` or `waiting`. A step the guard refuses passes the owner's 409 through.
+   * answers only `approved` or `waiting`. A step the guard refuses passes the owner's 409 through. A check that came
+   * with a plugin takes its steps only while that plugin's record, in this workspace, is installing or installed and
+   * lists it: then, and only then, the plugin's pass goes to Skill Hub's owner. Otherwise it is a 409 `PLUGIN_OWNED`.
    */
   public async requestStep(
     input: CapabilitySkillOperationRequest & { actorId: string },
   ): Promise<CapabilitySkillActionOutcome> {
-    const { approval } = await this.sources.createSkillHubApproval({
+    const step: CreateSkillHubOperatorApprovalInput = {
       workspaceId: input.workspaceId,
       snapshotId: input.snapshotId,
       operationKind: input.operationKind,
       actorId: input.actorId,
-    });
+    };
+    const pluginPass = await this.pluginPassFor(input);
+    const { approval } = pluginPass
+      ? await this.sources.createSkillHubApproval(step, { pluginPass })
+      : await this.sources.createSkillHubApproval(step);
     const { approvalId } = approval;
     // The same request hands back the approval it already made; an approved one is never resolved again.
     if (approval.status === "approved") return { status: "approved", approvalId };
@@ -230,6 +251,29 @@ export class CapabilitySkillActionsService {
       actorId: input.actorId,
     });
     return { status: "approved", approvalId };
+  }
+
+  /**
+   * The plugin's pass for a step on its skill, or undefined for any other check (and for one this workspace doesn't
+   * have, which Skill Hub's owner refuses as not found). Only a record that is installing or installed, in this
+   * workspace, and lists the check as one of its skill pieces gives it; anything else is refused before any approval.
+   */
+  private async pluginPassFor(
+    input: Pick<CapabilitySkillOperationRequest, "workspaceId" | "snapshotId">,
+  ): Promise<{ pluginId: string } | undefined> {
+    const snapshot = await this.sources.findSkillHubSnapshot(input.snapshotId);
+    if (!snapshot || snapshot.workspaceId !== input.workspaceId) return undefined;
+    const source = pluginSkillSource(snapshot);
+    if (!source) return undefined;
+    const listing = (await this.sources.listPluginRecords()).find(
+      (plugin) =>
+        plugin.pluginId === source.pluginId &&
+        plugin.workspaceId === input.workspaceId &&
+        PLUGIN_STATES_TAKING_SKILL_STEPS.has(plugin.state) &&
+        plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === input.snapshotId),
+    );
+    if (!listing) throw new PluginSkillNeedsInstallError(source.pluginId);
+    return { pluginId: listing.pluginId };
   }
 
   /**

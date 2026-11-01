@@ -8,6 +8,7 @@ import {
   isGoatError,
   pluginManifestSchema,
   redactStructuredSecrets,
+  type CapabilityPluginDetail,
   type CapabilityPluginRefusal,
   type PluginActionOutcome,
 } from "@goatcitadel/contracts";
@@ -24,6 +25,9 @@ const workspaceIdSchema = z
   .max(200)
   .refine((value) => value === value.normalize("NFKC").trim(), "must be NFKC text with no space at either end");
 const listQuerySchema = z.object({ workspaceId: workspaceIdSchema }).strict();
+const detailQuerySchema = z
+  .object({ pluginId: pluginManifestSchema.shape.pluginId, workspaceId: workspaceIdSchema })
+  .strict();
 const inspectionParamsSchema = z.object({ inspectionId: z.uuid() }).strict();
 const inspectionQuerySchema = z.object({}).strict();
 // A plugin source by kind, nothing else: a shipped plugin by its id, an https Git address with an optional commit,
@@ -61,6 +65,8 @@ const INSTALL_UNAVAILABLE_MESSAGE = "This plugin can't be installed right now.";
 const KEY_MESSAGE = "Send an Idempotency-Key header of up to 256 letters, digits or . _ : @ / + * - characters.";
 // The list reads the plugin store, the shipped manifests and, for installed plugins with skills, Skill Hub's checks.
 const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
+// A detail reads the plugin store, its install plan and snapshot, and its skills' Skill Hub checks by their ids.
+const DETAIL_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
 // An inspection fetches a whole source (a Git clone, say) and runs every piece's check.
 const INSPECTION_RATE_LIMIT = { max: 10, timeWindow: "1 minute" } as const;
 const READ_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
@@ -81,6 +87,7 @@ const ANSWERED_UNAVAILABLE_REASONS: ReadonlySet<unknown> = new Set(["change_plan
  */
 export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
   const operatorList = withRouteAccess(fastify, "operator", { config: { rateLimit: LIST_RATE_LIMIT } });
+  const operatorDetail = withRouteAccess(fastify, "operator", { config: { rateLimit: DETAIL_RATE_LIMIT } });
   const operatorInspect = withRouteAccess(fastify, "operator", {
     bodyLimit: BODY_LIMIT,
     config: { rateLimit: INSPECTION_RATE_LIMIT },
@@ -102,6 +109,26 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
     try {
       markNoStore(reply);
       return reply.send(await requirePlugins(fastify).list());
+    } catch (error) {
+      return sendPluginError(reply, error, request.log);
+    }
+  });
+
+  /**
+   * One installed plugin, install-wide like the list, and each of its pieces with its state and a link to its own item,
+   * all written by the Gateway: a skill read by its Skill Hub check's id, the rest from the plugin's record. Its state
+   * follows the list's own rule. 404 for a plugin that isn't installed. Reading writes nothing and publishes no events.
+   */
+  fastify.get("/api/v1/capabilities/plugins/detail", operatorDetail, async (request, reply) => {
+    const query = detailQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: query.error.flatten() });
+    try {
+      markNoStore(reply);
+      const detail: CapabilityPluginDetail = await requirePlugins(fastify).detail({
+        pluginId: query.data.pluginId,
+        actorId: actorIdFor(request),
+      });
+      return reply.send(detail);
     } catch (error) {
       return sendPluginError(reply, error, request.log);
     }

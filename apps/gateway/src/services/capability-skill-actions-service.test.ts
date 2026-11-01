@@ -60,6 +60,13 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
     reviewSkillHubSource: vi.fn(async () => ({ snapshot: { snapshotId: "skill-hub-review-1" }, replayed: false })),
     listSkillHub: vi.fn(async () => ({ items: [hubItem()] })),
     createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("install_inactive", "pending") })),
+    // An ordinary check: not one a plugin brought, so no plugin record is read.
+    findSkillHubSnapshot: vi.fn(async () => ({
+      sourceProvider: "local",
+      sourceRef: "skills/import-packs/himalaya",
+      workspaceId: "default",
+    })),
+    listPluginRecords: vi.fn(async () => []),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }

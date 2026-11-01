@@ -36,6 +36,7 @@ const UNNAMED_MESSAGES: Record<UnnamedPluginPiece["kind"], string> = {
   skill: "This skill came with a plugin that isn't installed.",
   prompt_pack: "This prompt pack came with a plugin that isn't installed.",
 };
+const SKILL_NEEDS_INSTALL_MESSAGE = "This skill came with a plugin. Install the plugin to use it.";
 /** What a Skill Hub review records as the source of a plugin's skill (the review's own `PLUGIN_SOURCE_PROVIDER`). */
 const PLUGIN_SOURCE_PROVIDER: SkillSourceProvider = "goatcitadel_plugin";
 /** A plugin skill's source: `plugin:<pluginId>/<pieceId>@<pin>`. */
@@ -62,8 +63,35 @@ export class PluginOwnedError extends GoatError {
   }
 }
 
+/**
+ * 409 `PLUGIN_OWNED`: an install step on a plugin's skill whose plugin isn't being installed, or isn't installed, in
+ * this workspace with that skill listed. Installing the plugin is the only way its skills come in. It already says
+ * what to do, so nothing names it after a plugin.
+ */
+export class PluginSkillNeedsInstallError extends GoatError {
+  public readonly code = "PLUGIN_OWNED" as const;
+  public readonly httpStatus = 409;
+
+  public constructor(pluginId: string | undefined) {
+    super(SKILL_NEEDS_INSTALL_MESSAGE, pluginId ? { pluginId } : undefined);
+  }
+}
+
 export function isPluginOwnedError(error: unknown): error is PluginOwnedError {
   return error instanceof PluginOwnedError || (isGoatError(error) && error.code === "PLUGIN_OWNED");
+}
+
+/**
+ * Whether a Skill Hub check came with a plugin: undefined for any other check, otherwise the plugin its source names
+ * (`pluginId` undefined when the source names none GoatCitadel could have written).
+ */
+export function pluginSkillSource(snapshot: {
+  sourceProvider: string;
+  sourceRef: string;
+}): { pluginId: string | undefined } | undefined {
+  if (snapshot.sourceProvider !== PLUGIN_SOURCE_PROVIDER) return undefined;
+  const named = PLUGIN_SKILL_SOURCE_PATTERN.exec(snapshot.sourceRef)?.[1];
+  return { pluginId: named && PLUGIN_ID_PATTERN.test(named) ? named : undefined };
 }
 
 /** The refusal named after the installed plugin that added the piece, or the refusal as it was when none did. */
@@ -128,9 +156,9 @@ export function assertSkillHubSnapshotNotFromPlugin(
   snapshot: { snapshotId: string; sourceProvider: string; sourceRef: string },
   pass?: { pluginId: string },
 ): void {
-  if (snapshot.sourceProvider !== PLUGIN_SOURCE_PROVIDER) return;
-  const named = PLUGIN_SKILL_SOURCE_PATTERN.exec(snapshot.sourceRef)?.[1];
-  const pluginId = named && PLUGIN_ID_PATTERN.test(named) ? named : undefined;
+  const source = pluginSkillSource(snapshot);
+  if (!source) return;
+  const { pluginId } = source;
   if (pluginId && pass?.pluginId === pluginId) return;
   throw new PluginOwnedError({ kind: "skill", ref: snapshot.snapshotId, ...(pluginId ? { pluginId } : {}) });
 }

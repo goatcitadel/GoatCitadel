@@ -98,6 +98,37 @@ describe("CapabilityToolsService", () => {
     });
   });
 
+  it("names each plugin that holds a group off, in the holds' order, and no plugin on any other group", async () => {
+    const { service } = build({
+      readSettings: vi.fn(async () => ({
+        revision: 7,
+        switchedOffToolGroups: ["git", "browser", "files"] as ToolGroupId[],
+        pluginToolGroupHolds: [
+          { groupId: "browser" as ToolGroupId, pluginId: "browser-checks", pluginName: "Browser checks" },
+          { groupId: "git" as ToolGroupId, pluginId: "meeting-tools", pluginName: "Meeting tools" },
+          { groupId: "browser" as ToolGroupId, pluginId: "meeting-tools", pluginName: "Meeting tools" },
+        ],
+      })),
+    });
+
+    const response = await service.list("default", ACTOR);
+
+    const held = Object.fromEntries(response.groups.map((group) => [group.groupId, group.heldOffBy]));
+    expect(held.browser).toEqual([
+      { pluginId: "browser-checks", name: "Browser checks" },
+      { pluginId: "meeting-tools", name: "Meeting tools" },
+    ]);
+    expect(held.git).toEqual([{ pluginId: "meeting-tools", name: "Meeting tools" }]);
+    // The operator's own switch holds files off: no plugin is named.
+    expect(response.groups.find((group) => group.groupId === "files")).toMatchObject({ state: "off" });
+    expect(
+      response.groups
+        .filter((group) => "heldOffBy" in group)
+        .map((group) => group.groupId)
+        .sort(),
+    ).toEqual(["browser", "git"]);
+  });
+
   it("reports the workspace, the settings revision and when the list was made", async () => {
     const { service } = build();
 

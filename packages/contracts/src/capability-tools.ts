@@ -81,6 +81,11 @@ export interface CapabilityToolGroupItem {
   /** The tools this install offers, in registry order. */
   tools: CapabilityToolItem[];
   blockedToolCount: number;
+  /**
+   * The plugins that hold this group off, in the order the Gateway lists its holds. A held group reads `off` whatever
+   * the operator's own switch says, and only uninstalling each plugin releases its hold. Absent when no plugin holds it.
+   */
+  heldOffBy?: { pluginId: string; name: string }[];
 }
 
 export interface CapabilityToolsResponse {

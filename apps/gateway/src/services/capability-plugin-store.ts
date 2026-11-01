@@ -244,6 +244,24 @@ export function pluginToolGroupHolds(
   );
 }
 
+/**
+ * The plugin each Skill Hub check belongs to, by check id: every skill piece a record lists, of a plugin in any state.
+ * What marks a skill switched on from one of them as the plugin's.
+ */
+export function pluginsBySkillCheck(
+  plugins: readonly Pick<StoredPlugin, "pluginId" | "name" | "pieces">[],
+): Map<string, { pluginId: string; name: string }> {
+  return new Map(
+    plugins.flatMap((plugin) =>
+      plugin.pieces.flatMap((piece) =>
+        piece.kind === "skill" && piece.skillSnapshotId !== undefined
+          ? [[piece.skillSnapshotId, { pluginId: plugin.pluginId, name: plugin.name }] as const]
+          : [],
+      ),
+    ),
+  );
+}
+
 function hasExpired(kept: KeptInspection, nowMs: number): boolean {
   const expiresAt = Date.parse(kept.inspection.expiresAt);
   return !Number.isFinite(expiresAt) || expiresAt <= nowMs;

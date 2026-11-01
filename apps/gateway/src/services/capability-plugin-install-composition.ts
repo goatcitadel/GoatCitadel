@@ -40,9 +40,10 @@ export interface PluginRecordsOwner {
   runImmediateTransaction<T>(work: () => T | Promise<T>): Promise<Awaited<T>>;
 }
 
-/** The Change Plan control plane, as an install uses it. */
+/** The Change Plan control plane, as an install (and the plugin's detail, reading its install plan) uses it. */
 export interface PluginPlansOwner {
   isEnabled(): Promise<boolean>;
+  get(actor: EvolutionControlPlaneActor, planId: string): Promise<ChangePlanRecord>;
   findByIdempotencyKey(actor: EvolutionControlPlaneActor, key: string): Promise<ChangePlanRecord | undefined>;
   create(input: EvolutionControlPlaneCreateInput): Promise<ChangePlanRecord>;
   confirm(

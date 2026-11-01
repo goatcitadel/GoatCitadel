@@ -479,8 +479,8 @@ import {
 import { WebSearchCredentialService } from "./web-search-credential-service.js";
 import { composeCapabilityConnectors } from "./capability-connectors-composition.js";
 import { composeCapabilityTools, composeCapabilityToolUsage } from "./capability-tools-composition.js";
-import { composeCapabilitySkills } from "./capability-skills-composition.js";
-import { composeCapabilityPlugins, pluginSnapshotResolver } from "./capability-plugins-composition.js";
+import { composeCapabilitySkillsAndPlugins } from "./capability-skills-plugins-composition.js";
+import { pluginSnapshotResolver } from "./capability-plugins-composition.js";
 import { readPluginPieceOwner } from "./capability-plugin-store.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { GoogleWorkspaceOAuthService } from "./google-workspace-oauth-service.js";
@@ -3938,7 +3938,7 @@ export class GatewayService {
         safeWriteFallbackDir: () =>
           path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out"),
       }),
-      capabilitySkills: composeCapabilitySkills({
+      ...composeCapabilitySkillsAndPlugins({
         chatTurnCapabilityProfiles: this.storage.chatTurnCapabilityProfiles,
         skills: this,
         loadedSkills: () => this.skillsService.list(),
@@ -3947,17 +3947,12 @@ export class GatewayService {
         approvals: composed.approvals,
         audit: this.storage.audit,
         features: this,
-        deploymentProfile: () => this.config.assistant.deploymentProfile,
-        rootDir: this.config.rootDir,
         skillHub: composed.skills,
         skillHubSnapshots: this.storage.skillHubSnapshots,
         skillSources: this.skillImportService,
-      }),
-      capabilityPlugins: composeCapabilityPlugins({
         config: this.config,
         mcp: this,
         settings: this,
-        skillHub: composed.skills,
         records: this.storage,
         policy: this.policyEngine,
         plans: this.evolutionControlPlaneService,
