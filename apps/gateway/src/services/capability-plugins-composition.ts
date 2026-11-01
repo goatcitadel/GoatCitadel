@@ -11,6 +11,7 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { PluginToolGroupHold } from "@goatcitadel/policy-engine";
+import { builtInPluginsRoot } from "./built-in-plugins-root.js";
 import { CapabilityPluginActionsService } from "./capability-plugin-actions-service.js";
 import {
   pluginActionSources,
@@ -87,7 +88,10 @@ export interface PluginToolGroupHoldsTarget {
  * Change Plan adapters.
  */
 export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
-  /** `<rootDir>/plugins` holds the plugins that ship; `<data>/plugins` holds the snapshots and their temp copies. */
+  /**
+   * `<rootDir>/plugins` holds the plugins that ship (the release's `app/templates/plugins` on a packaged install);
+   * `<data>/plugins` holds the snapshots and their temp copies.
+   */
   config: CapabilityPluginsConfig;
   /** Skill Hub's source review, and its operator list, which a plugin's skills are read from by their checks' ids. */
   skillHub: {
@@ -110,7 +114,10 @@ export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
   approvals: CapabilitySkillsOwners["approvals"];
 }
 
-/** Where plugins live on this install. Snapshots and their temp copies share a volume, since a snapshot is renamed in. */
+/**
+ * Where plugins live on this install. Snapshots and their temp copies share a volume, since a snapshot is renamed in.
+ * The plugins that ship are read from the release's own app folder on a packaged install (`builtInPluginsRoot`).
+ */
 export function pluginDataPaths(config: CapabilityPluginsConfig): {
   snapshots: string;
   temp: string;
@@ -120,7 +127,7 @@ export function pluginDataPaths(config: CapabilityPluginsConfig): {
   return {
     snapshots: path.join(pluginsData, "snapshots"),
     temp: path.join(pluginsData, "tmp"),
-    builtIn: path.join(path.resolve(config.rootDir), "plugins"),
+    builtIn: builtInPluginsRoot(config.rootDir),
   };
 }
 

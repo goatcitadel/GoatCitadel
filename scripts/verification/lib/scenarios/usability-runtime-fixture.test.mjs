@@ -22,6 +22,8 @@ test("fresh browser fixtures exclude operator config, private workspaces and sch
     await fs.writeFile(path.join(sourceRoot, "workspaces", "private", "MEMORY.md"), privateBytes);
     await fs.mkdir(path.join(sourceRoot, "skills", "shipped"), { recursive: true });
     await fs.writeFile(path.join(sourceRoot, "skills", "shipped", "SKILL.md"), "shipped skill fixture");
+    await fs.mkdir(path.join(sourceRoot, "plugins", "shipped"), { recursive: true });
+    await fs.writeFile(path.join(sourceRoot, "plugins", "shipped", "goatcitadel-plugin.json"), "shipped plugin fixture");
     const root = await prepareUsabilityRuntime("fixture", "http://127.0.0.1:12345/v1", { sourceRoot, tempParent: parent });
     assert.equal(path.dirname(root), parent);
     const files = await fs.readdir(path.join(root, "config"));
@@ -43,6 +45,9 @@ test("fresh browser fixtures exclude operator config, private workspaces and sch
       assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, "config", filename), "utf8")), unified[section]);
     }
     assert.equal(await fs.readFile(path.join(root, "skills", "shipped", "SKILL.md"), "utf8"), "shipped skill fixture");
+    // The plugins that ship are read from <rootDir>/plugins, so a fresh-install proof can open them.
+    assert.equal(await fs.readFile(path.join(root, "plugins", "shipped", "goatcitadel-plugin.json"), "utf8"),
+      "shipped plugin fixture");
     assert.equal(await fs.readFile(path.join(sourceRoot, "config", "goatcitadel.json"), "utf8"), privateBytes);
   } finally {
     // This exact temporary parent owns both the fake source and returned runtime.

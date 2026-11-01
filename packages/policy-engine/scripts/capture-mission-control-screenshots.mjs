@@ -104,7 +104,7 @@ async function main() {
 
 /*
  * The public gallery must never show operator state, so the runtime is built from
- * shipped defaults only: the tracked example config and the git-tracked skills.
+ * shipped defaults only: the tracked example config and the git-tracked skills and plugins.
  * Local `config/*.json`, `.env`, workspace guidance, and untracked skills are never read.
  */
 async function prepareRuntimeRoot() {
@@ -115,7 +115,7 @@ async function prepareRuntimeRoot() {
   await fs.mkdir(path.join(runtimeRoot, "home"), { recursive: true });
   await fs.mkdir(path.join(runtimeRoot, "backups"), { recursive: true });
   await writeShippedDefaultConfig();
-  await copyTrackedSkills();
+  await copyTrackedSkillsAndPlugins();
 }
 
 async function writeShippedDefaultConfig() {
@@ -142,13 +142,16 @@ async function writeShippedDefaultConfig() {
   );
 }
 
-async function copyTrackedSkills() {
-  const listed = spawnSync("git", ["-C", repoRoot, "ls-files", "-z", "--", "skills"], {
+/** The Gateway reads the plugins that ship from `<rootDir>/plugins`, so the gallery lists them as a fresh install does. */
+async function copyTrackedSkillsAndPlugins() {
+  const listed = spawnSync("git", ["-C", repoRoot, "ls-files", "-z", "--", "skills", "plugins"], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
   if (listed.error || listed.status !== 0) {
-    throw new Error(`Cannot list tracked skills with git: ${listed.error?.message ?? listed.stderr?.trim()}`);
+    throw new Error(
+      `Cannot list tracked skills and plugins with git: ${listed.error?.message ?? listed.stderr?.trim()}`,
+    );
   }
   for (const relativeFile of listed.stdout.split("\0").filter(Boolean)) {
     const source = path.join(repoRoot, relativeFile);

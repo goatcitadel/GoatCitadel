@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "pluginId": "browser-checks",
+  "name": "Browser checks",
+  "description": "Lets the AI open pages in a private browser, read them and take screenshots, with a skill for checking web pages step by step.",
+  "version": "1.0.0",
+  "author": "GoatCitadel",
+  "pieces": [
+    {
+      "kind": "connector",
+      "id": "playwright",
+      "templateId": "playwright",
+      "asksFirst": "everything"
+    },
+    {
+      "kind": "skill",
+      "id": "browser-qa",
+      "path": "skills/browser-qa"
+    }
+  ]
+}
