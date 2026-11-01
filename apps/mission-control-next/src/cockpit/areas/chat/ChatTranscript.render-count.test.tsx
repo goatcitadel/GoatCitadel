@@ -205,4 +205,26 @@ describe("ChatTranscript turn memo across composer and record changes", () => {
 
     expect(rerenderedSince(emptied)).toEqual(capturingTurnIds);
   });
+
+  it("re-renders only the previously and newly selected turns when the selection moves", () => {
+    const suggestionProps = {
+      ...settledProps,
+      capabilitySuggestions: [{ kind: "skill", title: "Add a skill", summary: "Summary", reason: "Reason" }],
+      onCapabilitySuggestionAction: vi.fn(),
+      onDismissCapabilitySuggestion: vi.fn(),
+    } as unknown as MissionThreadedActiveSessionSurfaceProps;
+    renderSettled({ ...suggestionProps, selectedTurnId: "m10" });
+    expect(renders.details.size).toBe(50);
+    const before = snapshot();
+
+    renderSettled({ ...suggestionProps, selectedTurnId: "m20" });
+
+    expect(rerenderedSince(before).sort()).toEqual(["m10", "m20"]);
+    const moved = snapshot();
+
+    renderSettled({ ...suggestionProps, selectedTurnId: null });
+
+    // With no selection the latest turn offers the suggestions.
+    expect(rerenderedSince(moved).sort()).toEqual(["m20", "m50"]);
+  });
 });
