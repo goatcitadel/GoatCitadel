@@ -179,6 +179,32 @@ describe("guarded built-in prompt-pack import owner", () => {
     expect(fixture.create).not.toHaveBeenCalled();
   });
 
+  it("refuses a plugin's pack that declares run variables while typed run variables are off, before writing it", async () => {
+    const fixture = setup();
+    const pluginPackId = "plugin-meeting-tools-topics";
+    const schema = renderPromptPackRunVariableSchema({
+      version: RUN_VARIABLE_SCHEMA_VERSION,
+      fields: [{ id: "topic", label: "Topic", type: "text", required: true }],
+    }).join("\n");
+    const source = { content: `${schema}\n${markdown}`, packId: pluginPackId, sourceLabel: "Plugin Meeting tools" };
+    const prepared = preparePromptPackImport(source).write;
+    // The variables are part of what the install binds, so they can't be dropped without the revision changing.
+    expect(prepared.runVariableSchema?.fields.map((field) => field.id)).toEqual(["topic"]);
+    fixture.requireFeatureEnabled.mockRejectedValueOnce(
+      new Error("Feature flag typedRunVariablesV1Enabled is disabled."),
+    );
+
+    await expect(
+      fixture.service.importPromptPack(source, {
+        packKey: pluginPackId,
+        expectedDefinitionRevision: builtinDefinitionRevision(pluginPackId, prepared),
+      }),
+    ).rejects.toThrow("Feature flag typedRunVariablesV1Enabled is disabled.");
+    expect(fixture.requireFeatureEnabled).toHaveBeenCalledExactlyOnceWith("typedRunVariablesV1Enabled");
+    expect(fixture.create).not.toHaveBeenCalled();
+    expect(() => fixture.repository.getPack(pluginPackId)).toThrow(NotFoundError);
+  });
+
   it("refuses importing over a plugin's prompt pack", async () => {
     const fixture = setup();
     const pluginPackId = "plugin-meeting-tools-checks";

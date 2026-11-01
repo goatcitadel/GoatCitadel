@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import { FeatureDisabledError, type ChangePlanRecord } from "@goatcitadel/contracts";
+import { pluginToolGroupHolds } from "./capability-plugin-store.js";
 import { builtinDefinitionRevision } from "./prompt-pack/builtin-definition.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 import {
@@ -396,6 +397,32 @@ describe("installing a plugin through one Change Plan", () => {
     ]);
     // The hook holds its secret now, so it stays for the hook's own removal.
     expect(h.state.deletedSecrets).toEqual([]);
+    // A group the record lists as held is in force while the record still reads "installing" (Task 15's rule).
+    expect(pluginToolGroupHolds(await h.store.list())).toEqual([
+      { groupId: "browser", pluginId: PLUGIN_ID, pluginName: "Meeting tools" },
+    ]);
+  });
+
+  it("stops at its prompt pack, by name, when typed run variables were switched off after the check", async () => {
+    const h = harness();
+    const plan = await planFor(h);
+    // The prompt-pack owner checks the flag before it writes anything (PromptPackService.importPromptPack).
+    h.sources.importPromptPack.mockRejectedValueOnce(new FeatureDisabledError("typedRunVariablesV1Enabled"));
+
+    const settled = await h.confirm(plan);
+
+    expect(settled.status).toBe("manual_required");
+    expect(settled.result).toMatchObject({
+      failureCode: "plugin_install_prompt_packs_failed",
+      failureDetail: "Feature flag typedRunVariablesV1Enabled is disabled.",
+    });
+    expect(settled.result?.summary).toContain("Couldn't add the prompt pack Meeting checks.");
+    expect(h.state.packs).toEqual([]);
+    expect((await h.store.get(PLUGIN_ID))?.pieces.find((piece) => piece.kind === "prompt_pack")).toEqual({
+      pieceId: "checks",
+      kind: "prompt_pack",
+      owned: true,
+    });
   });
 
   it("deletes the secrets no hook holds when a step before the hooks fails", async () => {
@@ -497,6 +524,63 @@ describe("installing a plugin through one Change Plan", () => {
     expect(isAutoResumeOnApprovalPlan(plan("plugin_install", { sessionId: "session-1" }))).toBe(false);
     expect(isAutoResumeOnApprovalPlan(plan("plugin_install", { turnId: "turn-1" }))).toBe(false);
     expect(isAutoResumeOnApprovalPlan(plan("plugin_install", { surface: "chat" }))).toBe(false);
+  });
+
+  it("never deletes a live hook's secret when a finished install plan is cancelled", async () => {
+    const h = harness();
+    const settled = await h.confirm(await planFor(h));
+    expect(settled.status).toBe("completed");
+
+    // A finished plan has no pending action, so the nonce never stops a cancel: the control plane refuses it later.
+    await expect(h.plans.cancel(OPERATOR, settled.planId, settled.revision, "x".repeat(16))).rejects.toMatchObject({
+      httpStatus: 409,
+    });
+    expect(h.state.deletedSecrets).toEqual([]);
+    expect(h.state.keychain.get(HOOK_REF)).toBe("signing-secret");
+
+    // A plan that stopped after its hook was added keeps that hook's secret as well.
+    const stopped = harness();
+    const plan = await planFor(stopped);
+    stopped.state.failAt = "prompt_pack";
+    const manual = await stopped.confirm(plan);
+    expect(manual.status).toBe("manual_required");
+    await expect(stopped.plans.cancel(OPERATOR, manual.planId, manual.revision, "x".repeat(16))).rejects.toMatchObject({
+      httpStatus: 409,
+    });
+    expect(stopped.state.deletedSecrets).toEqual([]);
+    expect(stopped.state.keychain.get(HOOK_REF)).toBe("signing-secret");
+  });
+
+  it("never deletes a secret its install's record shows a hook holding, whatever the plan says", async () => {
+    const h = harness();
+    const settled = await h.confirm(await planFor(h));
+    expect((await h.store.get(PLUGIN_ID))?.pieces.find((piece) => piece.kind === "hook")?.ref).toBe("hook-1");
+
+    // As if a plan that had applied still read as waiting: the record's hook keeps its secret.
+    await h.adapter.discard(
+      { origin: settled.origin, actions: undefined as never },
+      {
+        ...settled,
+        status: "awaiting_approval",
+      },
+    );
+
+    expect(h.state.deletedSecrets).toEqual([]);
+    expect(h.state.keychain.get(HOOK_REF)).toBe("signing-secret");
+  });
+
+  it("keeps the secrets, and says so, when the record can't be read to tell which a hook holds", async () => {
+    const h = harness();
+    const plan = await planFor(h);
+    h.sources.readPlugin.mockRejectedValueOnce(new Error("The saved plugin records can't be read."));
+
+    const cancelled = await h.plans.cancel(OPERATOR, plan.planId, plan.revision);
+
+    expect(cancelled.status).toBe("cancelled");
+    expect(h.state.deletedSecrets).toEqual([]);
+    expect(h.sources.reportSecretsKept).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ message: "The saved plugin records can't be read." }),
+    );
   });
 
   it("keeps no staging step, so the operator's own confirmation reaches the approval skip", () => {

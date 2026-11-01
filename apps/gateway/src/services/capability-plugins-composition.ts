@@ -127,6 +127,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
         reportFailedSecretDelete(secretRef, error);
       }
     },
+    reportSecretsKept: reportKeptSecrets,
   };
   changePlanAdapters.register(new PluginInstallChangePlanAdapter(pluginInstallSources(shared, owners)));
   const actions = new CapabilityPluginActionsService(pluginActionSources(shared, owners));
@@ -317,6 +318,16 @@ function reportFirstHoldsReadFailure(error: unknown): void {
 }
 
 /** A signing secret that couldn't be deleted is logged by its reference, so it can be found and removed. */
+function reportKeptSecrets(error: unknown): void {
+  const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
+  log.error(
+    "a plugin install plan ended unapplied, and its stored signing secrets were kept: its record can't be read",
+    {
+      err: redactStructuredSecrets(diagnostic).value,
+    },
+  );
+}
+
 function reportFailedSecretDelete(secretRef: string, error: unknown): void {
   const diagnostic = error instanceof Error ? { name: error.name, message: error.message } : { value: error };
   log.error("a plugin hook's stored signing secret couldn't be deleted", {

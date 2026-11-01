@@ -848,7 +848,11 @@ describe("capability plugin routes", () => {
         headers: { "idempotency-key": "install-7f0c" },
       });
       expect(fault.statusCode).toBe(503);
-      expect(fault.json()).toEqual({ error: "Plugins can't be read right now.", code: "EXTERNAL_SERVICE_FAILED" });
+      // An install's own plain words; the fault's path stays in the server log.
+      expect(fault.json()).toEqual({
+        error: "This plugin can't be installed right now.",
+        code: "EXTERNAL_SERVICE_FAILED",
+      });
     });
 
     it.each([

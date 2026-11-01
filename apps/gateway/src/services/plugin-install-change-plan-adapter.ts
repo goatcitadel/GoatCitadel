@@ -2,18 +2,17 @@ import { createHash } from "node:crypto";
 import {
   ConflictError,
   HOOK_TRIGGER_LABELS,
-  NotFoundError,
   PolicyViolationError,
   SemanticValidationError,
   TOOL_GROUPS,
   canonicalJsonString,
   isGoatError,
-  redactSecretText,
   type CapabilityPluginInspection,
   type CapabilityPluginPieceView,
   type ChangePlanOrigin,
   type ChangePlanPluginInstallRequest,
   type ChangePlanRecord,
+  type ChangePlanStatus,
   type DeploymentProfile,
   type HookCreateInput,
   type McpServerCreateInput,
@@ -34,6 +33,17 @@ import type {
 import { mcpServerLabelKey } from "./mcp-money-moving.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
 import {
+  OTHER_WORKSPACE_MESSAGE,
+  PLUGIN_CHANGED_MESSAGE,
+  boundedSentences,
+  boundedTitle,
+  failureDetail,
+  pluginAlreadyInstalled,
+  pluginChanged,
+  requireInstallableInspection,
+  type KeptPluginInspection,
+} from "./plugin-plan-support.js";
+import {
   distinctPluginPromptPackNames,
   pluginPromptPackId,
   pluginPromptPackSourceLabel,
@@ -45,19 +55,15 @@ import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 // A plugin install: one Change Plan that adds the pieces an inspection checked, each through its own owner and from the
 // snapshot that was checked. The plan holds only references; a hook's signing secret is already in the key store.
 
-export const PLUGIN_CHANGED_MESSAGE = "This plugin changed since it was checked. Check it again.";
-export const PLUGIN_INSPECTION_GONE_MESSAGE =
-  "That plugin check wasn't found, or it ran out of time. Check the plugin again.";
-const OTHER_WORKSPACE_MESSAGE = "This plugin was checked for another workspace. Check it again here.";
-const NOT_INSTALLABLE_MESSAGE = "This plugin has pieces that can't be installed. Check it again once they're fixed.";
 const SECRET_REFS_MESSAGE = "Every hook needs its own signing secret, and no other piece takes one.";
-const MAX_SUMMARY_LENGTH = 2_000;
-
-/** A kept inspection, with the snapshot it read. */
-export interface KeptPluginInspection {
-  readonly inspection: CapabilityPluginInspection;
-  readonly snapshotTreeSha256: string;
-}
+/** A plan in one of these never reached apply, so no hook holds a secret it names. */
+const NOT_YET_APPLIED: ReadonlySet<ChangePlanStatus> = new Set([
+  "draft",
+  "awaiting_input",
+  "awaiting_confirmation",
+  "staging",
+  "awaiting_approval",
+]);
 
 /** The settings an install reads. */
 export interface PluginInstallSettings {
@@ -118,6 +124,8 @@ export interface PluginInstallSources {
   ): Promise<unknown>;
   /** Deletes a signing secret this install stored. It reports its own failure and never throws. */
   deleteHookSecret(secretRef: string): void;
+  /** Reports secrets kept because the plugin's record couldn't be read to tell which a hook holds. */
+  reportSecretsKept(error: unknown): void;
 }
 
 /** The install's steps in order; a failure's `failureCode` names the one it stopped at. */
@@ -161,9 +169,10 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     requireCapabilitiesOrigin(context.origin);
     if (request.workspaceId !== context.origin.workspaceId) throw conflict(OTHER_WORKSPACE_MESSAGE);
     const binding = await this.bind(request);
-    const steps = await this.plannedSentences(binding);
+    const settings = await this.sources.readSettings();
+    const hosts = await this.hostsToAllow(binding, settings.networkAllowlist);
     const { manifest } = binding;
-    const summary = boundedSentences(steps);
+    const summary = boundedSentences(this.plannedSentences(binding, settings, hosts));
     return {
       target: {
         ownerId: "capability_plugins",
@@ -173,9 +182,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       title: boundedTitle(`Install ${manifest.name}`),
       summary,
       impact: boundedSentences([
-        ...(steps.some((step) => step.startsWith("Allow ") && !step.endsWith(" for hooks."))
-          ? ["Any tool can reach an allowed host, not only this plugin's connectors."]
-          : []),
+        ...(hosts.network.length > 0 ? ["Any tool can reach an allowed host, not only this plugin's connectors."] : []),
         "Uninstalling the plugin removes what this install adds, and keeps what was already there.",
         ...(binding.inspection.trust === "unverified"
           ? ["GoatCitadel checked each piece, not who wrote the plugin."]
@@ -198,8 +205,10 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       // The bytes on disk, the kept check and the manifest: all as they were when the plan was made.
       await this.sources.verifySnapshot(request.snapshotTreeSha256);
       binding = await this.bind(request);
+      // Kept as the plan's own binding (carry 8). `bind` has already refused any record, so the record part is null by
+      // construction: what catches a change is `verifySnapshot` and `bind`, and this only catches a tampered target.
       if (bindingHash(await this.sources.readPlugin(binding.manifest.pluginId), request) !== plan.target.expectedHash) {
-        throw conflict(PLUGIN_CHANGED_MESSAGE);
+        throw pluginChanged();
       }
     } catch (error) {
       // Nothing was written, so no hook holds a secret yet: each one is this install's to delete.
@@ -252,8 +261,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
   /** Reports what the plugin's record holds after an interruption. It never writes, so nothing is applied twice. */
   async reconcile(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord) {
     requireRequest(plan);
-    // The plan's target names the plugin, so this never depends on the inspection still being kept.
-    const pluginId = plan.target.resourceId.startsWith("plugin:") ? plan.target.resourceId.slice("plugin:".length) : "";
+    const pluginId = planPluginId(plan);
     const record = pluginId ? await this.sources.readPlugin(pluginId) : undefined;
     const own = record?.installPlanId === plan.planId ? record : undefined;
     if (own?.state === "installed") {
@@ -276,10 +284,30 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     };
   }
 
-  /** A plan that ends before it applies (cancelled, expired or refused) leaves no secret behind in the key store. */
-  discard(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord): void {
-    if (plan.request.kind !== "plugin_install") return;
-    this.deleteUnheldSecrets(plan.request, new Set());
+  /**
+   * A plan that ends before it applies (cancelled, expired or refused) leaves no secret behind in the key store. A plan
+   * that reached apply is never this method's to clean, even when a cancel of a finished plan is asked for (the control
+   * plane refuses that only after calling it): its hooks hold their secrets until uninstalling removes them. Even before
+   * apply, a secret this install's own record shows a hook holding is kept.
+   */
+  async discard(_context: EvolutionControlPlaneAdapterContext, plan: ChangePlanRecord): Promise<void> {
+    if (plan.request.kind !== "plugin_install" || !NOT_YET_APPLIED.has(plan.status)) return;
+    let held: ReadonlySet<string>;
+    try {
+      held = await this.hooksHeldByRecord(plan);
+    } catch (error) {
+      // A secret left behind is safer than a hook that can't sign: keep them all, and say so.
+      this.sources.reportSecretsKept(error);
+      return;
+    }
+    this.deleteUnheldSecrets(plan.request, held);
+  }
+
+  /** The hook pieces this plan's install record shows holding a hook (and so its secret), by piece id. */
+  private async hooksHeldByRecord(plan: ChangePlanRecord): Promise<ReadonlySet<string>> {
+    const record = await this.sources.readPlugin(planPluginId(plan));
+    if (record?.installPlanId !== plan.planId) return new Set();
+    return new Set(record.pieces.filter((piece) => piece.kind === "hook" && piece.ref).map((piece) => piece.pieceId));
   }
 
   /**
@@ -288,16 +316,16 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
    * snapshot, as its pieces' templates, addresses, groups and paths aren't in the inspection.
    */
   private async bind(request: ChangePlanPluginInstallRequest): Promise<InstallBinding> {
-    const kept = await this.sources.readInspection(request.inspectionId);
-    if (!kept) throw new NotFoundError(PLUGIN_INSPECTION_GONE_MESSAGE);
+    const kept = requireInstallableInspection(
+      await this.sources.readInspection(request.inspectionId),
+      request.workspaceId,
+    );
     const { inspection } = kept;
-    if (inspection.workspaceId !== request.workspaceId) throw conflict(OTHER_WORKSPACE_MESSAGE);
-    if (!inspection.installable || !inspection.manifestSha256) throw conflict(NOT_INSTALLABLE_MESSAGE);
     if (
       inspection.manifestSha256 !== request.manifestSha256 ||
       kept.snapshotTreeSha256 !== request.snapshotTreeSha256
     ) {
-      throw conflict(PLUGIN_CHANGED_MESSAGE);
+      throw pluginChanged();
     }
     const parsed = await this.sources.readManifest(request.snapshotTreeSha256);
     if (
@@ -305,25 +333,18 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       parsed.manifestSha256 !== request.manifestSha256 ||
       parsed.manifest.pluginId !== inspection.pluginId
     ) {
-      throw conflict(PLUGIN_CHANGED_MESSAGE);
+      throw pluginChanged();
     }
     const { manifest } = parsed;
     const views = new Map(inspection.pieces.map((view) => [view.pieceId, view]));
-    if (manifest.pieces.some((piece) => views.get(piece.id)?.kind !== piece.kind))
-      throw conflict(PLUGIN_CHANGED_MESSAGE);
+    if (manifest.pieces.some((piece) => views.get(piece.id)?.kind !== piece.kind)) throw pluginChanged();
     const hookIds = manifest.pieces.filter((piece) => piece.kind === "hook").map((piece) => piece.id);
     const refIds = Object.keys(request.hookSecretRefs ?? {});
     if (refIds.length !== hookIds.length || hookIds.some((id) => !refIds.includes(id))) {
       throw new SemanticValidationError(SECRET_REFS_MESSAGE);
     }
     const installed = await this.sources.readPlugin(manifest.pluginId);
-    if (installed) {
-      throw new ConflictError({
-        code: "ALREADY_EXISTS",
-        message: `${installed.name} is already installed.`,
-        details: { pluginId: manifest.pluginId },
-      });
-    }
+    if (installed) throw pluginAlreadyInstalled(installed);
     return { inspection, manifest, treeSha256: request.snapshotTreeSha256, views };
   }
 
@@ -356,8 +377,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       }),
     };
     await this.sources.updatePlugin(manifest.pluginId, (current) => {
-      if (current)
-        throw new ConflictError({ code: "ALREADY_EXISTS", message: `${current.name} is already installed.` });
+      if (current) throw pluginAlreadyInstalled(current);
       return record;
     });
   }
@@ -523,9 +543,11 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
   }
 
   /** The plain steps the plan will take, in order, for its summary and its confirmation. */
-  private async plannedSentences(binding: InstallBinding): Promise<string[]> {
-    const settings = await this.sources.readSettings();
-    const hosts = await this.hostsToAllow(binding, settings.networkAllowlist);
+  private plannedSentences(
+    binding: InstallBinding,
+    settings: PluginInstallSettings,
+    hosts: { readonly network: readonly string[]; readonly hooks: readonly string[] },
+  ): string[] {
     const { manifest } = binding;
     const sentences = [
       ...(hosts.network.length > 0 ? [`Allow ${hosts.network.join(", ")}.`] : []),
@@ -607,7 +629,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
   /** Changes this install's own record; any other record (or none) is a conflict, never overwritten. */
   private async save(pluginId: string, plan: ChangePlanRecord, change: (record: StoredPlugin) => StoredPlugin) {
     await this.sources.updatePlugin(pluginId, (current) => {
-      if (current?.installPlanId !== plan.planId) throw conflict(PLUGIN_CHANGED_MESSAGE);
+      if (current?.installPlanId !== plan.planId) throw pluginChanged();
       return change(current);
     });
   }
@@ -636,6 +658,11 @@ function requireRequest(plan: ChangePlanRecord): ChangePlanPluginInstallRequest 
 
 function conflict(message: string): ConflictError {
   return new ConflictError({ message });
+}
+
+/** The plugin a plan's target names (`plugin:<id>`), so nothing depends on its inspection still being kept. */
+function planPluginId(plan: ChangePlanRecord): string {
+  return plan.target.resourceId.startsWith("plugin:") ? plan.target.resourceId.slice("plugin:".length) : "";
 }
 
 /**
@@ -764,29 +791,4 @@ function whatFailed(binding: InstallBinding, progress: InstallProgress, step: In
     case "finish":
       return "Couldn't mark the install as finished.";
   }
-}
-
-/** Sentences joined, kept within the plan's summary bound: past it, the rest are counted, not listed. */
-function boundedSentences(sentences: readonly string[]): string {
-  const kept: string[] = [];
-  for (const [index, sentence] of sentences.entries()) {
-    const rest = sentences.length - index;
-    const tail = ` And ${rest} more ${rest === 1 ? "step" : "steps"}.`;
-    if ([...kept, sentence].join(" ").length + tail.length > MAX_SUMMARY_LENGTH) {
-      return `${kept.join(" ")}${tail}`;
-    }
-    kept.push(sentence);
-  }
-  return kept.join(" ");
-}
-
-function boundedTitle(title: string): string {
-  return title.length <= 180 ? title : `${title.slice(0, 179).trimEnd()}…`;
-}
-
-/** The error's own message on one line, redacted and bounded, or nothing when it carries none. */
-function failureDetail(error: unknown): string | undefined {
-  const message = error instanceof Error ? error.message.replace(/[\s\p{Cc}]+/gu, " ").trim() : "";
-  const detail = redactSecretText(message).value.slice(0, 300).trim();
-  return detail || undefined;
 }

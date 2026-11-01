@@ -7,6 +7,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type {
   CapabilityPluginInspection,
   CapabilityPluginListResponse,
+  HookRecord,
   McpServerRecord,
   PluginActionOutcome,
 } from "@goatcitadel/contracts";
@@ -279,6 +280,20 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     });
     expect(rollback.statusCode, rollback.body).toBe(409);
     expect(rollback.json()).toMatchObject({ error: "Uninstall the plugin instead." });
+
+    // Cancelling the finished plan is refused, and the hook's secret stays in the key store.
+    const cancelled = await inject("POST", `/api/v1/change-plans/${outcome.planId}/cancellations`, {
+      workspaceId: WORKSPACE_ID,
+      expectedRevision: plan.revision,
+      actionNonce: "x".repeat(16),
+    });
+    expect(cancelled.statusCode, cancelled.body).toBe(409);
+    expect(keychain.get(ref!)).toBe(HOOK_SECRET);
+    // The hooks owner signs the hook's deliveries with the secret the install stored, through its own key-store
+    // custody (a second custody over the same key store as the install's).
+    const hook = await live.storage.workspaceHooks.get(WORKSPACE_ID, hooks[0]!.hookId);
+    const signer = live.hooksService as unknown as { resolveWebhookSigningSecret(record: HookRecord): string };
+    expect(signer.resolveWebhookSigningSecret(hook)).toBe(HOOK_SECRET);
 
     // Installing it again is refused before any secret is stored.
     const again = await inject("POST", INSTALL_URL, body);

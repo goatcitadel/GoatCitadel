@@ -19,7 +19,8 @@ import type { RuntimeSettings } from "./gateway/runtime-settings.js";
 import { createMcpServer, updateMcpServerPolicy, type McpServerAdminHost } from "./mcp-server-admin-service.js";
 import { mcpServerRevision } from "./mcp-server-revision.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
-import type { KeptPluginInspection, PluginInstallSources } from "./plugin-install-change-plan-adapter.js";
+import type { PluginInstallSources } from "./plugin-install-change-plan-adapter.js";
+import type { KeptPluginInspection } from "./plugin-plan-support.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
 import type { PluginInstallSettingsUpdate } from "./settings-auth-service.js";
 
@@ -100,6 +101,7 @@ export interface PluginInstallShared {
   listBuiltInPluginIds(): Promise<readonly string[]>;
   storeHookSecret(value: string): string;
   deleteHookSecret(secretRef: string): void;
+  reportSecretsKept(error: unknown): void;
 }
 
 /** The install plan's owners. */
@@ -151,6 +153,7 @@ export function pluginInstallSources(
     createHook: (input) => hooks.createWorkspaceHook(input),
     importPromptPack: (input, guarded) => promptPackImports.importPromptPack(input, guarded),
     deleteHookSecret: (secretRef) => shared.deleteHookSecret(secretRef),
+    reportSecretsKept: (error) => shared.reportSecretsKept(error),
   };
 }
 

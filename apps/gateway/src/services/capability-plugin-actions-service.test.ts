@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { SecretStoreUnavailableError } from "./secret-store-service.js";
 import {
   INSPECTION_ID,
@@ -112,6 +112,24 @@ describe("CapabilityPluginActionsService.install", () => {
     });
     await cancelled.plans.cancel(OPERATOR, plan.planId, plan.revision);
     expect(cancelled.state.deletedSecrets).toEqual(["keychain:goatcitadel:hook:00000000-0000-4000-8000-0000000000aa"]);
+
+    // A plan left waiting in the Inbox past its 15 minutes is expired by the control plane's own sweep.
+    const expired = harness({ skip: false });
+    const waiting = await expired.actions.install(installInput());
+    expect(waiting.outcome).toBe("waiting");
+    const [stored] = [...expired.state.keychain.keys()];
+    vi.useFakeTimers({ toFake: ["Date"] });
+    try {
+      vi.setSystemTime(Date.now() + 16 * 60 * 1000);
+      const swept = await expired.plans.reconcileActive();
+      expect(swept.map((item) => [item.planId, item.status])).toEqual([[waiting.planId, "failed"]]);
+    } finally {
+      vi.useRealTimers();
+    }
+    expect((await expired.plans.get(OPERATOR, waiting.planId)).result?.failureCode).toBe("expired");
+    expect(expired.state.deletedSecrets).toEqual([stored]);
+    expect(expired.state.keychain.size).toBe(0);
+    expect(expired.state.order).toEqual([]);
   });
 
   it("answers a replayed key from the first plan and never stores a new secret", async () => {

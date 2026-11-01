@@ -57,6 +57,7 @@ const idempotencyKeySchema = z
   .regex(/^[\p{L}\p{N}._:@/+*-]+$/u);
 
 const UNAVAILABLE_MESSAGE = "Plugins can't be read right now.";
+const INSTALL_UNAVAILABLE_MESSAGE = "This plugin can't be installed right now.";
 const KEY_MESSAGE = "Send an Idempotency-Key header of up to 256 letters, digits or . _ : @ / + * - characters.";
 // The list reads the plugin store, the shipped manifests and, for installed plugins with skills, Skill Hub's checks.
 const LIST_RATE_LIMIT = { max: 60, timeWindow: "1 minute" } as const;
@@ -175,7 +176,7 @@ export const capabilityPluginsRoutes: FastifyPluginAsync = async (fastify) => {
     } catch (error) {
       // The input refusals are the service's own plain words, so they answer 400 here.
       if (isGoatError(error) && error.httpStatus === 400) return sendRouteError(reply, error, request.log);
-      return sendPluginError(reply, error, request.log);
+      return sendPluginError(reply, error, request.log, INSTALL_UNAVAILABLE_MESSAGE);
     }
   });
 
@@ -217,7 +218,12 @@ function idempotencyScopeFor(request: { authActorId?: string }): string {
  * and "the key store can't be used" as they say; and anything else as a plain 503. A fault's own message can carry a
  * temp path or another owner's words, so it stays in the log.
  */
-function sendPluginError(reply: FastifyReply, error: unknown, log: FastifyBaseLogger) {
+function sendPluginError(
+  reply: FastifyReply,
+  error: unknown,
+  log: FastifyBaseLogger,
+  unavailableMessage = UNAVAILABLE_MESSAGE,
+) {
   if (error instanceof PluginSourceError) {
     log.warn({ code: error.reason, err: diagnosticOf(error.cause) }, "a plugin source was refused");
     return reply.code(error.statusCode).send(refusalBody(error.message, { code: error.reason }));
@@ -236,8 +242,8 @@ function sendPluginError(reply: FastifyReply, error: unknown, log: FastifyBaseLo
   if (error instanceof ServiceUnavailableError && ANSWERED_UNAVAILABLE_REASONS.has(error.details?.reason)) {
     return sendRouteError(reply, error, log);
   }
-  log.error({ err: diagnosticOf(error) }, "plugins could not be read");
-  return sendRouteError(reply, new ServiceUnavailableError(UNAVAILABLE_MESSAGE), log);
+  log.error({ err: diagnosticOf(error) }, "a plugins request failed");
+  return sendRouteError(reply, new ServiceUnavailableError(unavailableMessage), log);
 }
 
 function refusalBody(message: string, details: CapabilityPluginRefusal["details"]): CapabilityPluginRefusal {

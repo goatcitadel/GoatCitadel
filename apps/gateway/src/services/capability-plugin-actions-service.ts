@@ -13,17 +13,16 @@ import type { StoredPlugin } from "./capability-plugin-store.js";
 import { awaitsApplyConfirmation } from "./evolution-control-plane-action-guards.js";
 import type { EvolutionControlPlaneActor } from "./evolution-control-plane-service.js";
 import {
-  PLUGIN_CHANGED_MESSAGE,
-  PLUGIN_INSPECTION_GONE_MESSAGE,
+  pluginAlreadyInstalled,
+  pluginChanged,
+  requireInstallableInspection,
   type KeptPluginInspection,
-} from "./plugin-install-change-plan-adapter.js";
+} from "./plugin-plan-support.js";
 import { isSecretStoreUnavailableLikeError } from "./secret-store-service.js";
 
 const MAX_SECRET_LENGTH = 512;
 const CHANGE_PLANS_OFF_MESSAGE = "Installing plugins needs Change Plans, which are off on this install.";
 const WORKSPACE_MISSING_MESSAGE = "That workspace isn't on this install.";
-const OTHER_WORKSPACE_MESSAGE = "This plugin was checked for another workspace. Check it again here.";
-const NOT_INSTALLABLE_MESSAGE = "This plugin has pieces that can't be installed. Check it again once they're fixed.";
 const ANSWER_GONE_MESSAGE =
   "This install's first answer is no longer kept, so it can't be sent again. Install the plugin again.";
 const MISSING_SECRET_MESSAGE = "Every hook needs its own signing secret.";
@@ -138,13 +137,9 @@ export class CapabilityPluginActionsService {
   private async checkedRequest(
     input: CapabilityPluginInstallInput,
   ): Promise<Omit<ChangePlanPluginInstallRequest, "hookSecretRefs">> {
-    const kept = await this.sources.readInspection(input.inspectionId);
-    if (!kept) throw new NotFoundError(PLUGIN_INSPECTION_GONE_MESSAGE);
+    // The same checks the plan's adapter binds to when it is made and again when it applies.
+    const kept = requireInstallableInspection(await this.sources.readInspection(input.inspectionId), input.workspaceId);
     const { inspection, snapshotTreeSha256 } = kept;
-    if (inspection.workspaceId !== input.workspaceId) throw new ConflictError({ message: OTHER_WORKSPACE_MESSAGE });
-    if (!inspection.installable || !inspection.manifestSha256) {
-      throw new ConflictError({ message: NOT_INSTALLABLE_MESSAGE });
-    }
     if (
       inspection.trust === "unverified" &&
       (await this.sources.listBuiltInPluginIds()).includes(inspection.pluginId)
@@ -152,22 +147,14 @@ export class CapabilityPluginActionsService {
       throw new PluginIdReservedError();
     }
     const installed = await this.sources.readPlugin(inspection.pluginId);
-    if (installed) {
-      throw new ConflictError({
-        code: "ALREADY_EXISTS",
-        message: `${installed.name} is already installed.`,
-        details: { pluginId: inspection.pluginId },
-      });
-    }
+    if (installed) throw pluginAlreadyInstalled(installed);
     checkSecrets(
       inspection.pieces.filter((piece) => piece.kind === "hook").map((piece) => piece.pieceId),
       input.hookSecrets ?? {},
     );
     await this.sources.verifySnapshot(snapshotTreeSha256);
     const parsed = await this.sources.readManifest(snapshotTreeSha256);
-    if (!parsed.ok || parsed.manifestSha256 !== inspection.manifestSha256) {
-      throw new ConflictError({ message: PLUGIN_CHANGED_MESSAGE });
-    }
+    if (!parsed.ok || parsed.manifestSha256 !== inspection.manifestSha256) throw pluginChanged();
     return {
       kind: "plugin_install",
       inspectionId: inspection.inspectionId,

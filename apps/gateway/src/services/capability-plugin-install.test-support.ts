@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { vi } from "vitest";
+import { vi, type Mock } from "vitest";
 import {
   ConflictError,
   parsePluginManifest,
@@ -310,6 +310,7 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
       state.deletedSecrets.push(secretRef);
       state.keychain.delete(secretRef);
     }),
+    reportSecretsKept: vi.fn((_error: unknown) => undefined),
   } satisfies PluginInstallSources;
 
   const database = createDatabase({ dbPath: ":memory:" });
@@ -335,7 +336,7 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
     getApprovalDisposition: async () => disposition,
   });
   let minted = 0;
-  const storeHookSecret = vi.fn((value: string) => {
+  const storeHookSecret: Mock<(value: string) => string> = vi.fn((value: string) => {
     const ref = `keychain:goatcitadel:hook:00000000-0000-4000-8000-${String(++minted).padStart(12, "0")}`;
     state.keychain.set(ref, value);
     return ref;
