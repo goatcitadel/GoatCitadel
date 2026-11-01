@@ -29,8 +29,10 @@ code, and its manifest is `goatcitadel-plugin.json`.
   and never runs or imports anything from the folder
 - `PLUGIN_MANIFEST_FILENAME` and `PLUGIN_LIMITS` are the file name and the limits
 
-Checking a manifest installs nothing and grants nothing. GoatCitadel does not
-install plugins yet.
+Checking a manifest installs nothing and grants nothing. The GoatCitadel
+Gateway inspects, installs and uninstalls plugins through its Capabilities API,
+governed by Change Plans. Mission Control has no Plugins tab yet, and there is
+no plugin trust or marketplace surface.
 
 ## Check a plugin
 

@@ -128,12 +128,12 @@ These are still true after this document lands:
 
 - GoatCitadel publishes `@goatcitadel/extensions-sdk`; `1.0.0` is the last published version.
 - The workspace version, `2.0.0`, keeps the effective-tool snapshot helpers and adds the plugin manifest validator, with `loadPluginManifest` and the `goatcitadel-plugin-preflight` command, and is not published yet.
-- Add-ons and integration plugins are removed. The Gateway inspects plugins, but GoatCitadel has no plugin install, trust or marketplace surface today.
+- Add-ons and integration plugins are removed. The Gateway inspects, installs and uninstalls plugins through its Capabilities API, governed by Change Plans. Mission Control has no Plugins tab yet, and GoatCitadel has no plugin trust or marketplace surface.
 - The SDK can check a plugin manifest. A manifest that passes the check has not been installed, approved or granted anything.
 - Skill bundles keep their review-only manifest contract.
 
 ## Recommended Next Slice
 
-1. Let the Gateway install and uninstall plugins it has inspected, behind its own checks and approvals.
+1. Add the Capabilities › Plugins tab to Mission Control over the Gateway's plugin routes, so an operator can inspect, install and uninstall a plugin without calling the API.
 2. Publish `@goatcitadel/extensions-sdk@2.0.0`, so the published line moves off the retired helpers. Bump and publish `@goatcitadel/contracts` in step: the packed SDK depends on the published contracts version, and `@goatcitadel/contracts@1.0.0` has no plugin exports.
 3. Keep `@goatcitadel/extensions-sdk` versioned and prepublish-checked as the public author boundary.
