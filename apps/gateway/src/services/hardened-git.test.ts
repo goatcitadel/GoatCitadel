@@ -1,9 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFile, execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { promisify } from "node:util";
+import { afterAll, beforeAll, describe, expect, it, vi, type Mock } from "vitest";
 import {
   COMMIT_FETCH_REFUSED_MESSAGE,
   GitCommitFetchRefusedError,
@@ -26,10 +27,27 @@ import {
   isGitProcessFailure,
   isPortableTreePath,
   labelledGitTreeWording,
+  materializeBoundedGitTree,
   parseBoundedGitTree,
   type BoundedGitTreeOptions,
 } from "./hardened-git.js";
 import { PLUGIN_GIT_TREE_WORDING } from "./plugin-git-messages.js";
+
+// Every `git` the Gateway runs goes through the promisified `execFile`. It is wrapped, not replaced, so the commands still
+// run against real repositories and the tests can count them, or change what one of them sent back.
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  const { promisify: promisifyActual } = await import("node:util");
+  const execFileWithCount = Object.assign((...args: Parameters<typeof actual.execFile>) => actual.execFile(...args), {
+    [promisifyActual.custom]: vi.fn(promisifyActual(actual.execFile)),
+  });
+  return { ...actual, execFile: execFileWithCount };
+});
+
+/** The promisified `execFile` the Gateway's Git runners call. */
+function gitRuns(): Mock {
+  return (execFile as unknown as Record<symbol, Mock>)[promisify.custom]!;
+}
 
 const LIMITS = { maxFiles: 256, maxTotalBytes: 8 * 1024 * 1024, maxFileBytes: 1024 * 1024 };
 const HARDENED_CONFIG = [
@@ -562,6 +580,152 @@ describe("the tree rules the Git readers share", () => {
       "e\u0301.md",
     ]) {
       expect(isPortableTreePath(bad), JSON.stringify(bad)).toBe(false);
+    }
+  });
+});
+
+describe("materializeBoundedGitTree (through a local repository)", () => {
+  const treeOptions: BoundedGitTreeOptions = {
+    limits: { maxFiles: 256, maxEntries: 512, maxFileBytes: 64 * 1024, maxTotalBytes: 1024 * 1024 },
+    label: "skill",
+    limitError: GitTreeLimitError,
+  };
+  let treeRepo: string;
+  let treeFiles: Record<string, Buffer>;
+
+  /** 256 files: text, an empty one, and bytes that look like Git's own framing (newlines, NULs, a fake header). */
+  function treeFixture(): Record<string, Buffer> {
+    const files: Record<string, Buffer> = {
+      "empty.txt": Buffer.alloc(0),
+      "framing.bin": Buffer.from(`${"a".repeat(40)} blob 3\n\0\n\n\r\n`, "latin1"),
+      "bytes.bin": Buffer.from(Array.from({ length: 256 }, (_, index) => index)),
+      "same-a.md": Buffer.from("same content\n"),
+      "same-b.md": Buffer.from("same content\n"),
+    };
+    for (let index = Object.keys(files).length; index < 256; index += 1) {
+      files[`docs/part-${Math.floor(index / 32)}/file-${index}.md`] = Buffer.from(`file ${index}\n`.repeat(index % 7));
+    }
+    return files;
+  }
+
+  function freshTreeRepo(): string {
+    const repo = fs.mkdtempSync(path.join(scratchRoot, "tree-repo-"));
+    git(repo, "init", "--quiet", "--initial-branch=main");
+    for (const [relativePath, content] of Object.entries(treeFiles)) {
+      const target = path.join(repo, ...relativePath.split("/"));
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      fs.writeFileSync(target, content);
+    }
+    git(repo, "-c", "core.autocrlf=false", "add", "-A");
+    git(repo, "commit", "--quiet", "-m", "tree");
+    return repo;
+  }
+
+  function readTree(root: string): Record<string, Buffer> {
+    const found: Record<string, Buffer> = {};
+    const visit = (directory: string): void => {
+      for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+        const full = path.join(directory, entry.name);
+        if (entry.isDirectory()) visit(full);
+        else found[path.relative(root, full).replaceAll("\\", "/")] = fs.readFileSync(full);
+      }
+    };
+    visit(root);
+    return found;
+  }
+
+  function materialize(repo: string, options: BoundedGitTreeOptions = treeOptions): Promise<string> {
+    const destDir = freshDest();
+    return materializeBoundedGitTree(repo, new AbortController().signal, options, destDir).then(() => destDir);
+  }
+
+  /** Each Git command's subcommand and first argument, without the hardened `-c` settings in front. */
+  function gitCommands(): string[][] {
+    return gitRuns().mock.calls.map(([, args]) =>
+      (args as string[]).filter((arg, index, all) => arg !== "-c" && all[index - 1] !== "-c").slice(0, 2),
+    );
+  }
+
+  beforeAll(() => {
+    treeFiles = treeFixture();
+    treeRepo = freshTreeRepo();
+  });
+
+  it("reads a 256-file tree with three Git commands, not two per file", async () => {
+    gitRuns().mockClear();
+
+    await materialize(treeRepo);
+
+    expect(gitCommands()).toEqual([
+      ["ls-tree", "-r"],
+      ["cat-file", "--batch-check"],
+      ["cat-file", "--batch"],
+    ]);
+  });
+
+  it("writes every file byte for byte", async () => {
+    const destDir = await materialize(treeRepo);
+
+    const written = readTree(destDir);
+    expect(Object.keys(written).sort()).toEqual(Object.keys(treeFiles).sort());
+    for (const [relativePath, content] of Object.entries(treeFiles)) {
+      expect(written[relativePath]!.equals(content), relativePath).toBe(true);
+    }
+  });
+
+  it("refuses a file over the per-file limit and a tree over the total before reading any content", async () => {
+    gitRuns().mockClear();
+    const tooLarge = await materialize(treeRepo, {
+      ...treeOptions,
+      limits: { ...treeOptions.limits, maxFileBytes: 200 },
+    }).catch((error: unknown) => error);
+    expect(tooLarge).toBeInstanceOf(GitTreeLimitError);
+    expect((tooLarge as Error).message).toMatch(/^Git skill blob .+ exceeds 200 bytes\.$/u);
+
+    const tooManyBytes = await materialize(treeRepo, {
+      ...treeOptions,
+      limits: { ...treeOptions.limits, maxTotalBytes: 1_000 },
+    }).catch((error: unknown) => error);
+    expect(tooManyBytes).toBeInstanceOf(GitTreeLimitError);
+    expect((tooManyBytes as Error).message).toBe("Git skill tree exceeds 1000 total bytes.");
+
+    expect(gitCommands().filter(([, mode]) => mode === "--batch")).toEqual([]);
+  });
+
+  it("calls a blob Git reports missing unavailable", async () => {
+    const repo = freshTreeRepo();
+    const objectId = git(repo, "rev-parse", "HEAD:same-a.md");
+    fs.rmSync(path.join(repo, ".git", "objects", objectId.slice(0, 2), objectId.slice(2)), { force: true });
+
+    const thrown = await materialize(repo).catch((error: unknown) => error);
+
+    expect(thrown).toBeInstanceOf(GitTreeLimitError);
+    expect((thrown as Error).message).toMatch(
+      /^Git skill blob same-[ab]\.md is unavailable inside the bounded partial clone\.$/u,
+    );
+  });
+
+  it("calls a cut-short batch read a changed file and writes nothing", async () => {
+    const runAsync = gitRuns().getMockImplementation()!;
+    gitRuns().mockImplementation((...call: unknown[]) => {
+      const pending = runAsync(...call) as Promise<{ stdout: Buffer }> & { child: unknown };
+      if (!(call[1] as string[]).includes("--batch")) return pending;
+      const cut = pending.then((result) => ({ ...result, stdout: result.stdout.subarray(0, -2) }));
+      return Object.assign(cut, { child: pending.child });
+    });
+    const destDir = freshDest();
+    try {
+      const thrown = await materializeBoundedGitTree(
+        treeRepo,
+        new AbortController().signal,
+        treeOptions,
+        destDir,
+      ).catch((error: unknown) => error);
+      expect(thrown).toBeInstanceOf(GitFetchFailedError);
+      expect((thrown as Error).message).toMatch(/^Git skill blob .+ changed during bounded materialization\.$/u);
+      expect(fs.existsSync(destDir)).toBe(false);
+    } finally {
+      gitRuns().mockImplementation(runAsync);
     }
   });
 });
