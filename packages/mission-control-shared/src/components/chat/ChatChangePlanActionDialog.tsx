@@ -10,6 +10,8 @@ export interface ChatChangePlanActionDialogProps {
   readonly plan: ChangePlanRecord | null;
   readonly linkedPlan?: ChangePlanRecord | null;
   readonly pending?: boolean;
+  /** The action waits on something outside the dialog: confirm shows working, but the dialog stays closable. */
+  readonly waiting?: boolean;
   readonly error?: string | null;
   readonly contextNote?: string;
   readonly onClose: () => void;
@@ -36,6 +38,7 @@ export function ChatChangePlanActionDialog({
   plan,
   linkedPlan,
   pending = false,
+  waiting = false,
   error,
   contextNote,
   onClose,
@@ -158,7 +161,7 @@ export function ChatChangePlanActionDialog({
         .join("\n\n")}
       confirmLabel={linkedPlan ? "Apply both exact changes" : confirmLabel(action)}
       danger={plan.risk === "danger" || linkedPlan?.risk === "danger"}
-      confirmPending={pending}
+      confirmPending={pending || waiting}
       confirmDisabled={
         !previewReady ||
         missingRequired ||

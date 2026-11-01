@@ -1,8 +1,5 @@
 import { useEffect, useRef, useSyncExternalStore } from "react";
-import type {
-  ChangePlanRecord,
-  ChangePlanStatus,
-} from "@goatcitadel/contracts";
+import { changePlanPhaseForStatus, type ChangePlanRecord, type ChangePlanStatus } from "@goatcitadel/contracts";
 import {
   fetchChangePlan,
   fetchSettings,
@@ -38,10 +35,10 @@ function publish(key: string, change: PendingChange) {
   changes.set(key, change);
   for (const listener of listeners) listener();
 }
-const completed = (status: ChangePlanStatus) =>
-  status === "completed" || status === "applied";
-const stopped = (status: ChangePlanStatus) =>
-  ["failed", "cancelled", "rolled_back"].includes(status);
+const completed = (status: ChangePlanStatus) => status === "completed" || status === "applied";
+// Terminal but not successful: failed, cancelled, rolled_back, manual_required,
+// rollback_failed. Nothing further will change, so polling and locking stop.
+const stopped = (status: ChangePlanStatus) => changePlanPhaseForStatus(status) === "terminal" && !completed(status);
 const statuses = new Set([
   "draft",
   "awaiting_input",
@@ -65,10 +62,7 @@ type SettingsAcknowledgement = {
   revision: number;
   changePlanReceipt?: Receipt;
 };
-export function useSettingsChange<
-  T,
-  R extends SettingsAcknowledgement = RuntimeSettingsResponse,
->(options: {
+export function useSettingsChange<T, R extends SettingsAcknowledgement = RuntimeSettingsResponse>(options: {
   key: string;
   operation?: string;
   matchesPlan?: (plan: ChangePlanRecord, submitted: T) => boolean;
@@ -89,12 +83,7 @@ export function useSettingsChange<
     () => savesInFlight.has(options.key),
     () => false,
   );
-  const acknowledge = (
-    owner: typeof options,
-    settings: R,
-    submitted: T,
-    baseRevision: number,
-  ) => {
+  const acknowledge = (owner: typeof options, settings: R, submitted: T, baseRevision: number) => {
     if (
       !Number.isSafeInteger(settings?.revision) ||
       settings.revision <= baseRevision ||
@@ -104,20 +93,11 @@ export function useSettingsChange<
         "The returned settings do not confirm this draft. Your input is preserved; refresh the change status before retrying.",
       );
     }
-    return owner.acceptSaved(
-      owner.savedValue?.(submitted) ?? submitted,
-      settings.revision,
-      submitted,
-    );
+    return owner.acceptSaved(owner.savedValue?.(submitted) ?? submitted, settings.revision, submitted);
   };
-  const receive = (
-    settings: R,
-    submitted: T,
-    baseRevision: number,
-  ): boolean => {
+  const receive = (settings: R, submitted: T, baseRevision: number): boolean => {
     const receipt = settings?.changePlanReceipt;
-    if (!receipt)
-      return acknowledge(options, settings, submitted, baseRevision);
+    if (!receipt) return acknowledge(options, settings, submitted, baseRevision);
     if (
       !receipt.planId?.trim() ||
       !statuses.has(receipt.status) ||
@@ -132,10 +112,8 @@ export function useSettingsChange<
       receipt,
       submitted,
       baseRevision,
-      blocking: true,
-      message:
-        receipt.summary ||
-        "Change submitted. Waiting for canonical settlement.",
+      blocking: !stopped(receipt.status),
+      message: receipt.summary || "Change submitted. Waiting for canonical settlement.",
     };
     publish(options.key, entry);
     if (completed(receipt.status)) {
@@ -143,9 +121,7 @@ export function useSettingsChange<
       publish(options.key, {
         ...entry,
         blocking: false,
-        message: clean
-          ? "Change saved and confirmed."
-          : "Submitted change saved. Your newer input remains unsaved.",
+        message: clean ? "Change saved and confirmed." : "Submitted change saved. Your newer input remains unsaved.",
       });
       return clean;
     }
@@ -180,42 +156,29 @@ export function useSettingsChange<
         !Number.isSafeInteger(plan.revision) ||
         plan.revision < pending.receipt.revision
       ) {
-        throw new Error(
-          "Change evidence does not match this Settings save. Your draft is preserved.",
-        );
+        throw new Error("Change evidence does not match this Settings save. Your draft is preserved.");
       }
       const next: PendingChange = {
         ...pending,
         receipt: {
           ...pending.receipt,
           ...plan,
-          summary: completed(plan.status)
-            ? (plan.result?.summary ?? plan.summary)
-            : plan.summary,
+          summary: completed(plan.status) ? (plan.result?.summary ?? plan.summary) : plan.summary,
         },
         plan,
         error: undefined,
-        message: completed(plan.status)
-          ? (plan.result?.summary ?? plan.summary)
-          : plan.summary,
+        message: completed(plan.status) ? (plan.result?.summary ?? plan.summary) : plan.summary,
       };
       if (completed(plan.status)) {
         const settings = owner.read
           ? await owner.read(pending.submitted as T)
           : ((await fetchSettings()) as unknown as R);
         if (changes.get(key) !== pending) return false;
-        const clean = acknowledge(
-          owner,
-          settings,
-          pending.submitted as T,
-          pending.baseRevision,
-        );
+        const clean = acknowledge(owner, settings, pending.submitted as T, pending.baseRevision);
         publish(key, {
           ...next,
           blocking: false,
-          message: clean
-            ? "Change saved and confirmed."
-            : "Submitted change saved. Your newer input remains unsaved.",
+          message: clean ? "Change saved and confirmed." : "Submitted change saved. Your newer input remains unsaved.",
         });
         await owner.reload();
         return clean;
@@ -224,7 +187,8 @@ export function useSettingsChange<
         ...next,
         blocking: !stopped(plan.status),
         message: stopped(plan.status)
-          ? "Change " +
+          ? (plan.result?.summary ? `${plan.result.summary} ` : "") +
+            "Change " +
             plan.status.replaceAll("_", " ") +
             ". Your draft is preserved. Refresh the current settings before trying again."
           : next.message,
@@ -235,10 +199,7 @@ export function useSettingsChange<
       if (changes.get(key) === pending)
         publish(key, {
           ...pending,
-          error:
-            error instanceof Error
-              ? error.message
-              : "Change status unavailable. Your draft is preserved.",
+          error: error instanceof Error ? error.message : "Change status unavailable. Your draft is preserved.",
         });
       return false;
     } finally {
@@ -250,10 +211,7 @@ export function useSettingsChange<
   useEffect(() => {
     if (!change?.blocking) return;
     void refreshRef.current();
-    const timer = globalThis.setInterval(
-      () => void refreshRef.current(),
-      15_000,
-    );
+    const timer = globalThis.setInterval(() => void refreshRef.current(), 15_000);
     return () => globalThis.clearInterval(timer);
   }, [options.key, change?.receipt.planId, change?.blocking]);
   return {
@@ -261,12 +219,9 @@ export function useSettingsChange<
     receive,
     refresh,
     hasPending: saving || Boolean(change?.blocking),
-    isPending: () =>
-      savesInFlight.has(options.key) ||
-      Boolean(changes.get(options.key)?.blocking),
+    isPending: () => savesInFlight.has(options.key) || Boolean(changes.get(options.key)?.blocking),
     beginSave: () => {
-      if (savesInFlight.has(options.key) || changes.get(options.key)?.blocking)
-        return false;
+      if (savesInFlight.has(options.key) || changes.get(options.key)?.blocking) return false;
       savesInFlight.add(options.key);
       for (const listener of listeners) listener();
       return true;
@@ -294,35 +249,20 @@ export function SettingsChangeStatus({
   if (!change) return null;
   const confirmed = settingsChangeIsConfirmed(change);
   const action = change.receipt.requiredAction;
-  const approvalId =
-    action?.kind === "approval" ? action.approvalId : undefined;
+  const approvalId = action?.kind === "approval" ? action.approvalId : undefined;
   return (
-    <section
-      aria-label="Settings change status"
-      className="mc-next-settings-notice"
-    >
+    <section aria-label="Settings change status" className="mc-next-settings-notice">
       <p role="status">
-        <strong>{change.receipt.status.replaceAll("_", " ")}</strong> ·{" "}
-        {change.message}
+        <strong>{change.receipt.status.replaceAll("_", " ")}</strong> · {change.message}
       </p>
-      {change.blocking ? (
-        <p>
-          Save is paused until this change settles. You can keep editing your
-          draft.
-        </p>
-      ) : null}
+      {change.blocking ? <p>Save is paused until this change settles. You can keep editing your draft.</p> : null}
       {change.error ? <p role="alert">{change.error}</p> : null}
       <div className="mc-next-settings-button-row">
         <NativeButton variant="outline" onClick={() => void onRefresh()}>
           Refresh change status
         </NativeButton>
-        {change.blocking &&
-        change.plan?.requiredAction &&
-        !approvalId &&
-        onReview ? (
-          <NativeButton onClick={() => onReview(change.plan!)}>
-            Continue setup
-          </NativeButton>
+        {change.blocking && change.plan?.requiredAction && !approvalId && onReview ? (
+          <NativeButton onClick={() => onReview(change.plan!)}>Continue setup</NativeButton>
         ) : null}
         {approvalId && !confirmed ? (
           <NativeButton

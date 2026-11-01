@@ -18,6 +18,7 @@ import {
   supportedGuidedThinkingLevels,
   withAddableBuiltinProviders,
 } from "../../../features/native-routes/settings/sections/guided-model-setup-support";
+import { runProviderSignIn } from "./guided-provider-sign-in";
 
 export const TERMINAL_CHANGE_PLAN_STATUSES = new Set<ChangePlanRecord["status"]>([
   "completed",
@@ -85,6 +86,8 @@ export function useGuidedModelSetup({
   // The raw draft behind the default-model plan this wizard submitted, before effort clamping.
   const submittedDraftRef = useRef<typeof modelDraft.value | null>(null);
   const planLoadGeneration = useRef(0);
+  // The running provider sign-in poll, if any; aborted on close, unmount and workspace change.
+  const signInRef = useRef<AbortController | null>(null);
   const [models, setModels] = useState<string[]>([]);
   const [latestPlan, setLatestPlan] = useState<ChangePlanRecord | null>(null);
   const [activePlans, setActivePlans] = useState<ChangePlanRecord[]>([]);
@@ -92,6 +95,7 @@ export function useGuidedModelSetup({
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [recheckingEndpoint, setRecheckingEndpoint] = useState(false);
+  const [signingIn, setSigningIn] = useState(false);
 
   const selectedProvider = useMemo(
     () => providers.find((provider) => provider.providerId === providerId) ?? null,
@@ -163,6 +167,7 @@ export function useGuidedModelSetup({
     const generation = ++planLoadGeneration.current;
     busyRef.current = false;
     setBusy(false);
+    setSigningIn(false);
     setActionError(null);
     setLatestPlan(null);
     setActivePlans([]);
@@ -187,6 +192,8 @@ export function useGuidedModelSetup({
     return () => {
       cancelled = true;
       planLoadGeneration.current += 1;
+      signInRef.current?.abort();
+      signInRef.current = null;
     };
   }, [workspaceId]);
 
@@ -244,34 +251,85 @@ export function useGuidedModelSetup({
     [recordPlan],
   );
 
-  const pendingSetupPlan = pendingPlanForSelection(
-    [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
-      (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
-    ),
-    providerId,
+  const continueProviderSignIn = useCallback(
+    async (plan: ChangePlanRecord) => {
+      if (plan.requiredAction?.kind !== "oauth" || plan.request.kind !== "provider_connection") {
+        setActionError("This sign-in action changed. Reopen the setup request.");
+        return;
+      }
+      await runAction(async () => {
+        const controller = new AbortController();
+        signInRef.current = controller;
+        setSigningIn(true);
+        try {
+          return await runProviderSignIn(plan, workspaceId, controller.signal, {
+            // Past this point the Gateway consumes the sign-in, so closing the dialog must no longer cancel the run.
+            onCompleting: () => {
+              if (signInRef.current === controller) signInRef.current = null;
+              setSigningIn(false);
+            },
+          });
+        } finally {
+          if (signInRef.current === controller) {
+            signInRef.current = null;
+            setSigningIn(false);
+          }
+        }
+      });
+    },
+    [runAction, workspaceId],
   );
-  const createPlan = async (request: Parameters<typeof createChangePlan>[0]["request"]) => {
-    if (pendingSetupPlan) {
-      setDialogPlan(pendingSetupPlan);
+  /** Stops a running sign-in poll and releases the busy state it held; a no-op when none runs. */
+  const cancelProviderSignIn = useCallback(() => {
+    const controller = signInRef.current;
+    if (!controller) return;
+    signInRef.current = null;
+    controller.abort();
+    // Discards the cancelled run's late result or error.
+    planLoadGeneration.current += 1;
+    busyRef.current = false;
+    setBusy(false);
+    setSigningIn(false);
+  }, []);
+
+  const livePlans = [...(latestPlan ? [latestPlan] : []), ...activePlans].filter(
+    (plan) => !TERMINAL_CHANGE_PLAN_STATUSES.has(plan.status),
+  );
+  const pendingConnectPlan = pendingPlanForSelection(livePlans, providerId, { kind: "provider_connection" });
+  const pendingDefaultPlan = pendingPlanForSelection(livePlans, providerId, {
+    kind: "installation_default_model",
+    model,
+    thinkingLevel,
+  });
+  const createPlan = async (
+    pending: ChangePlanRecord | null,
+    request: Parameters<typeof createChangePlan>[0]["request"],
+  ) => {
+    if (pending) {
+      setDialogPlan(pending);
       return;
     }
     await runAction(() => createChangePlan({ workspaceId, surface: "settings", request }));
   };
   const createProviderPlan = async () => {
-    if (!providerId && !pendingSetupPlan) {
+    if (!providerId && !pendingConnectPlan) {
       setNotice("Choose a provider or local runtime first.");
       return;
     }
     const addProfile = selectedProvider?.addProfile;
-    await createPlan({ kind: "provider_connection", providerId, ...(addProfile ? { profile: addProfile } : {}) });
+    await createPlan(pendingConnectPlan, {
+      kind: "provider_connection",
+      providerId,
+      ...(addProfile ? { profile: addProfile } : {}),
+    });
   };
   const createDefaultPlan = async () => {
-    if ((!providerId || !model) && !pendingSetupPlan) {
+    if ((!providerId || !model) && !pendingDefaultPlan) {
       setNotice("Choose a verified provider and model first.");
       return;
     }
-    if (!pendingSetupPlan) submittedDraftRef.current = modelDraft.value;
-    await createPlan({ kind: "installation_default_model", providerId, model, thinkingLevel });
+    if (!pendingDefaultPlan) submittedDraftRef.current = modelDraft.value;
+    await createPlan(pendingDefaultPlan, { kind: "installation_default_model", providerId, model, thinkingLevel });
   };
   const recheckLocalEndpoint = async () => {
     if (!providerId || recheckingEndpoint) return;
@@ -343,12 +401,16 @@ export function useGuidedModelSetup({
     defaultPlanCompleted,
     progress,
     busy,
+    /** True while a provider sign-in polls; the review dialog stays dismissible so the user can stop it. */
+    signingIn,
     actionError,
     setActionError,
     latestPlan,
     dialogPlan,
     setDialogPlan,
     runAction,
+    continueProviderSignIn,
+    cancelProviderSignIn,
     createProviderPlan,
     cancelPlan,
     primary,
