@@ -5,6 +5,7 @@ import { gzipSync } from "node:zlib";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ToolInvokeRequest, ToolPolicyConfig } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import * as nativeDocumentParser from "./native-document-parser.js";
 import { createPlainDocumentPdf } from "./document-pdf.js";
 import { executeTool } from "./tool-executor.js";
 import {
@@ -13,6 +14,11 @@ import {
   DOCS_EXTRACT_TEXT_MAX_CHARS,
   DOCS_READ_BYTES_MAX,
 } from "./tool-executor/document-helpers-executor.js";
+
+vi.mock("./native-document-parser.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./native-document-parser.js")>();
+  return { ...actual, parseNativeFileDocument: vi.fn(actual.parseNativeFileDocument) };
+});
 
 const createdRoots: string[] = [];
 const PHRASE = "Quarterly revenue grew twelve percent";
@@ -158,6 +164,52 @@ describe("document helper tools", () => {
     }
     expect(next).toBeUndefined();
     expect(pages).toEqual(["\u{1F600}", "a", "\u{1F680}"]);
+  });
+
+  it("parses a document once while paging its text", async () => {
+    const root = createRoot();
+    const file = path.join(root, "long.txt");
+    const body = "abcdefghij".repeat(50);
+    fs.writeFileSync(file, body);
+    const config = createConfig(root);
+    const parse = vi.mocked(nativeDocumentParser.parseNativeFileDocument);
+    parse.mockClear();
+    const first = await executeTool(request("docs.extract_text", { path: file, maxChars: 200 }), config, storage);
+    const second = await executeTool(
+      request("docs.extract_text", { path: file, maxChars: 200, offset: first.nextOffset }),
+      config,
+      storage,
+    );
+    expect(parse).toHaveBeenCalledTimes(1);
+    expect(String(first.text) + String(second.text)).toBe(body.slice(0, 400));
+  });
+
+  it("re-parses when the file is rewritten between pages", async () => {
+    const root = createRoot();
+    const file = path.join(root, "changing.txt");
+    fs.writeFileSync(file, "first version of the text");
+    const config = createConfig(root);
+    const parse = vi.mocked(nativeDocumentParser.parseNativeFileDocument);
+    parse.mockClear();
+    await executeTool(request("docs.extract_text", { path: file }), config, storage);
+    fs.writeFileSync(file, "second, longer version of the text");
+    const next = await executeTool(request("docs.extract_text", { path: file }), config, storage);
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(next.text).toBe("second, longer version of the text");
+  });
+
+  it("still rejects an outside path after the same name was cached", async () => {
+    const root = createRoot();
+    const outside = createRoot();
+    const inside = path.join(root, "a.txt");
+    fs.writeFileSync(inside, "inside text");
+    const secret = path.join(outside, "secret.txt");
+    fs.writeFileSync(secret, "nope");
+    const config = createConfig(root);
+    await executeTool(request("docs.extract_text", { path: inside }), config, storage);
+    await expect(executeTool(request("docs.extract_text", { path: secret }), config, storage)).rejects.toThrow(
+      /read|allowed|outside/i,
+    );
   });
 
   it("rejects a path outside read roots", async () => {

@@ -20,6 +20,50 @@ export const DOCS_DECOMPRESS_MAX_OUTPUT = 65_536;
 /** Memory guard for text extraction, which needs the whole file to parse it. */
 const DOCS_EXTRACT_SOURCE_MAX_BYTES = 64 * 1024 * 1024;
 
+const EXTRACT_CACHE_MAX_ENTRIES = 4;
+const EXTRACT_CACHE_MAX_CHARS = 16_000_000;
+
+interface ExtractedDocument {
+  name: string;
+  format: "pdf" | "docx" | "text";
+  pageCount?: number;
+  text: string;
+}
+
+/**
+ * Parsed documents kept while a guest pages one through docs.extract_text, so each page does not re-parse the whole
+ * file. Insertion order is recency order; bounded by entry count and total characters held.
+ */
+const extractCache = new Map<string, ExtractedDocument>();
+
+function readExtractCache(key: string): ExtractedDocument | undefined {
+  const hit = extractCache.get(key);
+  if (hit) {
+    extractCache.delete(key);
+    extractCache.set(key, hit);
+  }
+  return hit;
+}
+
+function writeExtractCache(key: string, document: ExtractedDocument): void {
+  extractCache.delete(key);
+  if (document.text.length > EXTRACT_CACHE_MAX_CHARS) {
+    return;
+  }
+  extractCache.set(key, document);
+  let totalChars = 0;
+  for (const entry of extractCache.values()) totalChars += entry.text.length;
+  for (const oldest of [...extractCache.keys()]) {
+    if (extractCache.size <= EXTRACT_CACHE_MAX_ENTRIES && totalChars <= EXTRACT_CACHE_MAX_CHARS) break;
+    totalChars -= extractCache.get(oldest)?.text.length ?? 0;
+    extractCache.delete(oldest);
+  }
+}
+
+function attachmentScope(request: ToolInvokeRequest): string {
+  return JSON.stringify([request.workspaceId ?? "", request.sessionId, request.agentId]);
+}
+
 const DOCUMENT_HELPER_TOOL_NAMES = new Set(["docs.read_bytes", "docs.extract_text", "docs.decompress"]);
 
 export interface DocumentHelperAttachmentBytes {
@@ -88,6 +132,7 @@ async function resolveSource(
   deps: DocumentHelperExecutorDeps,
   maxBytes: number,
   startByte = 0,
+  policyChecked = false,
 ): Promise<ResolvedSource> {
   const rawPath = request.args.path;
   const rawAttachmentId = request.args.attachmentId;
@@ -98,7 +143,9 @@ async function resolveSource(
     throw new Error("Provide exactly one of path or attachmentId.");
   }
   if (pathArg !== undefined) {
-    await deps.assertReadPathAllowedForRequest(pathArg, request, config, storage);
+    if (!policyChecked) {
+      await deps.assertReadPathAllowedForRequest(pathArg, request, config, storage);
+    }
     const full = path.resolve(pathArg);
     const handle = await fs.open(full, "r");
     try {
@@ -172,23 +219,75 @@ async function extractText(
 ) {
   const offset = clampInt(request.args.offset, 0, 0, Number.MAX_SAFE_INTEGER);
   const maxChars = clampInt(request.args.maxChars, DOCS_EXTRACT_TEXT_MAX_CHARS, 1, DOCS_EXTRACT_TEXT_MAX_CHARS);
-  const source = await resolveSource(request, config, storage, deps, DOCS_EXTRACT_SOURCE_MAX_BYTES);
-  if (source.cut) {
-    throw new Error(`${source.name} is too large to extract text from.`);
-  }
-  const parsed = await parseNativeFileDocument(source.name, source.bytes);
-  const text = parsed.normalizedText;
+  const document = await loadExtractedDocument(request, config, storage, deps);
+  const text = document.text;
   const end = pageEnd(text, offset, maxChars, DOCS_EXTRACT_TEXT_MAX_BYTES);
-  const format = parsed.parser.format === "pdf" || parsed.parser.format === "docx" ? parsed.parser.format : "text";
   return {
-    name: source.name,
-    format,
-    ...(parsed.parser.pageCount === undefined ? {} : { pageCount: parsed.parser.pageCount }),
+    name: document.name,
+    format: document.format,
+    ...(document.pageCount === undefined ? {} : { pageCount: document.pageCount }),
     totalChars: text.length,
     offset: Math.min(offset, text.length),
     text: text.slice(offset, end),
     ...(end < text.length ? { nextOffset: end } : {}),
   };
+}
+
+async function parseSource(source: ResolvedSource): Promise<ExtractedDocument> {
+  if (source.cut) {
+    throw new Error(`${source.name} is too large to extract text from.`);
+  }
+  const parsed = await parseNativeFileDocument(source.name, source.bytes);
+  const format = parsed.parser.format === "pdf" || parsed.parser.format === "docx" ? parsed.parser.format : "text";
+  return {
+    name: source.name,
+    format,
+    ...(parsed.parser.pageCount === undefined ? {} : { pageCount: parsed.parser.pageCount }),
+    text: parsed.normalizedText,
+  };
+}
+
+/**
+ * The parsed document for an extract_text call. The read-path policy check runs on every call before the cache is
+ * read. A path entry is keyed on the stat taken before the read, so a rewritten file misses; an attachment's size is
+ * known only after its bytes load, so that read still happens and only the parse is skipped.
+ */
+async function loadExtractedDocument(
+  request: ToolInvokeRequest,
+  config: ToolPolicyConfig,
+  storage: AsyncStorage,
+  deps: DocumentHelperExecutorDeps,
+): Promise<ExtractedDocument> {
+  const rawPath = request.args.path;
+  const rawAttachmentId = request.args.attachmentId;
+  const hasPath = typeof rawPath === "string" && rawPath.trim().length > 0;
+  const attachmentId = typeof rawAttachmentId === "string" ? rawAttachmentId.trim() : "";
+  if (hasPath && attachmentId.length === 0) {
+    await deps.assertReadPathAllowedForRequest(rawPath, request, config, storage);
+    const full = path.resolve(rawPath);
+    const stat = await fs.stat(full);
+    const key = JSON.stringify(["path", full, stat.size, stat.mtimeMs]);
+    const cached = stat.isFile() ? readExtractCache(key) : undefined;
+    if (cached) {
+      return cached;
+    }
+    const source = await resolveSource(request, config, storage, deps, DOCS_EXTRACT_SOURCE_MAX_BYTES, 0, true);
+    const document = await parseSource(source);
+    writeExtractCache(key, document);
+    return document;
+  }
+  const source = await resolveSource(request, config, storage, deps, DOCS_EXTRACT_SOURCE_MAX_BYTES);
+  if (source.cut) {
+    return parseSource(source);
+  }
+  const key = JSON.stringify(["attachment", attachmentScope(request), attachmentId, source.totalBytes]);
+  const cached = readExtractCache(key);
+  if (cached) {
+    return cached;
+  }
+  const document = await parseSource(source);
+  writeExtractCache(key, document);
+  return document;
 }
 
 const JSON_SHORT_ESCAPES = new Set([0x22, 0x5c, 0x08, 0x09, 0x0a, 0x0c, 0x0d]);
