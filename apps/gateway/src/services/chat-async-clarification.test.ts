@@ -1,9 +1,11 @@
 import { describe, it, expect, vi } from "vitest";
-import type {
-  ChatCompletionRequest,
-  ChatCompletionResponse,
-  ChatOptionalUserInputReplyRecord,
-  ChatUserInputPromptRecord,
+import {
+  HEARTBEAT_PERMISSION_PROFILE_ID,
+  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
+  type ChatCompletionRequest,
+  type ChatCompletionResponse,
+  type ChatOptionalUserInputReplyRecord,
+  type ChatUserInputPromptRecord,
 } from "@goatcitadel/contracts";
 import type { ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import {
@@ -80,6 +82,40 @@ describe("default-off async clarification in the existing runner", () => {
     expect(JSON.stringify(requests[0]?.tools ?? [])).not.toContain("user_input_request");
     expect(registerOptionalUserInput).not.toHaveBeenCalled();
   });
+
+  it.each([SCHEDULED_TURN_PERMISSION_PROFILE_ID, HEARTBEAT_PERMISSION_PROFILE_ID])(
+    "hides the tool and never opens a question for a restricted autonomous profile (%s)",
+    async (permissionProfileId) => {
+      const requests: ChatCompletionRequest[] = [];
+      const registerOptionalUserInput = vi.fn();
+      const invokeTool = vi.fn(async () => ({
+        outcome: "executed" as const,
+        auditEventId: "fixture-audit",
+        result: { status: "optional_input_requested", title: "Style", question: "Which style?" },
+      }));
+      const runner = new EffectAwareChatTurnAgentRunner({
+        storage: createMockStorage() as never,
+        listToolCatalog: () => catalog(["user_input.request"]),
+        chatAsyncClarificationV1Enabled: () => true,
+        registerOptionalUserInput,
+        readOptionalUserInput: async () => ({ prompts: [], replies: [] }),
+        createChatCompletion: async (request) => {
+          requests.push(request);
+          return requests.length === 1
+            ? namedToolCallCompletion("user_input.request", { title: "Style", question: "Which style?" })
+            : done();
+        },
+        invokeTool,
+      });
+      const result = await runner.run({ ...input, permissionProfileId });
+      expect(JSON.stringify(requests[0]?.tools ?? [])).not.toContain("user_input_request");
+      expect(registerOptionalUserInput).not.toHaveBeenCalled();
+      expect(result.turnTrace.pendingUserInput).toBeFalsy();
+      expect(
+        result.turnTrace.toolRuns.filter((run) => run.toolName === "user_input.request" && run.status === "executed"),
+      ).toEqual([]);
+    },
+  );
 
   it("continues independent tools, then consumes a canonical answer once at the next model boundary", async () => {
     const requests: ChatCompletionRequest[] = [];
