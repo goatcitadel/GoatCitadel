@@ -38,6 +38,7 @@ import { ChatTurnDetails } from "./ChatTurnDetails";
 import { ChatTurnFailureCard } from "./ChatTurnFailureCard";
 import { ChatTurnThinking } from "./ChatTurnThinking";
 import { TurnReceipt } from "./ChatTurnReceipt";
+import { turnReadsDraft, type TurnActions } from "./use-turn-actions";
 
 const ChatChangePlanCard = lazy(async () => ({
   default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard,
@@ -73,8 +74,8 @@ function turnAccessibleName(prompt: string, position?: number): string {
 }
 
 /**
- * Memoized so a streaming preview flush re-renders only the turn whose `previewText` changed.
- * Callers must pass stable `actions` and callbacks.
+ * Memoized so a streaming preview flush, a composer keystroke or a reasoning chunk re-renders only the turn whose
+ * props changed. Callers must pass stable `actions` and callbacks.
  */
 export const Turn = memo(function Turn({
   turn,
@@ -83,11 +84,12 @@ export const Turn = memo(function Turn({
   previewText,
   streaming,
   actions,
+  draftEmpty,
+  continueActions,
   channel,
   newMessageCount,
   onInspectTurn,
   onOpenArtifact,
-  onReviewPlan,
   onNewConversation,
 }: {
   turn: ChatThreadTurnRecord;
@@ -97,14 +99,20 @@ export const Turn = memo(function Turn({
   isLatest?: boolean;
   previewText: string | null;
   streaming: boolean;
-  actions: MissionThreadedActiveSessionSurfaceProps;
+  actions: TurnActions;
+  /** Whether the composer is empty; it matters only to a turn that `turnReadsDraft`. */
+  draftEmpty: boolean;
+  /**
+   * The live session surface, passed only to a stopped latest turn: Continue follows the composer's draft and send
+   * state, so that one turn re-renders as the draft changes.
+   */
+  continueActions?: MissionThreadedActiveSessionSurfaceProps;
   /** Set in a channel conversation, so each message can say where it came from. Callers keep it stable. */
   channel?: ChannelConversationContext;
   /** When set, this turn's message is the first new one since the reader was last here. */
   newMessageCount?: number;
   onInspectTurn?: (turnId: string) => void;
   onOpenArtifact?: (turnId: string, artifactId?: string) => void;
-  onReviewPlan?: MissionThreadedRenderSurfaceInput["onReviewChangePlan"];
   /** Opens a fresh conversation, offered when this one has grown too long for the model. Callers keep it stable. */
   onNewConversation?: () => void;
 }) {
@@ -190,8 +198,8 @@ export const Turn = memo(function Turn({
             </p>
           ) : null}
           {/* Continue sends a message, which a channel conversation would deliver or post to the channel. */}
-          {stopped && assistantText && !streaming && resendable ? (
-            <ChatContinueAction turn={turn} isLatest={isLatest} actions={actions} />
+          {continueActions && stopped && assistantText && !streaming && resendable ? (
+            <ChatContinueAction turn={turn} isLatest={isLatest} actions={continueActions} />
           ) : null}
           {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
         </div>
@@ -244,19 +252,18 @@ export const Turn = memo(function Turn({
       !fromChannel &&
       !streaming &&
       actions.selectedSessionId &&
-      turn.trace.status === "completed" &&
-      turn.trace.completion?.status === "complete" ? (
+      turnReadsDraft(turn) ? (
         <Suspense fallback={<p role="status">Loading skill capture…</p>}>
           <WorkflowSkillCaptureControl
             turn={turn}
             sessionId={actions.selectedSessionId}
             workspaceId={actions.workspaceId}
-            draftEmpty={!actions.draft.trim()}
+            draftEmpty={draftEmpty}
             onPrepare={(prompt) => {
               actions.onDraftChange(prompt);
               actions.composerRef.current?.focus();
             }}
-            onReviewPlan={onReviewPlan}
+            onReviewPlan={actions.onReviewPlan}
           />
         </Suspense>
       ) : null}

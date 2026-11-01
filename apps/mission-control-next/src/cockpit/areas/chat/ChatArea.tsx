@@ -34,6 +34,7 @@ import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { ChatTimerPanel } from "../../../features/threaded-surface/ChatTimerPanel";
 import { ChatSessionStatusPanel } from "../../../features/threaded-surface/ChatSessionStatusPanel";
+import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
 
@@ -232,6 +233,41 @@ export function ChatAreaView({
       ),
     });
   };
+  const openArtifact = (turnId: string, artifactId?: string) => {
+    if (!active) return;
+    const exactId =
+      artifactId ?? active.thread?.turns.find((turn) => turn.turnId === turnId)?.generatedArtifacts?.[0]?.artifactId;
+    if (!exactId || !selectedSessionId || inspectorView.current !== renderedInspectorView) return;
+    const pending = {
+      view: renderedInspectorView,
+      turnId,
+      artifactId: exactId,
+      ready: false,
+      target: new URL(
+        chatSelectionHref({ sessionId: selectedSessionId, turnId, artifactId: exactId }),
+        window.location.origin,
+      ).href,
+      history: readCockpitHistory(),
+      dismissal: getDismissalGeneration?.() ?? 0,
+    };
+    pendingArtifact.current = pending;
+    void Promise.resolve(active.onOpenGeneratedArtifact(turnId, exactId)).then(
+      () => {
+        if (pendingArtifact.current !== pending || inspectorView.current !== pending.view) return;
+        pending.ready = true;
+        setArtifactReadRevision((revision) => revision + 1);
+      },
+      () => {
+        if (pendingArtifact.current === pending) pendingArtifact.current = null;
+      },
+    );
+  };
+  // The transcript's turns are memoized, so its handlers keep one identity and call the latest versions.
+  const inspectTurn = useStableHandler((turnId: string) => openInspector(turnId, "turn"));
+  const inspectRun = useStableHandler((turnId: string) => openInspector(turnId, "run"));
+  const openTranscriptArtifact = useStableHandler(openArtifact);
+  const startNewConversation = useStableHandler(() => void input.sessionRail.onCreateSession());
+  const reviewChangePlan = useOptionalStableHandler(input.onReviewChangePlan);
   const openProjects = () => navigate("/chat/projects");
   // Messaging lists this workspace's channels under the conversations; a channel row opens that channel's page.
   const messaging = {
@@ -347,39 +383,11 @@ export function ChatAreaView({
               props={active}
               channel={channel}
               receipt={input.changePlanReceipt}
-              onReviewPlan={input.onReviewChangePlan}
-              onNewConversation={() => void input.sessionRail.onCreateSession()}
-              onInspectTurn={(turnId) => openInspector(turnId, "turn")}
-              onInspectRun={(turnId) => openInspector(turnId, "run")}
-              onOpenArtifact={(turnId, artifactId) => {
-                const exactId =
-                  artifactId ??
-                  active.thread?.turns.find((turn) => turn.turnId === turnId)?.generatedArtifacts?.[0]?.artifactId;
-                if (!exactId || !selectedSessionId || inspectorView.current !== renderedInspectorView) return;
-                const pending = {
-                  view: renderedInspectorView,
-                  turnId,
-                  artifactId: exactId,
-                  ready: false,
-                  target: new URL(
-                    chatSelectionHref({ sessionId: selectedSessionId, turnId, artifactId: exactId }),
-                    window.location.origin,
-                  ).href,
-                  history: readCockpitHistory(),
-                  dismissal: getDismissalGeneration?.() ?? 0,
-                };
-                pendingArtifact.current = pending;
-                void Promise.resolve(active.onOpenGeneratedArtifact(turnId, exactId)).then(
-                  () => {
-                    if (pendingArtifact.current !== pending || inspectorView.current !== pending.view) return;
-                    pending.ready = true;
-                    setArtifactReadRevision((revision) => revision + 1);
-                  },
-                  () => {
-                    if (pendingArtifact.current === pending) pendingArtifact.current = null;
-                  },
-                );
-              }}
+              onReviewPlan={reviewChangePlan}
+              onNewConversation={startNewConversation}
+              onInspectTurn={inspectTurn}
+              onInspectRun={inspectRun}
+              onOpenArtifact={openTranscriptArtifact}
             />
           </div>
         ) : (

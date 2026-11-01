@@ -1,5 +1,6 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
+import { turnReadsDraft, useTurnActions } from "./use-turn-actions";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
 import {
@@ -251,6 +252,7 @@ export function ChatTranscript({
   }, [onNewConversation]);
   const startNewConversation = useCallback(() => newConversation.current?.(), []);
   const offerNewConversation = onNewConversation ? startNewConversation : undefined;
+  const turnActions = useTurnActions(props, onReviewPlan);
 
   if (props.historicalWindow || props.historicalWindowLoading || props.historicalWindowError)
     return (
@@ -289,6 +291,8 @@ export function ChatTranscript({
       ? visibleTurns.slice(props.followOutput ? -100 : 0, props.followOutput ? undefined : 100)
       : visibleTurns;
   const fallbackOffset = props.followOutput ? visibleTurns.length - fallbackTurns.length : 0;
+  // Only a stopped latest turn can offer Continue, which follows the live draft and send state.
+  const continueTurnId = latestTurn?.trace.status === "cancelled" ? latestTurn.turnId : undefined;
   const renderTurn = (turn: ChatThreadTurnRecord, position: number) => (
     <Turn
       turn={turn}
@@ -296,12 +300,13 @@ export function ChatTranscript({
       isLatest={turn.turnId === latestTurn?.turnId}
       previewText={preview?.turnId === turn.turnId ? preview.visibleText : null}
       streaming={pendingTurnId === turn.turnId && props.hasActiveStream}
-      actions={props}
+      actions={turnActions}
+      draftEmpty={turnReadsDraft(turn) ? !props.draft.trim() : true}
+      continueActions={turn.turnId === continueTurnId ? props : undefined}
       channel={channel}
       newMessageCount={newChannelMessages?.turnId === turn.turnId ? newChannelMessages.count : undefined}
       onInspectTurn={onInspectTurn}
       onOpenArtifact={onOpenArtifact}
-      onReviewPlan={onReviewPlan}
       onNewConversation={offerNewConversation}
     />
   );
