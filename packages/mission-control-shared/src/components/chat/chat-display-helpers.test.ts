@@ -1,6 +1,39 @@
 import { describe, expect, it } from "vitest";
 import { CHAT_TURN_ACTIVE_STATUSES, type ChatTurnTraceRecord } from "@goatcitadel/contracts";
-import { canRetryTurn, getTurnPendingLabel, humanizeEnum, toTitleCase } from "./chat-display-helpers";
+import {
+  canRetryTurn,
+  formatAnswerReviewLabel,
+  getTurnPendingLabel,
+  humanizeEnum,
+  toTitleCase,
+} from "./chat-display-helpers";
+
+describe("formatAnswerReviewLabel", () => {
+  const review = (answerReview?: NonNullable<ChatTurnTraceRecord["reflection"]>["answerReview"]) => ({
+    reflection: { attempted: false, attemptCount: 0, ...(answerReview ? { answerReview } : {}) },
+  });
+  const base = { depth: "standard" as const, reviewedAt: "2026-11-01T00:00:00.000Z", action: "recorded" as const };
+
+  it("is null when the answer was not reviewed", () => {
+    expect(formatAnswerReviewLabel(undefined)).toBeNull();
+    expect(formatAnswerReviewLabel(review())).toBeNull();
+  });
+
+  it("names the verdict in one short line", () => {
+    expect(formatAnswerReviewLabel(review({ ...base, outcome: "passed", issues: [] }))).toBe("Reviewed: no issues");
+    expect(formatAnswerReviewLabel(review({ ...base, outcome: "issues_found", issues: ["a", "b"] }))).toBe(
+      "Reviewed: 2 issues",
+    );
+    expect(
+      formatAnswerReviewLabel(
+        review({ ...base, depth: "strict", action: "noted_in_answer", outcome: "issues_found", issues: ["a"] }),
+      ),
+    ).toBe("Reviewed: 1 issue, noted in the answer");
+    expect(formatAnswerReviewLabel(review({ ...base, outcome: "unavailable", issues: [], reason: "timeout" }))).toBe(
+      "Review unavailable",
+    );
+  });
+});
 
 function failedTrace(failure?: ChatTurnTraceRecord["failure"]): ChatTurnTraceRecord {
   return {
@@ -68,7 +101,12 @@ describe("canRetryTurn", () => {
   });
 
   it("allows retry after an operator cancels a turn before any assistant output", () => {
-    expect(canRetryTurn({ assistantMessage: undefined, trace: { ...failedTrace(), status: "cancelled", failure: undefined } })).toBe(true);
+    expect(
+      canRetryTurn({
+        assistantMessage: undefined,
+        trace: { ...failedTrace(), status: "cancelled", failure: undefined },
+      }),
+    ).toBe(true);
   });
 
   it("denies retry when there is no assistant output and no retryable failure", () => {

@@ -343,7 +343,7 @@ export function listChatCommandCatalog(): ChatCommandCatalogItem[] {
       usage: "/model <model-id|provider-id/model-id>",
       description: "Override provider/model for this session.",
     },
-    { command: "/web", usage: "/web auto|off|quick|deep", description: "Set web retrieval behavior." },
+    { command: "/web", usage: "/web auto|off|deep", description: "Set web retrieval behavior." },
     {
       command: "/memory",
       usage: "/memory auto|on|off or /memory <query>",
@@ -646,12 +646,15 @@ export async function parseChatCommand(
   }
 
   if (command === "/web") {
-    const webMode = (args[0] ?? "").toLowerCase() as ChatWebMode;
-    if (!["auto", "off", "quick", "deep"].includes(webMode)) {
-      return { ok: false, command, args, message: "Usage: /web auto|off|quick|deep" };
+    const requested = (args[0] ?? "").toLowerCase();
+    if (!["auto", "off", "quick", "deep"].includes(requested)) {
+      return { ok: false, command, args, message: "Usage: /web auto|off|deep" };
     }
+    // Quick is retired; it never forced a search, so it now means Auto.
+    const webMode: ChatWebMode = requested === "quick" ? "auto" : (requested as ChatWebMode);
     const prefs = await deps.updateChatSessionPrefs(sessionId, { webMode });
-    return { ok: true, command, args, prefs, message: `Web mode set to ${prefs.webMode}.` };
+    const retired = requested === "quick" ? "Quick web mode was retired. " : "";
+    return { ok: true, command, args, prefs, message: `${retired}Web mode set to ${prefs.webMode}.` };
   }
 
   if (command === "/memory") {

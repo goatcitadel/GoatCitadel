@@ -9,6 +9,25 @@ import {
 
 export type ChatTraceTone = "muted" | "warning" | "critical" | "success";
 
+/**
+ * One short line for a turn's answer review, or null when the answer was not reviewed:
+ * "Reviewed: no issues", "Reviewed: 2 issues" (", noted in the answer" for strict) or "Review unavailable".
+ */
+export function formatAnswerReviewLabel(trace: Pick<ChatTurnTraceRecord, "reflection"> | undefined): string | null {
+  const review = trace?.reflection?.answerReview;
+  if (!review) {
+    return null;
+  }
+  if (review.outcome === "unavailable") {
+    return "Review unavailable";
+  }
+  if (review.outcome === "passed") {
+    return "Reviewed: no issues";
+  }
+  const count = review.issues.length === 1 ? "1 issue" : `${review.issues.length} issues`;
+  return review.action === "noted_in_answer" ? `Reviewed: ${count}, noted in the answer` : `Reviewed: ${count}`;
+}
+
 export function parseTimestamp(timestamp: string): number | null {
   const parsed = Date.parse(timestamp);
   return Number.isNaN(parsed) ? null : parsed;

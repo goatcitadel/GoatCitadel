@@ -760,6 +760,134 @@ describe("streamPreparedAgentChatTurn", () => {
     ]);
   });
 
+  describe("answer review", () => {
+    function answeringHost(answer = "Paris is the capital of France.") {
+      const host = createHost();
+      host.turnRuntime.runStream = vi.fn(async function* () {
+        host.storage.chatTurnTraces.patch("turn-1", {
+          status: "completed",
+          routing: { effectiveProviderId: "openai", effectiveModel: "gpt-5.4" },
+        });
+        yield { type: "delta", sessionId: "session-1", turnId: "turn-1", messageId: "assistant-1", delta: answer };
+        yield {
+          type: "message_done",
+          sessionId: "session-1",
+          turnId: "turn-1",
+          messageId: "assistant-1",
+          content: answer,
+        };
+      }) as never;
+      return host;
+    }
+
+    function preparedWithReview(depth: "off" | "standard" | "strict") {
+      const prepared = createPreparedTurn() as unknown as { prefs: Record<string, unknown> };
+      prepared.prefs.orchestrationReviewDepth = depth;
+      return prepared as never;
+    }
+
+    async function drain(host: ReturnType<typeof createHost>, prepared: never) {
+      const chunks = [];
+      for await (const chunk of streamPreparedAgentChatTurn(
+        host,
+        "session-1",
+        { content: "What is the capital of France?", mode: "chat" } as never,
+        prepared,
+        "chat_thread_turn_appended",
+      )) {
+        chunks.push(chunk);
+      }
+      return chunks;
+    }
+
+    it("does not call the reviewer when review is off", async () => {
+      const host = answeringHost();
+      await drain(host, preparedWithReview("off"));
+      expect(host.createChatCompletion).not.toHaveBeenCalled();
+      expect(host.storage.chatTurnTraces.get("turn-1").reflection?.answerReview).toBeUndefined();
+    });
+
+    it("reviews the answer before the assistant message is written and records the verdict", async () => {
+      const host = answeringHost();
+      const order: string[] = [];
+      host.createChatCompletion = vi.fn(async () => {
+        order.push("review");
+        return { choices: [{ index: 0, message: { content: '{"verdict":"pass","issues":[]}' } }] };
+      }) as never;
+      const ingest = host.ingestEvent as ReturnType<typeof vi.fn>;
+      const originalIngest = ingest.getMockImplementation()!;
+      ingest.mockImplementation(async (...args: unknown[]) => {
+        order.push("ingest");
+        return originalIngest(...(args as Parameters<typeof originalIngest>));
+      });
+
+      const chunks = await drain(host, preparedWithReview("standard"));
+
+      expect(order).toEqual(["review", "ingest"]);
+      expect(host.createChatCompletion).toHaveBeenCalledWith(
+        expect.objectContaining({ providerId: "openai", model: "gpt-5.4", stream: false }),
+        expect.objectContaining({ utilityKind: "chat_answer_review", turnId: "turn-1" }),
+      );
+      expect(host.storage.chatTurnTraces.get("turn-1").reflection?.answerReview).toMatchObject({
+        depth: "standard",
+        outcome: "passed",
+        action: "recorded",
+      });
+      expect(chunks.find((chunk) => chunk.type === "message_done")).toMatchObject({
+        content: "Paris is the capital of France.",
+      });
+      expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+        status: "completed",
+        assistantMessageId: "assistant-1",
+      });
+    });
+
+    it("completes the turn and records review unavailable when the reviewer fails", async () => {
+      const host = answeringHost();
+      host.createChatCompletion = vi.fn(async () => {
+        throw new Error("provider timeout");
+      }) as never;
+
+      const chunks = await drain(host, preparedWithReview("standard"));
+
+      expect(chunks.find((chunk) => chunk.type === "message_done")).toMatchObject({
+        content: "Paris is the capital of France.",
+      });
+      expect(chunks.some((chunk) => chunk.type === "error")).toBe(false);
+      expect(host.storage.chatTurnTraces.get("turn-1")).toMatchObject({
+        status: "completed",
+        reflection: { answerReview: { outcome: "unavailable", reason: "provider timeout" } },
+      });
+    });
+
+    it("appends strict review issues to the streamed and persisted answer", async () => {
+      const host = answeringHost();
+      host.createChatCompletion = vi.fn(async () => ({
+        choices: [{ index: 0, message: { content: '{"verdict":"issues","issues":["No source supports this."]}' } }],
+      })) as never;
+
+      const chunks = await drain(host, preparedWithReview("strict"));
+
+      const messageDone = chunks.find((chunk) => chunk.type === "message_done") as { content: string };
+      expect(messageDone.content).toMatch(/^Paris is the capital of France\.\n\n---\n\*\*Review notes:\*\*/);
+      expect(messageDone.content).toContain("- No source supports this.");
+      const deltas = chunks
+        .filter((chunk) => chunk.type === "delta")
+        .map((chunk) => (chunk as { delta: string }).delta);
+      expect(deltas.join("")).toBe(messageDone.content);
+      const ingested = (host.ingestEvent as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[1] as {
+        message: { content: string };
+      };
+      expect(ingested.message.content).toBe(messageDone.content);
+      expect(host.storage.chatTurnTraces.get("turn-1").reflection?.answerReview).toMatchObject({
+        depth: "strict",
+        outcome: "issues_found",
+        action: "noted_in_answer",
+        issues: ["No source supports this."],
+      });
+    });
+  });
+
   it("keeps the runner's saved citations when an approval-resumed segment streams none", async () => {
     const host = createHost();
     const earlierSource = {
