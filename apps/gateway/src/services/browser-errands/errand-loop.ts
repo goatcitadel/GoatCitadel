@@ -128,6 +128,23 @@ function readToolCalls(response: ChatCompletionResponse): { text: string; calls:
   return { text, calls, malformed };
 }
 
+/**
+ * The URL as it may be stored or shown later: origin and path only. A query string or fragment can carry a token
+ * (checkout, password reset, sign-in callback) and user info a password; the full URL stays in memory.
+ */
+export function persistableUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    parsed.username = "";
+    parsed.password = "";
+    parsed.search = "";
+    parsed.hash = "";
+    return parsed.toString();
+  } catch {
+    return "";
+  }
+}
+
 function hostOf(url: string): string {
   try {
     return new URL(url).host || url;
@@ -217,7 +234,7 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
   const visited: string[] = [];
 
   const noteUrl = (): void => {
-    const url = browser.currentUrl();
+    const url = persistableUrl(browser.currentUrl());
     if (url && !visited.includes(url)) {
       visited.push(url);
     }

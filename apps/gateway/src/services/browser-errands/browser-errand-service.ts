@@ -109,6 +109,17 @@ interface ActiveErrand {
   settled?: Promise<void>;
 }
 
+/** Approval evidence could not be recorded: the errand stops (fail closed) and its summary says why. */
+function stopApprovalUnrecorded(errand: ActiveErrand, error: unknown): void {
+  // eslint-disable-next-line no-console -- bounded diagnostic; the errand stops and says why.
+  console.warn("[goatcitadel] browser errand approval could not be recorded", {
+    errandId: errand.view.errandId,
+    error: error instanceof Error ? error.message : String(error),
+  });
+  errand.approvalUnrecorded = true;
+  errand.controller.abort();
+}
+
 /** Runs one browser errand at a time in GoatCitadel's own Chrome window, for the `browser.errand` tool. */
 export class BrowserErrandService {
   private active: ActiveErrand | undefined;
@@ -337,19 +348,22 @@ export class BrowserErrandService {
           return errand.stopping ? "stopped" : answer;
         } catch (error) {
           // The approval could not be recorded or withdrawn; the errand must not act without one.
-          // eslint-disable-next-line no-console -- bounded diagnostic; the errand stops and says why.
-          console.warn("[goatcitadel] browser errand approval could not be recorded", {
-            errandId: errand.view.errandId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          errand.approvalUnrecorded = true;
-          errand.controller.abort();
+          stopApprovalUnrecorded(errand, error);
           return "stopped";
         } finally {
           this.settleState(errand);
         }
       },
-      afterApprovedAction: hooks.afterApprovedAction,
+      afterApprovedAction: async (png) => {
+        try {
+          await hooks.afterApprovedAction(png);
+        } catch (error) {
+          // The approved action's "after" evidence could not be stored: stop rather than act on without it. The
+          // rethrow ends the loop, which sees the abort and reports "stopped", not the raw storage error.
+          stopApprovalUnrecorded(errand, error);
+          throw new Error(BROWSER_ERRAND_APPROVAL_UNRECORDED_SUMMARY, { cause: error });
+        }
+      },
       lastDenialReason: hooks.lastDenialReason,
       waitForHandBack: (reason) => this.waitForHandBack(errand, browser, reason),
       onProgress: (progress: ErrandProgress) => {
@@ -451,9 +465,19 @@ export class BrowserErrandService {
           if (errand.stopping) {
             return "halt";
           }
+          const takeoversBefore = errand.takeovers;
           const decision = await beforeAction(action, index);
           // Re-checked after the (possibly long) approval wait, right before the action is dispatched.
-          return errand.stopping ? "halt" : decision;
+          if (errand.stopping) {
+            return "halt";
+          }
+          if (errand.takeovers !== takeoversBefore || errand.takenOverSince !== undefined) {
+            // The operator took over while the approval was prepared or awaited: the page may have changed, so the
+            // action is not dispatched; wait for Hand back and let the model look again.
+            await untilHandedBack();
+            return "halt";
+          }
+          return decision;
         });
       },
     };

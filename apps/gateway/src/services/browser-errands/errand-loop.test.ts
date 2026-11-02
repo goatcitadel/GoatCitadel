@@ -328,6 +328,26 @@ describe("runErrandLoop", () => {
     expect(order).toEqual(["run", "after"]);
   });
 
+  it("stops, without the raw storage error, when the after-action evidence cannot be recorded", async () => {
+    const controller = new AbortController();
+    const afterApprovedAction = vi.fn(async (_png: Buffer) => {
+      controller.abort();
+      throw new Error("database is locked");
+    });
+    const { deps, browser } = makeDeps([click(), textReply("ok")], { afterApprovedAction, signal: controller.signal });
+    browser.describeTarget.mockResolvedValue(target({ text: "Place your order" }));
+    const outcome = await runErrandLoop(deps, { goal: "buy" });
+    expect(outcome.status).toBe("stopped");
+    expect(outcome.summary).not.toContain("database is locked");
+  });
+
+  it("keeps only the origin and path of visited URLs", async () => {
+    const { deps, browser } = makeDeps([click(), textReply("ok")]);
+    browser.currentUrl.mockReturnValue("https://user:pw@shop.example/reset?token=secret#frag");
+    const outcome = await runErrandLoop(deps, { goal: "x" });
+    expect(outcome.visitedUrls).toEqual(["https://shop.example/reset"]);
+  });
+
   it("does not call afterApprovedAction for actions that needed no approval", async () => {
     const afterApprovedAction = vi.fn(async (_png: Buffer) => undefined);
     const { deps } = makeDeps([click(), textReply("ok")], { afterApprovedAction });

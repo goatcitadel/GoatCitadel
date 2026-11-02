@@ -11,7 +11,7 @@ import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ApprovalCreateCommitHook } from "../approval-lifecycle-service.js";
 import { withCanonicalApprovalOutcome } from "../approval-canonical-outcome.js";
 import { ERRAND_APPROVAL_KIND, ERRAND_APPROVAL_TTL_MS } from "./errand-constants.js";
-import type { ErrandApprovalInput, ErrandLoopDeps } from "./errand-loop.js";
+import { persistableUrl, type ErrandApprovalInput, type ErrandLoopDeps } from "./errand-loop.js";
 
 export { ERRAND_APPROVAL_KIND };
 export const ERRAND_TOOL_NAME = "browser.errand";
@@ -308,7 +308,7 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
         actedOn: false,
         originChanged,
         approvedOrigin: asked.origin,
-        pageUrl: browser.currentUrl(),
+        pageUrl: persistableUrl(browser.currentUrl()),
         reasked,
       },
     });
@@ -340,7 +340,7 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
           category: input.category,
           title,
           body: input.body,
-          pageUrl: input.pageUrl,
+          pageUrl: persistableUrl(input.pageUrl),
           screenshotAttachmentId: screenshot.attachmentId,
           toolRunId: deps.toolRunId,
         },
@@ -365,7 +365,7 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
         },
         preview: {
           summary,
-          url: input.pageUrl,
+          url: persistableUrl(input.pageUrl),
           title,
           screenshotAttachmentId: screenshot.attachmentId,
           screenshotSha256: screenshot.sha256,
@@ -497,7 +497,7 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
       payload: {
         screenshotAttachmentId: screenshot.attachmentId,
         screenshotSha256: screenshot.sha256,
-        pageUrl: browser.currentUrl(),
+        pageUrl: persistableUrl(browser.currentUrl()),
       },
     });
   };

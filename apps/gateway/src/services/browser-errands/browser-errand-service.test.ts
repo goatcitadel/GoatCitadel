@@ -148,6 +148,69 @@ describe("BrowserErrandService", () => {
     await service.dispose();
   });
 
+  it("stops, logs it and says why when an approved action's after evidence cannot be recorded", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { service } = buildService(vi.fn, {
+      createGate: () =>
+        fakeGate(vi.fn, {
+          recordAfterScreenshot: vi.fn(async () => {
+            throw new Error("database is locked");
+          }),
+        }),
+      runLoop: async (deps) => {
+        const failure = await deps.afterApprovedAction!(Buffer.from("after")).then(
+          () => "recorded",
+          (error: Error) => error.message,
+        );
+        return outcome(deps.signal.aborted ? "stopped" : "failed", { summary: failure });
+      },
+    });
+    await expect(service.run(errandRequest())).resolves.toMatchObject({
+      outcome: "stopped",
+      summary: BROWSER_ERRAND_APPROVAL_UNRECORDED_SUMMARY,
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "[goatcitadel] browser errand approval could not be recorded",
+      expect.objectContaining({ error: "database is locked" }),
+    );
+    warn.mockRestore();
+    await service.dispose();
+  });
+
+  it("does not dispatch an approved action when the operator took over during the approval", async () => {
+    const wait: ComputerAction = { type: "wait" };
+    let batch!: Promise<{ ran: number; halted: boolean }>;
+    const { service, browser } = buildService(vi.fn, {
+      runLoop: async (deps) => {
+        batch = deps.browser.runActions([wait], async () => {
+          // The operator takes over while the approval is awaited, then the approval comes back approved.
+          browser.fireOverlay({ type: "take_over" });
+          return "proceed";
+        });
+        const result = await batch;
+        return outcome("done", { summary: `ran ${result.ran}` });
+      },
+    });
+    const dispatched: ComputerAction[] = [];
+    browser.runActions = async (actions, beforeAction) => {
+      for (const [index, action] of actions.entries()) {
+        if ((await beforeAction(action, index)) === "halt") return { ran: dispatched.length, halted: true };
+        dispatched.push(action);
+      }
+      return { ran: dispatched.length, halted: false };
+    };
+    const running = service.run(errandRequest());
+    await vi.waitFor(() => expect(service.getStatus("tool-run-1")?.state).toBe("taken_over"));
+    let settled = false;
+    void batch.then(() => (settled = true));
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(settled).toBe(false);
+    browser.fireOverlay({ type: "hand_back" });
+    await expect(running).resolves.toMatchObject({ outcome: "done", summary: "ran 0" });
+    expect(dispatched).toEqual([]);
+    await service.dispose();
+  });
+
   it("halts the rest of an action batch on Take over and waits for Hand back", async () => {
     const wait: ComputerAction = { type: "wait" };
     const asked: number[] = [];

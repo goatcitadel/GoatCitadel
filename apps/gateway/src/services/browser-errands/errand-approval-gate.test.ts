@@ -726,6 +726,47 @@ describe("errand approval gate", () => {
     await expect(withdrawApproval(host, first.approvalId, "system:errand-stopped")).rejects.toThrow("already resolved");
   });
 
+  it("stores page URLs without their query string, fragment or user info", async () => {
+    const { db, host, fake, gate, waitForPending, SESSION_ID, TURN_ID } = setup();
+    const hooks = errandLoopApprovalHooks(gate);
+    fake.state.url = "https://shop.example/checkout?session=secret1#frag";
+    const answer = hooks.requestApproval(approvalInput({ pageUrl: fake.state.url }));
+    const first = await waitForPending();
+    expect(db.approvals.get(first).preview.url).toBe("https://shop.example/checkout");
+    expect(db.chatInlineApprovals.listByTurn(TURN_ID)[0]!.details).toMatchObject({
+      pageUrl: "https://shop.example/checkout",
+    });
+    fake.state.url = "https://u:pw@pay.example/confirm?token=secret2#t=secret3";
+    await resolveApproval(host, first, { decision: "approve", resolvedBy: "operator" });
+    await vi.waitFor(
+      async () => {
+        const pending = await host.storage.approvals.listPendingBySession(SESSION_ID);
+        expect(pending.map((item) => item.approvalId)).not.toContain(first);
+        expect(pending).toHaveLength(1);
+      },
+      { timeout: 5_000, interval: 20 },
+    );
+    const second = (await host.storage.approvals.listPendingBySession(SESSION_ID))[0]!;
+    expect(second.preview.url).toBe("https://pay.example/confirm");
+    await resolveApproval(host, second.approvalId, { decision: "approve", resolvedBy: "operator" });
+    await expect(answer).resolves.toBe("approved");
+    await hooks.afterApprovedAction(AFTER_PNG);
+    const superseded = db.approvalEvents.listByApprovalId(first).find((event) => event.eventType === "superseded");
+    expect(superseded?.payload.pageUrl).toBe("https://pay.example/confirm");
+    const after = db.approvalEvents
+      .listByApprovalId(second.approvalId)
+      .find((event) => event.eventType === "errand_after_screenshot");
+    expect(after?.payload.pageUrl).toBe("https://pay.example/confirm");
+    const stored = JSON.stringify([
+      db.approvals.get(first),
+      second,
+      db.chatInlineApprovals.listByTurn(TURN_ID),
+      db.approvalEvents.listByApprovalId(first),
+      db.approvalEvents.listByApprovalId(second.approvalId),
+    ]);
+    expect(stored).not.toMatch(/secret|pw@/);
+  });
+
   it("records the after screenshot against the approved request", async () => {
     const { db, host, gate, attachments, waitForPending } = setup();
     const hooks = errandLoopApprovalHooks(gate);
