@@ -77,6 +77,8 @@ export interface BoundedGitTreeOptions {
   limitError: GitLimitErrorClass;
   /** Words for each refusal in place of the label's. The skill import gives none, so its messages stay as they were. */
   wording?: GitTreeWording;
+  /** Admits an executable blob (mode 100755) as a plain file; it is written without its executable bit. */
+  executableAsPlain?: boolean;
 }
 
 function treeWording(options: BoundedGitTreeOptions): GitTreeWording {
@@ -453,7 +455,8 @@ export function parseBoundedGitTree(output: string, options: BoundedGitTreeOptio
     const metadata = record.slice(0, separator).split(" ");
     const relativePath = record.slice(separator + 1);
     const [mode, objectType, objectId] = metadata;
-    if (mode !== "100644" || objectType !== "blob" || !/^[a-f0-9]{40}$/u.test(objectId ?? "")) {
+    const plainMode = mode === "100644" || (options.executableAsPlain === true && mode === "100755");
+    if (!plainMode || objectType !== "blob" || !/^[a-f0-9]{40}$/u.test(objectId ?? "")) {
       throw new GitTreeRefusedError(words.unsupportedObject(relativePath));
     }
     if (!isPortableTreePath(relativePath)) throw new GitTreeRefusedError(words.notPortable(relativePath));
@@ -651,6 +654,8 @@ async function fetchGitTreeUnder(input: FetchGitTreeInput, policy: GitTreeFetchP
     label: "plugin",
     limitError: GitTreeLimitError,
     wording: PLUGIN_GIT_TREE_WORDING,
+    // A plugin runs nothing, so a script's executable bit is dropped rather than refusing the plugin.
+    executableAsPlain: true,
   };
   const deadline = startGitDeadline("Git plugin fetch timed out.");
   // The scratch repository is removed only if this call made it: a folder that was already there is not ours.
