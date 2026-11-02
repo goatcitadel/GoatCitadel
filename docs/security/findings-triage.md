@@ -322,6 +322,18 @@ After the 2026-10-12 morning pushes the AI view reported four findings in four f
 | `apps/mission-control-next/src/cockpit/areas/settings/WorkspaceDesignContextSettings.tsx` — list `kind: "document"` artifacts instead of `"markdown"` | Rejected. `ChatGeneratedArtifactKind` is `markdown \| html \| mermaid \| code \| text`; `"document"` is not a valid kind, so the offered change would fail typecheck. DESIGN.md content is markdown. |
 | `apps/gateway/src/services/gateway/cron-automation-service.ts` — `hour12: false` emits `24` at midnight | Repeat of the earlier 2026-10-12 finding; still rejected as not reproducible on Node 24. |
 
+### 2026-11-01 AI queue snapshot
+
+After the 2026-11-01 default-branch pushes (head `c9c2b87a8`) the AI view reported five findings in five files:
+
+| Reported | Disposition and evidence |
+|---|---|
+| `apps/gateway/src/services/chat-subagent-fanout-service.ts` — `canonicalWriteFence` is accepted but not forwarded to `durableFanout.execute` | Offered diff rejected. `ChatDurableFanoutExecutionInput` has no `canonicalWriteFence` field, so the diff fails typecheck. Durable fan-out guards its own writes: it binds the invocation to the durable parent run and server-authored tool run, and re-checks live authority before reserving and before each child dispatch (`assertFanoutLiveAuthority`, `preDispatchGuard`). Wrapping the whole delegation in the turn fence would hold it across child runs. Revisit only as a designed change to fan-out authority. |
+| `apps/mission-control-next/src/cockpit/areas/chat/ChatComposerPlusMenu.tsx` — the Sources row lacks `disabled` | Rejected. The row only opens the Sources panel. The panel's `ExternalSourceStrip` is already disabled for read-only history and session-control banners, and the Sources chips beside the composer are not disabled either, so sources stay viewable. |
+| `docs/superpowers/specs/2026-11-01-claude-code-plugin-import-spike.md` — "gets a fixed line" contradicts "never makes up a description" | Accepted: reworded to a fixed placeholder line that says no description was provided. |
+| `packages/mission-control-shared/src/components/chat/chat-display-helpers.ts` — `summarizeDelegationSteps` ignores `cancelled` | Accepted. Cancelled steps are counted and settled; the counts line adds "Cancelled N" only when there are any, so existing renders do not change. Skipped steps stay unsettled as before. |
+| `packages/policy-engine/src/errand-browser/computer-actions.ts` — chord strings such as `Ctrl+Enter` reach `keyboard.down()` | Accepted. Chord strings are split into keys before validation, the 8-key limit applies to the split keys, and a trailing `+` stays the plus key. |
+
 ### There is no way to dismiss an AI finding
 
 Unlike Standard findings, which carry a per-row **Dismiss** button, the AI findings surface offers

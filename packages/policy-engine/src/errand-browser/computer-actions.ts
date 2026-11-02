@@ -170,10 +170,16 @@ function normalizeOne(entry: unknown, label: string): ComputerAction | string {
       return { type: "type", text: record.text };
     case "keypress": {
       const keys = Array.isArray(record.keys) ? record.keys : [];
-      if (keys.length === 0 || keys.length > MAX_KEYS || !keys.every((key) => typeof key === "string" && key)) {
+      if (!keys.every((key) => typeof key === "string" && key)) {
         return `${label} needs between 1 and ${MAX_KEYS} keys.`;
       }
-      return { type: "keypress", keys: (keys as string[]).map(normalizeComputerKey) };
+      // Dispatch holds each entry with keyboard.down(), which rejects chord strings such as "Ctrl+Enter", so a chord
+      // is split into its keys here. A trailing "+" is the plus key itself ("+", "Ctrl++").
+      const parts = (keys as string[]).flatMap((key) => key.split(/\+(?!$)/).map((part) => part.trim()));
+      if (parts.length === 0 || parts.length > MAX_KEYS || parts.some((part) => !part)) {
+        return `${label} needs between 1 and ${MAX_KEYS} keys.`;
+      }
+      return { type: "keypress", keys: parts.map(normalizeComputerKey) };
     }
     case "wait":
       return { type: "wait" };

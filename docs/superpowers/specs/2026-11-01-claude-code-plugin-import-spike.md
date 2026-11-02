@@ -68,7 +68,7 @@ same `parsePluginManifest`, so every named refusal applies to it.
 | The manifest file itself | Generated `goatcitadel-plugin.json` | Optional in Claude Code ("The manifest is optional"). Without it the layout alone defines the plugin, and the name comes from the folder or marketplace entry. |
 | `name` (the only required key) | `pluginId` | All 69 sample names pass `PLUGIN_ID_PATTERN` (`plugins.ts:94`). The existing `PLUGIN_ID_RESERVED` check still applies. |
 | `displayName`, else `name` | `name` | |
-| `description` (optional) | `description` (required, 1–500 chars) | A plugin without one gets a fixed line that says so. The import never makes up a description. |
+| `description` (optional) | `description` (required, 1–500 chars) | A plugin without one gets the same fixed placeholder line, saying no description was provided. The import never writes a description from the plugin's content. |
 | `version` (optional, 36 of 54 have it) | `version` (required) | When it's missing, use the pinned commit's first 12 hex characters, or `content-<12 hex>` for a folder. |
 | `author` (an object, `name` required) | `author` (a string) | Name only. |
 | `homepage` | `homepage` | Only when `https`. |

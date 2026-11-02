@@ -1,5 +1,11 @@
 import { ActorTimestamp, formatActorTimestamp } from "./ChatThreadReadingPrimitives";
-export { ActorTimestamp, formatActorTimestamp, formatActorTimestampTitle, isThreadScrollNearBottom, ChatThreadNotices } from "./ChatThreadReadingPrimitives";
+export {
+  ActorTimestamp,
+  formatActorTimestamp,
+  formatActorTimestampTitle,
+  isThreadScrollNearBottom,
+  ChatThreadNotices,
+} from "./ChatThreadReadingPrimitives";
 import { memo, useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { getWorkflowSkillCaptureDisplay } from "./workflow-skill-capture-display";
 import { WorkflowSkillCaptureEvidence } from "./WorkflowSkillCaptureEvidence";
@@ -901,11 +907,13 @@ export function ChatThreadDelegationSummary({
   if (!delegationRun) {
     return null;
   }
-  const { completedCount, failedCount, pendingCount, skippedCount, runningCount, currentStep } =
+  const { completedCount, failedCount, pendingCount, skippedCount, cancelledCount, runningCount, currentStep } =
     summarizeDelegationSteps(delegationRun.steps);
   const isCowork = mode === "cowork";
   const formatStepLabel = (step: ChatDelegationStepView) => step.label?.trim() || toTitleCase(step.role);
-  const countsLine = `Completed ${completedCount} · Running ${runningCount} · Pending ${pendingCount} · Failed ${failedCount} · Skipped ${skippedCount}`;
+  const countsLine =
+    `Completed ${completedCount} · Running ${runningCount} · Pending ${pendingCount} · Failed ${failedCount} · Skipped ${skippedCount}` +
+    (cancelledCount > 0 ? ` · Cancelled ${cancelledCount}` : "");
   const runChips = buildDelegationRunChips(delegationRun);
 
   if (isCowork) {
@@ -987,10 +995,7 @@ export function ChatThreadDelegationSummary({
           <strong>{delegationRun.label}</strong> · {delegationRun.mode}
         </p>
         <p>{delegationRun.objective}</p>
-        <p>
-          Completed {completedCount} · Running {runningCount} · Pending {pendingCount} · Failed {failedCount} · Skipped{" "}
-          {skippedCount}
-        </p>
+        <p>{countsLine}</p>
         <ol className="mc-next-thread-step-list">
           {delegationRun.steps.map((step) => (
             <ChatDelegationStepEvidence

@@ -118,6 +118,26 @@ describe("normalizeComputerActions", () => {
     expect(result.errors[0]).toContain("keypress");
     expect(result.errors[1]).toContain("action 2");
   });
+
+  it("splits chord strings into keys and keeps the plus key itself", () => {
+    const result = normalizeComputerActions([
+      { type: "keypress", keys: ["ctrl+Enter"] },
+      { type: "keypress", keys: ["Ctrl + Shift + t"] },
+      { type: "keypress", keys: ["+"] },
+      { type: "keypress", keys: ["Ctrl++"] },
+      { type: "keypress", keys: ["++"] },
+      { type: "keypress", keys: ["a+b+c+d+e", "f+g+h+i"] },
+    ]);
+    expect(result.actions).toEqual([
+      { type: "keypress", keys: ["Control", "Enter"] },
+      { type: "keypress", keys: ["Control", "Shift", "t"] },
+      { type: "keypress", keys: ["+"] },
+      { type: "keypress", keys: ["Control", "+"] },
+    ]);
+    expect(result.errors).toHaveLength(2);
+    expect(result.errors[0]).toContain("action 5");
+    expect(result.errors[1]).toContain("action 6");
+  });
 });
 
 describe("errand browser computer actions", () => {
