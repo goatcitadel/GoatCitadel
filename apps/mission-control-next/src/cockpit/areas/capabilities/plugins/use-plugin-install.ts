@@ -1,6 +1,7 @@
 import { useEffect } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
+  ApprovalRequest,
   CapabilityPluginDetail,
   CapabilityPluginInspection,
   PluginActionOutcome,
@@ -12,6 +13,7 @@ import {
 } from "@goatcitadel/mission-control-shared/api/capability-plugins";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { pendingSkillStep } from "./plugin-install-view";
 import { manifestRefusalLines, pluginRefusalOf, refusalMessage, wasAnswered } from "./plugin-check-copy";
 import {
   __resetPluginInstallFlowForTests,
@@ -304,16 +306,37 @@ export interface PluginInstall {
   inspect(source: PluginSource): void;
   /** Install (at a check that passed), or Continue (at an install that isn't finished). */
   confirm(hookSecrets: Readonly<Record<string, string>>): Promise<boolean>;
-  /** Reads now, for a decision made in the panel's approval. */
-  checkNow(): void;
+  /**
+   * Reads now, for a decision made in the panel's approval. With `approved` for a skill step's approval, the install
+   * goes on through the steps after it.
+   */
+  checkNow(status?: ApprovalRequest["status"]): void;
 }
 
 const IDLE: PluginInstallState = { phase: "idle" };
+
+/**
+ * A skill step's approval approved in the panel: the install goes on through the steps after it, as it does from the
+ * confirmation. A reload loses the confirmation's chain, so approving a step reopened by Continue carries it on. The
+ * step is kept as asked, so one that comes back unapplied reads as not done rather than being asked again. A step not
+ * known here leaves the chain as it was.
+ */
+export function stepApproved(key: string, kind: PluginSkillStepKind | undefined) {
+  const entry = readPluginInstall(key);
+  const state = entry?.state;
+  if (!entry || !kind || state?.phase !== "following" || !state.waitingApprovalId) return;
+  const piece = state.detail.pieces.find((item) => item.pendingApprovalId === state.waitingApprovalId);
+  if (piece?.kind !== "skill") return;
+  setPluginInstall(key, { ...entry, chain: true, asked: { pieceId: piece.pieceId, kind } });
+}
 
 function waitingStepOf(entry: PluginInstallEntry | undefined): PluginSkillStepKind | undefined {
   const state = entry?.state;
   if (state?.phase !== "following" || !state.waitingApprovalId) return undefined;
   const piece = state.detail.pieces.find((item) => item.pendingApprovalId === state.waitingApprovalId);
+  // The Gateway's own word first; then the step this session asked for, then the skill's own install.
+  const named = pendingSkillStep(piece);
+  if (named) return named;
   if (piece && entry?.asked?.pieceId === piece.pieceId) return entry.asked.kind;
   return entry?.waitingStep?.approvalId === state.waitingApprovalId ? entry.waitingStep.kind : undefined;
 }
@@ -360,7 +383,10 @@ export function usePluginInstall(
     ...(entry?.asked ? { asked: entry.asked } : {}),
     inspect: (source) => startPluginInspection(key, source, installContext(key) ?? { client, workspaceId }),
     confirm: (hookSecrets) => confirmPluginInstall(key, hookSecrets),
-    checkNow: () => readNow(key),
+    checkNow: (status) => {
+      if (status === "approved") stepApproved(key, waitingStepOf(readPluginInstall(key)));
+      readNow(key);
+    },
   };
 }
 

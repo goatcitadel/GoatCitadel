@@ -22,7 +22,7 @@ import {
   type PluginInstallEntry,
   type PluginSkillStepKind,
 } from "./plugin-install-store";
-import { firstUnfinishedPiece } from "./plugin-install-view";
+import { firstUnfinishedPiece, pendingSkillStep } from "./plugin-install-view";
 import { setPluginUninstall } from "./plugin-uninstall-store";
 
 // Following an install once it is confirmed: the plugin's own plan until the plugin has a record, then the plugin's
@@ -341,7 +341,7 @@ function skillPiece(
         ...following,
         state: { ...following.state, ...(approvalId ? { waitingApprovalId: approvalId } : {}) },
       });
-      if (approvalId && !asked) void lookUpWaitingStep(key, piece, approvalId);
+      if (approvalId && !asked && !pendingSkillStep(piece)) void lookUpWaitingStep(key, piece, approvalId);
       return paced(key, `${piece.pieceId}:waiting:${approvalId ?? ""}`, "waiting");
     }
     case "installing":
@@ -393,7 +393,7 @@ async function readPlanSummary(key: string, detail: CapabilityPluginDetail) {
   }
 }
 
-/** Which step a waiting approval is for, from the skill's own install: the detail reads both waits the same way. */
+/** Which step a waiting approval is for, from the skill's own install, when the detail doesn't name it. */
 async function lookUpWaitingStep(key: string, piece: CapabilityPluginDetailPiece, approvalId: string) {
   const context = contexts.get(key);
   if (!context || !piece.skillSnapshotId || stepLookups.has(approvalId)) return;

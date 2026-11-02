@@ -80,7 +80,7 @@ function ApprovalInPlace({ flow, name }: { flow: PluginInstall; name: string }) 
       {...(words.summary ? { summary: words.summary } : {})}
       reviewLabel="Review the change"
       loadFailureHint="Reload to try again."
-      onResolved={() => flow.checkNow()}
+      onResolved={(status) => flow.checkNow(status)}
     />
   );
 }

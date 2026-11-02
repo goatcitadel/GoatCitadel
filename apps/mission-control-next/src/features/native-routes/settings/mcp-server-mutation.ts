@@ -124,10 +124,12 @@ function knownUncommitted(error: unknown, serverId: string, method = "PATCH") {
 }
 export type McpServerUpdateResult =
   | { status: "saved"; server: McpServerRecord }
+  | { status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked"; message: string }
   | {
-      status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked";
+      /** GoatCitadel refused the change because a plugin owns the server. Nothing changed, so it isn't a conflict. */
+      status: "plugin_owned";
       message: string;
-      /** The plugin that owns the server, when GoatCitadel refused the change for it. */
+      /** The plugin that owns the server, when GoatCitadel named it. */
       pluginId?: string;
     };
 
@@ -186,7 +188,7 @@ export async function commitMcpServerUpdate({
     if (refusal) {
       write(id, IDLE);
       return {
-        status: "conflict",
+        status: "plugin_owned",
         message: refusal.message,
         ...(refusal.pluginId ? { pluginId: refusal.pluginId } : {}),
       };

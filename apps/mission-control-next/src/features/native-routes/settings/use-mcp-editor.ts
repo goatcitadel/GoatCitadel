@@ -111,14 +111,18 @@ export function useMcpEditor({
       },
       isCurrent: () => isScopeCurrent() && editorGeneration.current === generation,
     });
+    if (result.status === "plugin_owned") {
+      if (!isScopeCurrent() || editorGeneration.current !== generation) return false;
+      // Only the plugin's sentence and its link: nothing changed, so there is nothing to review again, and a draft that
+      // can't be saved here isn't kept.
+      draft.discard();
+      notify({ tone: "warning", message: result.message, ...(result.pluginId ? { pluginId: result.pluginId } : {}) });
+      return false;
+    }
     if (result.status !== "saved") {
       // A newer editor must not inherit an old preflight's status or start its review flow.
       if (!isScopeCurrent() || editorGeneration.current !== generation) return false;
-      notify({
-        tone: result.status === "uncertain" ? "error" : "warning",
-        message: result.message,
-        ...(result.pluginId ? { pluginId: result.pluginId } : {}),
-      });
+      notify({ tone: result.status === "uncertain" ? "error" : "warning", message: result.message });
       if (["conflict", "unavailable", "uncertain"].includes(result.status)) await review.refresh();
       return false;
     }

@@ -303,7 +303,7 @@ describe("Plugin panel", () => {
     const lines = [...(dialog()?.querySelectorAll("li") ?? [])].map((item) => item.textContent);
     expect(lines).toEqual([
       "Removes: Calendar, Meeting notes and Page checks",
-      "Stays: Git, and the hosts it allowed",
+      "Stays: Git, and the hosts it allowed (calendar.example.com)",
       "Deletes the runs of its prompt packs.",
     ]);
     expect(dialog()?.textContent).toContain("This can't be undone here.");
@@ -491,6 +491,6 @@ describe("Plugin panel", () => {
     await press(button("Uninstall", body()));
     const lines = [...(dialog()?.querySelectorAll("li") ?? [])].map((item) => item.textContent ?? "");
     expect(lines.some((line) => line.startsWith("Removes"))).toBe(false);
-    expect(lines).toContain("Stays: the hosts it allowed");
+    expect(lines).toContain("Stays: the hosts it allowed (calendar.example.com)");
   });
 });

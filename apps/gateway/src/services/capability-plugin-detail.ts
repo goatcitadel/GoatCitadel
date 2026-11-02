@@ -92,6 +92,7 @@ export interface PluginPieceReading {
 export interface PluginPieceLabel {
   label: string;
   asksFirst: string;
+  /** The hosts installing it allows: a connector's template hosts, or a hook's own host. */
   hosts?: string[];
 }
 
@@ -183,7 +184,8 @@ export function buildPluginDetailPieces(
       label: piece.kind === "skill" && check ? check.title : described.label,
       asksFirst: piece.owned ? described.asksFirst : (KEPT_LINES[piece.kind] ?? described.asksFirst),
       check: piece.owned ? READY : ALREADY_THERE,
-      ...(described.hosts ? { hosts: [...described.hosts] } : {}),
+      // A piece already there allowed nothing.
+      ...(piece.owned && described.hosts ? { hosts: [...described.hosts] } : {}),
       ...(piece.skillSnapshotId ? { skillSnapshotId: piece.skillSnapshotId } : {}),
       state: reading.state,
       ...(reading.pendingApprovalId ? { pendingApprovalId: reading.pendingApprovalId } : {}),
@@ -332,11 +334,15 @@ function describePiece(piece: Exclude<PluginPiece, { kind: "prompt_pack" }>): Pl
   switch (piece.kind) {
     case "skill":
       return { label: piece.id, asksFirst: ASKS_FIRST.skill };
-    case "connector":
+    case "connector": {
+      const template = MCP_SERVER_TEMPLATES.find((item) => item.templateId === piece.templateId);
+      const hosts = templateHosts(template?.networkHosts);
       return {
-        label: MCP_SERVER_TEMPLATES.find((item) => item.templateId === piece.templateId)?.label ?? piece.templateId,
+        label: template?.label ?? piece.templateId,
         asksFirst: piece.asksFirst === "everything" ? ASKS_FIRST.connectorEverything : ASKS_FIRST.connectorChanges,
+        ...(hosts.length > 0 ? { hosts } : {}),
       };
+    }
     case "tool_group_off": {
       const label = TOOL_GROUPS.find((item) => item.id === piece.groupId)?.label ?? piece.groupId;
       return { label, asksFirst: ASKS_FIRST.toolGroupOff(label) };
@@ -373,6 +379,14 @@ async function readPromptPack(
     reportUnreadable(error);
     return undefined;
   }
+}
+
+/**
+ * A connector's hosts as its install allows them (trimmed, lower case, each once): the hosts its uninstall leaves in
+ * the allowlist.
+ */
+function templateHosts(hosts: readonly string[] | undefined): string[] {
+  return [...new Set((hosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean))];
 }
 
 function hostOf(url: string): string | undefined {

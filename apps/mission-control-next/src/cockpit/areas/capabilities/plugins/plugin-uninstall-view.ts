@@ -26,20 +26,19 @@ const ADDED_STATES: ReadonlySet<CapabilityPluginPieceState> = new Set([
 
 /**
  * The confirmation's lines, from the detail: what the plugin added goes, what was already there stays, and so do the
- * hosts it allowed. The plan's own approval and outcome then say exactly what the Gateway did.
+ * hosts it allowed, each named once. The plan's own approval and outcome then say exactly what the Gateway did.
  */
 export function uninstallConfirmLines(pieces: readonly CapabilityPluginDetailPiece[]): string[] {
   const owned = pieces.filter((piece) => piece.check.status !== "already_there" && ADDED_STATES.has(piece.state));
   const kept = pieces.filter((piece) => piece.check.status === "already_there");
-  const hosts = pieces.some((piece) => (piece.hosts?.length ?? 0) > 0);
-  const stays = [...kept.map((piece) => piece.label), ...(hosts ? ["the hosts it allowed"] : [])];
+  const hosts = [...new Set(pieces.flatMap((piece) => piece.hosts ?? []))];
+  const hostsPart = hosts.length > 0 ? `the hosts it allowed (${joinLabels(hosts)})` : undefined;
+  const keptPart = kept.length > 0 ? joinLabels(kept.map((piece) => piece.label)) : undefined;
   const staysLine =
-    kept.length > 0 && hosts
-      ? `Stays: ${joinLabels(kept.map((piece) => piece.label))}, and the hosts it allowed`
-      : `Stays: ${joinLabels(stays)}`;
+    keptPart && hostsPart ? `Stays: ${keptPart}, and ${hostsPart}` : `Stays: ${keptPart ?? hostsPart ?? ""}`;
   return [
     ...(owned.length > 0 ? [`Removes: ${joinLabels(owned.map((piece) => piece.label))}`] : []),
-    ...(stays.length > 0 ? [staysLine] : []),
+    ...(keptPart || hostsPart ? [staysLine] : []),
     ...(owned.some((piece) => piece.kind === "prompt_pack") ? [PROMPT_PACK_RUNS_LINE] : []),
   ];
 }

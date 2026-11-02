@@ -1,4 +1,5 @@
 import type {
+  CapabilityPluginDetailPiece,
   CapabilityPluginInspection,
   CapabilityPluginPieceCheck,
   CapabilityPluginPieceState,
@@ -111,6 +112,12 @@ export function changesNewChats(pieces: readonly { kind: PluginPieceKind; state?
 export function stepApprovalWords(kind: "install_inactive" | "activate" | undefined, skill: string) {
   if (kind === undefined) return { title: `Approve this step for ${skill}?`, summary: undefined };
   return approvalWords(kind === "install_inactive" ? "waiting_install" : "waiting_switch_on", skill);
+}
+
+/** The skill step a piece's waiting approval asks for, as the detail names it; undefined when it doesn't. */
+export function pendingSkillStep(piece: CapabilityPluginDetailPiece | undefined): PluginSkillStepKind | undefined {
+  const step = piece?.pendingStep;
+  return step === "install_inactive" || step === "activate" ? step : undefined;
 }
 
 /** What the panel knows about its flow, for its one progress line. */

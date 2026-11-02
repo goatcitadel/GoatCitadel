@@ -107,6 +107,8 @@ export interface FakeGateway {
   pieces: Record<string, CapabilityPluginPieceState>;
   /** The approval a waiting piece waits for. */
   pending: Record<string, string>;
+  /** Which skill step a waiting piece's approval asks for, as the detail names it. */
+  pendingSteps: Record<string, "install_inactive" | "activate">;
   /** Where a piece goes on the read after the one that found it installing. */
   next: Record<string, CapabilityPluginPieceState>;
   /** Each skill step asked for, as `<snapshot> <kind>`. */
@@ -123,6 +125,7 @@ export function fakeGateway(inspection = inspectionOf()): FakeGateway {
     workspaceId: inspection.workspaceId,
     pieces: {},
     pending: {},
+    pendingSteps: {},
     next: {},
     steps: [],
     calls: [],
@@ -139,10 +142,12 @@ export function readDetail(gateway: FakeGateway): CapabilityPluginDetail {
       delete gateway.next[piece.pieceId];
     }
     const pendingApprovalId = gateway.pending[piece.pieceId];
+    const pendingStep = gateway.pendingSteps[piece.pieceId];
     return {
       ...piece,
       state,
       ...(state === "waiting_for_approval" && pendingApprovalId ? { pendingApprovalId } : {}),
+      ...(state === "waiting_for_approval" && pendingApprovalId && pendingStep ? { pendingStep } : {}),
     };
   });
   const { inspection } = gateway;
@@ -217,12 +222,14 @@ export function step(gateway: FakeGateway, request: CapabilitySkillOperationRequ
   }
   gateway.pieces[piece.pieceId] = "waiting_for_approval";
   gateway.pending[piece.pieceId] = approvalId;
+  gateway.pendingSteps[piece.pieceId] = request.operationKind;
   return { status: "waiting", approvalId };
 }
 
 /** A skill step's approval was approved: it is applied, and the next read after finds it done. */
 export function approveStep(gateway: FakeGateway, pieceId: string, kind: "install_inactive" | "activate") {
   delete gateway.pending[pieceId];
+  delete gateway.pendingSteps[pieceId];
   gateway.pieces[pieceId] = "installing";
   gateway.next[pieceId] = kind === "install_inactive" ? "installed_off" : "added";
 }

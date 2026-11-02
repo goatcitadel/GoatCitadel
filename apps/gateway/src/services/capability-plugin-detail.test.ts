@@ -424,6 +424,19 @@ describe("a plugin's detail", () => {
     expect(sources.readInstallPlanStatus).not.toHaveBeenCalled();
   });
 
+  it("names the hosts a connector it added allowed, and none for a connector that was already there", async () => {
+    const added = await routeService().service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+    // The uninstall's confirmation says these stay in the allowlist.
+    expect(added.pieces.find((piece) => piece.pieceId === "issues")?.hosts).toEqual(["mcp.linear.app"]);
+
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [record({ pieces: [{ pieceId: "issues", kind: "connector", owned: false }] })]),
+    });
+    const kept = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+    expect(kept.pieces[0]).toMatchObject({ pieceId: "issues", state: "kept" });
+    expect(kept.pieces[0]?.hosts).toBeUndefined();
+  });
+
   it("reads a piece already there as kept, and links a kept group", async () => {
     const { service } = routeService({
       listInstalled: vi.fn(async () => [

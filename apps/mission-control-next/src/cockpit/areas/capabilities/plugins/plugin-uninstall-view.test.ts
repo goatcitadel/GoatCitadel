@@ -1,6 +1,6 @@
 import type { CapabilityPluginDetail, CapabilityPluginDetailPiece } from "@goatcitadel/contracts";
 import { describe, expect, it } from "vitest";
-import { uninstallApproval } from "./plugin-uninstall-view";
+import { uninstallApproval, uninstallConfirmLines } from "./plugin-uninstall-view";
 
 const NOTES: CapabilityPluginDetailPiece = {
   pieceId: "notes",
@@ -32,6 +32,56 @@ function uninstalling(piece: CapabilityPluginDetailPiece): CapabilityPluginDetai
     pieces: [piece],
   };
 }
+
+describe("uninstallConfirmLines", () => {
+  const PLAYWRIGHT: CapabilityPluginDetailPiece = {
+    pieceId: "browser",
+    kind: "connector",
+    label: "Playwright Browser",
+    asksFirst: "Changes ask first in Chat.",
+    check: { status: "ready" },
+    hosts: ["registry.npmjs.org"],
+    state: "added",
+  };
+  const QA: CapabilityPluginDetailPiece = { ...NOTES, pieceId: "browser-qa", label: "browser-qa", state: "added" };
+
+  it("says the hosts its connector allowed stay, by name", () => {
+    expect(uninstallConfirmLines([PLAYWRIGHT, QA])).toEqual([
+      "Removes: Playwright Browser and browser-qa",
+      "Stays: the hosts it allowed (registry.npmjs.org)",
+    ]);
+  });
+
+  it("names each host once, after what was already there", () => {
+    const hook: CapabilityPluginDetailPiece = {
+      pieceId: "watch",
+      kind: "hook",
+      label: "After a tool call",
+      asksFirst: "Sends event details.",
+      check: { status: "ready" },
+      hosts: ["hooks.example.com", "registry.npmjs.org"],
+      state: "added",
+    };
+    const git: CapabilityPluginDetailPiece = {
+      pieceId: "no-git",
+      kind: "tool_group_off",
+      label: "Git",
+      asksFirst: "Already off.",
+      check: { status: "already_there" },
+      state: "kept",
+    };
+    expect(uninstallConfirmLines([PLAYWRIGHT, hook, git])).toEqual([
+      "Removes: Playwright Browser and After a tool call",
+      "Stays: Git, and the hosts it allowed (registry.npmjs.org and hooks.example.com)",
+    ]);
+  });
+
+  it("has no Stays line when nothing stays", () => {
+    expect(uninstallConfirmLines([{ ...PLAYWRIGHT, hosts: undefined }, QA])).toEqual([
+      "Removes: Playwright Browser and browser-qa",
+    ]);
+  });
+});
 
 describe("uninstallApproval", () => {
   it("titles each skill step's approval by the step the detail names", () => {

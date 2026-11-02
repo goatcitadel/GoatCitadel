@@ -533,6 +533,63 @@ describe("Plugin install panel: installing", () => {
     expect(text()).toContain("Meeting tools is installed.");
   });
 
+  it("titles a skill approval reopened after a reload as before it, and goes on to switching it on", async () => {
+    list = listAnswer(false);
+    gateway.skip = false;
+    gateway.installed = true;
+    gateway.pieces = { calendar: "added", notes: "waiting_for_approval" };
+    gateway.pending = { notes: "approval-notes-install" };
+    gateway.pendingSteps = { notes: "install_inactive" };
+    stored["approval-notes-install"] = approval("approval-notes-install", { schemaVersion: "v1" });
+    // The skill's own install doesn't hold a plugin's check, so only the detail names the step.
+    skills.fetchCapabilitySkillInstalls.mockResolvedValue({
+      workspaceId: "ws-1",
+      installs: [],
+      operatorApprovalSkip: false,
+      generatedAt: "",
+    });
+    await render(PLUGIN_KEY);
+
+    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve installing Meeting notes?");
+    expect(dialog()?.textContent).toContain(
+      "Installs Meeting notes switched off. It can't be used until you switch it on.",
+    );
+    expect(text()).toContain("Waiting for your approval to install Meeting notes.");
+
+    approveStep(gateway, "notes", "install_inactive");
+    await press(button("Approve once", dialog()!));
+    await beat(1_000);
+    // No second Continue: the switch-on step is asked for, as it is without a reload.
+    expect(button("Continue")).toBeUndefined();
+    expect(gateway.steps).toEqual(["snap-notes activate"]);
+    expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve switching on Meeting notes?");
+    approveStep(gateway, "notes", "activate");
+    await press(button("Approve once", dialog()!));
+    await beat(1_000);
+    expect(container.querySelector('[role="status"]')?.textContent).toBe("Meeting tools is installed.");
+  });
+
+  it("asks nothing more after a reloaded skill approval is declined", async () => {
+    gateway.skip = false;
+    gateway.installed = true;
+    gateway.pieces = { calendar: "added", notes: "waiting_for_approval" };
+    gateway.pending = { notes: "approval-notes-install" };
+    gateway.pendingSteps = { notes: "install_inactive" };
+    stored["approval-notes-install"] = approval("approval-notes-install", { schemaVersion: "v1" });
+    decided.approve = (approvalId) => {
+      stored[approvalId] = { ...stored[approvalId]!, status: "rejected" };
+      gateway.pieces.notes = "check_passed";
+      delete gateway.pending.notes;
+      delete gateway.pendingSteps.notes;
+    };
+    await render(PLUGIN_KEY);
+
+    await press(button("Approve once", dialog()!));
+    await beat(1_000);
+    expect(skills.requestCapabilitySkillOperation).not.toHaveBeenCalled();
+    expect(button("Continue")).toBeDefined();
+  });
+
   it("shows the folder path typed in Technical details while the panel is open, and its name after a reload", async () => {
     prefs.showTechnicalDetails = true;
     gateway = fakeGateway(
