@@ -387,6 +387,101 @@ describe("SkillHubOperatorService", () => {
     expect(passing.createApproval).toHaveBeenCalledTimes(1);
   });
 
+  it("blocks installing a plugin skill named like a bundled skill", async () => {
+    for (const skillName of ["receiving-code-review", "Receiving-Code-Review"]) {
+      const fromPlugin = snapshot({
+        snapshotId: "snapshot-plugin",
+        sourceProvider: "goatcitadel_plugin",
+        sourceType: "local_path",
+        sourceRef: `plugin:meeting-tools/${skillName}@content:${"a".repeat(64)}`,
+        canonicalSourceKey: `plugin:meeting-tools/${skillName}`,
+        compatibility: { compatible: true },
+        provenance: { source: "goatcitadel_plugin", skillName },
+      });
+      const harness = createHarness({ snapshots: [fromPlugin] });
+
+      const listed = await harness.service.list({ workspaceId: "workspace-1" });
+      const item = listed.items.find((entry) => entry.snapshotId === "snapshot-plugin")!;
+      expect(item.actions.install_inactive.allowed, skillName).toBe(false);
+      expect(item.actions.install_inactive.blockers, skillName).toContain("BUNDLED_SKILL_NAME_TAKEN");
+      // The block holds when the step is asked for too, the plugin's own pass included.
+      await expect(
+        harness.service.createApproval(
+          {
+            workspaceId: "workspace-1",
+            snapshotId: "snapshot-plugin",
+            operationKind: "install_inactive",
+            actorId: "operator-1",
+          },
+          { pluginPass: { pluginId: "meeting-tools" } },
+        ),
+      ).rejects.toThrow(/BUNDLED_SKILL_NAME_TAKEN/u);
+      expect(harness.createApproval).not.toHaveBeenCalled();
+    }
+  });
+
+  it("leaves a Skills tab import of that name to its existing rules", async () => {
+    const fromGit = snapshot({
+      snapshotId: "snapshot-git",
+      sourceProvider: "github",
+      sourceType: "git",
+      sourceRef: "https://github.com/example/skills/tree/main/receiving-code-review",
+      canonicalSourceKey: "git:github.com/example/skills/receiving-code-review",
+      compatibility: { compatible: true },
+      provenance: { source: "github", skillName: "receiving-code-review" },
+    });
+    const harness = createHarness({ snapshots: [fromGit] });
+
+    const listed = await harness.service.list({ workspaceId: "workspace-1" });
+    const item = listed.items.find((entry) => entry.snapshotId === "snapshot-git")!;
+    expect(item.actions.install_inactive.blockers).not.toContain("BUNDLED_SKILL_NAME_TAKEN");
+    expect(item.actions.install_inactive.allowed).toBe(true);
+  });
+
+  it("still switches on and revokes a plugin skill installed before the block", async () => {
+    const fromPlugin = {
+      sourceProvider: "goatcitadel_plugin",
+      sourceType: "local_path",
+      sourceRef: `plugin:meeting-tools/receiving-code-review@content:${"a".repeat(64)}`,
+      canonicalSourceKey: "plugin:meeting-tools/receiving-code-review",
+      compatibility: { skillId: "extra:receiving-code-review", compatible: true },
+      provenance: { source: "goatcitadel_plugin", skillName: "receiving-code-review" },
+    };
+    const installed = snapshot({ ...fromPlugin, snapshotId: "snapshot-v1" });
+    const version = candidateVersion({
+      versionId: "version-v1",
+      upstreamSnapshotId: "snapshot-v1",
+      sourceFingerprint: installed.contentTreeSha256,
+      title: "receiving-code-review",
+    });
+    const pass = { pluginPass: { pluginId: "meeting-tools" } };
+    const request = (operationKind: SkillHubOperationIntentTemplate["operationKind"]) => ({
+      workspaceId: "workspace-1",
+      snapshotId: "snapshot-v1",
+      operationKind,
+      actorId: "operator-1",
+    });
+
+    // Installed but not yet switched on: it can be switched on.
+    const inactive = createHarness({ snapshots: [installed], candidates: [version] });
+    const inactiveItem = (await inactive.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(inactiveItem.actions.activate).toEqual({ allowed: true, blockers: [] });
+    await inactive.service.createApproval(request("activate"), pass);
+    expect(inactive.createApproval).toHaveBeenCalledTimes(1);
+
+    // Switched on: it can be revoked.
+    const live = createHarness({
+      snapshots: [installed],
+      candidates: [version],
+      lifecycle: { ...activeLifecycle(installed), skillId: "extra:receiving-code-review" },
+    });
+    const liveItem = (await live.service.list({ workspaceId: "workspace-1" })).items[0]!;
+    expect(liveItem.actions.revoke).toEqual({ allowed: true, blockers: [] });
+    expect(liveItem.actions.activate.blockers).not.toContain("BUNDLED_SKILL_NAME_TAKEN");
+    await live.service.createApproval(request("revoke"), pass);
+    expect(live.createApproval).toHaveBeenCalledTimes(1);
+  });
+
   it("rejects turn lineage without a parent session before creating an approval", async () => {
     const current = snapshot({ snapshotId: "snapshot-install" });
     const harness = createHarness({ snapshots: [current] });

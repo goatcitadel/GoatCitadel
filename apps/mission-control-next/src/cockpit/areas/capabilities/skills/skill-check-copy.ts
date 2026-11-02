@@ -24,6 +24,7 @@ export const SKILL_BLOCKER_COPY: Readonly<Record<SkillHubBlockerCode, string>> =
   SOURCE_ALREADY_INSTALLED: "It's already installed.",
   CANDIDATE_ALREADY_EXISTS: "It's already installed.",
   RUNTIME_ALREADY_EXISTS: "It's already installed.",
+  BUNDLED_SKILL_NAME_TAKEN: "GoatCitadel already has a built-in skill with this name.",
 };
 
 /** The sentence for a code the map doesn't hold: it is one of GoatCitadel's checks all the same. */
