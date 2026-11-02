@@ -294,10 +294,8 @@ describe("mission-control-next route model", () => {
       area: "settings",
       section: "workspaces",
     });
-    expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=addons")).toMatchObject({
-      area: "settings",
-      section: "addons",
-    });
+    // Capability packs were retired, and Classic has no Plugins page: an old add-ons bookmark opens the default.
+    expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=addons")).toMatchObject({ area: "chat" });
     expect(resolveRouteFromLocation("http://goatcitadel.local/?tab=onboarding")).toMatchObject({
       area: "settings",
       section: "onboarding",
@@ -401,8 +399,8 @@ describe("mission-control-next route model", () => {
     );
     // Reviewed route-inventory tripwire: every one of the 44 current release-bearing routes must remain classified.
     expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "ship")).toHaveLength(44);
-    // Reviewed route-inventory tripwire: the six intentionally experimental routes must remain explicitly labeled.
-    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(6);
+    // Reviewed route-inventory tripwire: the five intentionally experimental routes must remain explicitly labeled.
+    expect(ROUTE_RELEASE_SCOPE.filter((scope) => scope.status === "experimental")).toHaveLength(5);
     expect(describeReleaseScopeForOperator(getRouteReleaseScope({ area: "settings", section: "providers" }))).toBe(
       "Release-ready. Action: Configure provider credentials and run provider/model smoke evidence. Verification: verify:surface:regression, provider exercise paths. Constraint: Provider setup is release-bearing with smoke evidence, model discovery state, and plain failure copy.",
     );

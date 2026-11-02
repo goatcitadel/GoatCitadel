@@ -37,10 +37,6 @@ const DEDICATED_ACTION_PROOFS = Object.freeze({
     "surface-regression.settings-personalities",
     "The route-specific browser scenario asserts its unique Experimental badge and a safe route-owned 503 state.",
   ),
-  "route.settings-addons.experimental-label-and-safe-failure": dedicated(
-    "surface-regression.settings-addons",
-    "The route-specific browser scenario asserts its unique Experimental badge and a safe route-owned 503 state.",
-  ),
 });
 
 const ACTION_ASSERTIONS = Object.freeze({

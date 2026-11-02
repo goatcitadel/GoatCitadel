@@ -441,9 +441,6 @@ async function collectEnabledExperimentalMutations(main, routeSlug) {
     "ops-improvement": [/approve/iu, /reject/iu, /apply/iu, /activate/iu],
     "ops-kanban": [/^unblock$/iu, /^retry selected/iu, /^close$/iu],
     "settings-personalities": [/save/iu, /delete/iu, /reset/iu, /make default/iu],
-    // The page is capability packs only. While the pack reads are down, no
-    // control that stages a pack or opens staged evidence may stay enabled.
-    "settings-addons": [/^review pack staging/iu, /^review evidence for/iu],
   };
   const patterns = patternsBySlug[routeSlug];
   if (!patterns) throw new Error(`no degraded mutation policy is registered for ${routeSlug}`);
@@ -491,7 +488,6 @@ function experimentalDegradedApiPath(routeSlug) {
     "ops-improvement": "/api/v1/observe/timeline",
     "ops-kanban": "/api/v1/agentic/runs",
     "settings-personalities": "/api/v1/personalities",
-    "settings-addons": "/api/v1/capability-packs",
   };
   const target = targetBySlug[routeSlug];
   if (!target) throw new Error(`no deterministic degraded API target is registered for ${routeSlug}`);

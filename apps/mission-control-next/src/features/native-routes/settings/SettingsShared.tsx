@@ -1,7 +1,7 @@
 // Shared settings primitives, types, and navigation helpers extracted from
 // `../SettingsNativePage.tsx` as the first slice of the per-section settings
 // decomposition. Keep this file focused on layout/utility surface; section-
-// specific helpers (providers, personalities, channels, MCP, tools, addons)
+// specific helpers (providers, personalities, channels, MCP, tools)
 // stay in `../SettingsNativePage.tsx` until their dedicated section files land.
 import { useId, type ComponentType, type ReactNode } from "react";
 import {
@@ -9,7 +9,6 @@ import {
   CheckCircle2,
   Gauge,
   HardDrive,
-  Package2,
   Webhook,
   Play,
   Plug2,
@@ -590,8 +589,6 @@ export function iconForSettingsSection(section: string) {
       return Wrench;
     case "hooks":
       return Webhook;
-    case "addons":
-      return Package2;
     default:
       return SlidersHorizontal;
   }
@@ -633,8 +630,6 @@ export function labelForSettingsSection(section: string) {
       return "Tools";
     case "hooks":
       return "Hooks";
-    case "addons":
-      return "Capability packs";
     default:
       return "Unknown";
   }
@@ -676,8 +671,6 @@ export function descriptionForSettingsSection(section: string) {
       return "Review the tool catalog and manage grants from one place.";
     case "hooks":
       return "Configure governed lifecycle hooks, data scope, and durable delivery evidence.";
-    case "addons":
-      return "Preview bundled capability packs. Plugins replace them soon.";
     default:
       return "This settings deep link is not registered.";
   }

@@ -191,8 +191,6 @@ function translateLegacyTab(
       return { area: "settings", section: "general" };
     case "workspaces":
       return { area: "settings", section: "workspaces" };
-    case "addons":
-      return { area: "settings", section: "addons" };
     case "onboarding":
       return { area: "settings", section: "onboarding" };
     case "mesh":
@@ -240,8 +238,6 @@ function translateSettingsTab(tab?: string): AppRoute["section"] {
       return "channels";
     case "mcp":
       return "mcp";
-    case "addons":
-      return "addons";
     case "onboarding":
       return "onboarding";
     case "access":

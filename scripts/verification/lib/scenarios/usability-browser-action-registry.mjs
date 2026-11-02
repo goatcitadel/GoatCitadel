@@ -23,10 +23,6 @@ const DEDICATED_BROWSER_PROOFS = Object.freeze({
     "surface-regression.settings-personalities",
     "The route-specific Chromium scenario asserts its unique Experimental badge and safe route-owned failure state.",
   ),
-  "route.settings-addons.experimental-label-and-safe-failure": dedicated(
-    "surface-regression.settings-addons",
-    "The route-specific Chromium scenario asserts its unique Experimental badge and safe route-owned failure state.",
-  ),
   "route.settings-hooks.signed-webhook-safe-test-and-delivery-history": dedicated(
     "surface-regression.settings-hooks",
     "The route-specific Chromium scenario verifies that the governed Hooks surface renders from canonical Gateway state.",

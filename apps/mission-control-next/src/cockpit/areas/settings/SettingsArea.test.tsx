@@ -84,7 +84,6 @@ vi.mock("./PermissionProfileSettings", () => ({
 vi.mock("./HooksSettings", () => ({
   HooksSettings: ({ workspaceId }: { workspaceId: string }) => <OwnerProbe name={`Hooks ${workspaceId}`} />,
 }));
-vi.mock("./PortablePacksSettings", () => ({ PortablePacksSettings: () => <OwnerProbe name="Packs owner" /> }));
 vi.mock("./TrustPolicySettings", () => ({ TrustPolicySettings: () => <OwnerProbe name="Trust owner" /> }));
 vi.mock("./FirstRunArea", () => ({ FirstRunArea: () => <p>First run owner</p> }));
 vi.mock("./FirstRunStatus", () => ({ FirstRunStatus: () => <p>First run status</p> }));
@@ -248,7 +247,6 @@ describe("Settings section tabs", () => {
     // Settings is handed the Plugins address, which is no Settings page (the shell opens Capabilities for it).
     await vi.waitFor(() => expect(container.textContent).toContain("Settings destination unavailable"));
     expect(container.textContent).toContain("This link does not match a settings page.");
-    expect(container.textContent).not.toContain("Packs owner");
     expect(container.textContent).not.toContain("Add-ons owner");
     expect(container.textContent).not.toContain("Runtime owner");
     expect(container.querySelector('a[href^="/settings/connections"]')).toBeNull();
@@ -343,7 +341,7 @@ describe("Settings section tabs", () => {
   });
   it("keeps all grouped owner destinations in ordered tabs with native hrefs", async () => {
     const pages = buildSettingsIndex();
-    expect(pages.flatMap((page) => page.entries)).toHaveLength(22);
+    expect(pages.flatMap((page) => page.entries)).toHaveLength(21);
     expect(pages.flatMap((page) => page.entries).every((entry) => !entry.href.includes("shell="))).toBe(true);
     for (const page of pages) {
       window.history.replaceState(null, "", `/settings/${page.id}?shell=cockpit`);

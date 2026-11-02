@@ -46,7 +46,9 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // (+2). The source form's refusal and a signing secret's rule use Field's own alert.
 // 909: a plugin's uninstall announces its progress line and why a request was refused or its plan ended (+2, one
 //   place: the plugin panel, or a stopped install's panel, never both).
-export const LIVE_REGION_BUDGET = 909;
+// 895: the capability packs page went (-14): PortablePacksSettings had eight live regions, PortablePackSetup four and
+//   PackPlanControls two. Plugins replace it.
+export const LIVE_REGION_BUDGET = 895;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

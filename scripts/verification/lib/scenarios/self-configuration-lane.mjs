@@ -114,12 +114,11 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
   },
   {
     id: "self-configuration.comparison-ui-tests",
-    title: "Canonical Chat workflow capture and pack execution controls",
+    title: "Canonical Chat workflow capture controls",
     subsystem: "mission-control",
     cwd: "apps/mission-control-next",
     args: ["exec", "node", "../../node_modules/vitest/vitest.mjs", "run",
-      "src/features/threaded-surface/WorkflowSkillCaptureControl.test.tsx",
-      "src/features/native-routes/settings/sections/PackExecutionPanel.test.tsx"],
+      "src/features/threaded-surface/WorkflowSkillCaptureControl.test.tsx"],
   },
   {
     id: "self-configuration.threaded-prompt-tests",
@@ -201,7 +200,7 @@ export const SELF_CONFIGURATION_HELD_ROWS = Object.freeze([
   {
     id: "fresh-workspace-browser-qa-pack",
     status: "held",
-    reason: "Controlled owner and UI tests do not prove a fresh workspace's approved Browser QA pack producing real browser artifacts after restart or partial failure.",
+    reason: "Controlled owner and UI tests do not prove a fresh workspace's installed Browser checks plugin producing real browser artifacts after restart or partial failure.",
   },
 ]);
 

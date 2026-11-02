@@ -40,7 +40,6 @@ const NATIVE_SECTIONS = new Set([
   "channels",
   "local-ai",
   "integrations",
-  "addons",
   "permissions",
   "hooks",
   "budget",
@@ -63,17 +62,11 @@ export const CONNECTOR_SETUP_SECTIONS: readonly ConnectorSetupSection[] = ["mcp"
 
 /**
  * The Cockpit's Settings pages. Settings › Connections was retired (2026-10-30): MCP servers, Integrations and Web &
- * Search moved to Capabilities › Connectors › Advanced setup, Channels to Chat › Messaging › Advanced channel setup,
- * and Capability packs to Settings › Advanced until the Plugins tab replaces them. Classic keeps the shared rail groups.
+ * Search moved to Capabilities › Connectors › Advanced setup and Channels to Chat › Messaging › Advanced channel
+ * setup. Capability packs were retired; plugins live on Capabilities › Plugins. Classic keeps the shared rail groups.
  */
 function cockpitSettingsGroups(): RailGroup[] {
-  return (RAIL_GROUPS.settings ?? []).flatMap((group) =>
-    group.id === "settings-connections"
-      ? []
-      : group.id === "settings-advanced"
-        ? [{ ...group, sections: [...group.sections, "addons"] }]
-        : [group],
-  );
+  return (RAIL_GROUPS.settings ?? []).filter((group) => group.id !== "settings-connections");
 }
 
 type SettingsSection = NonNullable<AppRoute["section"]>;
@@ -123,11 +116,9 @@ function sectionHref(section: SettingsSection, item: RailItem): string {
                                             ? connectorSetupHref(section)
                                             : section === "channels"
                                               ? channelAdvancedSetupHref()
-                                              : section === "addons"
-                                                ? "/settings/advanced#addons"
-                                                : section === "runtime"
-                                                  ? "/settings/advanced#managed-runtime"
-                                                  : buildAppHref({ area: item.area, section });
+                                              : section === "runtime"
+                                                ? "/settings/advanced#managed-runtime"
+                                                : buildAppHref({ area: item.area, section });
 }
 
 /** One rail section's destination; undefined when the rail has no such section, or discovery leaves it out. */
