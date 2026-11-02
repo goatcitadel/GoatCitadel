@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
-import { ConflictError } from "@goatcitadel/contracts";
 import { ErrandAlreadyAnsweredError, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import type { InboundChannelCommandExecutionInput } from "./inbound-channel-event-service.js";
 import {
