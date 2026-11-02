@@ -12,6 +12,7 @@ import { createLocalAiRouteService as createLocalAiRoutePort } from "./local-ai-
 import { createLlamaCppRoutePort } from "./llama-cpp-route-service.js";
 import { acquireBoundLlamaCppEmbeddingLease } from "./llama-cpp-provider-lease.js";
 import { createMeshRoutePort } from "./mesh-route-service.js";
+import { COMPANION_SIGNED_APPROVALS_ENABLED } from "./companion-signed-approval.js";
 import { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
 import { createMobileRoutePort } from "./mobile-route-service.js";
 import { createConfiguredMobilePushProvider } from "./mobile-push-provider.js";
@@ -370,6 +371,7 @@ export function composeRuntimeAdminRouteDependencies(
       mobilePush,
       mobileApprovalKeys,
       publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
+      signedCompanionApprovalsEnabled: COMPANION_SIGNED_APPROVALS_ENABLED,
     }),
     modelComparisons: createModelComparisonRoutePort(
       new ModelComparisonService({

@@ -1,6 +1,18 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
+import {
+  COMPANION_APPROVE_REFUSED_MESSAGE,
+  companionSignedDecisionSchema,
+  refuseCompanionNote,
+  refuseCompanionReject,
+} from "../services/companion-signed-approval.js";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
+import { DEVICE_ACCESS_APPROVAL_KIND } from "../services/device-access-helpers.js";
+import {
+  buildErrandPhoneApprovalView,
+  type ErrandPhoneApprovalView,
+  type ErrandScreenshotReads,
+} from "../services/browser-errands/errand-phone-approval-view.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import { sendRouteError } from "./_error-handler.js";
@@ -40,6 +52,8 @@ const resolveSchema = z.object({
   decision: z.enum(["approve", "reject", "edit"]),
   editedPayload: z.record(z.string(), z.unknown()).optional(),
   resolutionNote: z.string().optional(),
+  /** A paired phone's signature over the decision; read only for a companion approve or edit. */
+  signedDecision: companionSignedDecisionSchema.optional(),
 });
 
 // SECURITY (codex finding #21): The bulk-resolve route previously accepted
@@ -217,12 +231,21 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success || !query.success) {
       return reply.code(400).send({ error: "Invalid approval read." });
     }
+    const companion = request.authActorSource === "companion";
+    if (companion) {
+      // Set before the read, so a failed read is not cached either.
+      reply.header("Cache-Control", "private, no-store");
+    }
     try {
-      if (request.authActorSource === "companion") {
-        reply.header("Cache-Control", "private, no-store");
+      const approval = await approvals.getApproval(params.data.approvalId, query.data.workspaceId);
+      const projected = projectApprovalPublicResponse(approval);
+      if (!companion) {
+        return reply.send(projected);
       }
+      // Only the paired phone gets an errand's plain line and spotlight screenshot.
+      const errandPhoneView = await buildErrandPhoneApprovalView(approval, errandScreenshotReads(fastify));
       return reply.send(
-        projectApprovalPublicResponse(await approvals.getApproval(params.data.approvalId, query.data.workspaceId)),
+        errandPhoneView ? { ...projected, errandPhoneView: projectErrandPhoneViewText(errandPhoneView) } : projected,
       );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
@@ -258,16 +281,25 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    if (request.authActorSource === "companion" && parsed.data.decision !== "reject") {
-      return reply.code(403).send({
-        error:
-          "Paired companions may review or reject approvals, but approval and edit require operator authority until a server-verifiable device approval key is registered.",
-      });
-    }
+    const { signedDecision, ...decisionInput } = parsed.data;
 
     try {
+      if (request.authActorSource === "companion") {
+        const refusal =
+          decisionInput.decision === "reject"
+            ? refuseCompanionReject(decisionInput)
+            : await refuseUnsignedCompanionDecision(fastify, request, approvalId, {
+                decision: decisionInput.decision,
+                editedPayload: decisionInput.editedPayload,
+                resolutionNote: decisionInput.resolutionNote,
+                signedDecision,
+              });
+        if (refusal) {
+          return reply.code(refusal.statusCode).send({ error: refusal.error });
+        }
+      }
       const result = await approvals.resolveApproval(approvalId, {
-        ...parsed.data,
+        ...decisionInput,
         resolvedBy: resolveActorId(request),
       });
       await markMutationCommitted(request);
@@ -418,6 +450,76 @@ function readHeader(value: unknown): string | undefined {
     return undefined;
   }
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * A paired phone may approve or edit only with a verified signature from its grant's active approval key, and only
+ * while the signed approvals switch is on (off in shipped builds). The approval must still be waiting: its one-time
+ * move out of `pending` is what makes each signed decision, and so each nonce, usable once. Device access requests
+ * stay operator-only. Returns the refusal, or undefined to go on.
+ */
+async function refuseUnsignedCompanionDecision(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  approvalId: string,
+  input: {
+    decision: "approve" | "edit";
+    editedPayload?: Record<string, unknown>;
+    resolutionNote?: string;
+    signedDecision?: z.infer<typeof companionSignedDecisionSchema>;
+  },
+): Promise<{ statusCode: number; error: string } | undefined> {
+  const mobile = fastify.services.mobile as Partial<typeof fastify.services.mobile> | undefined;
+  if (!mobile?.admitSignedCompanionDecision) {
+    return { statusCode: 403, error: COMPANION_APPROVE_REFUSED_MESSAGE };
+  }
+  const admission = await mobile.admitSignedCompanionDecision({
+    approvalId,
+    decision: input.decision,
+    editedPayload: input.editedPayload,
+    grantId: request.authGrantId,
+    companionSessionId: request.authCompanionSessionId,
+    signedDecision: input.signedDecision,
+  });
+  if (!admission.admitted) {
+    return { statusCode: admission.statusCode, error: admission.error };
+  }
+  const noteRefusal = refuseCompanionNote(input.resolutionNote);
+  if (noteRefusal) {
+    return noteRefusal;
+  }
+  const approval = await fastify.services.approvals.getApproval(approvalId);
+  if (approval.kind === DEVICE_ACCESS_APPROVAL_KIND) {
+    return { statusCode: 403, error: "Device access requests are approved at the PC." };
+  }
+  if (approval.status !== "pending") {
+    return { statusCode: 409, error: "This approval was already answered, so the phone's decision was not used." };
+  }
+  return undefined;
+}
+
+/**
+ * The phone view's text goes through the same public secret projection as the rest of the response, so its line and
+ * page never show what `preview` redacts. The screenshot is bytes the approval recorded by sha256, not text.
+ */
+function projectErrandPhoneViewText(view: ErrandPhoneApprovalView): ErrandPhoneApprovalView {
+  const text = projectApprovalPublicResponse({ line: view.line, ...(view.page ? { page: view.page } : {}) });
+  return { ...view, line: text.line, ...(text.page ? { page: text.page } : {}) };
+}
+
+/** The errand screenshot reads, through the chat attachments owner; absent attachments mean no screenshot. */
+function errandScreenshotReads(fastify: FastifyInstance): ErrandScreenshotReads {
+  const attachments = fastify.services.chatAttachments as Partial<typeof fastify.services.chatAttachments> | undefined;
+  return {
+    record: async (attachmentId) => {
+      if (!attachments?.getChatAttachment) throw new Error("Chat attachments are unavailable.");
+      return await attachments.getChatAttachment(attachmentId);
+    },
+    bytes: async (attachmentId) => {
+      if (!attachments?.readChatAttachmentContent) throw new Error("Chat attachments are unavailable.");
+      return (await attachments.readChatAttachmentContent(attachmentId)).bytes;
+    },
+  };
 }
 
 interface ApprovalActorRequest {

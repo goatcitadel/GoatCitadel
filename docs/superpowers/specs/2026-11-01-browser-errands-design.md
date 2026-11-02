@@ -275,6 +275,11 @@ This work:
 
 The phone app's code is not in this repository. Until its update ships, the phone shows errand approvals and can deny or stop them, and approving happens in the window, Chat, or a channel. The doc and the Settings text must say so plainly.
 
+Follow-ups after the Gateway side (PR 3, plan `docs/superpowers/plans/2026-11-02-browser-errands-phone.md`):
+
+- **Turn signed phone approvals on.** The switch is `COMPANION_SIGNED_APPROVALS_ENABLED` in `apps/gateway/src/services/companion-signed-approval.ts`, `false` in shipped builds. Flip it, and report the approval key's `verificationAvailability` as available, once the phone app's matching release passes its device proof.
+- **Errands started from the phone.** A paired phone cannot send a Chat turn today, so there is no phone origin yet; every errand approval reaches the phone after 30 seconds. Sending it right away needs a phone origin first.
+
 ## Accepted risks
 
 The operator accepted these for v1. They must be written down where the operator will see them: in the "Browser errands" Settings text and in the `docs/DESKTOP_AUTOMATION_SAFETY.md` section.

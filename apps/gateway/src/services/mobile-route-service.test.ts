@@ -305,6 +305,41 @@ describe("mobile-route-service", () => {
     expect(mobileApprovalKeys.revokeGrant).toHaveBeenCalledWith("grant-1");
   });
 
+  it("admits a signed phone decision only when the port is built with the switch on", async () => {
+    const decision = {
+      approvalId: "approval-1",
+      decision: "approve" as const,
+      grantId: "grant-1",
+      companionSessionId: "companion-1",
+      signedDecision: { signedAt: "2026-11-02T12:00:00.000Z", nonce: "nonce-1", signature: "c2ln" },
+    };
+    const offKeys = createMobileApprovalKeysMock();
+    const off = createMobileRoutePort({
+      storage: { audit: {} } as never,
+      mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: offKeys,
+      publishRealtime: vi.fn(),
+    });
+    expect(await off.admitSignedCompanionDecision(decision)).toMatchObject({ admitted: false, statusCode: 403 });
+    expect(offKeys.verifyApprovalDecisionSignature).not.toHaveBeenCalled();
+
+    const onKeys = createMobileApprovalKeysMock();
+    const on = createMobileRoutePort({
+      storage: { audit: {} } as never,
+      mobilePush: createMobilePushMock(),
+      mobileApprovalKeys: onKeys,
+      publishRealtime: vi.fn(),
+      signedCompanionApprovalsEnabled: true,
+    });
+    expect(await on.admitSignedCompanionDecision(decision)).toEqual({
+      admitted: true,
+      keyId: "mak_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    });
+    expect(onKeys.verifyApprovalDecisionSignature).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-1", decision: "approve", grantId: "grant-1" }),
+    );
+  });
+
   it("audits approval-key registration without persisting public key material", async () => {
     const records: Record<string, unknown>[] = [];
     const mobileApprovalKeys = createMobileApprovalKeysMock();
@@ -410,6 +445,12 @@ function createMobileApprovalKeysMock() {
       },
     ]),
     listKeys: vi.fn(async () => ({ items: [record] })),
+    verifyApprovalDecisionSignature: vi.fn(async () => ({
+      verified: true as const,
+      keyId: record.keyId,
+      publicKeySha256: record.publicKeySha256,
+      revision: 2,
+    })),
   };
 }
 
