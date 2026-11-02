@@ -2,6 +2,7 @@
 import type { ToolInvokeRequest } from "@goatcitadel/contracts";
 import type { ErrandBrowser, ErrandOverlayEvent } from "@goatcitadel/policy-engine";
 import type { ErrandApprovalGate, ErrandApprovalGateDeps } from "./errand-approval-gate.js";
+import type { ErrandOriginDeps } from "./errand-origin.js";
 import type { ErrandLoopDeps, ErrandOutcome } from "./errand-loop.js";
 import { BrowserErrandService, type BrowserErrandServiceDeps } from "./browser-errand-service.js";
 
@@ -99,6 +100,18 @@ export function errandRequest(overrides: Partial<ToolInvokeRequest> = {}): ToolI
   };
 }
 
+/** Origin readers for a Mission Control session; tests override them to model a channel conversation. */
+export function missionOrigin(overrides: Partial<ErrandOriginDeps> = {}): ErrandOriginDeps {
+  return {
+    sessionChannel: async () => "mission",
+    binding: async () => undefined,
+    turnActorId: async () => undefined,
+    connection: async () => undefined,
+    readDiscordPairings: async () => [],
+    ...overrides,
+  };
+}
+
 export function buildService(spy: Spy, overrides: Partial<BrowserErrandServiceDeps> = {}) {
   const browser = fakeBrowser(spy);
   const gate = fakeGate(spy);
@@ -108,7 +121,7 @@ export function buildService(spy: Spy, overrides: Partial<BrowserErrandServiceDe
   const deps: BrowserErrandServiceDeps = {
     isEnabled: async () => true,
     deploymentProfile: () => "trusted_local",
-    sessionChannel: async () => "mission",
+    origin: missionOrigin(),
     launchBrowser,
     callModel: spy(async () => {
       throw new Error("the fake loop never calls the model");

@@ -4,8 +4,8 @@ import { ErrandBrowserLaunchError, type ComputerAction, type ErrandBrowser } fro
 import {
   BROWSER_ERRAND_APPROVAL_UNRECORDED_SUMMARY,
   BROWSER_ERRAND_BUSY_MESSAGE,
-  BROWSER_ERRAND_CHANNEL_MESSAGE,
   BROWSER_ERRAND_DISABLED_MESSAGE,
+  BROWSER_ERRAND_OWNER_ONLY_MESSAGE,
   BROWSER_ERRAND_PROFILE_LOCKED_MESSAGE,
   BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE,
   BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE,
@@ -17,6 +17,7 @@ import {
   errandRequest,
   fakeBrowser,
   fakeGate,
+  missionOrigin,
   outcome,
   untilAborted,
   type FakeBrowser,
@@ -51,10 +52,89 @@ describe("BrowserErrandService", () => {
     expect(launchBrowser).not.toHaveBeenCalled();
   });
 
-  it("refuses a channel-origin turn", async () => {
-    const { service, launchBrowser } = buildService(vi.fn, { sessionChannel: async () => "telegram" });
-    await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_CHANNEL_MESSAGE);
-    expect(launchBrowser).not.toHaveBeenCalled();
+  describe("who may start an errand", () => {
+    const OWNER = "1001";
+    const telegramOrigin = (sender: string) =>
+      missionOrigin({
+        sessionChannel: async () => "telegram",
+        binding: async () => ({
+          sessionId: "session-1",
+          transport: "integration",
+          connectionId: "conn-1",
+          target: "chat-1001",
+          conversation: { kind: "direct", counterpartActorId: OWNER },
+          writable: true,
+          createdAt: "2026-11-01T00:00:00.000Z",
+          updatedAt: "2026-11-01T00:00:00.000Z",
+        }),
+        turnActorId: async (sessionId, turnId) =>
+          sessionId === "session-1" && turnId === "turn-1" ? sender : undefined,
+        connection: async () => ({
+          key: "telegram",
+          config: {
+            inboundAccessMode: "pairing",
+            ownerActorIds: [OWNER],
+            telegramPairing: {
+              approved: [
+                { actorId: OWNER, approvedAt: "2026-11-01T00:00:00.000Z" },
+                { actorId: "2002", approvedAt: "2026-11-01T00:00:00.000Z" },
+              ],
+              pending: [],
+            },
+          },
+        }),
+      });
+
+    it("lets the owner start an errand from their Telegram direct conversation", async () => {
+      let originDuringRun: unknown;
+      const built = buildService(vi.fn, {
+        origin: telegramOrigin(OWNER),
+        runLoop: async () => {
+          originDuringRun = built.service.getActiveOrigin();
+          return outcome("done", { answer: "Found one." });
+        },
+      });
+      await expect(built.service.run(errandRequest())).resolves.toMatchObject({ outcome: "done" });
+      expect(originDuringRun).toEqual({
+        kind: "channel",
+        connectionId: "conn-1",
+        channelKey: "telegram",
+        target: "chat-1001",
+        conversation: "direct",
+        actorId: OWNER,
+      });
+      expect(built.service.getActiveOrigin()).toBeUndefined();
+      await built.service.dispose();
+    });
+
+    it("refuses a paired sender who is not the owner", async () => {
+      const { service, launchBrowser } = buildService(vi.fn, { origin: telegramOrigin("2002") });
+      await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
+      expect(BROWSER_ERRAND_OWNER_ONLY_MESSAGE).toBe("Only the owner can start a browser errand here.");
+      expect(launchBrowser).not.toHaveBeenCalled();
+      expect(service.getStatus("tool-run-1")).toBeUndefined();
+    });
+
+    it("refuses when the session cannot be read", async () => {
+      const { service, launchBrowser } = buildService(vi.fn, {
+        origin: missionOrigin({ sessionChannel: async () => Promise.reject(new Error("missing")) }),
+      });
+      await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
+      expect(launchBrowser).not.toHaveBeenCalled();
+    });
+
+    it("still runs a Mission Control errand, with origin pc", async () => {
+      let originDuringRun: unknown;
+      const built = buildService(vi.fn, {
+        runLoop: async () => {
+          originDuringRun = built.service.getActiveOrigin();
+          return outcome("done");
+        },
+      });
+      await expect(built.service.run(errandRequest())).resolves.toMatchObject({ outcome: "done" });
+      expect(originDuringRun).toEqual({ kind: "pc" });
+      await built.service.dispose();
+    });
   });
 
   it("refuses a second concurrent errand", async () => {

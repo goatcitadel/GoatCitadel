@@ -10,12 +10,15 @@ import {
   type ErrandApprovalGateDeps,
 } from "./errand-approval-gate.js";
 import { runErrandLoop, type ErrandLoopDeps, type ErrandOutcome, type ErrandProgress } from "./errand-loop.js";
+import { resolveOwnedErrandOrigin, type ErrandOrigin, type ErrandOriginDeps } from "./errand-origin.js";
 
 export const BROWSER_ERRAND_DISABLED_MESSAGE = "Browser errands are turned off. Turn on Browser errands in Settings.";
 export const BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE =
   "Browser errands aren't available on this GoatCitadel. They need GoatCitadel running on your own PC.";
-export const BROWSER_ERRAND_CHANNEL_MESSAGE =
-  "Errands from channels arrive in a later update. Start this one from Chat on your PC.";
+/** A channel sender who is not the operator's own account (see `isErrandOwner`) asked for an errand. */
+export const BROWSER_ERRAND_OWNER_ONLY_MESSAGE = "Only the owner can start a browser errand here.";
+/** Someone other than the operator's own account answered an errand approval in a channel. */
+export const BROWSER_ERRAND_OWNER_ANSWER_MESSAGE = "Only the owner can answer this.";
 export const BROWSER_ERRAND_BUSY_MESSAGE = "Another errand is running. Stop it or wait for it to finish.";
 export const BROWSER_ERRAND_NO_TURN_MESSAGE = "Browser errands run only inside a Chat turn.";
 export const BROWSER_ERRAND_NO_GOAL_MESSAGE = "Say what the errand is.";
@@ -73,8 +76,8 @@ type GateDeps = Pick<ErrandApprovalGateDeps, "approvals" | "storage" | "attachme
 export interface BrowserErrandServiceDeps {
   isEnabled(): Promise<boolean>;
   deploymentProfile(): string;
-  /** The session's channel: "mission" for Chat in Mission Control, otherwise the channel the turn came in on. */
-  sessionChannel(sessionId: string): Promise<string | undefined>;
+  /** Reads where a turn came from and who sent it, for the owner rule. */
+  origin: ErrandOriginDeps;
   launchBrowser(signal: AbortSignal): Promise<ErrandBrowser>;
   callModel(
     request: ChatCompletionRequest,
@@ -91,6 +94,8 @@ export interface BrowserErrandServiceDeps {
 
 interface ActiveErrand {
   view: ErrandStatusView;
+  /** Where the errand was started: Chat on the PC, or the operator's channel conversation. */
+  origin: ErrandOrigin;
   controller: AbortController;
   gate?: ErrandApprovalGate;
   handBackWaiters: Set<(answer: "resumed" | "stopped") => void>;
@@ -129,6 +134,12 @@ export class BrowserErrandService {
   private disposed = false;
 
   public constructor(private readonly deps: BrowserErrandServiceDeps) {}
+
+  /** Where the running errand was started, if one is running. */
+  public getActiveOrigin(): ErrandOrigin | undefined {
+    const origin = this.active?.origin;
+    return origin ? { ...origin } : undefined;
+  }
 
   public getStatus(toolRunId: string): ErrandStatusView | undefined {
     const view = this.views.get(toolRunId);
@@ -174,9 +185,15 @@ export class BrowserErrandService {
     const goal = typeof request.args.goal === "string" ? request.args.goal.trim().slice(0, ERRAND_GOAL_MAX_CHARS) : "";
     const turnId = request.turnId?.trim();
     const toolRunId = request.toolRunId?.trim();
-    await this.assertAllowed(request.sessionId);
+    await this.assertAllowed();
     if (!turnId || !toolRunId) {
       throw new Error(BROWSER_ERRAND_NO_TURN_MESSAGE);
+    }
+    // Chat on the PC, or the operator's own account in one of their channels; anyone else, or an origin that can't be
+    // read, is refused.
+    const origin = await resolveOwnedErrandOrigin(this.deps.origin, request.sessionId, turnId).catch(() => undefined);
+    if (!origin) {
+      throw new Error(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
     }
     if (!goal) {
       throw new Error(BROWSER_ERRAND_NO_GOAL_MESSAGE);
@@ -196,6 +213,7 @@ export class BrowserErrandService {
         stepText: "Starting",
         modelRequests: 0,
       },
+      origin,
       controller: new AbortController(),
       handBackWaiters: new Set(),
       takenOverMs: 0,
@@ -243,16 +261,12 @@ export class BrowserErrandService {
     }
   }
 
-  private async assertAllowed(sessionId: string): Promise<void> {
+  private async assertAllowed(): Promise<void> {
     if (!(await this.deps.isEnabled())) {
       throw new Error(BROWSER_ERRAND_DISABLED_MESSAGE);
     }
     if (this.deps.deploymentProfile() === "remote_hardened") {
       throw new Error(BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE);
-    }
-    const channel = await this.deps.sessionChannel(sessionId).catch(() => undefined);
-    if (channel !== "mission") {
-      throw new Error(BROWSER_ERRAND_CHANNEL_MESSAGE);
     }
   }
 

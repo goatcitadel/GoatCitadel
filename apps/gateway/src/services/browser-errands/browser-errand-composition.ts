@@ -3,6 +3,7 @@ import type {
   ChatAttachmentRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  DiscordPairingRecord,
   ModelUsageAttributionContext,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
@@ -13,6 +14,7 @@ import type { ChatAttachmentUploadInput } from "../chat-attachment-service.js";
 import { createUtilityModelUsageAttribution } from "../utility-model-usage-attribution.js";
 import { BrowserErrandService } from "./browser-errand-service.js";
 import type { ErrandApprovalRuntime } from "./errand-approval-gate.js";
+import { createErrandOriginDeps } from "./errand-origin.js";
 
 export const BROWSER_ERRAND_UTILITY_KIND = "browser_errand";
 
@@ -27,6 +29,8 @@ export interface GatewayBrowserErrandInputs {
   ): Promise<ChatCompletionResponse>;
   uploadAttachment(input: ChatAttachmentUploadInput): Promise<ChatAttachmentRecord>;
   subscribeRealtime(listener: (event: RealtimeEvent) => void): () => void;
+  /** The Gateway's Discord pairing records, for the owner rule on Discord connections. */
+  readDiscordPairings(): Promise<DiscordPairingRecord[]>;
 }
 
 /** Where the errand browser keeps its own logins, apart from the operator's everyday Chrome. */
@@ -40,7 +44,7 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
   return new BrowserErrandService({
     isEnabled: () => inputs.isEnabled(),
     deploymentProfile: () => config.assistant.deploymentProfile,
-    sessionChannel: async (sessionId) => (await inputs.storage.sessions.getBySessionId(sessionId)).channel,
+    origin: createErrandOriginDeps(inputs),
     launchBrowser: (signal) =>
       launchErrandBrowser({
         profileDir: browserErrandProfileDir(config),

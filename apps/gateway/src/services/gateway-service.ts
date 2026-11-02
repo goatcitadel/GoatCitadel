@@ -2478,6 +2478,7 @@ export class GatewayService {
       chatCompletions: (request, attribution) => this.llmService.chatCompletions(request, attribution),
       uploadAttachment: (input) => chatAttachmentService.uploadChatAttachment(this.buildChatAttachmentHost(), input),
       subscribeRealtime: (listener) => this.realtimeEventService.subscribeRealtime(listener),
+      readDiscordPairings: () => this.readDiscordPairings(),
     });
     this.steerService = new ChatSteerService();
     this.chatCompactionBreakerActionService = createChatCompactionBreakerActionServiceForGateway({
