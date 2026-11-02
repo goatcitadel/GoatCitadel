@@ -331,3 +331,70 @@ function seedActiveGrant(storage: Storage, grantId: string): void {
       createdAt: "2026-08-11T00:00:00.000Z",
     });
 }
+
+describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
+  const png = Buffer.from("spotlight-png", "utf8");
+  const pngSha256 = createHash("sha256").update(png).digest("hex");
+  const approvalId = "5b0f8a2c-1d34-4e56-8a7b-9c0d1e2f3a4b";
+
+  async function readAs(kind: string, headers: Record<string, string>) {
+    const app = Fastify();
+    closers.push(() => app.close());
+    const approval = {
+      approvalId,
+      kind,
+      status: "pending",
+      riskLevel: "caution",
+      payload: {},
+      preview: {
+        summary: "Send the message — Reply to Sam",
+        url: "https://mail.example/inbox",
+        screenshotAttachmentId: "att-1",
+        screenshotSha256: pngSha256,
+      },
+      linkage: { sessionId: "session-1" },
+      createdAt: "2026-11-02T12:00:00.000Z",
+    };
+    app.decorate("services", {
+      approvals: { getApproval: vi.fn(async () => approval) },
+      chatAttachments: {
+        getChatAttachment: vi.fn(async () => ({
+          sessionId: "session-1",
+          mimeType: "image/png",
+          sizeBytes: png.byteLength,
+          sha256: pngSha256,
+        })),
+        readChatAttachmentContent: vi.fn(async () => ({ bytes: png })),
+      },
+    } as never);
+    app.decorate("requireOperatorAuth", (async () => undefined) as never);
+    app.addHook("onRequest", async (request) => {
+      const source = request.headers["x-auth-source"];
+      request.authActorSource = (typeof source === "string" ? source : "none") as never;
+      const purpose = request.headers["x-auth-purpose"];
+      request.authPrincipalPurpose = (typeof purpose === "string" ? purpose : undefined) as never;
+    });
+    await app.register(approvalsRoutes);
+    return await app.inject({ method: "GET", url: `/api/v1/approvals/${approvalId}`, headers });
+  }
+
+  it("gives the paired phone the plain line and the spotlight screenshot for an errand approval", async () => {
+    const response = await readAs("browser.errand.action", COMPANION_HEADERS);
+    expect(response.statusCode).toBe(200);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.json().errandPhoneView).toEqual({
+      line: "GoatCitadel wants to: Send the message — Reply to Sam",
+      page: "https://mail.example/inbox",
+      screenshot: { mimeType: "image/png", sha256: pngSha256, dataBase64: png.toString("base64") },
+    });
+  });
+
+  it("adds no errand view for other approval kinds or for the operator", async () => {
+    const otherKind = await readAs("tool.shell", COMPANION_HEADERS);
+    expect(otherKind.statusCode).toBe(200);
+    expect(otherKind.json().errandPhoneView).toBeUndefined();
+    const operator = await readAs("browser.errand.action", {});
+    expect(operator.statusCode).toBe(200);
+    expect(operator.json().errandPhoneView).toBeUndefined();
+  });
+});

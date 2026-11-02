@@ -6,6 +6,10 @@ import {
 } from "../services/companion-signed-approval.js";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "../services/device-access-helpers.js";
+import {
+  buildErrandPhoneApprovalView,
+  type ErrandScreenshotReads,
+} from "../services/browser-errands/errand-phone-approval-view.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import { sendRouteError } from "./_error-handler.js";
@@ -225,12 +229,15 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       return reply.code(400).send({ error: "Invalid approval read." });
     }
     try {
-      if (request.authActorSource === "companion") {
-        reply.header("Cache-Control", "private, no-store");
+      const approval = await approvals.getApproval(params.data.approvalId, query.data.workspaceId);
+      const projected = projectApprovalPublicResponse(approval);
+      if (request.authActorSource !== "companion") {
+        return reply.send(projected);
       }
-      return reply.send(
-        projectApprovalPublicResponse(await approvals.getApproval(params.data.approvalId, query.data.workspaceId)),
-      );
+      reply.header("Cache-Control", "private, no-store");
+      // Only the paired phone gets an errand's plain line and spotlight screenshot.
+      const errandPhoneView = await buildErrandPhoneApprovalView(approval, errandScreenshotReads(fastify));
+      return reply.send(errandPhoneView ? { ...projected, errandPhoneView } : projected);
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -471,6 +478,21 @@ async function refuseUnsignedCompanionDecision(
     return { statusCode: 409, error: "This approval was already answered, so the phone's decision was not used." };
   }
   return undefined;
+}
+
+/** The errand screenshot reads, through the chat attachments owner; absent attachments mean no screenshot. */
+function errandScreenshotReads(fastify: FastifyInstance): ErrandScreenshotReads {
+  const attachments = fastify.services.chatAttachments as Partial<typeof fastify.services.chatAttachments> | undefined;
+  return {
+    record: async (attachmentId) => {
+      if (!attachments?.getChatAttachment) throw new Error("Chat attachments are unavailable.");
+      return await attachments.getChatAttachment(attachmentId);
+    },
+    bytes: async (attachmentId) => {
+      if (!attachments?.readChatAttachmentContent) throw new Error("Chat attachments are unavailable.");
+      return (await attachments.readChatAttachmentContent(attachmentId)).bytes;
+    },
+  };
 }
 
 interface ApprovalActorRequest {
