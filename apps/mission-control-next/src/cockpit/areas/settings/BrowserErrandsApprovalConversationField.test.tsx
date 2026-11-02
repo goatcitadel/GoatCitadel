@@ -129,7 +129,7 @@ describe("where waiting browser errand approvals go", () => {
       expect(optionLabels(container)).toEqual(["None", "Telegram · Me", "Slack · Me at work"]);
       expect(picker(container).value).toBe("");
       expect(container.textContent).toContain(
-        "When you're away from the PC, errand approvals go here and to your phone if you haven't answered in 30 seconds.",
+        "When you're away from the PC, errand approvals go here and to your phone if you haven't answered in 30 seconds. Until the phone app update ships, your phone can see and deny them; approve them in the window, in Chat, or in a channel.",
       );
     } finally {
       unmount();

@@ -16,7 +16,7 @@ import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 export const BROWSER_ERRAND_APPROVALS_ANCHOR = "browser-errand-approvals";
 const OPERATION = "browser_errand_approval_conversation";
 const HELP =
-  "When you're away from the PC, errand approvals go here and to your phone if you haven't answered in 30 seconds.";
+  "When you're away from the PC, errand approvals go here and to your phone if you haven't answered in 30 seconds. Until the phone app update ships, your phone can see and deny them; approve them in the window, in Chat, or in a channel.";
 const NOT_LISTED = "A conversation not listed here";
 
 export interface ErrandApprovalConversationOption {
