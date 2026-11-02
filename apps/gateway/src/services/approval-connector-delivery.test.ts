@@ -70,6 +70,32 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     );
   });
 
+  it("carries a delivery override into the durable channel delivery", async () => {
+    const createDurableRun = vi.fn(() => ({ runId: "delivery-run-2" }));
+    await enqueueApprovalRemoteTokenConnectorDelivery(
+      {
+        tokenSecrets: { store: vi.fn(), delete: vi.fn() },
+        requestAttribution: {},
+        createDurableRun: createDurableRun as never,
+      },
+      {
+        approval: createApproval(),
+        connector: createConnector("integration_connection", "active", ["outbound_messages"], { key: "telegram" }),
+        tokenRecord: { token: `grat_${"d".repeat(43)}`, tokenId: "rat_124", expiresAt: "2099-03-20T12:00:00.000Z" },
+        delivery: { target: "4242", message: "GoatCitadel wants to: Click Buy" },
+      },
+    );
+
+    expect(createDurableRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          action: "channel.send",
+          payload: { target: "4242", message: "GoatCitadel wants to: Click Buy", interactiveActionTemplate: undefined },
+        }),
+      }),
+    );
+  });
+
   it("returns committed durable truth and preserves its secret when post-commit publication fails", async () => {
     const rawToken = `grat_${"c".repeat(43)}`;
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_committed";
@@ -326,6 +352,86 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
         { label: "Deny", decision: "r" },
       ],
     });
+  });
+
+  it("sends a delivery override to its own conversation with its own message and screenshot", () => {
+    const payload = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      approval: createApproval(),
+      // No configured default approval target: the override names the conversation.
+      connector: createConnector("integration_connection", "active", ["outbound_messages", "interactive_actions"], {
+        key: "telegram",
+        approvalInlineActionsReady: true,
+      }),
+      tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
+      tokenId: "rat_123",
+      expiresAt: "2026-03-20T12:00:00.000Z",
+      delivery: { target: " 4242 ", message: "GoatCitadel wants to: Click Buy", attachmentIds: ["att-1", " "] },
+    });
+
+    expect(payload?.payload).toEqual({
+      target: "4242",
+      message: "GoatCitadel wants to: Click Buy",
+      attachments: [{ attachmentId: "att-1" }],
+      interactiveActionTemplate: expect.objectContaining({ platform: "telegram", tokenId: "rat_123" }),
+    });
+    expect(payload?.secretRefs).toEqual({ approvalActionToken: "keychain:goatcitadel:approval-remote-action:rat_123" });
+  });
+
+  it("still refuses a delivery override on a connection that can't send", () => {
+    expect(
+      buildApprovalRemoteTokenConnectorDeliveryPayload({
+        approval: createApproval(),
+        connector: createConnector("integration_connection", "active", ["approvals"], {
+          approvalDeliveryTarget: "#ops-approvals",
+        }),
+        tokenId: "rat_123",
+        expiresAt: "2026-03-20T12:00:00.000Z",
+        delivery: { target: "4242", message: "GoatCitadel wants to: Click Buy" },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("leaves the default integration message and the other connector kinds byte-identical", () => {
+    const base = {
+      approval: createApproval(),
+      tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
+      tokenId: "rat_123",
+      expiresAt: "2026-03-20T12:00:00.000Z",
+    };
+    const delivery = { target: "4242", message: "GoatCitadel wants to: Click Buy", attachmentIds: ["att-1"] };
+    for (const connector of [
+      createConnector("browser", "active", ["approvals", "interactive_actions"]),
+      createConnector("mcp_server", "active", ["approvals", "interactive_actions"]),
+    ]) {
+      expect(JSON.stringify(buildApprovalRemoteTokenConnectorDeliveryPayload({ ...base, connector, delivery }))).toBe(
+        JSON.stringify(buildApprovalRemoteTokenConnectorDeliveryPayload({ ...base, connector })),
+      );
+    }
+
+    const integration = buildApprovalRemoteTokenConnectorDeliveryPayload({
+      ...base,
+      connector: createConnector("integration_connection", "active", ["approvals", "outbound_messages"], {
+        approvalDeliveryTarget: "#ops-approvals",
+      }),
+    });
+    expect(integration?.payload).toEqual({
+      target: "#ops-approvals",
+      message: [
+        "GoatCitadel approval action requested.",
+        "Approval ID: apr_123",
+        "Requester: n/a",
+        "Kind: tool.invoke",
+        "Risk: danger",
+        "Status: pending",
+        "Rollback: n/a",
+        "Preview: Write file",
+        "Action token ID: rat_123",
+        "Expires at: 2026-03-20T12:00:00.000Z",
+        "Resolve this approval from Mission Control.",
+      ].join("\n"),
+      interactiveActionTemplate: undefined,
+    });
+    expect(Object.keys(integration?.payload ?? {})).toEqual(["target", "message", "interactiveActionTemplate"]);
   });
 
   it("keeps unsupported integration providers on Mission Control resolution without storing a bearer", async () => {

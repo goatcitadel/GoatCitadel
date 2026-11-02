@@ -175,6 +175,63 @@ describe("protected approval action provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("puts the inline approval buttons on the photo when an attachment is present", async () => {
+    const harness = createHarness();
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 1002 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createRequest();
+    request.args.attachments = [
+      { title: "spotlight.png", mimeType: "image/png", dataBase64: Buffer.from("png-bytes").toString("base64") },
+    ];
+
+    await expect(
+      executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+    ).resolves.toMatchObject({ status: "sent" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/sendPhoto$/);
+    const form = init?.body as FormData;
+    expect(form.get("caption")).toBe("Approval requested.");
+    expect(JSON.parse(String(form.get("reply_markup")))).toEqual({
+      inline_keyboard: [
+        [
+          { text: "Approve", callback_data: `gca:${RAW_TOKEN}:a` },
+          { text: "Deny", callback_data: `gca:${RAW_TOKEN}:r` },
+        ],
+      ],
+    });
+  });
+
+  it("keeps the buttons on the text when the caption is too long for the photo", async () => {
+    const harness = createHarness();
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 1003 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createRequest();
+    request.args.message = "Approval requested. ".repeat(60);
+    request.args.attachments = [
+      { title: "spotlight.png", mimeType: "image/png", dataBase64: Buffer.from("png-bytes").toString("base64") },
+    ];
+
+    await expect(
+      executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+    ).resolves.toMatchObject({ status: "sent" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [textUrl, textInit] = fetchMock.mock.calls[0]!;
+    expect(String(textUrl)).toMatch(/\/sendMessage$/);
+    expect(JSON.parse(String(textInit?.body)).reply_markup.inline_keyboard[0]).toHaveLength(2);
+    const [photoUrl, photoInit] = fetchMock.mock.calls[1]!;
+    expect(String(photoUrl)).toMatch(/\/sendPhoto$/);
+    expect((photoInit?.body as FormData).get("reply_markup")).toBeNull();
+  });
+
   it.each([`x${RAW_TOKEN}`, `${RAW_TOKEN}x`])("rejects recoverable decorated approval bearer %s", async (message) => {
     const harness = createHarness();
     const fetchMock = vi.fn();

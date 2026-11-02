@@ -927,7 +927,10 @@ import {
   type OperatorDeskSendInput,
   type OperatorDeskSendResult,
 } from "./channel-desk-turn.js";
-import { enqueueApprovalRemoteTokenConnectorDelivery } from "./approval-connector-delivery.js";
+import {
+  enqueueApprovalRemoteTokenConnectorDelivery,
+  type ApprovalRemoteTokenDeliveryOverride,
+} from "./approval-connector-delivery.js";
 import {
   commsActivity as commsActivityImpl,
   commsReact as commsReactImpl,
@@ -2467,8 +2470,8 @@ export class GatewayService {
         await this.enqueueApprovalResolutionEffects(approval, input, options),
       requestApprovalEffectProcessing: () => this.approvalEffectsService.requestEffectProcessing(),
       awaitApprovalResolutionEffects: (approvalId) => this.approvalEffectsService.awaitResolutionEffects(approvalId),
-      enqueueApprovalRemoteTokenDelivery: async (approval, connector, tokenRecord) =>
-        await this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
+      enqueueApprovalRemoteTokenDelivery: async (approval, connector, tokenRecord, delivery) =>
+        await this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord, delivery),
     });
     this.browserErrandService = createGatewayBrowserErrandService({
       config: this.config,
@@ -10144,6 +10147,7 @@ export class GatewayService {
       connectorId: string;
       issuedBy?: string;
       expiresInMs?: number;
+      delivery?: ApprovalRemoteTokenDeliveryOverride;
     },
   ): Promise<RemoteApprovalActionTokenIssueResult> {
     return await this.approvalRuntime.createApprovalRemoteActionToken(approvalId, input);
@@ -10215,11 +10219,8 @@ export class GatewayService {
   /** @internal */ public async enqueueApprovalRemoteTokenDelivery(
     approval: ApprovalRequest,
     connector: ConnectorRecord,
-    tokenRecord: {
-      token: string;
-      tokenId: string;
-      expiresAt: string;
-    },
+    tokenRecord: { token: string; tokenId: string; expiresAt: string },
+    delivery?: ApprovalRemoteTokenDeliveryOverride,
   ): Promise<DurableRunRecord | undefined> {
     if (!(await this.isFeatureEnabled("durableKernelV1Enabled"))) {
       return undefined;
@@ -10230,7 +10231,7 @@ export class GatewayService {
         requestAttribution: this.getCurrentRequestAttribution(),
         createDurableRun: async (input) => await this.createDurableRun(input),
       },
-      { approval, connector, tokenRecord },
+      { approval, connector, tokenRecord, ...(delivery ? { delivery } : {}) },
     );
   }
 

@@ -1483,11 +1483,14 @@ async function telegramSend(
       chatId,
       message,
       replyToMessageId,
-      undefined,
+      replyMarkup,
       grantAllowlist,
     );
     caption = undefined;
   }
+  // Inline buttons ride on the first message only: the captioned photo, or the
+  // long text above it when the caption does not fit Telegram's 1024 limit.
+  let pendingReplyMarkup = lastMessageId ? undefined : replyMarkup;
   for (const [index, attachment] of attachments.entries()) {
     try {
       lastMessageId = await telegramSendAttachment(
@@ -1500,7 +1503,9 @@ async function telegramSend(
         caption,
         index === 0 ? replyToMessageId : undefined,
         grantAllowlist,
+        pendingReplyMarkup,
       );
+      pendingReplyMarkup = undefined;
     } catch (error) {
       if (lastMessageId) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -1671,6 +1676,7 @@ async function telegramSendAttachment(
   caption: string | undefined,
   replyToMessageId?: number,
   grantAllowlist?: string[],
+  replyMarkup?: Record<string, unknown>,
 ): Promise<string> {
   const parseMode = asString(config.parseMode) ?? undefined;
   const isImage = isImageChannelAttachment(attachment);
@@ -1700,6 +1706,9 @@ async function telegramSendAttachment(
     if (replyToMessageId) {
       formData.set("reply_parameters", JSON.stringify({ message_id: replyToMessageId }));
     }
+    if (replyMarkup) {
+      formData.set("reply_markup", JSON.stringify(replyMarkup));
+    }
     body = formData;
   } else {
     body = JSON.stringify({
@@ -1708,6 +1717,7 @@ async function telegramSendAttachment(
       caption,
       parse_mode: parseMode,
       reply_parameters: replyToMessageId ? { message_id: replyToMessageId } : undefined,
+      reply_markup: replyMarkup,
     });
     headers = { "Content-Type": "application/json" };
   }

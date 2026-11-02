@@ -19,6 +19,7 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import type { ApprovalRemoteTokenDeliveryOverride } from "./approval-connector-delivery.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { withApprovalFollowUp } from "./approval-follow-up.js";
 import { buildRemoteTokenConsumedObservabilityEffect } from "./approval-observability.js";
@@ -67,6 +68,7 @@ export interface ApprovalRemoteActionContext {
     approval: ApprovalRequest,
     connector: ConnectorRecord,
     tokenRecord: { token: string; tokenId: string; expiresAt: string },
+    delivery?: ApprovalRemoteTokenDeliveryOverride,
   ): Promise<{ runId?: string } | undefined>;
 }
 
@@ -77,6 +79,8 @@ export async function createApprovalRemoteActionToken(
     connectorId: string;
     issuedBy?: string;
     expiresInMs?: number;
+    /** Send this delivery to one conversation with its own message instead of the connector's default. */
+    delivery?: ApprovalRemoteTokenDeliveryOverride;
   },
 ): Promise<RemoteApprovalActionTokenIssueResult> {
   const approval = await context.storage.approvals.get(approvalId);
@@ -150,11 +154,13 @@ export async function createApprovalRemoteActionToken(
     ...created,
     approvalId,
     token,
-    ...(await enqueueRemoteTokenDelivery(context, deliveryApproval, connector, {
-      token,
-      tokenId: created.tokenId,
-      expiresAt: created.expiresAt,
-    })),
+    ...(await enqueueRemoteTokenDelivery(
+      context,
+      deliveryApproval,
+      connector,
+      { token, tokenId: created.tokenId, expiresAt: created.expiresAt },
+      input.delivery,
+    )),
   };
 }
 
@@ -297,9 +303,10 @@ async function enqueueRemoteTokenDelivery(
   approval: ApprovalRequest,
   connector: ConnectorRecord,
   tokenRecord: { token: string; tokenId: string; expiresAt: string },
+  delivery?: ApprovalRemoteTokenDeliveryOverride,
 ): Promise<Pick<RemoteApprovalActionTokenIssueResult, "deliveryStatus" | "deliveryRunId" | "deliveryError">> {
   try {
-    const deliveryRun = await context.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord);
+    const deliveryRun = await context.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord, delivery);
     if (!deliveryRun) {
       return { deliveryStatus: "not_configured" };
     }
