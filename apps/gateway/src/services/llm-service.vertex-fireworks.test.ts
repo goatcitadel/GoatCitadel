@@ -9,6 +9,11 @@ import { LlmReasoningProfileError } from "./llm-reasoning-profile.js";
 import { LlmService, sanitizeProviderResponseForPublicProjection } from "./llm-service.js";
 import { ModelChangePlanAdapter } from "./model-change-plan-adapter.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const roots: string[] = [];
 
 afterEach(() => {

@@ -117,6 +117,7 @@ import {
   type IdempotentExternalSideEffectRunInput,
   type ExternalSideEffectReplayWorkerResult,
   runIdempotentExternalSideEffect,
+  readExternalSideEffectProviderMessageId,
   runReplaySafeExternalSideEffectWorker,
 } from "./external-side-effect-runner-service.js";
 
@@ -280,6 +281,12 @@ export interface DurableExecutionHost extends chatTurnDispatchService.ChatTurnDi
     run: DurableRunRecord,
     checkpointState: Record<string, unknown>,
   ): Promise<void>;
+  /** Best-effort presentation cleanup after the connector send and terminal checkpoint have committed. */
+  onConnectorDeliveryCompleted?(
+    run: DurableRunRecord,
+    payload: ConnectorDeliveryWorkflowPayload,
+    checkpointState: Record<string, unknown>,
+  ): Promise<void>;
 }
 
 type HookDeliveryWorkflowPayload = {
@@ -391,6 +398,7 @@ type DurableConnectorDeliveryWorkflowHost = DurableWorkflowCompletionHost &
     | "approvalRemoteTokenSecrets"
     | "publishRealtime"
     | "resolveDurableRunHookWorkspaceId"
+    | "onConnectorDeliveryCompleted"
   >;
 
 type DurableHookDeliveryWorkflowHost = DurableWorkflowCompletionHost &
@@ -1641,6 +1649,7 @@ export async function executeDurableConnectorDeliveryRun(
     if (sideEffect.claim.replayOutcome !== "duplicate" && recorded?.status !== "completed") {
       throw new Error(sideEffect.message);
     }
+    const providerMessageId = readExternalSideEffectProviderMessageId(recorded?.responsePayload);
     const checkpointState = {
       connectorId: connector.connectorId,
       connectorType: connector.connectorType,
@@ -1648,8 +1657,10 @@ export async function executeDurableConnectorDeliveryRun(
       deliveryStatus: "already_committed",
       sideEffectRunId: sideEffect.claim.sideEffectRunId,
       externalReferenceId: recorded?.externalReferenceId,
+      ...(providerMessageId ? { result: { providerMessageId } } : {}),
     };
     const completed = await completeDurableWorkflowRun(host, run, checkpointState);
+    if (completed) await notifyConnectorDeliveryCompletedSafely(host, completed, payload, checkpointState);
     if (completed && hydratesBrowserApprovalBearer && approvalActionTokenRef) {
       try {
         approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
@@ -1671,6 +1682,7 @@ export async function executeDurableConnectorDeliveryRun(
     sideEffectRunId: sideEffect.claim.sideEffectRunId,
   };
   const completed = await completeDurableWorkflowRun(host, run, checkpointState);
+  if (completed) await notifyConnectorDeliveryCompletedSafely(host, completed, payload, checkpointState);
   if (completed && hydratesBrowserApprovalBearer && approvalActionTokenRef) {
     try {
       approvalRemoteTokenSecrets.delete(approvalActionTokenRef);
@@ -1679,6 +1691,24 @@ export async function executeDurableConnectorDeliveryRun(
     }
   }
   publishConnectorDeliveryCompletedSafely(host, run, connector, payload, checkpointState);
+}
+
+async function notifyConnectorDeliveryCompletedSafely(
+  host: Pick<DurableConnectorDeliveryWorkflowHost, "onConnectorDeliveryCompleted">,
+  run: DurableRunRecord,
+  payload: ConnectorDeliveryWorkflowPayload,
+  checkpointState: Record<string, unknown>,
+): Promise<void> {
+  try {
+    await host.onConnectorDeliveryCompleted?.(run, payload, redactStructuredSecrets(checkpointState).value);
+  } catch (error) {
+    // eslint-disable-next-line no-console -- presentation cleanup cannot reopen a committed provider send.
+    console.warn("[goatcitadel] connector delivery completion cleanup failed", {
+      runId: run.runId,
+      detail: "Connector delivery completion cleanup failed.",
+      errorType: error instanceof TypeError ? "TypeError" : error instanceof Error ? "Error" : "unknown",
+    });
+  }
 }
 
 class ConnectorDeliveryDispatchFailureError extends Error {

@@ -397,7 +397,7 @@ function seedActiveGrant(storage: Storage, grantId: string): void {
 }
 
 describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
-  const png = Buffer.from("spotlight-png", "utf8");
+  const png = Buffer.from("89504e470d0a1a0a", "hex");
   const pngSha256 = createHash("sha256").update(png).digest("hex");
   const approvalId = "5b0f8a2c-1d34-4e56-8a7b-9c0d1e2f3a4b";
 
@@ -408,33 +408,54 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
       summary: "Send the message — Reply to Sam",
       url: "https://mail.example/inbox",
     },
+    options: {
+      screenshot?: boolean;
+      query?: string;
+      status?: string;
+      sessionId?: string;
+      record?: Record<string, unknown>;
+      bytes?: Buffer;
+      missing?: boolean;
+      missingApproval?: boolean;
+      expectedHash?: string;
+    } = {},
   ) {
     const app = Fastify();
     closers.push(() => app.close());
     const approval = {
       approvalId,
       kind,
-      status: "pending",
+      status: options.status ?? "pending",
       riskLevel: "caution",
       payload: {},
       preview: {
         ...preview,
         screenshotAttachmentId: "att-1",
-        screenshotSha256: pngSha256,
+        screenshotSha256: options.expectedHash ?? pngSha256,
       },
-      linkage: { sessionId: "session-1" },
+      linkage: { sessionId: options.sessionId ?? "session-1" },
       createdAt: "2026-11-02T12:00:00.000Z",
     };
+    const getApproval = vi.fn(async () => {
+      if (options.missingApproval) throw new Error("private approval failure");
+      return approval;
+    });
+    const getChatAttachment = vi.fn(async () => {
+      if (options.missing) throw new Error("private attachment path");
+      return {
+        sessionId: "session-1",
+        mimeType: "image/png",
+        sizeBytes: png.byteLength,
+        sha256: pngSha256,
+        ...options.record,
+      };
+    });
+    const readChatAttachmentContent = vi.fn(async () => ({ bytes: options.bytes ?? png }));
     app.decorate("services", {
-      approvals: { getApproval: vi.fn(async () => approval) },
+      approvals: { getApproval },
       chatAttachments: {
-        getChatAttachment: vi.fn(async () => ({
-          sessionId: "session-1",
-          mimeType: "image/png",
-          sizeBytes: png.byteLength,
-          sha256: pngSha256,
-        })),
-        readChatAttachmentContent: vi.fn(async () => ({ bytes: png })),
+        getChatAttachment,
+        readChatAttachmentContent,
       },
     } as never);
     app.decorate("requireOperatorAuth", (async () => undefined) as never);
@@ -445,7 +466,12 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
       request.authPrincipalPurpose = (typeof purpose === "string" ? purpose : undefined) as never;
     });
     await app.register(approvalsRoutes);
-    return await app.inject({ method: "GET", url: `/api/v1/approvals/${approvalId}`, headers });
+    const response = await app.inject({
+      method: "GET",
+      url: `/api/v1/approvals/${approvalId}${options.screenshot ? "/errand-screenshot" : ""}${options.query ?? ""}`,
+      headers,
+    });
+    return Object.assign(response, { getApproval, getChatAttachment, readChatAttachmentContent });
   }
 
   it("gives the paired phone the plain line and the spotlight screenshot for an errand approval", async () => {
@@ -455,8 +481,14 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
     expect(response.json().errandPhoneView).toEqual({
       line: "GoatCitadel wants to: Send the message — Reply to Sam",
       page: "https://mail.example/inbox",
-      screenshot: { mimeType: "image/png", sha256: pngSha256, dataBase64: png.toString("base64") },
+      screenshot: {
+        mimeType: "image/png",
+        sha256: pngSha256,
+        url: `/api/v1/approvals/${approvalId}/errand-screenshot`,
+      },
     });
+    expect(response.readChatAttachmentContent).not.toHaveBeenCalled();
+    expect(response.body).not.toContain("dataBase64");
   });
 
   it("redacts credential text and credential URL paths in the phone view, as in the preview", async () => {
@@ -474,7 +506,8 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
     expect(view.page).not.toContain("supersecretvalue");
     expect(body.preview.url).not.toContain("supersecretvalue");
     expect(view.page).toBe(body.preview.url);
-    expect(view.screenshot.dataBase64).toBe(png.toString("base64"));
+    expect(view.screenshot.sha256).toBe(pngSha256);
+    expect(view.screenshot.url).toBe(`/api/v1/approvals/${approvalId}/errand-screenshot`);
   });
 
   it("adds no errand view for other approval kinds or for the operator", async () => {
@@ -484,5 +517,99 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
     const operator = await readAs("browser.errand.action", {});
     expect(operator.statusCode).toBe(200);
     expect(operator.json().errandPhoneView).toBeUndefined();
+  });
+
+  it("preserves the approval read's encoded workspace scope in the screenshot URL", async () => {
+    const response = await readAs("browser.errand.action", COMPANION_HEADERS, undefined, {
+      query: "?workspaceId=work+%26+space%2Fone",
+    });
+    expect(response.getApproval).toHaveBeenCalledWith(approvalId, "work & space/one");
+    expect(response.json().errandPhoneView.screenshot.url).toBe(
+      `/api/v1/approvals/${approvalId}/errand-screenshot?workspaceId=work+%26+space%2Fone`,
+    );
+  });
+
+  it("returns only the bound PNG through the attachment owner with a bounded session read", async () => {
+    const response = await readAs("browser.errand.action", COMPANION_HEADERS, undefined, {
+      screenshot: true,
+      query: "?workspaceId=work+%26+space%2Fone&attachmentId=someone-elses",
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.rawPayload).toEqual(png);
+    expect(response.headers["content-type"]).toBe("image/png");
+    expect(response.headers["x-content-type-options"]).toBe("nosniff");
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+    expect(response.getApproval).toHaveBeenCalledWith(approvalId, "work & space/one");
+    expect(response.readChatAttachmentContent).toHaveBeenCalledWith("att-1", {
+      sessionId: "session-1",
+      maxBytes: 4 * 1024 * 1024,
+    });
+  });
+
+  it.each([
+    ["wrong session", { record: { sessionId: "session-2" } }],
+    ["wrong hash", { record: { sha256: "f".repeat(64) } }],
+    ["wrong type", { record: { mimeType: "image/svg+xml" } }],
+    ["oversize metadata", { record: { sizeBytes: 4 * 1024 * 1024 + 1 } }],
+    ["nonfinite size", { record: { sizeBytes: Number.NaN } }],
+    ["negative size", { record: { sizeBytes: -1 } }],
+    ["fractional size", { record: { sizeBytes: 8.5 } }],
+    ["changed bytes", { bytes: Buffer.from("changed") }],
+    ["oversized bytes", { bytes: Buffer.alloc(4 * 1024 * 1024 + 1) }],
+    ["size mismatch", { record: { sizeBytes: png.byteLength + 1 } }],
+    ["missing attachment", { missing: true }],
+    ["missing approval", { missingApproval: true }],
+    ["not pending", { status: "approved" }],
+    ["no canonical session", { sessionId: "" }],
+    ["invalid expected hash", { expectedHash: "not-a-sha256" }],
+  ])("returns a generic uncached 404 for %s", async (_label, options) => {
+    const response = await readAs("browser.errand.action", COMPANION_HEADERS, undefined, {
+      ...options,
+      screenshot: true,
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Errand screenshot unavailable." });
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("refuses non-PNG bytes even when the stored hash and size agree", async () => {
+    const bytes = Buffer.from("not a PNG");
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    const response = await readAs("browser.errand.action", COMPANION_HEADERS, undefined, {
+      screenshot: true,
+      bytes,
+      expectedHash: hash,
+      record: { sha256: hash, sizeBytes: bytes.byteLength },
+    });
+    expect(response.statusCode).toBe(404);
+    expect(response.json()).toEqual({ error: "Errand screenshot unavailable." });
+  });
+
+  it("refuses a nonerrand approval", async () => {
+    const response = await readAs("tool.shell", COMPANION_HEADERS, undefined, { screenshot: true });
+    expect(response.statusCode).toBe(404);
+    expect(response.readChatAttachmentContent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["operator", { "x-auth-source": "operator" }],
+    ["unauthenticated", {}],
+    ["device", { "x-auth-source": "device" }],
+    ["session-control companion", { "x-auth-source": "companion", "x-auth-purpose": "session_control_client" }],
+  ])("denies %s before reading approval or bytes, with no-store", async (_label, headers) => {
+    const response = await readAs("browser.errand.action", headers, undefined, { screenshot: true });
+    expect(response.statusCode).toBe(403);
+    expect(response.getApproval).not.toHaveBeenCalled();
+    expect(response.readChatAttachmentContent).not.toHaveBeenCalled();
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("marks an invalid screenshot query no-store before returning 400", async () => {
+    const response = await readAs("browser.errand.action", COMPANION_HEADERS, undefined, {
+      screenshot: true,
+      query: "?workspaceId=",
+    });
+    expect(response.statusCode).toBe(400);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
   });
 });

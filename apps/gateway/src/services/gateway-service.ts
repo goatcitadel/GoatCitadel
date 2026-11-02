@@ -3237,6 +3237,8 @@ export class GatewayService {
         },
         connectorDelivery: {
           storage: this.storage,
+          onConnectorDeliveryCompleted: (run, payload, state) =>
+            this.browserErrandService.onConnectorDeliveryCompleted(run.runId, payload, state),
           requireConnectorRecord: async (connectorId) => await this.requireConnectorRecord(connectorId),
           commsSend: async (input, options) => await this.commsSend(input, options),
           commsReply: async (input, options) => await this.commsReply(input, options),

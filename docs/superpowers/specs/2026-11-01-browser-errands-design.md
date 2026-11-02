@@ -3,11 +3,11 @@
 Date: 2026-11-01
 Status: draft for operator review
 
-Delivery status: PR 1 delivered the errand browser, the Gateway errand loop and Chat tool (behind the "Browser errands" flag), approval integrity, the Chat card with approvals, and the safety doc section plus a local proof script (`scripts/dev/errand-local-proof.mjs`). PR 2 delivered errands in channels: starting an errand from the operator's own channel account, approvals and sign-in notices reaching channels (right away for channel-started errands, after 30 seconds for PC-started ones, plus a Settings › Tools conversation picker), APPROVE / DENY / STOP replies and buttons on Telegram (webhook mode) and Discord, screenshots in private conversations only, and the final screenshot sent back. PR 3 remains (the phone approving). Not yet run: the local proof script, the live Codex acceptance check, and live checks per channel; the operator is to run them.
+Delivery status: PR 1 delivered the errand browser, the Gateway errand loop and Chat tool (behind the "Browser errands" flag), approval integrity, the Chat card with approvals, and the safety doc section plus a local proof script (`scripts/dev/errand-local-proof.mjs`). PR 2 delivered errands in channels: starting an errand from the operator's own channel account, approvals and sign-in notices reaching channels (right away for channel-started errands, after 30 seconds for PC-started ones, plus a Settings › Tools conversation picker), APPROVE / DENY / STOP replies and buttons on Telegram (webhook mode) and Discord, screenshots in private conversations only, and the final screenshot sent back. PR 3 delivered the Gateway side of signed phone approvals; enabling them still waits for the matching phone release proof. Not yet run: the local proof script, the live Codex acceptance check, and live checks per channel; the operator is to run them.
 
 ## Intent
 
-The operator wants GoatCitadel to "use my computer like a person would at the end of the day, smooth, seamless." This document covers the first step toward that: **browser errands**. You ask for something in Chat, from a channel, or from the phone. GoatCitadel opens its own browser window on your PC and does the errand by looking at the screen and using a mouse and keyboard, the way a person would. You can watch it work, stop it at any time, and approve the steps that matter.
+The operator wants GoatCitadel to "use my computer like a person would at the end of the day, smooth, seamless." This document covers the first step toward that: **browser errands**. You ask for something in Chat or from a channel; starting from the paired phone is future work. GoatCitadel opens its own browser window on your PC and does the errand by looking at the screen and using a mouse and keyboard, the way a person would. You can watch it work, stop it at any time, and approve the steps that matter.
 
 The errands the operator named:
 
@@ -271,14 +271,36 @@ This work:
 - **Wires signed phone approvals into the approvals route.** A companion approve or edit is accepted only with a valid signature from the grant's active key over the decision contract (`goatcitadel.mobile-approval-decision.v1`). Each nonce is accepted once, signature-time skew is checked, and every failure closes.
 - **Tests the route with a test signer.** These tests cover replay, a stale timestamp, a revoked key, and the wrong approval.
 - **Leaves the capability switched off in shipped builds** until the phone app's matching release passes its device proof. That flip is a separate, small change, recorded as a follow-up.
-- **Puts the errand's spotlight screenshot and plain line on the approval the phone loads.**
+- **Puts the errand's plain line and a spotlight screenshot reference on the approval the phone loads.** The phone fetches the PNG separately under the same companion authentication.
 
 The phone app's code is not in this repository. Until its update ships, the phone shows errand approvals and can deny or stop them, and approving happens in the window, Chat, or a channel. The doc and the Settings text must say so plainly.
 
 Follow-ups after the Gateway side (PR 3, plan `docs/superpowers/plans/2026-11-02-browser-errands-phone.md`):
 
 - **Turn signed phone approvals on.** The switch is `COMPANION_SIGNED_APPROVALS_ENABLED` in `apps/gateway/src/services/companion-signed-approval.ts`, `false` in shipped builds. Flip it, and report the approval key's `verificationAvailability` as available, once the phone app's matching release passes its device proof.
-- **Errands started from the phone.** A paired phone cannot send a Chat turn today, so there is no phone origin yet; every errand approval reaches the phone after 30 seconds. Sending it right away needs a phone origin first.
+- **Errands started from the phone.** An ordinary paired phone cannot send a Chat turn today, so there is no phone origin yet; every errand approval reaches the phone after 30 seconds. The distinct external session-control path is described under "Known follow-ups" below.
+
+### Mobile approval read contract
+
+For a pending `browser.errand.action`, a general companion's `GET /api/v1/approvals/:approvalId` may include:
+
+```json
+{
+  "errandPhoneView": {
+    "line": "GoatCitadel wants to: Click Place your order",
+    "page": "https://example.com/checkout",
+    "screenshot": {
+      "mimeType": "image/png",
+      "sha256": "<64 lowercase hexadecimal characters>",
+      "url": "/api/v1/approvals/<approvalId>/errand-screenshot"
+    }
+  }
+}
+```
+
+`screenshot.dataBase64` is removed. Approval reads validate attachment metadata without loading screenshot bytes; phone clients fetch `screenshot.url` using their existing companion authentication. A `workspaceId` supplied on the approval read is preserved in the relative URL's query. Neither the URL nor the digest is a bearer credential. `line` and `page` still pass through the public secret projection.
+
+The companion-only image endpoint rechecks the pending errand approval, its own Chat session, the attachment's session, PNG metadata and signature, the recorded digest and actual bytes, and the 4 MiB limit using a bounded attachment read. A missing, changed, invalid or no-longer-pending screenshot returns a generic 404. Both approval and image responses use `Cache-Control: private, no-store`; successful image responses also use `Content-Type: image/png` and `X-Content-Type-Options: nosniff`. Operator credentials and purpose-bound session-control companions do not grant access to this endpoint. Phone clients should retain the displayed image only for the current approval view and use its digest to avoid redundant fetches while that view remains open; this does not enable HTTP caching.
 
 ## Accepted risks
 
@@ -304,9 +326,11 @@ These are the builder's starting values; adjust with reason:
 
 ## Known follow-ups
 
+- **Starting from the paired phone is not supported yet.** The phone's ordinary `general_companion` session can review errand approvals, but cannot send Chat turns. The existing external session-control send path requires a separately provisioned `session_control_client`, an operator-approved session control grant with `send`, a signed request, and the bound token, client instance, generation and live lease. That path is not phone-origin support: errands currently recognize only PC and channel origins. Phone initiation needs a separately reviewed authority contract and matching mobile-app support, with server-authenticated device provenance carried through durable Chat and errand admission and a defined immediate approval dispatch. Do not infer phone origin from a user agent, caller-supplied mobile context, actor label, or session channel. This follow-up adds no send route and leaves the signed-approval release gate unchanged.
+
 Closed after PR 2 (channels and approvals away from the PC):
 
-- **Buttons come off once answered.** When an errand approval is answered from any surface, or the errand ends, the Approve / Deny buttons are taken off the channel messages that carried them: Telegram clears the message's reply markup, Discord edits its components to none. The message is found by the provider message id the completed connector delivery recorded. It is best effort: a failure logs a bounded warning and never touches the approval. A message whose send had not completed when the approval was answered keeps its buttons; pressing one still gets "This was already answered."
+- **Buttons come off once answered, including late sends.** When an errand approval is answered from any surface, or the errand ends, the Approve / Deny buttons are taken off the channel messages that carried them: Telegram clears the message's reply markup, Discord edits its components to none. The message is found by the provider message id the completed connector delivery recorded. If a send finishes after the approval was answered or the errand ended, the delivery-completion hook removes its buttons then. Cleanup is best effort: a failure logs one bounded warning without provider error text and never changes the approval or the completed delivery. A rare overlap after an errand ends may repeat the idempotent empty-button edit. If cleanup fails, pressing a retained button still gets "This was already answered."
 - **Discord answers a press within 3 seconds.** An Approve / Deny press is acknowledged first with a private deferred reply, before any connection, pairing or durable-command read, and the result edits that reply. The route, pairing and ownership checks are unchanged. A press Discord would not let GoatCitadel acknowledge is not acted on.
 - **A skipped phone push says why.** A push skipped because its approval was already answered is recorded as `approval_already_resolved` (still status `cancelled_revoked`), not `registration_revoked`. SQLite v276 and Postgres v225 widen the delivery table's classification CHECK; both Postgres lineages (fresh, and upgraded from v224) are tested against a real database.
 - **The picked conversation is named.** The completed Change Plan for the approval conversation says where approvals now go in plain words, the conversation's name and its channel ("Me on Telegram"), with no IDs.

@@ -20,6 +20,11 @@ import { SecretStoreService } from "./secret-store-service.js";
 import { finalizeDurableChatRun } from "./chat-durable-run-service.js";
 import { DURABLE_RETRY_POLICY_DEFAULT } from "./durable-retry-policy.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 it("retains native failure facts through governed inference, verified artifact, settlement and canonical Chat completion", async () => {
   const root = mkdtempSync(join(tmpdir(), "goat-native-chat-acceptance-"));
   if (!resolve(root).startsWith(resolve(tmpdir()) + sep) || !root.includes("goat-native-chat-acceptance-")) throw new Error("Unexpected fixture root.");

@@ -20,6 +20,11 @@ import type { ServiceContext } from "./service-context.js";
 import { SkillImportService } from "./skill-import-service.js";
 import { getSettings, updateSettings, type SettingsRuntimeDependencies } from "./settings-auth-service.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 interface TempHarness {
   rootDir: string;
   storage?: Storage;

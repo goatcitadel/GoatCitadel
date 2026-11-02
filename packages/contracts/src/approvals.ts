@@ -86,6 +86,15 @@ export interface ShellCommandExplanation {
   readonly highestRisk: ShellRiskLevel;
 }
 
+/** Companion-only view derived for a pending browser errand approval read. */
+export interface ErrandPhoneApprovalView {
+  line: string;
+  /** The page's origin and path, passed through public secret projection. */
+  page?: string;
+  /** Authenticated relative URL; fetching revalidates the approval and the exact attachment bytes. */
+  screenshot?: { mimeType: "image/png"; sha256: string; url: string };
+}
+
 export interface ApprovalRequest {
   /** Derived from canonical resolution events; absence means legacy/unknown. */
   resolutionOutcome?: ApprovalResolutionOutcome;

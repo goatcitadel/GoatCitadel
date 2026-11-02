@@ -31,6 +31,11 @@ function buildService(): LlmService {
 
 // Shape mirrors OpenRouter GET /models: display name in `name`, context size in
 // `context_length`, completion cap nested under `top_provider`.
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const OPENROUTER_MODELS_FIXTURE = {
   data: [
     {
