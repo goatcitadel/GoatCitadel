@@ -119,6 +119,16 @@ owners the PR touches were consolidated back to their original caps. Every origi
 baseline-owner limit remains unchanged; this does not permit future growth above these
 caps.
 
+Additional operator clarification, November 2: browser errands PR 2 (errands and
+approvals away from the PC) adds files to the same `browser-errands/` folder outside
+`GatewayService`, which stays under its 13132-line limit. Record the dependency/host
+caps of **7/0** for `errand-origin.ts`, **5/0** for `errand-approval-delivery.ts`,
+**4/0** for `errand-approval-press-guard.ts`, **5/0** for `errand-escalation.ts`,
+**5/0** for `errand-escalation-gateway.ts` and **4/0** for `errand-channel-notices.ts`
+as explicit C0 gate-reconciliation scope exceptions. The existing owners the PR touches
+are at or below their original caps. Every original baseline-owner limit remains
+unchanged; this does not permit future growth above these caps.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:
