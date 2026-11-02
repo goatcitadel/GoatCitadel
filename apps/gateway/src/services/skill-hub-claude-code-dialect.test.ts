@@ -131,6 +131,11 @@ describe("hasClaudeCodeShellLines", () => {
     ["a four-backtick fence opened with ````!", "Steps:\n````!\nls\n````\n"],
     ["an inline command after punctuation", "Run it (!`ls`) or quote it >!`pwd`."],
     ["an inline command inside a code block", "```md\nSee !`git log`\n```\n"],
+    ["an inline command that spans a newline", "Check first: !`git\nstatus` then go on."],
+    ["a ```! fence opener in the middle of a line", "Run this: ```!\ngit status\n```\n"],
+    ["a tilde fence opened with ~~~!", "Steps:\n~~~!\nls\n~~~\n"],
+    ["an inline command in a CRLF file", "Intro.\r\n!`ls`\r\n"],
+    ["a fence in a CRLF file", "Steps:\r\n```!\r\nls\r\n```\r\n"],
   ])("finds %s", (_label, markdown) => {
     expect(hasClaudeCodeShellLines(markdown)).toBe(true);
   });
