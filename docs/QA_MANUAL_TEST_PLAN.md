@@ -434,7 +434,6 @@ Routes:
 - `/settings/runtime`
 - `/settings/local-ai`
 - `/settings/workspaces`
-- `/settings/addons` (capability packs only; in the Cockpit, Settings › Advanced, opened from `#addons`)
 - `/settings/integrations` (in the Cockpit, redirects to `/capabilities/connectors/advanced#integration-connections`)
 - `/settings/channels` (in the Cockpit, redirects to `/chat/messaging/advanced`)
 - `/settings/mcp` (in the Cockpit, redirects to `/capabilities/connectors/advanced#mcp-servers`)
@@ -447,7 +446,8 @@ Expected:
 - Page title/label matches route.
 - Route inspector or visible chrome agrees with current route.
 - No page falls back silently to the wrong surface.
-- Experimental pages are labeled experimental: `/library/journey`, `/library/curator`, `/ops/improvement`, `/ops/kanban`, `/settings/personalities`, `/settings/addons`.
+- Experimental pages are labeled experimental: `/library/journey`, `/library/curator`, `/ops/improvement`, `/ops/kanban`, `/settings/personalities`.
+- The retired capability packs addresses (`/settings/addons`, `/settings/advanced#addons`, `/settings/connections#addons`) open Capabilities › Plugins in the Cockpit; Classic `?tab=addons` opens the default page.
 
 Result:
 
@@ -1138,20 +1138,27 @@ Expected:
 
 Result:
 
-### LIB-CAP-03 Capability Packs
+### PLUGIN-01 Plugins
+
+Capability packs were retired; plugins replace them (the old LIB-CAP-03 case).
 
 Steps:
 
-1. Preview local capability pack.
-2. Install/stage a pack if safe.
-3. Export preview/evidence.
-4. Inspect Settings -> Capability packs (`/settings/addons`) and Library -> Capabilities.
+1. Open Capabilities › Plugins (`/capabilities/plugins`) at desktop and phone widths, in light and dark themes.
+2. Open Browser checks from the Built in list and read its panel: what it is, where it comes from, its trust, and Install.
+3. Install Browser checks with "Apply my Settings and Capabilities changes without asking first" off: approve the plugin, then the skill's two steps, in place. Reload once during the skill's steps; the panel says "Install not finished" and resumes.
+4. Check the Skills and Connectors rows say "From Browser checks", and that editing its connector in Advanced setup is refused.
+5. Uninstall Browser checks. With the setting off, approve, wait for the skill to turn off, then press "Finish uninstalling" and approve again.
+6. Try Install from Git with a public repository holding a test plugin (or check a refused host shows its plain line), and Add from folder with the SDK's reference plugin.
+7. Try Add from folder with a hostile fixture folder (a link, a hook that changes what happens).
 
 Expected:
 
-- Pack materialization receipts are review evidence only.
-- Installing/staging does not auto-activate assets.
-- Asset activation remains routed through existing governed lifecycle.
+- Trust reads Built in or Unverified only; there is no Verified tier and no marketplace.
+- A plugin runs no code. Install shows every piece and what it asks first; each piece still takes its own checks, and a skill is never usable before it is switched on.
+- After uninstall, the skill reads "Removed with Browser checks", the connector is gone, and the Playwright host is still allowed.
+- The hostile folder is refused in plain words, and nothing is installed.
+- Known limits hold: with the setting off, uninstalling a plugin whose skill is switched on takes the second pass; Prompt packs and Hooks show no "From Browser checks".
 
 Result:
 

@@ -411,12 +411,16 @@ Revoke the grant.
 Attempt the action again.","Prompt/action: create narrow grant for a safe read-only capability pattern in QA workspace, then ask Chat: Use the granted safe read-only capability to inspect runtime status.","Grant has workspace, surface, risk tier, patterns, budget/count, grantor, reason, expiry, and revocation state.
 Deny-wins policy still overrides grant.
 Revoked or expired grant no longer authorizes the action.",,,,,,,,,,
-LIB-CAP-03,"Library: Agents, Skills, Capabilities",Capability Packs,,,"Preview local capability pack.
-Install/stage a pack if safe.
-Export preview/evidence.
-Inspect Settings -> Add-ons and Library -> Capabilities.","Action: preview a local capability pack using a reference/test pack, stage/install only in QA workspace, then verify no callable entries appear without activation.","Pack materialization receipts are review evidence only.
-Installing/staging does not auto-activate assets.
-Asset activation remains routed through existing governed lifecycle.",,,,,,,,,,
+PLUGIN-01,"Library: Agents, Skills, Capabilities",Plugins,,,"Open Capabilities -> Plugins at desktop and phone widths, light and dark.
+Open Browser checks from the Built in list and read its panel.
+Install it with the skip setting off: approve the plugin, then the skill's two steps; reload once and resume.
+Check Skills and Connectors say From Browser checks; editing its connector in Advanced setup is refused.
+Uninstall it; with the setting off, Finish uninstalling once the skill is off.
+Install from Git and Add from folder with the SDK's reference plugin; try a hostile fixture folder.","Action: install and uninstall Browser checks in a QA workspace, then add the SDK reference plugin from a folder.","Trust reads Built in or Unverified only; no Verified tier.
+A plugin runs no code; each piece takes its own checks.
+After uninstall the skill reads Removed with Browser checks, the connector is gone and the Playwright host stays allowed.
+The hostile folder is refused in plain words.
+Prompt packs and Hooks show no From Browser checks (known limit).",,,,,,,,,,
 LIB-MEM-01,"Library: Memory, Knowledge, Notes","Memory List, Edit, Forget, History",,,"Open /library/memory.
 Create or identify a test memory item.
 Edit it.

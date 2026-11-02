@@ -51,7 +51,7 @@ Both themes are first-class. Contrast: body and placeholder text at least 4.5:1,
 
 ## Status and trust vocabulary
 
-One shared module maps domain states to label, tone, and icon; no raw status string, enum value, ID, URL, API path, or stack trace reaches the screen (IDs appear only in monospace technical slots inside the inspector). Labels operators see: Queued, Running, Waiting on you, Waiting, Paused, Done, Failed, Cancelled, Failed · needs recovery, Needs your input, Needs confirmation, Applying, Verifying, Monitoring, Needs a manual step, Rolling back, Rolled back, Draft, Approved, Approved with edits, Denied, Expired, Withdrawn, Blocked by policy, Couldn't deliver, Outcome unknown. Risk reads Safe, Caution, Danger, Nuclear. Trust reads Built-in, Verified, Reviewed, Not reviewed, Quarantined. Status is never conveyed by color alone.
+One shared module maps domain states to label, tone, and icon; no raw status string, enum value, ID, URL, API path, or stack trace reaches the screen (IDs appear only in monospace technical slots inside the inspector). Labels operators see: Queued, Running, Waiting on you, Waiting, Paused, Done, Failed, Cancelled, Failed · needs recovery, Needs your input, Needs confirmation, Applying, Verifying, Monitoring, Needs a manual step, Rolling back, Rolled back, Draft, Approved, Approved with edits, Denied, Expired, Withdrawn, Blocked by policy, Couldn't deliver, Outcome unknown. Risk reads Safe, Caution, Danger, Nuclear. Trust reads Built-in, Verified, Reviewed, Not reviewed, Quarantined; a plugin's trust reads Built in or Unverified only, with no Verified tier. Status is never conveyed by color alone.
 
 ## Decisions and danger
 

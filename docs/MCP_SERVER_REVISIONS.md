@@ -19,8 +19,8 @@ approvals, credentials or tool inventory.
 Operator authentication remains required. Missing or malformed revisions return
 400; missing targets return 404. Older clients must read and carry the new
 revision. The two synthesized internal servers remain Gateway-owned and cannot
-be edited or deleted from Settings. Existing capability-pack writers carry their
-read revision in addition to the pack owner's review and compensation bindings.
+be edited or deleted from Settings. Capability packs were retired, so no pack
+writer remains.
 
 ## Registry and runtime behavior
 
