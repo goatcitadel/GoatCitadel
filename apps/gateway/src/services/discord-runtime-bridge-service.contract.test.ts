@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
+import { ErrandAlreadyAnsweredError, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import { ConflictError, type ChatSendMessageResponse, type ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   acceptDiscordRuntimeSlashCommand,
@@ -378,6 +378,23 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(response).toContain("Approved approval-1");
   });
 
+  it("answers a raw-token errand approval refusal with the owner-only copy", async () => {
+    const host = createHost();
+    host.resolveApprovalWithRemoteToken = vi.fn(async () => {
+      throw new ErrandOwnerOnlyError();
+    });
+
+    const response = await handleDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      commandText: "/approve grat_secret",
+      sourceCommandId: "interaction-1",
+    });
+
+    expect(response).toBe("Only the owner can answer this.");
+  });
+
   it("passes Discord actor provenance into chat command fallback handling", async () => {
     const host = createHost();
 
@@ -747,6 +764,36 @@ describe("discord-runtime-bridge-service contract behavior", () => {
       channelActorId: "user-1",
     });
     expect(host.resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+  });
+
+  it("says an errand approval typed as /approve was already answered, with no approval id", async () => {
+    const host = createHost();
+    host.resolveApprovalWithRemoteTokenId = vi.fn(async () => {
+      throw new ErrandAlreadyAnsweredError();
+    });
+    await acceptDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      actorId: "user-1",
+      commandText: "/approve grat_super_secret",
+      sourceCommandId: "interaction-approval-answered",
+      room: "channel-1",
+      metadata: { interaction: true },
+    });
+    const acceptedInput = host.acceptMock.mock.calls[0]?.[0];
+
+    await expect(
+      executeDiscordRuntimeInboundCommand(host, {
+        eventType: acceptedInput.eventType,
+        inboundEventId: "inbound-interaction-approval-answered",
+        operationKey: acceptedInput.idempotencyKey,
+        idempotencyKey: acceptedInput.idempotencyKey,
+        channel: acceptedInput.channel,
+        connectionId: acceptedInput.connectionId,
+        bindingTarget: acceptedInput.bindingTarget,
+        message: acceptedInput.message,
+      }),
+    ).resolves.toEqual({ resultText: "This was already answered." });
   });
 
   it("persists only a not-found marker when an approval bearer value is unknown", async () => {

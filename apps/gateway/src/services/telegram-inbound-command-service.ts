@@ -1,5 +1,10 @@
 import type { IntegrationConnectionUpdateInput, PersonalityCatalogResponse } from "@goatcitadel/contracts";
-import { ERRAND_OWNER_ONLY_COPY, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
+import {
+  ERRAND_ALREADY_ANSWERED_COPY,
+  ERRAND_OWNER_ONLY_COPY,
+  ErrandAlreadyAnsweredError,
+  ErrandOwnerOnlyError,
+} from "./browser-errands/errand-approval-press-guard.js";
 import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
 import { normalizeChannelCommandInput } from "./channel-command-contract.js";
 import type { InboundChannelCommandExecutionInput } from "./inbound-channel-event-service.js";
@@ -99,6 +104,10 @@ export async function executeTelegramInboundCommand(
       // Not the owner: the approval stays pending and its token unspent.
       if (error instanceof ErrandOwnerOnlyError) {
         return { resultText: ERRAND_OWNER_ONLY_COPY };
+      }
+      // An errand approval answered elsewhere, or its token spent or expired: no approval id reaches the chat.
+      if (error instanceof ErrandAlreadyAnsweredError) {
+        return { resultText: ERRAND_ALREADY_ANSWERED_COPY };
       }
       throw error;
     }

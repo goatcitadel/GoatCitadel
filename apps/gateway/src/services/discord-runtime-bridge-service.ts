@@ -14,7 +14,12 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
-import { ERRAND_OWNER_ONLY_COPY, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
+import {
+  ERRAND_ALREADY_ANSWERED_COPY,
+  ERRAND_OWNER_ONLY_COPY,
+  ErrandAlreadyAnsweredError,
+  ErrandOwnerOnlyError,
+} from "./browser-errands/errand-approval-press-guard.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { ChatCommandOptions } from "./chat-command-service.js";
 import {
@@ -464,6 +469,10 @@ export async function executeDiscordRuntimeInboundCommand(
       if (error instanceof ErrandOwnerOnlyError) {
         return { resultText: ERRAND_OWNER_ONLY_COPY };
       }
+      // An errand approval answered elsewhere, from a button or the slash command: no approval id reaches the reply.
+      if (error instanceof ErrandAlreadyAnsweredError) {
+        return { resultText: ERRAND_ALREADY_ANSWERED_COPY };
+      }
       // A spent or expired token, or an approval answered elsewhere: the press changes nothing.
       if (button && error instanceof ConflictError) {
         return { resultText: DISCORD_APPROVAL_BUTTON_COPY.alreadyAnswered };
@@ -552,12 +561,21 @@ export async function handleDiscordRuntimeSlashCommand(
     if (!normalizedCommand.approvalToken) {
       return `Use ${normalizedCommand.command} <action-token> from an approval message.`;
     }
-    const result = await host.resolveApprovalWithRemoteToken({
-      token: normalizedCommand.approvalToken,
-      connectorId: `integration:${input.connectionId}`,
-      decision: normalizedCommand.approvalDecision,
-      resolvedBy: `discord:${input.actorId}`,
-    });
+    let result: ApprovalResolveResult;
+    try {
+      result = await host.resolveApprovalWithRemoteToken({
+        token: normalizedCommand.approvalToken,
+        connectorId: `integration:${input.connectionId}`,
+        decision: normalizedCommand.approvalDecision,
+        resolvedBy: `discord:${input.actorId}`,
+      });
+    } catch (error) {
+      // A raw token never answers an errand approval from a channel; the approval stays pending.
+      if (error instanceof ErrandOwnerOnlyError) {
+        return ERRAND_OWNER_ONLY_COPY;
+      }
+      throw error;
+    }
     return renderDiscordApprovalResolution(result, normalizedCommand.approvalDecision);
   }
   if (

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
-import { ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
+import { ConflictError } from "@goatcitadel/contracts";
+import { ErrandAlreadyAnsweredError, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import type { InboundChannelCommandExecutionInput } from "./inbound-channel-event-service.js";
 import {
   executeTelegramInboundCommand,
@@ -118,6 +119,24 @@ describe("executeTelegramInboundCommand", () => {
 
     expect(result.resultText).toBe("Only the owner can answer this.");
     expect(resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith(expect.objectContaining({ channelActorId: "777" }));
+  });
+
+  it("says an errand approval was already answered, with no approval id", async () => {
+    const { host, resolveApprovalWithRemoteTokenId } = createHost();
+    resolveApprovalWithRemoteTokenId.mockRejectedValueOnce(new ErrandAlreadyAnsweredError());
+
+    const result = await executeTelegramInboundCommand(host, createApprovalInput());
+
+    expect(result.resultText).toBe("This was already answered.");
+  });
+
+  it("leaves a conflict on any other approval to the durable command owner", async () => {
+    const { host, resolveApprovalWithRemoteTokenId } = createHost();
+    resolveApprovalWithRemoteTokenId.mockRejectedValueOnce(
+      new ConflictError({ message: "Approval approval-9 is already resolved" }),
+    );
+
+    await expect(executeTelegramInboundCommand(host, createApprovalInput())).rejects.toBeInstanceOf(ConflictError);
   });
 
   it("replies to an errand approval answer without an approval id", async () => {

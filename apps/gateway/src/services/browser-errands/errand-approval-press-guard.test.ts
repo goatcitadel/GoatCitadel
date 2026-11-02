@@ -1,10 +1,18 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DiscordPairingRecord } from "@goatcitadel/contracts";
+import { ConflictError } from "@goatcitadel/contracts";
 import {
+  resolveApprovalWithRemoteToken,
   resolveApprovalWithRemoteTokenId,
   type ApprovalRemoteActionContext,
 } from "../approval-remote-action-service.js";
-import { createErrandPressGuard, ERRAND_OWNER_ONLY_COPY, ErrandOwnerOnlyError } from "./errand-approval-press-guard.js";
+import {
+  createErrandPressGuard,
+  ERRAND_ALREADY_ANSWERED_COPY,
+  ERRAND_OWNER_ONLY_COPY,
+  ErrandAlreadyAnsweredError,
+  ErrandOwnerOnlyError,
+} from "./errand-approval-press-guard.js";
 
 const OWNER = "1001";
 const FRIEND = "2002";
@@ -142,5 +150,69 @@ describe("errand approval buttons answer only to the owner", () => {
     await expect(guard({ connectorId: "mission-control", actorId: OWNER })).rejects.toBeInstanceOf(
       ErrandOwnerOnlyError,
     );
+  });
+});
+
+describe("an errand approval answered elsewhere", () => {
+  const spent = new ConflictError({
+    message: "Approval approval-1 was resolved by a different actor or remote token.",
+  });
+
+  it("reaches the channel as already answered, without the approval id", async () => {
+    const { press, consume } = setup("browser.errand.action", "telegram");
+    consume.mockImplementationOnce(async () => {
+      throw spent;
+    });
+    const refusal = await press(OWNER).catch((error: unknown) => error);
+    expect(refusal).toBeInstanceOf(ErrandAlreadyAnsweredError);
+    expect(refusal).toBeInstanceOf(ConflictError);
+    expect((refusal as Error).message).toBe(ERRAND_ALREADY_ANSWERED_COPY);
+    expect((refusal as Error).message).not.toContain("approval-1");
+  });
+
+  it("leaves another approval's conflict as it was", async () => {
+    const { press, consume } = setup("tool.exec", "telegram");
+    consume.mockImplementationOnce(async () => {
+      throw spent;
+    });
+    await expect(press(FRIEND)).rejects.toBe(spent);
+  });
+});
+
+describe("a raw action token typed into a channel", () => {
+  function rawSetup(kind: string) {
+    const consume = vi.fn(async () => {
+      throw CONSUMED;
+    });
+    const findByTokenHash = vi.fn(async () => ({
+      tokenId: "tok-1",
+      approvalId: "approval-1",
+      connectorId: "integration:conn-1",
+    }));
+    const context = {
+      storage: {
+        remoteActionTokens: { findByTokenHash },
+        approvals: { get: async () => ({ approvalId: "approval-1", kind }) },
+      },
+      consumeRemoteActionToken: consume,
+    } as unknown as ApprovalRemoteActionContext;
+    const answer = (connectorId: string) =>
+      resolveApprovalWithRemoteToken(context, { token: "grat_raw", connectorId, decision: "approve" });
+    return { answer, consume, findByTokenHash };
+  }
+
+  it("never answers an errand approval from a channel connection, and leaves the token unspent", async () => {
+    const { answer, consume } = rawSetup("browser.errand.action");
+    await expect(answer("integration:conn-1")).rejects.toBeInstanceOf(ErrandOwnerOnlyError);
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it("goes on for a non-errand approval, or outside a channel connection", async () => {
+    const other = rawSetup("tool.exec");
+    await expect(other.answer("integration:conn-1")).rejects.toBe(CONSUMED);
+    expect(other.consume).toHaveBeenCalledTimes(1);
+    const elsewhere = rawSetup("browser.errand.action");
+    await expect(elsewhere.answer("mission-control")).rejects.toBe(CONSUMED);
+    expect(elsewhere.findByTokenHash).not.toHaveBeenCalled();
   });
 });

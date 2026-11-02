@@ -20,8 +20,11 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenDeliveryOverride } from "./approval-connector-delivery.js";
-import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
-import { ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
+import {
+  asErrandAlreadyAnswered,
+  assertErrandChannelPressMayAnswer,
+  assertErrandRawTokenMayAnswer,
+} from "./browser-errands/errand-approval-press-guard.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { withApprovalFollowUp } from "./approval-follow-up.js";
 import { buildRemoteTokenConsumedObservabilityEffect } from "./approval-observability.js";
@@ -249,6 +252,7 @@ export async function resolveApprovalWithRemoteToken(
     resolvedBy?: string;
   },
 ): Promise<ApprovalResolveResult> {
+  await assertErrandRawTokenMayAnswer(context, input.token, input.connectorId);
   const tokenRecord = await context.consumeRemoteActionToken(input.token, "approval.resolve", {
     claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
     expectedConnectorId: input.connectorId,
@@ -273,34 +277,17 @@ export async function resolveApprovalWithRemoteTokenId(
   if (!connectorId) {
     throw new ValidationError({ message: "Opaque remote action token resolution requires a connector binding." });
   }
-  await assertChannelPressMayAnswer(context, input.tokenId, input.channelActorId);
-  const tokenRecord = await context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
-    claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
-    expectedConnectorId: connectorId,
-  });
-  return resolveApprovalWithConsumedRemoteToken(context, tokenRecord, input);
-}
-
-/** Errand approvals only take an answer from the operator's own account; checked before the token is consumed. */
-async function assertChannelPressMayAnswer(
-  context: ApprovalRemoteActionContext,
-  tokenId: string,
-  actorId: string | undefined,
-): Promise<void> {
-  const tokenRecord = await context.storage.remoteActionTokens.get(tokenId);
-  const approvalId = tokenRecord.approvalId ?? String(tokenRecord.mutation?.approvalId ?? "").trim();
-  if (!approvalId) {
-    return;
+  const errandApproval = await assertErrandChannelPressMayAnswer(context, input.tokenId, input.channelActorId);
+  try {
+    const tokenRecord = await context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
+      claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
+      expectedConnectorId: connectorId,
+    });
+    return await resolveApprovalWithConsumedRemoteToken(context, tokenRecord, input);
+  } catch (error) {
+    // An errand approval answered elsewhere: the channel gets copy without the approval id a conflict may carry.
+    throw errandApproval ? asErrandAlreadyAnswered(error) : error;
   }
-  // A failed read propagates: the token is never consumed on a kind that could not be established.
-  const approval = await context.storage.approvals.get(approvalId);
-  if (!isSelfPolledApprovalKind(approval.kind)) {
-    return;
-  }
-  if (!actorId?.trim() || !context.assertErrandPressOwner) {
-    throw new ErrandOwnerOnlyError();
-  }
-  await context.assertErrandPressOwner({ connectorId: tokenRecord.connectorId, actorId });
 }
 
 function assertApprovalPending(approval: ApprovalRequest): void {
