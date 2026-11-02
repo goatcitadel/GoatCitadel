@@ -1,10 +1,15 @@
+import { createHash } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { claudeCodeSkillMarkdown, writeClaudeCodePluginFixture } from "./claude-code-plugin.test-support.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
-import { readSnapshotPluginManifest } from "./plugin-snapshot-manifest.js";
+import {
+  readInstalledPluginManifest,
+  readSnapshotManifestParse,
+  readSnapshotPluginManifest,
+} from "./plugin-snapshot-manifest.js";
 
 const TREE = "a".repeat(64);
 let dir: string;
@@ -97,3 +102,87 @@ describe("readSnapshotPluginManifest", () => {
     expect((await read()).parsed).toMatchObject({ ok: false, code: "MANIFEST_MISSING" });
   });
 });
+
+describe("the manifest an install and an installed plugin read", () => {
+  const LEARN = { learn: { type: "http", url: "https://learn.microsoft.com/api/mcp" } };
+  const withoutLearn = MCP_SERVER_TEMPLATES.filter((template) => template.templateId !== "microsoft-learn");
+
+  async function writeKit(): Promise<void> {
+    await writeClaudeCodePluginFixture(dir, {
+      pluginJson: { name: "cc-kit" },
+      skills: { a: claudeCodeSkillMarkdown("a") },
+      mcpJson: { mcpServers: LEARN },
+    });
+  }
+
+  function fresh(templates = MCP_SERVER_TEMPLATES) {
+    return readSnapshotManifestParse({ snapshotDir: dir, treeSha256: TREE, templates });
+  }
+
+  it("answers a fresh translation with its text, so a changed catalog gives another hash", async () => {
+    await writeKit();
+    const checked = await fresh();
+    expect(checked).toMatchObject({ ok: true, claudeCode: { translatorVersion: 1 } });
+    if (!checked.ok) return;
+    expect(sha256(checked.claudeCode!.manifestText)).toBe(checked.manifestSha256);
+    expect(checked.manifest.pieces.map((piece) => piece.kind)).toEqual(["skill", "connector"]);
+
+    const later = await fresh(withoutLearn);
+    expect(later).toMatchObject({ ok: true });
+    if (!later.ok) return;
+    expect(later.manifestSha256).not.toBe(checked.manifestSha256);
+  });
+
+  it("answers a GoatCitadel manifest with no translation", async () => {
+    await writeClaudeCodePluginFixture(dir, {
+      skills: { a: claudeCodeSkillMarkdown("a") },
+      files: { "goatcitadel-plugin.json": JSON.stringify(NATIVE) },
+    });
+    const parsed = await fresh();
+    expect(parsed).toMatchObject({ ok: true, manifest: { pluginId: "native-kit" } });
+    expect(parsed).not.toHaveProperty("claudeCode");
+  });
+
+  it("reads an installed plugin's manifest from its record after the translation changes", async () => {
+    await writeKit();
+    const installed = await fresh();
+    if (!installed.ok) throw new Error("The fixture is refused.");
+    const record = {
+      snapshotTreeSha256: TREE,
+      claudeCode: { ...installed.claudeCode!, ignored: [], coverage: { usable: 2, total: 2 } },
+    };
+    const readFresh = vi.fn(() => fresh(withoutLearn));
+
+    const parsed = await readInstalledPluginManifest(TREE, [record], readFresh);
+
+    expect(readFresh).not.toHaveBeenCalled();
+    expect(parsed).toMatchObject({ ok: true, manifestSha256: installed.manifestSha256 });
+    if (!parsed.ok) return;
+    expect(parsed.manifest.pieces.map((piece) => piece.id)).toEqual(installed.manifest.pieces.map((piece) => piece.id));
+  });
+
+  it("decides another plugin's kept connector from the record during an uninstall", async () => {
+    // The uninstall scope reads each other plugin through the same reader: its kept connector still names its template.
+    await writeKit();
+    const installed = await fresh();
+    if (!installed.ok) throw new Error("The fixture is refused.");
+    const other = {
+      snapshotTreeSha256: TREE,
+      claudeCode: { ...installed.claudeCode!, ignored: [], coverage: { usable: 2, total: 2 } },
+    };
+    const parsed = await readInstalledPluginManifest(TREE, [other], () => fresh(withoutLearn));
+    expect(parsed.ok && parsed.manifest.pieces.find((piece) => piece.kind === "connector")).toMatchObject({
+      templateId: "microsoft-learn",
+    });
+  });
+
+  it("reads a record without a kept translation fresh", async () => {
+    const readFresh = vi.fn(async () => ({ ok: false as const, code: "MANIFEST_MISSING" as const, message: "x" }));
+    await readInstalledPluginManifest(TREE, [{ snapshotTreeSha256: TREE }], readFresh);
+    expect(readFresh).toHaveBeenCalledExactlyOnceWith(TREE);
+  });
+});
+
+function sha256(text: string): string {
+  return createHash("sha256").update(text, "utf8").digest("hex");
+}

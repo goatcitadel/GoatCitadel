@@ -187,6 +187,7 @@ export function buildPluginDetailPieces(
       // A piece already there allowed nothing.
       ...(piece.owned && described.hosts ? { hosts: [...described.hosts] } : {}),
       ...(piece.skillSnapshotId ? { skillSnapshotId: piece.skillSnapshotId } : {}),
+      ...(piece.warnings?.length ? { warnings: [...piece.warnings] } : {}),
       state: reading.state,
       ...(reading.pendingApprovalId ? { pendingApprovalId: reading.pendingApprovalId } : {}),
       ...(reading.pendingApprovalId && reading.pendingStep ? { pendingStep: reading.pendingStep } : {}),

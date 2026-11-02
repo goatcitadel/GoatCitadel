@@ -25,6 +25,7 @@ import { EvolutionControlPlaneService, type EvolutionControlPlaneActor } from ".
 import type { McpServerCreateOptions } from "./mcp-server-admin-service.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import { PluginInstallChangePlanAdapter, type PluginInstallSources } from "./plugin-install-change-plan-adapter.js";
+import type { SnapshotManifestParse } from "./plugin-snapshot-manifest.js";
 import { PluginSnapshotChangedError } from "./plugin-snapshot-store.js";
 
 // One plugin install over the real Change Plan control plane, on a migrated SQLite ledger, with the plugin store's real
@@ -232,7 +233,9 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
     verifySnapshot: vi.fn(async (treeSha256: string) => {
       if (treeSha256 !== TREE_SHA256 || state.tampered) throw new PluginSnapshotChangedError();
     }),
-    readManifest: vi.fn(async (_treeSha256: string) => parsePluginManifest(state.manifestText)),
+    readManifest: vi.fn(
+      async (_treeSha256: string): Promise<SnapshotManifestParse> => parsePluginManifest(state.manifestText),
+    ),
     readSnapshotText: vi.fn(async (_treeSha256: string, relativePath: string) => {
       const text = state.files[relativePath];
       if (text === undefined) throw new Error(`No ${relativePath} in the snapshot.`);

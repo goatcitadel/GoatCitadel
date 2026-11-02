@@ -424,6 +424,54 @@ describe("a plugin's detail", () => {
     expect(sources.readInstallPlanStatus).not.toHaveBeenCalled();
   });
 
+  it("keeps the left-out list, coverage and warnings on the installed plugin", async () => {
+    const ignored = [{ path: "commands/go.md", kind: "command" as const, label: "go", reason: "A command." }];
+    const claudeCode = {
+      translatorVersion: 1,
+      pluginJsonSha256: "e".repeat(64),
+      manifestText: "{}",
+      ignored,
+      coverage: { usable: 5, total: 6 },
+    };
+    const pieces = record().pieces.map((piece) =>
+      piece.kind === "skill" ? { ...piece, warnings: ["Placeholders reach the model as written."] } : piece,
+    );
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [record({ sourceFormat: "claude_code", claudeCode, pieces })]),
+    });
+
+    const detail = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+
+    expect(detail).toMatchObject({
+      sourceFormat: "claude_code",
+      ignored,
+      claudeCode: { translatorVersion: 1, pluginJsonSha256: "e".repeat(64), coverage: { usable: 5, total: 6 } },
+    });
+    // The kept text stays on the record; the detail never answers it.
+    expect(detail.claudeCode).not.toHaveProperty("manifestText");
+    expect(detail.pieces.map((piece) => piece.warnings)).toEqual([
+      ["Placeholders reach the model as written."],
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+    ]);
+  });
+
+  it("lists a Claude Code plugin with its format", async () => {
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [record({ sourceFormat: "claude_code" }), record({ pluginId: "native-kit" })]),
+    });
+
+    const { installed } = await service.list();
+
+    expect(installed.map((item) => [item.pluginId, item.sourceFormat])).toEqual([
+      [PLUGIN_ID, "claude_code"],
+      ["native-kit", undefined],
+    ]);
+    expect(installed[1]).not.toHaveProperty("sourceFormat");
+  });
+
   it("names the hosts a connector it added allowed, and none for a connector that was already there", async () => {
     const added = await routeService().service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
     // The uninstall's confirmation says these stay in the allowlist.

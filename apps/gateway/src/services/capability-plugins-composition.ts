@@ -35,7 +35,7 @@ import { TEMP_REMOVAL_OPTIONS, lookUpHostAddresses } from "./hardened-git.js";
 import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { PluginInstallChangePlanAdapter } from "./plugin-install-change-plan-adapter.js";
-import { listBuiltInPluginManifests, readPluginManifestFile, reservedPluginIds } from "./plugin-manifest-file.js";
+import { listBuiltInPluginManifests, reservedPluginIds } from "./plugin-manifest-file.js";
 import {
   readApprovalReading,
   readPluginSkillChecks,
@@ -48,6 +48,7 @@ import {
   PluginSnapshotStore,
   SNAPSHOT_SWEEP_GRACE_MS,
 } from "./plugin-snapshot-store.js";
+import { readInstalledPluginManifest, readSnapshotManifestParse } from "./plugin-snapshot-manifest.js";
 import { fetchPluginSource, folderSourcesAllowed } from "./plugin-source-service.js";
 import { PluginUninstallChangePlanAdapter } from "./plugin-uninstall-change-plan-adapter.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
@@ -56,6 +57,8 @@ import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hu
 
 const log = logger.child("capability-plugins");
 const { reportUndecidedSecrets, reportFailedSecretDelete } = pluginSecretLogs(log);
+/** Where a translator fault's detail goes when an install or a detail translates a Claude Code plugin again. */
+const translatorLog = { warn: (details: Record<string, unknown>, message: string) => log.warn(message, details) };
 /** What a version may hold to name a review key: the review's own key characters, kept short. */
 const GATEWAY_VERSION_PATTERN = /^[0-9A-Za-z.+-]{1,64}$/u;
 
@@ -200,7 +203,17 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     readPlugin: (pluginId) => store.get(pluginId),
     updatePlugin: (pluginId, change) => store.update(pluginId, change),
     verifySnapshot: (treeSha256) => snapshots.verify(treeSha256),
-    readManifest: (treeSha256) => readPluginManifestFile(resolveCheckedSnapshot(snapshots, treeSha256)),
+    // Fresh: a Claude Code plugin is translated again, with today's catalog, so an install never trusts a kept manifest.
+    readManifest: (treeSha256) =>
+      readSnapshotManifestParse({
+        snapshotDir: resolveCheckedSnapshot(snapshots, treeSha256),
+        treeSha256,
+        templates: MCP_SERVER_TEMPLATES,
+        log: translatorLog,
+      }),
+    // An installed plugin's own: its record's kept translation first, so a later release doesn't change what it reads.
+    readInstalledManifest: async (treeSha256) =>
+      await readInstalledPluginManifest(treeSha256, await store.list(), (tree) => shared.readManifest(tree)),
     readSnapshotText: (treeSha256, relativePath) =>
       readSnapshotText(resolveCheckedSnapshot(snapshots, treeSha256, relativePath)),
     listBuiltInPluginIds: async () => reservedPluginIds(await listBuiltInPluginManifests(builtInRoot)),
@@ -288,7 +301,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     readInstallPlanStatus: async (workspaceId, planId, actorId) =>
       (await plans.get({ workspaceId, actorId, surface: "capabilities" }, planId)).status,
     readApproval: (approvalId) => readApproval(approvalId),
-    readManifest: (treeSha256) => shared.readManifest(treeSha256),
+    readManifest: (treeSha256) => shared.readInstalledManifest(treeSha256),
     readSnapshotText: (treeSha256, relativePath) => shared.readSnapshotText(treeSha256, relativePath),
     inspect: (input) => inspection.inspect(input),
     readInspection: async (inspectionId) => (await store.getInspection(inspectionId))?.inspection,

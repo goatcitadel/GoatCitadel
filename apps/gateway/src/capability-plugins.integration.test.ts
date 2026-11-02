@@ -297,7 +297,7 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
     expectNoTempCopies(root);
   });
 
-  it("checks a Claude Code plugin folder, reads it back, and refuses to install it for now", async () => {
+  it("checks a Claude Code plugin folder and reads it back, installing nothing", async () => {
     const pluginDir = path.join(root, "sources", "cc-notes");
     writeFiles(pluginDir, {
       ".claude-plugin/plugin.json": JSON.stringify({ name: "cc-notes", description: "Notes from Claude Code." }),
@@ -340,14 +340,6 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
     const readBack = await inject("GET", `${INSPECTIONS_URL}/${inspection.inspectionId}`);
     expect(readBack.statusCode, readBack.body).toBe(200);
     expect(readBack.json()).toEqual(inspection);
-
-    const install = await inject("POST", "/api/v1/capabilities/plugins/install", {
-      workspaceId: WORKSPACE_ID,
-      inspectionId: inspection.inspectionId,
-    });
-    expect(install.statusCode, install.body).toBe(409);
-    expect(install.body).toContain("Claude Code plugins can be checked here, but not installed yet.");
-    expect(install.body).toContain("CLAUDE_CODE_INSTALL_NOT_READY");
 
     // Nothing was installed. The new paths are the snapshot and the skill's check, as for any plugin.
     expect(await readOwners()).toEqual(ownersBefore);

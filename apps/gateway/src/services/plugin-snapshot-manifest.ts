@@ -16,6 +16,7 @@ import {
   type ClaudeCodeTranslation,
   type ClaudeCodeTranslatorLog,
 } from "./claude-code-plugin-translator.js";
+import type { StoredClaudeCodeImport, StoredPlugin } from "./capability-plugin-store.js";
 import { readPluginManifestFile } from "./plugin-manifest-file.js";
 
 // Which manifest a plugin snapshot is read from. GoatCitadel's own `goatcitadel-plugin.json` always wins; a Claude Code
@@ -65,6 +66,67 @@ export async function readSnapshotPluginManifest(input: {
     parsed: parsePluginManifest(translation.manifestText),
     translation,
     ignored: translation.ignored,
+  };
+}
+
+/** A manifest read, and, for a Claude Code plugin, the translation it came from. */
+export type SnapshotManifestParse = PluginManifestParse & {
+  claudeCode?: Omit<StoredClaudeCodeImport, "ignored" | "coverage">;
+};
+
+/**
+ * The manifest a snapshot holds now, read fresh: GoatCitadel's own, or a new translation of a Claude Code plugin with
+ * today's translator and connector catalog. What an install checks against the inspected manifest's hash. The read is
+ * keyed by the tree alone; a built-in plugin's snapshot always holds goatcitadel-plugin.json, which wins.
+ */
+export async function readSnapshotManifestParse(input: {
+  snapshotDir: string;
+  treeSha256: string;
+  templates: readonly McpServerTemplateRecord[];
+  log?: ClaudeCodeTranslatorLog;
+}): Promise<SnapshotManifestParse> {
+  const reading = await readSnapshotPluginManifest({ ...input, sourceKind: "folder" });
+  if (reading.format !== "claude_code" || !reading.translation || !reading.parsed.ok) return reading.parsed;
+  const { translation } = reading;
+  return {
+    ...reading.parsed,
+    claudeCode: {
+      translatorVersion: CLAUDE_CODE_TRANSLATOR_VERSION,
+      pluginJsonSha256: translation.pluginJsonSha256,
+      manifestText: translation.manifestText,
+    },
+  };
+}
+
+/**
+ * The manifest an installed plugin was installed from: an installed Claude Code plugin's kept text when a record with
+ * this tree holds one, else the fresh read. A caller still compares the hash with the record's `manifestSha256`.
+ */
+export async function readInstalledPluginManifest(
+  treeSha256: string,
+  plugins: readonly Pick<StoredPlugin, "snapshotTreeSha256" | "claudeCode">[],
+  readFresh: (treeSha256: string) => Promise<PluginManifestParse>,
+): Promise<PluginManifestParse> {
+  const kept = plugins.find((plugin) => plugin.snapshotTreeSha256 === treeSha256 && plugin.claudeCode?.manifestText);
+  return kept?.claudeCode ? parsePluginManifest(kept.claudeCode.manifestText) : await readFresh(treeSha256);
+}
+
+/**
+ * What an installed Claude Code plugin's record keeps: the translation read again when the plan bound (whose hash is
+ * the checked one), with the left-out list and coverage from the check. A GoatCitadel plugin keeps none of it.
+ */
+export function claudeCodeRecordFields(
+  inspection: Pick<CapabilityPluginInspection, "sourceFormat" | "claudeCode" | "ignored">,
+  translation: SnapshotManifestParse["claudeCode"],
+): Pick<StoredPlugin, "sourceFormat" | "claudeCode"> {
+  if (inspection.sourceFormat !== "claude_code" || !translation || !inspection.claudeCode) return {};
+  return {
+    sourceFormat: "claude_code",
+    claudeCode: {
+      ...translation,
+      ignored: inspection.ignored.map((part) => ({ ...part })),
+      coverage: { ...inspection.claudeCode.coverage },
+    },
   };
 }
 

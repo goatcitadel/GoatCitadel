@@ -23,6 +23,7 @@ import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import type { PluginInstallSources } from "./plugin-install-change-plan-adapter.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
 import type { KeptPluginInspection } from "./plugin-plan-support.js";
+import type { SnapshotManifestParse } from "./plugin-snapshot-manifest.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
 import type { PluginInstallSettingsUpdate } from "./settings-auth-service.js";
 
@@ -111,7 +112,10 @@ export interface PluginInstallShared {
     change: (current: StoredPlugin | undefined) => StoredPlugin | undefined,
   ): Promise<void>;
   verifySnapshot(treeSha256: string): Promise<void>;
-  readManifest(treeSha256: string): Promise<PluginManifestParse>;
+  /** The snapshot's manifest read fresh: a Claude Code plugin is translated again. */
+  readManifest(treeSha256: string): Promise<SnapshotManifestParse>;
+  /** An installed plugin's manifest: its record's kept translation first, else the fresh read. */
+  readInstalledManifest(treeSha256: string): Promise<PluginManifestParse>;
   readSnapshotText(treeSha256: string, relativePath: string): Promise<string>;
   listBuiltInPluginIds(): Promise<readonly string[]>;
   storeHookSecret(value: string): string;

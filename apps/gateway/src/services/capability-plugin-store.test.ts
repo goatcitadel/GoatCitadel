@@ -101,6 +101,43 @@ function plugin(pluginId: string, overrides: Partial<StoredPlugin> = {}): Stored
 }
 
 describe("CapabilityPluginStore", () => {
+  it("reads a record saved before Phase 5", async () => {
+    const rows = new SettingRows();
+    // A row as Phase 4 wrote it: no format, no kept translation, no piece warnings.
+    const old = plugin("meeting-tools", { pieces: [{ pieceId: "notes", kind: "skill", owned: true }] });
+    rows.record = {
+      key: CAPABILITY_PLUGINS_SETTING_KEY,
+      value: { version: 1, plugins: [old], inspections: [] },
+      updatedAt: "t0",
+    };
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+
+    const read = await store.get("meeting-tools");
+
+    expect(read).toEqual(old);
+    expect(read).not.toHaveProperty("sourceFormat");
+    expect(read).not.toHaveProperty("claudeCode");
+  });
+
+  it("keeps a Claude Code plugin's kept translation and piece warnings through a write", async () => {
+    const store = new CapabilityPluginStore(new SettingRows(), () => new Date(NOW));
+    const record = plugin("cc-notes", {
+      sourceFormat: "claude_code",
+      claudeCode: {
+        translatorVersion: 1,
+        pluginJsonSha256: "e".repeat(64),
+        manifestText: "{}",
+        ignored: [{ path: "commands/go.md", kind: "command", label: "go", reason: "A command." }],
+        coverage: { usable: 1, total: 2 },
+      },
+      pieces: [{ pieceId: "notes", kind: "skill", owned: true, warnings: ["A line."] }],
+    });
+
+    await store.update("cc-notes", () => record);
+
+    expect(await store.get("cc-notes")).toEqual(record);
+  });
+
   it("keeps the newest 50 inspections and drops expired ones", async () => {
     const rows = new SettingRows();
     let now = NOW;
