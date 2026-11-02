@@ -16,7 +16,6 @@ import type { ApprovalEffectsService } from "./approval-resolution-effects-servi
 import type { ApprovalRuntimeService } from "./approval-runtime-service.js";
 import type { AssemblyService } from "./assembly-service.js";
 import type { BackupRetentionService } from "./backup-retention-service.js";
-import type { CapabilityPackService } from "./capability-pack-service.js";
 import type { CapabilitySystemService } from "./capability-system-service.js";
 import type { ChatProjectService } from "./chat-project-service.js";
 import type { ChatSessionStatusService } from "./chat-session-status-service.js";
@@ -86,7 +85,6 @@ export interface GatewayRouteCompositionPort {
   readonly approvalRuntime: ApprovalRuntimeService;
   readonly assemblyService: AssemblyService;
   readonly backupRetentionService: BackupRetentionService;
-  readonly capabilityPackService: CapabilityPackService;
   readonly capabilityScopeResolver: CapabilityScopeResolver;
   readonly capabilitySystemService: CapabilitySystemService;
   readonly chatCompactionBreakerActionService: ChatCompactionBreakerActionService;
@@ -278,7 +276,6 @@ export type GatewayRouteCompositionPrivateDependencies = Pick<
   | "approvalRuntime"
   | "assemblyService"
   | "backupRetentionService"
-  | "capabilityPackService"
   | "capabilityScopeResolver"
   | "capabilitySystemService"
   | "chatCompactionBreakerActionService"
@@ -323,7 +320,6 @@ export function createGatewayRouteCompositionPort(
     approvalRuntime: privateDependencies.approvalRuntime,
     assemblyService: privateDependencies.assemblyService,
     backupRetentionService: privateDependencies.backupRetentionService,
-    capabilityPackService: privateDependencies.capabilityPackService,
     capabilityScopeResolver: privateDependencies.capabilityScopeResolver,
     capabilitySystemService: privateDependencies.capabilitySystemService,
     chatCompactionBreakerActionService: privateDependencies.chatCompactionBreakerActionService,

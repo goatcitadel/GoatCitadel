@@ -39,6 +39,17 @@ describe("Evolution Control Plane governed route inventory", () => {
     }
   });
 
+  // Capability packs were replaced by plugins: only the generic create route can still name the kind, and it is refused.
+  it("keeps the retired capability pack kind off Chat", () => {
+    expect(EVOLUTION_GOVERNED_MUTATION_INVENTORY.find((entry) => entry.kind === "capability_pack")).toEqual({
+      kind: "capability_pack",
+      owner: "capability_packs_retired",
+      canonicalEntryPoints: ["POST /api/v1/change-plans"],
+      compatibilityEntryPoints: [],
+      mutationBoundary: "RetiredCapabilityPackChangePlanAdapter.apply",
+    });
+  });
+
   // A connector install is the operator's own Capabilities action, so neither the generic API nor a model can start one.
   it("keeps a connector install on its own operator route", () => {
     const install = EVOLUTION_GOVERNED_MUTATION_INVENTORY.find((entry) => entry.kind === "connector_install");

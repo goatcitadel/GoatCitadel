@@ -31,7 +31,8 @@ export type GoatErrorCode =
   | "SECRET_STORE_UNAVAILABLE"
   | "TURN_CANCELLED"
   | "PLUGIN_OWNED"
-  | "PLUGIN_ID_RESERVED";
+  | "PLUGIN_ID_RESERVED"
+  | "CAPABILITY_PACKS_RETIRED";
 
 // ---------------------------------------------------------------------------
 // Base class

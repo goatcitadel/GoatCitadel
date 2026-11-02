@@ -66,7 +66,7 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
   },
   {
     id: "self-configuration.comparison-owner-tests",
-    title: "First-task evidence, workflow skill capture, and governed pack installation",
+    title: "First-task evidence, workflow skill capture, and retired capability pack plans",
     subsystem: "gateway",
     cwd: "apps/gateway",
     args: ["exec", "node", "../../node_modules/vitest/vitest.mjs", "run",
@@ -75,10 +75,7 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/services/onboarding-first-task-service.test.ts",
       "src/routes/onboarding.test.ts",
       "src/services/workflow-skill-capture-service.test.ts",
-      "src/services/capability-pack-service.test.ts",
-      "src/services/capability-pack-change-plan-adapter.test.ts",
-      "src/services/capability-pack-compensation.test.ts",
-      "src/routes/capability-packs.test.ts"],
+      "src/services/retired-capability-pack-change-plan-adapter.test.ts"],
   },
   {
     id: "self-configuration.storage-durable-tests",

@@ -232,6 +232,7 @@ export class EvolutionControlPlaneService {
     await this.requireEnabled();
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
+    this.refuseRetired(current);
     const action = requirePendingAction(current, "confirmation", actionNonce);
     if (isExpired(current)) return await this.expire(current, actor.actorId);
     if (action.purpose === "rollback") {
@@ -284,6 +285,7 @@ export class EvolutionControlPlaneService {
     await this.requireEnabled();
     const current = await this.get(actor, planId);
     requireRevision(current, input.expectedRevision);
+    this.refuseRetired(current);
     if (current.requiredAction?.kind === "approval") {
       const action = requirePendingAction(current, "approval", input.actionNonce);
       if (action.actionId !== input.actionId) {
@@ -364,6 +366,7 @@ export class EvolutionControlPlaneService {
     await this.requireEnabled();
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
+    this.refuseRetired(current);
     if (!isOwnerInputActionKind(receipt.actionKind)) {
       throw new ValidationError({ message: "Change Plan owner input receipt kind is invalid." });
     }
@@ -472,6 +475,7 @@ export class EvolutionControlPlaneService {
   ): Promise<ChangePlanRecord> {
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
+    this.refuseRetired(current);
     if (["applying", "verifying", "monitoring", "rolling_back"].includes(current.status)) {
       throw new ConflictError({
         message: "This Change Plan crossed its live-effect boundary. Use rollback instead of cancellation.",
@@ -503,6 +507,7 @@ export class EvolutionControlPlaneService {
   ): Promise<ChangePlanRecord> {
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
+    this.refuseRetired(current);
     const adapter = this.requireMatchingAdapter(current);
     // A kind another action undoes says so (a plugin install: uninstall the plugin), rather than "no rollback".
     if (adapter.rollbackRefusal) throw new ConflictError({ message: adapter.rollbackRefusal });
@@ -514,10 +519,7 @@ export class EvolutionControlPlaneService {
     }
     const action = this.actions().confirmation({
       title: `Rollback ${current.title}`,
-      confirmationText:
-        current.kind === "capability_pack"
-          ? "Disable only MCP changes still owned by this pack. Skills and settings receive separate reversal review plans. Preserve pre-existing installations and later operator edits."
-          : "Apply only the recovery material already bound to this Change Plan.",
+      confirmationText: "Apply only the recovery material already bound to this Change Plan.",
       purpose: "rollback",
     });
     const pending = await this.deps.repository.transition(current.planId, {
@@ -532,7 +534,7 @@ export class EvolutionControlPlaneService {
     return pending;
   }
 
-  /** Refresh a monitoring pack from owner evidence without replaying its effects. */
+  /** Kept for old clients: capability packs were retired, so it answers `CAPABILITY_PACKS_RETIRED` for a pack plan. */
   public async verifyMonitoringPlan(
     actor: EvolutionControlPlaneActor,
     planId: string,
@@ -541,13 +543,8 @@ export class EvolutionControlPlaneService {
     await this.requireEnabled();
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
-    if (current.kind !== "capability_pack" || current.status !== "monitoring") {
-      throw new ConflictError({ message: "Only a monitoring capability pack can refresh its owner evidence." });
-    }
-    const adapter = this.requireMatchingAdapter(current);
-    if (!adapter.verify) throw new ServiceUnavailableError("The capability pack verification owner is unavailable.");
-    const outcome = await adapter.verify(this.context(current.origin), current);
-    return this.persistOutcome(actor, adapter, current, outcome, "owner_verification_requested");
+    this.refuseRetired(current);
+    throw new ConflictError({ message: "Only a monitoring capability pack can refresh its owner evidence." });
   }
 
   /** Durable approval signal delivery; llama.cpp approval resumes its exact reviewed plan. */
@@ -870,6 +867,11 @@ export class EvolutionControlPlaneService {
     } catch {
       throw new ServiceUnavailableError(`The ${kind} Change Plan adapter is unavailable.`);
     }
+  }
+
+  /** A retired kind refuses an operator action on its plan before anything is written (capability packs). */
+  private refuseRetired(plan: ChangePlanRecord): void {
+    this.requireAdapter(plan.kind).refuseAction?.();
   }
 
   private requireMatchingAdapter(plan: ChangePlanRecord): RegisteredEvolutionControlPlaneAdapter {
