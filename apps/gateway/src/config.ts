@@ -1527,7 +1527,9 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
       chatSkillInstructionsV1Enabled: featuresInput.chatSkillInstructionsV1Enabled ?? false,
       boundedToolExposureV1Enabled: featuresInput.boundedToolExposureV1Enabled ?? false,
       scheduledChatTurnsV1Enabled: featuresInput.scheduledChatTurnsV1Enabled ?? false,
-      chatExplicitContextV1Enabled: featuresInput.chatExplicitContextV1Enabled ?? false,
+      // Default ON: selected Chat sources reach the model (still only with durable execution and an explicit
+      // per-message selection). Operators can disable it with an explicit false (stored or env).
+      chatExplicitContextV1Enabled: featuresInput.chatExplicitContextV1Enabled ?? true,
       chatAutomaticFanoutV1Enabled: featuresInput.chatAutomaticFanoutV1Enabled ?? false,
       chatDelegationControlsV1Enabled: featuresInput.chatDelegationControlsV1Enabled ?? false,
       proactiveHeartbeatTurnsV1Enabled: featuresInput.proactiveHeartbeatTurnsV1Enabled ?? false,

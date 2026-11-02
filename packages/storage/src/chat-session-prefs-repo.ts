@@ -99,7 +99,8 @@ const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "revision" | "cr
   orchestrationIntensity: "balanced",
   orchestrationVisibility: "summarized",
   orchestrationProviderPreference: "balanced",
-  orchestrationReviewDepth: "standard",
+  // Answer review runs a reviewer model call per turn, so it is opt-in (matches the client's "off" default).
+  orchestrationReviewDepth: "off",
   orchestrationParallelism: "auto",
   codeAutoApply: "aggressive_auto",
 };
@@ -280,7 +281,9 @@ export class ChatSessionPrefsRepository {
       mode: "chat",
       planningMode: input.planningMode ?? current.planningMode,
       providerId: nextProviderId,
-      providerFallbackJson: encodeProviderFallback(input.providerFallback === undefined ? current.providerFallback : input.providerFallback),
+      providerFallbackJson: encodeProviderFallback(
+        input.providerFallback === undefined ? current.providerFallback : input.providerFallback,
+      ),
       model:
         input.model !== undefined ? normalizeOptional(input.model) : providerChanged ? null : (current.model ?? null),
       imageProviderId: nextImageProviderId,
@@ -410,15 +413,24 @@ function encodeProviderFallback(value: ChatProviderFallbackPreference | null | u
 }
 
 function validateProviderFallback(value: unknown): ChatProviderFallbackPreference {
-  if (!isRecord(value) || typeof value.providerId !== "string" || typeof value.model !== "string" ||
+  if (
+    !isRecord(value) ||
+    typeof value.providerId !== "string" ||
+    typeof value.model !== "string" ||
     typeof value.allowLocalToCloud !== "boolean" ||
-    Object.keys(value).some((key) => !["providerId", "model", "allowLocalToCloud"].includes(key))) {
+    Object.keys(value).some((key) => !["providerId", "model", "allowLocalToCloud"].includes(key))
+  ) {
     throw new TypeError("Invalid Chat provider fallback preference");
   }
   const providerId = value.providerId.trim();
   const model = value.model.trim();
-  if (!providerId || providerId.length > 200 || !model || model.length > 300 ||
-    [...providerId + model].some((character) => character.charCodeAt(0) < 32)) {
+  if (
+    !providerId ||
+    providerId.length > 200 ||
+    !model ||
+    model.length > 300 ||
+    [...(providerId + model)].some((character) => character.charCodeAt(0) < 32)
+  ) {
     throw new TypeError("Invalid Chat provider fallback target");
   }
   return { providerId, model, allowLocalToCloud: value.allowLocalToCloud };

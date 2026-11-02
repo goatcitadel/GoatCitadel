@@ -654,16 +654,23 @@ function sourcePicker(page) {
 }
 
 /**
- * The read-only sources strip stays hidden behind the composer toolbar's "Sources: ..." chip.
- * Opening the chip shows the strip; with nothing attached it also opens the source picker directly.
- * Idempotent: an already-visible strip is left open (a second chip click would close it).
+ * The read-only sources strip stays hidden behind the composer's "Sources: ..." control: a pill beside the + once
+ * sources are attached, otherwise a row in the + panel. Opening it shows the strip; with nothing attached it also
+ * opens the source picker directly. Idempotent: an already-visible strip is left open (a second click would close it).
  */
 async function revealSourceStrip(page) {
   const strip = page.locator(SOURCE_STRIP_SELECTOR);
   if (await strip.isVisible()) {
     return { strip, pickerOpenedByChip: false };
   }
-  const chip = page.getByRole("button", { name: /^Sources: /u });
+  let chip = page.getByRole("button", { name: /^Sources: /u });
+  const plus = page.getByRole("button", { name: "Add and options", exact: true });
+  if (!(await chip.count()) && (await plus.count()) && (await plus.getAttribute("aria-expanded")) === "false") {
+    await plus.click();
+    chip = page
+      .getByRole("dialog", { name: "Add and options", exact: true })
+      .getByRole("button", { name: /^Sources: / });
+  }
   await chip.waitFor({ timeout: 60_000 });
   let pickerOpenedByChip = false;
   if ((await chip.getAttribute("aria-expanded")) !== "true") {

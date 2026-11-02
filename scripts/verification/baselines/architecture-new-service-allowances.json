@@ -2720,6 +2720,14 @@
     },
     {
       "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-answer-review.ts",
+      "maxHostCallbacks": 1,
+      "maxDependencyMemberAccesses": 2,
+      "reason": "Operator-approved scope exception (2026-11-01) for Chat's Review answer, absent from the pinned baseline inventory. The setting was stored but never read; when a session turns it on, this owner makes one tool-free, memory-off reviewer call on the turn's route through the Gateway's own chat completion path (bound to the turn's workspace and session so that conversation's hooks govern it, 30 s bound, honours the turn's abort, recorded in the cost ledger as chat_answer_review) and reads the turn's stored tool runs as evidence. Its only reads are that completion call and the tool-run list. A failed review records a fixed reason and never the provider's message, and the turn always completes. It lives outside chat-turn-stream-service.ts and chat-turn-entry-service.ts, which only call it, so their caps are unchanged. Original baseline, inventory and existing-owner caps are unchanged.",
+      "evidence": "2026-11-01: chat-answer-review.test.ts covers one no-tools call on the turn's route with utility cost attribution and a pass recorded, the request bound to the conversation's workspace and session with memory off, issues found and the strict note appended without changing the answer, no review when it is off, for a delegated child, a heartbeat or server-only turn, remote-worker output, a repaired, empty or aborted answer, a provider failure and an unreadable verdict recorded as unavailable without throwing, a provider error quoting a key and a prompt reduced to its HTTP status with neither persisted, timeouts and other failures reduced to fixed sentences, and model-usage accounting errors still propagated; chat-turn-stream-service.test.ts covers the review on the streaming path, the strict note streamed as a delta and saved with the answer, and a failed review completing the turn; repository counters measure 1 host callback and 2 dependency accesses (cap 1 and 2)."
+    },
+    {
+      "planStep": "C0",
       "path": "apps/gateway/src/services/browser-errands/browser-errand-composition.ts",
       "maxHostCallbacks": 0,
       "maxDependencyMemberAccesses": 8,

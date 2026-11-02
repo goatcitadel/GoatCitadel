@@ -3,6 +3,7 @@ import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-e
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
 import { createMailDraftSchema } from "./mail-draft-schema.js";
 import { PAUSE_DORMANT_NO_AGENT_CRON_JOBS_SQLITE_SQL } from "./pause-dormant-no-agent-cron.js";
+import { RESET_CHAT_REVIEW_DEPTH_SQLITE_SQL } from "./chat-review-depth-reset-migration.js";
 import { upgradeChatRoutedContextAdmissionSchema } from "./chat-routed-context-admission-schema.js";
 import { upgradeHeartbeatFeatureBindingSchema } from "./heartbeat-feature-binding-schema.js";
 import { upgradeCommitmentOccurrenceSchema } from "./commitment-occurrence-schema.js";
@@ -7530,6 +7531,16 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
       { version: 273, name: "purge_integration_plugin_records", up: purgeIntegrationPluginRecords },
       // Capabilities records plugin installs and removals as their own plan kinds.
       { version: 274, name: "plugin_install_change_plans", up: upgradeChangePlanPluginInstallSchema },
+      // Answer review now costs a model call per turn; reset the never-read old default once (data only).
+      {
+        version: 275,
+        name: "reset_chat_review_depth",
+        up: (db) => {
+          if (tableExists(db, "chat_session_prefs")) {
+            db.exec(RESET_CHAT_REVIEW_DEPTH_SQLITE_SQL);
+          }
+        },
+      },
     ],
   },
 ];

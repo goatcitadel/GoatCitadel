@@ -19,10 +19,14 @@ export type ComposerSources = {
   onToggle: () => void;
 };
 
+/** Attach and the other controls stay usable while an attachment uploads; only an actual send locks them. */
+export const composerControlsProps = (props: ComposerProps): ComposerProps =>
+  props.attachmentUpload?.pending ? { ...props, sending: false } : props;
+
 /**
- * Everything between the composer notices and the draft: sources, queue, mode and model controls, uploads and media.
- * Wider layouts show it inline, as before. On a phone the queue, attachments, route acknowledgement and upload status
- * stay beside the draft, and the controls move into one "Message options" sheet so the transcript keeps the screen.
+ * Everything above the draft: sources, queue, notices and upload status. Wider layouts keep the controls in the draft
+ * box's own row (the + panel, mode pills, model chip and Send). On a phone the controls move into one
+ * "Message options" sheet so the transcript keeps the screen.
  */
 export function ChatComposerTools({
   props,
@@ -31,6 +35,7 @@ export function ChatComposerTools({
   sources,
   optionsOpen,
   onOptionsOpenChange,
+  onChooseModel,
 }: {
   props: ComposerProps;
   phone: boolean;
@@ -38,8 +43,10 @@ export function ChatComposerTools({
   sources: ComposerSources;
   optionsOpen: boolean;
   onOptionsOpenChange: (open: boolean) => void;
+  /** Wider layouts: opens the model chip's popover from a notice's "Choose another model". */
+  onChooseModel?: () => void;
 }) {
-  const controlsProps = props.attachmentUpload?.pending ? { ...props, sending: false } : props;
+  const controlsProps = composerControlsProps(props);
   const sourcesPanel = props.externalSourceControls ? (
     <div id={sources.panelId} hidden={!sources.open}>
       <ExternalSourceStrip
@@ -86,9 +93,8 @@ export function ChatComposerTools({
       <>
         {channelConversation ? null : sourcesPanel}
         {queue}
-        {channelConversation ? <ChatComposerNotices props={controlsProps} /> : controls}
+        <ChatComposerNotices props={controlsProps} onChooseModel={channelConversation ? undefined : onChooseModel} />
         <ChatUploadStatus upload={props.attachmentUpload} />
-        {channelConversation ? null : <ChatMediaControls props={props} />}
       </>
     );
   return (
