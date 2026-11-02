@@ -7,6 +7,7 @@ import { getChannelStreamRuntime } from "./channel-stream-runtime-registry.js";
 import type { McpRequesterResolverRegistryInput } from "./mcp-requester-resolution.js";
 import type { CronRunSnapshot } from "./gateway/cron-automation-service.js";
 import type { BrowserSessionRuntimeService } from "./browser-session-runtime-service.js";
+import type { BrowserErrandService } from "./browser-errands/browser-errand-service.js";
 import type { ReviewReadinessService } from "./review-readiness-service.js";
 import type { RuntimeAuthorityProjectionService } from "./runtime-authority-projection-service.js";
 import type { MutationIdempotencyStore } from "./mutation-idempotency-store.js";
@@ -25,6 +26,7 @@ type GatewayLogger = {
 
 export interface GatewayRuntimePort {
   readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
+  readonly browserErrandService: Pick<BrowserErrandService, "getStatus" | "stop">;
   readonly mutationIdempotencyStore: MutationIdempotencyStore;
   readonly reviewReadinessService: ReviewReadinessService;
   readonly runtimeAuthorityProjectionService: RuntimeAuthorityProjectionService;
@@ -130,6 +132,9 @@ function createGatewayRuntimeFacade(gateway: GatewayService): GatewayRuntimeInst
   return {
     get browserSessionRuntimeService() {
       return gateway.browserSessionRuntimeService;
+    },
+    get browserErrandService() {
+      return gateway.browserErrandService;
     },
     get mutationIdempotencyStore() {
       return gateway.mutationIdempotencyStore;

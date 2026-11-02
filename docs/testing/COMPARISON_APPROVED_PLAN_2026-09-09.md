@@ -108,6 +108,17 @@ an explicit C0 gate-reconciliation scope exception, following the October 26
 **3/0** precedent for `mcp-approval-relief.ts`. Every original baseline-owner limit
 remains unchanged; this does not permit future growth above this cap.
 
+Additional operator clarification, November 1: browser errands PR 1 (#695) adds a
+`browser.errand` Chat tool, off by default behind the `browserErrandsEnabled` flag, in
+its own `apps/gateway/src/services/browser-errands/` folder outside `GatewayService`,
+which stays under its 13132-line limit. Record the dependency/host caps of **8/0** for
+`browser-errand-composition.ts`, **12/0** for `browser-errand-service.ts`, **2/0** for
+`browser-errand-test-fixtures.ts`, **23/0** for `errand-approval-gate.ts` and **16/0**
+for `errand-loop.ts` as explicit C0 gate-reconciliation scope exceptions. The existing
+owners the PR touches were consolidated back to their original caps. Every original
+baseline-owner limit remains unchanged; this does not permit future growth above these
+caps.
+
 ### 2. Simplify onboarding through the first useful response
 
 Use the existing guided setup and Change Plans to provide one continuous flow:

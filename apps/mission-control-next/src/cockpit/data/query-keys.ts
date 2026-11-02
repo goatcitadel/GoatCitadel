@@ -119,6 +119,7 @@ export const SETTINGS_READER_KEYS: readonly QueryKey[] = [
   ["system", "settings-web-search"],
   ["system", "settings-approval-mode"],
   ["system", "settings-approval-skip"],
+  ["system", "settings-browser-errands"],
   ["system", "settings-filesystem-write-access"],
   ["system", "first-run-defaults"],
   ["settings", "gateway-auth"],

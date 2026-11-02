@@ -8,6 +8,7 @@ import {
   type ChatWebMode,
 } from "@goatcitadel/contracts";
 import {
+  BROWSER_ERRAND_TOOL_NAME,
   isOfficialResearchSearchInvocation,
   resolveOfficialSearchProviders,
   SUBAGENT_FANOUT_MAX_SUBTASKS,
@@ -534,6 +535,26 @@ export function extendTurnBudgetForExecutedBrowserTool(input: {
     turnBudgetDeadline: input.turnBudgetDeadline + (extendedTurnBudgetMs - input.currentTurnBudgetMs),
     effectiveTurnBudgetMs: extendedTurnBudgetMs,
     effectiveCompletionTimeoutMs: extendedCompletionTimeoutMs,
+  };
+}
+
+/**
+ * A browser errand can run for many minutes while the turn budget is only checked between tool calls. Give the turn
+ * back the time the errand took, so the answer pass after it still runs.
+ */
+export function extendTurnBudgetForBrowserErrand(input: {
+  readonly toolName: string;
+  readonly elapsedMs: number;
+  readonly currentTurnBudgetMs: number;
+  readonly turnBudgetDeadline: number;
+}): { turnBudgetDeadline: number; effectiveTurnBudgetMs: number } {
+  const elapsedMs = Math.max(0, Math.round(input.elapsedMs));
+  if (input.toolName !== BROWSER_ERRAND_TOOL_NAME || elapsedMs === 0) {
+    return { turnBudgetDeadline: input.turnBudgetDeadline, effectiveTurnBudgetMs: input.currentTurnBudgetMs };
+  }
+  return {
+    turnBudgetDeadline: input.turnBudgetDeadline + elapsedMs,
+    effectiveTurnBudgetMs: input.currentTurnBudgetMs + elapsedMs,
   };
 }
 

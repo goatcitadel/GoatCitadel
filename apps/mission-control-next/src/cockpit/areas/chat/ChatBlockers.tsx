@@ -6,6 +6,7 @@ import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useEffect, useRef, useState } from "react";
+import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
@@ -30,6 +31,11 @@ type Blockers = Pick<
   | "onRefreshThread"
 > &
   Partial<Pick<MissionThreadedActiveSessionSurfaceProps, "composerRef">>;
+
+function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefined): string | undefined {
+  const id = preview?.screenshotAttachmentId;
+  return typeof id === "string" && id.trim() ? id.trim() : undefined;
+}
 
 export function ChatBlockers({ props }: { props: Blockers }) {
   const { activeWorkspaceId } = useUiPreferences();
@@ -103,6 +109,11 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       : undefined;
   // Until the evidence matches, Approve stays disabled: say why, as the Inbox detail does, and offer a fresh read.
   const specialistChecking = !specialistQuery.isError && (specialistQuery.isPending || specialistQuery.isFetching);
+  // A browser errand step shows the picture of the page the errand is about to act on, above the decision.
+  const errandScreenshotId =
+    reviewedApproval?.kind === "browser.errand.action" || approval?.kind === "browser.errand.action"
+      ? errandScreenshotAttachmentId(reviewedApproval?.preview)
+      : undefined;
   const input = props.pendingUserInput;
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
@@ -191,6 +202,13 @@ export function ChatBlockers({ props }: { props: Blockers }) {
                 </Button>
               )}
             </div>
+          ) : null}
+          {errandScreenshotId ? (
+            <AttachmentImage
+              attachmentId={errandScreenshotId}
+              alt="The page the browser errand is about to act on"
+              className="mt-2 max-h-72 w-auto max-w-full rounded-md border border-line bg-sunken"
+            />
           ) : null}
           <ChatApprovalRenderer
             approvalId={approval.approvalId}

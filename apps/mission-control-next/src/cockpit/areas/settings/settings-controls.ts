@@ -45,6 +45,9 @@ export const ClaudeCliToolBridgeControl = preloadable(async () => ({
 export const ClaudeCliWarmContinuationControl = preloadable(async () => ({
   default: (await import("./ClaudeCliWarmContinuationControl")).ClaudeCliWarmContinuationControl,
 }));
+export const BrowserErrandsControl = preloadable(async () => ({
+  default: (await import("./BrowserErrandsControl")).BrowserErrandsControl,
+}));
 export const ChatThinkingStreamControl = preloadable(async () => ({
   default: (await import("./ChatThinkingStreamControl")).ChatThinkingStreamControl,
 }));
@@ -131,6 +134,7 @@ const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }
   tools: [
     ApprovalModeControl,
     SettingsApprovalSkipControl,
+    BrowserErrandsControl,
     FilesystemWriteRootsControl,
     ToolGrantSettings,
     SafetyCatalogSummary,
