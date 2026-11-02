@@ -27,10 +27,10 @@ export const CLAUDE_CODE_SETTING_NOT_KEPT = "CLAUDE_CODE_SETTING_NOT_KEPT" as co
 export const SKILL_RUNS_SHELL_COMMANDS = "SKILL_RUNS_SHELL_COMMANDS" as const;
 
 // Claude Code runs these lines before the model reads the skill. A false match costs one skill; a miss hands the model
-// a command, so the patterns lean wide and fail closed: an inline !`command` after anything but a backtick, its body
-// free to span lines; and three or more backticks or tildes followed by `!` anywhere, not only at a line start. CRLF
-// files match the same way. Code blocks are not exempt.
-const INLINE_SHELL_LINE = /(^|[^`])!`[^`]+`/m;
+// a command, so the patterns lean wide and fail closed: an inline !`command` anywhere, whatever comes before it, its
+// body free to span lines; and three or more backticks or tildes followed by `!` anywhere, not only at a line start.
+// CRLF files match the same way. Code blocks are not exempt.
+const INLINE_SHELL_LINE = /!`[^`]+`/;
 const FENCED_SHELL_BLOCK = /(`{3,}|~{3,})!/;
 
 export interface ClaudeCodeFrontmatterReading {

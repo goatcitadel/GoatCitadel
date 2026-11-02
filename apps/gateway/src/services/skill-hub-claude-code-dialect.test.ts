@@ -76,7 +76,7 @@ describe("checkClaudeCodeFrontmatter", () => {
     });
   });
 
-  it("warns only for user-invocable false", () => {
+  it("warns for any user-invocable value but true", () => {
     expect(checkClaudeCodeFrontmatter({ ...BASE, "user-invocable": false })).toEqual({
       ok: true,
       reading: { ignoredKeys: ["user-invocable"], widenedKeys: ["user-invocable"] },
@@ -136,6 +136,8 @@ describe("hasClaudeCodeShellLines", () => {
     ["a tilde fence opened with ~~~!", "Steps:\n~~~!\nls\n~~~\n"],
     ["an inline command in a CRLF file", "Intro.\r\n!`ls`\r\n"],
     ["a fence in a CRLF file", "Steps:\r\n```!\r\nls\r\n```\r\n"],
+    ["an inline command right after inline code", "Run `cmd`!`ls` now."],
+    ["an inline command right after two backticks", "Odd: ``!`ls` here."],
   ])("finds %s", (_label, markdown) => {
     expect(hasClaudeCodeShellLines(markdown)).toBe(true);
   });

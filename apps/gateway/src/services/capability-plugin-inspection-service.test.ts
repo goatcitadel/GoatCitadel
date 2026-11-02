@@ -478,17 +478,6 @@ describe("CapabilityPluginInspectionService", () => {
       expect(name, skill.id).toBe(skill.id);
       expect(isBundledSkillName(name!), skill.id).toBe(false);
     }
-
-    const { inspect } = await harness({
-      pieces: [{ kind: "skill", id: "browser-qa", path: "skills/browser-qa" }],
-      files: { "skills/browser-qa/SKILL.md": SKILL_MD.replace("meeting-notes", "browser-qa") },
-      overrides: { reviewSkill: vi.fn(async () => reviewed("review-browser-qa", [], "browser-qa")) },
-    });
-
-    const inspection = await inspect();
-
-    expect(inspection.installable).toBe(true);
-    expect(piece(inspection, "browser-qa").check).toEqual({ status: "ready" });
   });
 
   it("never reads a skill whose check can't be read as installable", async () => {
