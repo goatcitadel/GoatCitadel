@@ -17,6 +17,13 @@
 // the errand ends `done`. decline: answer "Not now", and it ends `declined`. signin: the window is handed to you
 // (the errand waits on you); sign in, press Hand back, and it ends `done`. The script exits non-zero when the
 // browser.errand tool run does not finish that way, or does not finish within 25 minutes.
+//
+// Channel check (manual; this script does not drive real channels): with a channel connected and your own account
+// marked "This is you" and allowlisted (or still paired), start an errand from that conversation, for example
+// "buy the item from <fixture url>". Expect the approval to arrive there at once with "GoatCitadel wants to: ..." and
+// "Page: ...", the screenshot in a private conversation only, and buttons (Telegram webhook mode, Discord bot mode)
+// or whole-message APPROVE / DENY / STOP replies elsewhere. Then start one at the PC and leave it unanswered for 30
+// seconds: it should also reach the conversation picked in Settings > Tools and the phone.
 import { randomUUID } from "node:crypto";
 import http from "node:http";
 

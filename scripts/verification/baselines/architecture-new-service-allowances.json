@@ -2765,6 +2765,54 @@
       "maxDependencyMemberAccesses": 16,
       "reason": "Operator-approved scope exception (2026-11-01) for browser errands PR 1 (#695), absent from the pinned baseline inventory. Browser errands are a new Chat tool, off by default behind the browserErrandsEnabled flag, that drive GoatCitadel's own Chrome window with a vision model and gate spending, sending, deleting and settings changes behind Gateway approvals. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners it touches (chat-turn-agent-runner.ts, approval-lifecycle-service.ts, approval-resolution-effects-service.ts) were consolidated back to their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file runs the errand model loop (gpt-6.1-sol on the openai-codex subscription) with the computer and hand_over function tools, classifies every action before it runs, enforces the 60-step and 20-minute limits, and keeps only the three most recent screenshots in each request.",
       "evidence": "2026-11-01: errand-loop.test.ts covers the text answer, asking before Place your order, decline, sign-in handover, malformed arguments and empty replies spending a step, the step and time limits, abort, declared-risk batching, control characters refused, and re-classification after approval; repository counters measure 0 host callbacks and 16 dependency accesses (cap 16)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/browser-errands/errand-origin.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 7,
+      "reason": "Operator-approved scope exception (2026-11-02) for browser errands PR 2 (errands and approvals away from the PC), absent from the pinned baseline inventory. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners PR 2 touches (approval-remote-action-service.ts, inbound-channel-event-service.ts, the Discord runtime and bridge, mobile-push-service.ts, settings-auth-service.ts) are at or below their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file decides where an errand came from (the PC or a channel conversation) and whether the sender is the operator's own account, reading the session, its channel binding, the turn's user message and the connection's pairing state.",
+      "evidence": "2026-11-02: errand-origin.test.ts covers PC and desk turns as PC origin, an owner in a Telegram or Discord direct conversation, a non-owner refused, a revoked pairing refused, a spoofed operator actor id refused and every missing-data case failing closed; repository counters measure 0 host callbacks and 7 dependency accesses (cap 7)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/browser-errands/errand-approval-delivery.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Operator-approved scope exception (2026-11-02) for browser errands PR 2 (errands and approvals away from the PC), absent from the pinned baseline inventory. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners PR 2 touches (approval-remote-action-service.ts, inbound-channel-event-service.ts, the Discord runtime and bridge, mobile-push-service.ts, settings-auth-service.ts) are at or below their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file sends one errand approval to a named conversation: it issues a per-connector remote token, builds the plain-text message, attaches the approval's own spotlight screenshot only in a private conversation, and records the delivery for text replies.",
+      "evidence": "2026-11-02: errand-approval-delivery.test.ts covers the errand-kind guard, private-only screenshots with the ownership check, group text with the private-only line, button readiness, fixed failure reasons and the token issued once per connector; repository counters measure 0 host callbacks and 5 dependency accesses (cap 5)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/browser-errands/errand-approval-press-guard.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "Operator-approved scope exception (2026-11-02) for browser errands PR 2 (errands and approvals away from the PC), absent from the pinned baseline inventory. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners PR 2 touches (approval-remote-action-service.ts, inbound-channel-event-service.ts, the Discord runtime and bridge, mobile-push-service.ts, settings-auth-service.ts) are at or below their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file runs the owner check for errand approval button presses and raw-token answers before any token is consumed, failing closed when the sender, the guard or the approval read is missing, and maps an already-spent errand token to a plain already-answered reply.",
+      "evidence": "2026-11-02: errand-approval-press-guard.test.ts and the Telegram and Discord contract tests cover owner and non-owner presses on both channels, missing actor, unreadable approval, raw-token refusal for errand kinds, unchanged behavior for other kinds and the already-answered mapping; repository counters measure 0 host callbacks and 4 dependency accesses (cap 4)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/browser-errands/errand-escalation.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Operator-approved scope exception (2026-11-02) for browser errands PR 2 (errands and approvals away from the PC), absent from the pinned baseline inventory. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners PR 2 touches (approval-remote-action-service.ts, inbound-channel-event-service.ts, the Discord runtime and bridge, mobile-push-service.ts, settings-auth-service.ts) are at or below their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file sends a waiting errand approval out: to the origin conversation right away for a channel errand, and after 30 seconds to the picked conversation (PC errands) and the phone (all errands).",
+      "evidence": "2026-11-02: errand-escalation.test.ts and errand-approval-gate-escalation.test.ts cover immediate channel delivery, the 30-second stage with fake timers, cancellation on answer or stop, re-asks getting their own timer and phone-only fallback with a warning; repository counters measure 0 host callbacks and 5 dependency accesses (cap 5)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/browser-errands/errand-escalation-gateway.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 5,
+      "reason": "Operator-approved scope exception (2026-11-02) for browser errands PR 2 (errands and approvals away from the PC), absent from the pinned baseline inventory. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners PR 2 touches (approval-remote-action-service.ts, inbound-channel-event-service.ts, the Discord runtime and bridge, mobile-push-service.ts, settings-auth-service.ts) are at or below their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file wires escalation to the Gateway: it reads the picked conversation from settings, accepts it only if it is the operator's own private conversation, and enqueues the phone push.",
+      "evidence": "2026-11-02: errand-escalation.test.ts covers group, missing kind, someone else's DM, a revoked pairing and a non-integration binding all refused with the phone push still sent; repository counters measure 0 host callbacks and 5 dependency accesses (cap 5)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/browser-errands/errand-channel-notices.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "Operator-approved scope exception (2026-11-02) for browser errands PR 2 (errands and approvals away from the PC), absent from the pinned baseline inventory. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners PR 2 touches (approval-remote-action-service.ts, inbound-channel-event-service.ts, the Discord runtime and bridge, mobile-push-service.ts, settings-auth-service.ts) are at or below their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file sends plain channel notices for an errand: the sign-in or bot-check pause notice and, for an errand started from a private conversation, its final screenshot.",
+      "evidence": "2026-11-02: errand-channel-notices.test.ts and browser-errand-service-notices.test.ts cover channel and PC timing, cancellation on hand-back, no notice after an errand ended or the Gateway shut down, private-only screenshots and the bot-check copy; repository counters measure 0 host callbacks and 4 dependency accesses (cap 4)."
     }
   ]
 }

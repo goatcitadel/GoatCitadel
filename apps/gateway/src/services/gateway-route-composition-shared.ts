@@ -1,4 +1,4 @@
-import type { LlmRuntimeConfig } from "@goatcitadel/contracts";
+import { NotFoundError, type LlmRuntimeConfig } from "@goatcitadel/contracts";
 import { KnowledgeFacadeService } from "./memory-facade-service.js";
 import { createWorkspacesRoutePort } from "./workspaces-route-service.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
@@ -6,6 +6,11 @@ import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js"
 import * as settingsAuthService from "./settings-auth-service.js";
 import type { GatewayRouteServiceDependencies } from "./gateway-route-services.js";
 import type { GatewayRouteCompositionPort } from "./gateway-route-composition-port.js";
+import type { RuntimeConfigurationChangePlanAdapterDependencies } from "./runtime-configuration-change-plan-adapter.js";
+import {
+  createOwnErrandConversationLookup,
+  type OwnErrandConversation,
+} from "./browser-errands/errand-escalation-gateway.js";
 
 export const DEFAULT_WORKSPACE_ID = "default";
 
@@ -35,15 +40,16 @@ export function getProviderSecretStatusForGateway(
 export function createWorkspacesRoutePortForGateway(
   gateway: GatewayRouteCompositionPort,
 ): GatewayRouteServiceDependencies["workspaces"] {
+  const { guidanceService: guidance } = gateway;
   return createWorkspacesRoutePort({
     storage: gateway.storage,
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload ?? {}),
-    listGlobalGuidance: () => gateway.guidanceService.listGlobalGuidance(),
-    listWorkspaceGuidance: (workspaceId) => gateway.guidanceService.listWorkspaceGuidance(workspaceId),
-    updateGlobalGuidance: (docType, content) => gateway.guidanceService.updateGlobalGuidance(docType, content),
+    listGlobalGuidance: () => guidance.listGlobalGuidance(),
+    listWorkspaceGuidance: (workspaceId) => guidance.listWorkspaceGuidance(workspaceId),
+    updateGlobalGuidance: (docType, content) => guidance.updateGlobalGuidance(docType, content),
     updateWorkspaceGuidance: (workspaceId, docType, content) =>
-      gateway.guidanceService.updateWorkspaceGuidance(workspaceId, docType, content),
+      guidance.updateWorkspaceGuidance(workspaceId, docType, content),
   });
 }
 
@@ -63,7 +69,44 @@ export function createSettingsRuntimeDependenciesForGateway(
     assertFirecrawlRuntimeUpdate: (input) => gateway.assertFirecrawlRuntimeUpdate(input),
     // A partial port (a test's) without the engine holds nothing.
     readPluginToolGroupHolds: () => gateway.policyEngine?.listPluginToolGroupHolds() ?? [],
+    isOwnErrandApprovalConversation: async (sessionId) =>
+      (await findOwnErrandConversation(gateway, sessionId)) !== undefined,
   };
+}
+
+/**
+ * The settings-owner checks the runtime configuration Change Plan adapter runs at prepare, each built from the port
+ * only when it runs: the dry-run of a settings update, and the name of a picked errand approval conversation.
+ */
+export function createRuntimeConfigurationOwnerChecks(
+  port: () => GatewayRouteCompositionPort,
+): Pick<
+  RuntimeConfigurationChangePlanAdapterDependencies,
+  "validateSettingsUpdate" | "errandApprovalConversationTitle"
+> {
+  return {
+    validateSettingsUpdate: async (input) => {
+      await settingsAuthService.buildSettingsCandidate(createSettingsRuntimeDependenciesForGateway(port()), input);
+    },
+    errandApprovalConversationTitle: async (sessionId) => (await findOwnErrandConversation(port(), sessionId))?.title,
+  };
+}
+
+/** The operator's own private conversation behind a session; a session or connection that no longer exists is none. */
+async function findOwnErrandConversation(
+  gateway: GatewayRouteCompositionPort,
+  sessionId: string,
+): Promise<OwnErrandConversation | undefined> {
+  const lookup = createOwnErrandConversationLookup({
+    storage: gateway.storage,
+    readDiscordPairings: () => gateway.readDiscordPairings(),
+  });
+  try {
+    return await lookup(sessionId);
+  } catch (error) {
+    if (error instanceof NotFoundError) return undefined;
+    throw error;
+  }
 }
 
 export function createSettingsAuthRuntimeDependenciesForGateway(

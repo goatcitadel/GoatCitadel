@@ -69,6 +69,8 @@ export async function patchSettings(input: {
   networkAllowlist?: string[];
   /** The https address the internet uses to reach this installation; `null` clears it. Saved on its own. */
   publicWebAddress?: string | null;
+  /** The operator's own private conversation that waiting browser errand approvals go to; `null` clears it. */
+  browserErrandApprovalSessionId?: string | null;
   operatorWriteRootChange?: OperatorWriteRootChange;
   globalToolAccessChange?: GlobalToolAccessChange;
   toolGroupChange?: ToolGroupChange;

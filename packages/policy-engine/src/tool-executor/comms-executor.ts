@@ -187,8 +187,7 @@ async function executeCommsToolWithBoundaryTracking(
     }
     const providerRequest = await hydrateProtectedApprovalActionAtProviderBoundary(
       request,
-      connection.connectionId,
-      connection.key,
+      { connectionId: connection.connectionId, key: connection.key, config: connectionConfig },
       storage,
       approvalActionSecrets,
     );
@@ -272,15 +271,21 @@ async function executeCommsToolWithBoundaryTracking(
 
 async function hydrateProtectedApprovalActionAtProviderBoundary(
   request: ToolInvokeRequest,
-  connectionId: string,
-  connectionKey: string,
+  connection: { connectionId: string; key: string; config: Record<string, unknown> },
   storage: AsyncStorage,
   runtime: ApprovalActionSecretRuntime,
 ): Promise<{ args: Record<string, unknown>; secretRef?: string }> {
+  const { connectionId, key: connectionKey } = connection;
   const templateValue = request.args.interactiveActionTemplate;
   if (templateValue === undefined) {
     assertNoRawRemoteApprovalBearer(request.args);
-    return { args: request.args };
+    // Approval buttons come only from a template hydrated below. Buttons a caller supplied on its own are dropped, so
+    // nothing can post look-alike Approve/Deny buttons from a bot the operator trusts.
+    if (request.args.interactiveActions === undefined) {
+      return { args: request.args };
+    }
+    const { interactiveActions: _callerButtons, ...argsWithoutButtons } = request.args;
+    return { args: argsWithoutButtons };
   }
   if (request.args.interactiveActions !== undefined) {
     throw new Error("blocked: Protected approval actions cannot include pre-hydrated callback data.");
@@ -288,7 +293,8 @@ async function hydrateProtectedApprovalActionAtProviderBoundary(
   if (request.toolName !== "channel.send" && request.toolName !== "telegram.send") {
     throw new Error("Protected approval actions are only supported for channel sends.");
   }
-  if (connectionKey !== "telegram") {
+  const actionPlatform = resolveInlineApprovalActionPlatform(connectionKey, connection.config);
+  if (!actionPlatform || (request.toolName === "telegram.send" && actionPlatform !== "telegram")) {
     throw new Error(`Inline approval actions are not supported by ${connectionKey}.`);
   }
   if (!templateValue || typeof templateValue !== "object" || Array.isArray(templateValue)) {
@@ -301,7 +307,7 @@ async function hydrateProtectedApprovalActionAtProviderBoundary(
   const expiresAt = asString(template.expiresAt);
   const expectedPrefix = "keychain:goatcitadel:approval-remote-action:";
   if (
-    platform !== "telegram" ||
+    platform !== actionPlatform ||
     !tokenId ||
     !tokenRef?.startsWith(expectedPrefix) ||
     tokenRef.slice(expectedPrefix.length) !== tokenId ||
@@ -314,7 +320,11 @@ async function hydrateProtectedApprovalActionAtProviderBoundary(
     throw new Error("blocked: Protected approval action template is invalid or mismatched.");
   }
   if ((await runtime.isApprovalActionConnectorReady?.(connectionId)) !== true) {
-    throw new Error("blocked: Authenticated Telegram approval callback ingress is not currently ready.");
+    throw new Error(
+      actionPlatform === "telegram"
+        ? "blocked: Authenticated Telegram approval callback ingress is not currently ready."
+        : "blocked: The Discord bot that receives approval buttons is not currently ready.",
+    );
   }
   const tokenRecord = await storage.remoteActionTokens.get(tokenId);
   if (
@@ -342,7 +352,7 @@ async function hydrateProtectedApprovalActionAtProviderBoundary(
       ...request.args,
       interactiveActionTemplate: undefined,
       interactiveActions: {
-        platform: "telegram",
+        platform: actionPlatform,
         tokenId,
         buttons: [
           { label: "Approve", callbackData: `gca:${rawToken}:a` },
@@ -351,6 +361,24 @@ async function hydrateProtectedApprovalActionAtProviderBoundary(
       },
     },
   };
+}
+
+/**
+ * The platforms whose native buttons come back to GoatCitadel authenticated: Telegram (its callback ingress is checked
+ * by the readiness hook) and Discord in bot mode, where the bot's gateway connection receives the button press. A
+ * Discord webhook cannot receive interactions, so a webhook-only connection gets no buttons.
+ */
+function resolveInlineApprovalActionPlatform(
+  connectionKey: string,
+  config: Record<string, unknown>,
+): "telegram" | "discord" | undefined {
+  if (connectionKey === "telegram") {
+    return "telegram";
+  }
+  if (connectionKey === "discord" && asString(config.runtimeMode) === "gateway") {
+    return "discord";
+  }
+  return undefined;
 }
 
 function hasCanonicalApprovalButtons(value: unknown): boolean {
@@ -1030,8 +1058,10 @@ async function discordSend(
   grantAllowlist?: string[],
 ): Promise<string> {
   const resolvedTarget = normalizeChannelTarget(target, "discord");
-  const webhookUrl = secretFrom(config, "webhookUrl", "webhookUrlEnv");
-  const discordRequest = await buildDiscordMessageRequest(message, attachments, allowlist, grantAllowlist);
+  const components = buildDiscordApprovalComponents(args.interactiveActions);
+  // Buttons only work on a message the bot posts itself: a webhook message's buttons never reach the bot.
+  const webhookUrl = components ? undefined : secretFrom(config, "webhookUrl", "webhookUrlEnv");
+  const discordRequest = await buildDiscordMessageRequest(message, attachments, allowlist, grantAllowlist, components);
   if (webhookUrl) {
     let res: { response: Response; finalUrl: string };
     try {
@@ -1179,6 +1209,7 @@ async function buildDiscordMessageRequest(
   attachments: ChannelAttachment[],
   allowlist: string[],
   grantAllowlist?: string[],
+  components?: Array<Record<string, unknown>>,
 ): Promise<{ headers?: Record<string, string>; body: BodyInit }> {
   const embeds = buildDiscordEmbeds(attachments);
   const uploadableAttachments = attachments.filter((attachment) => Boolean(attachment.dataBase64));
@@ -1189,6 +1220,9 @@ async function buildDiscordMessageRequest(
   payload.allowed_mentions = { parse: [] };
   if (embeds.length > 0) {
     payload.embeds = embeds;
+  }
+  if (components) {
+    payload.components = components;
   }
   if (uploadableAttachments.length === 0) {
     return {
@@ -1211,6 +1245,42 @@ async function buildDiscordMessageRequest(
     );
   }
   return { body: formData };
+}
+
+const DISCORD_ACTION_ROW = 1;
+const DISCORD_BUTTON = 2;
+const DISCORD_BUTTON_STYLE_SUCCESS = 3;
+const DISCORD_BUTTON_STYLE_DANGER = 4;
+const DISCORD_CUSTOM_ID_MAX_LENGTH = 100;
+
+/**
+ * One action row holding the Approve (green) and Deny (red) buttons. Each button's custom_id carries the hydrated
+ * `gca:<token>:a|r` value, so the raw token goes only to Discord inside custom_id.
+ */
+function buildDiscordApprovalComponents(value: unknown): Array<Record<string, unknown>> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined;
+  }
+  const recordValue = value as Record<string, unknown>;
+  if (asString(recordValue.platform) !== "discord" || !Array.isArray(recordValue.buttons)) {
+    return undefined;
+  }
+  const buttons = recordValue.buttons
+    .map((item) => {
+      if (!item || typeof item !== "object" || Array.isArray(item)) {
+        return undefined;
+      }
+      const label = asString((item as Record<string, unknown>).label);
+      const customId = asString((item as Record<string, unknown>).callbackData);
+      if (!label || !customId || customId.length > DISCORD_CUSTOM_ID_MAX_LENGTH) {
+        return undefined;
+      }
+      const style = customId.endsWith(":r") ? DISCORD_BUTTON_STYLE_DANGER : DISCORD_BUTTON_STYLE_SUCCESS;
+      return { type: DISCORD_BUTTON, style, label, custom_id: customId };
+    })
+    .filter((item): item is { type: number; style: number; label: string; custom_id: string } => Boolean(item))
+    .slice(0, 5);
+  return buttons.length > 0 ? [{ type: DISCORD_ACTION_ROW, components: buttons }] : undefined;
 }
 
 function buildDiscordEmbeds(attachments: ChannelAttachment[]): Array<Record<string, unknown>> {
@@ -1462,6 +1532,8 @@ async function telegramSend(
   const chatId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChatId);
   const replyToMessageId = parseOptionalIntegerLike(args.replyToMessageId ?? args.replyTo);
   const replyMarkup = normalizeTelegramInlineKeyboard(args.interactiveActions);
+  // A plain-text send (text quoting untrusted pages) skips the connection's HTML/Markdown parse mode.
+  const sendConfig = args.plainText === true ? { ...config, parseMode: undefined } : config;
   if (!token) {
     throw new Error("Missing Telegram bot token");
   }
@@ -1470,28 +1542,40 @@ async function telegramSend(
   }
 
   if (attachments.length === 0) {
-    return telegramSendText(config, allowlist, token, chatId, message, replyToMessageId, replyMarkup, grantAllowlist);
+    return telegramSendText(
+      sendConfig,
+      allowlist,
+      token,
+      chatId,
+      message,
+      replyToMessageId,
+      replyMarkup,
+      grantAllowlist,
+    );
   }
 
   let lastMessageId: string | undefined;
   let caption = message.trim() || undefined;
   if (caption && caption.length > 1024) {
     lastMessageId = await telegramSendText(
-      config,
+      sendConfig,
       allowlist,
       token,
       chatId,
       message,
       replyToMessageId,
-      undefined,
+      replyMarkup,
       grantAllowlist,
     );
     caption = undefined;
   }
+  // Inline buttons ride on the first message only: the captioned photo, or the
+  // long text above it when the caption does not fit Telegram's 1024 limit.
+  let pendingReplyMarkup = lastMessageId ? undefined : replyMarkup;
   for (const [index, attachment] of attachments.entries()) {
     try {
       lastMessageId = await telegramSendAttachment(
-        config,
+        sendConfig,
         allowlist,
         token,
         chatId,
@@ -1500,7 +1584,9 @@ async function telegramSend(
         caption,
         index === 0 ? replyToMessageId : undefined,
         grantAllowlist,
+        pendingReplyMarkup,
       );
+      pendingReplyMarkup = undefined;
     } catch (error) {
       if (lastMessageId) {
         const detail = error instanceof Error ? error.message : String(error);
@@ -1671,6 +1757,7 @@ async function telegramSendAttachment(
   caption: string | undefined,
   replyToMessageId?: number,
   grantAllowlist?: string[],
+  replyMarkup?: Record<string, unknown>,
 ): Promise<string> {
   const parseMode = asString(config.parseMode) ?? undefined;
   const isImage = isImageChannelAttachment(attachment);
@@ -1700,6 +1787,9 @@ async function telegramSendAttachment(
     if (replyToMessageId) {
       formData.set("reply_parameters", JSON.stringify({ message_id: replyToMessageId }));
     }
+    if (replyMarkup) {
+      formData.set("reply_markup", JSON.stringify(replyMarkup));
+    }
     body = formData;
   } else {
     body = JSON.stringify({
@@ -1708,6 +1798,7 @@ async function telegramSendAttachment(
       caption,
       parse_mode: parseMode,
       reply_parameters: replyToMessageId ? { message_id: replyToMessageId } : undefined,
+      reply_markup: replyMarkup,
     });
     headers = { "Content-Type": "application/json" };
   }

@@ -17,6 +17,9 @@ const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), 
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   fetchApproval: () => new Promise(() => undefined),
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
+  fetchChatMessaging: async () => ({ workspaceId: "default", channels: [] }),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchSettings: api.fetchSettings,
   patchSettings: api.patchSettings,

@@ -455,6 +455,8 @@ export const AssistantConfigInputSchema = z
     worktreesDir: z.string().optional(),
     /** The https address the internet uses to reach this installation. Checked and normalized on load. */
     publicWebAddress: z.string().optional(),
+    /** The Chat session id of the operator's own private conversation that waiting errand approvals go to. */
+    browserErrands: z.object({ approvalSessionId: z.string().optional() }).passthrough().optional(),
     auth: z
       .object({
         mode: z.enum(["none", "token", "basic"]).optional(),

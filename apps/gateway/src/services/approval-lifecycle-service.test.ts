@@ -3984,6 +3984,7 @@ function createApprovalHarness(input?: {
     findPendingFresh: vi.fn((tokenId: string) =>
       lastCreatedRemoteActionToken?.tokenId === tokenId ? lastCreatedRemoteActionToken : undefined,
     ),
+    findByTokenHash: vi.fn((): ReturnType<typeof createRemoteActionToken> | undefined => undefined),
     listByApprovalId: vi.fn(() => []),
     expirePendingByApprovalId: vi.fn(() => 0),
   };

@@ -203,6 +203,7 @@ async function dispatchIntegrationChannelAction(
       attachments,
       interactiveActions: normalizeInteractiveActions(actionPayload.interactiveActions),
       interactiveActionTemplate: normalizeInteractiveActionTemplate(actionPayload.interactiveActionTemplate),
+      ...(actionPayload.plainText === true ? { plainText: true } : {}),
       commitmentId: optionalString(actionPayload.commitmentId),
       effectId: deps.deliveryEffectId,
       ...governance,

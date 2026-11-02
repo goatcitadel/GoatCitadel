@@ -12,6 +12,18 @@ import type { ApprovalRemoteTokenSecretService } from "./approval-remote-token-s
 
 const MCP_APPROVAL_DELIVERY_TOOL_NAME = "goatcitadel.approval.remote_action_ready";
 
+/**
+ * Sends this one delivery to a specific conversation with its own message, in place of the connector's configured
+ * approval target and the default approval text. Only integration connectors honour it.
+ */
+export interface ApprovalRemoteTokenDeliveryOverride {
+  target: string;
+  message: string;
+  attachmentIds?: string[];
+  /** Send the message without the channel's markup parsing (for text that quotes untrusted pages). */
+  plainText?: boolean;
+}
+
 export interface ApprovalRemoteTokenDeliveryRuntime {
   readonly tokenSecrets: Pick<ApprovalRemoteTokenSecretService, "store" | "delete">;
   readonly requestAttribution: { traceId?: string; originSurface?: string };
@@ -24,11 +36,13 @@ export async function enqueueApprovalRemoteTokenConnectorDelivery(
     approval: ApprovalRequest;
     connector: ConnectorRecord;
     tokenRecord: { token: string; tokenId: string; expiresAt: string };
+    delivery?: ApprovalRemoteTokenDeliveryOverride;
   },
 ): Promise<DurableRunRecord | undefined> {
   const needsSecret =
     input.connector.connectorType === "browser" ||
-    (input.connector.connectorType === "integration_connection" && supportsInlineApprovalActions(input.connector));
+    (input.connector.connectorType === "integration_connection" &&
+      supportsInlineApprovalActions(input.connector, { toConversation: Boolean(input.delivery) }));
   let tokenRef: string | undefined;
   try {
     tokenRef = needsSecret ? runtime.tokenSecrets.store(input.tokenRecord.tokenId, input.tokenRecord.token) : undefined;
@@ -38,6 +52,7 @@ export async function enqueueApprovalRemoteTokenConnectorDelivery(
       tokenRef,
       tokenId: input.tokenRecord.tokenId,
       expiresAt: input.tokenRecord.expiresAt,
+      ...(input.delivery ? { delivery: input.delivery } : {}),
     });
     if (!payload) {
       if (tokenRef) {
@@ -117,6 +132,7 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
   tokenRef?: string;
   tokenId: string;
   expiresAt: string;
+  delivery?: ApprovalRemoteTokenDeliveryOverride;
 }): ConnectorDeliveryWorkflowPayload | undefined {
   if (input.connector.status !== "active") {
     return undefined;
@@ -149,18 +165,21 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
       };
 
     case "integration_connection": {
+      const delivery = input.delivery;
+      // A delivery to a named conversation needs only outbound sends; the "approvals" capability tracks whether the
+      // connection has a configured default approval target, which this delivery does not use.
       if (
-        !hasEnabledCapability(input.connector, "approvals") ||
+        (!delivery && !hasEnabledCapability(input.connector, "approvals")) ||
         !hasEnabledCapability(input.connector, "outbound_messages")
       ) {
         return undefined;
       }
-      const target = readMetadataString(input.connector, "approvalDeliveryTarget");
+      const target = delivery ? delivery.target.trim() : readMetadataString(input.connector, "approvalDeliveryTarget");
       if (!target) {
         return undefined;
       }
       const interactiveActionTemplate =
-        supportsInlineApprovalActions(input.connector) && input.tokenRef
+        supportsInlineApprovalActions(input.connector, { toConversation: Boolean(delivery) }) && input.tokenRef
           ? {
               platform: readIntegrationActionPlatform(input.connector),
               tokenId: input.tokenId,
@@ -183,7 +202,10 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
         ...(interactiveActionTemplate && input.tokenRef ? { secretRefs: { approvalActionToken: input.tokenRef } } : {}),
         payload: {
           target,
-          message: buildIntegrationApprovalDeliveryMessage(input, Boolean(interactiveActionTemplate)),
+          message:
+            delivery?.message ?? buildIntegrationApprovalDeliveryMessage(input, Boolean(interactiveActionTemplate)),
+          ...buildDeliveryAttachments(delivery),
+          ...(delivery?.plainText === true ? { plainText: true } : {}),
           interactiveActionTemplate,
         },
       };
@@ -252,14 +274,27 @@ export function hydrateBrowserApprovalRemoteTokenConnectorDeliveryPayload(
   };
 }
 
+function buildDeliveryAttachments(delivery: ApprovalRemoteTokenDeliveryOverride | undefined): {
+  attachments?: Array<{ attachmentId: string }>;
+} {
+  const attachmentIds = (delivery?.attachmentIds ?? []).map((id) => id.trim()).filter((id) => id.length > 0);
+  return attachmentIds.length > 0 ? { attachments: attachmentIds.map((attachmentId) => ({ attachmentId })) } : {};
+}
+
 function hasEnabledCapability(connector: ConnectorRecord, capabilityId: ConnectorCapabilityId): boolean {
   return connector.capabilities.some((item) => item.id === capabilityId && item.enabled);
 }
 
-function supportsInlineApprovalActions(connector: ConnectorRecord): boolean {
-  return (
-    hasEnabledCapability(connector, "interactive_actions") && connector.metadata?.approvalInlineActionsReady === true
-  );
+/**
+ * Whether an approval delivery on this connector carries the platform's Approve / Deny buttons. A delivery to a named
+ * conversation (`toConversation`) needs no default approval target, so it reads the conversation readiness.
+ */
+export function supportsInlineApprovalActions(
+  connector: ConnectorRecord,
+  options: { toConversation: boolean },
+): boolean {
+  const readinessKey = options.toConversation ? "conversationApprovalInlineActionsReady" : "approvalInlineActionsReady";
+  return hasEnabledCapability(connector, "interactive_actions") && connector.metadata?.[readinessKey] === true;
 }
 
 function readMetadataString(connector: ConnectorRecord, key: string): string | undefined {

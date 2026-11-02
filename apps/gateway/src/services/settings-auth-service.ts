@@ -17,6 +17,10 @@ import { isFirecrawlBaseUrlAllowlisted } from "./runtime-browser-backend-default
 import { createHash, createPublicKey, randomBytes, randomUUID, verify } from "node:crypto";
 import { logger } from "@goatcitadel/gateway-core";
 import { projectChatFeatureAvailability } from "./chat-feature-availability.js";
+import {
+  applyErrandApprovalConversation,
+  projectBrowserErrandSettings,
+} from "./runtime-errand-approval-conversation-change.js";
 import { normalizeFirecrawlApiKeyEnvName } from "@goatcitadel/policy-engine";
 import {
   APPROVAL_EXPIRY_ACTOR_ID,
@@ -168,6 +172,8 @@ export interface SettingsRuntimeDependencies {
   assertFirecrawlRuntimeUpdate(input: UpdateSettingsInput): void;
   /** The groups installed plugins hold off, as the policy engine holds them. Absent means none are held. */
   readPluginToolGroupHolds?(): readonly { groupId: string; pluginId: string; pluginName: string }[];
+  /** Whether a session is the operator's own private channel conversation. Absent refuses every errand pick. */
+  isOwnErrandApprovalConversation?(sessionId: string): Promise<boolean>;
 }
 
 export interface SettingsAuthRuntimeDependencies {
@@ -225,6 +231,7 @@ export async function getSettings(deps: SettingsRuntimeDependencies): Promise<Ru
     budgetMode: config.budgets.mode,
     workspaceDir: assistant.workspaceDir,
     ...(assistant.publicWebAddress ? { publicWebAddress: assistant.publicWebAddress } : {}),
+    browserErrands: projectBrowserErrandSettings(assistant),
     writeJailRoots: toolPolicy.sandbox.writeJailRoots,
     readOnlyRoots: toolPolicy.sandbox.readOnlyRoots,
     operatorWriteRoots: projectOperatorWriteRoots(toolPolicy),
@@ -320,6 +327,8 @@ export interface UpdateSettingsInput {
   networkAllowlist?: string[];
   /** The https address the internet uses to reach this installation. Checked and stored tidied; `null` clears it. */
   publicWebAddress?: string | null;
+  /** The operator's own private conversation that waiting errand approvals go to; `null` or empty clears it. */
+  browserErrandApprovalSessionId?: string | null;
   /** Add or remove one operator write root; validated against the write-root safety rules. */
   operatorWriteRootChange?: OperatorWriteRootChange;
   /** Set the global posture of one curated filesystem mutation tool. */
@@ -506,6 +515,9 @@ export async function buildSettingsCandidate(
     assertFirecrawlRuntimeUpdate: (input) => deps.assertFirecrawlRuntimeUpdate(input),
     // A candidate reads the live holds; a settings change never writes them.
     readPluginToolGroupHolds: () => deps.readPluginToolGroupHolds?.() ?? [],
+    // A candidate checks a picked conversation against the live bindings; it never writes them.
+    isOwnErrandApprovalConversation: async (sessionId) =>
+      (await deps.isOwnErrandApprovalConversation?.(sessionId)) ?? false,
   };
 
   let settings: RuntimeSettings;
@@ -603,32 +615,33 @@ export async function updateSettings(
   }
 
   if (input.memory) {
+    const memory = deps.config.assistant.memory;
     if (input.memory.enabled !== undefined) {
-      deps.config.assistant.memory.enabled = input.memory.enabled;
+      memory.enabled = input.memory.enabled;
     }
     if (input.memory.qmdEnabled !== undefined) {
-      deps.config.assistant.memory.qmd.enabled = input.memory.qmdEnabled;
+      memory.qmd.enabled = input.memory.qmdEnabled;
     }
     if (input.memory.qmdApplyToChat !== undefined) {
-      deps.config.assistant.memory.qmd.applyToChat = input.memory.qmdApplyToChat;
+      memory.qmd.applyToChat = input.memory.qmdApplyToChat;
     }
     if (input.memory.qmdApplyToOrchestration !== undefined) {
-      deps.config.assistant.memory.qmd.applyToOrchestration = input.memory.qmdApplyToOrchestration;
+      memory.qmd.applyToOrchestration = input.memory.qmdApplyToOrchestration;
     }
     if (input.memory.qmdMaxContextTokens !== undefined) {
-      deps.config.assistant.memory.qmd.maxContextTokens = Math.max(100, input.memory.qmdMaxContextTokens);
+      memory.qmd.maxContextTokens = Math.max(100, input.memory.qmdMaxContextTokens);
     }
     if (input.memory.qmdMinPromptChars !== undefined) {
-      deps.config.assistant.memory.qmd.minPromptChars = Math.max(0, input.memory.qmdMinPromptChars);
+      memory.qmd.minPromptChars = Math.max(0, input.memory.qmdMinPromptChars);
     }
     if (input.memory.qmdCacheTtlSeconds !== undefined) {
-      deps.config.assistant.memory.qmd.cacheTtlSeconds = Math.max(10, input.memory.qmdCacheTtlSeconds);
+      memory.qmd.cacheTtlSeconds = Math.max(10, input.memory.qmdCacheTtlSeconds);
     }
     if (input.memory.qmdDistillerProviderId !== undefined) {
-      deps.config.assistant.memory.qmd.distiller.providerId = input.memory.qmdDistillerProviderId.trim() || undefined;
+      memory.qmd.distiller.providerId = input.memory.qmdDistillerProviderId.trim() || undefined;
     }
     if (input.memory.qmdDistillerModel !== undefined) {
-      deps.config.assistant.memory.qmd.distiller.model = input.memory.qmdDistillerModel.trim() || undefined;
+      memory.qmd.distiller.model = input.memory.qmdDistillerModel.trim() || undefined;
     }
   }
 
@@ -674,6 +687,12 @@ export async function updateSettings(
       if (!checked.ok) throw new ValidationError({ message: checked.problem });
       assistant.publicWebAddress = checked.address;
     }
+  }
+
+  if (input.browserErrandApprovalSessionId !== undefined) {
+    // One sentence answers any conversation that is not the operator's own private one.
+    const { config, isOwnErrandApprovalConversation: isOwn } = deps;
+    await applyErrandApprovalConversation(config.assistant, input.browserErrandApprovalSessionId, isOwn?.bind(deps));
   }
 
   if (input.web?.search?.engineOrder !== undefined) {

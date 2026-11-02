@@ -68,3 +68,31 @@ describe("settingsChangePlanRequest public web address", () => {
     expect(settingsChangePlanRequest({ expectedRevision: 7, publicWebAddress: undefined })).toBeNull();
   });
 });
+
+describe("settingsChangePlanRequest browser errand approval conversation", () => {
+  const plan = (approvalSessionId: string | null) => ({
+    kind: "runtime_configuration",
+    change: { operation: "browser_errand_approval_conversation", config: { approvalSessionId } },
+  });
+
+  it("maps a pick to its own governed operation, trimmed", () => {
+    expect(settingsChangePlanRequest({ expectedRevision: 7, browserErrandApprovalSessionId: " session-dm " })).toEqual(
+      plan("session-dm"),
+    );
+  });
+
+  it("maps null and an empty pick to a clear", () => {
+    expect(settingsChangePlanRequest({ expectedRevision: 7, browserErrandApprovalSessionId: null })).toEqual(
+      plan(null),
+    );
+    expect(settingsChangePlanRequest({ expectedRevision: 7, browserErrandApprovalSessionId: "  " })).toEqual(
+      plan(null),
+    );
+  });
+
+  it("refuses an id no session could have with the one sentence", () => {
+    expect(() =>
+      settingsChangePlanRequest({ expectedRevision: 7, browserErrandApprovalSessionId: "bad\u0000id" }),
+    ).toThrow("Pick one of your own private conversations.");
+  });
+});

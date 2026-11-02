@@ -175,6 +175,155 @@ describe("protected approval action provider boundary", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("puts the inline approval buttons on the photo when an attachment is present", async () => {
+    const harness = createHarness();
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 1002 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createRequest();
+    request.args.attachments = [
+      { title: "spotlight.png", mimeType: "image/png", dataBase64: Buffer.from("png-bytes").toString("base64") },
+    ];
+
+    await expect(
+      executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+    ).resolves.toMatchObject({ status: "sent" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/sendPhoto$/);
+    const form = init?.body as FormData;
+    expect(form.get("caption")).toBe("Approval requested.");
+    expect(JSON.parse(String(form.get("reply_markup")))).toEqual({
+      inline_keyboard: [
+        [
+          { text: "Approve", callback_data: `gca:${RAW_TOKEN}:a` },
+          { text: "Deny", callback_data: `gca:${RAW_TOKEN}:r` },
+        ],
+      ],
+    });
+  });
+
+  it("sends a plain-text message without the connection's parse mode, on text and photo", async () => {
+    const harness = createHarness({ parseMode: "HTML" });
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 1004 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const plainText = createRequest();
+    plainText.args.message = "GoatCitadel wants to: Click <b>Buy_now</b>";
+    plainText.args.plainText = true;
+    const plainPhoto = createRequest();
+    plainPhoto.args.plainText = true;
+    plainPhoto.args.attachments = [
+      { title: "spotlight.png", mimeType: "image/png", dataBase64: Buffer.from("png-bytes").toString("base64") },
+    ];
+    const markup = createRequest();
+
+    for (const request of [plainText, plainPhoto, markup]) {
+      await expect(
+        executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+      ).resolves.toMatchObject({ status: "sent" });
+    }
+
+    const [textCall, photoCall, markupCall] = fetchMock.mock.calls;
+    const textBody = JSON.parse(String(textCall![1]?.body));
+    expect(textBody.parse_mode).toBeUndefined();
+    expect(textBody.text).toBe("GoatCitadel wants to: Click <b>Buy_now</b>");
+    expect((photoCall![1]?.body as FormData).get("parse_mode")).toBeNull();
+    expect(JSON.parse(String(markupCall![1]?.body)).parse_mode).toBe("HTML");
+  });
+
+  it("keeps the buttons on the text when the caption is too long for the photo", async () => {
+    const harness = createHarness();
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 1003 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const request = createRequest();
+    request.args.message = "Approval requested. ".repeat(60);
+    request.args.attachments = [
+      { title: "spotlight.png", mimeType: "image/png", dataBase64: Buffer.from("png-bytes").toString("base64") },
+    ];
+
+    await expect(
+      executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+    ).resolves.toMatchObject({ status: "sent" });
+
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    const [textUrl, textInit] = fetchMock.mock.calls[0]!;
+    expect(String(textUrl)).toMatch(/\/sendMessage$/);
+    expect(JSON.parse(String(textInit?.body)).reply_markup.inline_keyboard[0]).toHaveLength(2);
+    const [photoUrl, photoInit] = fetchMock.mock.calls[1]!;
+    expect(String(photoUrl)).toMatch(/\/sendPhoto$/);
+    expect((photoInit?.body as FormData).get("reply_markup")).toBeNull();
+  });
+
+  it("posts Discord Approve and Deny buttons through the bot, with the raw token only in custom_id", async () => {
+    const harness = createHarness({ channelKey: "discord", discordWebhookUrl: "https://discord.com/api/webhooks/1/x" });
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ id: "discord-msg-1" }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    await expect(
+      executeTool(createDiscordRequest(), createConfig(["discord.com"]), harness.storage, harness.runtime),
+    ).resolves.toMatchObject({ status: "sent", providerMessageId: "discord-msg-1" });
+
+    expect(harness.approvalReady).toHaveBeenCalledWith("conn-telegram");
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchMock.mock.calls[0]!;
+    // The bot posts the message: a webhook message's buttons never reach the bot.
+    expect(String(url)).toBe("https://discord.com/api/v10/channels/987654321/messages");
+    const body = JSON.parse(String(init?.body));
+    expect(body.content).toBe("Approval requested.");
+    expect(body.components).toEqual([
+      {
+        type: 1,
+        components: [
+          { type: 2, style: 3, label: "Approve", custom_id: `gca:${RAW_TOKEN}:a` },
+          { type: 2, style: 4, label: "Deny", custom_id: `gca:${RAW_TOKEN}:r` },
+        ],
+      },
+    ]);
+    expect(String(init?.body).split(RAW_TOKEN)).toHaveLength(3);
+    expect(JSON.stringify(harness.createQueued.mock.calls)).not.toContain(RAW_TOKEN);
+  });
+
+  it("refuses Discord buttons on a webhook-only connection before resolving a bearer", async () => {
+    const harness = createHarness({ channelKey: "discord", discordRuntimeMode: "bridge" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeTool(
+      createDiscordRequest(),
+      createConfig(["discord.com"]),
+      harness.storage,
+      harness.runtime,
+    );
+
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "not_available" });
+    expect(harness.resolveSecret).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a Telegram-shaped template on a Discord connection", async () => {
+    const harness = createHarness({ channelKey: "discord" });
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await executeTool(createRequest(), createConfig(["discord.com"]), harness.storage, harness.runtime);
+
+    expect(result).toMatchObject({ status: "failed", deliveryStatus: "blocked" });
+    expect(harness.resolveSecret).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
   it.each([`x${RAW_TOKEN}`, `${RAW_TOKEN}x`])("rejects recoverable decorated approval bearer %s", async (message) => {
     const harness = createHarness();
     const fetchMock = vi.fn();
@@ -198,6 +347,9 @@ function createHarness(
     enabled?: boolean;
     status?: string;
     approvalReady?: boolean;
+    parseMode?: string;
+    discordRuntimeMode?: string;
+    discordWebhookUrl?: string;
   } = {},
 ) {
   const channelKey = overrides.channelKey ?? "telegram";
@@ -222,8 +374,18 @@ function createHarness(
         status: overrides.status ?? "connected",
         config:
           channelKey === "telegram"
-            ? { botToken: "telegram-provider-token", defaultChatId: "-1001234567890" }
-            : { botToken: "slack-provider-token", defaultChannel: "#approvals" },
+            ? {
+                botToken: "telegram-provider-token",
+                defaultChatId: "-1001234567890",
+                ...(overrides.parseMode ? { parseMode: overrides.parseMode } : {}),
+              }
+            : channelKey === "discord"
+              ? {
+                  runtimeMode: overrides.discordRuntimeMode ?? "gateway",
+                  botToken: "discord-provider-token",
+                  ...(overrides.discordWebhookUrl ? { webhookUrl: overrides.discordWebhookUrl } : {}),
+                }
+              : { botToken: "slack-provider-token", defaultChannel: "#approvals" },
       })),
     },
     remoteActionTokens: {
@@ -279,6 +441,21 @@ function createRequest(overrides: { expiresAt?: string } = {}): ToolInvokeReques
     agentId: "operator",
     sessionId: "session-boundary-matrix",
     authContext: { boundary: "tool_host_boundary", secretRefs: [TOKEN_REF] },
+  };
+}
+
+function createDiscordRequest(): ToolInvokeRequest {
+  const request = createRequest();
+  return {
+    ...request,
+    args: {
+      ...request.args,
+      target: "987654321",
+      interactiveActionTemplate: {
+        ...(request.args.interactiveActionTemplate as Record<string, unknown>),
+        platform: "discord",
+      },
+    },
   };
 }
 

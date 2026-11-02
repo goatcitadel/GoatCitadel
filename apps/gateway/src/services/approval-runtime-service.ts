@@ -18,6 +18,7 @@ import type {
   RemoteApprovalActionTokenIssueResult,
 } from "./approval-types.js";
 import type { ApprovalCreateCommitHook, ApprovalLifecycleHost } from "./approval-lifecycle-service.js";
+import type { ApprovalRemoteTokenDeliveryOverride } from "./approval-connector-delivery.js";
 import type { ApprovalRemoteActionContext } from "./approval-remote-action-service.js";
 import * as approvalLifecycleService from "./approval-lifecycle-service.js";
 import * as approvalRemoteActionService from "./approval-remote-action-service.js";
@@ -38,6 +39,7 @@ export interface ApprovalRuntime {
       connectorId: string;
       issuedBy?: string;
       expiresInMs?: number;
+      delivery?: ApprovalRemoteTokenDeliveryOverride;
     },
   ): Promise<RemoteApprovalActionTokenIssueResult>;
   resolveApprovalWithRemoteToken(input: {
@@ -55,6 +57,7 @@ export interface ApprovalRuntime {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    channelActorId?: string;
   }): Promise<ApprovalResolveResult>;
   listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): Promise<ApprovalRequest[]>;
   getApproval(approvalId: string, workspaceId?: string): Promise<ApprovalRequest>;
@@ -132,6 +135,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
       connectorId: string;
       issuedBy?: string;
       expiresInMs?: number;
+      delivery?: ApprovalRemoteTokenDeliveryOverride;
     },
   ): Promise<RemoteApprovalActionTokenIssueResult> {
     return approvalRemoteActionService.createApprovalRemoteActionToken(this.host, approvalId, input);
@@ -155,6 +159,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    channelActorId?: string;
   }): Promise<ApprovalResolveResult> {
     return approvalRemoteActionService.resolveApprovalWithRemoteTokenId(this.host, input);
   }

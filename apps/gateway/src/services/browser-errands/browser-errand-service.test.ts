@@ -1,11 +1,11 @@
-import type { ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ChatCompletionResponse, ChatMessageSourceAuthority } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ErrandBrowserLaunchError, type ComputerAction, type ErrandBrowser } from "@goatcitadel/policy-engine";
 import {
   BROWSER_ERRAND_APPROVAL_UNRECORDED_SUMMARY,
   BROWSER_ERRAND_BUSY_MESSAGE,
-  BROWSER_ERRAND_CHANNEL_MESSAGE,
   BROWSER_ERRAND_DISABLED_MESSAGE,
+  BROWSER_ERRAND_OWNER_ONLY_MESSAGE,
   BROWSER_ERRAND_PROFILE_LOCKED_MESSAGE,
   BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE,
   BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE,
@@ -17,6 +17,7 @@ import {
   errandRequest,
   fakeBrowser,
   fakeGate,
+  missionOrigin,
   outcome,
   untilAborted,
   type FakeBrowser,
@@ -51,10 +52,109 @@ describe("BrowserErrandService", () => {
     expect(launchBrowser).not.toHaveBeenCalled();
   });
 
-  it("refuses a channel-origin turn", async () => {
-    const { service, launchBrowser } = buildService(vi.fn, { sessionChannel: async () => "telegram" });
-    await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_CHANNEL_MESSAGE);
-    expect(launchBrowser).not.toHaveBeenCalled();
+  describe("who may start an errand", () => {
+    const OWNER = "1001";
+    const telegramOrigin = (sender: string, sourceAuthority: ChatMessageSourceAuthority = "external_channel") =>
+      missionOrigin({
+        sessionChannel: async () => "telegram",
+        binding: async () => ({
+          sessionId: "session-1",
+          transport: "integration",
+          connectionId: "conn-1",
+          target: "chat-1001",
+          conversation: { kind: "direct", counterpartActorId: OWNER },
+          writable: true,
+          createdAt: "2026-11-01T00:00:00.000Z",
+          updatedAt: "2026-11-01T00:00:00.000Z",
+        }),
+        turnSender: async (sessionId, turnId) =>
+          sessionId === "session-1" && turnId === "turn-1" ? { actorId: sender, sourceAuthority } : undefined,
+        connection: async () => ({
+          key: "telegram",
+          config: {
+            inboundAccessMode: "pairing",
+            ownerActorIds: [OWNER],
+            telegramPairing: {
+              approved: [
+                { actorId: OWNER, approvedAt: "2026-11-01T00:00:00.000Z" },
+                { actorId: "2002", approvedAt: "2026-11-01T00:00:00.000Z" },
+              ],
+              pending: [],
+            },
+          },
+        }),
+      });
+
+    it("lets the owner start an errand from their Telegram direct conversation", async () => {
+      let originDuringRun: unknown;
+      const built = buildService(vi.fn, {
+        origin: telegramOrigin(OWNER),
+        runLoop: async () => {
+          originDuringRun = built.service.getActiveOrigin();
+          return outcome("done", { answer: "Found one." });
+        },
+      });
+      await expect(built.service.run(errandRequest())).resolves.toMatchObject({ outcome: "done" });
+      expect(originDuringRun).toEqual({
+        kind: "channel",
+        connectionId: "conn-1",
+        channelKey: "telegram",
+        target: "chat-1001",
+        conversation: "direct",
+        actorId: OWNER,
+      });
+      expect(built.service.getActiveOrigin()).toBeUndefined();
+      await built.service.dispose();
+    });
+
+    it("refuses a paired sender who is not the owner", async () => {
+      const { service, launchBrowser } = buildService(vi.fn, { origin: telegramOrigin("2002") });
+      await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
+      expect(BROWSER_ERRAND_OWNER_ONLY_MESSAGE).toBe("Only the owner can start a browser errand here.");
+      expect(launchBrowser).not.toHaveBeenCalled();
+      expect(service.getStatus("tool-run-1")).toBeUndefined();
+    });
+
+    it("runs a desk turn typed in Mission Control on a channel-bound session, with origin pc", async () => {
+      let originDuringRun: unknown;
+      const built = buildService(vi.fn, {
+        origin: telegramOrigin("operator", "operator"),
+        runLoop: async () => {
+          originDuringRun = built.service.getActiveOrigin();
+          return outcome("done");
+        },
+      });
+      await expect(built.service.run(errandRequest())).resolves.toMatchObject({ outcome: "done" });
+      expect(originDuringRun).toEqual({ kind: "pc" });
+      await built.service.dispose();
+    });
+
+    it("refuses a channel message whose actor id is 'operator' but which came in from the channel", async () => {
+      const { service, launchBrowser } = buildService(vi.fn, { origin: telegramOrigin("operator") });
+      await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
+      expect(launchBrowser).not.toHaveBeenCalled();
+    });
+
+    it("refuses when the session cannot be read", async () => {
+      const { service, launchBrowser } = buildService(vi.fn, {
+        origin: missionOrigin({ sessionChannel: async () => Promise.reject(new Error("missing")) }),
+      });
+      await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
+      expect(launchBrowser).not.toHaveBeenCalled();
+    });
+
+    it("still runs a Mission Control errand, with origin pc", async () => {
+      let originDuringRun: unknown;
+      const built = buildService(vi.fn, {
+        runLoop: async () => {
+          originDuringRun = built.service.getActiveOrigin();
+          return outcome("done");
+        },
+      });
+      await expect(built.service.run(errandRequest())).resolves.toMatchObject({ outcome: "done" });
+      expect(originDuringRun).toEqual({ kind: "pc" });
+      await built.service.dispose();
+    });
   });
 
   it("refuses a second concurrent errand", async () => {
@@ -501,5 +601,135 @@ describe("BrowserErrandService dispose", () => {
     await service.dispose();
     await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_SHUTTING_DOWN_MESSAGE);
     expect(launchBrowser).not.toHaveBeenCalled();
+  });
+});
+
+describe("BrowserErrandService channel deliveries", () => {
+  /** Starts an errand that waits in its first approval until it is stopped. */
+  async function runningErrand(state: { current?: string; pending: Set<string> }) {
+    let asked!: () => void;
+    const approvalAsked = new Promise<void>((resolve) => (asked = resolve));
+    const gate = fakeGate(vi.fn, {
+      isPending: vi.fn(async (id: string) => state.pending.has(id)),
+      pendingApprovalId: vi.fn(() => state.current),
+    });
+    const built = buildService(vi.fn, {
+      createGate: (deps) => {
+        gate.request = vi.fn(
+          () =>
+            new Promise<"stopped">((resolve) => {
+              asked();
+              deps.signal.addEventListener("abort", () => resolve("stopped"), { once: true });
+            }),
+        );
+        return gate;
+      },
+      runLoop: async (deps) => outcome((await deps.requestApproval({} as never)) === "stopped" ? "stopped" : "done"),
+    });
+    const running = built.service.run(errandRequest());
+    await approvalAsked;
+    const errandId = built.service.getStatus("tool-run-1")!.errandId;
+    const finish = async () => {
+      await built.service.stop(errandId, "operator");
+      await running;
+      await built.service.dispose();
+    };
+    return { service: built.service, errandId, finish };
+  }
+
+  /** A delivery whose provider send completed at `at` (default: when it is recorded). */
+  const sent = (approvalId: string, connectionId: string, target: string, at: () => number | undefined = Date.now) => {
+    const sentAt = at();
+    return { approvalId, connectionId, target, deliveryRunId: `run-${approvalId}`, sentAt: async () => sentAt };
+  };
+
+  it("never lets a reply answer a delivery that is only queued, and matches it once the send completed", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set(["approval-1"]) };
+    const { service, finish } = await runningErrand(state);
+    const send = { at: undefined as number | undefined };
+    const readSentAt = vi.fn(async () => send.at);
+    service.recordDelivery({
+      approvalId: "approval-1",
+      connectionId: "conn-1",
+      target: "chat-1",
+      deliveryRunId: "run-1",
+      sentAt: readSentAt,
+    });
+    // Queued: a reply sent now (or an APPROVE sent before the question went out) does not match.
+    const replyBeforeSend = Date.now();
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", replyBeforeSend)).resolves.toBeUndefined();
+    send.at = replyBeforeSend + 5;
+    // The send completed after that reply arrived: it still does not match the earlier reply.
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", replyBeforeSend)).resolves.toBeUndefined();
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", replyBeforeSend + 5)).resolves.toMatchObject({
+      approvalId: "approval-1",
+    });
+    // Once known, the send time is kept and not read again.
+    const reads = readSentAt.mock.calls.length;
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toMatchObject({ approvalId: "approval-1" });
+    expect(readSentAt).toHaveBeenCalledTimes(reads);
+    await finish();
+  });
+
+  it("treats a delivery whose send cannot be read as not delivered", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set(["approval-1"]) };
+    const { service, finish } = await runningErrand(state);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    service.recordDelivery({
+      approvalId: "approval-1",
+      connectionId: "conn-1",
+      target: "chat-1",
+      deliveryRunId: "run-1",
+      sentAt: async () => {
+        throw new Error("storage unavailable");
+      },
+    });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    warn.mockRestore();
+    await finish();
+  });
+
+  it("answers only the approval the errand is waiting on, never an older one (Review Focus 1)", async () => {
+    const state = { current: "approval-new" as string | undefined, pending: new Set(["approval-old", "approval-new"]) };
+    const { service, errandId, finish } = await runningErrand(state);
+    service.recordDelivery(sent("approval-old", "conn-1", "chat-1"));
+    service.recordDelivery(sent("approval-other", "conn-1", "chat-2"));
+    service.recordDelivery(sent("approval-new", "conn-1", "chat-1"));
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toEqual({
+      approvalId: "approval-new",
+      errandId,
+    });
+    // The current one resolves: the stale older delivery, though still pending in storage, is not a fallback.
+    state.pending.delete("approval-new");
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    state.current = "approval-old";
+    await expect(service.pendingDeliveryFor("conn-1", "chat-9")).resolves.toBeUndefined();
+    await expect(service.pendingDeliveryFor("conn-2", "chat-1")).resolves.toBeUndefined();
+    await finish();
+  });
+
+  it("does not let a reply answer an approval delivered after the reply arrived", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set(["approval-1"]) };
+    const { service, finish } = await runningErrand(state);
+    const before = Date.now() - 1;
+    service.recordDelivery(sent("approval-1", "conn-1", "chat-1"));
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", before)).resolves.toBeUndefined();
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", Date.now())).resolves.toMatchObject({
+      approvalId: "approval-1",
+    });
+    await finish();
+  });
+
+  it("has nothing pending once the stored approval is resolved, while none is waiting, or after the errand ends", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set<string>() };
+    const { service, finish } = await runningErrand(state);
+    service.recordDelivery(sent("approval-1", "conn-1", "chat-1"));
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    state.pending.add("approval-1");
+    state.current = undefined;
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    await finish();
+    service.recordDelivery(sent("approval-2", "conn-1", "chat-1"));
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
   });
 });

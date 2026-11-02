@@ -5,6 +5,7 @@ import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-share
 import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
+import { BrowserErrandsApprovalConversationField } from "./BrowserErrandsApprovalConversationField";
 import {
   GovernedSettingChangeStatus,
   GovernedSettingDraftState,
@@ -30,7 +31,8 @@ const matchesPlan = (plan: ChangePlanRecord, submitted: boolean) =>
   plan.request.change.enabled === submitted &&
   plan.target.ownerId === "runtime_settings";
 
-export function BrowserErrandsControl() {
+/** `workspaceId` is whose Messaging conversations the approval conversation picker lists. */
+export function BrowserErrandsControl({ workspaceId = "default" }: { workspaceId?: string }) {
   const query = useQuery({
     queryKey: ["system", "settings-browser-errands"],
     queryFn: fetchSettings,
@@ -116,6 +118,7 @@ export function BrowserErrandsControl() {
         owner="browser-errands"
         recoveryLabel="Inspect Browser errands setting activity"
       />
+      <BrowserErrandsApprovalConversationField workspaceId={workspaceId} />
     </section>
   );
 }

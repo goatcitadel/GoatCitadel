@@ -40,7 +40,19 @@ import {
   type OperatorDeskAcceptance,
   type OperatorDeskAccepted,
 } from "./channel-desk-turn.js";
-import { buildInboundConversationLaneKey } from "./inbound-channel-lane.js";
+import {
+  INBOUND_DRAIN_LOOPS,
+  INBOUND_ERRAND_CONTROL_LANE_PREFIX,
+  resolveInboundLaneKey,
+  type InboundDrainLoop,
+} from "./inbound-channel-lane.js";
+import {
+  ERRAND_REPLY_ALREADY_ANSWERED_COPY,
+  encodeErrandReplyMarker,
+  isErrandReplyMarker,
+  parseErrandReplyMarker,
+  type ErrandChannelReplies,
+} from "./browser-errands/errand-channel-replies.js";
 
 const CLAIM_LEASE_MS = 30_000;
 const CLAIM_HEARTBEAT_MS = 10_000;
@@ -151,6 +163,8 @@ export interface InboundChannelEventServiceDeps {
     participantB: string;
   }) => BotLoopGuardDecision;
   emitChannelActivity: (input: ChannelActivityInput) => Promise<unknown>;
+  /** Whole-message APPROVE / DENY / STOP replies to a waiting browser errand approval; read when a message arrives. */
+  errandReplies?: () => ErrandChannelReplies | undefined;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -192,8 +206,11 @@ export class InboundChannelTurnTerminalError extends Error {
  */
 export class InboundChannelEventService {
   private readonly ownerId: string;
-  private drainPromise?: Promise<void>;
-  private drainRequested = false;
+  /**
+   * The main loop claims every lane and waits for its whole batch, including a channel errand's turn that waits on
+   * an approval. The control loop claims only errand control lanes, so an answer to that approval still runs.
+   */
+  private readonly drainLoops: readonly InboundDrainLoop[] = INBOUND_DRAIN_LOOPS.map((loop) => ({ ...loop }));
   private retryTimer?: NodeJS.Timeout;
   private closed = false;
 
@@ -233,11 +250,12 @@ export class InboundChannelEventService {
     if (inputs.length === 0) {
       return [];
     }
-    const prepared = inputs.map((input) => {
-      // A provider callback can never claim to be the operator at the desk.
-      if ((input.dispatchKind as string) === OPERATOR_DESK_DISPATCH_KIND) {
-        throw new Error("Desk questions are accepted only through the desk path.");
-      }
+    // A provider callback can never claim to be the operator at the desk.
+    if (inputs.some((input) => (input.dispatchKind as string) === OPERATOR_DESK_DISPATCH_KIND)) {
+      throw new Error("Desk questions are accepted only through the desk path.");
+    }
+    const laneKeys = await Promise.all(inputs.map(async (input) => await this.resolveLaneKey(input)));
+    const prepared = inputs.map((input, index) => {
       const eventId = stableInboundId("event", input.channel, input.connectionId, input.idempotencyKey);
       return {
         input,
@@ -249,7 +267,7 @@ export class InboundChannelEventService {
           dispatchKind: input.dispatchKind,
           providerSourceId: input.message.eventId,
           idempotencyKey: input.idempotencyKey,
-          laneKey: buildInboundConversationLaneKey(input),
+          laneKey: laneKeys[index]!,
           payload: buildStoredPayload(input),
         },
       };
@@ -286,6 +304,18 @@ export class InboundChannelEventService {
       messageId: stableInboundId("message", result.event.eventId),
       turnId: stableInboundId("turn", result.event.eventId),
     };
+  }
+
+  /** The lane this event is queued in (see `resolveInboundLaneKey`). */
+  private async resolveLaneKey(input: DurableInboundChannelAcceptInput): Promise<string> {
+    return await resolveInboundLaneKey(input, {
+      awaitsAnswer: this.deps.errandReplies?.()?.awaitsAnswer,
+      events: this.deps.storage.inboundChannelEvents,
+      undecided: (error) =>
+        this.diagnostic("warn", "channel.inbound_errand_lane_unavailable", "Errand reply lane could not be decided.", {
+          error: normalizeError(error),
+        }),
+    });
   }
 
   private assertAccepting(): void {
@@ -355,20 +385,21 @@ export class InboundChannelEventService {
     }
   }
 
-  public async drain(limit = 25): Promise<void> {
+  /** Drains due events; with `laneKeyPrefix`, only events in lanes that start with it. */
+  public async drain(limit = 25, laneKeyPrefix?: string): Promise<void> {
     const admission = this.deps.sharedHostLifecycle?.tryReserve(
       "worker",
       `inbound-channel-drain:${this.ownerId}:${randomUUID()}`,
     );
     if (admission && !admission.admitted) return;
     try {
-      await this.drainAdmitted(limit, admission?.admitted ? admission.reservation.signal : undefined);
+      await this.drainAdmitted(limit, admission?.admitted ? admission.reservation.signal : undefined, laneKeyPrefix);
     } finally {
       if (admission?.admitted) admission.reservation.release();
     }
   }
 
-  private async drainAdmitted(limit: number, signal?: AbortSignal): Promise<void> {
+  private async drainAdmitted(limit: number, signal?: AbortSignal, laneKeyPrefix?: string): Promise<void> {
     if (this.closed || this.deps.isClosing()) {
       return;
     }
@@ -378,14 +409,13 @@ export class InboundChannelEventService {
         ownerId: this.ownerId,
         leaseDurationMs: CLAIM_LEASE_MS,
         limit,
+        ...(laneKeyPrefix ? { laneKeyPrefix } : {}),
       });
       if (claims.length === 0) {
         return;
       }
+      // Settling a claim can make the next event in its lane due, so go round until nothing is due.
       await Promise.all(claims.map(async (claim) => await this.processClaimSafely(claim)));
-      if (claims.length < limit) {
-        return;
-      }
     }
   }
 
@@ -404,25 +434,33 @@ export class InboundChannelEventService {
       this.retryTimer.unref();
       return;
     }
-    if (this.drainPromise) {
-      this.drainRequested = true;
+    for (const loop of this.drainLoops) {
+      this.startDrainLoop(loop);
+    }
+  }
+
+  /** Starts one drain loop, or asks the running one to go round again once it finishes. */
+  private startDrainLoop(loop: InboundDrainLoop): void {
+    if (loop.promise) {
+      loop.requested = true;
       return;
     }
-    this.drainRequested = false;
-    const task = this.drain()
+    loop.requested = false;
+    const task = this.drain(loop.limit, loop.laneKeyPrefix)
       .catch(async (error) => {
         this.diagnostic("error", "channel.inbound_drain_failed", "Durable inbound channel drain failed.", {
           error: normalizeError(error),
+          ...(loop.laneKeyPrefix ? { lanes: loop.laneKeyPrefix } : {}),
         });
         await this.requestDrain(1_000);
       })
       .finally(async () => {
-        this.drainPromise = undefined;
-        if (this.drainRequested) {
+        loop.promise = undefined;
+        if (loop.requested) {
           await this.requestDrain();
         }
       });
-    this.drainPromise = task;
+    loop.promise = task;
     this.deps.registerBackgroundTask(task);
   }
 
@@ -438,7 +476,8 @@ export class InboundChannelEventService {
         });
         return;
       }
-      const current = await this.deps.storage.inboundChannelEvents.get(claim.eventId);
+      const { inboundChannelEvents } = this.deps.storage;
+      const current = await inboundChannelEvents.get(claim.eventId);
       if (!claimStillMatches(current, claim)) {
         return;
       }
@@ -447,7 +486,7 @@ export class InboundChannelEventService {
       if (current.status === "command_execution_started" || isAmbiguousPostCommitError(error)) {
         terminal = this.requireTransition(
           claim,
-          await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+          await inboundChannelEvents.transitionClaimed(claim, {
             status: "manual_reconciliation_required",
             lastError: message,
             reconciliationReason:
@@ -459,7 +498,7 @@ export class InboundChannelEventService {
       } else if (error instanceof InboundChannelTurnTerminalError || current.attemptCount >= MAX_ATTEMPTS) {
         terminal = this.requireTransition(
           claim,
-          await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+          await inboundChannelEvents.transitionClaimed(claim, {
             status: "failed",
             lastError: message,
           }),
@@ -469,7 +508,7 @@ export class InboundChannelEventService {
         const nextAttemptAt = new Date(Date.now() + delayMs).toISOString();
         this.requireTransition(
           claim,
-          await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, {
+          await inboundChannelEvents.transitionClaimed(claim, {
             status: "retry_wait",
             nextAttemptAt,
             lastError: message,
@@ -543,6 +582,13 @@ export class InboundChannelEventService {
           conversation: payload.conversation,
         });
     if (!initializedSession) {
+      return;
+    }
+    assertCurrent();
+    // An answer to a waiting errand approval is settled here: it never becomes a Chat message or a turn.
+    // Typed text only: a command, a desk question or a voice transcription never answers an approval.
+    const typed = claim.event.dispatchKind === "agent_turn" || claim.event.dispatchKind === "record_only";
+    if (!desk && typed && (await this.answerErrandReply(claim, payload, content))) {
       return;
     }
     assertCurrent();
@@ -734,6 +780,73 @@ export class InboundChannelEventService {
   }
 
   /**
+   * Answers a whole-message APPROVE / DENY / STOP reply to the errand approval waiting in this conversation, and
+   * settles the event. False when the message is not one, so it goes on as ordinary chat.
+   *
+   * Before anything is resolved, the answer is recorded on the event (`commandOperationKey`
+   * `errand-reply:<decision>:<approvalId>`). A retry of an event that carries it never becomes a turn and never
+   * answers another approval: it retries the same decision on that approval while the errand still waits on it, and
+   * otherwise answers "This was already answered."
+   */
+  private async answerErrandReply(
+    claim: InboundChannelEventClaim,
+    payload: StoredInboundPayload,
+    content: string,
+  ): Promise<boolean> {
+    const replies = this.deps.errandReplies?.();
+    const { inboundChannelEvents } = this.deps.storage;
+    const { connectionId, channelKey, eventId, acceptedAt, commandOperationKey, laneKey } = claim.event;
+    // Queued apart from the conversation because an approval was waiting: it never becomes a turn running beside the
+    // conversation's own, so when nothing is waiting any more it is settled as already answered.
+    const control = laneKey.startsWith(INBOUND_ERRAND_CONTROL_LANE_PREFIX);
+    const target = payload.bindingTarget?.trim();
+    // The key names the answer's text too, so a retry that answers differently is a different send.
+    const settle = async (message: string | undefined): Promise<true> => {
+      if (replies && target && message) {
+        await replies.send({
+          connectionId,
+          target,
+          message,
+          idempotencyKey: stableInboundId("errand-reply", eventId, message),
+        });
+      }
+      this.requireTransition(claim, await inboundChannelEvents.transitionClaimed(claim, { status: "completed" }));
+      return true;
+    };
+    const actorId = payload.message.actorId?.trim();
+    const marked = isErrandReplyMarker(commandOperationKey);
+    const answered = marked ? parseErrandReplyMarker(commandOperationKey) : undefined;
+    if (marked && (!answered || !replies || !target || !actorId)) {
+      return await settle(ERRAND_REPLY_ALREADY_ANSWERED_COPY);
+    }
+    if (!replies || !target || !actorId) {
+      return control ? await settle(ERRAND_REPLY_ALREADY_ANSWERED_COPY) : false;
+    }
+    const answer = await replies.handle({
+      connectionId,
+      channelKey,
+      target,
+      actorId,
+      text: content,
+      sentAt: Date.parse(acceptedAt),
+      ...(answered ? { answered } : {}),
+      recordAnswer: async (recorded) => {
+        this.requireTransition(
+          claim,
+          await inboundChannelEvents.transitionClaimed(claim, {
+            status: "message_recorded",
+            linkage: { commandOperationKey: encodeErrandReplyMarker(recorded) },
+          }),
+        );
+      },
+    });
+    // A marked or control-lane event is never released to Chat, whatever the retry answers.
+    return answer.handled || marked || control
+      ? await settle(answer.handled ? answer.reply : ERRAND_REPLY_ALREADY_ANSWERED_COPY)
+      : false;
+  }
+
+  /**
    * The desk question's session, while its binding still lets it be answered; otherwise the question is settled as
    * suppressed, the way any suppressed event is, and nothing is recorded, answered or delivered.
    */
@@ -776,7 +889,8 @@ export class InboundChannelEventService {
     claim: InboundChannelEventClaim,
     payload: StoredInboundPayload,
   ): Promise<BotLoopGuardDecision> {
-    const evaluation = await this.deps.storage.inboundChannelEvents.beginBotLoopEvaluation(claim);
+    const { inboundChannelEvents } = this.deps.storage;
+    const evaluation = await inboundChannelEvents.beginBotLoopEvaluation(claim);
     if (!evaluation) {
       throw new InboundChannelClaimLostError(claim.eventId);
     }
@@ -796,7 +910,7 @@ export class InboundChannelEventService {
       // whether the guard mutated its in-memory bucket. Fail open for this one
       // already-accepted event and persist that recovery decision without
       // charging the guard a second time.
-      const recovered = await this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
+      const recovered = await inboundChannelEvents.completeBotLoopEvaluation(claim, {
         decision: "allow",
         reason: "recovered_incomplete_evaluation",
       });
@@ -817,7 +931,7 @@ export class InboundChannelEventService {
       participantA: payload.message.actorId,
       participantB: claim.event.connectionId,
     });
-    const completed = await this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
+    const completed = await inboundChannelEvents.completeBotLoopEvaluation(claim, {
       decision: guard.action,
       reason: guard.action === "suppress" ? guard.reason : undefined,
     });

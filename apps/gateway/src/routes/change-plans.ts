@@ -125,6 +125,10 @@ const firecrawlConfigurationSchema = nonEmptyStrict({
 const publicWebAddressConfigurationSchema = z
   .object({ publicWebAddress: z.string().trim().min(1).max(400).nullable() })
   .strict();
+// Shape only: the settings owner checks that the session is the operator's own private conversation.
+const errandApprovalConversationSchema = z
+  .object({ approvalSessionId: z.string().trim().min(1).max(256).nullable() })
+  .strict();
 const meshConfigurationSchema = nonEmptyStrict({
   enabled: z.boolean().optional(),
   mode: z.enum(["lan", "wan", "tailnet"]).optional(),
@@ -239,6 +243,12 @@ const requestSchema = z.discriminatedUnion("kind", [
           .object({
             operation: z.literal("public_web_address_configuration"),
             config: publicWebAddressConfigurationSchema,
+          })
+          .strict(),
+        z
+          .object({
+            operation: z.literal("browser_errand_approval_conversation"),
+            config: errandApprovalConversationSchema,
           })
           .strict(),
         z

@@ -353,6 +353,25 @@ describe("Gateway settings owner transaction", () => {
     expect(switched.settings.switchedOffToolGroups).toEqual(["git", "browser"]);
     expect(switched.config.toolPolicy.tools.disabledGroups).toEqual(["browser"]);
     expect(config).toEqual(before);
+
+    // A candidate asks the live ownership check for a picked errand conversation and refuses without one.
+    const isOwnErrandApprovalConversation = vi.fn(async (sessionId: string) => sessionId === "session-own-dm");
+    const picked = await buildSettingsCandidate(
+      { ...deps, isOwnErrandApprovalConversation },
+      { expectedRevision: 9, browserErrandApprovalSessionId: "session-own-dm" },
+    );
+    expect(picked.config.assistant.browserErrands).toEqual({ approvalSessionId: "session-own-dm" });
+    expect(picked.settings.browserErrands).toEqual({ approvalSessionId: "session-own-dm" });
+    await expect(
+      buildSettingsCandidate(
+        { ...deps, isOwnErrandApprovalConversation },
+        { expectedRevision: 9, browserErrandApprovalSessionId: "session-team" },
+      ),
+    ).rejects.toMatchObject({ name: "ValidationError", message: "Pick one of your own private conversations." });
+    await expect(
+      buildSettingsCandidate(deps, { expectedRevision: 9, browserErrandApprovalSessionId: "session-own-dm" }),
+    ).rejects.toMatchObject({ name: "ValidationError" });
+    expect(config).toEqual(before);
   });
 
   it("saves the public web address with the settings, and drops it from the saved config when cleared", async () => {

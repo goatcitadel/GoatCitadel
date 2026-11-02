@@ -10,12 +10,18 @@ import {
   type ErrandApprovalGateDeps,
 } from "./errand-approval-gate.js";
 import { runErrandLoop, type ErrandLoopDeps, type ErrandOutcome, type ErrandProgress } from "./errand-loop.js";
+import { resolveOwnedErrandOrigin, type ErrandOrigin, type ErrandOriginDeps } from "./errand-origin.js";
+import type { ErrandTrackedDelivery } from "./errand-approval-delivery.js";
+import type { ErrandChannelReplies, PendingErrandDelivery } from "./errand-channel-replies.js";
+import { warnErrandNoticeFailure } from "./errand-channel-notices.js";
 
 export const BROWSER_ERRAND_DISABLED_MESSAGE = "Browser errands are turned off. Turn on Browser errands in Settings.";
 export const BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE =
   "Browser errands aren't available on this GoatCitadel. They need GoatCitadel running on your own PC.";
-export const BROWSER_ERRAND_CHANNEL_MESSAGE =
-  "Errands from channels arrive in a later update. Start this one from Chat on your PC.";
+/** A channel sender who is not the operator's own account (see `isErrandOwner`) asked for an errand. */
+export const BROWSER_ERRAND_OWNER_ONLY_MESSAGE = "Only the owner can start a browser errand here.";
+/** Someone other than the operator's own account answered an errand approval in a channel. */
+export const BROWSER_ERRAND_OWNER_ANSWER_MESSAGE = "Only the owner can answer this.";
 export const BROWSER_ERRAND_BUSY_MESSAGE = "Another errand is running. Stop it or wait for it to finish.";
 export const BROWSER_ERRAND_NO_TURN_MESSAGE = "Browser errands run only inside a Chat turn.";
 export const BROWSER_ERRAND_NO_GOAL_MESSAGE = "Say what the errand is.";
@@ -68,13 +74,13 @@ export interface BrowserErrandToolResult extends Record<string, unknown> {
   finalScreenshotAttachmentId?: string;
 }
 
-type GateDeps = Pick<ErrandApprovalGateDeps, "approvals" | "storage" | "attachments" | "realtime">;
+type GateDeps = Pick<ErrandApprovalGateDeps, "approvals" | "storage" | "attachments" | "realtime" | "escalate">;
 
 export interface BrowserErrandServiceDeps {
   isEnabled(): Promise<boolean>;
   deploymentProfile(): string;
-  /** The session's channel: "mission" for Chat in Mission Control, otherwise the channel the turn came in on. */
-  sessionChannel(sessionId: string): Promise<string | undefined>;
+  /** Reads where a turn came from and who sent it, for the owner rule. */
+  origin: ErrandOriginDeps;
   launchBrowser(signal: AbortSignal): Promise<ErrandBrowser>;
   callModel(
     request: ChatCompletionRequest,
@@ -87,10 +93,14 @@ export interface BrowserErrandServiceDeps {
   createGate?: (deps: ErrandApprovalGateDeps) => ErrandApprovalGate;
   idleCloseMs?: number;
   disposeSettleMs?: number;
+  /** Builds the answers to APPROVE / DENY / STOP replies in channel conversations, from this service. */
+  channelReplies?(service: BrowserErrandService): ErrandChannelReplies;
 }
 
 interface ActiveErrand {
   view: ErrandStatusView;
+  /** Where the errand was started: Chat on the PC, or the operator's channel conversation. */
+  origin: ErrandOrigin;
   controller: AbortController;
   gate?: ErrandApprovalGate;
   handBackWaiters: Set<(answer: "resumed" | "stopped") => void>;
@@ -107,6 +117,33 @@ interface ActiveErrand {
   stopping: boolean;
   /** Resolves once the run has finished its cleanup, whatever its outcome. */
   settled?: Promise<void>;
+  /**
+   * This errand's approvals queued to channel conversations, oldest first. A text reply there can answer one only once
+   * its provider send has completed (`deliveredAt`, read from the delivery and kept once known).
+   */
+  deliveries: ReadonlyArray<ErrandTrackedDelivery & { deliveredAt?: number }>;
+}
+
+/**
+ * When the delivery's provider send completed, kept on the errand once known. A send still queued, failed or unreadable
+ * reads as undefined, so a reply in that conversation does not match it yet.
+ */
+async function confirmDelivery(
+  errand: ActiveErrand,
+  item: ActiveErrand["deliveries"][number],
+): Promise<number | undefined> {
+  const deliveredAt = await item.sentAt().catch((error: unknown) => {
+    // eslint-disable-next-line no-console -- bounded diagnostic; the reply simply does not match yet.
+    console.warn("[goatcitadel] errand approval delivery could not be read", {
+      deliveryRunId: item.deliveryRunId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  });
+  if (deliveredAt !== undefined) {
+    errand.deliveries = errand.deliveries.map((entry) => (entry === item ? { ...entry, deliveredAt } : entry));
+  }
+  return deliveredAt;
 }
 
 /** Approval evidence could not be recorded: the errand stops (fail closed) and its summary says why. */
@@ -128,7 +165,65 @@ export class BrowserErrandService {
   private readonly views = new Map<string, ErrandStatusView>();
   private disposed = false;
 
-  public constructor(private readonly deps: BrowserErrandServiceDeps) {}
+  /** Answers whole-message APPROVE / DENY / STOP replies in the conversations this errand asked in. */
+  public readonly channelReplies: ErrandChannelReplies | undefined;
+
+  public constructor(private readonly deps: BrowserErrandServiceDeps) {
+    this.channelReplies = deps.channelReplies?.(this);
+  }
+
+  /** Where the running errand was started, if one is running. */
+  public getActiveOrigin(): ErrandOrigin | undefined {
+    const origin = this.active?.origin;
+    return origin ? { ...origin } : undefined;
+  }
+
+  /**
+   * Remembers that the running errand's approval was queued to a channel conversation. It targets the single active
+   * errand (only one runs at a time); a record that arrives after that errand ended is dropped. Queueing is not
+   * delivery: the record counts for a reply only once `sentAt` reports the completed provider send.
+   */
+  public recordDelivery(record: ErrandTrackedDelivery): void {
+    const errand = this.active;
+    if (!errand) {
+      return;
+    }
+    const { approvalId, connectionId, target, deliveryRunId, sentAt } = record;
+    errand.deliveries = [...errand.deliveries, { approvalId, connectionId, target, deliveryRunId, sentAt }];
+  }
+
+  /**
+   * The approval the running errand is waiting on right now, when its send to this conversation completed no later than
+   * `sentAt` (when the answering message arrived) and its stored record is still pending. An older or stale delivery
+   * to the same conversation never counts, so a reply can only answer the question that was already in front of it.
+   */
+  public async pendingDeliveryFor(
+    connectionId: string,
+    target: string,
+    sentAt: number = Number.POSITIVE_INFINITY,
+  ): Promise<PendingErrandDelivery | undefined> {
+    const errand = this.active;
+    const gate = errand?.gate;
+    const approvalId = gate?.pendingApprovalId();
+    if (!errand || !gate || !approvalId || errand.stopping) {
+      return undefined;
+    }
+    let delivered = false;
+    for (const item of errand.deliveries) {
+      if (item.approvalId !== approvalId || item.connectionId !== connectionId || item.target !== target) {
+        continue;
+      }
+      const deliveredAt = item.deliveredAt ?? (await confirmDelivery(errand, item));
+      if (deliveredAt !== undefined && deliveredAt <= sentAt) {
+        delivered = true;
+        break;
+      }
+    }
+    if (!delivered || !(await gate.isPending(approvalId))) {
+      return undefined;
+    }
+    return { approvalId, errandId: errand.view.errandId };
+  }
 
   public getStatus(toolRunId: string): ErrandStatusView | undefined {
     const view = this.views.get(toolRunId);
@@ -174,9 +269,15 @@ export class BrowserErrandService {
     const goal = typeof request.args.goal === "string" ? request.args.goal.trim().slice(0, ERRAND_GOAL_MAX_CHARS) : "";
     const turnId = request.turnId?.trim();
     const toolRunId = request.toolRunId?.trim();
-    await this.assertAllowed(request.sessionId);
+    await this.assertAllowed();
     if (!turnId || !toolRunId) {
       throw new Error(BROWSER_ERRAND_NO_TURN_MESSAGE);
+    }
+    // Chat on the PC, or the operator's own account in one of their channels; anyone else, or an origin that can't be
+    // read, is refused.
+    const origin = await resolveOwnedErrandOrigin(this.deps.origin, request.sessionId, turnId).catch(() => undefined);
+    if (!origin) {
+      throw new Error(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
     }
     if (!goal) {
       throw new Error(BROWSER_ERRAND_NO_GOAL_MESSAGE);
@@ -196,6 +297,7 @@ export class BrowserErrandService {
         stepText: "Starting",
         modelRequests: 0,
       },
+      origin,
       controller: new AbortController(),
       handBackWaiters: new Set(),
       takenOverMs: 0,
@@ -204,6 +306,7 @@ export class BrowserErrandService {
       windowClosed: false,
       approvalUnrecorded: false,
       stopping: false,
+      deliveries: [],
     };
     // Claimed before any await, so a second call in the same tick is refused.
     this.active = errand;
@@ -243,16 +346,12 @@ export class BrowserErrandService {
     }
   }
 
-  private async assertAllowed(sessionId: string): Promise<void> {
+  private async assertAllowed(): Promise<void> {
     if (!(await this.deps.isEnabled())) {
       throw new Error(BROWSER_ERRAND_DISABLED_MESSAGE);
     }
     if (this.deps.deploymentProfile() === "remote_hardened") {
       throw new Error(BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE);
-    }
-    const channel = await this.deps.sessionChannel(sessionId).catch(() => undefined);
-    if (channel !== "mission") {
-      throw new Error(BROWSER_ERRAND_CHANNEL_MESSAGE);
     }
   }
 
@@ -296,7 +395,8 @@ export class BrowserErrandService {
   ): Promise<BrowserErrandToolResult> {
     const { request, turnId, toolRunId } = ids;
     const signal = errand.controller.signal;
-    const realNow = this.deps.now ?? Date.now;
+    const { now: injectedNow, gate: gateDeps } = this.deps;
+    const realNow = injectedNow ?? Date.now;
     const offClosed = browser.onClosed(() => {
       errand.windowClosed = true;
       errand.controller.abort();
@@ -304,7 +404,7 @@ export class BrowserErrandService {
     });
     const offOverlay = browser.overlay.onEvent((event) => this.onOverlayEvent(errand, browser, event, realNow));
     const gate = (this.deps.createGate ?? createErrandApprovalGate)({
-      ...this.deps.gate,
+      ...gateDeps,
       sessionId: request.sessionId,
       turnId,
       toolRunId,
@@ -313,6 +413,7 @@ export class BrowserErrandService {
       browser,
       signal,
       now: realNow,
+      origin: errand.origin,
     });
     errand.gate = gate;
     const hooks = errandLoopApprovalHooks(gate);
@@ -320,7 +421,7 @@ export class BrowserErrandService {
     let lastThumbnailStep = -ERRAND_THUMBNAIL_EVERY_STEPS;
     const upload = async (fileName: string, png: Buffer): Promise<string> =>
       (
-        await this.deps.gate.attachments.upload({
+        await gateDeps.attachments.upload({
           sessionId: request.sessionId,
           fileName,
           mimeType: "image/png",
@@ -407,6 +508,15 @@ export class BrowserErrandService {
         errand.view.finalAttachmentId = finalScreenshotAttachmentId;
       }
       this.finishView(errand, outcome.status, outcome.summary);
+      // A disposed service (the Gateway is shutting down) sends nothing more to channels.
+      if (!this.disposed) {
+        void this.channelReplies?.notices
+          ?.finished(errand.origin, {
+            sessionId: request.sessionId,
+            ...(finalScreenshotAttachmentId ? { finalScreenshotAttachmentId } : {}),
+          })
+          .catch(warnErrandNoticeFailure(errand.origin.kind === "channel" ? errand.origin.connectionId : undefined));
+      }
       errand.view.stepCount = outcome.steps;
       errand.view.modelRequests = outcome.modelRequests;
       return {
@@ -535,7 +645,17 @@ export class BrowserErrandService {
     if (errand.controller.signal.aborted) {
       this.resolveHandBack(errand, "stopped");
     }
-    return await handedBack;
+    // A sign-in or bot-check pause tells the operator's channel, unless Stop already ended it during the render; the
+    // notice is withdrawn once the pause ends.
+    const cancelNotice =
+      reason === "operator" || errand.controller.signal.aborted
+        ? undefined
+        : this.channelReplies?.notices?.signInPaused(errand.origin, reason);
+    try {
+      return await handedBack;
+    } finally {
+      cancelNotice?.();
+    }
   }
 
   private resolveHandBack(errand: ActiveErrand, answer: "resumed" | "stopped"): void {

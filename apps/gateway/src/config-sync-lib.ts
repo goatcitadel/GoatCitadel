@@ -88,6 +88,10 @@ export function buildUnifiedConfigPayloadFromRuntime(
     worktreesDir: runtimeConfig.assistant.worktreesDir,
     // Left out when unset, so clearing the address removes the key from the saved file.
     ...(runtimeConfig.assistant.publicWebAddress ? { publicWebAddress: runtimeConfig.assistant.publicWebAddress } : {}),
+    // Left out when no conversation is picked, like the address.
+    ...(runtimeConfig.assistant.browserErrands?.approvalSessionId
+      ? { browserErrands: { approvalSessionId: runtimeConfig.assistant.browserErrands.approvalSessionId } }
+      : {}),
     auth: {
       mode: runtimeConfig.assistant.auth.mode,
       allowLoopbackBypass: runtimeConfig.assistant.auth.allowLoopbackBypass,

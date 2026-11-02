@@ -1,8 +1,10 @@
 import path from "node:path";
 import type {
+  ChannelSendInput,
   ChatAttachmentRecord,
   ChatCompletionRequest,
   ChatCompletionResponse,
+  DiscordPairingRecord,
   ModelUsageAttributionContext,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
@@ -13,13 +15,24 @@ import type { ChatAttachmentUploadInput } from "../chat-attachment-service.js";
 import { createUtilityModelUsageAttribution } from "../utility-model-usage-attribution.js";
 import { BrowserErrandService } from "./browser-errand-service.js";
 import type { ErrandApprovalRuntime } from "./errand-approval-gate.js";
+import { createErrandPressGuard } from "./errand-approval-press-guard.js";
+import {
+  createErrandAwaitsAnswer,
+  createErrandReplyHandler,
+  type ErrandChannelReplies,
+  type ErrandReplyHandlerOptions,
+} from "./errand-channel-replies.js";
+import { createGatewayErrandChannelNotices } from "./errand-channel-notices-gateway.js";
+import { createErrandOriginDeps } from "./errand-origin.js";
+import { createGatewayErrandEscalation, type ErrandEscalationSources } from "./errand-escalation-gateway.js";
 
 export const BROWSER_ERRAND_UTILITY_KIND = "browser_errand";
 
 export interface GatewayBrowserErrandInputs {
   config: GatewayRuntimeConfig;
   storage: AsyncStorage;
-  approvals: ErrandApprovalRuntime;
+  /** Also issues the remote-action token an errand approval is sent to a channel conversation with. */
+  approvals: ErrandApprovalRuntime & ErrandEscalationSources["approvals"];
   isEnabled(): Promise<boolean>;
   chatCompletions(
     request: ChatCompletionRequest,
@@ -27,6 +40,10 @@ export interface GatewayBrowserErrandInputs {
   ): Promise<ChatCompletionResponse>;
   uploadAttachment(input: ChatAttachmentUploadInput): Promise<ChatAttachmentRecord>;
   subscribeRealtime(listener: (event: RealtimeEvent) => void): () => void;
+  /** The Gateway's Discord pairing records, for the owner rule on Discord connections. */
+  readDiscordPairings(): Promise<DiscordPairingRecord[]>;
+  /** Sends a channel message as GoatCitadel's own delivery. */
+  sendChannelMessage(input: ChannelSendInput & { idempotencyKey?: string }): Promise<unknown>;
 }
 
 /** Where the errand browser keeps its own logins, apart from the operator's everyday Chrome. */
@@ -36,11 +53,32 @@ export function browserErrandProfileDir(config: Pick<GatewayRuntimeConfig, "root
 
 /** Builds the Gateway's errand service from live Gateway pieces; GatewayService only wires the result. */
 export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandInputs): BrowserErrandService {
-  const { config } = inputs;
-  return new BrowserErrandService({
+  const { config, approvals, sendChannelMessage } = inputs;
+  const origin = createErrandOriginDeps(inputs);
+  // Read only once an approval escalates, after the service below exists.
+  const escalate = createGatewayErrandEscalation(inputs, () => errandService);
+  const errandService: BrowserErrandService = new BrowserErrandService({
     isEnabled: () => inputs.isEnabled(),
     deploymentProfile: () => config.assistant.deploymentProfile,
-    sessionChannel: async (sessionId) => (await inputs.storage.sessions.getBySessionId(sessionId)).channel,
+    origin,
+    // APPROVE / DENY / STOP replies: the service's own deliveries, the owner rule, the approval runtime, a plain send.
+    channelReplies: (service): ErrandChannelReplies => {
+      const pendingDeliveryFor: ErrandReplyHandlerOptions["pendingDeliveryFor"] = (connectionId, target, sentAt) =>
+        service.pendingDeliveryFor(connectionId, target, sentAt);
+      return {
+        handle: createErrandReplyHandler({
+          pendingDeliveryFor,
+          assertOwner: createErrandPressGuard(origin),
+          resolveApproval: (approvalId, decision, resolvedBy) =>
+            approvals.resolveApproval(approvalId, { decision, resolvedBy }),
+          stopErrand: (errandId, actorId) => service.stop(errandId, actorId),
+        }),
+        awaitsAnswer: createErrandAwaitsAnswer(pendingDeliveryFor),
+        // The answer is fixed copy, sent without the channel's markup parsing.
+        send: async (input) => void (await sendChannelMessage({ ...input, plainText: true })),
+        notices: createGatewayErrandChannelNotices(inputs),
+      };
+    },
     launchBrowser: (signal) =>
       launchErrandBrowser({
         profileDir: browserErrandProfileDir(config),
@@ -65,7 +103,8 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
         }),
       ),
     gate: {
-      approvals: inputs.approvals,
+      approvals,
+      escalate,
       storage: inputs.storage,
       realtime: { subscribeRealtime: (listener) => inputs.subscribeRealtime(listener) },
       attachments: {
@@ -77,4 +116,5 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
       },
     },
   });
+  return errandService;
 }

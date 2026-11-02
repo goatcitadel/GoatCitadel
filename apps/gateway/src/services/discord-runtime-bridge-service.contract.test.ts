@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { ChatSendMessageResponse, ChatSessionRecord } from "@goatcitadel/contracts";
+import { ErrandAlreadyAnsweredError, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
+import { ConflictError, type ChatSendMessageResponse, type ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   acceptDiscordRuntimeSlashCommand,
   awaitDiscordRuntimeSlashCommandResult,
@@ -377,6 +378,23 @@ describe("discord-runtime-bridge-service contract behavior", () => {
     expect(response).toContain("Approved approval-1");
   });
 
+  it("answers a raw-token errand approval refusal with the owner-only copy", async () => {
+    const host = createHost();
+    host.resolveApprovalWithRemoteToken = vi.fn(async () => {
+      throw new ErrandOwnerOnlyError();
+    });
+
+    const response = await handleDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "dm_1",
+      actorId: "user-1",
+      commandText: "/approve grat_secret",
+      sourceCommandId: "interaction-1",
+    });
+
+    expect(response).toBe("Only the owner can answer this.");
+  });
+
   it("passes Discord actor provenance into chat command fallback handling", async () => {
     const host = createHost();
 
@@ -743,8 +761,39 @@ describe("discord-runtime-bridge-service contract behavior", () => {
       connectorId: "integration:discord-1",
       decision: "approve",
       resolvedBy: "discord:user-1",
+      channelActorId: "user-1",
     });
     expect(host.resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
+  });
+
+  it("says an errand approval typed as /approve was already answered, with no approval id", async () => {
+    const host = createHost();
+    host.resolveApprovalWithRemoteTokenId = vi.fn(async () => {
+      throw new ErrandAlreadyAnsweredError();
+    });
+    await acceptDiscordRuntimeSlashCommand(host, {
+      connectionId: "discord-1",
+      target: "channel-1",
+      actorId: "user-1",
+      commandText: "/approve grat_super_secret",
+      sourceCommandId: "interaction-approval-answered",
+      room: "channel-1",
+      metadata: { interaction: true },
+    });
+    const acceptedInput = host.acceptMock.mock.calls[0]?.[0];
+
+    await expect(
+      executeDiscordRuntimeInboundCommand(host, {
+        eventType: acceptedInput.eventType,
+        inboundEventId: "inbound-interaction-approval-answered",
+        operationKey: acceptedInput.idempotencyKey,
+        idempotencyKey: acceptedInput.idempotencyKey,
+        channel: acceptedInput.channel,
+        connectionId: acceptedInput.connectionId,
+        bindingTarget: acceptedInput.bindingTarget,
+        message: acceptedInput.message,
+      }),
+    ).resolves.toEqual({ resultText: "This was already answered." });
   });
 
   it("persists only a not-found marker when an approval bearer value is unknown", async () => {
@@ -837,6 +886,120 @@ describe("discord-runtime-bridge-service contract behavior", () => {
       }),
     ).rejects.toThrow("Unsupported durable inbound command event");
     expect(host.parseChatCommand).not.toHaveBeenCalled();
+  });
+
+  describe("an Approve / Deny button press", () => {
+    async function pressButton(host: ReturnType<typeof createHost>, commandText: string) {
+      await acceptDiscordRuntimeSlashCommand(host, {
+        connectionId: "discord-1",
+        target: "dm-1",
+        actorId: "user-1",
+        commandText,
+        sourceCommandId: "interaction-button-1",
+        room: "dm-1",
+        metadata: { dm: true, interaction: true },
+        eventType: "discord-approval-button",
+      });
+      const accepted = host.acceptMock.mock.calls[0]![0];
+      const execute = () =>
+        executeDiscordRuntimeInboundCommand(host, {
+          eventType: accepted.eventType,
+          inboundEventId: "inbound-interaction-button-1",
+          operationKey: accepted.idempotencyKey,
+          idempotencyKey: accepted.idempotencyKey,
+          channel: accepted.channel,
+          connectionId: accepted.connectionId,
+          bindingTarget: accepted.bindingTarget,
+          message: accepted.message,
+        });
+      return { accepted, execute };
+    }
+
+    it("is accepted as a button event without the raw token, then approves through the opaque token id", async () => {
+      const host = createHost();
+      const { accepted, execute } = await pressButton(host, "/approve grat_button_secret");
+
+      expect(accepted.eventType).toBe("discord-approval-button");
+      expect(JSON.stringify(accepted)).not.toContain("grat_button_secret");
+      await expect(execute()).resolves.toEqual({ resultText: "Approved." });
+      expect(host.findRemoteActionTokenId).toHaveBeenCalledWith("grat_button_secret");
+      expect(host.resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith({
+        tokenId: "opaque-action-1",
+        connectorId: "integration:discord-1",
+        decision: "approve",
+        resolvedBy: "discord:user-1",
+        channelActorId: "user-1",
+      });
+    });
+
+    it("answers a non-owner's press on an errand approval with the owner-only copy", async () => {
+      const host = createHost();
+      host.resolveApprovalWithRemoteTokenId = vi.fn(async () => {
+        throw new ErrandOwnerOnlyError();
+      });
+      const { execute } = await pressButton(host, "/approve grat_button_secret");
+
+      await expect(execute()).resolves.toEqual({ resultText: "Only the owner can answer this." });
+    });
+
+    it("rejects on Deny", async () => {
+      const host = createHost();
+      const { execute } = await pressButton(host, "/deny grat_button_secret");
+
+      await expect(execute()).resolves.toEqual({ resultText: "Denied." });
+      expect(host.resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith(
+        expect.objectContaining({ decision: "reject", resolvedBy: "discord:user-1" }),
+      );
+    });
+
+    it("says the approval was already answered when its token is spent or the approval resolved elsewhere", async () => {
+      const host = createHost();
+      host.resolveApprovalWithRemoteTokenId = vi.fn(async () => {
+        throw new ConflictError({ message: "Remote action token has expired." });
+      });
+      const { execute } = await pressButton(host, "/approve grat_button_secret");
+
+      await expect(execute()).resolves.toEqual({ resultText: "This was already answered." });
+    });
+
+    it("leaves any other resolution failure to the durable command owner", async () => {
+      const host = createHost();
+      host.resolveApprovalWithRemoteTokenId = vi.fn(async () => {
+        throw new Error("storage unavailable");
+      });
+      const { execute } = await pressButton(host, "/approve grat_button_secret");
+
+      await expect(execute()).rejects.toThrow("storage unavailable");
+    });
+
+    it("does not resolve an unknown token, and refuses a button event with no approval in it", async () => {
+      const unknown = createHost();
+      unknown.findRemoteActionTokenId = vi.fn(() => undefined);
+      const { execute } = await pressButton(unknown, "/approve grat_unknown_button");
+      await expect(execute()).resolves.toEqual({ resultText: "GoatCitadel did not recognize that approval." });
+      expect(unknown.resolveApprovalWithRemoteTokenId).not.toHaveBeenCalled();
+
+      const host = createHost();
+      await expect(
+        executeDiscordRuntimeInboundCommand(host, {
+          eventType: "discord-approval-button",
+          inboundEventId: "inbound-button-bare",
+          operationKey: "discord:discord-1:interaction:bare",
+          idempotencyKey: "discord:discord-1:interaction:bare",
+          channel: "discord",
+          connectionId: "discord-1",
+          bindingTarget: "dm-1",
+          message: {
+            eventId: "bare",
+            account: "discord-1",
+            actorId: "user-1",
+            actorType: "user",
+            content: "/status",
+          },
+        }),
+      ).rejects.toThrow("missing its secret-free approval metadata");
+      expect(host.resolveApprovalWithRemoteTokenId).not.toHaveBeenCalled();
+    });
   });
 
   it("replays the persisted result and uses provider-safe copy for manual reconciliation", async () => {

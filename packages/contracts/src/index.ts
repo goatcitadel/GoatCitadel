@@ -170,6 +170,7 @@ export * from "./channel-wizard.js";
 export * from "./channel-address-host.js";
 export * from "./channel-reply-window.js";
 export * from "./public-web-address.js";
+export * from "./browser-errand-approval-conversation.js";
 export * from "./channel-probes.js";
 export * from "./channel-setup-evidence.js";
 export * from "./research.js";

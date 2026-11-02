@@ -11,7 +11,7 @@ import { describeRetiredChannel } from "@goatcitadel/contracts";
 import { MCP_APPROVAL_DELIVERY_TOOL_NAME } from "./mcp-approval-inbox.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { describeChannelCapabilities, describeChannelFeatureMetadata } from "./channel-diagnostics.js";
-import { isTelegramApprovalActionConnectionReady } from "./channel-secret-resolution.js";
+import { isInlineApprovalActionConnectionReady } from "./channel-secret-resolution.js";
 
 const CONNECTOR_CAPABILITY_VERSION = "v1";
 
@@ -78,10 +78,14 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
           : "degraded";
   const approvalDeliveryTarget = resolveIntegrationApprovalDeliveryTarget(connection);
   const approvalDeliveryReady = !retiredReason && status === "active" && Boolean(approvalDeliveryTarget);
-  const approvalInlineActionsReady =
-    approvalDeliveryReady &&
+  // Buttons on an approval sent to a named conversation need no default approval target, only a connection whose
+  // button presses come back authenticated; the default-target delivery also needs that target.
+  const conversationApprovalInlineActionsReady =
+    !retiredReason &&
+    status === "active" &&
     channelFeatures?.runtimePosture.inboundReadiness === "ready" &&
-    isTelegramApprovalActionConnectionReady(connection);
+    isInlineApprovalActionConnectionReady(connection);
+  const approvalInlineActionsReady = approvalDeliveryReady && conversationApprovalInlineActionsReady;
   return {
     connectorId: `integration:${connection.connectionId}`,
     connectorType: "integration_connection",
@@ -107,6 +111,7 @@ function toIntegrationConnectorRecord(connection: IntegrationConnection): Connec
       approvalDeliveryMode: isChannel ? "integration_channel_send" : undefined,
       approvalDeliveryReady,
       approvalInlineActionsReady,
+      conversationApprovalInlineActionsReady,
       approvalDeliveryReason: retiredReason ?? describeIntegrationApprovalDelivery(connection, approvalDeliveryTarget),
       approvalDeliveryTarget,
       channelCapabilities:

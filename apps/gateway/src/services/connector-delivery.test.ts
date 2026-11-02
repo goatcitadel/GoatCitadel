@@ -78,6 +78,38 @@ describe("dispatchConnectorDelivery", () => {
     });
   });
 
+  it("passes a plain-text channel send through only when the payload asks for it", async () => {
+    const commsSend = vi.fn(async (_input: ChannelSendInput): Promise<Record<string, unknown>> => ({ status: "sent" }));
+    const deps = {
+      commsSend,
+      commsReply: vi.fn(async () => ({})),
+      commsReact: vi.fn(),
+      commsUnsend: vi.fn(),
+      commsTyping: vi.fn(async () => createTypingResult()),
+      invokeMcpTool: vi.fn(),
+      publishRealtime: vi.fn(),
+    };
+    const connector = createConnector("integration_connection", "integration:channel-1", "channel-1", [
+      "outbound_messages",
+    ]);
+
+    await dispatchConnectorDelivery(
+      connector,
+      createPayload("channel.send", { target: "#ops", message: "a <b> c", plainText: true }),
+      deps,
+    );
+    await dispatchConnectorDelivery(connector, createPayload("channel.send", { target: "#ops", message: "x" }), deps);
+    await dispatchConnectorDelivery(
+      connector,
+      createPayload("channel.send", { target: "#ops", message: "y", plainText: "yes" }),
+      deps,
+    );
+
+    expect(commsSend.mock.calls[0]![0].plainText).toBe(true);
+    expect(commsSend.mock.calls[1]![0]).not.toHaveProperty("plainText");
+    expect(commsSend.mock.calls[2]![0]).not.toHaveProperty("plainText");
+  });
+
   it("fails closed when a durable channel delivery contains a malformed approval action template", async () => {
     const commsSend = vi.fn(
       async (): Promise<ToolInvokeResult> => ({

@@ -449,6 +449,7 @@ import {
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
+import { createGatewayErrandPressGuard } from "./browser-errands/errand-approval-press-guard.js";
 import { createGatewayBrowserErrandService } from "./browser-errands/browser-errand-composition.js";
 import type { BrowserErrandService } from "./browser-errands/browser-errand-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
@@ -595,6 +596,7 @@ import {
   createGatewayRouteCompositionPort,
   createIntegrationChannelServiceForGateway,
   createIntegrationDiagnosticsServiceForGateway,
+  createRuntimeConfigurationOwnerChecks,
   createSettingsAuthRuntimeDependenciesForGateway,
   createSettingsRuntimeDependenciesForGateway,
   type GatewayRouteCompositionPort,
@@ -914,7 +916,7 @@ import {
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import {
-  isTelegramApprovalActionConnectorReady,
+  isInlineApprovalActionConnectorReady,
   resolveChannelSendEnvSecret,
   resolveConnectionConfigSecret,
   type ChannelSecretOwner,
@@ -925,7 +927,10 @@ import {
   type OperatorDeskSendInput,
   type OperatorDeskSendResult,
 } from "./channel-desk-turn.js";
-import { enqueueApprovalRemoteTokenConnectorDelivery } from "./approval-connector-delivery.js";
+import {
+  enqueueApprovalRemoteTokenConnectorDelivery,
+  type ApprovalRemoteTokenDeliveryOverride,
+} from "./approval-connector-delivery.js";
 import {
   commsActivity as commsActivityImpl,
   commsReact as commsReactImpl,
@@ -1386,6 +1391,7 @@ export class GatewayService {
           : discordRuntimeBridgeService.executeDiscordRuntimeInboundCommand(this, input),
       decideBotLoop: (input) => getInboundBotLoopGuard().decide(input),
       emitChannelActivity: async (input) => await this.commsActivity(input),
+      errandReplies: () => this.browserErrandService.channelReplies,
       recordDevDiagnostic: (input) => this.recordDevDiagnostic(input),
     });
     this.browserSessionRuntimeService = new BrowserSessionRuntimeService({
@@ -1482,7 +1488,7 @@ export class GatewayService {
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
-        isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
+        isInlineApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
       resolveChannelConnectionSecret: (connectionId, ref) =>
         this.resolveConnectionSecret({ ref }, "ref", "refEnv", undefined, { connectionId }),
       resolveChannelEnvSecret: resolveChannelSendEnvSecret,
@@ -2432,6 +2438,7 @@ export class GatewayService {
       publishRealtime: async (eventType, source, payload, options) =>
         await this.publishRealtime(eventType, source, payload, options),
       requireConnectorRecord: async (connectorId) => await this.requireConnectorRecord(connectorId),
+      assertErrandPressOwner: createGatewayErrandPressGuard(this),
       consumeRemoteActionToken: (token, actionType, options) =>
         this.consumeRemoteActionToken(token, actionType, options),
       consumeRemoteActionTokenById: (tokenId, actionType, options) =>
@@ -2458,8 +2465,8 @@ export class GatewayService {
         await this.enqueueApprovalResolutionEffects(approval, input, options),
       requestApprovalEffectProcessing: () => this.approvalEffectsService.requestEffectProcessing(),
       awaitApprovalResolutionEffects: (approvalId) => this.approvalEffectsService.awaitResolutionEffects(approvalId),
-      enqueueApprovalRemoteTokenDelivery: async (approval, connector, tokenRecord) =>
-        await this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
+      enqueueApprovalRemoteTokenDelivery: async (approval, connector, tokenRecord, delivery) =>
+        await this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord, delivery),
     });
     this.browserErrandService = createGatewayBrowserErrandService({
       config: this.config,
@@ -2469,6 +2476,8 @@ export class GatewayService {
       chatCompletions: (request, attribution) => this.llmService.chatCompletions(request, attribution),
       uploadAttachment: (input) => chatAttachmentService.uploadChatAttachment(this.buildChatAttachmentHost(), input),
       subscribeRealtime: (listener) => this.realtimeEventService.subscribeRealtime(listener),
+      readDiscordPairings: () => this.readDiscordPairings(),
+      sendChannelMessage: (input) => this.commsSend(input, OWN_DELIVERY),
     });
     this.steerService = new ChatSteerService();
     this.chatCompactionBreakerActionService = createChatCompactionBreakerActionServiceForGateway({
@@ -3379,10 +3388,7 @@ export class GatewayService {
           this.llamaCppSetupSelection.resolve(selectionId, workspaceId),
         discardManagedSelection: (selectionId) => this.llamaCppSetupSelection.discard(selectionId),
         refreshLlamaRuntime: () => this.llamaCppRuntime.refresh(),
-        validateSettingsUpdate: async (input) => {
-          const deps = createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort());
-          await settingsAuthService.buildSettingsCandidate(deps, input);
-        },
+        ...createRuntimeConfigurationOwnerChecks(() => this.getRouteCompositionPort()),
         hasTemporaryAuthCredential: (planId) =>
           Boolean(this.secretStore.getSecret(runtimeTemporaryAuthAccount(planId))?.trim()),
         consumeTemporaryAuthCredential: (planId) => {
@@ -10090,6 +10096,7 @@ export class GatewayService {
       connectorId: string;
       issuedBy?: string;
       expiresInMs?: number;
+      delivery?: ApprovalRemoteTokenDeliveryOverride;
     },
   ): Promise<RemoteApprovalActionTokenIssueResult> {
     return await this.approvalRuntime.createApprovalRemoteActionToken(approvalId, input);
@@ -10113,6 +10120,7 @@ export class GatewayService {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    channelActorId?: string;
   }): Promise<ApprovalResolveResult> {
     return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }
@@ -10161,11 +10169,8 @@ export class GatewayService {
   /** @internal */ public async enqueueApprovalRemoteTokenDelivery(
     approval: ApprovalRequest,
     connector: ConnectorRecord,
-    tokenRecord: {
-      token: string;
-      tokenId: string;
-      expiresAt: string;
-    },
+    tokenRecord: { token: string; tokenId: string; expiresAt: string },
+    delivery?: ApprovalRemoteTokenDeliveryOverride,
   ): Promise<DurableRunRecord | undefined> {
     if (!(await this.isFeatureEnabled("durableKernelV1Enabled"))) {
       return undefined;
@@ -10176,7 +10181,7 @@ export class GatewayService {
         requestAttribution: this.getCurrentRequestAttribution(),
         createDurableRun: async (input) => await this.createDurableRun(input),
       },
-      { approval, connector, tokenRecord },
+      { approval, connector, tokenRecord, ...(delivery ? { delivery } : {}) },
     );
   }
 

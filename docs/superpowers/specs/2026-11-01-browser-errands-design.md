@@ -3,7 +3,7 @@
 Date: 2026-11-01
 Status: draft for operator review
 
-Delivery status: PR 1 delivered the errand browser, the Gateway errand loop and Chat tool (behind the "Browser errands" flag), approval integrity, the Chat card with approvals, and the safety doc section plus a local proof script (`scripts/dev/errand-local-proof.mjs`). PR 2 and PR 3 remain. Not yet run: the local proof script and the live Codex acceptance check have not been run; the operator is to run them.
+Delivery status: PR 1 delivered the errand browser, the Gateway errand loop and Chat tool (behind the "Browser errands" flag), approval integrity, the Chat card with approvals, and the safety doc section plus a local proof script (`scripts/dev/errand-local-proof.mjs`). PR 2 delivered errands in channels: starting an errand from the operator's own channel account, approvals and sign-in notices reaching channels (right away for channel-started errands, after 30 seconds for PC-started ones, plus a Settings › Tools conversation picker), APPROVE / DENY / STOP replies and buttons on Telegram (webhook mode) and Discord, screenshots in private conversations only, and the final screenshot sent back. PR 3 remains (the phone approving). Not yet run: the local proof script, the live Codex acceptance check, and live checks per channel; the operator is to run them.
 
 ## Intent
 

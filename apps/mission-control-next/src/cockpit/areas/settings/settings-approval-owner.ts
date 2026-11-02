@@ -15,6 +15,7 @@ export type SettingsApprovalOwner =
   | "chat-thinking-stream"
   | "settings-approval-skip"
   | "browser-errands"
+  | "browser-errand-approvals"
   | "firecrawl"
   | "search-engine-order"
   | "public-web-address";
@@ -91,6 +92,7 @@ export function settingsApprovalOwnerBinding(
       "firecrawl",
       "search-engine-order",
       "public-web-address",
+      "browser-errand-approvals",
     ].includes(owner)
   ) {
     const operation =
@@ -108,7 +110,9 @@ export function settingsApprovalOwnerBinding(
                   ? "web_search_configuration"
                   : owner === "public-web-address"
                     ? "public_web_address_configuration"
-                    : "llama_cpp_setup";
+                    : owner === "browser-errand-approvals"
+                      ? "browser_errand_approval_conversation"
+                      : "llama_cpp_setup";
     expectedWorkspace = owner === "llama-setup" ? workspaceId : "default";
     matches =
       plan.kind === "runtime_configuration" &&

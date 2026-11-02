@@ -19,6 +19,12 @@ import {
   ValidationError,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import type { ApprovalRemoteTokenDeliveryOverride } from "./approval-connector-delivery.js";
+import {
+  asErrandAlreadyAnswered,
+  assertErrandChannelPressMayAnswer,
+  assertErrandRawTokenMayAnswer,
+} from "./browser-errands/errand-approval-press-guard.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { withApprovalFollowUp } from "./approval-follow-up.js";
 import { buildRemoteTokenConsumedObservabilityEffect } from "./approval-observability.js";
@@ -59,6 +65,8 @@ export interface ApprovalRemoteActionContext {
     input: ApprovalResolveInput,
     context?: ApprovalResolutionContext,
   ): Promise<ApprovalResolveResult>;
+  /** Throws unless the channel user is the operator's own account; asked only for errand approvals. */
+  assertErrandPressOwner?(input: { connectorId: string; actorId: string }): Promise<void>;
   enqueueApprovalObservabilityEffects(
     approvalId: string,
     items: readonly ApprovalObservabilityEffectInput[],
@@ -67,6 +75,7 @@ export interface ApprovalRemoteActionContext {
     approval: ApprovalRequest,
     connector: ConnectorRecord,
     tokenRecord: { token: string; tokenId: string; expiresAt: string },
+    delivery?: ApprovalRemoteTokenDeliveryOverride,
   ): Promise<{ runId?: string } | undefined>;
 }
 
@@ -77,6 +86,8 @@ export async function createApprovalRemoteActionToken(
     connectorId: string;
     issuedBy?: string;
     expiresInMs?: number;
+    /** Send this delivery to one conversation with its own message instead of the connector's default. */
+    delivery?: ApprovalRemoteTokenDeliveryOverride;
   },
 ): Promise<RemoteApprovalActionTokenIssueResult> {
   const approval = await context.storage.approvals.get(approvalId);
@@ -150,11 +161,13 @@ export async function createApprovalRemoteActionToken(
     ...created,
     approvalId,
     token,
-    ...(await enqueueRemoteTokenDelivery(context, deliveryApproval, connector, {
-      token,
-      tokenId: created.tokenId,
-      expiresAt: created.expiresAt,
-    })),
+    ...(await enqueueRemoteTokenDelivery(
+      context,
+      deliveryApproval,
+      connector,
+      { token, tokenId: created.tokenId, expiresAt: created.expiresAt },
+      input.delivery,
+    )),
   };
 }
 
@@ -239,6 +252,7 @@ export async function resolveApprovalWithRemoteToken(
     resolvedBy?: string;
   },
 ): Promise<ApprovalResolveResult> {
+  await assertErrandRawTokenMayAnswer(context, input.token, input.connectorId);
   const tokenRecord = await context.consumeRemoteActionToken(input.token, "approval.resolve", {
     claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
     expectedConnectorId: input.connectorId,
@@ -255,17 +269,25 @@ export async function resolveApprovalWithRemoteTokenId(
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    /** The channel user who pressed the button; an errand approval then needs that user to be the owner. */
+    channelActorId?: string;
   },
 ): Promise<ApprovalResolveResult> {
   const connectorId = input.connectorId.trim();
   if (!connectorId) {
     throw new ValidationError({ message: "Opaque remote action token resolution requires a connector binding." });
   }
-  const tokenRecord = await context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
-    claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
-    expectedConnectorId: connectorId,
-  });
-  return resolveApprovalWithConsumedRemoteToken(context, tokenRecord, input);
+  const errandApproval = await assertErrandChannelPressMayAnswer(context, input.tokenId, input.channelActorId);
+  try {
+    const tokenRecord = await context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
+      claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
+      expectedConnectorId: connectorId,
+    });
+    return await resolveApprovalWithConsumedRemoteToken(context, tokenRecord, input);
+  } catch (error) {
+    // An errand approval answered elsewhere: the channel gets copy without the approval id a conflict may carry.
+    throw errandApproval ? asErrandAlreadyAnswered(error) : error;
+  }
 }
 
 function assertApprovalPending(approval: ApprovalRequest): void {
@@ -297,9 +319,10 @@ async function enqueueRemoteTokenDelivery(
   approval: ApprovalRequest,
   connector: ConnectorRecord,
   tokenRecord: { token: string; tokenId: string; expiresAt: string },
+  delivery?: ApprovalRemoteTokenDeliveryOverride,
 ): Promise<Pick<RemoteApprovalActionTokenIssueResult, "deliveryStatus" | "deliveryRunId" | "deliveryError">> {
   try {
-    const deliveryRun = await context.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord);
+    const deliveryRun = await context.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord, delivery);
     if (!deliveryRun) {
       return { deliveryStatus: "not_configured" };
     }
