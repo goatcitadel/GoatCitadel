@@ -12238,7 +12238,7 @@ export class GatewayService {
     this.promptPackService?.close();
     this.stopIntervalSchedulers();
     this.orchestrationWorktreeService.close();
-    await this.browserErrandService.dispose();
+    await this.browserErrandService?.dispose();
     if (this.backgroundTasks.size > 0) {
       const tasks = [...this.backgroundTasks];
       this.backgroundTasks.clear();
