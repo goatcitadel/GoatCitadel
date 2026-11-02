@@ -29,8 +29,18 @@ Errands are off until the operator turns on the "Browser errands" switch in Sett
 - **Visible screen and cursor:** the window is visible, with a banner and the GoatCitadel cursor.
 - **Approval-gated side effects:** spending, sending, deleting, and changing account settings need approval. Sign-ins are handed to the operator.
 - **Durable before/after audit:** for every approved action, the spotlight screenshot before and a screenshot after are kept with the approval record. The URLs the errand visited are listed in its tool result in Chat.
-- **Immediate stop:** Stop (on the window banner and on the Chat card) and Esc. Replying `STOP` from a channel arrives with a later PR.
+- **Immediate stop:** Stop (on the window banner and on the Chat card) and Esc. In a channel, the operator's own account can reply `STOP`.
 - **Gateway enforcement:** policy, deny-wins, approvals, and network rules (private and LAN addresses are blocked) stay in the Gateway.
+
+### Errands in channels
+
+The operator can also start and approve errands from a channel conversation, with these rules:
+
+- **Who counts as the operator.** Only the operator's own account: an `ownerActorIds` entry ("This is you") that is allowlisted (allowlist mode) or, on a pairing-mode connection, still approved (Telegram pairing in config, Discord pairing record). Revoking the pairing stops it. Turns typed in Mission Control count as the PC. Anyone else in a conversation is ignored for errands, buttons, and replies.
+- **Where approvals go.** An errand started from a channel asks in that conversation right away. An errand started at the PC asks in the window and Chat first; if still unanswered after 30 seconds it also goes to the one conversation picked in Settings › Tools (only the operator's own private conversation) and to the phone. Every errand's approval reaches the phone after 30 seconds if still unanswered; there is no instant phone push for errand approvals, and pushes skip approvals that were already answered.
+- **What the message shows.** "GoatCitadel wants to: ..." and "Page: ..." (the address without query or fragment). The spotlight screenshot is sent in private conversations only; groups get the text plus "Screenshots are only sent in a private conversation."
+- **How to answer.** Buttons on Telegram (webhook-mode connections) and Discord (bot mode). Elsewhere, reply with the whole message `APPROVE`, `DENY`, or `STOP` in capitals; near-misses get a hint instead of counting. A voice note is never treated as an approval.
+- **Sign-ins.** When an errand pauses for a sign-in, the channel hears "GoatCitadel needs you at the PC to sign in. The errand is paused." (right away for channel-started errands; after 30 seconds, to the picked conversation, for PC-started ones). A channel-started errand in a private conversation gets its final screenshot back there.
 
 ### Accepted risks
 
@@ -38,4 +48,4 @@ Browser errands let GoatCitadel use its own Chrome window on this PC, with your 
 
 - **Data leaving through ordinary browsing.** Reading, opening pages, and typing into search boxes never ask, and the browser profile holds real logins. A hostile page can try to get the model to read private data and carry it to another site, and none of the ask-first categories catches that. Mitigations that stay in place: private and LAN addresses are blocked, the overlay is kept out of model screenshots, the window is visible, and the URLs the errand visited are listed in its tool result.
 - **Accounts flagged as automated.** Sites may flag or limit an account used by an automated browser, and their terms may discourage robots. GoatCitadel does not hide that the browser is automated (no fingerprint spoofing or stealth plugins), and bot checks and captchas always go to the operator.
-- **Phone approvals.** Until the phone app's matching update ships, the phone shows errand approvals and can deny them (which ends the errand), but approving happens in the window or in Chat. Approving from a channel arrives with a later PR.
+- **Phone approvals.** The phone shows errand approvals and can deny them (which ends the errand), but it cannot approve yet; that arrives with a later PR. Approving happens in the window, in Chat, or in a channel.
