@@ -22,7 +22,8 @@ import type {
   AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { buildSkillHubLifecycleApprovalInput } from "./skill-hub-lifecycle-service.js";
-import { assertSkillHubSnapshotNotFromPlugin } from "./plugin-owned-refusal.js";
+import { assertSkillHubSnapshotNotFromPlugin, pluginSkillSource } from "./plugin-owned-refusal.js";
+import { BUNDLED_SKILL_NAME_TAKEN, isBundledSkillName } from "./plugin-skill-name-rules.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
 export const SKILL_HUB_OPERATOR_MAX_ITEMS = 100 as const;
@@ -685,6 +686,7 @@ export class SkillHubOperatorService {
       if (context.sourceCandidates.length > 0 || context.exactCandidate) blockers.push("SOURCE_ALREADY_INSTALLED");
       if (context.targetCandidateRevision) blockers.push("CANDIDATE_ALREADY_EXISTS");
       if (runtimeExists) blockers.push("RUNTIME_ALREADY_EXISTS");
+      if (pluginSkillNamedLikeBundled(context.snapshot)) blockers.push(BUNDLED_SKILL_NAME_TAKEN);
     } else if (action === "stage_update_candidate" || action === "stage_rollback_candidate") {
       if (context.candidateInventoryTruncated) blockers.push("CANDIDATE_INVENTORY_TRUNCATED");
       if (!context.lineageCandidateId || context.sourceCandidates.length === 0)
@@ -946,6 +948,16 @@ function resolveSnapshotSkillId(snapshot: SkillHubSnapshotRecord): string | unde
   if (explicitName && isCanonicalSkillName(explicitName)) return `extra:${explicitName}`;
   const tail = snapshot.canonicalSourceKey.split(/[/:]/u).filter(Boolean).at(-1);
   return tail && isCanonicalSkillName(tail) ? `extra:${tail}` : undefined;
+}
+
+/**
+ * A plugin's skill named like a skill that ships with GoatCitadel. Only installing it is refused: one installed before
+ * this rule keeps working, and a Skills tab import of that name keeps its own rules.
+ */
+function pluginSkillNamedLikeBundled(snapshot: SkillHubSnapshotRecord): boolean {
+  if (!pluginSkillSource(snapshot)) return false;
+  const name = resolveSnapshotSkillId(snapshot)?.slice("extra:".length);
+  return name !== undefined && isBundledSkillName(name);
 }
 
 function titleForSnapshot(snapshot: SkillHubSnapshotRecord): string {

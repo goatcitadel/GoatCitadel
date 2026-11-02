@@ -34,6 +34,9 @@ import {
   PROMPTWARE_SCANNER_VERSION,
 } from "./assembled-prompt-injection-guard.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
+import { claudeCodeDialectFindingCodes, type ClaudeCodeFrontmatterReading } from "./skill-hub-claude-code-dialect.js";
+import { assertNoClaudeCodeShellLines } from "./skill-hub-claude-code-skill-text.js";
+import { checkSkillFrontmatterShape, type SkillFrontmatterShape } from "./skill-hub-frontmatter-shape.js";
 import {
   assertPluginSkillFolder,
   recordedSource,
@@ -461,12 +464,14 @@ async function prepareReview(context: MaterializedSkillReviewContext, source: Re
   if (validation.candidate.sourceType !== source.sourceType || validation.candidate.sourceRef !== source.sourceRef) {
     rejectReview("SOURCE_IDENTITY_MISMATCH", "Materialized source identity did not match the reviewed request.");
   }
-  const declaredVersion = await assertKnownFrontmatterShape(context.skillDir);
+  const frontmatter = await assertKnownFrontmatterShape(context.skillDir, source.plugin?.dialect);
+  const declaredVersion = frontmatter.declaredVersion;
+  await assertNoClaudeCodeShellLines(context.skillDir, source.plugin?.dialect);
   const bundleScriptPaths = await assertKnownBundleShape(context.skillDir, validation);
   const networkOrigins = await extractExactNetworkOrigins(context.skillDir, validation, integrity.files);
   const permissionEnvelope = buildPermissionEnvelope(validation, networkOrigins, bundleScriptPaths);
   const blockerCodes = standardizedBlockers(validation);
-  const audit = buildAudit(validation, blockerCodes, networkOrigins, permissionEnvelope);
+  const audit = buildAudit(validation, blockerCodes, networkOrigins, permissionEnvelope, frontmatter.dialect);
   const resolvedVersion = context.resolvedGitCommit ?? `sha256:${integrity.treeSha256}`;
   const compatibility = {
     bundleManifestStatus: validation.bundleManifest?.status ?? "absent",
@@ -491,6 +496,10 @@ async function prepareReview(context: MaterializedSkillReviewContext, source: Re
       sourceType: validation.candidate.sourceType,
       sourceRef: recorded.sourceRef,
       ...(source.plugin ? { pluginTrust: source.plugin.trust } : {}),
+      // A Claude Code-format skill keeps its exact bytes; the record says how it was read and which keys it left out.
+      ...(frontmatter.dialect
+        ? { frontmatterDialect: "claude_code", ignoredFrontmatterKeys: frontmatter.dialect.ignoredKeys }
+        : {}),
       ...(context.resolvedGitCommit ? { resolvedGitCommit: context.resolvedGitCommit } : {}),
       // The validated SKILL.md name. The operator resolves the approved skill id (`extra:<name>`) from it first, and
       // applying the step requires exactly that id; a local or Git source's canonical key ends in a hash or the
@@ -598,6 +607,7 @@ function buildAudit(
   blockerCodes: string[],
   networkOrigins: string[],
   permissionEnvelope: SkillPermissionEnvelopeV1,
+  dialect: ClaudeCodeFrontmatterReading | undefined,
 ): SkillUpstreamAuditDetails {
   const findingCodes = [
     "BUNDLE_METADATA_VALIDATED",
@@ -610,6 +620,7 @@ function buildAudit(
     ...(validation.suspiciousSignals.length ? ["SUSPICIOUS_SCRIPT_INDICATOR"] : []),
     ...(networkOrigins.length ? ["NETWORK_ORIGINS_DECLARED"] : []),
     "PROMPTWARE_SCAN_CLEAN",
+    ...(dialect ? claudeCodeDialectFindingCodes(dialect) : []),
   ];
   return {
     policyId: REVIEW_POLICY_ID,
@@ -715,23 +726,16 @@ async function assertKnownBundleShape(skillDir: string, validation: SkillImportV
     : [];
 }
 
-async function assertKnownFrontmatterShape(skillDir: string): Promise<string | undefined> {
+/** Without a dialect the native rule applies unchanged; the file is read, never rewritten. */
+async function assertKnownFrontmatterShape(
+  skillDir: string,
+  dialect: "claude_code" | undefined,
+): Promise<SkillFrontmatterShape> {
   const raw = await fs.readFile(path.join(skillDir, "SKILL.md"), "utf8");
-  const parsed = parseSkillMarkdown(raw);
-  const frontmatter = parsed.frontmatter as unknown as Record<string, unknown>;
-  assertKnownKeys(frontmatter, ["name", "description", "metadata"], "UNKNOWN_FRONTMATTER_DIMENSION");
-  if (frontmatter.metadata !== undefined) {
-    if (!isRecord(frontmatter.metadata)) {
-      rejectReview("UNKNOWN_FRONTMATTER_DIMENSION", "Skill metadata is not a known permission shape.");
-    }
-    assertKnownKeys(
-      frontmatter.metadata,
-      ["version", "tags", "tools", "requires", "keywords"],
-      "UNKNOWN_FRONTMATTER_DIMENSION",
-    );
-  }
-  const version = isRecord(frontmatter.metadata) ? frontmatter.metadata.version : undefined;
-  return typeof version === "string" && version.trim() ? version.normalize("NFKC").trim() : undefined;
+  const frontmatter = parseSkillMarkdown(raw).frontmatter as unknown as Record<string, unknown>;
+  const check = checkSkillFrontmatterShape(frontmatter, dialect);
+  if (!check.ok) rejectReview(check.code, check.message);
+  return check.shape;
 }
 
 async function extractExactNetworkOrigins(
