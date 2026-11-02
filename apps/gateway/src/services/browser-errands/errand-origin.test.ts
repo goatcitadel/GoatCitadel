@@ -43,7 +43,7 @@ function deps(overrides: Partial<ErrandOriginDeps> = {}): ErrandOriginDeps {
   return {
     sessionChannel: async () => "telegram",
     binding: async () => binding(),
-    turnActorId: async () => OWNER,
+    turnSender: async () => ({ actorId: OWNER, sourceAuthority: "external_channel" }),
     connection: async () => ({
       key: "telegram",
       config: {
@@ -77,6 +77,21 @@ describe("resolveErrandOrigin", () => {
     });
   });
 
+  it("resolves a desk turn (operator authority) on a channel-bound session to the PC", async () => {
+    const desk = deps({ turnSender: async () => ({ actorId: "operator", sourceAuthority: "operator" }) });
+    await expect(resolveErrandOrigin(desk, "session-1", "turn-1")).resolves.toEqual({ kind: "pc" });
+    await expect(resolveOwnedErrandOrigin(desk, "session-1", "turn-1")).resolves.toEqual({ kind: "pc" });
+  });
+
+  it("keeps a channel message whose actor id is 'operator' a channel origin, and refuses it as not the owner", async () => {
+    const spoof = deps({ turnSender: async () => ({ actorId: "operator", sourceAuthority: "external_channel" }) });
+    await expect(resolveErrandOrigin(spoof, "session-1", "turn-1")).resolves.toMatchObject({
+      kind: "channel",
+      actorId: "operator",
+    });
+    await expect(resolveOwnedErrandOrigin(spoof, "session-1", "turn-1")).resolves.toBeUndefined();
+  });
+
   it("treats a conversation with no recorded kind as a group", async () => {
     const origin = await resolveErrandOrigin(
       deps({ binding: async () => binding({ conversation: undefined }) }),
@@ -93,8 +108,8 @@ describe("resolveErrandOrigin", () => {
     ["the binding is local", { binding: async () => binding({ transport: "local" }) }],
     ["the binding has no connection", { binding: async () => binding({ connectionId: undefined }) }],
     ["the binding has no target", { binding: async () => binding({ target: " " }) }],
-    ["the turn's sender can't be read", { turnActorId: async () => Promise.reject(new Error("no trace")) }],
-    ["the turn has no sender", { turnActorId: async () => undefined }],
+    ["the turn's sender can't be read", { turnSender: async () => Promise.reject(new Error("no trace")) }],
+    ["the turn has no sender", { turnSender: async () => undefined }],
   ] as Array<[string, Partial<ErrandOriginDeps>]>)("resolves nothing when %s", async (_name, overrides) => {
     await expect(resolveErrandOrigin(deps(overrides), "session-1", "turn-1")).resolves.toBeUndefined();
   });
@@ -127,7 +142,11 @@ describe("resolveOwnedErrandOrigin", () => {
 
   it("refuses a paired Telegram sender who is not the owner", async () => {
     await expect(
-      resolveOwnedErrandOrigin(deps({ turnActorId: async () => "2002" }), "session-1", "turn-1"),
+      resolveOwnedErrandOrigin(
+        deps({ turnSender: async () => ({ actorId: "2002", sourceAuthority: "external_channel" }) }),
+        "session-1",
+        "turn-1",
+      ),
     ).resolves.toBeUndefined();
   });
 
@@ -166,7 +185,9 @@ describe("resolveOwnedErrandOrigin", () => {
 });
 
 describe("createErrandOriginDeps", () => {
-  function storageWith(messages: Record<string, { sessionId: string; role: string; actorId: string }>) {
+  function storageWith(
+    messages: Record<string, { sessionId: string; role: string; actorId: string; sourceAuthority: string }>,
+  ) {
     const traces: Record<string, { sessionId: string; userMessageId: string }> = {
       "turn-1": { sessionId: "session-1", userMessageId: "msg-1" },
       "turn-other": { sessionId: "session-2", userMessageId: "msg-1" },
@@ -185,16 +206,24 @@ describe("createErrandOriginDeps", () => {
   it("reads the sender only from this session's user message for the turn", async () => {
     const readers = createErrandOriginDeps({
       storage: storageWith({
-        "msg-1": { sessionId: "session-1", role: "user", actorId: OWNER },
-        "msg-2": { sessionId: "session-1", role: "assistant", actorId: "assistant" },
+        "msg-1": { sessionId: "session-1", role: "user", actorId: OWNER, sourceAuthority: "external_channel" },
+        "msg-2": {
+          sessionId: "session-1",
+          role: "assistant",
+          actorId: "assistant",
+          sourceAuthority: "trusted_lifecycle",
+        },
       }),
       readDiscordPairings: async () => [pairing("approved")],
     });
-    await expect(readers.turnActorId("session-1", "turn-1")).resolves.toBe(OWNER);
+    await expect(readers.turnSender("session-1", "turn-1")).resolves.toEqual({
+      actorId: OWNER,
+      sourceAuthority: "external_channel",
+    });
     // A turn from another session, an assistant message, or a missing message gives no sender.
-    await expect(readers.turnActorId("session-1", "turn-other")).resolves.toBeUndefined();
-    await expect(readers.turnActorId("session-1", "turn-2")).resolves.toBeUndefined();
-    await expect(readers.turnActorId("session-1", "turn-missing")).resolves.toBeUndefined();
+    await expect(readers.turnSender("session-1", "turn-other")).resolves.toBeUndefined();
+    await expect(readers.turnSender("session-1", "turn-2")).resolves.toBeUndefined();
+    await expect(readers.turnSender("session-1", "turn-missing")).resolves.toBeUndefined();
     await expect(readers.sessionChannel("session-1")).resolves.toBe("telegram");
     await expect(readers.connection("conn-1")).resolves.toEqual({
       key: "telegram",

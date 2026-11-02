@@ -1,4 +1,8 @@
-import type { ChatSessionBindingRecord, DiscordPairingRecord } from "@goatcitadel/contracts";
+import type {
+  ChatMessageSourceAuthority,
+  ChatSessionBindingRecord,
+  DiscordPairingRecord,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { isErrandOwner } from "./errand-owner.js";
 
@@ -17,12 +21,18 @@ export type ErrandOrigin =
 /** The chat session that Mission Control's own Chat uses; every other value is the channel the turn came in on. */
 export const MISSION_SESSION_CHANNEL = "mission";
 
+/** Who sent the turn's user message, and the server-owned authority it was recorded with. */
+export interface ErrandTurnSender {
+  actorId: string;
+  sourceAuthority: ChatMessageSourceAuthority;
+}
+
 export interface ErrandOriginDeps {
   /** The session's channel: "mission" for Chat in Mission Control, otherwise the channel the turn came in on. */
   sessionChannel(sessionId: string): Promise<string | undefined>;
   binding(sessionId: string): Promise<ChatSessionBindingRecord | undefined>;
-  /** The actor id on the turn's user message, when that message belongs to this session. */
-  turnActorId(sessionId: string, turnId: string): Promise<string | undefined>;
+  /** The sender of the turn's user message, when that message belongs to this session. */
+  turnSender(sessionId: string, turnId: string): Promise<ErrandTurnSender | undefined>;
   /** The connection's channel key and stored config, for the owner check. */
   connection(connectionId: string): Promise<{ key: string; config: Record<string, unknown> } | undefined>;
   readDiscordPairings(): Promise<DiscordPairingRecord[]>;
@@ -33,11 +43,11 @@ export interface ErrandOriginDeps {
  * whose binding or sender can't be read, resolves to `undefined`, which the errand service refuses.
  */
 export async function resolveErrandOrigin(
-  deps: Pick<ErrandOriginDeps, "sessionChannel" | "binding" | "turnActorId">,
+  deps: Pick<ErrandOriginDeps, "sessionChannel" | "binding" | "turnSender">,
   sessionId: string,
   turnId: string,
 ): Promise<ErrandOrigin | undefined> {
-  const { sessionChannel, binding: readBinding, turnActorId } = deps;
+  const { sessionChannel, binding: readBinding, turnSender } = deps;
   const channelKey = (await sessionChannel(sessionId).catch(() => undefined))?.trim();
   if (!channelKey) {
     return undefined;
@@ -45,13 +55,18 @@ export async function resolveErrandOrigin(
   if (channelKey === MISSION_SESSION_CHANNEL) {
     return { kind: "pc" };
   }
-  const [binding, actorId] = await Promise.all([
+  const [binding, turnSent] = await Promise.all([
     readBinding(sessionId).catch(() => undefined),
-    turnActorId(sessionId, turnId).catch(() => undefined),
+    turnSender(sessionId, turnId).catch(() => undefined),
   ]);
+  // A desk turn: the operator typed it in Mission Control on a channel-bound session, and ingest recorded it with
+  // operator authority. Decided by the server-owned source authority, never by the actor id, which a channel can carry.
+  if (turnSent?.sourceAuthority === "operator") {
+    return { kind: "pc" };
+  }
   const connectionId = binding?.connectionId?.trim();
   const target = binding?.target?.trim();
-  const sender = actorId?.trim();
+  const sender = turnSent?.actorId.trim();
   if (!binding || binding.transport !== "integration" || !connectionId || !target || !sender) {
     return undefined;
   }
@@ -115,13 +130,15 @@ export function createErrandOriginDeps(sources: {
   return {
     sessionChannel: async (sessionId) => (await sessions.getBySessionId(sessionId)).channel,
     binding: async (sessionId) => await chatSessionBindings.get(sessionId),
-    turnActorId: async (sessionId, turnId) => {
+    turnSender: async (sessionId, turnId) => {
       const trace = await chatTurnTraces.get(turnId);
       if (trace.sessionId !== sessionId) {
         return undefined;
       }
       const message = await chatMessages.get(trace.userMessageId);
-      return message && message.sessionId === sessionId && message.role === "user" ? message.actorId : undefined;
+      return message && message.sessionId === sessionId && message.role === "user"
+        ? { actorId: message.actorId, sourceAuthority: message.sourceAuthority }
+        : undefined;
     },
     connection: async (connectionId) => {
       const record = await integrationConnections.get(connectionId);

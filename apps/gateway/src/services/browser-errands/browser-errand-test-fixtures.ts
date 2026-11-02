@@ -105,7 +105,7 @@ export function missionOrigin(overrides: Partial<ErrandOriginDeps> = {}): Errand
   return {
     sessionChannel: async () => "mission",
     binding: async () => undefined,
-    turnActorId: async () => undefined,
+    turnSender: async () => undefined,
     connection: async () => undefined,
     readDiscordPairings: async () => [],
     ...overrides,

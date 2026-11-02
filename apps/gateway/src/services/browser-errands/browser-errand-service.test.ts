@@ -1,4 +1,4 @@
-import type { ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ChatCompletionResponse, ChatMessageSourceAuthority } from "@goatcitadel/contracts";
 import { describe, expect, it, vi } from "vitest";
 import { ErrandBrowserLaunchError, type ComputerAction, type ErrandBrowser } from "@goatcitadel/policy-engine";
 import {
@@ -54,7 +54,7 @@ describe("BrowserErrandService", () => {
 
   describe("who may start an errand", () => {
     const OWNER = "1001";
-    const telegramOrigin = (sender: string) =>
+    const telegramOrigin = (sender: string, sourceAuthority: ChatMessageSourceAuthority = "external_channel") =>
       missionOrigin({
         sessionChannel: async () => "telegram",
         binding: async () => ({
@@ -67,8 +67,8 @@ describe("BrowserErrandService", () => {
           createdAt: "2026-11-01T00:00:00.000Z",
           updatedAt: "2026-11-01T00:00:00.000Z",
         }),
-        turnActorId: async (sessionId, turnId) =>
-          sessionId === "session-1" && turnId === "turn-1" ? sender : undefined,
+        turnSender: async (sessionId, turnId) =>
+          sessionId === "session-1" && turnId === "turn-1" ? { actorId: sender, sourceAuthority } : undefined,
         connection: async () => ({
           key: "telegram",
           config: {
@@ -113,6 +113,26 @@ describe("BrowserErrandService", () => {
       expect(BROWSER_ERRAND_OWNER_ONLY_MESSAGE).toBe("Only the owner can start a browser errand here.");
       expect(launchBrowser).not.toHaveBeenCalled();
       expect(service.getStatus("tool-run-1")).toBeUndefined();
+    });
+
+    it("runs a desk turn typed in Mission Control on a channel-bound session, with origin pc", async () => {
+      let originDuringRun: unknown;
+      const built = buildService(vi.fn, {
+        origin: telegramOrigin("operator", "operator"),
+        runLoop: async () => {
+          originDuringRun = built.service.getActiveOrigin();
+          return outcome("done");
+        },
+      });
+      await expect(built.service.run(errandRequest())).resolves.toMatchObject({ outcome: "done" });
+      expect(originDuringRun).toEqual({ kind: "pc" });
+      await built.service.dispose();
+    });
+
+    it("refuses a channel message whose actor id is 'operator' but which came in from the channel", async () => {
+      const { service, launchBrowser } = buildService(vi.fn, { origin: telegramOrigin("operator") });
+      await expect(service.run(errandRequest())).rejects.toThrow(BROWSER_ERRAND_OWNER_ONLY_MESSAGE);
+      expect(launchBrowser).not.toHaveBeenCalled();
     });
 
     it("refuses when the session cannot be read", async () => {
