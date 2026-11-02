@@ -1,6 +1,6 @@
 # AGENTS.md - GoatCitadel
 
-Last updated: 2026-10-30
+Last updated: 2026-11-01
 
 ## Scope and Instruction Precedence
 
@@ -48,7 +48,7 @@ It is not just a chat UI. It is a chat-first, multi-provider, skill-aware worksp
 | Projects | Workspace and project organization | Structured, navigable |
 | Library | Skills, memory, files, artifacts, capability evidence | Inspectable, provenance-aware |
 | Ops | Runtime health, activity, cost, diagnostics, backups, release proof | Operational, high-signal |
-| Settings | Providers, models, tools, auth, workspace controls; integrations and MCP are set up in Capabilities, channels in Chat › Messaging | Clear, progressive, safe |
+| Settings | Providers, models, tools, auth, workspace controls; integrations, MCP and plugins are set up in Capabilities, channels in Chat › Messaging | Clear, progressive, safe |
 
 ## North Star
 
@@ -234,7 +234,7 @@ Canonical state belongs in repositories and durable logs, not inferred UI state.
 
 ### Integrations, Channels, and Extensions
 
-Visible integrations and channels must either have real operator actions and diagnostics or be clearly labeled as incomplete/blocked. Integration plugins and add-ons were removed; do not describe them as shipped. Public extension claims should stay aligned with `@goatcitadel/extensions-sdk` and `docs/PLUGIN_SDK_CONTRACT.md`: `1.0.0` is the last published version, and the workspace's `2.0.0` keeps the effective-tool snapshot helpers and adds the plugin manifest validator (`parsePluginManifest` and `loadPluginManifest`) and the `goatcitadel-plugin-preflight` command. The Gateway inspects, installs and uninstalls plugins through its Capabilities API, governed by Change Plans; Mission Control has no Plugins tab yet, and there is no plugin trust or marketplace surface.
+Visible integrations and channels must either have real operator actions and diagnostics or be clearly labeled as incomplete/blocked. Integration plugins, add-ons and capability packs were removed; do not describe them as shipped. Plugins replace them: bundles of skills, connectors, tool-group holds, observe-only hooks and prompt packs that run no code. Public extension claims should stay aligned with `@goatcitadel/extensions-sdk` and `docs/PLUGIN_SDK_CONTRACT.md`: `1.0.0` is the last published version, and the workspace's `2.0.0` keeps the effective-tool snapshot helpers and adds the plugin manifest validator (`parsePluginManifest` and `loadPluginManifest`) and the `goatcitadel-plugin-preflight` command. The Gateway inspects, installs and uninstalls plugins through its Capabilities API, governed by Change Plans, and Mission Control's Capabilities › Plugins tab drives them. A plugin's trust reads Built in or Unverified; there is no Verified tier and no marketplace. Known limits: while "Apply my Settings and Capabilities changes without asking first" is off (the default), uninstalling a plugin whose skill is switched on takes a second uninstall, approved again, once the skill is off (the plugin panel offers "Finish uninstalling"); and prompt packs and hooks carry no plugin mark, so their lists show no "From <plugin>".
 
 ## Memory Rules
 

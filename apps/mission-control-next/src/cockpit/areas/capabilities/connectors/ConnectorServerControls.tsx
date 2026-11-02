@@ -3,12 +3,14 @@ import { useQueryClient } from "@tanstack/react-query";
 import type { CapabilityConnectorItem, CapabilityConnectorsResponse } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { deleteMcpServer } from "@goatcitadel/mission-control-shared/api/mcp-operations";
+import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useInspector } from "../../../app/inspector";
 import { queryKeys } from "../../../data/query-keys";
 import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { Switch } from "../../../ui/Switch";
+import { OpenInPluginsLink } from "../plugins/FromPluginLink";
 import { connectorPanelSource } from "./connector-links";
 import { CONNECTOR_CONFLICT_MESSAGE, useConnectorEnabled } from "./use-connector-enabled";
 
@@ -18,6 +20,19 @@ interface Failure {
   reloadable: boolean;
   /** The change did go through, so the line is a caution, not a failure. */
   saved?: boolean;
+  /** The plugin GoatCitadel named when it refused the change, linked beside its sentence. */
+  pluginId?: string;
+}
+
+/** Why a removal didn't happen: a plugin's refusal in GoatCitadel's own words, a conflict, or anything else. */
+function removalFailureOf(error: unknown): Failure {
+  const refusal = readPluginOwnedRefusal(error);
+  if (refusal) {
+    return { message: refusal.message, reloadable: false, ...(refusal.pluginId ? { pluginId: refusal.pluginId } : {}) };
+  }
+  const described = describeApiError(error);
+  const conflict = described.category === "conflict";
+  return { message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, reloadable: conflict };
 }
 
 /**
@@ -62,9 +77,7 @@ export function ConnectorServerControls({
     try {
       await deleteMcpServer(serverId, serverRevision);
     } catch (error) {
-      const described = describeApiError(error);
-      const conflict = described.category === "conflict";
-      setRemovalFailure({ message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, reloadable: conflict });
+      setRemovalFailure(removalFailureOf(error));
       setRemoving(false);
       setConfirming(false);
       // A failed request can still have been committed (a lost reply, a timeout), as with the switch: read the list
@@ -119,6 +132,12 @@ export function ConnectorServerControls({
         <div className="space-y-2">
           <p role="alert" className={failure.saved ? "text-sm text-fg-secondary" : "text-sm text-status-failed"}>
             {failure.message}
+            {failure.pluginId ? (
+              <>
+                {" "}
+                <OpenInPluginsLink pluginId={failure.pluginId} />
+              </>
+            ) : null}
           </p>
           {failure.reloadable ? (
             <Button
@@ -133,14 +152,22 @@ export function ConnectorServerControls({
           ) : null}
         </div>
       ) : null}
-      <Button
-        size="sm"
-        variant="danger"
-        disabled={!serverId || !serverRevision || switchState.pending}
-        onClick={() => setConfirming(true)}
-      >
-        Remove
-      </Button>
+      {item.fromPlugin ? (
+        // A plugin's connector goes when its plugin is uninstalled; GoatCitadel refuses to remove it on its own.
+        <p className="text-sm text-fg-secondary">
+          {`It came with ${item.fromPlugin.name}. Uninstall the plugin to remove it.`}{" "}
+          <OpenInPluginsLink pluginId={item.fromPlugin.pluginId} />
+        </p>
+      ) : (
+        <Button
+          size="sm"
+          variant="danger"
+          disabled={!serverId || !serverRevision || switchState.pending}
+          onClick={() => setConfirming(true)}
+        >
+          Remove
+        </Button>
+      )}
       <Dialog
         open={confirming}
         onOpenChange={(open) => {

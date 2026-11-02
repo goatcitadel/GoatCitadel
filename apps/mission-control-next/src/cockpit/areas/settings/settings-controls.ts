@@ -103,9 +103,6 @@ export const CapabilityScopesSettings = preloadable(async () => ({
   default: (await import("./CapabilityScopesSettings")).CapabilityScopesSettings,
 }));
 export const HooksSettings = preloadable(async () => ({ default: (await import("./HooksSettings")).HooksSettings }));
-export const PortablePacksSettings = preloadable(async () => ({
-  default: (await import("./PortablePacksSettings")).PortablePacksSettings,
-}));
 
 const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }[]> = {
   onboarding: [FirstRunStatus],
@@ -125,7 +122,6 @@ const SECTION_CONTROLS: Record<string, readonly { preload: () => Promise<void> }
   channels: [PublicWebAddressSettings, ChannelsSettings],
   mcp: [McpServersSettings],
   "web-search": [WebSearchSettings],
-  addons: [PortablePacksSettings],
   runtime: [ManagedRuntimeSettings, DaemonDiagnostics, VoiceRuntimeSettings],
   providers: [ModelsSettings, ChatThinkingStreamControl, ClaudeCliToolBridgeControl, ClaudeCliWarmContinuationControl],
   "local-ai": [LlamaSetupSettings, LocalAiSettings],

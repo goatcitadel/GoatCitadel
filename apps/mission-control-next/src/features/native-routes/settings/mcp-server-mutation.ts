@@ -6,6 +6,7 @@ import {
   updateMcpServer,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
 import { isRuntimeInvokableMcpServer } from "./helpers/mcp-helpers";
 import { mcpLines, reviewedMcpPolicy } from "./mcp-policy-fields";
 
@@ -123,7 +124,14 @@ function knownUncommitted(error: unknown, serverId: string, method = "PATCH") {
 }
 export type McpServerUpdateResult =
   | { status: "saved"; server: McpServerRecord }
-  | { status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked"; message: string };
+  | { status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked"; message: string }
+  | {
+      /** GoatCitadel refused the change because a plugin owns the server. Nothing changed, so it isn't a conflict. */
+      status: "plugin_owned";
+      message: string;
+      /** The plugin that owns the server, when GoatCitadel named it. */
+      pluginId?: string;
+    };
 
 /** Shared UI retry lock and exact owner acknowledgement; Gateway CAS owns the write. */
 export async function commitMcpServerUpdate({
@@ -175,6 +183,16 @@ export async function commitMcpServerUpdate({
     write(id, { phase: "saved", message: "Saved MCP configuration confirmed by the Gateway." });
     return { status: "saved", server: saved };
   } catch (error) {
+    // A plugin's server: GoatCitadel refused before writing anything, and its sentence says why and what to do.
+    const refusal = dispatched ? readPluginOwnedRefusal(error) : undefined;
+    if (refusal) {
+      write(id, IDLE);
+      return {
+        status: "plugin_owned",
+        message: refusal.message,
+        ...(refusal.pluginId ? { pluginId: refusal.pluginId } : {}),
+      };
+    }
     if (!dispatched || knownUncommitted(error, id)) {
       write(id, IDLE);
       return {
@@ -192,7 +210,12 @@ export async function commitMcpServerUpdate({
 }
 export type McpServerDeleteResult =
   | { status: "deleted"; serverId: string }
-  | { status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked"; message: string };
+  | {
+      status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked";
+      message: string;
+      /** The plugin that owns the server, when GoatCitadel refused the change for it. */
+      pluginId?: string;
+    };
 
 /** Exact saved revision and canonical absence; shares the update retry lock across presentations. */
 export async function commitMcpServerDelete({
@@ -253,6 +276,15 @@ export async function commitMcpServerDelete({
     write(id, { phase: "deleted", message: "MCP server deletion confirmed by the Gateway." });
     return { status: "deleted", serverId: id };
   } catch (error) {
+    const refusal = dispatched && !acknowledged ? readPluginOwnedRefusal(error) : undefined;
+    if (refusal) {
+      write(id, IDLE);
+      return {
+        status: "conflict",
+        message: refusal.message,
+        ...(refusal.pluginId ? { pluginId: refusal.pluginId } : {}),
+      };
+    }
     if (!dispatched || (!acknowledged && knownUncommitted(error, id, "DELETE"))) {
       write(id, IDLE);
       return {

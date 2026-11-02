@@ -10,7 +10,6 @@ const moduleLoaders = {
   autonomy: () => import("./autonomy.js"),
   auth: () => import("./auth.js"),
   capabilities: () => import("./capabilities.js"),
-  "capability-packs": () => import("./capability-packs.js"),
   "channel-probes": () => import("./channel-probes.js"),
   "channel-wizard": () => import("./channel-wizard.js"),
   channels: () => import("./channels.js"),

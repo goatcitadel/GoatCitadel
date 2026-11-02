@@ -29,15 +29,18 @@ export async function prepareUsabilityRuntime(runId, baseUrl, options = {}) {
   })) {
     await fs.writeFile(path.join(config, filename), `${JSON.stringify(configured[section], null, 2)}\n`);
   }
-  // Skills are shipped source inputs; private workspace copies are not.
+  // Skills and the plugins that ship (read from <rootDir>/plugins) are shipped source inputs; private workspace copies
+  // are not. `copySkills: false` leaves both to the caller, as the test bench copies only their git-tracked files.
   if (options.copySkills === false) return root;
-  const skills = path.join(sourceRoot, "skills");
-  try {
-    await fs.stat(skills);
-  } catch (error) {
-    if (error?.code === "ENOENT") return root;
-    throw error;
+  for (const folder of ["skills", "plugins"]) {
+    const shipped = path.join(sourceRoot, folder);
+    try {
+      await fs.stat(shipped);
+    } catch (error) {
+      if (error?.code === "ENOENT") continue;
+      throw error;
+    }
+    await fs.cp(shipped, path.join(root, folder), { recursive: true });
   }
-  await fs.cp(skills, path.join(root, "skills"), { recursive: true });
   return root;
 }

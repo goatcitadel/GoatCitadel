@@ -21,7 +21,7 @@ import {
   fetchGitTree,
 } from "./hardened-git.js";
 import { PluginSnapshotStore } from "./plugin-snapshot-store.js";
-import { PluginSourceError, fetchPluginSource } from "./plugin-source-service.js";
+import { PluginSourceError, fetchPluginSource, folderSourcesAllowed } from "./plugin-source-service.js";
 
 const fetchGitTreeMock = vi.mocked(fetchGitTree);
 const COMMIT = "0123456789abcdef0123456789abcdef01234567";
@@ -471,6 +471,12 @@ describe("fetchPluginSource: folder", () => {
       const result = await fetchPluginSource({ kind: "folder", path: makeFolder(PLUGIN_FILES) }, inputs(profile));
       expect(result.pin.kind, profile).toBe("content");
     }
+  });
+
+  it("says by the same rule whether a folder can be added, which the Plugins list answers", () => {
+    expect(folderSourcesAllowed("local_dev")).toBe(true);
+    expect(folderSourcesAllowed("trusted_local")).toBe(true);
+    expect(folderSourcesAllowed("remote_hardened")).toBe(false);
   });
 
   it("needs an absolute path to a folder that is there", async () => {

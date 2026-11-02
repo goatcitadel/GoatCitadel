@@ -10,7 +10,6 @@ import { __resetChannelMutationStateForTests } from "./settings/sections/channel
 import { __resetProviderMutationStateForTests } from "./settings/sections/provider-mutation-state";
 import { __resetManagedRuntimeUncertaintyForTests } from "./settings/managed-runtime-state";
 import { __resetMcpServerMutationsForTests } from "./settings/mcp-server-mutation";
-import { __resetPackAttemptsForTests } from "./settings/sections/pack-mutation-state";
 import { __resetDeviceAccessRevocationsForTests } from "./settings/use-device-access-revocation";
 import { DetailInspector } from "../../components/DetailInspector";
 import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
@@ -26,13 +25,7 @@ import { GCModal } from "@goatcitadel/mission-control-shared/components/ui/GCMod
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { __resetFormDirtyRegistryForTests, hasDirtySections } from "./library/use-form-dirty";
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import type {
-  CapabilityPackManifest,
-  CapabilityPackPreview,
-  WorkspaceCreateInput,
-  WorkspaceUpdateInput,
-  WorkspaceRecord,
-} from "@goatcitadel/contracts";
+import type { WorkspaceCreateInput, WorkspaceUpdateInput, WorkspaceRecord } from "@goatcitadel/contracts";
 
 const mountedSettingsRenderers: ReactTestRenderer[] = [];
 function create(...args: Parameters<typeof createRenderer>): ReactTestRenderer {
@@ -159,7 +152,6 @@ const settingsMocks = vi.hoisted(() => {
     deletePersonality: fn(),
     deleteProviderSecret: fn(),
     disconnectMcpServer: fn(),
-    exportCapabilityPack: fn(),
     discoverTelegramTargets: fn(),
     discoverTelegramSetupTargets: fn(),
     fetchTelegramChannelPairings: fn(),
@@ -171,10 +163,6 @@ const settingsMocks = vi.hoisted(() => {
     fetchActiveLocalOperatorOverrides: fn(),
     fetchAgenticRuns: fn(),
     fetchAutonomousActivationGrants: fn(),
-    fetchCapabilityPackPreview: fn(),
-    fetchCapabilityPacks: fn(),
-    fetchStagedCapabilityPacks: fn(),
-    fetchLocalCapabilityPackPreview: fn(),
     fetchChannelSetupDefinitions: fn(),
     fetchChannelSetupDrafts: fn(),
     fetchChannelSetupDraft:
@@ -235,15 +223,12 @@ const settingsMocks = vi.hoisted(() => {
     fetchWorkspaces: fn(),
     finalizeChannelSetupDraft: fn(),
     getCachedModelProbe: vi.fn(),
-    installCapabilityPack: fn(),
-    installLocalCapabilityPack: fn(),
     installVoiceRuntime: fn(),
     isApiRequestError: vi.fn(
       (error: unknown) => error instanceof Error && error.name === "ApiRequestError" && "status" in error,
     ),
     invokeIntegrationConnectionAction: fn(),
     listCitadels: fn(),
-    materializeStagedCapabilityPack: fn(),
     loadModelsForProvider: fn(["gpt-5.4-mini"]),
     patchSettings: vi.fn<(input: Record<string, any>) => Promise<any>>(async () => ({})),
     patchGatewayAuthSettings: vi.fn<(input: Record<string, any>) => Promise<any>>(async (input) => ({
@@ -436,15 +421,10 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   deletePersonality: settingsMocks.deletePersonality,
   deleteProviderSecret: settingsMocks.deleteProviderSecret,
   disconnectMcpServer: settingsMocks.disconnectMcpServer,
-  exportCapabilityPack: settingsMocks.exportCapabilityPack,
   discoverTelegramTargets: settingsMocks.discoverTelegramTargets,
   fetchActiveLocalOperatorOverrides: settingsMocks.fetchActiveLocalOperatorOverrides,
   fetchAgenticRuns: settingsMocks.fetchAgenticRuns,
   fetchAutonomousActivationGrants: settingsMocks.fetchAutonomousActivationGrants,
-  fetchCapabilityPackPreview: settingsMocks.fetchCapabilityPackPreview,
-  fetchCapabilityPacks: settingsMocks.fetchCapabilityPacks,
-  fetchStagedCapabilityPacks: settingsMocks.fetchStagedCapabilityPacks,
-  fetchLocalCapabilityPackPreview: settingsMocks.fetchLocalCapabilityPackPreview,
   fetchChannelSetupDefinitions: settingsMocks.fetchChannelSetupDefinitions,
   fetchChannelSetupDrafts: settingsMocks.fetchChannelSetupDrafts,
   fetchChannelSetupDraft: settingsMocks.fetchChannelSetupDraft,
@@ -507,12 +487,9 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   fetchWorkspaces: settingsMocks.fetchWorkspaces,
   listCitadels: settingsMocks.listCitadels,
   finalizeChannelSetupDraft: settingsMocks.finalizeChannelSetupDraft,
-  installCapabilityPack: settingsMocks.installCapabilityPack,
-  installLocalCapabilityPack: settingsMocks.installLocalCapabilityPack,
   installVoiceRuntime: settingsMocks.installVoiceRuntime,
   isApiRequestError: settingsMocks.isApiRequestError,
   invokeIntegrationConnectionAction: settingsMocks.invokeIntegrationConnectionAction,
-  materializeStagedCapabilityPack: settingsMocks.materializeStagedCapabilityPack,
   patchSettings: settingsMocks.patchSettings,
   patchGatewayAuthSettings: settingsMocks.patchGatewayAuthSettings,
   pollOpenAICodexOAuthDeviceFlow: settingsMocks.pollOpenAICodexOAuthDeviceFlow,
@@ -1319,121 +1296,6 @@ function setupResponses() {
     if (!grant) throw new Error("Unknown fixture device grant");
     return { grant: { ...grant, revokedAt: "2026-09-30T12:00:00.000Z" } };
   });
-  settingsMocks.fetchCapabilityPacks.mockResolvedValue({
-    items: [
-      {
-        packId: "operator-pack",
-        name: "Operator Pack",
-        version: "1.0.0",
-        description: "Adds operator-facing capabilities",
-        trustTier: "trusted",
-        tags: ["ops"],
-        assets: [
-          {
-            id: "skill-1",
-            label: "Skill 1",
-            kind: "skill",
-            runtimeSupport: "available",
-            installMode: "review_required",
-          },
-        ],
-        provenance: { source: "bundled", publisher: "GoatCitadel" },
-      },
-    ],
-  });
-  settingsMocks.fetchStagedCapabilityPacks.mockResolvedValue({
-    items: [
-      {
-        packId: "operator-pack",
-        name: "Operator Pack",
-        version: "1.0.0",
-        trustTier: "trusted",
-        source: "bundled",
-        actorId: "operator",
-        stagedAt: "2026-05-31T00:00:00.000Z",
-        status: "staged_for_review",
-        reviewRequired: true,
-        stagedAssets: [{ kind: "skill", assetId: "skill-1", reason: "Review required", outcome: "review_required" }],
-        evidenceEnvelopeId: "env-pack",
-      },
-    ],
-  });
-  settingsMocks.fetchCapabilityPackPreview.mockResolvedValue({
-    manifest: {
-      packId: "operator-pack",
-      trustTier: "trusted",
-      name: "Operator Pack",
-      installWarnings: ["Review before install."],
-      provenance: { source: "bundled" },
-    },
-    reviewRequired: true,
-    policyChanges: { redactionMode: "basic" },
-    unsupportedAssets: [],
-    installPlan: [{ kind: "skill", assetId: "skill-1", reason: "Adds workflow", outcome: "stage" }],
-  });
-  settingsMocks.fetchLocalCapabilityPackPreview.mockResolvedValue({
-    manifest: {
-      packId: "local-pack",
-      name: "Local Pack",
-      trustTier: "community",
-      installWarnings: ["Review local assets."],
-      provenance: { source: "local_file" },
-    },
-    reviewRequired: true,
-    policyChanges: { redactionMode: "strict" },
-    unsupportedAssets: [],
-    installPlan: [{ kind: "addon", assetId: "addon:local", reason: "Review required", outcome: "review_required" }],
-  });
-  settingsMocks.installCapabilityPack.mockResolvedValue({ ok: true });
-  settingsMocks.materializeStagedCapabilityPack.mockResolvedValue({
-    packId: "operator-pack",
-    actorId: "operator",
-    materializedAt: "2026-05-31T00:02:00.000Z",
-    status: "materialization_recorded",
-    sourceEvidenceEnvelopeId: "env-pack",
-    evidenceEnvelopeId: "env-materialized",
-    assets: [{ assetId: "skill-1", kind: "skill", requested: true, outcome: "review_recorded" }],
-    limitations: ["evidence only"],
-  });
-  settingsMocks.exportCapabilityPack.mockResolvedValue({
-    exportedAt: "2026-05-31T00:00:00.000Z",
-    readOnly: true,
-    mutationSemantics: "none",
-    manifest: {
-      packId: "operator-pack",
-      name: "Operator Pack",
-      version: "1.0.0",
-      description: "Adds operator-facing capabilities",
-      trustTier: "trusted",
-      tags: ["ops"],
-      assets: [],
-      policyDefaults: {
-        requireFirstUseApproval: true,
-        memoryWriteAuthority: "operator_controlled",
-        redactionMode: "strict",
-        autoRunEnabled: false,
-      },
-      provenance: { source: "bundled", publisher: "goatcitadel" },
-      installWarnings: [],
-    },
-    evidence: { source: "staged_evidence", evidenceEnvelopeId: "env-pack" },
-    limitations: ["read-only"],
-  });
-  settingsMocks.installLocalCapabilityPack.mockResolvedValue({
-    preview: {
-      manifest: {
-        packId: "local-pack",
-        name: "Local Pack",
-        trustTier: "community",
-        installWarnings: ["Review local assets."],
-        provenance: { source: "local_file" },
-      },
-      reviewRequired: true,
-      policyChanges: { redactionMode: "strict" },
-      unsupportedAssets: [],
-      installPlan: [{ kind: "addon", assetId: "addon:local", reason: "Review required", outcome: "review_required" }],
-    },
-  });
   const demo = demoFixture();
   let demoState = demo.empty;
   settingsMocks.fetchDemoState.mockImplementation(async () => structuredClone(demoState));
@@ -1608,7 +1470,6 @@ beforeEach(() => {
   __resetChannelMutationStateForTests();
   __resetManagedRuntimeUncertaintyForTests();
   __resetMcpServerMutationsForTests();
-  __resetPackAttemptsForTests();
   vi.clearAllMocks();
   for (const resetMock of resetSettingsMocks) resetMock();
   __resetSessionDraftsForTests();
@@ -2524,7 +2385,7 @@ describe("SettingsNativePage broad native sections", () => {
     expect(navigate).toHaveBeenCalledWith({ area: "settings", section: "providers", theme: "ops" });
   });
 
-  it("renders general, access, onboarding demo, runtime, workspace, channel, tool, and capability pack flows", async () => {
+  it("renders general, access, onboarding demo, runtime, workspace, channel, and tool flows", async () => {
     const generalNavigate = vi.fn();
     const general = await mount("general", { navigate: generalNavigate });
     await act(async () => {
@@ -2897,22 +2758,6 @@ describe("SettingsNativePage broad native sections", () => {
       await toolRevokeModal?.props.onConfirm();
     });
     expect(settingsMocks.revokeToolGrant).toHaveBeenCalledWith("grant-1");
-
-    // The real route mounts one settings owner at a time. Retire earlier
-    // journey renderers so their dirty registries cannot block the pack editor.
-    await act(async () => {
-      for (const renderer of mountedSettingsRenderers.splice(0)) renderer.unmount();
-    });
-    const packs = await mount("addons");
-    await flush();
-    expect(settingsMocks.fetchCapabilityPacks).toHaveBeenCalled();
-    expect(collectText(packs.root)).toContain("Operator Pack");
-    expect(collectText(packs.root)).toContain("No capability is installed, enabled, connected or invoked by staging.");
-    expect(collectText(packs.root)).not.toContain("Add-on");
-    expect(collectText(packs.root)).not.toContain("Arena");
-    expect(settingsMocks.installCapabilityPack).not.toHaveBeenCalled();
-    expect(settingsMocks.materializeStagedCapabilityPack).not.toHaveBeenCalled();
-    expect(settingsMocks.installLocalCapabilityPack).not.toHaveBeenCalled();
   });
 
   it("renders gateway auth credential-plan warnings on the access page", async () => {
@@ -3860,104 +3705,10 @@ describe("SettingsNativePage broad native sections", () => {
     expect(permissions.root.findByProps({ value: "Research reviewer" })).toBeTruthy();
   });
 
-  it("ignores stale portable previews and retains the exact draft after failed staging", async () => {
-    const page = await mount("addons");
-    await click(findButton(page.root, "Import pack"));
-    const manifest = (packId: string): CapabilityPackManifest => ({
-      packId,
-      name: `${packId} preview`,
-      version: "1.0.0",
-      description: "Portable evidence fixture",
-      trustTier: "community",
-      tags: [],
-      installWarnings: [],
-      provenance: { source: "local_file", publisher: "Verification" },
-      policyDefaults: {
-        requireFirstUseApproval: true,
-        autoRunEnabled: false,
-        memoryWriteAuthority: "operator_controlled",
-        redactionMode: "strict",
-      },
-      assets: [
-        {
-          id: "local-skill",
-          label: "Local skill",
-          kind: "skill",
-          runtimeSupport: "available",
-          installMode: "review_required",
-        },
-      ],
-    });
-    const preview = (value: CapabilityPackManifest): CapabilityPackPreview => ({
-      manifest: value,
-      reviewRequired: true,
-      policyChanges: value.policyDefaults,
-      unsupportedAssets: [],
-      installPlan: [{ kind: "skill", assetId: "local-skill", reason: "Review required", outcome: "review_required" }],
-    });
-    const firstManifest = manifest("first"),
-      secondManifest = manifest("second");
-    settingsMocks.fetchLocalCapabilityPackPreview.mockResolvedValue(preview(secondManifest));
-    let resolvePreview!: (value: unknown) => void;
-    settingsMocks.fetchLocalCapabilityPackPreview.mockImplementationOnce(
-      () =>
-        new Promise((resolve) => {
-          resolvePreview = resolve;
-        }),
-    );
-    const first = JSON.stringify(firstManifest);
-    const second = JSON.stringify(secondManifest);
-    await change(page.root.findByType("textarea"), first);
-    await click(findButton(page.root, "Preview local pack"));
-    await change(page.root.findByType("textarea"), second);
-    await act(async () => resolvePreview(preview(firstManifest)));
-    await flush();
-    expect(collectText(page.root)).not.toContain("first preview");
-    expect(
-      page.root.findAllByType("button").filter((button) => collectText(button) === "Review pack staging"),
-    ).toHaveLength(0);
-    expect(settingsMocks.installLocalCapabilityPack).not.toHaveBeenCalled();
-    await click(findButton(page.root, "Preview local pack"));
-    settingsMocks.installLocalCapabilityPack.mockRejectedValueOnce(new Error("Staging unavailable"));
-    await click(findButton(page.root, "Review pack staging"));
-    expect(settingsMocks.installLocalCapabilityPack).not.toHaveBeenCalled();
-    await act(async () => {
-      page.root
-        .findAllByType(ConfirmModal)
-        .find((modal) => modal.props.open)!
-        .props.onConfirm();
-    });
-    await flush();
-    expect(settingsMocks.installLocalCapabilityPack).toHaveBeenCalledWith(secondManifest, { actorId: "operator" });
-    expect(page.root.findByType("textarea").props.value).toBe(second);
-    expect(collectText(page.root)).toContain("Staging unavailable");
-    expect(collectText(page.root)).toContain("Pack action outcome is unconfirmed");
-    await click(findButton(page.root, "Back to list"));
-    await act(async () =>
-      page.root
-        .findAllByType(DraftLeaveDialog)
-        .find((node) => node.props.open)!
-        .props.onContinue(),
-    );
-    expect(collectText(findButton(page.root, "Import pack"))).toMatch(/Import pack\s+· Unsaved/);
-    await click(findButton(page.root, "Import pack"));
-    expect(page.root.findByType("textarea").props.value).toBe(second);
-    await click(findButton(page.root, "Preview local pack"));
-    expect(findButton(page.root, "Review pack staging").props.disabled).toBe(true);
-    expect(settingsMocks.installLocalCapabilityPack).toHaveBeenCalledTimes(1);
-  });
-
-  it("registers Runtime and Capability packs editor drafts with the global navigation guard", async () => {
+  it("registers Runtime editor drafts with the global navigation guard", async () => {
     const runtime = await mount("runtime");
     await click(findButton(runtime.root, "Configure llama.cpp"));
     await change(runtime.root.findByProps({ value: "http://127.0.0.1:8080/v1" }), "http://127.0.0.1:9090/v1");
-    expect(hasDirtySections()).toBe(true);
-    runtime.unmount();
-    __resetFormDirtyRegistryForTests();
-
-    const packs = await mount("addons");
-    await click(findButton(packs.root, "Import pack"));
-    await change(packs.root.findByType("textarea"), '{"packId":"draft-pack"}');
     expect(hasDirtySections()).toBe(true);
   });
 
@@ -4612,14 +4363,6 @@ describe("SettingsNativePage partial gateway responses", () => {
     const permissions = await mount("permissions");
 
     expect(collectText(permissions.root)).toContain("Permission profiles");
-  });
-
-  it("renders the capability packs section when the bundled catalog payload is empty", async () => {
-    settingsMocks.fetchCapabilityPacks.mockResolvedValue({});
-
-    const packs = await mount("addons");
-
-    expect(collectText(packs.root)).toContain("Capability pack staging and review record installation evidence only.");
   });
 
   it("keeps provider advice defensive when the advice payload is empty", async () => {

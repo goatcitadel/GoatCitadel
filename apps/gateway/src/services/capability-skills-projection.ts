@@ -7,6 +7,7 @@ import {
   type CapabilitySkillDetail,
   type CapabilitySkillItem,
   type CapabilitySkillState,
+  type PluginTrust,
   type SkillListItem,
   type SkillOrigin,
   type SkillRuntimeState,
@@ -28,6 +29,13 @@ export interface ShippedSkillDirs {
    * from one records that folder as its local source.
    */
   readonly packs: ReadonlySet<string>;
+}
+
+/** The plugin a skill came with, and its record's trust when known. */
+export interface PluginOfSkill {
+  pluginId: string;
+  name: string;
+  trust?: PluginTrust;
 }
 
 type OriginFacts = Pick<SkillListItem, "skillId" | "source" | "capabilityCategory" | "dir" | "lifecycle">;
@@ -126,8 +134,11 @@ export function buildCapabilitySkillItems(input: {
   /** The ids of the skills the workspace's turns may load. Absent when they couldn't be read. */
   turnSkillIds?: ReadonlySet<string>;
   shippedSkillDirs: ShippedSkillDirs;
-  /** The Skill Hub checks plugin records list as their skills, with the plugin. Absent when they couldn't be read. */
-  pluginSkills?: ReadonlyMap<string, { pluginId: string; name: string }>;
+  /**
+   * The Skill Hub checks plugin records list as their skills, with the plugin and its record's trust. Absent when they
+   * couldn't be read.
+   */
+  pluginSkills?: ReadonlyMap<string, PluginOfSkill>;
   /** The skills uninstalls removed, by skill id, with the plugin each went with. Absent when they couldn't be read. */
   removedPluginSkills?: ReadonlyMap<string, { name: string }>;
   /** The Skill Hub checks that read one of GoatCitadel's own pack folders on this install. */
@@ -145,12 +156,17 @@ export function buildCapabilitySkillItems(input: {
         name: skill.name,
         description: skill.description ?? "",
         category: skillCategoryFor({ skillId: skill.skillId, tags: skill.tags, keywords: skill.keywords }),
-        origin: skillOriginFor(skill, input.shippedSkillDirs, input.packSnapshotIds),
+        // A built-in plugin's skill is GoatCitadel's own, by the plugin record's trust, never a replayed check's.
+        origin:
+          fromPlugin?.trust === "built_in"
+            ? "built_in"
+            : skillOriginFor(skill, input.shippedSkillDirs, input.packSnapshotIds),
         state: STATE_BY_RUNTIME_STATE[skill.state],
         // As the skill list reports it; a missing value never claims the AI can use the skill.
         callable: skill.callable === true,
         revision: skill.revision,
-        switchable: input.switchableSkillIds.has(skill.skillId),
+        // A skill removed with its plugin offers no switch, whatever the switch owner holds.
+        switchable: !removedWith && input.switchableSkillIds.has(skill.skillId),
         ...(input.turnSkillIds ? { leftOutOfWorkspace: !input.turnSkillIds.has(skill.skillId) } : {}),
         pinned: skill.pinned === true,
         ...(skill.lifecycleState ? { lifecycleState: skill.lifecycleState } : {}),
@@ -169,8 +185,8 @@ export function buildCapabilitySkillItems(input: {
  */
 function pluginOf(
   skill: Pick<SkillListItem, "lifecycle">,
-  pluginSkills: ReadonlyMap<string, { pluginId: string; name: string }> | undefined,
-): { pluginId: string; name: string } | undefined {
+  pluginSkills: ReadonlyMap<string, PluginOfSkill> | undefined,
+): PluginOfSkill | undefined {
   const provenance = skill.lifecycle?.provenance;
   if (provenance?.source !== "extra" || !provenance.sourceRef) return undefined;
   return pluginSkills?.get(provenance.sourceRef);

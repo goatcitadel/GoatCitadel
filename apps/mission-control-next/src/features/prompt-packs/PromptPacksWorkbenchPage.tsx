@@ -106,6 +106,7 @@ export function PromptPacksWorkbenchPage({
           passThreshold={state.passThreshold}
           hasReport={!!state.report}
           error={state.error}
+          errorPluginId={state.errorPluginId}
           success={state.success}
           activeRun={state.activeRun}
           selectedPackId={state.selectedPackId}

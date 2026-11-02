@@ -56,7 +56,10 @@ export function SkillPanelSwitch({
   const noteId = useId();
   // A failure the store kept from before the panel opened was read out when it happened (see SkillRow).
   const mountedWith = useRef(sw.failure);
-  if (!item.switchable) return <p className="text-sm text-fg-secondary">{CANT_SWITCH_NOTE}</p>;
+  if (!item.switchable) {
+    // A skill removed with its plugin has nothing to switch, pause or resume: the reason under the badge says why.
+    return item.removedWithPlugin ? null : <p className="text-sm text-fg-secondary">{CANT_SWITCH_NOTE}</p>;
+  }
   const busy = sw.pending || sw.waiting;
   const announceFailure = announce && sw.failure !== mountedWith.current;
   return (

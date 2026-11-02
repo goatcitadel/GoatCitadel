@@ -100,6 +100,16 @@ describe("composeCapabilityTools", () => {
     }
   });
 
+  it("reads from the policy engine whether plugins' holds can be read", async () => {
+    const { wired } = owners("trusted_local");
+    const held = composeCapabilityTools({ ...wired, policy: { pluginToolGroupHoldsUnavailable: () => true } });
+
+    expect((await held.list("default")).issues).toEqual([
+      "Which tool groups plugins keep off can't be read right now, so the tools in every group that can be switched off are kept off.",
+    ]);
+    expect((await composeCapabilityTools(wired).list("default")).issues).toEqual([]);
+  });
+
   it("reports cookies and storage tools as blocked by the install on a hardened or dev profile", async () => {
     for (const profile of ["remote_hardened", "local_dev"] as const) {
       const { wired, inspectToolAccess } = owners(profile);

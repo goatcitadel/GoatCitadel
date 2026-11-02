@@ -3,6 +3,7 @@ import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
+import { FromPluginLink } from "../plugins/FromPluginLink";
 import { CHAT_CONNECTORS_SETTINGS_HREF, WORKSPACE_CAPABILITIES_HREF } from "./connector-links";
 import {
   chatBlockLine,
@@ -30,6 +31,12 @@ export function ConnectorHeader({ item }: { item: CapabilityConnectorItem }) {
     >
       <p className="text-sm text-fg-secondary">
         {connectorKindLabel(item.kind)} · {connectorCategoryLabel(item.category)}
+        {item.fromPlugin ? (
+          <>
+            {" · "}
+            <FromPluginLink plugin={item.fromPlugin} />
+          </>
+        ) : null}
       </p>
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <StatusBadge status={state} />

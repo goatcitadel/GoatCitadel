@@ -50,7 +50,6 @@ export type SettingsSection =
   | "runtime"
   | "local-ai"
   | "workspaces"
-  | "addons"
   | "integrations"
   | "channels"
   | "mcp"
@@ -640,13 +639,6 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
       section: "hooks",
     },
     {
-      id: "settings-addons",
-      label: "Capability packs",
-      description: "Preview bundled capability packs. Plugins replace them soon.",
-      area: "settings",
-      section: "addons",
-    },
-    {
       id: "settings-budget",
       label: "Budgets",
       description: "Choose a budget preference: Saver, Balanced, or Power. It is not a dollar limit.",
@@ -731,7 +723,7 @@ export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
     {
       id: "settings-connections",
       label: "Connections",
-      sections: ["channels", "integrations", "mcp", "web-search", "addons"],
+      sections: ["channels", "integrations", "mcp", "web-search"],
     },
     { id: "settings-safety", label: "Safety", sections: ["permissions", "tools", "trust-policy", "hooks", "budget"] },
     {

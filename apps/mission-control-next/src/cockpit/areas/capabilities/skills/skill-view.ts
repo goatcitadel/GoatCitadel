@@ -44,7 +44,7 @@ export interface SkillStateLink {
  * Which row of `presentSkillState`'s order a skill matched. Only `on` and `paused` mean the AI can use the skill here,
  * so only they take the panel's note about what the state does.
  */
-export type SkillStateKind = "waiting" | "off" | "left_out" | "not_usable" | "paused" | "on";
+export type SkillStateKind = "waiting" | "removed" | "off" | "left_out" | "not_usable" | "paused" | "on";
 
 /**
  * The state word of a skill, the tone it reads in, and the line that says why, with the link that goes with it, and the
@@ -86,7 +86,8 @@ const NOT_USABLE_OTHERWISE: NotUsablePresentation = {
 };
 
 /**
- * What one skill reads as, the first match winning: a change waiting on your approval, off, left out of this workspace
+ * What one skill reads as, the first match winning: a change waiting on your approval, removed with its plugin, off,
+ * left out of this workspace
  * by its skill choices, not usable (said by its review state), paused, and on. A paused skill is usable when it is
  * approved or trusted, which is why the not-usable rows come before Paused.
  *
@@ -106,6 +107,15 @@ export function presentSkillState(
       tone: "waiting",
       reason: "The change applies once you approve it.",
       kind: "waiting",
+    };
+  }
+  // GoatCitadel marks a skill removed with its plugin only once the AI can't use it, so this comes before the rest.
+  if (item.removedWithPlugin) {
+    return {
+      label: `Removed with ${item.removedWithPlugin.name}`,
+      tone: "neutral",
+      reason: "Its plugin was uninstalled, so the AI can't use it",
+      kind: "removed",
     };
   }
   if (item.state === "off") return { label: "Off", tone: "neutral", reason: "The AI can't use it", kind: "off" };

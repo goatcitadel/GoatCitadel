@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import type { Dialog } from "../../ui/Dialog";
 import { McpServerEditor } from "./McpServerEditor";
 import { __resetMcpServerMutationsForTests } from "../../../features/native-routes/settings/mcp-server-mutation";
@@ -227,6 +228,36 @@ describe("native saved MCP editor", () => {
     root = createRoot(container);
     await act(async () => pending.resolve(saved));
     expect(api.updateMcpServer).not.toHaveBeenCalled();
+  });
+  it("shows only the plugin's sentence when GoatCitadel refuses a plugin's server, and keeps no draft", async () => {
+    await render();
+    await typeLabel("Plugin draft");
+    await click("Review MCP changes");
+    api.updateMcpServer.mockRejectedValueOnce(
+      new ApiRequestError("From Browser checks. Uninstall it to remove this.", {
+        kind: "http",
+        method: "PATCH",
+        path: "/api/v1/mcp/servers/mcp-editor",
+        status: 409,
+        body: {
+          error: "From Browser checks. Uninstall it to remove this.",
+          code: "PLUGIN_OWNED",
+          details: { pluginId: "browser-checks" },
+        },
+      }),
+    );
+    const reads = api.fetchMcpServer.mock.calls.length;
+    await click("Save reviewed MCP configuration");
+
+    expect(container.textContent).toContain("From Browser checks. Uninstall it to remove this.");
+    // Nothing changed on the server, so there is nothing to review again and no draft to keep.
+    expect(container.textContent).not.toContain("Saved configuration changed");
+    expect(container.querySelector('[aria-label="Current MCP server review"]')).toBeNull();
+    expect(api.fetchMcpServer).toHaveBeenCalledTimes(reads + 1);
+    expect(container.textContent).not.toContain("Unsaved MCP server draft");
+    await click("Close editor");
+    expect(close).toHaveBeenCalledTimes(1);
+    expect(container.querySelector('[aria-label="Unsaved changes"]')).toBeNull();
   });
   it("keeps or discards a dirty draft only through the leave decision", async () => {
     await render();

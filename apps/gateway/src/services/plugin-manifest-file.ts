@@ -21,9 +21,10 @@ export function readPluginManifestFile(dir: string): Promise<PluginManifestParse
  * The manifests of the plugins that ship with GoatCitadel: each plain folder under `builtInRoot` whose name is a plugin
  * id and whose manifest names that same id (the id a built-in install asks for), the first 64 by name. A folder whose
  * manifest is missing, too large or refused is left out. Nothing is copied, fetched or checked, and a missing root
- * lists nothing.
+ * lists nothing, as does no root at all (a packaged install whose app folder can't be verified).
  */
-export async function listBuiltInPluginManifests(builtInRoot: string): Promise<PluginManifest[]> {
+export async function listBuiltInPluginManifests(builtInRoot: string | undefined): Promise<PluginManifest[]> {
+  if (builtInRoot === undefined) return [];
   let dir;
   try {
     dir = await fs.opendir(builtInRoot);
@@ -47,6 +48,21 @@ export async function listBuiltInPluginManifests(builtInRoot: string): Promise<P
     if (parsed.ok && parsed.manifest.pluginId === folder) manifests.push(parsed.manifest);
   }
   return manifests;
+}
+
+/**
+ * The ids of the plugins that ship with GoatCitadel, fixed here so they stay reserved even while the built-in folder
+ * can't be read (a packaged install whose app folder can't be verified). The manifest test checks this list against the
+ * repository's `plugins/` folder.
+ */
+export const SHIPPED_PLUGIN_IDS: readonly string[] = Object.freeze(["browser-checks"]);
+
+/**
+ * The ids no Git or folder plugin may take: every shipped id, whether or not its folder can be read now, and any other
+ * built-in the folder lists.
+ */
+export function reservedPluginIds(listed: readonly PluginManifest[]): string[] {
+  return [...new Set([...SHIPPED_PLUGIN_IDS, ...listed.map((manifest) => manifest.pluginId)])];
 }
 
 /** Whether `value` is a plugin id by the manifest's own rule. */

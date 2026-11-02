@@ -749,28 +749,6 @@ describe("shared API wrappers", () => {
   });
 
   it("routes platform runtime wrappers and clamps query limits", async () => {
-    await expectCall(platform.fetchCapabilityPacks(), "/api/v1/capability-packs");
-    await expectCall(platform.fetchStagedCapabilityPacks(), "/api/v1/capability-packs/staged");
-    await expectCall(platform.fetchCapabilityPackPreview("pack/1"), "/api/v1/capability-packs/pack%2F1/preview");
-    await expectCall(platform.exportCapabilityPack("pack/1"), "/api/v1/capability-packs/pack%2F1/export");
-    await expectCall(
-      platform.fetchLocalCapabilityPackPreview({ packId: "local-pack" } as never),
-      "/api/v1/capability-packs/local/preview",
-      { method: "POST" },
-    );
-    await expectCall(platform.installCapabilityPack("pack/1"), "/api/v1/capability-packs/pack%2F1/install", {
-      method: "POST",
-    });
-    await expectCall(
-      platform.installLocalCapabilityPack({ packId: "local-pack" } as never),
-      "/api/v1/capability-packs/local/install",
-      { method: "POST" },
-    );
-    await expectCall(
-      platform.materializeStagedCapabilityPack("env/1", { confirmReview: true }),
-      "/api/v1/capability-packs/staged/env%2F1/materialize",
-      { method: "POST" },
-    );
     await expectCall(
       platform.fetchEvidenceEnvelopes({
         workspaceId: "workspace-a",

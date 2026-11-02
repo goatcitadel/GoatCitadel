@@ -11,7 +11,6 @@ export function composeMemoryKnowledgeRouteDependencies(
   gateway: GatewayRouteCompositionPort,
 ): RouteDependencyDomain<
   | "capabilities"
-  | "capabilityPacks"
   | "compliance"
   | "curator"
   | "evidence"
@@ -57,17 +56,6 @@ export function composeMemoryKnowledgeRouteDependencies(
 
   return {
     capabilities: gateway.capabilitySystemService,
-    capabilityPacks: {
-      installLocalPack: (input) => gateway.capabilityPackService.installLocalPack(input),
-      installPack: (packId, input) => gateway.capabilityPackService.installPack(packId, input),
-      materializeStagedPack: (evidenceEnvelopeId, input) =>
-        gateway.capabilityPackService.materializeStagedPack(evidenceEnvelopeId, input),
-      exportPack: (packId) => gateway.capabilityPackService.exportPack(packId),
-      listPacks: () => gateway.capabilityPackService.listPacks(),
-      listStagedPacks: () => gateway.capabilityPackService.listStagedPacks(),
-      previewLocalPack: (manifest) => gateway.capabilityPackService.previewLocalPack(manifest),
-      previewPack: (packId) => gateway.capabilityPackService.previewPack(packId),
-    },
     curator: {
       listCuratorStatus: () => gateway.listCuratorStatus(),
       archiveCuratorSkill: (input) => gateway.archiveCuratorSkill(input),

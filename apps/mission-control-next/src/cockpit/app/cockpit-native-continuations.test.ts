@@ -29,8 +29,8 @@ describe("internal native owner continuations", () => {
     ],
     ["/settings/safety#approval-mode", "/settings/safety"],
     // The retired Settings › Connections opens its sections' new homes, with the scope and query carried.
-    ["/settings/connections#addons", "/settings/advanced"],
     ["/settings/connections#mcp-servers", "/capabilities/connectors/advanced"],
+    ["/settings/connections#web-search", "/capabilities/connectors/advanced"],
   ])("keeps canonical target and carried scope/query for %s", (input, pathname) => {
     const result = resolveCockpitContinuation(input, context);
     expect(result.kind).toBe("native");
@@ -45,6 +45,21 @@ describe("internal native owner continuations", () => {
     expect(url.searchParams.get("shell")).toBe("cockpit");
     expect(url.searchParams.has("shellScope")).toBe(false);
     expect(url.hash).toBe(input.includes("#") ? new URL(input, "http://cockpit.invalid").hash : "#evidence");
+  });
+  it("sends a retired add-ons continuation to Plugins, keeping the carried scope and dropping its anchor", () => {
+    for (const input of ["/settings/connections#addons", "/settings/advanced#addons", "/settings/addons"]) {
+      const result = resolveCockpitContinuation(input, context);
+      expect(result.kind, input).toBe("native");
+      if (result.kind !== "native") throw new Error("Expected the Plugins tab");
+      const url = new URL(result.href, "http://cockpit.invalid");
+      expect(url.pathname, input).toBe("/capabilities/plugins");
+      expect(url.searchParams.get("workspaceId"), input).toBe("workspace-a");
+      expect(url.searchParams.get("citadelId"), input).toBe("c");
+      expect(url.searchParams.getAll("keep"), input).toEqual(["yes", "two"]);
+      expect(url.searchParams.get("shell"), input).toBe("cockpit");
+      // Plugins has no add-ons section, so the old anchor (or the carried one) is replaced by none.
+      expect(url.hash, input).toBe("");
+    }
   });
   it("sends a Library skill or tool continuation to Capabilities, keeping the carried scope", () => {
     for (const [input, pathname, item] of [

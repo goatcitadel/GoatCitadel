@@ -76,6 +76,8 @@ import {
   filterPromptPackTestsByResult,
   formatPromptPackExecutionStyle,
   isPromptPackV2UiEnabled,
+  promptPackChangeError,
+  promptPackRefusingPlugin,
   summarizePromptPackTestOutcomes,
 } from "./PromptPacksWorkbenchPage.helpers";
 import {
@@ -119,6 +121,8 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
   const [resetClearScores, setResetClearScores] = useState(true);
   const [importing, setImporting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // The plugin a refused change named, kept with the words it came with, so a later error never takes its link.
+  const [pluginRefusal, setPluginRefusal] = useState<{ message: string; pluginId: string } | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
   const [packs, setPacks] = useState<PromptPackRecord[]>([]);
   const [selectedPackId, setSelectedPackId] = useState<string | null>(null);
@@ -799,7 +803,10 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setSuccess(`Reset complete: removed ${result.deletedRuns} run(s) and ${result.deletedScores} score(s).`);
       setConfirmResetArmed(false);
     } catch (err) {
-      setError(describeApiError(err).summary);
+      const message = promptPackChangeError(err);
+      const pluginId = promptPackRefusingPlugin(err);
+      setError(message);
+      setPluginRefusal(pluginId ? { message, pluginId } : null);
     } finally {
       setResetting(false);
     }
@@ -1245,6 +1252,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
     resetClearScores,
     importing,
     error,
+    errorPluginId: pluginRefusal && pluginRefusal.message === error ? pluginRefusal.pluginId : undefined,
     success,
     packs,
     selectedPackId,

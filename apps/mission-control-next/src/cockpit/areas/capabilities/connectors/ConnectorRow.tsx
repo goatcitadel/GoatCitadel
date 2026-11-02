@@ -2,6 +2,7 @@ import type { CapabilityConnectorItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { LetterIcon } from "../LetterIcon";
+import { FromPluginLink } from "../plugins/FromPluginLink";
 import { connectorAction, connectorKindLabel, presentConnectorState, withInstallProgress } from "./connector-view";
 import { useConnectorInstallStatus } from "./use-connector-install";
 
@@ -27,6 +28,7 @@ export function ConnectorRow({
         <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
           <h3 className="min-w-0 truncate text-base font-semibold text-fg">{item.name}</h3>
           <span className="shrink-0 text-xs text-fg-muted">{connectorKindLabel(item.kind)}</span>
+          {item.fromPlugin ? <FromPluginLink plugin={item.fromPlugin} className="shrink-0 text-xs" /> : null}
         </div>
         <p className="mt-0.5 truncate text-sm text-fg-secondary">{item.description}</p>
         <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1">

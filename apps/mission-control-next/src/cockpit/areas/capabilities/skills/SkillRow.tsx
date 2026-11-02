@@ -6,6 +6,7 @@ import { StatusBadge } from "../../../ui/StatusBadge";
 import { Switch } from "../../../ui/Switch";
 import { reopenSettingsApproval } from "../../settings/SettingsApprovalDialog";
 import { LetterIcon } from "../LetterIcon";
+import { FromPluginLink } from "../plugins/FromPluginLink";
 import { CANT_SWITCH_NOTE, PINNED_NOTE, presentSkillState, SKILL_TONE_TEXT } from "./skill-view";
 import { useSkillSwitch } from "./use-skill-switch";
 
@@ -69,6 +70,7 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             <h3 className="min-w-0 truncate text-base font-semibold text-fg">{item.name}</h3>
             <span className="shrink-0 text-xs text-fg-muted">{SKILL_ORIGIN_LABELS[item.origin]}</span>
+            {item.fromPlugin ? <FromPluginLink plugin={item.fromPlugin} className="shrink-0 text-xs" /> : null}
           </div>
           <p className="mt-0.5 truncate text-sm text-fg-secondary">{item.description}</p>
           <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1">
@@ -86,7 +88,8 @@ export function SkillRow({ item, uses, onView }: SkillRowProps) {
             ) : (
               <>
                 <StatusBadge status={state} />
-                <span className="text-sm text-fg-secondary">{CANT_SWITCH_NOTE}</span>
+                {/* A skill removed with its plugin has nothing to switch: its reason line says why. */}
+                {item.removedWithPlugin ? null : <span className="text-sm text-fg-secondary">{CANT_SWITCH_NOTE}</span>}
               </>
             )}
             {sw.waitingApprovalId ? (

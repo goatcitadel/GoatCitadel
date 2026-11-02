@@ -75,7 +75,6 @@ export const appCopy = {
     notAvailable: "n/a",
   },
   navItems: [
-    { id: "addons", label: "Capability packs", code: "PCK" },
     { id: "onboarding", label: "Launch Wizard", code: "NEW" },
     { id: "dashboard", label: "Work", code: "SUM" },
     { id: "system", label: "System", code: "ENG" },
@@ -104,7 +103,7 @@ export const appCopy = {
     { id: "npu", label: "Local Runtime", code: "NPU" },
   ] satisfies NavItemCopy[],
   navSections: [
-    { label: "Configure", items: ["onboarding", "settings", "workspaces", "integrations", "tools", "addons"] },
+    { label: "Configure", items: ["onboarding", "settings", "workspaces", "integrations", "tools"] },
     {
       label: "Work",
       items: [
@@ -124,7 +123,6 @@ export const appCopy = {
     { label: "Admin", items: ["skills", "mcp"] },
   ] satisfies NavSectionCopy[],
   nextStepByTab: {
-    addons: "Preview bundled capability packs. Plugins replace them soon.",
     onboarding: "Finish setup once, then move into Summit or Chat.",
     dashboard: "Start in Work when you want the fastest path into Chat.",
     system: "If anything feels slow, check vitals here first.",
@@ -174,29 +172,6 @@ export const pageCopy: Record<PageId, PageCopy> = {
         },
         { term: "Subagents", meaning: "Optional delegated work with visible run state and operator controls." },
         { term: "Code capability", meaning: "Governed implementation help with approval and artifact evidence." },
-      ],
-    },
-  },
-  addons: {
-    title: "Capability packs",
-    subtitle: "Preview bundled capability packs. Plugins replace them soon.",
-    guide: {
-      what: "Use Capability packs to preview what a bundled pack would set up before anything is staged.",
-      when: "Use this to look over a bundled pack or a portable pack manifest. Plugins will replace capability packs soon.",
-      actions: [
-        "Preview a pack to see what it adds.",
-        "Import a portable pack manifest to preview it.",
-        "Stage a pack to keep it for review. Staging does not install anything.",
-      ],
-      terms: [
-        {
-          term: "Preview",
-          meaning: "A look at what a pack would add. Previewing does not install, turn on or connect anything.",
-        },
-        {
-          term: "Staged",
-          meaning: "A pack saved for review. Staging does not install, turn on or connect anything.",
-        },
       ],
     },
   },

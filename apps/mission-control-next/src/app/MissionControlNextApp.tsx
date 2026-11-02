@@ -102,7 +102,7 @@ export {
 /**
  * F-M11: experimental library/ops surfaces that are filtered out of the rails
  * and need an explicit command-palette entry to stay reachable. (Settings
- * experimental sections — personalities, addons — already surface via the
+ * experimental section — personalities — already surfaces via the
  * settings rail-item palette mapping.)
  */
 const EXPERIMENTAL_COMMAND_ROUTES: ReadonlyArray<{

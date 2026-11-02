@@ -5,6 +5,7 @@ import { HOOK_TRIGGER_VALUES } from "./hooks.js";
 import {
   PLUGIN_LIMITS,
   PLUGIN_MANIFEST_FILENAME,
+  PLUGIN_MANIFEST_REFUSAL_CODES,
   isPortablePluginPath,
   parsePluginManifest,
   pluginManifestTooLarge,
@@ -762,5 +763,45 @@ describe("parsePluginManifest", () => {
       if (!result.ok) return;
       expect(result.manifestSha256).toBe(createHash("sha256").update(Buffer.from(text, "utf8")).digest("hex"));
     });
+  });
+});
+
+describe("PLUGIN_MANIFEST_REFUSAL_CODES", () => {
+  it("names every code a refused manifest can carry, once each, for the cockpit to word", () => {
+    // Typed as the refusal code, so a list entry that isn't one fails to compile here.
+    const codes: readonly PluginManifestRefusalCode[] = PLUGIN_MANIFEST_REFUSAL_CODES;
+    expect([...codes].sort()).toEqual(
+      [
+        "MANIFEST_MISSING",
+        "MANIFEST_TOO_LARGE",
+        "MANIFEST_INVALID",
+        "DUPLICATE_PIECE_ID",
+        "PIECE_PATH_INVALID",
+        "UNKNOWN_PIECE_KIND",
+        "FEATURE_FLAGS_NOT_ALLOWED",
+        "CHAT_INSTRUCTIONS_NOT_ALLOWED",
+        "HOOK_MUST_ONLY_OBSERVE",
+        "HOOK_CODE_NOT_ALLOWED",
+        "PRESET_MUST_TIGHTEN",
+      ].sort(),
+    );
+    expect(new Set(codes).size).toBe(codes.length);
+    // Whatever the parser refuses with is one of them.
+    const refused = [
+      { ...validManifest(), featureFlags: {} },
+      { ...validManifest(), instructions: "x" },
+      withPiece(0, (piece) => ({ ...piece, path: "../outside" })),
+      withPiece(1, (piece) => ({ ...piece, kind: "teleport" })),
+      {
+        ...validManifest(),
+        pieces: [
+          { kind: "skill", id: "a", path: "a" },
+          { kind: "skill", id: "a", path: "b" },
+        ],
+      },
+      { ...validManifest(), schemaVersion: 2 },
+    ];
+    for (const manifest of refused) expect(codes).toContain(refusalOf(manifest).code);
+    expect(codes).toContain(pluginManifestTooLarge().code);
   });
 });

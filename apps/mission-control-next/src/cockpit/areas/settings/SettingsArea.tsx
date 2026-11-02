@@ -46,7 +46,6 @@ import {
   LlamaSetupSettings,
   CapabilityScopesSettings,
   HooksSettings,
-  PortablePacksSettings,
   preloadSettingsSection,
 } from "./settings-controls";
 import { RulesPrecedenceLink } from "./RulesPrecedence";
@@ -135,9 +134,7 @@ export function SettingsArea() {
           />
         );
       // MCP servers, Integrations and Web & Search are on Capabilities › Connectors › Advanced setup, and Channels on
-      // Chat › Messaging › Advanced channel setup. Capability packs wait here, on Advanced, for the Plugins tab.
-      case "addons":
-        return <PortablePacksSettings />;
+      // Chat › Messaging › Advanced channel setup. Plugins are on Capabilities › Plugins.
       // One owner page per editor: llama.cpp setup lives on Models › Local AI, the managed runtime on Advanced.
       case "runtime":
         return (

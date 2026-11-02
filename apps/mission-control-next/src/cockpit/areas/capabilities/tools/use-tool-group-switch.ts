@@ -12,6 +12,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { fetchChangePlan, fetchChangePlans } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
 import { patchSettings } from "@goatcitadel/mission-control-shared/api/settings-operations";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { toolListQuery } from "../../../data/capability-tools-query";
@@ -58,7 +59,9 @@ export interface ToolGroupSwitch {
    * object for as long as that failure stands, in every view, so a view can tell a failure it was already showing from
    * a new one.
    */
-  failure?: { message: string; conflict: boolean };
+  failure?: { message: string; conflict: boolean; pluginId?: string };
+  /** The plugins that keep the group off, as the list names them. Its switch can't turn it on while any does. */
+  heldOffBy?: readonly { pluginId: string; name: string }[];
   setEnabled(next: boolean): void;
   /** Reads the list again and drops the last failure. */
   reload(): void;
@@ -79,7 +82,11 @@ const failures = new WeakMap<ToolGroupSwitchEntry, NonNullable<ToolGroupSwitch["
 function failureOf(entry: Extract<ToolGroupSwitchEntry, { phase: "failed" }>) {
   const known = failures.get(entry);
   if (known) return known;
-  const made = { message: entry.message, conflict: entry.conflict };
+  const made = {
+    message: entry.message,
+    conflict: entry.conflict,
+    ...(entry.pluginId ? { pluginId: entry.pluginId } : {}),
+  };
   failures.set(entry, made);
   return made;
 }
@@ -120,8 +127,8 @@ const approvalOf = (entry: FollowEntry) => (entry.phase === "waiting" ? entry.ap
 const sameFollow = (a: FollowEntry, b: FollowEntry) =>
   a.phase === b.phase && a.planId === b.planId && approvalOf(a) === approvalOf(b);
 
-function fail(groupId: ToolGroupId, message: string, conflict = false) {
-  setToolGroupSwitch(groupId, { phase: "failed", message, conflict });
+function fail(groupId: ToolGroupId, message: string, conflict = false, pluginId?: string) {
+  setToolGroupSwitch(groupId, { phase: "failed", message, conflict, ...(pluginId ? { pluginId } : {}) });
   // Whatever the plan or request did, the list shows what the Gateway holds now.
   const context = contexts.get(groupId);
   if (context) void context.client.invalidateQueries({ queryKey: context.listKey });
@@ -228,6 +235,9 @@ async function save(group: CapabilityToolGroupItem, next: boolean, expectedRevis
   } catch (error) {
     // Only this group goes back, and only when it was changed. A newer list may have landed for the others.
     if (!next) putState(context, groupId, before);
+    // A plugin keeps the group off: GoatCitadel's own sentence names it, and reloading wouldn't change anything.
+    const refusal = readPluginOwnedRefusal(error);
+    if (refusal) return fail(groupId, refusal.message, false, refusal.pluginId);
     const described = describeApiError(error);
     const conflict = described.category === "conflict";
     // A request that reported a failure can still have been committed, so `fail` reads the list again.
@@ -297,6 +307,7 @@ export function useToolGroupSwitch(group: CapabilityToolGroupItem, settingsRevis
     waiting,
     ...(entry?.phase === "waiting" && entry.approvalId ? { waitingApprovalId: entry.approvalId } : {}),
     ...(entry?.phase === "failed" ? { failure: failureOf(entry) } : {}),
+    ...(group.heldOffBy && group.heldOffBy.length > 0 ? { heldOffBy: group.heldOffBy } : {}),
     setEnabled: (next) => void save(group, next, settingsRevision, { client, listKey }),
     reload: () => {
       if (readToolGroupSwitch(group.groupId)?.phase === "failed") setToolGroupSwitch(group.groupId, undefined);

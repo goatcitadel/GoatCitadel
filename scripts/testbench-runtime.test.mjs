@@ -31,6 +31,7 @@ const SENTINEL = "TESTBENCH-SENTINEL-DO-NOT-COPY";
 const UNTRACKED_OPERATOR_FILES = [
   ["workspaces", "private", "AGENTS.md"],
   ["skills", "workspace", "private", "SKILL.md"],
+  ["plugins", "private", "goatcitadel-plugin.json"],
   [".env"],
   ["data", "secrets", "token.txt"],
   ["config", ".generations", "g1.json"],
@@ -51,10 +52,12 @@ function makeSourceRoot(t, { git = true } = {}) {
   }
   fs.mkdirSync(path.join(root, "skills", "demo"), { recursive: true });
   fs.writeFileSync(path.join(root, "skills", "demo", "SKILL.md"), "# Demo skill\n");
+  fs.mkdirSync(path.join(root, "plugins", "demo"), { recursive: true });
+  fs.writeFileSync(path.join(root, "plugins", "demo", "goatcitadel-plugin.json"), "{}\n");
   if (git) {
-    // ls-files reads the index, so staging the shipped skill is enough: no commit or identity needed.
+    // ls-files reads the index, so staging the shipped skill and plugin is enough: no commit or identity needed.
     execFileSync("git", ["init", "--quiet"], { cwd: root });
-    execFileSync("git", ["add", "skills/demo/SKILL.md"], { cwd: root });
+    execFileSync("git", ["add", "skills/demo/SKILL.md", "plugins/demo/goatcitadel-plugin.json"], { cwd: root });
   }
   return root;
 }
@@ -66,7 +69,7 @@ function listFiles(directory) {
     .map((entry) => path.join(entry.parentPath, entry.name));
 }
 
-test("prepareTestbenchRuntime copies shipped defaults and skills, never operator config or workspaces", async (t) => {
+test("prepareTestbenchRuntime copies shipped defaults, skills and plugins, never operator config or workspaces", async (t) => {
   const sourceRoot = makeSourceRoot(t);
   const tempParent = fs.mkdtempSync(path.join(os.tmpdir(), "testbench-parent-"));
   t.after(() => fs.rmSync(tempParent, { recursive: true, force: true }));
@@ -85,6 +88,7 @@ test("prepareTestbenchRuntime copies shipped defaults and skills, never operator
   assert.equal(fs.existsSync(path.join(runtimeRoot, "workspaces")), false);
   assert.equal(fs.existsSync(path.join(runtimeRoot, "skills", "demo", "SKILL.md")), true);
   assert.equal(fs.existsSync(path.join(runtimeRoot, "skills", "workspace")), false);
+  assert.equal(fs.existsSync(path.join(runtimeRoot, "plugins", "demo", "goatcitadel-plugin.json")), true);
   assert.equal(fs.existsSync(path.join(runtimeRoot, "home")), true);
   assert.equal(fs.existsSync(path.join(runtimeRoot, "backups")), true);
   const providers = JSON.parse(fs.readFileSync(path.join(runtimeRoot, "config", "llm-providers.json"), "utf8"));

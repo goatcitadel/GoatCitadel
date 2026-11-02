@@ -97,7 +97,7 @@ export function useMcpEnabled({
         setReview(null);
       } else {
         setNotice(result.message);
-        if (["conflict", "cancelled"].includes(result.status)) setReview(null);
+        if (["conflict", "cancelled", "plugin_owned"].includes(result.status)) setReview(null);
       }
       try {
         await reload();

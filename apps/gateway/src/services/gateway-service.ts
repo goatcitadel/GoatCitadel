@@ -655,9 +655,8 @@ import {
   providerTemporarySecretAccount,
 } from "./provider-connection-change-plan-adapter.js";
 import { CapabilityCandidateChangePlanAdapter } from "./capability-candidate-change-plan-adapter.js";
-import { CapabilityPackChangePlanAdapter } from "./capability-pack-change-plan-adapter.js";
+import { RetiredCapabilityPackChangePlanAdapter } from "./retired-capability-pack-change-plan-adapter.js";
 import { createConnectorInstallChangePlanAdapter } from "./connector-install-change-plan-adapter.js";
-import { compensatePackMcpServer } from "./capability-pack-mcp-owner.js";
 import { ImprovementCandidateChangePlanAdapter } from "./improvement-candidate-change-plan-adapter.js";
 import { ChannelConnectionChangePlanAdapter } from "./channel-connection-change-plan-adapter.js";
 import { RuntimeRemediationChangePlanAdapter } from "./runtime-remediation-change-plan-adapter.js";
@@ -771,7 +770,6 @@ import {
 import { WorkspacePathBridgeRuntime } from "./workspace-path-bridge-runtime.js";
 import { ChatWorkspaceSnapshotService } from "./chat-workspace-snapshot-service.js";
 import { buildDelegatedFilesystemScopeControl, DelegatedWorkResultService } from "./delegated-work-result-service.js";
-import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
 import { RuntimeDecisionRecorder } from "./runtime-decision-recorder.js";
@@ -1162,7 +1160,6 @@ export class GatewayService {
   private readonly evidenceEnvelopeService: EvidenceEnvelopeService;
   private readonly runtimeDecisionRecorder: RuntimeDecisionRecorder;
   private readonly continuationGateService: ContinuationGateService;
-  private readonly capabilityPackService: CapabilityPackService;
   private readonly memoryWriteGateService: MemoryWriteGateService;
   private readonly operatorProfileService: OperatorProfileService;
   public readonly workPassportService: WorkPassportService;
@@ -1309,12 +1306,6 @@ export class GatewayService {
     });
     this.continuationGateService = new ContinuationGateService({
       storage: this.storage,
-      publishRealtime: async (eventType, source, payload) => {
-        await this.publishRealtime(eventType, source, payload);
-      },
-    });
-    this.capabilityPackService = new CapabilityPackService({
-      evidenceEnvelopeService: this.evidenceEnvelopeService,
       publishRealtime: async (eventType, source, payload) => {
         await this.publishRealtime(eventType, source, payload);
       },
@@ -3368,51 +3359,7 @@ export class GatewayService {
       ...readProductSourceApplySupervisorConfiguration(),
     });
     const evolutionAdapters = new EvolutionControlPlaneAdapterRegistry([
-      new CapabilityPackChangePlanAdapter({
-        storage: this.storage,
-        rootDir: config.rootDir,
-        candidateRoot: config.assistant.capabilities.candidateRoot,
-        listPacks: () => this.capabilityPackService.listPacks(),
-        readMcpServers: () => this.readMcpServers(),
-        readMcpTools: () => this.readMcpTools(),
-        createMcpServer: (input, serverId, planId) =>
-          this.storage.runImmediateTransaction(() =>
-            mcpServerAdminService.createMcpServer(this.mcpAdministration, input, serverId, planId),
-          ),
-        enableMcpServer: (serverId, planId) =>
-          this.storage.runImmediateTransaction(() =>
-            mcpServerAdminService.updateMcpServer(
-              this.mcpAdministration,
-              serverId,
-              { enabled: true },
-              { planId, phase: "apply" },
-            ),
-          ),
-        compensateMcp: (input) =>
-          this.storage.runImmediateTransaction(() => compensatePackMcpServer(this.mcpAdministration, input)),
-        connectMcpServer: (serverId) => mcpServerAdminService.connectMcpServer(this.mcpAdministration, serverId),
-        readFeatures: async () => ({ ...(await this.getSettings()).features }),
-        readSettingsSnapshot: async () => {
-          const settings = await this.getSettings();
-          return { revision: settings.revision, features: { ...settings.features } };
-        },
-        cancelChild: (plan, child) =>
-          this.evolutionControlPlaneService.cancel(
-            {
-              ...plan.origin,
-              actorId: plan.origin.actorId ?? "",
-            },
-            child.planId,
-            child.revision,
-          ),
-        getCandidateDetail: (candidateId) => this.capabilitySystemService.getCandidateDetail(candidateId),
-        createChild: (plan, request, idempotencyKey) =>
-          this.evolutionControlPlaneService.create({
-            actor: { ...plan.origin, actorId: plan.origin.actorId ?? "", requestId: idempotencyKey },
-            request,
-            idempotencyKey,
-          }),
-      }),
+      new RetiredCapabilityPackChangePlanAdapter(),
       createConnectorInstallChangePlanAdapter(this, this.mcpAdministration),
       new ModelChangePlanAdapter({
         getChatSessionPrefs: (sessionId) => this.getChatSessionPrefs(sessionId),
@@ -3658,7 +3605,6 @@ export class GatewayService {
       approvalRuntime: this.approvalRuntime,
       assemblyService: this.assemblyService,
       backupRetentionService: this.backupRetentionService,
-      capabilityPackService: this.capabilityPackService,
       capabilityScopeResolver: this.capabilityScopeResolver,
       capabilitySystemService: this.capabilitySystemService,
       chatCompactionBreakerActionService: this.chatCompactionBreakerActionService,
@@ -3931,6 +3877,7 @@ export class GatewayService {
       capabilityTools: composeCapabilityTools({
         tools: this,
         settings: this,
+        policy: this.policyEngine,
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         safeWriteFallbackDir: () =>
           path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out"),

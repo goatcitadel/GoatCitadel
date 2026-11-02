@@ -2,11 +2,13 @@ import { useId, useRef, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { CapabilityConnectorItem, CapabilityConnectorsResponse, McpApprovalPosture } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
 import { updateMcpServerPolicy } from "@goatcitadel/mission-control-shared/api/mcp-operations";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { queryKeys } from "../../../data/query-keys";
 import { Button } from "../../../ui/Button";
 import { cn } from "../../../lib/cn";
+import { OpenInPluginsLink } from "../plugins/FromPluginLink";
 import { approvalPostureInEffect } from "./connector-view";
 import { CONNECTOR_CONFLICT_MESSAGE, withRow } from "./use-connector-enabled";
 
@@ -40,10 +42,14 @@ export const REMOTE_LINE = "This install is set up for remote access, so every a
 const MONEY_LINE = "This connector can move money, so changes always ask you first.";
 const PER_CHAT_LINE = "This connector's tools are listed per chat, so every action asks you first.";
 const NO_BINDING_LINE = "This server's saved version isn't available, so it can't be changed here.";
+/** A plugin's connector keeps what its plugin set; GoatCitadel refuses a change to it. */
+const pluginLine = (name: string) => `It came with ${name}, so it can't be changed here.`;
 
 interface Failure {
   message: string;
   conflict: boolean;
+  /** The plugin GoatCitadel named when it refused the change, linked beside its sentence. */
+  pluginId?: string;
 }
 
 /**
@@ -74,7 +80,8 @@ export function WhatAsksFirst({ item, reliefAvailable }: { item: CapabilityConne
 
   const { serverId, serverRevision } = item;
   const perChat = item.requesterScoped === true;
-  const locked = !reliefAvailable || perChat || !serverId || !serverRevision;
+  const fromPlugin = item.fromPlugin;
+  const locked = !reliefAvailable || perChat || !serverId || !serverRevision || fromPlugin !== undefined;
   const saved: McpApprovalPosture = approvalPostureInEffect(item, reliefAvailable) ?? "everything_asks";
   // Only where the choice is open; a locked group already says why nothing can change.
   const moneyLocked = item.movesMoney === true && !locked;
@@ -126,9 +133,7 @@ export function WhatAsksFirst({ item, reliefAvailable }: { item: CapabilityConne
     } catch (error) {
       queued.current = undefined;
       setChoice(undefined);
-      const described = describeApiError(error);
-      const conflict = described.category === "conflict";
-      setFailure({ message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, conflict });
+      setFailure(saveFailure(error));
       // A request that reported a failure can still have been committed (a lost reply, a timeout), so the list is read
       // again and shows whatever the Gateway really holds.
       void client.invalidateQueries({ queryKey: listKey });
@@ -138,13 +143,15 @@ export function WhatAsksFirst({ item, reliefAvailable }: { item: CapabilityConne
     }
   }
 
-  const note = !reliefAvailable
-    ? REMOTE_LINE
-    : perChat
-      ? PER_CHAT_LINE
-      : !serverRevision
-        ? NO_BINDING_LINE
-        : BOUNDARY_LINE;
+  const note = fromPlugin
+    ? pluginLine(fromPlugin.name)
+    : !reliefAvailable
+      ? REMOTE_LINE
+      : perChat
+        ? PER_CHAT_LINE
+        : !serverRevision
+          ? NO_BINDING_LINE
+          : BOUNDARY_LINE;
   return (
     <div className="space-y-3">
       <fieldset
@@ -177,11 +184,23 @@ export function WhatAsksFirst({ item, reliefAvailable }: { item: CapabilityConne
       </fieldset>
       <p id={noteId} className="text-sm text-fg-secondary">
         {note}
+        {fromPlugin ? (
+          <>
+            {" "}
+            <OpenInPluginsLink pluginId={fromPlugin.pluginId} />
+          </>
+        ) : null}
       </p>
       {failure ? (
         <div className="space-y-2">
           <p role="alert" className="text-sm text-status-failed">
             {failure.message}
+            {failure.pluginId ? (
+              <>
+                {" "}
+                <OpenInPluginsLink pluginId={failure.pluginId} />
+              </>
+            ) : null}
           </p>
           {failure.conflict ? (
             <Button
@@ -198,6 +217,19 @@ export function WhatAsksFirst({ item, reliefAvailable }: { item: CapabilityConne
       ) : null}
     </div>
   );
+}
+
+/**
+ * Why a save didn't happen: a plugin's refusal in GoatCitadel's own words with its plugin, a conflict, or the plain
+ * description of anything else.
+ */
+function saveFailure(error: unknown): Failure {
+  const refusal = readPluginOwnedRefusal(error);
+  if (refusal)
+    return { message: refusal.message, conflict: false, ...(refusal.pluginId ? { pluginId: refusal.pluginId } : {}) };
+  const described = describeApiError(error);
+  const conflict = described.category === "conflict";
+  return { message: conflict ? CONNECTOR_CONFLICT_MESSAGE : described.summary, conflict };
 }
 
 /** One choice. The whole row, title and detail, is the radio's label, so its name says what the choice does. */

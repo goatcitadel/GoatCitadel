@@ -19,11 +19,11 @@ export async function prepareVerificationRuntime(runId) {
   const tempRoot = await fs.mkdtemp(path.join(tempParent, `goatcitadel-verify-${sanitizeFilePart(runId)}-`));
   await fs.mkdir(path.join(tempRoot, "data"), { recursive: true });
   await fs.cp(path.join(repoRoot, "config"), path.join(tempRoot, "config"), { recursive: true });
-  if (existsSync(path.join(repoRoot, "skills"))) {
-    await fs.cp(path.join(repoRoot, "skills"), path.join(tempRoot, "skills"), { recursive: true });
-  }
-  if (existsSync(path.join(repoRoot, "workspaces"))) {
-    await fs.cp(path.join(repoRoot, "workspaces"), path.join(tempRoot, "workspaces"), { recursive: true });
+  // The Gateway reads the plugins that ship from <rootDir>/plugins outside a packaged install.
+  for (const folder of ["skills", "plugins", "workspaces"]) {
+    if (existsSync(path.join(repoRoot, folder))) {
+      await fs.cp(path.join(repoRoot, folder), path.join(tempRoot, folder), { recursive: true });
+    }
   }
   return tempRoot;
 }

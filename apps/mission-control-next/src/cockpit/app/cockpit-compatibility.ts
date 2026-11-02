@@ -1,5 +1,6 @@
 import type { CapabilityKind } from "@goatcitadel/contracts";
 import { readCatalogLocation } from "../areas/library/capability-catalog-route";
+import { PLUGINS_HREF } from "../areas/capabilities/plugins/plugin-links";
 import { SKILLS_HREF, skillIdFromCapabilityId, skillItemHref } from "../areas/capabilities/skills/skill-links";
 import { TOOLS_HREF, toolHref, toolNameFromCapabilityId } from "../areas/capabilities/tools/tool-links";
 import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
@@ -33,8 +34,8 @@ const systemViews = new Set([
   "improvement",
   "runtime",
 ]);
-// Skills, Connectors and Tools are the shipped Capabilities tabs; the other tabs resolve missing until they exist.
-const capabilitiesViews = new Set(["skills", "connectors", "tools"]);
+// The shipped Capabilities tabs; any other segment resolves missing.
+const capabilitiesViews = new Set(["skills", "plugins", "connectors", "tools"]);
 // The catalog filters the old Library skills and tools addresses could carry. Capabilities has no such filters, so
 // they stay behind.
 const libraryCatalogFilterParams = ["q", "type", "status", "trust"];
@@ -119,17 +120,19 @@ const RETIRED_CONNECTIONS_HOMES: Readonly<Record<string, string>> = {
   integrations: connectorSetupHref("integrations"),
   "web-search": connectorSetupHref("web-search"),
   channels: channelAdvancedSetupHref(),
-  addons: "/settings/advanced#addons",
+  // Capabilities › Plugins replaces the add-ons (capability packs) section.
+  addons: PLUGINS_HREF,
 };
 
 /**
- * Where an address of the retired Settings › Connections (2026-10-30) lives now, as a path with its hash, or undefined
- * for any other Settings address. Bookmarks and sign-ins that were under way keep working: a provider's sign-in return
- * keeps its fragment and lands on Capabilities › Connectors › Advanced setup, which hands it back. Any other hash, or
- * none, opens Advanced setup on its first section. `/settings/channels`, `/settings/mcp`, `/settings/integrations` and
- * `/settings/web-search` follow their sections; `/settings/addons` is still a Settings section and resolves there.
+ * Where an address of a retired Settings section lives now, as a path with its hash, or undefined for any other
+ * Settings address. Bookmarks and sign-ins that were under way keep working: a provider's sign-in return keeps its
+ * fragment and lands on Capabilities › Connectors › Advanced setup, which hands it back. Any other hash of the retired
+ * Settings › Connections (2026-10-30), or none, opens Advanced setup on its first section. `/settings/channels`,
+ * `/settings/mcp`, `/settings/integrations` and `/settings/web-search` follow their sections. The add-ons section,
+ * at `/settings/addons`, `/settings/advanced#addons` or `/settings/connections#addons`, opens Capabilities › Plugins.
  */
-function retiredConnectionsAddress(section: string, hash: string): string | undefined {
+function retiredSettingsAddress(section: string, hash: string): string | undefined {
   if (section === "connections") {
     if (isMcpOAuthReturnFragment(hash) || isGoogleOAuthReturnFragment(hash)) return `${CONNECTOR_SETUP_PATH}#${hash}`;
     return (
@@ -137,9 +140,9 @@ function retiredConnectionsAddress(section: string, hash: string): string | unde
       CONNECTOR_SETUP_PATH
     );
   }
-  return section !== "addons" && Object.hasOwn(RETIRED_CONNECTIONS_HOMES, section)
-    ? RETIRED_CONNECTIONS_HOMES[section]
-    : undefined;
+  // Advanced's other sections stay on Settings.
+  if (section === "advanced") return hash === "addons" ? PLUGINS_HREF : undefined;
+  return Object.hasOwn(RETIRED_CONNECTIONS_HOMES, section) ? RETIRED_CONNECTIONS_HOMES[section] : undefined;
 }
 
 /** Conversation publication follows route coverage, including root/alias entries, but never Projects. */
@@ -310,7 +313,7 @@ export function resolveCockpitCompatibility(input: string): CockpitResolution {
   )
     return native();
   const retired =
-    area === "settings" && parts.length === 2 ? retiredConnectionsAddress(section!, url.hash.slice(1)) : undefined;
+    area === "settings" && parts.length === 2 ? retiredSettingsAddress(section!, url.hash.slice(1)) : undefined;
   if (retired) {
     const target = new URL(retired, url);
     // The page's own query (a channel to set up, the workspace, the shell) travels; the hash is the new home's.

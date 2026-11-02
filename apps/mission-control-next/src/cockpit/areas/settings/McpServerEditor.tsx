@@ -11,6 +11,7 @@ import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { McpDraftLeave } from "./McpDraftLeave";
 import { McpPolicyFields, McpPolicySummary } from "../../../features/native-routes/settings/McpPolicyFields";
+import { PluginRefusalLink } from "../capabilities/plugins/FromPluginLink";
 
 const fieldClass =
   "mt-1 block min-h-10 w-full rounded-md border border-line-control bg-canvas px-3 text-fg disabled:opacity-60";
@@ -94,7 +95,10 @@ export function McpServerEditor({
             <p role="alert">The saved server settings could not load. Your draft is kept.</p>
           ) : null}
           {control.notice ? (
-            <p role={control.notice.tone === "error" ? "alert" : "status"}>{control.notice.message}</p>
+            <p role={control.notice.tone === "error" ? "alert" : "status"}>
+              {control.notice.message}
+              <PluginRefusalLink pluginId={control.notice.pluginId} />
+            </p>
           ) : null}
           {control.mutation.locked ? (
             <p role="status">{control.mutation.message ?? "Waiting for GoatCitadel to confirm…"}</p>

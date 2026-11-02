@@ -135,6 +135,8 @@ async function main() {
   copyDirectory(path.join(repoRoot, "config"), path.join(templatesRoot, "config"));
   copyIfExists(path.join(repoRoot, ".env.example"), path.join(templatesRoot, ".env.example"));
   copyIfExists(path.join(repoRoot, "skills"), path.join(templatesRoot, "skills"));
+  // Read in place by the packaged Gateway (`built-in-plugins-root.ts`), never seeded into the writable runtime root.
+  copyIfExists(path.join(repoRoot, "plugins"), path.join(templatesRoot, "plugins"));
   copyIfExists(path.join(repoRoot, "workspaces"), path.join(templatesRoot, "workspaces"));
   copyFile(
     path.join(scriptDir, "runtime", "ui-static-server.mjs"),

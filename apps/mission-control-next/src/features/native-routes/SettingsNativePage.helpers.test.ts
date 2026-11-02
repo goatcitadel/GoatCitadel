@@ -204,11 +204,9 @@ describe("SettingsNativePage helpers", () => {
     expect(normalizeBudgetMode("turbo")).toBe("balanced");
     expect(labelForSettingsSection("mcp")).toBe("MCP");
     expect(labelForSettingsSection("permissions")).toBe("Permissions");
-    expect(labelForSettingsSection("addons")).toBe("Capability packs");
+    expect(labelForSettingsSection("addons")).toBe("Unknown");
     expect(labelForSettingsSection("missing")).toBe("Unknown");
-    expect(descriptionForSettingsSection("addons")).toBe(
-      "Preview bundled capability packs. Plugins replace them soon.",
-    );
+    expect(descriptionForSettingsSection("addons")).toContain("not registered");
     expect(descriptionForSettingsSection("permissions")).toContain("permission profiles");
     expect(descriptionForSettingsSection("missing")).toContain("not registered");
   });

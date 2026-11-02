@@ -34,7 +34,7 @@ function formatKind(kind: ChangePlanRecord["kind"]): string {
     case "plugin_install":
       return "Install a plugin";
     case "plugin_uninstall":
-      return "Remove a plugin";
+      return "Uninstall a plugin";
     case "improvement_candidate":
       return "Improvement";
     case "managed_source_registration":

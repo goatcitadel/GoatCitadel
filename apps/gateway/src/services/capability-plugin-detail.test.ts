@@ -147,6 +147,7 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
   const sources: CapabilityPluginsRouteSources = {
     listInstalled: vi.fn(async () => [record()]),
     listBuiltIn: vi.fn(async () => []),
+    builtInUnavailable: vi.fn(() => false),
     readSkillChecks: vi.fn(async () => checksOf(SWITCHED_ON)),
     readInstallPlanStatus: vi.fn(async (): Promise<ChangePlanStatus> => "completed"),
     readApproval: vi.fn(async (): Promise<ApprovalReading | undefined> => ({ status: "pending", effects: "done" })),
@@ -165,6 +166,8 @@ function routeService(overrides: Partial<CapabilityPluginsRouteSources> = {}) {
       throw new Error("reading never uninstalls");
     }),
     loadToolGroupHolds: vi.fn(async () => undefined),
+    readOperatorApprovalSkip: vi.fn(async () => false),
+    folderSourcesAllowed: vi.fn(() => true),
     reportFailure: vi.fn(),
     ...overrides,
   };
@@ -278,8 +281,26 @@ describe("a plugin's detail", () => {
       skillSnapshotId: SKILL_CHECK,
       state: "waiting_for_approval",
       pendingApprovalId: "approval-install_inactive",
+      pendingStep: "install_inactive",
     });
     expect(detail.state).toBe("install_not_finished");
+  });
+
+  it("names a step left waiting from the install as that step while the plugin is uninstalled", async () => {
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [record({ state: "uninstalling" })]),
+      readSkillChecks: vi.fn(async () => checksOf(WAITING_INSTALL)),
+    });
+
+    const detail = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+
+    expect(detail.state).toBe("uninstalling");
+    // No revoke was asked for: the approval is the skill's install step, never its removal.
+    expect(detail.pieces[0]).toMatchObject({
+      state: "waiting_for_approval",
+      pendingApprovalId: "approval-install_inactive",
+      pendingStep: "install_inactive",
+    });
   });
 
   it("marks the plugin not finished until every skill is switched on", async () => {
@@ -403,6 +424,19 @@ describe("a plugin's detail", () => {
     expect(sources.readInstallPlanStatus).not.toHaveBeenCalled();
   });
 
+  it("names the hosts a connector it added allowed, and none for a connector that was already there", async () => {
+    const added = await routeService().service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+    // The uninstall's confirmation says these stay in the allowlist.
+    expect(added.pieces.find((piece) => piece.pieceId === "issues")?.hosts).toEqual(["mcp.linear.app"]);
+
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [record({ pieces: [{ pieceId: "issues", kind: "connector", owned: false }] })]),
+    });
+    const kept = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+    expect(kept.pieces[0]).toMatchObject({ pieceId: "issues", state: "kept" });
+    expect(kept.pieces[0]?.hosts).toBeUndefined();
+  });
+
   it("reads a piece already there as kept, and links a kept group", async () => {
     const { service } = routeService({
       listInstalled: vi.fn(async () => [
@@ -424,6 +458,10 @@ describe("a plugin's detail", () => {
       ["issues", "kept", { status: "already_there" }, undefined],
       ["no-git", "kept", { status: "already_there" }, "/capabilities/tools?item=group:git"],
     ]);
+    // The manifest asks for everything to ask first, but a kept server keeps its own setting.
+    expect(detail.pieces[1]?.asksFirst).toBe("Already saved. It keeps its own setting for what asks first.");
+    // A kept group was already off and isn't held by the plugin, so it is the operator's own switch.
+    expect(detail.pieces[2]?.asksFirst).toBe("Already off. It stays your own switch.");
     expect(detail.state).toBe("installed");
   });
 
@@ -500,6 +538,8 @@ describe("a plugin's detail", () => {
       const detail = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
 
       expect(detail.state).toBe("uninstalling");
+      // The revoke is named as one, so its approval reads as a removal and no other step's does.
+      expect(detail.pieces[0]?.pendingStep).toBe("revoke");
       expect(
         detail.pieces.map((piece) => [piece.pieceId, piece.state, piece.pendingApprovalId]),
         String(status),
@@ -543,8 +583,8 @@ describe("a plugin's detail", () => {
     const waiting = await removing([
       { ...skill, waiting: { approvalId: "approval-revoke-old", operation: "revoke" } },
     ]).detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
-    expect(waiting.pieces.map((piece) => [piece.state, piece.pendingApprovalId])).toEqual([
-      ["waiting_for_approval", "approval-revoke-old"],
+    expect(waiting.pieces.map((piece) => [piece.state, piece.pendingApprovalId, piece.pendingStep])).toEqual([
+      ["waiting_for_approval", "approval-revoke-old", "revoke"],
     ]);
 
     // Approved in the Inbox, and not in effect yet: being removed, with nothing left to approve.

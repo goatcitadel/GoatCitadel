@@ -3,6 +3,7 @@ import { AssessmentThresholdBar } from "./PromptPacksWorkbenchPage.components";
 import type { ActiveRunState } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
 import { NativeButton } from "@next/features/native-routes/primitives";
 import { useEmbeddedPageHeader } from "@next/features/native-routes/embedded-page-header";
+import { PluginRefusalLink } from "@next/cockpit/areas/capabilities/plugins/FromPluginLink";
 
 export interface PromptPacksHeroProps {
   isOpsVariant: boolean;
@@ -13,6 +14,8 @@ export interface PromptPacksHeroProps {
   passThreshold?: number;
   hasReport: boolean;
   error: string | null;
+  /** The plugin GoatCitadel named when it refused the change the error is about. */
+  errorPluginId?: string;
   success: string | null;
   activeRun: ActiveRunState | null;
   selectedPackId: string | null;
@@ -37,6 +40,7 @@ export function PromptPacksHero({
   passThreshold,
   hasReport,
   error,
+  errorPluginId,
   success,
   activeRun,
   selectedPackId,
@@ -150,7 +154,10 @@ export function PromptPacksHero({
       {error ? (
         <div className="mc-pp-alert danger" role="alert">
           <AlertTriangle size={16} />
-          <span>{error}</span>
+          <span>
+            {error}
+            <PluginRefusalLink pluginId={errorPluginId} />
+          </span>
         </div>
       ) : null}
       {success ? (

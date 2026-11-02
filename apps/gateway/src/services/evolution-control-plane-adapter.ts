@@ -126,6 +126,11 @@ export interface EvolutionControlPlaneAdapter<Request extends ChangePlanRequest 
    * 409 with these plain words, which say what to do instead.
    */
   readonly rollbackRefusal?: string;
+  /**
+   * Set on a retired kind: throws its refusal before an action on one of its plans writes anything. Reads, expiry and
+   * startup recovery never call it.
+   */
+  refuseAction?(): never;
   /** Inspect the exact owner snapshot prepared for persistence without mutating it. */
   inspect?(
     context: EvolutionControlPlaneAdapterContext,

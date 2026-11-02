@@ -52,9 +52,6 @@ const WorkspacesSection = lazy(() =>
 const OnboardingSection = lazy(() =>
   import("./settings/sections/OnboardingSection").then((module) => ({ default: module.OnboardingSection })),
 );
-const AddonsSection = lazy(() =>
-  import("./settings/sections/AddonsSection").then((module) => ({ default: module.AddonsSection })),
-);
 const PermissionsSection = lazy(() =>
   import("./settings/sections/PermissionsSection").then((module) => ({ default: module.PermissionsSection })),
 );
@@ -183,8 +180,6 @@ function renderSettingsSection(props: SettingsSectionProps) {
       return <ToolsSection {...props} />;
     case "hooks":
       return <HooksSection {...props} />;
-    case "addons":
-      return <AddonsSection {...props} />;
     case "workspace-capabilities":
       return <WorkspaceCapabilitiesSection {...props} />;
     case "citadel-capabilities":

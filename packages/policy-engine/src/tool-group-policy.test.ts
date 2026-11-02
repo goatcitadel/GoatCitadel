@@ -401,6 +401,17 @@ describe("switched-off tool groups in the policy engine", () => {
       expect(engine.listPluginToolGroupHolds()).toEqual([]);
     });
 
+    it("says whether the holds can be read, so a list can say so", () => {
+      const engine = new ToolPolicyEngine(config(), asyncStorage);
+      expect(engine.pluginToolGroupHoldsUnavailable()).toBe(false);
+
+      engine.setPluginToolGroupHoldsUnavailable();
+      expect(engine.pluginToolGroupHoldsUnavailable()).toBe(true);
+
+      engine.setPluginToolGroupHolds([]);
+      expect(engine.pluginToolGroupHoldsUnavailable()).toBe(false);
+    });
+
     it("leaves Core, MCP and mesh tools, which belong to no group a plugin can hold, as they are", async () => {
       const engine = new ToolPolicyEngine(config(), asyncStorage);
       engine.setPluginToolGroupHoldsUnavailable();

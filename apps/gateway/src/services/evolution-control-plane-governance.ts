@@ -17,10 +17,11 @@ export interface GovernedMutationInventoryEntry {
 export const EVOLUTION_GOVERNED_MUTATION_INVENTORY: readonly GovernedMutationInventoryEntry[] = [
   {
     kind: "capability_pack",
-    owner: "capability_pack_execution",
-    canonicalEntryPoints: ["POST /api/v1/change-plans", "change.request"],
+    // Replaced by plugins: old plans still read, and a create or any action on one is refused.
+    owner: "capability_packs_retired",
+    canonicalEntryPoints: ["POST /api/v1/change-plans"],
     compatibilityEntryPoints: [],
-    mutationBoundary: "CapabilityPackChangePlanAdapter.apply",
+    mutationBoundary: "RetiredCapabilityPackChangePlanAdapter.apply",
   },
   {
     kind: "connector_install",

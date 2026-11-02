@@ -18,6 +18,8 @@ export type LoadState<T> = {
 export type Notice = {
   tone: "success" | "warning" | "error" | "info";
   message: string;
+  /** The plugin GoatCitadel named when it refused the change, for a link to that plugin beside the message. */
+  pluginId?: string;
 };
 
 export type NativeLoadIssue = {
@@ -84,7 +86,8 @@ export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<un
   // last-writer-wins races on workspace switch and setState-after-unmount.
   const requestIdRef = useRef(0);
   const activeRef = useRef(false);
-  const dataRef = useRef(state.data); dataRef.current = state.data;
+  const dataRef = useRef(state.data);
+  dataRef.current = state.data;
 
   const reload = useCallback(async () => {
     const requestId = requestIdRef.current + 1;
@@ -132,7 +135,9 @@ export function useAsyncLoad<T>(loader: () => Promise<T>, deps: ReadonlyArray<un
   const updateData = useCallback((update: (current: T) => T) => {
     if (!activeRef.current || dataRef.current === null) return;
     requestIdRef.current += 1;
-    setState((current) => current.data === null ? current : { loading: false, error: null, data: update(current.data) });
+    setState((current) =>
+      current.data === null ? current : { loading: false, error: null, data: update(current.data) },
+    );
   }, []);
 
   return { ...state, reload, updateData };
