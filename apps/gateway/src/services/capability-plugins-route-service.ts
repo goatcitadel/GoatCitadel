@@ -2,6 +2,7 @@ import {
   NotFoundError,
   type CapabilityPluginDetail,
   type CapabilityPluginInspection,
+  type CapabilityPluginInstalledItem,
   type CapabilityPluginListItem,
   type CapabilityPluginListResponse,
   type ChangePlanStatus,
@@ -33,14 +34,24 @@ const BUILT_IN_DISPLAY = "Ships with GoatCitadel";
 const INSPECTION_NOT_FOUND_MESSAGE = "That plugin check wasn't found, or it ran out of time. Check the plugin again.";
 const PLUGIN_NOT_INSTALLED_MESSAGE = "This plugin isn't installed.";
 const MANIFEST_NOT_INSTALLED_ONE = "The plugin's stored copy doesn't hold the manifest it was installed from.";
+/** The list's plain lines, in this order, for a part that couldn't be read. */
+const ISSUE_MESSAGES = {
+  // Only the plugins installed in a workspace whose checks failed read as not finished; the others read as they are.
+  skillChecks:
+    "Whether some plugins' skills are switched on couldn't be read right now, so those plugins show as not finished.",
+  builtIn: "The plugins that ship with GoatCitadel couldn't be read right now.",
+  builtInUnavailable: "Built-in plugins can't be read on this install.",
+} as const;
 
 /**
- * A source that can fail on its own, leaving its part out rather than the whole answer: the list's built-in plugins and
- * Skill Hub checks, the plugin store a refusal reads its plugin's name from, and a detail's install plan and snapshot.
+ * A source that can fail on its own, leaving its part out rather than the whole answer: the list's built-in plugins,
+ * Skill Hub checks and skip setting, the plugin store a refusal reads its plugin's name from, and a detail's install
+ * plan and snapshot.
  */
 export type CapabilityPluginsSource =
   | "built_in"
   | "skill_hub"
+  | "approval_skip"
   | "plugin_store"
   | "install_plan"
   | "snapshot"
@@ -50,8 +61,17 @@ export type CapabilityPluginsSource =
 export interface CapabilityPluginsRouteSources {
   /** The plugin store's records. */
   listInstalled(): Promise<readonly StoredPlugin[]>;
-  /** The manifests of the plugins shipped under `<rootDir>/plugins`. */
+  /**
+   * The manifests of the plugins in the built-in plugins folder (`builtInPluginsRoot`: the release's
+   * `app/templates/plugins` on a packaged install, none when that folder can't be verified, `<rootDir>/plugins`
+   * otherwise).
+   */
   listBuiltIn(): Promise<readonly PluginManifest[]>;
+  /**
+   * True when this install has no built-in plugins folder it may read (a packaged install whose app folder can't be
+   * verified), so `listBuiltIn` lists none. Fixed when plugins are wired, which logged it once; listing logs nothing.
+   */
+  builtInUnavailable(): boolean;
   /**
    * A workspace's Skill Hub checks by their ids, whatever their place among its newest checks: what a plugin's skill
    * pieces are read from. A check that isn't there is left out.
@@ -75,6 +95,10 @@ export interface CapabilityPluginsRouteSources {
   uninstall(input: CapabilityPluginUninstallInput): Promise<PluginActionOutcome>;
   /** The first read of the tool groups plugins hold off, which startup awaits before any chat runs. */
   loadToolGroupHolds(): Promise<void>;
+  /** Whether the operator's skip applies on this install, by the one rule every skip follows (never `remote_hardened`). */
+  readOperatorApprovalSkip(): Promise<boolean>;
+  /** Whether a plugin may be read from a folder on this install, by the fetch's own rule. */
+  folderSourcesAllowed(): boolean;
   /** Called with the real error of a part that couldn't be read, so the answer carries none of it. */
   reportFailure(source: CapabilityPluginsSource, error: unknown): void;
 }
@@ -91,11 +115,17 @@ export class CapabilityPluginsRouteService {
    * Installed records come from the store, which must be readable. A plugin reads `installed` only when its install
    * finished and every piece is added or kept, its skills switched on (`pluginPublicState`, the detail's own rule).
    * Each skill is read by its check's id; a check that can't be read reads as not finished. `builtIn` lists every
-   * shipped plugin that isn't installed, from its manifest alone: nothing is fetched or checked.
+   * shipped plugin that isn't installed, from its manifest alone: nothing is fetched or checked. Unreadable checks, a
+   * built-in folder whose read failed, and an install with no built-in folder it may read each add a plain line to
+   * `issues`, so neither "not finished" nor an empty built-in list is taken for the truth.
    */
   public async list(): Promise<CapabilityPluginListResponse> {
-    const [installed, builtIn] = await Promise.all([this.sources.listInstalled(), this.readBuiltIn()]);
-    const checks = await this.readInstalledSkillChecks(installed);
+    const [installed, builtIn, operatorApprovalSkip] = await Promise.all([
+      this.sources.listInstalled(),
+      this.readBuiltIn(),
+      this.readOperatorApprovalSkip(),
+    ]);
+    const { checks, unreadable } = await this.readInstalledSkillChecks(installed);
     const installedIds = new Set(installed.map((plugin) => plugin.pluginId));
     return {
       installed: byName(
@@ -104,7 +134,7 @@ export class CapabilityPluginsRouteService {
         ),
       ),
       builtIn: byName(
-        builtIn
+        (builtIn ?? [])
           .filter((manifest) => !installedIds.has(manifest.pluginId))
           .map(
             (manifest): CapabilityPluginListItem => ({
@@ -119,6 +149,14 @@ export class CapabilityPluginsRouteService {
             }),
           ),
       ),
+      operatorApprovalSkip,
+      folderSourcesAllowed: this.sources.folderSourcesAllowed(),
+      // Fixed order, whatever order the reads finish in.
+      issues: [
+        ...(unreadable ? [ISSUE_MESSAGES.skillChecks] : []),
+        ...(builtIn === undefined ? [ISSUE_MESSAGES.builtIn] : []),
+        ...(this.sources.builtInUnavailable() ? [ISSUE_MESSAGES.builtInUnavailable] : []),
+      ],
     };
   }
 
@@ -150,6 +188,7 @@ export class CapabilityPluginsRouteService {
       ...listItem(plugin, pluginPublicState(plugin, readings)),
       ...(manifest?.author ? { author: manifest.author } : {}),
       pin: plugin.pin,
+      manifestSha256: plugin.manifestSha256,
       installPlanId: plugin.installPlanId,
       installedAt: plugin.installedAt,
       pieces: buildPluginDetailPieces(plugin, manifest, labels, readings),
@@ -203,24 +242,34 @@ export class CapabilityPluginsRouteService {
     return found;
   }
 
-  /** The shipped plugins, or none (with the failure logged) when their folder can't be read. */
-  private async readBuiltIn(): Promise<readonly PluginManifest[]> {
+  /** The shipped plugins, or undefined (with the failure logged) when their folder can't be read. */
+  private async readBuiltIn(): Promise<readonly PluginManifest[] | undefined> {
     try {
       return await this.sources.listBuiltIn();
     } catch (error) {
       this.sources.reportFailure("built_in", error);
-      return [];
+      return undefined;
+    }
+  }
+
+  /** `remote_hardened` always asks, and its setting is never read. An unreadable setting asks too (logged). */
+  private async readOperatorApprovalSkip(): Promise<boolean> {
+    try {
+      return await this.sources.readOperatorApprovalSkip();
+    } catch (error) {
+      this.sources.reportFailure("approval_skip", error);
+      return false;
     }
   }
 
   /**
    * The installed plugins' skill checks, by workspace: each workspace's checks read once, by the ids its installed
    * plugins list. Only an installed plugin's state depends on them. A workspace whose checks can't be read is left out,
-   * so its plugins read as not finished, never installed.
+   * so its plugins read as not finished, never installed, and `unreadable` says so.
    */
   private async readInstalledSkillChecks(
     plugins: readonly StoredPlugin[],
-  ): Promise<ReadonlyMap<string, ReadonlyMap<string, PluginSkillCheck>>> {
+  ): Promise<{ checks: ReadonlyMap<string, ReadonlyMap<string, PluginSkillCheck>>; unreadable: boolean }> {
     const idsByWorkspace = new Map<string, Set<string>>();
     for (const plugin of plugins) {
       if (plugin.state !== "installed") continue;
@@ -229,12 +278,13 @@ export class CapabilityPluginsRouteService {
       idsByWorkspace.set(plugin.workspaceId, ids);
     }
     const read = await Promise.all(
-      [...idsByWorkspace].map(async ([workspaceId, ids]) => {
-        const checks = await this.readSkillChecks(workspaceId, [...ids]);
-        return checks ? [[workspaceId, checks] as const] : [];
-      }),
+      [...idsByWorkspace].map(
+        async ([workspaceId, ids]) => [workspaceId, await this.readSkillChecks(workspaceId, [...ids])] as const,
+      ),
     );
-    return new Map(read.flat());
+    const checks = new Map<string, ReadonlyMap<string, PluginSkillCheck>>();
+    for (const [workspaceId, found] of read) if (found) checks.set(workspaceId, found);
+    return { checks, unreadable: checks.size < read.length };
   }
 
   /** A workspace's skill checks by their ids; undefined, with the failure logged, when they can't be read. */
@@ -309,8 +359,8 @@ export class CapabilityPluginsRouteService {
   }
 }
 
-/** An installed plugin as the list shows it, in the state its pieces were read in. */
-function listItem(plugin: StoredPlugin, state: CapabilityPluginListItem["state"]): CapabilityPluginListItem {
+/** An installed plugin as the list shows it, in the state its pieces were read in, with its workspace and source. */
+function listItem(plugin: StoredPlugin, state: CapabilityPluginListItem["state"]): CapabilityPluginInstalledItem {
   return {
     pluginId: plugin.pluginId,
     name: plugin.name,
@@ -320,6 +370,8 @@ function listItem(plugin: StoredPlugin, state: CapabilityPluginListItem["state"]
     sourceDisplay: plugin.sourceDisplay,
     state,
     pieceCounts: countPieces(plugin.pieces),
+    workspaceId: plugin.workspaceId,
+    sourceKind: plugin.sourceKind,
   };
 }
 
@@ -329,7 +381,7 @@ function countPieces(pieces: readonly { kind: PluginPieceKind }[]): Partial<Reco
   return counts;
 }
 
-function byName(items: CapabilityPluginListItem[]): CapabilityPluginListItem[] {
+function byName<Item extends CapabilityPluginListItem>(items: Item[]): Item[] {
   return [...items].sort(
     (left, right) => left.name.localeCompare(right.name, "en") || left.pluginId.localeCompare(right.pluginId, "en"),
   );

@@ -33,7 +33,7 @@ export const RULES = [
   {
     id: "manual-humanize",
     pattern: /\.replace(?:All)?\(\s*(?:["'`]_["'`]|\/_\/g)\s*,\s*["'`] ["'`]\s*\)/g,
-    budget: 10,
+    budget: 7,
     help: "underscore-stripping is humanizeToken by hand; use a typed presenter",
   },
   {
@@ -63,7 +63,7 @@ export const RULES = [
     // IDs inside TechnicalDetails and key/href templates don't count; the run-detail headers read "Run" with the id in
     // technical details. Autonomous grants name their revoke action by reason and keep their IDs in technical details;
     // what remains is mostly browser-session actor IDs, which are the grant's visible subject.
-    budget: 23,
+    budget: 22,
     help: "show a name or plain label; put the ID in TechnicalDetails",
   },
   {
@@ -94,12 +94,12 @@ export const ROOT_BUDGETS = {
   cockpit: {},
   "native-settings": {
     "humanize-token": 4,
-    "manual-humanize": 35,
+    "manual-humanize": 31,
     "local-date-format": 10,
     "optional-plural": 3,
     "inline-plural": 11,
     "jsx-raw-id": 16,
-    "raw-iso-time": 7,
+    "raw-iso-time": 6,
     "raw-error-text": 6,
   },
   "native-ops": {

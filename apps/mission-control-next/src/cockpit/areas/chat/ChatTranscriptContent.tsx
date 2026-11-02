@@ -17,7 +17,7 @@ import {
 import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
 import { OctagonAlert, TriangleAlert } from "lucide-react";
-import { presentAttachmentType } from "./chat-vocabulary";
+import { liveTurnStatusLabel, presentAttachmentType } from "./chat-vocabulary";
 import { describeChannelMessageSource, type ChannelConversationContext } from "./channel-conversation";
 import { useInChannelConversation } from "./channel-conversation-scope";
 import { ChannelNewMessagesDivider } from "./ChannelNewMessagesDivider";
@@ -180,7 +180,7 @@ export const Turn = memo(function Turn({
               Assistant{" "}
               {turn.assistantMessage?.timestamp ? <ActorTimestamp timestamp={turn.assistantMessage.timestamp} /> : null}
             </p>
-            {streaming ? <StatusBadge status={{ label: "Responding", tone: "running" }} /> : null}
+            {streaming ? <StatusBadge status={{ label: liveTurnStatusLabel(turn.trace), tone: "running" }} /> : null}
             {!streaming && (stopped || failed || partial) ? (
               <StatusBadge status={presentChatTurnStatus(turn.trace.status)} />
             ) : null}

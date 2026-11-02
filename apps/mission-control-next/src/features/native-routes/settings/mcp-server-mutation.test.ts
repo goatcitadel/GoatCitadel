@@ -58,15 +58,32 @@ afterEach(() => {
 });
 describe("shared MCP update owner", () => {
   it("saves reviewed arguments and the full normalized policy without changing authentication or trust", async () => {
-    const policy = { requireFirstToolApproval: false, redactionMode: "basic" as const, allowedToolPatterns: ["read.*"], blockedToolPatterns: ["write.*"], allowedEnvKeys: ["MCP_CONFIG"], notes: "Reviewed policy" };
-    api.updateMcpServer.mockResolvedValue(server({ revision: "b".repeat(64), args: ["path with spaces", "--readonly"], policy }));
+    const policy = {
+      requireFirstToolApproval: false,
+      redactionMode: "basic" as const,
+      allowedToolPatterns: ["read.*"],
+      blockedToolPatterns: ["write.*"],
+      allowedEnvKeys: ["MCP_CONFIG"],
+      notes: "Reviewed policy",
+    };
+    api.updateMcpServer.mockResolvedValue(
+      server({ revision: "b".repeat(64), args: ["path with spaces", "--readonly"], policy }),
+    );
     const input = { expectedRevision: "a".repeat(64), args: ["path with spaces", "--readonly"], policy };
     expect((await commitMcpServerUpdate({ reviewed: server(), input, isCurrent: () => true })).status).toBe("saved");
     expect(api.updateMcpServer).toHaveBeenCalledExactlyOnceWith("review-server", input);
   });
   it("keeps uncertainty when an argument or policy receipt differs from the exact reviewed configuration", async () => {
     api.updateMcpServer.mockResolvedValue(server({ revision: "b".repeat(64), args: ["different"] }));
-    expect((await commitMcpServerUpdate({ reviewed: server(), input: { expectedRevision: "a".repeat(64), args: ["reviewed"] }, isCurrent: () => true })).status).toBe("uncertain");
+    expect(
+      (
+        await commitMcpServerUpdate({
+          reviewed: server(),
+          input: { expectedRevision: "a".repeat(64), args: ["reviewed"] },
+          isCurrent: () => true,
+        })
+      ).status,
+    ).toBe("uncertain");
   });
   it("rereads the exact server then sends only enabled metadata with owner CAS", async () => {
     expect((await commit()).status).toBe("saved");
@@ -107,6 +124,22 @@ describe("shared MCP update owner", () => {
       failure({ code: "WRITE_CONFLICT", details: { reason: "MCP_SERVER_REVIEW_REQUIRED" } }),
     );
     expect((await commit()).status).toBe("conflict");
+    expect((await commit()).status).toBe("saved");
+  });
+  it("shows a plugin's refusal in GoatCitadel's own words, with no lock: nothing was written", async () => {
+    api.updateMcpServer.mockRejectedValueOnce(
+      failure({
+        error: "From Browser checks. Uninstall it to remove this.",
+        code: "PLUGIN_OWNED",
+        details: { pluginId: "browser-checks" },
+      }),
+    );
+    // Not a conflict: nothing changed on the server, so there is nothing to review again.
+    expect(await commit()).toEqual({
+      status: "plugin_owned",
+      message: "From Browser checks. Uninstall it to remove this.",
+      pluginId: "browser-checks",
+    });
     expect((await commit()).status).toBe("saved");
   });
   it.each([

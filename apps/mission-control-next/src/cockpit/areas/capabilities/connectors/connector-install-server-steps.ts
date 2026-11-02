@@ -266,7 +266,9 @@ export async function switchOn(id: number, token: number, serverId: string, retr
     });
     if (!isCurrent(id, token)) return;
     if (result.status !== "saved") {
-      return refusedStep(id, token, serverId, "switch_on", result, {
+      // A plugin's refusal reads here as it did before it had its own status: changed elsewhere.
+      const refusal = result.status === "plugin_owned" ? { ...result, status: "conflict" as const } : result;
+      return refusedStep(id, token, serverId, "switch_on", refusal, {
         retry: retried ? undefined : () => switchOn(id, token, serverId, true),
         settled: () => switchOnSettled(id, token, serverId),
       });

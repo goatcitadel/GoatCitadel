@@ -202,8 +202,15 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
       await inject("GET", `/api/v1/capabilities/plugins?workspaceId=${WORKSPACE_ID}`)
     ).json<CapabilityPluginListResponse>();
     expect(listed.installed).toEqual([
-      expect.objectContaining({ pluginId: "reference-plugin", state: "install_not_finished" }),
+      expect.objectContaining({
+        pluginId: "reference-plugin",
+        state: "install_not_finished",
+        workspaceId: WORKSPACE_ID,
+        sourceKind: "built_in",
+      }),
     ]);
+    // This install's config turns the skip on, and the list answers it with the folder rule and no issues.
+    expect(listed).toMatchObject({ operatorApprovalSkip: true, folderSourcesAllowed: true, issues: [] });
     const record = await new CapabilityPluginStore(gateway!.storage.systemSettings).get("reference-plugin");
     expect(record).toMatchObject({
       state: "installed",
@@ -335,6 +342,11 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     const before = await readDetail();
     expect(before.state).toBe("install_not_finished");
     expect(before.author).toBe("GoatCitadel");
+    expect(before).toMatchObject({
+      workspaceId: WORKSPACE_ID,
+      sourceKind: "built_in",
+      manifestSha256: expect.stringMatching(/^[0-9a-f]{64}$/u),
+    });
     expect(before.pieces.map((piece) => [piece.pieceId, piece.state])).toEqual([
       ["meeting-notes", "check_passed"],
       ["meeting-notes-check", "added"],

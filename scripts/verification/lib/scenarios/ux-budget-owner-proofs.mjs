@@ -45,7 +45,6 @@ import { runCockpitNotificationRoutingProof } from "./cockpit-notification-routi
 import { runCockpitIntegrationMeetProof } from "./cockpit-integration-meet-proof.mjs";
 import { runCockpitHooksProof } from "./cockpit-hooks-proof.mjs";
 import { runCockpitCapabilityScopesProof } from "./cockpit-capability-scopes-proof.mjs";
-import { runCockpitPortablePacksProof } from "./cockpit-portable-packs-proof.mjs";
 import { runCockpitScheduleLifecycleProof } from "./cockpit-schedule-lifecycle-proof.mjs";
 import { runCockpitTaskLifecycleProof } from "./cockpit-task-lifecycle-proof.mjs";
 import { runCockpitMcpModePreviewsProof } from "./cockpit-mcp-mode-previews-proof.mjs";
@@ -62,7 +61,6 @@ const OWNER_PROOFS = {
   "inbox-viewed": runCockpitInboxViewedProof,
   hooks: runCockpitHooksProof,
   "capability-scopes": runCockpitCapabilityScopesProof,
-  "portable-packs": runCockpitPortablePacksProof,
   "schedule-lifecycle": runCockpitScheduleLifecycleProof,
   "task-lifecycle": runCockpitTaskLifecycleProof,
   "mcp-mode-previews": runCockpitMcpModePreviewsProof,

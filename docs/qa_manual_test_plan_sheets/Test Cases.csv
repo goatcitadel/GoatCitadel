@@ -9,7 +9,7 @@ desktop shortcut if selected
 native WinUI 3 / Windows App SDK host
 WebView2-hosted Mission Control
 launcher fallback commands",,"Action: install the Windows package, then launch GoatCitadel from the Start Menu.",,,,,,,,,,,
-ENV-05,Test Environments,Optional / Experimental Runtime,,,,"Action: enable only the optional runtime under test, such as voice, NPU, local AI, add-ons, or experimental package smoke.",,,,,,,,,,,
+ENV-05,Test Environments,Optional / Experimental Runtime,,,,"Action: enable only the optional runtime under test, such as voice, NPU, local AI, or experimental package smoke.",,,,,,,,,,,
 PRE-01,Preflight Checklist,Repo And Runtime Baseline,,,"Record the current commit SHA.
 Record whether the worktree is clean or dirty.
 Record Node, pnpm, .NET SDK, Docker, and OS versions.
@@ -105,15 +105,11 @@ Record signing/notarization or unsigned/ad-hoc warning state.","Action: build th
 Linux tarball is labeled experimental until exact artifact proof promotes it.
 No experimental artifact is described as public-trust proof without matching release evidence.",,,,,,,,,,
 NAV-01,"Shell, Navigation, And Visual Coverage",Canonical Route Coverage,,"/chat
-/cowork
-/cowork/tasks
-/cowork/board
-/code
 /projects
 /library/agents
-/library/skills
-/library/capabilities
+/capabilities/skills (Capabilities -> Skills; in the Cockpit, /library/skills and /library/capabilities redirect here)
 /library/memory
+/library/journey
 /library/knowledge
 /library/notes
 /library/communications
@@ -121,6 +117,13 @@ NAV-01,"Shell, Navigation, And Visual Coverage",Canonical Route Coverage,,"/chat
 /library/artifacts
 /library/prompt-packs
 /library/curator
+/library/citadel
+/library/citadel-overview
+/library/citadel-wards
+/library/citadel-council
+/library/citadel-blueprint
+/library/citadel-vault
+/ops/boards
 /ops/activity
 /ops/sessions
 /ops/schedules
@@ -143,15 +146,16 @@ NAV-01,"Shell, Navigation, And Visual Coverage",Canonical Route Coverage,,"/chat
 /settings/runtime
 /settings/local-ai
 /settings/workspaces
-/settings/addons
-/settings/integrations
-/settings/channels
-/settings/mcp
-/settings/tools",,"Action: open each listed route directly in the browser address bar, then navigate there through the app chrome where possible.","Each direct URL loads the right page.
+/settings/integrations (in the Cockpit, redirects to /capabilities/connectors/advanced#integration-connections)
+/settings/channels (in the Cockpit, redirects to /chat/messaging/advanced)
+/settings/mcp (in the Cockpit, redirects to /capabilities/connectors/advanced#mcp-servers)
+/settings/tools
+/settings/hooks",,"Action: open each listed route directly in the browser address bar, then navigate there through the app chrome where possible.","Each direct URL loads the right page.
 Page title/label matches route.
 Route inspector or visible chrome agrees with current route.
 No page falls back silently to the wrong surface.
-Experimental pages are labeled experimental: /library/curator, /ops/improvement, /ops/kanban, /settings/personalities, /settings/addons.",,,,,,,,,,
+Experimental pages are labeled experimental: /library/journey, /library/curator, /ops/improvement, /ops/kanban, /settings/personalities.
+The retired capability packs addresses (/settings/addons, /settings/advanced#addons, /settings/connections#addons) open Capabilities -> Plugins in the Cockpit; Classic ?tab=addons opens the default page.",,,,,,,,,,
 NAV-02,"Shell, Navigation, And Visual Coverage",Legacy Redirects,,,"Open legacy URLs such as /?tab=chat, /?surface=code, and /?space=observe&page=activity&tab=scheduler.
 Compare expected redirect paths in the release-surface manifest.","Action: open /?tab=chat, /?surface=code, and /?space=observe&page=activity&tab=scheduler.","Legacy URLs redirect to current routes.
 Redirected routes load the next shell.
@@ -411,12 +415,16 @@ Revoke the grant.
 Attempt the action again.","Prompt/action: create narrow grant for a safe read-only capability pattern in QA workspace, then ask Chat: Use the granted safe read-only capability to inspect runtime status.","Grant has workspace, surface, risk tier, patterns, budget/count, grantor, reason, expiry, and revocation state.
 Deny-wins policy still overrides grant.
 Revoked or expired grant no longer authorizes the action.",,,,,,,,,,
-LIB-CAP-03,"Library: Agents, Skills, Capabilities",Capability Packs,,,"Preview local capability pack.
-Install/stage a pack if safe.
-Export preview/evidence.
-Inspect Settings -> Add-ons and Library -> Capabilities.","Action: preview a local capability pack using a reference/test pack, stage/install only in QA workspace, then verify no callable entries appear without activation.","Pack materialization receipts are review evidence only.
-Installing/staging does not auto-activate assets.
-Asset activation remains routed through existing governed lifecycle.",,,,,,,,,,
+PLUGIN-01,"Library: Agents, Skills, Capabilities",Plugins,,,"Open Capabilities -> Plugins at desktop and phone widths, light and dark.
+Open Browser checks from the Built in list and read its panel.
+Install it with the skip setting off: approve the plugin, then the skill's two steps; reload once and resume.
+Check Skills and Connectors say From Browser checks; editing its connector in Advanced setup is refused.
+Uninstall it; with the setting off, Finish uninstalling once the skill is off.
+Install from Git and Add from folder with the SDK's reference plugin; try a hostile fixture folder.","Action: install and uninstall Browser checks in a QA workspace, then add the SDK reference plugin from a folder.","Trust reads Built in or Unverified only; no Verified tier.
+A plugin runs no code; each piece takes its own checks.
+After uninstall the skill reads Removed with Browser checks, the connector is gone and the Playwright host stays allowed.
+The hostile folder is refused in plain words.
+Prompt packs and Hooks show no From Browser checks (known limit).",,,,,,,,,,
 LIB-MEM-01,"Library: Memory, Knowledge, Notes","Memory List, Edit, Forget, History",,,"Open /library/memory.
 Create or identify a test memory item.
 Edit it.
@@ -669,12 +677,12 @@ Evaluate access for a safe tool and risky tool.
 Create, expire, and revoke a grant.","Action: create a scoped QA grant for a safe tool, verify it, revoke it, then attempt the same tool action again.","Tool access state is readable.
 Grants are scoped and expiring.
 Risky tool remains approval/policy governed.",,,,,,,,,,
-INT-01,"Integrations, Channels, MCP, A2A, Add-ons",Integrations Overview,,,"Open /settings/integrations.
+INT-01,"Integrations, Channels, MCP, A2A",Integrations Overview,,,"Open /settings/integrations.
 Inspect all visible connectors.
 For each visible beta/native connector, identify setup/action path or blocked copy.",Action: inspect each integration card and click its setup/test/action entrypoint; no chat prompt needed.,"No visible connector is a diagnostics-only shell without saying so.
 Runnable entries expose real operator actions.
 Blocked/incomplete entries are labeled.",,,,,,,,,,
-INT-02,"Integrations, Channels, MCP, A2A, Add-ons",Channel Setup Matrix,,"Discord
+INT-02,"Integrations, Channels, MCP, A2A",Channel Setup Matrix,,"Discord
 Slack
 Telegram
 Google Chat
@@ -692,18 +700,18 @@ Test bad token or missing permission.",Action: use a sandbox connection. Test me
 Bad token/missing permission errors are readable.
 Webhook-only/manual-confirm paths are labeled.
 Break-glass or public-webhook requirements are explicit.",,,,,,,,,,
-INT-03,"Integrations, Channels, MCP, A2A, Add-ons",Comms Public Actions,,,"Use safe sandbox connection.
+INT-03,"Integrations, Channels, MCP, A2A",Comms Public Actions,,,"Use safe sandbox connection.
 Test send, reply, react, unsend, typing, and activity where supported.
 Inspect diagnostics.","Action: send sandbox text 'QA comms send canary', reply 'QA comms reply canary', react with thumbs-up if supported, then unsend/typing/activity where supported.","Unsupported actions fail clearly.
 Supported actions go through configured connector.
 Approval/policy boundaries still apply.",,,,,,,,,,
-INT-04,"Integrations, Channels, MCP, A2A, Add-ons",Webhooks And Inbound Verification,,,"Configure one inbound webhook-capable channel.
+INT-04,"Integrations, Channels, MCP, A2A",Webhooks And Inbound Verification,,,"Configure one inbound webhook-capable channel.
 Send inbound sandbox event.
 Try invalid signature/token.
 Inspect linked session/task/activity.",Action: send inbound sandbox webhook payload from the channel provider; invalid edge: repeat with bad signature/token.,"Valid inbound event creates/updates intended state.
 Invalid signature/token is rejected.
 No secret payload is logged or shown raw.",,,,,,,,,,
-INT-05,"Integrations, Channels, MCP, A2A, Add-ons",External Side Effects And Replay,,,"Trigger a safe external write in sandbox.
+INT-05,"Integrations, Channels, MCP, A2A",External Side Effects And Replay,,,"Trigger a safe external write in sandbox.
 Inspect evidence envelope and side-effect ledger.
 Test failed-before-boundary case.
 Test unknown-post-boundary/manual reconciliation case.
@@ -711,18 +719,18 @@ Run explicit Activepieces check_run_status if configured.",Action: trigger sandb
 Replay only retries eligible failed-before-boundary/stale claimed-not-sent states.
 Unknown post-boundary outcomes stay manual.
 Activepieces status is explicit operator read, not background polling.",,,,,,,,,,
-MCP-01,"Integrations, Channels, MCP, A2A, Add-ons",Local stdio MCP,,,"Open /settings/mcp.
+MCP-01,"Integrations, Channels, MCP, A2A",Local stdio MCP,,,"Open /settings/mcp.
 Configure a safe local stdio server.
 Inspect tool/resource discovery.
 Invoke a safe tool through governed path.
 Disable server.","Action: configure a harmless local stdio MCP server such as a test echo/list server, then invoke an echo or list-safe-resources tool.","Local stdio readiness is visible.
 Invocation remains Gateway-mediated.
 Disable removes callable availability.",,,,,,,,,,
-MCP-02,"Integrations, Channels, MCP, A2A, Add-ons",Approval Inbox MCP,,,"Enable/inspect built-in Approval Inbox path.
+MCP-02,"Integrations, Channels, MCP, A2A",Approval Inbox MCP,,,"Enable/inspect built-in Approval Inbox path.
 Generate approval.
 Read/resolve through MCP path if configured.","Action: create pending approval with APPR-01 trigger, then read/resolve it through the Approval Inbox MCP path if configured.","Approval Inbox truth matches Ops -> Approvals.
 Resolution remains governed and audited.",,,,,,,,,,
-MCP-03,"Integrations, Channels, MCP, A2A, Add-ons",Remote HTTP/SSE MCP With Auth,,"no auth
+MCP-03,"Integrations, Channels, MCP, A2A",Remote HTTP/SSE MCP With Auth,,"no auth
 token env
 OAuth2","Configure remote server.
 Verify network allowlist/auth readiness.
@@ -732,31 +740,23 @@ Expire/remove token and retry.",Action: configure a sandbox remote MCP server. I
 Missing OAuth tokens show needs_auth.
 Expired tokens show expired until reconnect/refresh.
 Bearer/token details stay redacted.",,,,,,,,,,
-A2A-01,"Integrations, Channels, MCP, A2A, Add-ons",Agent Card And Peer Auth,,,"Request public /.well-known/agent-card.json.
+A2A-01,"Integrations, Channels, MCP, A2A",Agent Card And Peer Auth,,,"Request public /.well-known/agent-card.json.
 Request operator /api/v1/a2a/agent-card.
 Test peer-authenticated path if configured.","Action: GET /.well-known/agent-card.json, then GET /api/v1/a2a/agent-card with operator auth, then test a configured peer credential.","Public discovery disabled by default.
 Operator diagnostics available.
 Peer auth is separate from operator auth.",,,,,,,,,,
-A2A-02,"Integrations, Channels, MCP, A2A, Add-ons",Inbound / Outbound Task Binding,,,"Preview inbound or outbound A2A task.
+A2A-02,"Integrations, Channels, MCP, A2A",Inbound / Outbound Task Binding,,,"Preview inbound or outbound A2A task.
 Send a sandbox task.
 Inspect task/session/durable binding.
 Send duplicate peer/context/message if safe.","Action: send sandbox A2A task message 'QA A2A binding canary', then resend the same peer/context/message identity to test idempotency.","Binding is idempotent by peer/context/message identity.
 A2A task creates or links canonical local session/task/run state.
 A2A does not claim to replace GoatCitadel mesh.",,,,,,,,,,
-A2A-03,"Integrations, Channels, MCP, A2A, Add-ons",Push Notification And gRPC,,,"Configure peer push notification.
+A2A-03,"Integrations, Channels, MCP, A2A",Push Notification And gRPC,,,"Configure peer push notification.
 Send a task event.
 Configure gRPC transport only with explicit binding/listener.
 Inspect audit/network allowlist behavior.",Action: use a configured sandbox A2A peer push target; send task event 'QA A2A push canary'. Only test gRPC when listener/binding is explicitly configured.,"Push/gRPC remain explicit Gateway transports.
 Network allowlists and audit apply.
 Missing config fails closed.",,,,,,,,,,
-ADDON-01,"Integrations, Channels, MCP, A2A, Add-ons",Add-ons Experimental Lifecycle,,,"Open /settings/addons.
-Inspect catalog/source/trust tier.
-Install a safe reference add-on only after review.
-Launch/stop/update/disable/uninstall.
-Inspect health checks and install location.","Action: install only the reference/test add-on after reviewing source/trust tier; launch, stop, update, disable, and uninstall it.","Surface is experimental.
-Add-on install is never silent.
-Install path is outside core checkout.
-Trust metadata is visible and not treated as cryptographic proof.",,,,,,,,,,
 BROW-01,"Browser Sessions, Voice, Media, Optional Sidecars",Browser Session Grants,,,"Create browser session.
 Inspect state/events.
 Grant scoped access.

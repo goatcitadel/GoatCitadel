@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { ValidationError, type McpServerRecord, type McpToolRecord } from "@goatcitadel/contracts";
-import { compensatePackMcpServer, packMcpConfigurationHash } from "./capability-pack-mcp-owner.js";
 import {
   completeMcpOAuth,
   connectMcpServer,
@@ -37,7 +36,8 @@ rl.on("line", (line) => {
 `;
 
 describe("mcp-server-admin-service", () => {
-  it("binds compensation to the creating plan and current pack revision", async () => {
+  // Plans an older Gateway made still own their servers until an operator edit clears the bookkeeping.
+  it("keeps a plan's ownership of a server until an operator edits it", async () => {
     const host = createHost();
     const created = await createMcpServer(
       host,
@@ -51,41 +51,11 @@ describe("mcp-server-admin-service", () => {
       `pack-${"1".repeat(40)}`,
       "plan-1",
     );
-    const input = {
-      planId: "plan-1",
-      serverId: created.serverId,
-      mode: "created" as const,
-      configurationHash: packMcpConfigurationHash(created),
-    };
-    await expect(compensatePackMcpServer(host, { ...input, planId: "foreign" })).rejects.toThrow("preserved");
     await updateMcpServer(host, created.serverId, { enabled: true }, { planId: "plan-1", phase: "apply" });
     expect(host.servers[0]!.packChange).toMatchObject({ revision: 2, created: true });
-    await compensatePackMcpServer(host, input);
-    expect(host.servers[0]).toMatchObject({ enabled: false, packChange: { revision: 3, phase: "compensate" } });
-    const writes = host.writeMcpServers.mock.calls.length;
-    await compensatePackMcpServer(host, input);
-    expect(host.writeMcpServers).toHaveBeenCalledTimes(writes);
     await updateMcpServer(host, created.serverId, { enabled: true });
     expect(host.servers[0]!.packChange).toBeUndefined();
-    await expect(compensatePackMcpServer(host, input)).rejects.toThrow("preserved");
     expect(host.servers[0]!.enabled).toBe(true);
-  });
-  it("can reverse its enable action on an existing server while retaining the registration", async () => {
-    const host = createHost({ servers: [createServer({ enabled: false })] });
-    const original = host.servers[0]!;
-    await updateMcpServer(host, original.serverId, { enabled: true }, { planId: "enable-plan", phase: "apply" });
-    await compensatePackMcpServer(host, {
-      planId: "enable-plan",
-      serverId: original.serverId,
-      mode: "enabled",
-      configurationHash: packMcpConfigurationHash(original),
-    });
-    expect(host.servers).toHaveLength(1);
-    expect(host.servers[0]).toMatchObject({
-      enabled: false,
-      command: original.command,
-      packChange: { created: false },
-    });
   });
   it("creates stdio server records with normalized policy and emits realtime", async () => {
     const host = createHost();

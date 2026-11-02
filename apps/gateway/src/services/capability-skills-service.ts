@@ -21,6 +21,7 @@ import {
   buildCapabilitySkillItems,
   countWaitingCandidates,
   pendingSkillApprovalIds,
+  type PluginOfSkill,
   type ShippedSkillDirs,
 } from "./capability-skills-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
@@ -56,10 +57,10 @@ export interface CapabilitySkillsSources {
   /** One Skill Hub check by its id, in any workspace: what source it read. */
   findSkillHubSnapshot(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined>;
   /**
-   * The Skill Hub checks plugin records list as their skills, by check id, with the plugin that lists each: what marks
-   * a skill switched on from one of them.
+   * The Skill Hub checks plugin records list as their skills, by check id, with the plugin that lists each and its
+   * record's trust: what marks a skill switched on from one of them, and reads a built-in plugin's skill as built in.
    */
-  listPluginSkills(): Promise<ReadonlyMap<string, { pluginId: string; name: string }>>;
+  listPluginSkills(): Promise<ReadonlyMap<string, PluginOfSkill>>;
   /** The skills uninstalls removed, by skill id, with the plugin each went with: what reads one as removed with it. */
   listRemovedPluginSkills(): Promise<ReadonlyMap<string, { name: string }>>;
 }

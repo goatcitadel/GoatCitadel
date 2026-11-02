@@ -123,7 +123,7 @@ function describeAccessDenial(reasonCodes: readonly string[]): string {
     return PLUGIN_HOLDS_UNREADABLE;
   }
   if (reasonCodes.includes("tool_group_off") && reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLD_REASON_CODE)) {
-    return "A plugin keeps this tool's group off. Uninstalling that plugin turns the group back on.";
+    return "A plugin keeps this tool's group off. Uninstalling every plugin that keeps it off, in Capabilities › Plugins, turns the group back on.";
   }
   if (reasonCodes.includes("tool_group_off")) return "This tool's group is switched off in Capabilities › Tools.";
   return reasonCodes.length > 0

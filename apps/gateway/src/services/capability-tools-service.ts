@@ -22,6 +22,8 @@ const PROBE_CONCURRENCY = 8;
 /** The session the probes run under. It names no real chat, so a probe never touches one. */
 const PROBE_SESSION_ID = "capabilities-tools";
 const UNCHECKED_RULES_ISSUE = "Some tools' rules couldn't be checked right now.";
+const HOLDS_UNAVAILABLE_ISSUE =
+  "Which tool groups plugins keep off can't be read right now, so the tools in every group that can be switched off are kept off.";
 
 /** Lowest to highest, the order a group's risk is taken in. */
 const RISK_ORDER: readonly ToolRiskLevel[] = ["safe", "caution", "danger", "nuclear"];
@@ -63,6 +65,11 @@ export interface CapabilityToolsSources {
    * `pluginToolGroupHolds` no group names a plugin.
    */
   readSettings(): Promise<ToolSettings>;
+  /**
+   * Whether the policy engine can't read which groups plugins hold off, so it keeps every switchable group's tools off.
+   * The switches still read as Settings has them; the list says so in one issue line. Absent reads as readable.
+   */
+  readPluginToolGroupHoldsUnavailable?(): boolean;
   resolvePolicyContext(
     input: { workspaceId: string; surface: "chat" } & CapabilityToolsActor,
   ): Promise<ToolPolicyActorContext>;
@@ -187,7 +194,10 @@ export class CapabilityToolsService {
       workspaceId,
       groups,
       settingsRevision: settings.revision,
-      issues: unchecked ? [UNCHECKED_RULES_ISSUE] : [],
+      issues: [
+        ...(unchecked ? [UNCHECKED_RULES_ISSUE] : []),
+        ...(this.sources.readPluginToolGroupHoldsUnavailable?.() === true ? [HOLDS_UNAVAILABLE_ISSUE] : []),
+      ],
       generatedAt: this.now().toISOString(),
     };
   }

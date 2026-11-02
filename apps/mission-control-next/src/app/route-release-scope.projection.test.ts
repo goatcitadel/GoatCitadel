@@ -53,7 +53,6 @@ const EXPECTED_RAW_KEYS = [
   "settings/runtime",
   "settings/local-ai",
   "settings/workspaces",
-  "settings/addons",
   "settings/integrations",
   "settings/channels",
   "settings/mcp",
@@ -79,7 +78,6 @@ const EXPERIMENTAL_RAW_KEYS = new Set<string>([
   "ops/improvement",
   "ops/kanban",
   "settings/personalities",
-  "settings/addons",
 ]);
 
 function routeFor(scope: RouteReleaseScope): AppRoute {
@@ -93,11 +91,11 @@ describe("compact release metadata and full facade parity", () => {
     expect(routeModel.describeReleaseScopeForOperator).toBe(fullScopeOwner.describeReleaseScopeForOperator);
   });
 
-  it("preserves all 57 raw records, statuses and public field order", () => {
-    expect(EXPECTED_RAW_KEYS).toHaveLength(57);
-    expect(routeModel.ROUTE_RELEASE_SCOPE).toHaveLength(57);
+  it("preserves all 56 raw records, statuses and public field order", () => {
+    expect(EXPECTED_RAW_KEYS).toHaveLength(56);
+    expect(routeModel.ROUTE_RELEASE_SCOPE).toHaveLength(56);
     expect(routeModel.ROUTE_RELEASE_SCOPE.map(routeModel.getRouteReleaseKey)).toEqual(EXPECTED_RAW_KEYS);
-    expect(new Set(routeModel.ROUTE_RELEASE_SCOPE.map(routeModel.getRouteReleaseKey)).size).toBe(57);
+    expect(new Set(routeModel.ROUTE_RELEASE_SCOPE.map(routeModel.getRouteReleaseKey)).size).toBe(56);
 
     for (const scope of routeModel.ROUTE_RELEASE_SCOPE) {
       const key = routeModel.getRouteReleaseKey(scope);
@@ -197,7 +195,7 @@ describe("compact release metadata and full facade parity", () => {
     );
     expect(routeModel.isExperimentalRoute({ area: "settings", section: "personalities" })).toBe(true);
     expect(routeModel.isPrimaryRailRoute({ area: "settings", section: "personalities" })).toBe(true);
-    expect(routeModel.isPrimaryRailRoute({ area: "settings", section: "addons" })).toBe(false);
+    expect(routeModel.isPrimaryRailRoute({ area: "library", section: "journey" })).toBe(false);
   });
 
   it.each([
@@ -225,21 +223,21 @@ describe("compact release metadata and full facade parity", () => {
 describe("live canonical release status adapter", () => {
   it("observes an ordinary row.status assignment through every raw and normalized reader", () => {
     const row = routeModel.ROUTE_RELEASE_SCOPE.find(
-      (scope) => scope.area === "settings" && scope.section === "addons",
+      (scope) => scope.area === "library" && scope.section === "journey",
     )!;
     const old = row.status,
       descriptor = Object.getOwnPropertyDescriptor(row, "status");
     expect(descriptor).toMatchObject({ enumerable: true, configurable: true, writable: true, value: old });
     // Prime the existing raw-key cache before changing the canonical row.
-    expect(readRouteReleaseStatus("settings/addons")).toBe(old);
+    expect(readRouteReleaseStatus("library/journey")).toBe(old);
     try {
       row.status = "ship";
-      expect(routeModel.getRouteReleaseScope({ area: "settings", section: "addons" })).toBe(row);
-      expect(readRouteReleaseStatus("settings/addons")).toBe("ship");
-      expect(routeModel.getRouteReleaseStatus({ area: "settings", section: "addons" })).toBe("ship");
-      expect(routeModel.isHiddenRoute({ area: "settings", section: "addons" })).toBe(false);
-      expect(routeModel.isExperimentalRoute({ area: "settings", section: "addons" })).toBe(false);
-      expect(routeModel.isPrimaryRailRoute({ area: "settings", section: "addons" })).toBe(true);
+      expect(routeModel.getRouteReleaseScope({ area: "library", section: "journey" })).toBe(row);
+      expect(readRouteReleaseStatus("library/journey")).toBe("ship");
+      expect(routeModel.getRouteReleaseStatus({ area: "library", section: "journey" })).toBe("ship");
+      expect(routeModel.isHiddenRoute({ area: "library", section: "journey" })).toBe(false);
+      expect(routeModel.isExperimentalRoute({ area: "library", section: "journey" })).toBe(false);
+      expect(routeModel.isPrimaryRailRoute({ area: "library", section: "journey" })).toBe(true);
       expect(Object.keys(row)).toEqual(["area", "section", "status", "releaseAction", "verification", "note"]);
     } finally {
       row.status = old;

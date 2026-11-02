@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { SettingsArea } from "./SettingsArea";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
+import { resolveCockpitCompatibility } from "../../app/cockpit-compatibility";
 import { buildSettingsIndex } from "./settings-index";
 import { selectedSettingsSection } from "./SettingsSectionTabs";
 import type { CapabilityToolBlock } from "@goatcitadel/contracts";
@@ -83,7 +84,6 @@ vi.mock("./PermissionProfileSettings", () => ({
 vi.mock("./HooksSettings", () => ({
   HooksSettings: ({ workspaceId }: { workspaceId: string }) => <OwnerProbe name={`Hooks ${workspaceId}`} />,
 }));
-vi.mock("./PortablePacksSettings", () => ({ PortablePacksSettings: () => <OwnerProbe name="Packs owner" /> }));
 vi.mock("./TrustPolicySettings", () => ({ TrustPolicySettings: () => <OwnerProbe name="Trust owner" /> }));
 vi.mock("./FirstRunArea", () => ({ FirstRunArea: () => <p>First run owner</p> }));
 vi.mock("./FirstRunStatus", () => ({ FirstRunStatus: () => <p>First run status</p> }));
@@ -237,15 +237,19 @@ describe("Settings section tabs", () => {
     expect(container.querySelector('a[href="/settings/models#local-ai"]')?.textContent).toBe("Models › Local AI");
     expect(owner.mounted.mock.calls.filter(([name]) => name === "Llama owner")).toHaveLength(1);
   });
-  it("shows capability packs on Advanced and no add-ons", async () => {
+  it("shows no capability packs or add-ons: their old address opens Capabilities › Plugins", async () => {
+    // The cockpit routes the address to the Plugins tab, so Settings never mounts the packs section for it.
+    expect(resolveCockpitCompatibility("/settings/advanced?shell=cockpit#addons")).toEqual({
+      kind: "native",
+      href: "/capabilities/plugins?shell=cockpit",
+    });
     await render("/settings/advanced?shell=cockpit#addons");
-    await vi.waitFor(() => expect(container.textContent).toContain("Packs owner"));
+    // Settings is handed the Plugins address, which is no Settings page (the shell opens Capabilities for it).
+    await vi.waitFor(() => expect(container.textContent).toContain("Settings destination unavailable"));
+    expect(container.textContent).toContain("This link does not match a settings page.");
     expect(container.textContent).not.toContain("Add-ons owner");
-    // Experimental, so it is no tab: Advanced shows one section at a time, as Connections did with it.
-    expect(container.querySelector('[role="tablist"][aria-label$=" sections"]')).toBeNull();
     expect(container.textContent).not.toContain("Runtime owner");
     expect(container.querySelector('a[href^="/settings/connections"]')).toBeNull();
-    expect(container.textContent).not.toContain("does not match");
   });
   it("links Trust & policy to the one explanation of how rules combine", async () => {
     await render("/settings/safety?shell=cockpit#trust-policy");
@@ -337,7 +341,7 @@ describe("Settings section tabs", () => {
   });
   it("keeps all grouped owner destinations in ordered tabs with native hrefs", async () => {
     const pages = buildSettingsIndex();
-    expect(pages.flatMap((page) => page.entries)).toHaveLength(22);
+    expect(pages.flatMap((page) => page.entries)).toHaveLength(21);
     expect(pages.flatMap((page) => page.entries).every((entry) => !entry.href.includes("shell="))).toBe(true);
     for (const page of pages) {
       window.history.replaceState(null, "", `/settings/${page.id}?shell=cockpit`);

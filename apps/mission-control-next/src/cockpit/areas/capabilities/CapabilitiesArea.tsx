@@ -11,6 +11,7 @@ import {
 } from "./capabilities-tabs";
 import { ConnectorsTab } from "./connectors/ConnectorsTab";
 import { readLastCapabilitiesTab, writeLastCapabilitiesTab } from "./last-tab-preference";
+import { PluginsTab } from "./plugins/PluginsTab";
 import { SkillsTab } from "./skills/SkillsTab";
 import { ToolsTab } from "./tools/ToolsTab";
 
@@ -48,6 +49,7 @@ export function CapabilitiesArea() {
       <section className={`${AREA_PAGE} min-h-full`}>
         <AreaHeader title="Capabilities" description="Everything GoatCitadel's AI can use, in one place." />
         {tab === "skills" ? <SkillsTab /> : null}
+        {tab === "plugins" ? <PluginsTab /> : null}
         {tab === "connectors" && connectorSetup ? (
           <Suspense fallback={<p className="text-sm text-fg-muted">Loading Advanced setup…</p>}>
             <ConnectorSetupPage />

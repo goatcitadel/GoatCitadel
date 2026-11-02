@@ -50,16 +50,12 @@ describe("cockpit settings index", () => {
       ),
     );
     expect(pages.flatMap((page) => page.entries).some((entry) => moved.has(entry.section))).toBe(false);
-    // Capability packs wait on Advanced for the Plugins tab.
+    // Capability packs were retired; Advanced keeps only the managed runtime.
     expect(
       buildSettingsIndex()
         .find((page) => page.id === "advanced")
         ?.entries.map((entry) => [entry.section, entry.href, entry.discoverable]),
-    ).toEqual([
-      ["runtime", "/settings/advanced#managed-runtime", true],
-      // Experimental, so reached by its link only (Trust & policy, first-run, the old address), as before.
-      ["addons", "/settings/advanced#addons", false],
-    ]);
+    ).toEqual([["runtime", "/settings/advanced#managed-runtime", true]]);
     expect(pages.flatMap((page) => page.entries).find((entry) => entry.section === "providers")).toMatchObject({
       href: "/settings/models#providers",
       completeNative: true,
@@ -116,8 +112,7 @@ describe("cockpit settings index", () => {
   it.each([
     ["desktop system permission", "General"],
     ["archive restore", "Workspaces"],
-    // Integrations moved to Capabilities › Connectors › Advanced setup; Capability packs are still here, on Advanced.
-    ["capability pack import export", "Capability packs"],
+    // Integrations moved to Capabilities › Connectors › Advanced setup; Capability packs were retired.
     ["select activate chat", "Permissions"],
     ["signing", "Hooks"],
     ["basic password", "Access & devices"],
@@ -154,8 +149,8 @@ describe("cold Settings destination projection", () => {
       "Access",
       "Advanced",
     ]);
-    // Four sections moved out with Connections; Capability packs stay, on Advanced.
-    expect(destinations.flatMap((page) => page.entries)).toHaveLength(discovery ? 19 : 22);
+    // Four sections moved out with Connections, and Capability packs were retired.
+    expect(destinations.flatMap((page) => page.entries)).toHaveLength(discovery ? 19 : 21);
     expect(
       fullPages.map((page) => ({
         ...page,

@@ -396,14 +396,6 @@ export const ROUTE_RELEASE_SCOPE: readonly RouteReleaseScope[] = [
   },
   {
     area: "settings",
-    section: "addons",
-    status: "experimental",
-    releaseAction: "Preview bundled capability packs without implying a full marketplace/install lifecycle.",
-    verification: "verify:surface:regression label check",
-    note: "Capability packs stay experimental until plugins replace them.",
-  },
-  {
-    area: "settings",
     section: "integrations",
     status: "ship",
     releaseAction: "Review connector status and open real setup/action paths where supported.",

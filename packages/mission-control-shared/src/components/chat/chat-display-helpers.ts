@@ -11,12 +11,14 @@ import { plural } from "../../content/format.js";
 export type ChatTraceTone = "muted" | "warning" | "critical" | "success";
 
 /**
- * One short line for a turn's answer review, or null when the answer was not reviewed:
+ * One short line for a turn's finished answer review, or null when there is no verdict:
  * "Reviewed: no issues", "Reviewed: 2 issues" (", noted in the answer" for strict) or "Review unavailable".
+ * A `running` review is a live-only signal shown by the streaming badge; a receipt or trace card kept after a
+ * failed stream must not claim a review is still running, so it gets no line.
  */
 export function formatAnswerReviewLabel(trace: Pick<ChatTurnTraceRecord, "reflection"> | undefined): string | null {
   const review = trace?.reflection?.answerReview;
-  if (!review) {
+  if (!review || review.outcome === "running") {
     return null;
   }
   if (review.outcome === "unavailable") {
@@ -196,6 +198,7 @@ export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
   failedCount: number;
   pendingCount: number;
   skippedCount: number;
+  cancelledCount: number;
   runningCount: number;
   currentStep: TStep | undefined;
 } {
@@ -203,6 +206,7 @@ export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
   let failedCount = 0;
   let pendingCount = 0;
   let skippedCount = 0;
+  let cancelledCount = 0;
   let runningCount = 0;
   let currentRunningStep: TStep | undefined;
   let latestSettledStep: TStep | undefined;
@@ -218,6 +222,9 @@ export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
       pendingCount += 1;
     } else if (step.status === "skipped") {
       skippedCount += 1;
+    } else if (step.status === "cancelled") {
+      cancelledCount += 1;
+      latestSettledStep = step;
     } else if (step.status === "running") {
       runningCount += 1;
       currentRunningStep ??= step;
@@ -229,6 +236,7 @@ export function summarizeDelegationSteps<TStep extends ChatDelegationStepLike>(
     failedCount,
     pendingCount,
     skippedCount,
+    cancelledCount,
     runningCount,
     currentStep: currentRunningStep ?? latestSettledStep ?? steps[0],
   };

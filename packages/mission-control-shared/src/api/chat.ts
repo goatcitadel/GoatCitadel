@@ -1543,17 +1543,6 @@ export async function fetchChangePlan(planId: string, context: ChangePlanClientC
   return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}?${query.toString()}`);
 }
 
-export async function verifyChangePlan(
-  planId: string,
-  context: ChangePlanClientContext,
-  expectedRevision: number,
-): Promise<ChangePlanRecord> {
-  return request<ChangePlanRecord>(`/api/v1/change-plans/${encodeURIComponent(planId)}/verifications`, {
-    method: "POST",
-    body: JSON.stringify({ ...changePlanActorBody(context), expectedRevision }),
-  });
-}
-
 export async function respondToChangePlan(
   planId: string,
   context: ChangePlanClientContext,

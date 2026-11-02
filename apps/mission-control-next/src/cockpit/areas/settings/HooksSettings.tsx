@@ -17,6 +17,7 @@ import { HookRecordEvidence, HookRunEvidence } from "./HookEvidence";
 import { useActiveWorkspaceLabel } from "../../data/use-workspace-name";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { HOOK_MODE_LABELS, presentHookDeliveryStatus, presentHookTrigger } from "./settings-vocabulary";
+import { PluginRefusalLink } from "../capabilities/plugins/FromPluginLink";
 
 export function HooksSettings({ workspaceId }: { workspaceId: string }) {
   const workspaceLabel = useActiveWorkspaceLabel();
@@ -59,6 +60,7 @@ export function HooksSettings({ workspaceId }: { workspaceId: string }) {
       {s.notice ? (
         <p role="status" className="break-words text-sm">
           {s.notice.message}
+          <PluginRefusalLink pluginId={s.notice.pluginId} />
         </p>
       ) : null}
       {s.uncertainty ? (

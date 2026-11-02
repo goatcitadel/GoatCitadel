@@ -74,6 +74,16 @@ export interface CapabilityPluginListItem {
   pieceCounts: Partial<Record<PluginPieceKind, number>>;
 }
 
+/** A plugin GoatCitadel has a record of: the list item, with where it was installed and where it came from. */
+export interface CapabilityPluginInstalledItem extends CapabilityPluginListItem {
+  /**
+   * The workspace it was installed in. Its uninstall, its skills' own steps and its approvals all belong there; an
+   * uninstall from another workspace is refused.
+   */
+  workspaceId: string;
+  sourceKind: PluginSource["kind"];
+}
+
 /**
  * Where one installed plugin's piece is.
  * - `added`: the plugin added it, and a skill is switched on. `kept`: it was already there, so uninstalling leaves it.
@@ -96,11 +106,16 @@ export type CapabilityPluginPieceState =
   | "failed"
   | "unknown";
 
+/** The skill step a piece's pending approval asks for: installing it, switching it on, or removing it in an uninstall. */
+export type CapabilityPluginPendingStep = "install_inactive" | "activate" | "revoke";
+
 /** One installed plugin's piece: what it is, where it is, and a link to its own item, all written by the Gateway. */
 export type CapabilityPluginDetailPiece = CapabilityPluginPieceView & {
   state: CapabilityPluginPieceState;
   /** The approval it waits for, while `waiting_for_approval`. */
   pendingApprovalId?: string;
+  /** Which skill step `pendingApprovalId` asks for, when the Gateway can tell. */
+  pendingStep?: CapabilityPluginPendingStep;
   /** The piece's own item in its tab, when it has one. */
   href?: string;
 };
@@ -109,9 +124,11 @@ export type CapabilityPluginDetailPiece = CapabilityPluginPieceView & {
  * `GET /api/v1/capabilities/plugins/detail?pluginId=&workspaceId=`: one installed plugin and each of its pieces. Its
  * `state` follows the same rule as the list's: `installed` only once every piece is added or kept.
  */
-export interface CapabilityPluginDetail extends CapabilityPluginListItem {
+export interface CapabilityPluginDetail extends CapabilityPluginInstalledItem {
   author?: string;
   pin: PluginPin;
+  /** Lowercase hex SHA-256 of the manifest's bytes it was installed from. */
+  manifestSha256: string;
   installPlanId: string;
   installedAt: string;
   pieces: CapabilityPluginDetailPiece[];
@@ -122,8 +139,18 @@ export interface CapabilityPluginDetail extends CapabilityPluginListItem {
  * `builtIn` lists the plugins that ship with GoatCitadel and aren't installed; listing them fetches and checks nothing.
  */
 export interface CapabilityPluginListResponse {
-  installed: CapabilityPluginListItem[];
+  installed: CapabilityPluginInstalledItem[];
   builtIn: CapabilityPluginListItem[];
+  /**
+   * Whether the operator's setting to skip approvals for their own changes applies here, which decides whether a
+   * plugin's install, its uninstall and its skills' steps ask first. Never on a `remote_hardened` install, where every
+   * one asks; a setting that can't be read asks too.
+   */
+  operatorApprovalSkip: boolean;
+  /** Whether a plugin may be added from a folder on this computer: never on a `remote_hardened` install. */
+  folderSourcesAllowed: boolean;
+  /** Plain lines about the parts of the list that couldn't be read. */
+  issues: string[];
 }
 
 /** `POST /api/v1/capabilities/plugins/inspections`. It installs nothing. */

@@ -24,7 +24,13 @@ export type ToolGroupSwitchEntry =
   | ({ readonly phase: "applying" } & PlanFollow)
   /** The change is made; the list is being read again to show it. */
   | { readonly phase: "confirming" }
-  | { readonly phase: "failed"; readonly message: string; readonly conflict: boolean };
+  | {
+      readonly phase: "failed";
+      readonly message: string;
+      readonly conflict: boolean;
+      /** The plugin GoatCitadel named when it refused to switch the group on: a plugin keeps it off. */
+      readonly pluginId?: string;
+    };
 
 export const SAVING: ToolGroupSwitchEntry = { phase: "saving" };
 export const CONFIRMING: ToolGroupSwitchEntry = { phase: "confirming" };

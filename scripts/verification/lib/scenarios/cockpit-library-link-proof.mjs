@@ -60,6 +60,7 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
         await mkdir(screenshotDir, { recursive: true });
         const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-library-link-${variant}.png`);
         await page.screenshot({ path: screenshot, fullPage: false });
+        const pluginPanel = await provePluginPanel({ page, variant, workspaceId: seeded.body.workspaceId, screenshotDir });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/library?shell=cockpit"), { waitUntil: "domcontentloaded" });
         const typeFilter = page.getByRole("combobox", { name: /^Type(?:\s|$)/u });
         await typeFilter.waitFor({ timeout: 30_000 });
@@ -76,9 +77,45 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
           assertOk(response, "navigation tool-grant owner"); return response.body;
         } });
         await page.getByRole("heading", { name: "All tools", exact: true }).waitFor({ timeout: 30_000 });
-        return { status: "passed", metrics: { capabilityId: item.capabilityId, libraryKind: libraryKind ?? "none", blockingAxe: 0, overflow, draftNavigation },
-          artifacts: emptyArtifacts({ screenshots: [relativeToRun(context, screenshot)] }) };
+        return { status: "passed", metrics: { capabilityId: item.capabilityId, libraryKind: libraryKind ?? "none", blockingAxe: 0, overflow, draftNavigation,
+          pluginId: PLUGIN_ID, pluginOverflow: pluginPanel.overflow },
+          artifacts: emptyArtifacts({ screenshots: [relativeToRun(context, screenshot), relativeToRun(context, pluginPanel.screenshot)] }) };
       } finally { await browserContext.close(); }
     });
   }
+
+  // A plugin's address opens its panel. On a fresh stack Browser checks ships but isn't installed, so the panel shows it
+  // from the tab's list (no detail is read): what it is, where it comes from, and Install.
+  async function provePluginPanel({ page, variant, workspaceId, screenshotDir }) {
+    const plugins = await requestJson(stack.gatewayUrl, `/api/v1/capabilities/plugins?${new URLSearchParams({ workspaceId })}`);
+    assertOk(plugins, "read Plugins tab owner list");
+    const plugin = [...(plugins.body?.installed ?? []), ...(plugins.body?.builtIn ?? [])].find((entry) => entry.pluginId === PLUGIN_ID);
+    if (!plugin?.name) throw new Error(`Library proof needs the built-in ${PLUGIN_ID} plugin in the Plugins tab's list.`);
+    const panelItem = `plugin:${PLUGIN_ID}`;
+    await page.goto(buildVerificationUiUrl(stack.uiUrl, `/capabilities/plugins?item=${encodeURIComponent(panelItem)}&shell=cockpit`), { waitUntil: "domcontentloaded" });
+    const atPluginPanel = (url) => url.pathname === "/capabilities/plugins" && url.searchParams.get("item") === panelItem
+      && url.searchParams.get("shell") === "cockpit";
+    const panel = page.getByRole("region", { name: `Inspector: ${plugin.name}`, exact: true });
+    const assertPanel = async () => {
+      await page.waitForURL(atPluginPanel, { timeout: 30_000 });
+      await panel.getByRole("heading", { name: "What it is", exact: true }).waitFor({ timeout: 30_000 });
+      await panel.getByRole("heading", { name: "Where it comes from", exact: true }).waitFor({ timeout: 30_000 });
+      if (plugin.state === "available") {
+        await panel.getByRole("button", { name: `Install ${plugin.name}`, exact: true }).waitFor({ timeout: 30_000 });
+      }
+    };
+    await assertPanel();
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await assertPanel();
+    await page.addScriptTag({ path: axeSourcePath });
+    const axe = await auditPageAccessibility(page);
+    const blocking = axe.violations.filter((entry) => ["serious", "critical"].includes(entry.impact));
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    if (blocking.length || overflow > 1) throw new Error(`Plugin link ${variant}: accessibility ${blocking.map((entry) => entry.id).join(", ") || "clear"}; overflow ${overflow}px`);
+    const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-plugin-link-${variant}.png`);
+    await page.screenshot({ path: screenshot, fullPage: false });
+    return { overflow, screenshot };
+  }
 }
+
+const PLUGIN_ID = "browser-checks";

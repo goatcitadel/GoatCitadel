@@ -234,7 +234,7 @@ const OPERATOR_ACTIONS: readonly SkillHubOperatorAction[] = [
 
 export class SkillHubOperatorService {
   private readonly now: () => string;
-  private readonly inFlightApprovalsByFingerprint = new Map<string, Promise<ApprovalRequest>>();
+  private readonly inFlightApprovalsByFingerprint = new Map<string, { approval: Promise<ApprovalRequest> }>();
 
   public constructor(private readonly options: SkillHubOperatorServiceOptions) {
     this.now = options.now ?? (() => new Date().toISOString());
@@ -345,7 +345,7 @@ export class SkillHubOperatorService {
     }
     const inFlight = this.inFlightApprovalsByFingerprint.get(fingerprint);
     if (inFlight) {
-      const approval = await inFlight;
+      const approval = await inFlight.approval;
       return {
         schemaVersion: SKILL_HUB_OPERATOR_SCHEMA_VERSION,
         approval: await this.summarizeApproval(approval),
@@ -367,7 +367,10 @@ export class SkillHubOperatorService {
       assertCreatedApprovalMatchesIntent(approval, approvalInput);
       return approval;
     })();
-    this.inFlightApprovalsByFingerprint.set(fingerprint, pendingApproval);
+    // A fresh entry object per request, so the cleanup below removes only this request's entry. Comparing entries
+    // rather than promises also keeps CodeQL js/missing-await from reading the identity check as an unawaited use.
+    const inFlightEntry = { approval: pendingApproval };
+    this.inFlightApprovalsByFingerprint.set(fingerprint, inFlightEntry);
     try {
       const approval = await pendingApproval;
       return {
@@ -377,7 +380,7 @@ export class SkillHubOperatorService {
         operatorMessage: "Approval created. Candidate and runtime state remain unchanged until the effect settles.",
       };
     } finally {
-      if (this.inFlightApprovalsByFingerprint.get(fingerprint) === pendingApproval) {
+      if (this.inFlightApprovalsByFingerprint.get(fingerprint) === inFlightEntry) {
         this.inFlightApprovalsByFingerprint.delete(fingerprint);
       }
     }

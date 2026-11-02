@@ -5,6 +5,7 @@ import {
   type CapabilitySkills,
   type CapabilitySkillsOwners,
 } from "./capability-skills-composition.js";
+import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 
 // The Skills tab and the Plugins tab, wired together. A plugin's skills take the Skills tab's own install steps, which
 // read the plugin records, and the Skills tab marks a skill a plugin brought (or an uninstall removed); the plugin's
@@ -15,7 +16,7 @@ import {
 export interface CapabilitySkillsAndPluginsOwners
   extends
     Omit<CapabilitySkillsOwners, "deploymentProfile" | "rootDir" | "pluginRecords" | "skillHub">,
-    Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill"> {
+    Omit<CapabilityPluginsOwners, "skillHub" | "revokeSkill" | "readOperatorApprovalSkip"> {
   skillHub: CapabilitySkillsOwners["skillHub"] & CapabilityPluginsOwners["skillHub"];
 }
 
@@ -35,6 +36,12 @@ export function composeCapabilitySkillsAndPlugins(
       if (!wired.skills) throw new Error("The Skills tab isn't wired yet, so a plugin's skill can't be revoked.");
       return wired.skills.revokeSkillForPluginUninstall(input);
     },
+    // The same skip the Skills tab and the plugin plans follow, read live: never on remote_hardened, whose setting
+    // is never read.
+    readOperatorApprovalSkip: () =>
+      allowsOperatorApprovalSkip(owners.config.assistant.deploymentProfile, () =>
+        owners.features.isFeatureEnabled("settingsApprovalSkipEnabled"),
+      ),
   });
   const capabilitySkills = composeCapabilitySkills({
     ...owners,

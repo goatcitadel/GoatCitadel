@@ -319,11 +319,11 @@ describe("buildBaseAgentSystemPrompt", () => {
       }),
     ).volatileTail;
     expect(tail).toContain(
-      "To allow file writes, the operator uninstalls the plugin that keeps the Files tools off, which turns them back on.",
+      "To allow file writes, the operator uninstalls every plugin that keeps the Files tools off in Capabilities › Plugins, which turns them back on.",
     );
     expect(tail).not.toContain("switches the Files tools back on");
-    // Capabilities › Plugins arrives with the Plugins tab, so Chat doesn't point at it yet (Q11).
-    expect(tail).not.toContain("Capabilities › Plugins");
+    // The Plugins tab can uninstall now, so Chat names where (Q11). Two plugins may hold a group, so it says every one.
+    expect(tail).toContain("Capabilities › Plugins");
     expect(tail).toContain(
       "To allow shell commands, the operator switches the Shell and code tools back on in Capabilities › Tools.",
     );
@@ -345,7 +345,7 @@ describe("buildBaseAgentSystemPrompt", () => {
       "To allow file writes, try again later: GoatCitadel can't read which tool groups plugins keep off, so it keeps those tools off until it can.",
     );
     expect(tail).not.toContain("switches the Files tools back on");
-    expect(tail).not.toContain("uninstalls the plugin that keeps the Files tools off");
+    expect(tail).not.toContain("uninstalls every plugin that keeps the Files tools off");
     expect(tail).toContain(
       "To allow shell commands, the operator switches the Shell and code tools back on in Capabilities › Tools.",
     );

@@ -62,18 +62,18 @@ export function ChatTranscript({
   const hasPreviewTurn = visibleTurns.some((turn) => turn.turnId === pendingTurnId);
   const latestTurn = visibleTurns.at(-1);
   const newChannelMessages = useChannelReading(channel, visibleTurns, props);
-  const lifecycle = useRef<{ session: string | null; running: boolean }>({
-    session: props.selectedSessionId,
-    running: false,
-  });
+  const lifecycle = useRef({ session: props.selectedSessionId, running: false, reviewing: false });
   const [announcement, setAnnouncement] = useState("");
   const decisionWaiting = Boolean(
     props.pendingApproval || (props.pendingUserInput && !isBackgroundChatUserInputPrompt(props.pendingUserInput)),
   );
+  // Review answer's call runs after the answer has streamed; announce it once, when it starts.
+  const reviewing = props.hasActiveStream && latestTurn?.trace.reflection?.answerReview?.outcome === "running";
   useEffect(() => {
     const previous = lifecycle.current;
     if (previous.session !== props.selectedSessionId) setAnnouncement("");
     else if (props.hasActiveStream && !previous.running) setAnnouncement("Response started.");
+    else if (reviewing && !previous.reviewing) setAnnouncement("Reviewing the answer.");
     else if (!props.hasActiveStream && previous.running)
       setAnnouncement(
         latestTurn?.trace.status === "cancelled"
@@ -84,8 +84,8 @@ export function ChatTranscript({
               ? "Response ended. A decision is waiting for you."
               : "Response ended.",
       );
-    lifecycle.current = { session: props.selectedSessionId, running: props.hasActiveStream };
-  }, [props.selectedSessionId, props.hasActiveStream, latestTurn?.trace.status, decisionWaiting]);
+    lifecycle.current = { session: props.selectedSessionId, running: props.hasActiveStream, reviewing };
+  }, [props.selectedSessionId, props.hasActiveStream, latestTurn?.trace.status, decisionWaiting, reviewing]);
   const previewHasText = Boolean(preview?.visibleText);
   const conversationMessageIds = useMemo(
     () =>

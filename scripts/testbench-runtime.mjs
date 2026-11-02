@@ -185,25 +185,30 @@ export function claudeCliNotReadyMessage(reason) {
   return `Claude Code CLI is not ready (${reason}). ${guidance}`;
 }
 
-/** Lists git-tracked files under `skills/`, relative to `sourceRoot`. Throws if git cannot answer. */
-function listTrackedSkillFiles(sourceRoot) {
-  const result = spawnSync("git", ["-C", sourceRoot, "ls-files", "-z", "--", "skills"], {
+/** The shipped folders the sandbox copies: the skills, and the plugins the Gateway reads from `<rootDir>/plugins`. */
+const SHIPPED_TRACKED_FOLDERS = ["skills", "plugins"];
+
+/** Lists git-tracked files under the shipped folders, relative to `sourceRoot`. Throws if git cannot answer. */
+function listTrackedShippedFiles(sourceRoot) {
+  const result = spawnSync("git", ["-C", sourceRoot, "ls-files", "-z", "--", ...SHIPPED_TRACKED_FOLDERS], {
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
   });
   if (result.error || result.status !== 0) {
     const reason = result.error?.message ?? result.stderr?.trim() ?? `exit code ${result.status}`;
     throw new Error(
-      `Test bench cannot tell which skills are tracked: "git ls-files" failed in ${sourceRoot} (${reason}). ` +
-        "Refusing to copy an unfiltered skills tree into the sandbox.",
+      `Test bench cannot tell which skills and plugins are tracked: "git ls-files" failed in ${sourceRoot} (${reason}). ` +
+        "Refusing to copy an unfiltered skills or plugins tree into the sandbox.",
     );
   }
   return result.stdout.split("\0").filter(Boolean);
 }
 
-/** Replaces the fixture's whole-directory skills copy with the tracked files only. */
-async function copyTrackedSkills(sourceRoot, runtimeRoot, trackedFiles) {
-  await fs.rm(path.join(runtimeRoot, "skills"), { recursive: true, force: true });
+/** Replaces any whole-directory copy of the shipped folders with their tracked files only. */
+async function copyTrackedShippedFiles(sourceRoot, runtimeRoot, trackedFiles) {
+  for (const folder of SHIPPED_TRACKED_FOLDERS) {
+    await fs.rm(path.join(runtimeRoot, folder), { recursive: true, force: true });
+  }
   for (const relativeFile of trackedFiles) {
     const source = path.join(sourceRoot, relativeFile);
     const target = path.join(runtimeRoot, relativeFile);
@@ -219,15 +224,15 @@ async function copyTrackedSkills(sourceRoot, runtimeRoot, trackedFiles) {
 
 /**
  * Builds the sandbox runtime root from shipped defaults only: the tracked example config,
- * the deterministic stub as the only provider, and the git-tracked skills. Operator config,
+ * the deterministic stub as the only provider, and the git-tracked skills and plugins. Operator config,
  * secrets, untracked workspace skills, and workspace guidance are never read.
  */
 export async function prepareTestbenchRuntime({ runId, stubBaseUrl, sourceRoot = repoRoot, tempParent }) {
   // Ask git first so a failure leaves no half-built runtime root behind.
-  const trackedSkillFiles = listTrackedSkillFiles(sourceRoot);
+  const trackedShippedFiles = listTrackedShippedFiles(sourceRoot);
   const runtimeRoot = await prepareUsabilityRuntime(runId, stubBaseUrl, { sourceRoot, tempParent, copySkills: false });
   try {
-    await copyTrackedSkills(sourceRoot, runtimeRoot, trackedSkillFiles);
+    await copyTrackedShippedFiles(sourceRoot, runtimeRoot, trackedShippedFiles);
     await fs.mkdir(path.join(runtimeRoot, "home"), { recursive: true });
     await fs.mkdir(path.join(runtimeRoot, "backups"), { recursive: true });
   } catch (error) {

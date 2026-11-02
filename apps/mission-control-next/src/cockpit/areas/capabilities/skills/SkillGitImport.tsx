@@ -9,9 +9,10 @@ const HAS_CREDENTIALS = "Leave your user name and token out of the address, like
 
 /**
  * The address the browser may send, or why it won't: an `https:` URL that parses, with no user name or token in it,
- * since those must never leave the browser. Which hosts are allowed is the Gateway's.
+ * since those must never leave the browser. Which hosts are allowed is the Gateway's. The Plugins tab's Git form holds
+ * its address to the same rule.
  */
-function sendableAddress(value: string): { sourceRef: string } | { refusal: string } {
+export function sendableAddress(value: string): { sourceRef: string } | { refusal: string } {
   const address = value.trim();
   let url: URL;
   try {

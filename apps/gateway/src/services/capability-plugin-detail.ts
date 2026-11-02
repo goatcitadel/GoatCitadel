@@ -2,6 +2,7 @@ import {
   HOOK_TRIGGER_LABELS,
   TOOL_GROUPS,
   type CapabilityPluginDetailPiece,
+  type CapabilityPluginPendingStep,
   type CapabilityPluginPieceCheck,
   type CapabilityPluginPieceState,
   type CapabilityPluginState,
@@ -9,6 +10,7 @@ import {
   type ChangePlanStatus,
   type PluginManifest,
   type PluginPiece,
+  type PluginPieceKind,
 } from "@goatcitadel/contracts";
 import type { StoredPlugin, StoredPluginPiece } from "./capability-plugin-store.js";
 import { ASKS_FIRST } from "./capability-plugin-inspection-service.js";
@@ -52,6 +54,14 @@ const SKILL_STEP_STATES: Readonly<Record<CapabilitySkillInstallStep, CapabilityP
   failed: "failed",
 };
 const UNREAD_DETAILS = "Its details can't be read right now.";
+/**
+ * The line for a piece that was already there, whatever the manifest asked for: a connector it kept (or handed over)
+ * keeps its own approval setting, and a group already off isn't held, so it stays the operator's switch.
+ */
+const KEPT_LINES: Partial<Readonly<Record<PluginPieceKind, string>>> = {
+  connector: ASKS_FIRST.connectorKept,
+  tool_group_off: ASKS_FIRST.toolGroupKept,
+};
 const READY: CapabilityPluginPieceCheck = { status: "ready" };
 const ALREADY_THERE: CapabilityPluginPieceCheck = { status: "already_there" };
 
@@ -74,12 +84,15 @@ export interface PluginPieceReadings {
 export interface PluginPieceReading {
   state: CapabilityPluginPieceState;
   pendingApprovalId?: string;
+  /** Which skill step that approval asks for. */
+  pendingStep?: CapabilityPluginPendingStep;
 }
 
 /** A piece's label and what it does, as the inspection showed them. */
 export interface PluginPieceLabel {
   label: string;
   asksFirst: string;
+  /** The hosts installing it allows: a connector's template hosts, or a hook's own host. */
   hosts?: string[];
 }
 
@@ -169,12 +182,14 @@ export function buildPluginDetailPieces(
       pieceId: piece.pieceId,
       kind: piece.kind,
       label: piece.kind === "skill" && check ? check.title : described.label,
-      asksFirst: described.asksFirst,
+      asksFirst: piece.owned ? described.asksFirst : (KEPT_LINES[piece.kind] ?? described.asksFirst),
       check: piece.owned ? READY : ALREADY_THERE,
-      ...(described.hosts ? { hosts: [...described.hosts] } : {}),
+      // A piece already there allowed nothing.
+      ...(piece.owned && described.hosts ? { hosts: [...described.hosts] } : {}),
       ...(piece.skillSnapshotId ? { skillSnapshotId: piece.skillSnapshotId } : {}),
       state: reading.state,
       ...(reading.pendingApprovalId ? { pendingApprovalId: reading.pendingApprovalId } : {}),
+      ...(reading.pendingApprovalId && reading.pendingStep ? { pendingStep: reading.pendingStep } : {}),
       ...(href ? { href } : {}),
     };
   });
@@ -229,9 +244,9 @@ function readSkillPiece(
   }
   const state = SKILL_STEP_STATES[check.step];
   if (state !== "waiting_for_approval") return { state };
-  const pendingApprovalId =
-    check.step === "waiting_install" ? check.pendingApprovals.install_inactive : check.pendingApprovals.activate;
-  return { state, ...(pendingApprovalId ? { pendingApprovalId } : {}) };
+  const pendingStep = check.step === "waiting_install" ? "install_inactive" : "activate";
+  const pendingApprovalId = check.pendingApprovals[pendingStep];
+  return { state, ...(pendingApprovalId ? { pendingApprovalId, pendingStep } : {}) };
 }
 
 /**
@@ -246,13 +261,15 @@ function readRevoke(
   approvals: ReadonlyMap<string, ApprovalReading> | undefined,
 ): PluginPieceReading | undefined {
   if (check.pendingApprovals.revoke) {
-    return { state: "waiting_for_approval", pendingApprovalId: check.pendingApprovals.revoke };
+    return { state: "waiting_for_approval", pendingApprovalId: check.pendingApprovals.revoke, pendingStep: "revoke" };
   }
   const asked = piece.waiting?.operation === "revoke" ? piece.waiting.approvalId : undefined;
   const latest = check.revokeApproval;
   const status =
     (asked ? approvals?.get(asked)?.status : undefined) ?? (latest?.approvalId === asked ? latest?.status : undefined);
-  if (asked && status === "pending") return { state: "waiting_for_approval", pendingApprovalId: asked };
+  if (asked && status === "pending") {
+    return { state: "waiting_for_approval", pendingApprovalId: asked, pendingStep: "revoke" };
+  }
   // Approved, whoever asked: being removed only until it settles, or its work fails or ends.
   const approvedId =
     asked && status === "approved" ? asked : latest?.status === "approved" ? latest.approvalId : undefined;
@@ -263,9 +280,9 @@ function readRevoke(
 }
 
 /**
- * The link to the piece's own item, written here, never by the cockpit: a skill once its check names it, a saved
- * connector by the item id the Connectors list gives it, a tool group by its id, a prompt pack by its id, and a hook
- * to the hooks settings. A piece that is removed, failed, unknown or not added yet has none.
+ * The link to the piece's own item, written here, never by the cockpit: a skill once it reads added (only then does the
+ * Skills list hold its item), a saved connector by the item id the Connectors list gives it, a tool group by its id, a
+ * prompt pack by its id, and a hook to the hooks settings. A piece that is removed, failed, unknown or not added yet has none.
  */
 function pieceHref(
   piece: StoredPluginPiece,
@@ -276,7 +293,7 @@ function pieceHref(
   if (state === "removed" || state === "failed" || state === "unknown") return undefined;
   switch (piece.kind) {
     case "skill":
-      return check?.skillId ? `/capabilities/skills?item=skill:${check.skillId}` : undefined;
+      return check?.skillId && state === "added" ? `/capabilities/skills?item=skill:${check.skillId}` : undefined;
     case "connector":
       return piece.ref && state === "added"
         ? `/capabilities/connectors?item=${encodeURIComponent(`mcp-server:${piece.ref}`)}`
@@ -317,11 +334,15 @@ function describePiece(piece: Exclude<PluginPiece, { kind: "prompt_pack" }>): Pl
   switch (piece.kind) {
     case "skill":
       return { label: piece.id, asksFirst: ASKS_FIRST.skill };
-    case "connector":
+    case "connector": {
+      const template = MCP_SERVER_TEMPLATES.find((item) => item.templateId === piece.templateId);
+      const hosts = templateHosts(template?.networkHosts);
       return {
-        label: MCP_SERVER_TEMPLATES.find((item) => item.templateId === piece.templateId)?.label ?? piece.templateId,
+        label: template?.label ?? piece.templateId,
         asksFirst: piece.asksFirst === "everything" ? ASKS_FIRST.connectorEverything : ASKS_FIRST.connectorChanges,
+        ...(hosts.length > 0 ? { hosts } : {}),
       };
+    }
     case "tool_group_off": {
       const label = TOOL_GROUPS.find((item) => item.id === piece.groupId)?.label ?? piece.groupId;
       return { label, asksFirst: ASKS_FIRST.toolGroupOff(label) };
@@ -358,6 +379,14 @@ async function readPromptPack(
     reportUnreadable(error);
     return undefined;
   }
+}
+
+/**
+ * A connector's hosts as its install allows them (trimmed, lower case, each once): the hosts its uninstall leaves in
+ * the allowlist.
+ */
+function templateHosts(hosts: readonly string[] | undefined): string[] {
+  return [...new Set((hosts ?? []).map((host) => host.trim().toLowerCase()).filter(Boolean))];
 }
 
 function hostOf(url: string): string | undefined {

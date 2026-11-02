@@ -497,9 +497,9 @@ describe("CapabilityPluginInspectionService", () => {
     );
   });
 
-  it("marks an already saved connector as already there", async () => {
+  it("marks an already saved connector as already there, keeping its own approval setting", async () => {
     const pieces: Pieces = [
-      { kind: "connector", id: "notes", templateId: "notes-app" },
+      { kind: "connector", id: "notes", templateId: "notes-app", asksFirst: "everything" },
       { kind: "connector", id: "keyed", templateId: "keyed" },
       { kind: "connector", id: "unknown", templateId: "unknown-app" },
     ];
@@ -514,7 +514,8 @@ describe("CapabilityPluginInspectionService", () => {
       pieceId: "notes",
       kind: "connector",
       label: "Notes App",
-      asksFirst: "Reading runs freely; creating or changing something asks first in Chat.",
+      // Not the manifest's "Everything it does asks first in Chat.": the install never changes a server it keeps.
+      asksFirst: "Already saved. It keeps its own setting for what asks first.",
       check: { status: "already_there" },
     });
     // The install's own template rule, word for word.
@@ -564,6 +565,36 @@ describe("CapabilityPluginInspectionService", () => {
     expect(piece(inspection, "web").check).toEqual({ status: "already_there" });
     expect(piece(inspection, "browser").check).toEqual({ status: "ready" });
     expect(inspection.installable).toBe(false);
+  });
+
+  it("says a group the operator already switched off stays their own switch, never that the plugin holds it", async () => {
+    const pieces: Pieces = [
+      { kind: "tool_group_off", id: "web", groupId: "web_search" },
+      { kind: "tool_group_off", id: "browser", groupId: "browser" },
+    ];
+    const { inspect } = await harness({
+      pieces,
+      overrides: {
+        readSettings: vi.fn(async () => ({
+          switchedOffToolGroups: ["web_search"],
+          networkAllowlist: [],
+          typedRunVariablesEnabled: false,
+        })),
+      },
+    });
+
+    const inspection = await inspect();
+
+    // Kept, like a connector already saved: installing doesn't hold it off, so it isn't off "while installed".
+    expect(piece(inspection, "web")).toMatchObject({
+      check: { status: "already_there" },
+      asksFirst: "Already off. It stays your own switch.",
+    });
+    expect(piece(inspection, "browser")).toMatchObject({
+      check: { status: "ready" },
+      asksFirst: "Turns Browser off in every chat while installed.",
+    });
+    expect(inspection.installable).toBe(true);
   });
 
   it("refuses a hook to a private address", async () => {

@@ -41,7 +41,14 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 904: Chat's Code Mode request row announces its one status line (Running code…, then the outcome), why a read it
 // needs failed (the request, Code Mode readiness), why a click was not sent, and why Keep as a tool did not save (+5);
 // its loading lines are not announced. A code_mode.run approval in Chat says why Approve waits, as Inbox does (+1).
-export const LIVE_REGION_BUDGET = 904;
+// 905: the Capabilities Plugins tab announces the one outcome that replaces its whole page, a first read that failed.
+// 907: a plugin's install panel announces its progress line and why a check, the install or a skill's step stopped
+// (+2). The source form's refusal and a signing secret's rule use Field's own alert.
+// 909: a plugin's uninstall announces its progress line and why a request was refused or its plan ended (+2, one
+//   place: the plugin panel, or a stopped install's panel, never both).
+// 895: the capability packs page went (-14): PortablePacksSettings had eight live regions, PortablePackSetup four and
+//   PackPlanControls two. Plugins replace it.
+export const LIVE_REGION_BUDGET = 895;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

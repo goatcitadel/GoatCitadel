@@ -110,7 +110,6 @@ export const NEXT_RELEASE_SURFACE_STATUS_BY_SLUG = {
   "settings-local-ai": "ship",
   "settings-workspaces": "ship",
   "settings-budget": "ship",
-  "settings-addons": "experimental",
   "settings-integrations": "ship",
   "settings-channels": "ship",
   "settings-mcp": "ship",
@@ -464,14 +463,6 @@ export const NEXT_RELEASE_SURFACE_MANIFEST = withReleaseSurfaceStatus([
     readyText: "Budget mode",
     expectedArea: "settings",
     expectedSection: "budget",
-    interaction: "open-inspector",
-  },
-  {
-    slug: "settings-addons",
-    href: "/settings/addons",
-    readyText: "Capability packs",
-    expectedArea: "settings",
-    expectedSection: "addons",
     interaction: "open-inspector",
   },
   {

@@ -73,9 +73,9 @@ const DEFAULT_SETTINGS_TEST_REFS = Object.freeze([
 ]);
 
 export const EXPECTED_USABILITY_SURFACE_COUNTS = Object.freeze({
-  routes: 50,
+  routes: 49,
   shipped: 44,
-  experimental: 6,
+  experimental: 5,
   redirects: 20,
   directCompatibility: 3,
 });
@@ -133,7 +133,6 @@ export const ROUTE_ACTIONS_BY_SLUG = Object.freeze({
   "settings-local-ai": ["hardware-readiness-and-not-configured-reason"],
   "settings-workspaces": ["workspace-create-select-archive-restore", "workspace-isolation"],
   "settings-budget": ["budget-mode-update-and-conflict"],
-  "settings-addons": ["experimental-label-and-safe-failure"],
   "settings-integrations": ["integration-validation-and-diagnostics", "sandbox-destination"],
   "settings-channels": ["channel-validation-and-diagnostics", "sandbox-destination"],
   "settings-mcp": ["mcp-server-tool-grant-lifecycle", "unsupported-transport-truth"],

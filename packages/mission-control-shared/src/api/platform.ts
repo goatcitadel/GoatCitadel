@@ -161,14 +161,6 @@ export async function fetchLlamaCppStatus(): Promise<LlamaCppRuntimeStatus> {
 
 // Optional destination operations retain their public bindings and shared request owner.
 export {
-  fetchCapabilityPacks,
-  fetchStagedCapabilityPacks,
-  fetchCapabilityPackPreview,
-  exportCapabilityPack,
-  fetchLocalCapabilityPackPreview,
-  installCapabilityPack,
-  installLocalCapabilityPack,
-  materializeStagedCapabilityPack,
   fetchEvidenceEnvelopes,
   fetchCuratorStatus,
   archiveCuratorSkill,

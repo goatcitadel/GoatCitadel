@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import { CapabilityPackService } from "./capability-pack-service.js";
 import { ContinuationGateService } from "./continuation-gate-service.js";
 import { MemoryWriteGateService } from "./memory-write-gate-service.js";
 
@@ -224,40 +223,5 @@ describe("MemoryWriteGateService", () => {
 
     expect(decision.decision).toBe("blocked");
     expect(decision.redactionStatus).toBe("blocked_secret");
-  });
-});
-
-describe("CapabilityPackService", () => {
-  it("previews bundled packs as disabled or review-required by default", () => {
-    const service = new CapabilityPackService({
-      evidenceEnvelopeService: { createEnvelope: vi.fn() } as never,
-    });
-
-    const preview = service.previewPack("browser-qa-operator");
-
-    expect(preview.manifest.provenance.source).toBe("bundled");
-    expect(preview.installPlan.some((item) => item.outcome === "disabled")).toBe(true);
-    expect(preview.reviewRequired).toBe(true);
-  });
-
-  it("records evidence when a capability pack is staged", async () => {
-    const createEnvelope = vi.fn(() => ({
-      envelopeId: "env-1",
-      createdAt: "2026-05-04T00:00:00.000Z",
-    }));
-    const service = new CapabilityPackService({
-      evidenceEnvelopeService: { createEnvelope } as never,
-    });
-
-    const result = await service.installPack("memory-governance", { actorId: "operator" });
-
-    expect(result.evidenceEnvelopeId).toBe("env-1");
-    expect(result.stagedAssets.every((item) => item.outcome !== "enabled")).toBe(true);
-    expect(createEnvelope).toHaveBeenCalledWith(
-      expect.objectContaining({
-        eventKind: "capability_pack_install",
-        metadata: expect.objectContaining({ packId: "memory-governance" }),
-      }),
-    );
   });
 });

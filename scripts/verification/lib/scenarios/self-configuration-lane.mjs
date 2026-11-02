@@ -66,7 +66,7 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
   },
   {
     id: "self-configuration.comparison-owner-tests",
-    title: "First-task evidence, workflow skill capture, and governed pack installation",
+    title: "First-task evidence, workflow skill capture, and retired capability pack plans",
     subsystem: "gateway",
     cwd: "apps/gateway",
     args: ["exec", "node", "../../node_modules/vitest/vitest.mjs", "run",
@@ -75,10 +75,7 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
       "src/services/onboarding-first-task-service.test.ts",
       "src/routes/onboarding.test.ts",
       "src/services/workflow-skill-capture-service.test.ts",
-      "src/services/capability-pack-service.test.ts",
-      "src/services/capability-pack-change-plan-adapter.test.ts",
-      "src/services/capability-pack-compensation.test.ts",
-      "src/routes/capability-packs.test.ts"],
+      "src/services/retired-capability-pack-change-plan-adapter.test.ts"],
   },
   {
     id: "self-configuration.storage-durable-tests",
@@ -117,12 +114,11 @@ export const SELF_CONFIGURATION_COMMANDS = Object.freeze([
   },
   {
     id: "self-configuration.comparison-ui-tests",
-    title: "Canonical Chat workflow capture and pack execution controls",
+    title: "Canonical Chat workflow capture controls",
     subsystem: "mission-control",
     cwd: "apps/mission-control-next",
     args: ["exec", "node", "../../node_modules/vitest/vitest.mjs", "run",
-      "src/features/threaded-surface/WorkflowSkillCaptureControl.test.tsx",
-      "src/features/native-routes/settings/sections/PackExecutionPanel.test.tsx"],
+      "src/features/threaded-surface/WorkflowSkillCaptureControl.test.tsx"],
   },
   {
     id: "self-configuration.threaded-prompt-tests",
@@ -204,7 +200,7 @@ export const SELF_CONFIGURATION_HELD_ROWS = Object.freeze([
   {
     id: "fresh-workspace-browser-qa-pack",
     status: "held",
-    reason: "Controlled owner and UI tests do not prove a fresh workspace's approved Browser QA pack producing real browser artifacts after restart or partial failure.",
+    reason: "Controlled owner and UI tests do not prove a fresh workspace's installed Browser checks plugin producing real browser artifacts after restart or partial failure.",
   },
 ]);
 

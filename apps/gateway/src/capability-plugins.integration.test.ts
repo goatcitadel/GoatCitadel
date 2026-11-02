@@ -180,6 +180,10 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
           pieceCounts: { skill: 1, connector: 1, tool_group_off: 1, hook: 1, prompt_pack: 1 },
         },
       ],
+      // The example config keeps the skip off, and a local install may add a folder.
+      operatorApprovalSkip: false,
+      folderSourcesAllowed: true,
+      issues: [],
     });
     const ownersBefore = await readOwners();
     const pathsBefore = new Set(listPaths(root));

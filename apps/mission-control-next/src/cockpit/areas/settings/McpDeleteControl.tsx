@@ -4,6 +4,7 @@ import { useMcpDeletion } from "../../../features/native-routes/settings/use-mcp
 import { hasMcpServerBinding, isGatewayMcpServer } from "../../../features/native-routes/settings/mcp-server-mutation";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
+import { PluginRefusalLink } from "../capabilities/plugins/FromPluginLink";
 
 export function McpDeleteControl({
   workspaceId,
@@ -41,6 +42,7 @@ export function McpDeleteControl({
       {control.notice ? (
         <p role={control.notice.tone === "error" ? "alert" : "status"} className="w-full text-xs text-fg-secondary">
           {control.notice.message}
+          <PluginRefusalLink pluginId={control.notice.pluginId} />
         </p>
       ) : null}
       <Dialog

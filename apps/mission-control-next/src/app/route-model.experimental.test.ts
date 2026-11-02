@@ -10,7 +10,6 @@ describe("isExperimentalRoute (NAV-02 rail gating)", () => {
       { area: "ops", section: "improvement" },
       { area: "ops", section: "kanban" },
       { area: "settings", section: "personalities" },
-      { area: "settings", section: "addons" },
     ] as const;
     for (const route of experimental) {
       expect(isExperimentalRoute(route)).toBe(true);
@@ -60,7 +59,7 @@ describe("isHiddenRoute (release-only navigation gating)", () => {
 
   it("does not hide release-bearing or experimental routes", () => {
     expect(isHiddenRoute({ area: "settings", section: "providers" })).toBe(false);
-    expect(isHiddenRoute({ area: "settings", section: "addons" })).toBe(false);
+    expect(isHiddenRoute({ area: "library", section: "journey" })).toBe(false);
     expect(isHiddenRoute({ area: "chat" })).toBe(false);
   });
 
@@ -75,7 +74,7 @@ describe("isPrimaryRailRoute", () => {
 
     expect(isExperimentalRoute(personalities)).toBe(true);
     expect(isPrimaryRailRoute(personalities)).toBe(true);
-    expect(isPrimaryRailRoute({ area: "settings", section: "addons" })).toBe(false);
+    expect(isPrimaryRailRoute({ area: "library", section: "journey" })).toBe(false);
   });
 
   it("includes shipped routes and excludes direct-URL-only routes", () => {

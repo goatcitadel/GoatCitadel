@@ -26,11 +26,6 @@ import type { CapabilityToolUsageService } from "./capability-tool-usage-service
 import type { CapabilityToolsService } from "./capability-tools-service.js";
 import { CapabilityScopeRouteService, type CapabilityScopeRouteServiceDeps } from "./capability-scope-route-service.js";
 import {
-  createCapabilityPacksRouteService,
-  type CapabilityPacksRoutePort,
-  type CapabilityPacksRouteService,
-} from "./capability-packs-route-service.js";
-import {
   createChatAttachmentsRouteService,
   type ChatAttachmentsRoutePort,
   type ChatAttachmentsRouteService,
@@ -336,7 +331,6 @@ export interface GatewayRouteServices {
   citadels: CitadelsRouteService;
   compliance: ComplianceRouteService;
   capabilities: CapabilitiesRouteService;
-  capabilityPacks: CapabilityPacksRouteService;
   chatArtifactRenders: ChatArtifactRendersRouteService;
   chatAttachments: ChatAttachmentsRouteService;
   chatCompactionBreakerActions: ChatCompactionBreakerActionService;
@@ -444,7 +438,6 @@ export interface GatewayRouteServiceDependencies {
   vaultKey?: VaultKeyProvider;
   compliance: ComplianceExportServiceDeps;
   capabilities: CapabilitiesRoutePort;
-  capabilityPacks: CapabilityPacksRoutePort;
   chatArtifactRenders: ChatArtifactRendersRoutePort;
   chatAttachments: ChatAttachmentsRoutePort;
   chatCompactionBreakerActions: ChatCompactionBreakerActionService;
@@ -527,7 +520,6 @@ export function createGatewayRouteServices(deps: GatewayRouteServiceDependencies
     citadels: new CitadelsRouteService(deps.citadels, deps.masonInterpret, deps.vaultKey),
     compliance: createComplianceRouteService(deps.compliance),
     capabilities: new CapabilitiesRouteService(deps.capabilities),
-    capabilityPacks: createCapabilityPacksRouteService(deps.capabilityPacks),
     chatArtifactRenders: createChatArtifactRendersRouteService(deps.chatArtifactRenders),
     chatAttachments: createChatAttachmentsRouteService(deps.chatAttachments),
     chatCompactionBreakerActions: deps.chatCompactionBreakerActions,

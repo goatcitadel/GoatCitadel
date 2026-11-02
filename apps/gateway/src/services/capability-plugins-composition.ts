@@ -11,6 +11,7 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { PluginToolGroupHold } from "@goatcitadel/policy-engine";
+import { builtInPluginsRoot } from "./built-in-plugins-root.js";
 import { CapabilityPluginActionsService } from "./capability-plugin-actions-service.js";
 import {
   pluginActionSources,
@@ -34,7 +35,7 @@ import { TEMP_REMOVAL_OPTIONS, lookUpHostAddresses } from "./hardened-git.js";
 import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { PluginInstallChangePlanAdapter } from "./plugin-install-change-plan-adapter.js";
-import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-manifest-file.js";
+import { listBuiltInPluginManifests, readPluginManifestFile, reservedPluginIds } from "./plugin-manifest-file.js";
 import {
   readApprovalReading,
   readPluginSkillChecks,
@@ -47,7 +48,7 @@ import {
   PluginSnapshotStore,
   SNAPSHOT_SWEEP_GRACE_MS,
 } from "./plugin-snapshot-store.js";
-import { fetchPluginSource } from "./plugin-source-service.js";
+import { fetchPluginSource, folderSourcesAllowed } from "./plugin-source-service.js";
 import { PluginUninstallChangePlanAdapter } from "./plugin-uninstall-change-plan-adapter.js";
 import { projectSwitchedOffToolGroups } from "./settings-operator-write-access.js";
 import type { SkillHubOperatorListResponse } from "./skill-hub-operator-service.js";
@@ -87,7 +88,11 @@ export interface PluginToolGroupHoldsTarget {
  * Change Plan adapters.
  */
 export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
-  /** `<rootDir>/plugins` holds the plugins that ship; `<data>/plugins` holds the snapshots and their temp copies. */
+  /**
+   * The plugins that ship are read from `builtInPluginsRoot` (the release's `app/templates/plugins` on a packaged
+   * install, none when that folder can't be verified, `<rootDir>/plugins` otherwise); `<data>/plugins` holds the
+   * snapshots and their temp copies.
+   */
   config: CapabilityPluginsConfig;
   /** Skill Hub's source review, and its operator list, which a plugin's skills are read from by their checks' ids. */
   skillHub: {
@@ -108,19 +113,25 @@ export interface CapabilityPluginsOwners extends CapabilityPluginInstallOwners {
    * page by page, where a skill's own step left waiting is found.
    */
   approvals: CapabilitySkillsOwners["approvals"];
+  /**
+   * Whether the operator's skip applies on this install, as a plain function over the one rule every skip follows
+   * (`allowsOperatorApprovalSkip`): what the Plugins list answers. It decides nothing here.
+   */
+  readOperatorApprovalSkip(): Promise<boolean>;
 }
 
-/** Where plugins live on this install. Snapshots and their temp copies share a volume, since a snapshot is renamed in. */
+/**
+ * Where plugin copies live on this install. Snapshots and their temp copies share a volume, since a snapshot is renamed
+ * in. The plugins that ship are found once, by `builtInPluginsRoot`, when the Plugins tab is wired.
+ */
 export function pluginDataPaths(config: CapabilityPluginsConfig): {
   snapshots: string;
   temp: string;
-  builtIn: string;
 } {
   const pluginsData = path.join(path.resolve(config.rootDir, config.assistant.dataDir), "plugins");
   return {
     snapshots: path.join(pluginsData, "snapshots"),
     temp: path.join(pluginsData, "tmp"),
-    builtIn: path.join(path.resolve(config.rootDir), "plugins"),
   };
 }
 
@@ -148,6 +159,8 @@ export interface CapabilityPlugins {
 export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): CapabilityPlugins {
   const { config, mcp, settings, skillHub, records, policy, plans, keychain, changePlanAdapters, approvals } = owners;
   const paths = pluginDataPaths(config);
+  // Undefined on a packaged install whose app folder can't be verified: then no plugin is listed or fetched as built in.
+  const builtInRoot = builtInPluginsRoot(config.rootDir);
   const snapshots = new PluginSnapshotStore(paths.snapshots);
   const store = new CapabilityPluginStore(records.systemSettings);
   // Never rejects (it logs its own failures); the catch only satisfies the async-boundary rule.
@@ -190,7 +203,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     readManifest: (treeSha256) => readPluginManifestFile(resolveCheckedSnapshot(snapshots, treeSha256)),
     readSnapshotText: (treeSha256, relativePath) =>
       readSnapshotText(resolveCheckedSnapshot(snapshots, treeSha256, relativePath)),
-    listBuiltInPluginIds: async () => (await listBuiltInPluginManifests(paths.builtIn)).map((item) => item.pluginId),
+    listBuiltInPluginIds: async () => reservedPluginIds(await listBuiltInPluginManifests(builtInRoot)),
     storeHookSecret: (value) => custody.storeSecret(value),
     deleteHookSecret: (secretRef) => {
       try {
@@ -230,7 +243,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     fetchSource: (source) =>
       fetchPluginSource(source, {
         importSnapshot: (dir) => snapshots.importDirectory(dir),
-        builtInRoot: paths.builtIn,
+        builtInRoot,
         deploymentProfile: config.assistant.deploymentProfile,
         tempRoot: paths.temp,
       }),
@@ -268,7 +281,9 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
   });
   const routes = new CapabilityPluginsRouteService({
     listInstalled: () => store.list(),
-    listBuiltIn: () => listBuiltInPluginManifests(paths.builtIn),
+    listBuiltIn: () => listBuiltInPluginManifests(builtInRoot),
+    // Found once above, which logged it; the list says it on every read without logging again.
+    builtInUnavailable: () => builtInRoot === undefined,
     readSkillChecks,
     readInstallPlanStatus: async (workspaceId, planId, actorId) =>
       (await plans.get({ workspaceId, actorId, surface: "capabilities" }, planId)).status,
@@ -280,6 +295,9 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     install: (input) => actions.install(input),
     uninstall: (input) => actions.uninstall(input),
     loadToolGroupHolds: () => holds.load(),
+    readOperatorApprovalSkip: () => owners.readOperatorApprovalSkip(),
+    // The live profile, by the fetch's own folder rule.
+    folderSourcesAllowed: () => folderSourcesAllowed(config.assistant.deploymentProfile),
     reportFailure: reportFailedRead,
   });
   return { routes, readPlugins: () => store.list(), readRemovedPlugins: () => store.listRemoved() };

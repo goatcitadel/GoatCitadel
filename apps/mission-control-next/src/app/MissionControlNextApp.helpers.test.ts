@@ -36,18 +36,21 @@ describe("MissionControlNextApp shell helpers", () => {
         item("workspaces"),
         item("integrations"),
         item("mcp"),
-        item("addons"),
       ]).map((group) => group.items.map((entry) => entry.section)),
     ).toEqual([
       ["personalities"],
       ["onboarding", "providers"],
-      ["integrations", "mcp", "addons"],
+      ["integrations", "mcp"],
       ["permissions", "trust-policy"],
       ["workspaces"],
       ["access"],
       ["runtime"],
     ]);
-    expect(buildRailSections("library", [item("memory"), item("prompt-packs"), item("curator"), item("communications")]).map((group) => group.id)).toEqual(["library-skills", "library-knowledge", "library-mail"]);
+    expect(
+      buildRailSections("library", [item("memory"), item("prompt-packs"), item("curator"), item("communications")]).map(
+        (group) => group.id,
+      ),
+    ).toEqual(["library-skills", "library-knowledge", "library-mail"]);
     expect(buildRailSections("ops", [item("activity"), item("approvals")]).map((group) => group.id)).toEqual([
       "ops-approvals",
       "ops-activity",
@@ -83,7 +86,9 @@ describe("MissionControlNextApp shell helpers", () => {
   it("renders every declared grouped rail item exactly once", () => {
     for (const area of ["settings", "library", "ops"] as const) {
       const groupedItems = buildRailSections(area, navigationRailItems(area)).flatMap((group) => group.items);
-      const expectedIds = navigationRailItems(area).map((entry) => entry.id).sort();
+      const expectedIds = navigationRailItems(area)
+        .map((entry) => entry.id)
+        .sort();
       expect(groupedItems.map((entry) => entry.id).sort()).toEqual(expectedIds);
       expect(new Set(groupedItems.map((entry) => entry.id)).size).toBe(expectedIds.length);
     }

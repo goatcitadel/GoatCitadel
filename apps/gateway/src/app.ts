@@ -78,7 +78,6 @@ import { docsRoutes } from "./routes/docs.js";
 import { devDiagnosticsRoutes } from "./routes/dev-diagnostics.js";
 import { devVerificationRoutes } from "./routes/dev-verification.js";
 import { mcpRoutes } from "./routes/mcp.js";
-import { capabilityPacksRoutes } from "./routes/capability-packs.js";
 import { evidenceRoutes } from "./routes/evidence.js";
 import { evidenceReceiptsRoutes } from "./routes/evidence-receipts.js";
 import { voiceRoutes } from "./routes/voice.js";
@@ -500,7 +499,6 @@ export async function buildApp(options: GatewayPluginOptions = {}) {
     await app.register(durableRoutes);
     await app.register(connectorsRoutes);
     await app.register(trustRoutes);
-    await app.register(capabilityPacksRoutes);
     await app.register(evidenceRoutes);
     await app.register(evidenceReceiptsRoutes);
     await app.register(adminRoutes);

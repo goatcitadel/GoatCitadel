@@ -10,6 +10,7 @@ import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
+import { FromPluginLink } from "../plugins/FromPluginLink";
 import { SkillPanelDetail } from "./SkillPanelDetail";
 import { SkillPanelSwitch } from "./SkillPanelSwitch";
 import { presentSkillState, presentSkillUses, skillCategoryLabel, SKILL_TONE_TEXT } from "./skill-view";
@@ -51,6 +52,7 @@ function SkillDetails({
         <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
           <StatusBadge status={state} />
           <span className="text-sm text-fg-secondary">{SKILL_ORIGIN_LABELS[item.origin]}</span>
+          {item.fromPlugin ? <FromPluginLink plugin={item.fromPlugin} className="text-sm" /> : null}
           <span className="text-sm text-fg-secondary">{skillCategoryLabel(item.category)}</span>
         </div>
         {/* A wait's reason stands under the switch, beside the way to review the change. */}

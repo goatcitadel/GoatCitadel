@@ -89,7 +89,11 @@ export function useMcpDeletion({
       notify({ tone: "success", message: `MCP server ${selected.server.label} deleted and absence confirmed.` });
       return;
     }
-    notify({ tone: result.status === "uncertain" ? "error" : "warning", message: result.message });
+    notify({
+      tone: result.status === "uncertain" ? "error" : "warning",
+      message: result.message,
+      ...(result.pluginId ? { pluginId: result.pluginId } : {}),
+    });
     if (["conflict", "unavailable"].includes(result.status)) await onConflict?.();
   }
   return {

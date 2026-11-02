@@ -72,7 +72,8 @@ export type FindSkillHubChecks = (input: {
 /** One check, as a plugin's skill piece reads it. */
 export function pluginSkillCheck(item: SkillHubOperatorItem): PluginSkillCheck {
   const step = skillHubInstallStep(item);
-  // Installed once a version exists, or once switching it on settled (the Skills tab's own `installedSkillId` rule).
+  // Installed once a version exists, or once switching it on settled. This is wider than the Skills tab's own
+  // `installedSkillId`, set only once switching on settled, so the detail links the skill only once it reads added.
   const installed = item.candidate !== undefined || item.runtime.activeVersion || step === "done";
   const revoke = item.approvals.revoke;
   const pendingApprovals: Partial<Record<SkillHubOperationKind, string>> = {};

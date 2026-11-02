@@ -36,7 +36,7 @@ test("surface proof covers the default cockpit and selects Classic explicitly fo
 
 test("cockpit captures are additive and preserve all classic PNG identities with explicit shell selection", () => {
   const classic = NEXT_VISUAL_REGRESSION_MANIFEST.filter((route) => route.shell === "classic");
-  assert.equal(classic.length, 53);
+  assert.equal(classic.length, 52);
   assert.deepEqual(
     classic.map(({ shell: _shell, ...route }) => route),
     [...NEXT_RELEASE_SURFACE_MANIFEST, ...NEXT_VISUAL_SCENARIO_MANIFEST],
@@ -45,7 +45,7 @@ test("cockpit captures are additive and preserve all classic PNG identities with
     const href = new URL(resolveReleaseSurfaceHref(route), "http://test.invalid");
     assert.equal(href.searchParams.get("shell"), "classic");
   }
-  assert.equal(classic.length * RELEASE_SURFACE_VARIANTS.length, 424);
+  assert.equal(classic.length * RELEASE_SURFACE_VARIANTS.length, 416);
   const slugs = NEXT_VISUAL_REGRESSION_MANIFEST.map((route) => route.slug);
   assert.equal(new Set(slugs).size, slugs.length, "Two shells must never share a baseline filename.");
 });
@@ -112,7 +112,7 @@ test("native manifest covers cockpit destinations and binds fixture, theme and e
   assert.equal(gallery.readySelector, '[data-cockpit-gallery="true"]');
   assert.equal(gallery.readyText, "Cockpit components");
   assert.equal(COCKPIT_VISUAL_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 232);
-  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 656);
+  assert.equal(NEXT_VISUAL_REGRESSION_MANIFEST.length * RELEASE_SURFACE_VARIANTS.length, 648);
 });
 
 test("the Code Mode card captures bind each state to its seeded session and pinned readiness", () => {

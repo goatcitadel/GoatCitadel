@@ -279,6 +279,51 @@ describe("buildCapabilitySkillItems", () => {
     expect(items.filter((item) => "removedWithPlugin" in item)).toHaveLength(1);
   });
 
+  it("offers no switch for a skill removed with its plugin, even when the switch owner holds it", () => {
+    const items = buildCapabilitySkillItems({
+      ...ITEMS_INPUT,
+      switchableSkillIds: new Set(["extra:notes", "extra:other"]),
+      skills: [
+        skill({ skillId: "extra:notes", name: "notes", callable: false, lifecycleState: "revoked" }),
+        skill({ skillId: "extra:other", name: "other", callable: false }),
+      ],
+      removedPluginSkills: new Map([["extra:notes", { name: "Meeting tools" }]]),
+    });
+
+    expect(items.map((item) => [item.skillId, item.switchable])).toEqual([
+      ["extra:notes", false],
+      ["extra:other", true],
+    ]);
+  });
+
+  it("reads a built-in plugin's skill as built in, from the plugin record's trust", () => {
+    const lifecycle = (sourceRef: string) => ({
+      skillId: "extra:browser-qa",
+      category: "community_imported" as const,
+      lifecycleState: "approved" as const,
+      trustLabel: "Approved upstream snapshot",
+      provenance: { source: "extra", sourceRef },
+      createdAt: "2026-10-31T00:00:00.000Z",
+      updatedAt: "2026-10-31T00:00:00.000Z",
+    });
+    const items = buildCapabilitySkillItems({
+      ...ITEMS_INPUT,
+      skills: [
+        skill({ skillId: "extra:browser-qa", name: "browser-qa", lifecycle: lifecycle("check-built-in") }),
+        skill({ skillId: "extra:notes", name: "notes", lifecycle: lifecycle("check-unverified") }),
+      ],
+      pluginSkills: new Map([
+        ["check-built-in", { pluginId: "browser-checks", name: "Browser checks", trust: "built_in" as const }],
+        ["check-unverified", { pluginId: "meeting-tools", name: "Meeting tools", trust: "unverified" as const }],
+      ]),
+    });
+
+    expect(items.map((item) => [item.skillId, item.origin, item.fromPlugin])).toEqual([
+      ["extra:browser-qa", "built_in", { pluginId: "browser-checks", name: "Browser checks" }],
+      ["extra:notes", "imported", { pluginId: "meeting-tools", name: "Meeting tools" }],
+    ]);
+  });
+
   it("keeps callable false for an enabled skill that isn't reviewed", () => {
     const items = buildCapabilitySkillItems({
       ...ITEMS_INPUT,

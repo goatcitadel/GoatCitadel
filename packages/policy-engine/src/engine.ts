@@ -423,7 +423,7 @@ export class ToolPolicyEngine {
   private readonly registry: ToolRegistry;
   private pluginToolGroupHolds: readonly PluginToolGroupHold[] = [];
   /** Set while the plugin records can't be read: deny-wins fails closed on every group a plugin could hold. */
-  private pluginToolGroupHoldsUnavailable = false;
+  private holdsUnavailable = false;
 
   public constructor(
     private readonly config: ToolPolicyConfig,
@@ -453,7 +453,7 @@ export class ToolPolicyEngine {
    */
   public setPluginToolGroupHolds(holds: readonly PluginToolGroupHold[]): void {
     this.pluginToolGroupHolds = Object.freeze(holds.map((hold) => Object.freeze({ ...hold })));
-    this.pluginToolGroupHoldsUnavailable = false;
+    this.holdsUnavailable = false;
   }
 
   /**
@@ -463,7 +463,12 @@ export class ToolPolicyEngine {
    * Gateway reads the holds before any chat runs and sets this only when that read fails.
    */
   public setPluginToolGroupHoldsUnavailable(): void {
-    this.pluginToolGroupHoldsUnavailable = true;
+    this.holdsUnavailable = true;
+  }
+
+  /** Whether the holds can't be read now, so a list can say that every switchable group's tools are kept off. */
+  public pluginToolGroupHoldsUnavailable(): boolean {
+    return this.holdsUnavailable;
   }
 
   /** The holds last set, so a reader can say which plugin keeps a group off. */
@@ -489,9 +494,7 @@ export class ToolPolicyEngine {
   private policyConfig(): ToolPolicyConfig {
     return withHeldToolGroups(
       this.config,
-      this.pluginToolGroupHoldsUnavailable
-        ? SWITCHABLE_TOOL_GROUP_IDS
-        : this.pluginToolGroupHolds.map((hold) => hold.groupId),
+      this.holdsUnavailable ? SWITCHABLE_TOOL_GROUP_IDS : this.pluginToolGroupHolds.map((hold) => hold.groupId),
     );
   }
 
@@ -509,7 +512,7 @@ export class ToolPolicyEngine {
         `tool ${toolName} is in a tool group switched off by the operator${group}`,
       );
     }
-    if (this.pluginToolGroupHoldsUnavailable) {
+    if (this.holdsUnavailable) {
       const reason = `tool ${toolName} is in a tool group kept off${group}: ${PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON}`;
       return withReasonCode(deny(riskLevel, "tool_group_off", reason), PLUGIN_TOOL_GROUP_HOLDS_UNAVAILABLE_REASON_CODE);
     }

@@ -9,15 +9,8 @@ import type {
   LlamaCppHuggingFaceDownloadStatus,
 } from "./platform.js";
 import type {
-  CapabilityPackExportResponse,
   AssemblyRunDetailResponse,
   AssemblyRunRecord,
-  CapabilityPackInstallResult,
-  CapabilityPackManifest,
-  CapabilityPackMaterializeRequest,
-  CapabilityPackMaterializeResult,
-  CapabilityPackPreview,
-  CapabilityPackStagedResponse,
   ChangeRiskEvaluationResponse,
   CreateAssemblyRunInput,
   CuratorArchiveRequest,
@@ -66,64 +59,6 @@ import type {
 } from "./types.js";
 
 import { request } from "./client-core.js";
-
-export async function fetchCapabilityPacks(): Promise<{ items: CapabilityPackManifest[] }> {
-  return request<{ items: CapabilityPackManifest[] }>("/api/v1/capability-packs");
-}
-
-export async function fetchStagedCapabilityPacks(): Promise<CapabilityPackStagedResponse> {
-  return request<CapabilityPackStagedResponse>("/api/v1/capability-packs/staged");
-}
-
-export async function fetchCapabilityPackPreview(packId: string): Promise<CapabilityPackPreview> {
-  return request<CapabilityPackPreview>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/preview`);
-}
-
-export async function exportCapabilityPack(packId: string): Promise<CapabilityPackExportResponse> {
-  return request<CapabilityPackExportResponse>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/export`);
-}
-
-export async function fetchLocalCapabilityPackPreview(
-  manifest: CapabilityPackManifest,
-): Promise<CapabilityPackPreview> {
-  return request<CapabilityPackPreview>("/api/v1/capability-packs/local/preview", {
-    method: "POST",
-    body: JSON.stringify({ manifest }),
-  });
-}
-
-export async function installCapabilityPack(
-  packId: string,
-  input: { actorId?: string } = {},
-): Promise<CapabilityPackInstallResult> {
-  return request<CapabilityPackInstallResult>(`/api/v1/capability-packs/${encodeURIComponent(packId)}/install`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function installLocalCapabilityPack(
-  manifest: CapabilityPackManifest,
-  input: { actorId?: string } = {},
-): Promise<CapabilityPackInstallResult> {
-  return request<CapabilityPackInstallResult>("/api/v1/capability-packs/local/install", {
-    method: "POST",
-    body: JSON.stringify({ ...input, manifest }),
-  });
-}
-
-export async function materializeStagedCapabilityPack(
-  evidenceEnvelopeId: string,
-  input: CapabilityPackMaterializeRequest,
-): Promise<CapabilityPackMaterializeResult> {
-  return request<CapabilityPackMaterializeResult>(
-    `/api/v1/capability-packs/staged/${encodeURIComponent(evidenceEnvelopeId)}/materialize`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
 
 export async function fetchEvidenceEnvelopes(
   query: EvidenceEnvelopeListQuery = {},

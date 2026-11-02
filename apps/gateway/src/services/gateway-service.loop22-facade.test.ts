@@ -48,7 +48,6 @@ function createRouteDependencyHarness() {
     approvalRuntime: { name: "approval-runtime" },
     assemblyService: { name: "assembly" },
     backupRetentionService: { name: "backup-retention" },
-    capabilityPackService: { name: "capability-pack" },
     capabilitySystemService: { name: "capability-system" },
     chatProjectService: { name: "chat-project" },
     chatTurnRuntime: { name: "chat-turn-runtime" },

@@ -55,18 +55,22 @@ export interface PluginManifest {
   pieces: readonly PluginPiece[];
 }
 
-export type PluginManifestRefusalCode =
-  | "MANIFEST_MISSING"
-  | "MANIFEST_TOO_LARGE"
-  | "MANIFEST_INVALID"
-  | "DUPLICATE_PIECE_ID"
-  | "PIECE_PATH_INVALID"
-  | "UNKNOWN_PIECE_KIND"
-  | "FEATURE_FLAGS_NOT_ALLOWED"
-  | "CHAT_INSTRUCTIONS_NOT_ALLOWED"
-  | "HOOK_MUST_ONLY_OBSERVE"
-  | "HOOK_CODE_NOT_ALLOWED"
-  | "PRESET_MUST_TIGHTEN";
+/** Every code a refused manifest can carry, at run time too, so a client can word each one. */
+export const PLUGIN_MANIFEST_REFUSAL_CODES = [
+  "MANIFEST_MISSING",
+  "MANIFEST_TOO_LARGE",
+  "MANIFEST_INVALID",
+  "DUPLICATE_PIECE_ID",
+  "PIECE_PATH_INVALID",
+  "UNKNOWN_PIECE_KIND",
+  "FEATURE_FLAGS_NOT_ALLOWED",
+  "CHAT_INSTRUCTIONS_NOT_ALLOWED",
+  "HOOK_MUST_ONLY_OBSERVE",
+  "HOOK_CODE_NOT_ALLOWED",
+  "PRESET_MUST_TIGHTEN",
+] as const;
+
+export type PluginManifestRefusalCode = (typeof PLUGIN_MANIFEST_REFUSAL_CODES)[number];
 
 /**
  * The answer to parsing a manifest. `manifestSha256` is the lowercase hex SHA-256 of the manifest's bytes, exactly as

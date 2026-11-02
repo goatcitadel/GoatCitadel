@@ -178,14 +178,6 @@ function createGateway() {
         killSwitchEngaged: disabled,
       })),
     },
-    capabilityPackService: {
-      installLocalPack: fn((input: unknown) => ({ input, local: true })),
-      installPack: fn((packId: string, input: unknown) => ({ packId, input })),
-      materializeStagedPack: fn((evidenceEnvelopeId: string, input: unknown) => ({ evidenceEnvelopeId, input })),
-      listPacks: fn(() => [{ packId: "pack-1" }]),
-      previewLocalPack: fn((manifest: unknown) => ({ manifest, localPreview: true })),
-      previewPack: fn((packId: string) => ({ packId, preview: true })),
-    },
     capabilitySystemService: {
       createProposal: fn((input: unknown) => ({ input, proposalId: "proposal-1" })),
       listCatalog: fn((scope?: string) => [{ scope }]),
@@ -360,24 +352,6 @@ describe("route composition loop 15 delegates", () => {
     const deps = composeMemoryKnowledgeRouteDependencies(gateway as never) as any;
 
     expect(deps.capabilities).toBe(gateway.capabilitySystemService);
-    expect(deps.capabilityPacks.installPack("pack-1", { workspaceId: "default" })).toEqual({
-      packId: "pack-1",
-      input: { workspaceId: "default" },
-    });
-    expect(deps.capabilityPacks.installLocalPack({ manifest: { packId: "local" } })).toEqual({
-      input: { manifest: { packId: "local" } },
-      local: true,
-    });
-    expect(deps.capabilityPacks.materializeStagedPack("env-1", { confirmReview: true })).toEqual({
-      evidenceEnvelopeId: "env-1",
-      input: { confirmReview: true },
-    });
-    expect(deps.capabilityPacks.listPacks()).toEqual([{ packId: "pack-1" }]);
-    expect(deps.capabilityPacks.previewLocalPack({ packId: "local" })).toEqual({
-      manifest: { packId: "local" },
-      localPreview: true,
-    });
-    expect(deps.capabilityPacks.previewPack("pack-1")).toEqual({ packId: "pack-1", preview: true });
     expect(deps.curator.listCuratorStatus()).toMatchObject({ cycleDays: 7 });
     expect(deps.curator.archiveCuratorSkill({ skillId: "skill-1", confirm: true })).toMatchObject({ archived: true });
     expect(deps.curator.pruneCuratorSkill({ skillId: "skill-1", confirm: true })).toMatchObject({ pruned: true });

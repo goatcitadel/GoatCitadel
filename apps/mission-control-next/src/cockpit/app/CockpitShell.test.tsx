@@ -245,6 +245,21 @@ describe("CockpitShell", () => {
     expect(window.location.pathname).toBe("/capabilities");
     await vi.waitFor(() => expect(container.textContent).toContain("Capabilities content"));
   });
+  it("opens Capabilities › Plugins for the old capability packs address", async () => {
+    window.history.replaceState(null, "", "/settings/advanced?shell=cockpit#addons");
+    await act(async () => {
+      root.render(
+        <QueryClientProvider client={new QueryClient()}>
+          <CockpitShell />
+        </QueryClientProvider>,
+      );
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("Capabilities content"));
+    expect(window.location.pathname).toBe("/capabilities/plugins");
+    expect(window.location.hash).toBe("");
+    const nav = container.querySelector('nav[aria-label="Areas"]')!;
+    expect(nav.querySelector('[aria-current="page"]')?.getAttribute("aria-label")).toBe("Capabilities");
+  });
   it("sidebar search: accessible name starts with the visible text", async () => {
     await act(async () => {
       root.render(

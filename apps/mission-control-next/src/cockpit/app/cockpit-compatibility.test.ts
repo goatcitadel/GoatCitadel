@@ -80,6 +80,8 @@ describe("Cockpit compatibility coverage", () => {
     "/capabilities/connectors?workspaceId=w#top",
     "/capabilities/tools",
     "/capabilities/tools?workspaceId=w&item=group%3Afiles#top",
+    "/capabilities/plugins",
+    "/capabilities/plugins?workspaceId=w&item=plugin%3Abrowser-checks#top",
   ])("opens the Capabilities area natively: %s", (href) => {
     expect(resolveCockpitCompatibility(href)).toEqual({ kind: "native", href });
   });
@@ -87,7 +89,8 @@ describe("Cockpit compatibility coverage", () => {
     "/capabilities/skills/extra",
     "/capabilities/connectors/extra",
     "/capabilities/tools/extra",
-    "/capabilities/plugins",
+    "/capabilities/plugins/extra",
+    "/capabilities/extensions",
     "/capabilities/unknown",
   ])("reports %s missing until its tab exists", (href) => {
     expect(resolveCockpitCompatibility(href)).toEqual({ kind: "missing" });
@@ -96,6 +99,7 @@ describe("Cockpit compatibility coverage", () => {
     "/capabilities/skills?shell=classic",
     "/capabilities/connectors?shell=classic",
     "/capabilities/tools?shell=classic",
+    "/capabilities/plugins?shell=classic",
   ])("offers Classic for an explicit rollback of the Capabilities area: %s", (href) => {
     expect(resolveCockpitCompatibility(href)).toMatchObject({ kind: "classic" });
   });
@@ -260,18 +264,38 @@ describe("the retired Settings › Connections addresses", () => {
     ["/settings/connections#integration-connections", "/capabilities/connectors/advanced#integration-connections"],
     ["/settings/connections#web-search", "/capabilities/connectors/advanced#web-search"],
     ["/settings/connections#channels", "/chat/messaging/advanced"],
-    ["/settings/connections#addons", "/settings/advanced#addons"],
-    // The section paths follow their sections; Capability packs is still a Settings section and stays put.
+    ["/settings/connections#addons", "/capabilities/plugins"],
+    // The section paths follow their sections.
     ["/settings/mcp", "/capabilities/connectors/advanced#mcp-servers"],
     ["/settings/integrations", "/capabilities/connectors/advanced#integration-connections"],
     ["/settings/web-search", "/capabilities/connectors/advanced#web-search"],
     ["/settings/channels", "/chat/messaging/advanced"],
-    ["/settings/addons", "/settings/addons"],
+    ["/settings/addons", "/capabilities/plugins"],
     // The new homes are native as they are.
     ["/capabilities/connectors/advanced#web-search", "/capabilities/connectors/advanced#web-search"],
     ["/chat/messaging/advanced", "/chat/messaging/advanced"],
   ])("opens %s at %s", (input, href) => {
     expect(resolveCockpitCompatibility(input)).toEqual({ kind: "native", href });
+  });
+
+  it("redirects the old add-ons addresses to Plugins", () => {
+    for (const [input, href] of [
+      ["/settings/addons", "/capabilities/plugins"],
+      ["/settings/advanced#addons", "/capabilities/plugins"],
+      ["/settings/connections#addons", "/capabilities/plugins"],
+      // The workspace and the shell travel; the add-ons anchor means nothing on Plugins, so it is dropped.
+      ["/settings/addons?workspaceId=w&shell=cockpit", "/capabilities/plugins?workspaceId=w&shell=cockpit"],
+      ["/settings/advanced?workspaceId=w&shell=cockpit#addons", "/capabilities/plugins?workspaceId=w&shell=cockpit"],
+      ["/settings/connections?workspaceId=w#addons", "/capabilities/plugins?workspaceId=w"],
+    ] as const) {
+      expect(resolveCockpitCompatibility(input), input).toEqual({ kind: "native", href });
+    }
+    // Advanced's other sections, and Advanced itself, stay on Settings.
+    for (const href of ["/settings/advanced", "/settings/advanced#remote-workers", "/settings/advanced#unknown"]) {
+      expect(resolveCockpitCompatibility(href), href).toEqual({ kind: "native", href });
+    }
+    // An explicit Classic rollback still returns Classic before any redirect.
+    expect(resolveCockpitCompatibility("/settings/addons?shell=classic")).toMatchObject({ kind: "classic" });
   });
 
   it("keeps a provider's sign-in return whole, on Advanced setup, which hands it back", () => {

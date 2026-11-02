@@ -333,6 +333,7 @@ describe("CommandPalette", () => {
 
   it.each([
     ["Skills", "/capabilities/skills"],
+    ["Plugins", "/capabilities/plugins"],
     ["Connectors", "/capabilities/connectors"],
     ["Tools", "/capabilities/tools"],
   ])("lists Capabilities › %s as a tab destination", async (label, path) => {
