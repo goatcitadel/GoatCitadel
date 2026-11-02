@@ -32,6 +32,8 @@ export interface PackagedAppDiscovery {
  *   only installing or updating a release writes; the Gateway never does. The app folder is found as the release-trust
  *   check finds it, and used only when it holds a `release-manifest.json` and this Gateway's own module, entry and
  *   Node runtime.
+ * - The `app` folder holding this Gateway's own module is a candidate too, so a packaged Gateway started without the
+ *   launcher (no `GOATCITADEL_APP_DIR`, from another working folder) still finds its release, or reads none.
  * - When something points to a packaged install (`GOATCITADEL_APP_DIR` names a folder that isn't a source checkout, or
  *   a candidate may hold a release manifest) but no app folder passes that check, no plugin is read as built in: never
  *   the writable runtime root's `plugins` folder. `report` (the server log) gets one plain line, naming no folder; the
@@ -43,7 +45,8 @@ export function builtInPluginsRoot(
   discovery: PackagedAppDiscovery = thisGatewaysAppDiscovery(rootDir),
   report: (message: string) => void = (message) => log.warn(message),
 ): string | undefined {
-  const candidates = [discovery.appDirVariable, ...discovery.otherCandidates];
+  const moduleApp = appFolderHolding(discovery.runtimePaths.gatewayModulePath);
+  const candidates = [discovery.appDirVariable, ...discovery.otherCandidates, ...(moduleApp ? [moduleApp] : [])];
   const appDir = resolvePackagedRuntimeAppDir(candidates, discovery.runtimePaths);
   if (appDir) return path.join(appDir, ...PACKAGED_BUILT_IN_PLUGINS_FOLDER);
   if (!pointsToPackagedInstall(discovery.appDirVariable, candidates))
@@ -66,6 +69,18 @@ function pointsToPackagedInstall(
   return candidates.some(
     (candidate) => candidate?.trim() && mayExist(path.join(path.resolve(candidate), RELEASE_MANIFEST)),
   );
+}
+
+/** The nearest folder named `app` (a release's fixed layout) that holds `file`, or undefined when none does. */
+function appFolderHolding(file: string): string | undefined {
+  if (!file.trim()) return undefined;
+  let dir = path.dirname(path.resolve(file));
+  for (;;) {
+    if (path.basename(dir).toLowerCase() === "app") return dir;
+    const parent = path.dirname(dir);
+    if (parent === dir) return undefined;
+    dir = parent;
+  }
 }
 
 function isSourceCheckout(dir: string): boolean {

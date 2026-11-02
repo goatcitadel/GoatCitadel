@@ -10,8 +10,15 @@ import {
   PACKAGED_BUILT_IN_PLUGINS_FOLDER,
   UNVERIFIED_APP_FOLDER_MESSAGE,
 } from "./built-in-plugins-root.js";
-import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-manifest-file.js";
+import {
+  listBuiltInPluginManifests,
+  readPluginManifestFile,
+  reservedPluginIds,
+  SHIPPED_PLUGIN_IDS,
+} from "./plugin-manifest-file.js";
 import { fetchPluginSource } from "./plugin-source-service.js";
+import { prepareVerificationRuntime } from "../../../../scripts/verification/lib/runtime.mjs";
+import { prepareUsabilityRuntime } from "../../../../scripts/verification/lib/scenarios/usability-runtime-fixture.mjs";
 
 /**
  * The plugins that ship with GoatCitadel: every folder under the repository's `plugins/` is a manifest GoatCitadel
@@ -58,6 +65,16 @@ describe("the plugins that ship with GoatCitadel", () => {
     }
     // Every shipped folder is listed: none is left out for a manifest the list can't read.
     expect((await listBuiltInPluginManifests(PLUGINS_ROOT)).map((manifest) => manifest.pluginId)).toEqual(folders);
+    // The fixed list that keeps these ids reserved while the folder can't be read names exactly the shipped folders.
+    expect([...SHIPPED_PLUGIN_IDS].sort()).toEqual(folders);
+  });
+
+  it("reserves every shipped id even when the built-in folder can't be read", async () => {
+    // No folder (a packaged install whose app folder can't be verified): a Git or folder plugin still can't take one.
+    expect(reservedPluginIds(await listBuiltInPluginManifests(undefined))).toEqual([...SHIPPED_PLUGIN_IDS]);
+    // A readable folder adds its own ids, once each.
+    const listed = await listBuiltInPluginManifests(PLUGINS_ROOT);
+    expect(reservedPluginIds([...listed, ...listed]).sort()).toEqual([...SHIPPED_PLUGIN_IDS].sort());
   });
 
   it("ships Browser checks as one Playwright connector that always asks first, and one skill", async () => {
@@ -102,7 +119,7 @@ describe("the plugins that ship with GoatCitadel", () => {
     }
   });
 
-  it("packages the plugins folder", () => {
+  it("packages the plugins folder", async () => {
     // The release bundle copies the folder into the app's read-only templates, where the packaged Gateway reads it.
     const bundle = readRepoFile("scripts/packaging/build-bundle.mjs");
     expect(bundle).toContain('const templatesRoot = path.join(appRoot, "templates");');
@@ -112,13 +129,26 @@ describe("the plugins that ship with GoatCitadel", () => {
     const launcher = readRepoFile("bin/goatcitadel.mjs");
     expect(launcher).not.toMatch(/packagedRuntimeRoot, "plugins"/u);
 
-    // Every fresh-install fixture the verification lanes, the test bench and the screenshot gallery start from.
-    expect(readRepoFile("scripts/verification/lib/runtime.mjs")).toMatch(
-      /for \(const folder of \["skills", "plugins", "workspaces"\]\)/u,
-    );
-    expect(readRepoFile("scripts/verification/lib/scenarios/usability-runtime-fixture.mjs")).toMatch(
-      /for \(const folder of \["skills", "plugins"\]\)/u,
-    );
+    // The fresh-install fixtures the verification lanes and the usability proof start from, run for real: each runtime
+    // root they make holds the shipped plugins.
+    const shipped = path.join("plugins", "browser-checks", "goatcitadel-plugin.json");
+    const tempParent = fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-plugin-fixtures-"));
+    const previousTempRoot = process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+    process.env.GOATCITADEL_VERIFY_TEMP_ROOT = tempParent;
+    try {
+      const verification: string = await prepareVerificationRuntime("built-in-plugins-test");
+      expect(fs.existsSync(path.join(verification, shipped))).toBe(true);
+      const usability: string = await prepareUsabilityRuntime("built-in-plugins-test", "http://127.0.0.1:9", {
+        tempParent,
+      });
+      expect(fs.existsSync(path.join(usability, shipped))).toBe(true);
+    } finally {
+      if (previousTempRoot === undefined) delete process.env.GOATCITADEL_VERIFY_TEMP_ROOT;
+      else process.env.GOATCITADEL_VERIFY_TEMP_ROOT = previousTempRoot;
+      fs.rmSync(tempParent, { recursive: true, force: true });
+    }
+    // The test bench and the screenshot gallery copy only git-tracked files from inside their own runs, and the bundle
+    // runs as one whole script, so those are read as written.
     expect(readRepoFile("scripts/testbench-runtime.mjs")).toMatch(
       /const SHIPPED_TRACKED_FOLDERS = \["skills", "plugins"\];/u,
     );
@@ -196,6 +226,21 @@ describe("where the Gateway reads the plugins that ship", () => {
     expect(report).not.toHaveBeenCalled();
   });
 
+  it("finds a packaged release from this Gateway's own module when it is started without the launcher", () => {
+    const { appDir, runtimeRoot, runtimePaths } = packagedInstall();
+    const elsewhere = tempDir("goatcitadel-elsewhere-");
+    const report = vi.fn();
+    // `node <home>/app/gateway/dist/main.js` from another folder, with no GOATCITADEL_APP_DIR.
+    const manual = { appDirVariable: undefined, otherCandidates: [elsewhere, runtimeRoot], runtimePaths };
+
+    expect(builtInPluginsRoot(runtimeRoot, manual, report)).toBe(path.join(appDir, "templates", "plugins"));
+
+    // The same start on a Node outside the release: its app folder can't be verified, so none is read as built in.
+    const systemNode = { ...runtimePaths, executablePath: sourceCheckout().runtimePaths.executablePath };
+    expect(builtInPluginsRoot(runtimeRoot, { ...manual, runtimePaths: systemNode }, report)).toBeUndefined();
+    expect(report.mock.calls).toEqual([[UNVERIFIED_APP_FOLDER_MESSAGE]]);
+  });
+
   it("reads no built-ins when a packaged install's app folder can't be verified, never the runtime root", async () => {
     const { home, appDir, runtimeRoot, runtimePaths } = packagedInstall();
     const systemNode = sourceCheckout().runtimePaths;
@@ -258,12 +303,21 @@ describe("where the Gateway reads the plugins that ship", () => {
   });
 
   it("reads this repository's plugins folder from this checkout", () => {
-    const named = process.env.GOATCITADEL_APP_DIR;
-    delete process.env.GOATCITADEL_APP_DIR;
-    try {
-      expect(builtInPluginsRoot(REPO_ROOT)).toBe(PLUGINS_ROOT);
-    } finally {
-      if (named !== undefined) process.env.GOATCITADEL_APP_DIR = named;
-    }
+    // An explicit discovery, so the runner's own GOATCITADEL_APP_DIR and working folder change nothing.
+    const discovery = {
+      appDirVariable: undefined,
+      otherCandidates: [path.join(REPO_ROOT, "apps", "gateway"), REPO_ROOT],
+      runtimePaths: {
+        gatewayModulePath: path.join(REPO_ROOT, "apps", "gateway", "src", "services", "built-in-plugins-root.ts"),
+        entryPath: path.join(REPO_ROOT, "apps", "gateway", "src", "main.ts"),
+        executablePath: process.execPath,
+      },
+    };
+    const report = vi.fn();
+
+    expect(builtInPluginsRoot(REPO_ROOT, discovery, report)).toBe(PLUGINS_ROOT);
+    // The launcher's `verify:desktop` run names the checkout itself, which reads the same folder.
+    expect(builtInPluginsRoot(REPO_ROOT, { ...discovery, appDirVariable: REPO_ROOT }, report)).toBe(PLUGINS_ROOT);
+    expect(report).not.toHaveBeenCalled();
   });
 });

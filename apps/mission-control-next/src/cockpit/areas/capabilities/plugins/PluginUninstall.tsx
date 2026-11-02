@@ -19,6 +19,9 @@ export function PluginUninstall({ detail }: { detail: CapabilityPluginDetail }) 
   const current = flow.detail ?? detail;
   const { entry, approval } = flow;
   const asking = entry?.phase === "asking";
+  // Its plan is under way and the plugin isn't uninstalling yet: its approval ("Review the change") is the next move,
+  // and a second Uninstall would only make a second plan.
+  const underWay = entry?.phase === "following" && current.state !== "uninstalling";
   return (
     <div className="space-y-3">
       {approval ? (
@@ -38,7 +41,7 @@ export function PluginUninstall({ detail }: { detail: CapabilityPluginDetail }) 
         <Button variant="danger" loading={asking} loadingLabel="Asking…" onClick={flow.start}>
           Finish uninstalling
         </Button>
-      ) : (
+      ) : underWay ? null : (
         <Button variant="danger" loading={asking} loadingLabel="Asking…" onClick={() => setConfirming(true)}>
           Uninstall
         </Button>

@@ -2,6 +2,7 @@ import {
   HOOK_TRIGGER_LABELS,
   TOOL_GROUPS,
   type CapabilityPluginDetailPiece,
+  type CapabilityPluginPendingStep,
   type CapabilityPluginPieceCheck,
   type CapabilityPluginPieceState,
   type CapabilityPluginState,
@@ -83,6 +84,8 @@ export interface PluginPieceReadings {
 export interface PluginPieceReading {
   state: CapabilityPluginPieceState;
   pendingApprovalId?: string;
+  /** Which skill step that approval asks for. */
+  pendingStep?: CapabilityPluginPendingStep;
 }
 
 /** A piece's label and what it does, as the inspection showed them. */
@@ -184,6 +187,7 @@ export function buildPluginDetailPieces(
       ...(piece.skillSnapshotId ? { skillSnapshotId: piece.skillSnapshotId } : {}),
       state: reading.state,
       ...(reading.pendingApprovalId ? { pendingApprovalId: reading.pendingApprovalId } : {}),
+      ...(reading.pendingApprovalId && reading.pendingStep ? { pendingStep: reading.pendingStep } : {}),
       ...(href ? { href } : {}),
     };
   });
@@ -238,9 +242,9 @@ function readSkillPiece(
   }
   const state = SKILL_STEP_STATES[check.step];
   if (state !== "waiting_for_approval") return { state };
-  const pendingApprovalId =
-    check.step === "waiting_install" ? check.pendingApprovals.install_inactive : check.pendingApprovals.activate;
-  return { state, ...(pendingApprovalId ? { pendingApprovalId } : {}) };
+  const pendingStep = check.step === "waiting_install" ? "install_inactive" : "activate";
+  const pendingApprovalId = check.pendingApprovals[pendingStep];
+  return { state, ...(pendingApprovalId ? { pendingApprovalId, pendingStep } : {}) };
 }
 
 /**
@@ -255,13 +259,15 @@ function readRevoke(
   approvals: ReadonlyMap<string, ApprovalReading> | undefined,
 ): PluginPieceReading | undefined {
   if (check.pendingApprovals.revoke) {
-    return { state: "waiting_for_approval", pendingApprovalId: check.pendingApprovals.revoke };
+    return { state: "waiting_for_approval", pendingApprovalId: check.pendingApprovals.revoke, pendingStep: "revoke" };
   }
   const asked = piece.waiting?.operation === "revoke" ? piece.waiting.approvalId : undefined;
   const latest = check.revokeApproval;
   const status =
     (asked ? approvals?.get(asked)?.status : undefined) ?? (latest?.approvalId === asked ? latest?.status : undefined);
-  if (asked && status === "pending") return { state: "waiting_for_approval", pendingApprovalId: asked };
+  if (asked && status === "pending") {
+    return { state: "waiting_for_approval", pendingApprovalId: asked, pendingStep: "revoke" };
+  }
   // Approved, whoever asked: being removed only until it settles, or its work fails or ends.
   const approvedId =
     asked && status === "approved" ? asked : latest?.status === "approved" ? latest.approvalId : undefined;

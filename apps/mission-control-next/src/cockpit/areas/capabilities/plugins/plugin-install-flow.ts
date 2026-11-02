@@ -46,10 +46,14 @@ const EXPIRED = "The request expired after 15 minutes. Nothing was changed.";
 const WITHDRAWN = "This install was cancelled. Nothing was changed.";
 const NOT_FOUND = "This plugin can't be found anymore. Reload to see where it stands.";
 const UNINSTALLING = "This plugin is being uninstalled.";
-const declinedStep = (skill: string, kind: PluginSkillStepKind) =>
+/**
+ * A step asked for that came back to where it was. Declined, expired or withdrawn read the same here, so the words
+ * claim no decision: the step didn't go through, and Continue asks again.
+ */
+const stepNotDone = (skill: string, kind: PluginSkillStepKind) =>
   kind === "install_inactive"
-    ? `${skill} wasn't installed. The request was declined.`
-    : `${skill} is installed, not switched on. The request to switch it on was declined.`;
+    ? `${skill} wasn't installed: the step didn't go through. Continue to ask again.`
+    : `${skill} is installed, not switched on: the step didn't go through. Continue to ask again.`;
 const stepStopped = (skill: string, kind: PluginSkillStepKind | undefined) =>
   kind === "activate" ? `Switching on ${skill} didn't finish.` : `Installing ${skill} didn't finish.`;
 export const installStopped = (name: string) => `Installing ${name} didn't finish.`;
@@ -323,9 +327,9 @@ function skillPiece(
     case "check_passed":
     case "installed_off": {
       const kind: PluginSkillStepKind = piece.state === "check_passed" ? "install_inactive" : "activate";
-      // Back where it was after asking for this very step: that request was declined.
+      // Back where it was after asking for this very step: declined, expired or withdrawn, the detail can't tell.
       if (asked === kind) {
-        const notice = declinedStep(piece.label, kind);
+        const notice = stepNotDone(piece.label, kind);
         return setPluginInstall(key, { ...following, chain: false, asked: undefined, notice, declined: true });
       }
       setPluginInstall(key, following);

@@ -281,8 +281,26 @@ describe("a plugin's detail", () => {
       skillSnapshotId: SKILL_CHECK,
       state: "waiting_for_approval",
       pendingApprovalId: "approval-install_inactive",
+      pendingStep: "install_inactive",
     });
     expect(detail.state).toBe("install_not_finished");
+  });
+
+  it("names a step left waiting from the install as that step while the plugin is uninstalled", async () => {
+    const { service } = routeService({
+      listInstalled: vi.fn(async () => [record({ state: "uninstalling" })]),
+      readSkillChecks: vi.fn(async () => checksOf(WAITING_INSTALL)),
+    });
+
+    const detail = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
+
+    expect(detail.state).toBe("uninstalling");
+    // No revoke was asked for: the approval is the skill's install step, never its removal.
+    expect(detail.pieces[0]).toMatchObject({
+      state: "waiting_for_approval",
+      pendingApprovalId: "approval-install_inactive",
+      pendingStep: "install_inactive",
+    });
   });
 
   it("marks the plugin not finished until every skill is switched on", async () => {
@@ -507,6 +525,8 @@ describe("a plugin's detail", () => {
       const detail = await service.detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
 
       expect(detail.state).toBe("uninstalling");
+      // The revoke is named as one, so its approval reads as a removal and no other step's does.
+      expect(detail.pieces[0]?.pendingStep).toBe("revoke");
       expect(
         detail.pieces.map((piece) => [piece.pieceId, piece.state, piece.pendingApprovalId]),
         String(status),
@@ -550,8 +570,8 @@ describe("a plugin's detail", () => {
     const waiting = await removing([
       { ...skill, waiting: { approvalId: "approval-revoke-old", operation: "revoke" } },
     ]).detail({ pluginId: PLUGIN_ID, actorId: "operator-1" });
-    expect(waiting.pieces.map((piece) => [piece.state, piece.pendingApprovalId])).toEqual([
-      ["waiting_for_approval", "approval-revoke-old"],
+    expect(waiting.pieces.map((piece) => [piece.state, piece.pendingApprovalId, piece.pendingStep])).toEqual([
+      ["waiting_for_approval", "approval-revoke-old", "revoke"],
     ]);
 
     // Approved in the Inbox, and not in effect yet: being removed, with nothing left to approve.

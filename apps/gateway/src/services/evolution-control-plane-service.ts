@@ -436,6 +436,8 @@ export class EvolutionControlPlaneService {
     }
     if (isExpired(current)) return this.expire(current, actor.actorId);
     const adapter = this.requireMatchingAdapter(current);
+    // A retired kind applies nothing: its approved plan settles before any apply or rollback is recorded.
+    if (adapter.refuseAction) return await this.settleRetired(actor, adapter, current);
     const resumesRollback = current.result?.failureCode === "rollback_approval_pending";
     if (resumesRollback && !adapter.rollback) {
       throw new ServiceUnavailableError("The approved rollback owner is unavailable.");
@@ -475,7 +477,7 @@ export class EvolutionControlPlaneService {
   ): Promise<ChangePlanRecord> {
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
-    this.refuseRetired(current);
+    // A retired kind's plan that never started can still be cancelled: its adapter has nothing to discard.
     if (["applying", "verifying", "monitoring", "rolling_back"].includes(current.status)) {
       throw new ConflictError({
         message: "This Change Plan crossed its live-effect boundary. Use rollback instead of cancellation.",
@@ -870,6 +872,29 @@ export class EvolutionControlPlaneService {
     } catch {
       throw new ServiceUnavailableError(`The ${kind} Change Plan adapter is unavailable.`);
     }
+  }
+
+  /**
+   * An approved plan of a retired kind, settled as needing the operator with the words its adapter's recovery gives
+   * (capability packs: "replaced by plugins"), so its trail never claims an apply that couldn't happen.
+   */
+  private async settleRetired(
+    actor: EvolutionControlPlaneActor,
+    adapter: EvolutionControlPlaneAdapter,
+    plan: ChangePlanRecord,
+  ): Promise<ChangePlanRecord> {
+    let words: EvolutionControlPlaneAdapterError;
+    try {
+      const { result } = await adapter.reconcile(this.context(plan.origin), plan);
+      words = new EvolutionControlPlaneAdapterError(
+        result?.summary ?? "This kind of change was retired.",
+        "manual_required",
+        result?.failureCode ?? "adapter_failed",
+      );
+    } catch (error) {
+      words = new EvolutionControlPlaneAdapterError(safeErrorSummary(error), "manual_required");
+    }
+    return await this.settleAdapterFailure(actor, plan, words);
   }
 
   /** A retired kind refuses an operator action on its plan before anything is written (capability packs). */

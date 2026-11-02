@@ -50,6 +50,21 @@ export async function listBuiltInPluginManifests(builtInRoot: string | undefined
   return manifests;
 }
 
+/**
+ * The ids of the plugins that ship with GoatCitadel, fixed here so they stay reserved even while the built-in folder
+ * can't be read (a packaged install whose app folder can't be verified). The manifest test checks this list against the
+ * repository's `plugins/` folder.
+ */
+export const SHIPPED_PLUGIN_IDS: readonly string[] = Object.freeze(["browser-checks"]);
+
+/**
+ * The ids no Git or folder plugin may take: every shipped id, whether or not its folder can be read now, and any other
+ * built-in the folder lists.
+ */
+export function reservedPluginIds(listed: readonly PluginManifest[]): string[] {
+  return [...new Set([...SHIPPED_PLUGIN_IDS, ...listed.map((manifest) => manifest.pluginId)])];
+}
+
 /** Whether `value` is a plugin id by the manifest's own rule. */
 export function isPluginId(value: string): boolean {
   return pluginManifestSchema.shape.pluginId.safeParse(value).success;

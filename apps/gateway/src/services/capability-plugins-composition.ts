@@ -35,7 +35,7 @@ import { TEMP_REMOVAL_OPTIONS, lookUpHostAddresses } from "./hardened-git.js";
 import { HookSecretCustodyService } from "./hook-secret-custody-service.js";
 import { MCP_SERVER_TEMPLATES } from "./mcp-server-templates.js";
 import { PluginInstallChangePlanAdapter } from "./plugin-install-change-plan-adapter.js";
-import { listBuiltInPluginManifests, readPluginManifestFile } from "./plugin-manifest-file.js";
+import { listBuiltInPluginManifests, readPluginManifestFile, reservedPluginIds } from "./plugin-manifest-file.js";
 import {
   readApprovalReading,
   readPluginSkillChecks,
@@ -203,7 +203,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
     readManifest: (treeSha256) => readPluginManifestFile(resolveCheckedSnapshot(snapshots, treeSha256)),
     readSnapshotText: (treeSha256, relativePath) =>
       readSnapshotText(resolveCheckedSnapshot(snapshots, treeSha256, relativePath)),
-    listBuiltInPluginIds: async () => (await listBuiltInPluginManifests(builtInRoot)).map((item) => item.pluginId),
+    listBuiltInPluginIds: async () => reservedPluginIds(await listBuiltInPluginManifests(builtInRoot)),
     storeHookSecret: (value) => custody.storeSecret(value),
     deleteHookSecret: (secretRef) => {
       try {

@@ -109,6 +109,7 @@ function fixture() {
   const current = new EvolutionControlPlaneService({
     repository,
     adapters: new EvolutionControlPlaneAdapterRegistry([new RetiredCapabilityPackChangePlanAdapter()]),
+    getApprovalDisposition: async () => "approved",
   });
   let key = 0;
   /** A plan the older Gateway made: waiting, or confirmed and then monitoring or completed. */
@@ -119,7 +120,26 @@ function fixture() {
     oldAdapter.settle = settle;
     return await older.confirm(actor, created.planId, created.revision, created.requiredAction!.actionNonce);
   };
-  return { repository, oldAdapter, older, current, oldPlan };
+  /** A plan the older Gateway left waiting for its approval, as an Inbox decision finds it. */
+  const awaitingApproval = async (approvalId: string) => {
+    const waiting = await oldPlan();
+    return await repository.transition(waiting.planId, {
+      expectedRevision: waiting.revision,
+      status: "awaiting_approval",
+      actionNonce: waiting.requiredAction!.actionNonce,
+      requiredAction: {
+        kind: "approval",
+        actionId: "action_pack_approval",
+        actionNonce: "nonce-pack-approval",
+        title: "Approve the pack",
+        risk: "caution",
+        approvalId,
+      },
+      eventType: "approval_requested",
+      actorId: actor.actorId,
+    });
+  };
+  return { repository, sync, oldAdapter, older, current, oldPlan, awaitingApproval };
 }
 
 async function expectRetired(promise: Promise<unknown>) {
@@ -183,6 +203,38 @@ describe("retired capability pack plans", () => {
     });
   });
 
+  it("settles an old plan approved in the Inbox without recording an apply", async () => {
+    const h = fixture();
+    const waiting = await h.awaitingApproval("approval-pack-1");
+    expect(waiting.status).toBe("awaiting_approval");
+
+    const settled = await h.current.resumeApproved(actor, waiting.planId, waiting.revision, "approval-pack-1");
+
+    expect(settled).toMatchObject({
+      status: "manual_required",
+      evidenceRefs: waiting.evidenceRefs,
+      result: { summary: RETIRED.message, failureCode: "capability_packs_retired" },
+    });
+    // Its trail goes straight from waiting to needing the operator: no apply was ever started.
+    const events = h.sync.listEvents(waiting.planId).map((event) => event.eventType);
+    expect(events).not.toContain("approval_verified_apply_started");
+    expect(events).not.toContain("rollback_approval_verified");
+    expect(events.at(-1)).toBe("manual_required");
+  });
+
+  it("lets the operator cancel an old plan that never started", async () => {
+    const h = fixture();
+    const waiting = await h.oldPlan();
+    const approval = await h.awaitingApproval("approval-pack-2");
+
+    await expect(
+      h.current.cancel(actor, waiting.planId, waiting.revision, waiting.requiredAction!.actionNonce),
+    ).resolves.toMatchObject({ status: "cancelled" });
+    await expect(
+      h.current.cancel(actor, approval.planId, approval.revision, approval.requiredAction!.actionNonce),
+    ).resolves.toMatchObject({ status: "cancelled" });
+  });
+
   it("lets startup expire an old waiting plan", async () => {
     const h = fixture();
     h.oldAdapter.expiresAt = "2000-01-01T00:00:00.000Z";
@@ -220,7 +272,6 @@ describe("retired capability pack plans", () => {
         ownerResourceId: "pack-secret",
       }),
     );
-    await expectRetired(h.current.cancel(actor, waiting.planId, waiting.revision, nonce));
     await expectRetired(h.current.requestRollback(actor, completed.planId, completed.revision));
     await expectRetired(h.current.verifyMonitoringPlan(actor, monitoring.planId, monitoring.revision));
 

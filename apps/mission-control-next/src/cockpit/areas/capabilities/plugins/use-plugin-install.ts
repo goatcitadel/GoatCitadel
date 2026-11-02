@@ -30,6 +30,7 @@ import {
 } from "./plugin-install-flow";
 import {
   cancelPluginInstallTick,
+  pluginIdOfInstallKey,
   pluginInstallKey,
   readPluginInstall,
   setPluginInstall,
@@ -260,12 +261,22 @@ export function resetPluginInstall(key: string) {
   setPluginInstall(key, undefined);
 }
 
-/** The key a panel should move to, once: the next call answers nothing. */
+/**
+ * The key a panel should move to, once: the next call answers nothing. A check that handed over to its plugin keeps
+ * only the hand-over, with nothing of its own to show, so reopening its address (a copied link) goes to the plugin's
+ * panel again rather than to a frozen "Installing…".
+ */
 export function takePluginInstallMove(key: string): string | undefined {
   const entry = readPluginInstall(key);
   if (!entry?.movedTo) return undefined;
-  setPluginInstall(key, { ...entry, movedTo: undefined });
-  return entry.movedTo;
+  const target = entry.movedTo;
+  if (pluginIdOfInstallKey(target) !== undefined) {
+    forgetFlow(key);
+    setPluginInstall(key, { state: IDLE, movedTo: target });
+  } else {
+    setPluginInstall(key, { ...entry, movedTo: undefined });
+  }
+  return target;
 }
 
 export interface PluginInstall {

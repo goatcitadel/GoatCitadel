@@ -28,7 +28,12 @@ import {
   type FakeGateway,
 } from "./plugin-install.test-support";
 import { draftPluginInstallKey } from "./plugin-install-store";
-import { __resetPluginInstallsForTests, usePluginInstall, type PluginInstall } from "./use-plugin-install";
+import {
+  __resetPluginInstallsForTests,
+  takePluginInstallMove,
+  usePluginInstall,
+  type PluginInstall,
+} from "./use-plugin-install";
 
 const api = vi.hoisted(() => ({
   inspectCapabilityPlugin: vi.fn(),
@@ -323,6 +328,37 @@ describe("usePluginInstall", () => {
     // This confirmation asked for that step, so it is known without a read.
     expect(shown[PLUGIN_KEY]!.waitingStep).toBe("install_inactive");
     expect(skills.fetchCapabilitySkillInstalls).not.toHaveBeenCalled();
+
+    // Its check keeps only the hand-over: reopening its address goes to the plugin again, never to a frozen install.
+    let moved: string | undefined;
+    await act(async () => {
+      moved = takePluginInstallMove(INSPECTION_ID);
+    });
+    expect(moved).toBe(PLUGIN_KEY);
+    expect(shown[INSPECTION_ID]!.state).toEqual({ phase: "idle" });
+    expect(shown[INSPECTION_ID]!.movedTo).toBe(PLUGIN_KEY);
+  });
+
+  it("says a skill's step that came back didn't go through, claiming no decline", async () => {
+    gateway.skip = false;
+    await render();
+    await inspect();
+    await confirm();
+    approvePlugin(gateway);
+    await act(async () => shown[INSPECTION_ID]!.checkNow());
+    await settle();
+    expect(shown[PLUGIN_KEY]!.state).toMatchObject({ waitingApprovalId: "approval-notes-install" });
+
+    // The step's approval expired or was withdrawn: the skill reads as not installed again.
+    gateway.pieces.notes = "check_passed";
+    delete gateway.pending.notes;
+    await act(async () => shown[PLUGIN_KEY]!.checkNow());
+    await settle();
+
+    expect(shown[PLUGIN_KEY]!.notice).toBe(
+      "Meeting notes wasn't installed: the step didn't go through. Continue to ask again.",
+    );
+    expect(shown[PLUGIN_KEY]!.notice).not.toContain("declined");
   });
 
   it("sends a check or an install again with the same key only when its answer never came", async () => {

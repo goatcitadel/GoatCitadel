@@ -106,11 +106,16 @@ export type CapabilityPluginPieceState =
   | "failed"
   | "unknown";
 
+/** The skill step a piece's pending approval asks for: installing it, switching it on, or removing it in an uninstall. */
+export type CapabilityPluginPendingStep = "install_inactive" | "activate" | "revoke";
+
 /** One installed plugin's piece: what it is, where it is, and a link to its own item, all written by the Gateway. */
 export type CapabilityPluginDetailPiece = CapabilityPluginPieceView & {
   state: CapabilityPluginPieceState;
   /** The approval it waits for, while `waiting_for_approval`. */
   pendingApprovalId?: string;
+  /** Which skill step `pendingApprovalId` asks for, when the Gateway can tell. */
+  pendingStep?: CapabilityPluginPendingStep;
   /** The piece's own item in its tab, when it has one. */
   href?: string;
 };

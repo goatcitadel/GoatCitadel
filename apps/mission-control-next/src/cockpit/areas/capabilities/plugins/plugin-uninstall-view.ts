@@ -4,6 +4,7 @@ import type {
   CapabilityPluginPieceState,
 } from "@goatcitadel/contracts";
 import { joinLabels } from "../skills/discover-view";
+import { stepApprovalWords } from "./plugin-install-view";
 import type { PluginUninstallEntry } from "./plugin-uninstall-store";
 
 // Wording for a plugin's uninstall. What it removes, keeps and asks for is the Gateway's; nothing here decides it.
@@ -49,7 +50,18 @@ export const approveUninstallTitle = (name: string) => `Approve uninstalling ${n
 /** The title of a skill's removal approval, which carries no title of its own. */
 export const approveRemovingTitle = (skill: string) => `Approve removing ${skill}?`;
 
-/** The approval the uninstall waits on now, with its title: a skill's removal first, then the plan's own. */
+/**
+ * The title of a skill step's approval, by the step the Gateway names: only a revoke reads as a removal. An install or
+ * switch-on step left waiting from the plugin's install keeps its own words, and a step not named reads neutrally.
+ */
+export function pieceStepTitle(piece: CapabilityPluginDetailPiece): string {
+  if (piece.pendingStep === "revoke") return approveRemovingTitle(piece.label);
+  const step =
+    piece.pendingStep === "install_inactive" || piece.pendingStep === "activate" ? piece.pendingStep : undefined;
+  return stepApprovalWords(step, piece.label).title;
+}
+
+/** The approval the uninstall waits on now, with its title: a skill's step first, then the plan's own. */
 export function uninstallApproval(
   entry: PluginUninstallEntry | undefined,
   detail: CapabilityPluginDetail | undefined,
@@ -58,13 +70,13 @@ export function uninstallApproval(
   const name = detail?.name ?? "this plugin";
   const piece = detail?.pieces.find((item) => item.pendingApprovalId && !decided.has(item.pendingApprovalId));
   if (detail?.state === "uninstalling" && piece?.pendingApprovalId) {
-    return { approvalId: piece.pendingApprovalId, title: approveRemovingTitle(piece.label) };
+    return { approvalId: piece.pendingApprovalId, title: pieceStepTitle(piece) };
   }
   if (entry?.phase === "following" && entry.approvalId && !decided.has(entry.approvalId)) {
-    const removal = detail?.pieces.find((item) => item.pendingApprovalId === entry.approvalId);
+    const step = detail?.pieces.find((item) => item.pendingApprovalId === entry.approvalId);
     return {
       approvalId: entry.approvalId,
-      title: removal ? approveRemovingTitle(removal.label) : approveUninstallTitle(name),
+      title: step ? pieceStepTitle(step) : approveUninstallTitle(name),
     };
   }
   return undefined;

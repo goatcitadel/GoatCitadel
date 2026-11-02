@@ -336,10 +336,21 @@ describe("Plugin panel", () => {
         plugin.waiting.add(REVOKE_APPROVAL);
         plugin.pieces = [
           { ...CALENDAR, state: "removed", href: undefined },
-          { ...NOTES, state: "waiting_for_approval", pendingApprovalId: REVOKE_APPROVAL, href: undefined },
+          {
+            ...NOTES,
+            state: "waiting_for_approval",
+            pendingApprovalId: REVOKE_APPROVAL,
+            pendingStep: "revoke",
+            href: undefined,
+          },
         ];
       } else {
-        plugin.pieces = plugin.pieces.map((piece) => ({ ...piece, state: "removed", pendingApprovalId: undefined }));
+        plugin.pieces = plugin.pieces.map((piece) => ({
+          ...piece,
+          state: "removed",
+          pendingApprovalId: undefined,
+          pendingStep: undefined,
+        }));
       }
     };
     await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
@@ -348,6 +359,9 @@ describe("Plugin panel", () => {
 
     // The plan's own approval opens in place, titled by GoatCitadel.
     expect(dialog()?.textContent).toContain("Uninstall Meeting tools");
+    // While it waits, Uninstall isn't offered again: a second press would only make a second plan.
+    expect(button("Uninstall", body())).toBeUndefined();
+    expect(button("Finish uninstalling", body())).toBeUndefined();
     await press(button("Approve once", dialog()));
     // Then the skill's removal, which carries no title of its own.
     expect(dialog()?.textContent).toContain("Approve removing Meeting notes?");

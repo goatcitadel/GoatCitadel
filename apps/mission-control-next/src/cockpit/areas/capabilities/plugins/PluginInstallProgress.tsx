@@ -32,11 +32,18 @@ function stopLines(flow: PluginInstall): StopLine[] {
       ...(state.inspectionId ? [{ text: CANT_BE_INSTALLED, failure: false }] : []),
     ];
   }
+  // Being uninstalled isn't a failure: the uninstall below reads out its own progress, so this is a quiet line.
+  if (state.phase === "failed" && isUninstalling(flow)) return [];
   if (state.phase === "failed") return [{ text: state.message, failure: true }];
   return [
     ...(flow.notice ? [{ text: flow.notice, failure: !flow.declined }] : []),
     ...(flow.unreadable ? [{ text: CANT_CHECK, failure: false }] : []),
   ];
+}
+
+/** The install handed over to an uninstall: its plugin reads as being uninstalled. */
+function isUninstalling(flow: PluginInstall): boolean {
+  return flow.state.phase === "failed" && flow.state.detail?.state === "uninstalling";
 }
 
 /**
@@ -120,6 +127,7 @@ export function PluginInstallProgress({
           ))}
         </div>
       ) : null}
+      {state.phase === "failed" && isUninstalling(flow) ? <p className="text-fg">{state.message}</p> : null}
       {done ? <p>{NEW_CHATS_NOTE}</p> : null}
       <ProgressAction
         flow={flow}
