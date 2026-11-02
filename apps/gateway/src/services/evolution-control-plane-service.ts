@@ -544,7 +544,10 @@ export class EvolutionControlPlaneService {
     const current = await this.get(actor, planId);
     requireRevision(current, expectedRevision);
     this.refuseRetired(current);
-    throw new ConflictError({ message: "Only a monitoring capability pack can refresh its owner evidence." });
+    throw new ConflictError({
+      message:
+        "Only capability pack plans could refresh their evidence, and capability packs were replaced by plugins.",
+    });
   }
 
   /** Durable approval signal delivery; llama.cpp approval resumes its exact reviewed plan. */

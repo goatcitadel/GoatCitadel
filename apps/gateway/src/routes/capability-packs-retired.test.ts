@@ -81,4 +81,26 @@ describe("retired capability pack routes", { timeout: 300_000 }, () => {
     const packRoutes = app!.routeAccessManifest.filter((entry) => entry.url.startsWith("/api/v1/capability-packs"));
     expect(packRoutes).toEqual([]);
   });
+
+  it("answers retired for a new capability pack plan", async () => {
+    const created = await app!.inject({
+      method: "POST",
+      url: "/api/v1/change-plans",
+      headers: { "idempotency-key": "retired-packs-create-1" },
+      payload: {
+        workspaceId: "default",
+        request: {
+          kind: "capability_pack",
+          packId: "browser-qa",
+          manifestHash: "a".repeat(64),
+          assetIds: ["playwright"],
+        },
+      },
+    });
+    expect(created.statusCode, created.body).toBe(409);
+    expect(created.json()).toMatchObject({
+      code: "CAPABILITY_PACKS_RETIRED",
+      error: "Capability packs were replaced by plugins.",
+    });
+  });
 });

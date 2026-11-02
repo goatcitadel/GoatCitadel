@@ -64,19 +64,20 @@ export class RetiredCapabilityPackChangePlanAdapter implements EvolutionControlP
   }
 
   /**
-   * Startup recovery leaves a monitoring plan as it is. A plan stopped in any other live step can't stay there (no
-   * step goes back to itself), so it settles as needing the operator, with the retired words.
+   * Startup recovery settles a still-live pack plan once, as needing the operator, with the retired words: nothing can
+   * finish it, and a plan left monitoring would stay active and gain a revision on every start. It keeps its evidence
+   * and stays readable.
    */
   public async reconcile(
     _context: EvolutionControlPlaneAdapterContext,
     plan: ChangePlanRecord,
   ): Promise<EvolutionControlPlaneReconcileOutcome> {
-    const kept = { evidenceRefs: plan.evidenceRefs, rollbackRefs: plan.rollbackRefs, effectObserved: false };
-    if (plan.status === "monitoring") return { ...kept, status: "monitoring", result: plan.result };
     return {
-      ...kept,
       status: "manual_required",
+      evidenceRefs: plan.evidenceRefs,
+      rollbackRefs: plan.rollbackRefs,
       result: { summary: RETIRED_MESSAGE, failureCode: "capability_packs_retired" },
+      effectObserved: false,
     };
   }
 }

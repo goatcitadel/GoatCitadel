@@ -16,8 +16,8 @@ import {
   RetiredCapabilityPackChangePlanAdapter,
 } from "./retired-capability-pack-change-plan-adapter.js";
 
-// Capability packs were replaced by plugins. A plan an older Gateway made still lists and reads, and startup still
-// recovers it, but nothing acts on it any more.
+// Capability packs were replaced by plugins. A plan an older Gateway made still lists and reads, and startup settles a
+// still-live one once, but nothing acts on it any more.
 
 const RETIRED = {
   code: "CAPABILITY_PACKS_RETIRED",
@@ -138,18 +138,49 @@ describe("retired capability pack plans", () => {
     const listed = await h.current.list(actor);
     expect(listed.map((plan) => plan.planId).sort()).toEqual([waiting.planId, monitoring.planId].sort());
 
-    // Startup recovery leaves a monitoring plan as it is: the same status, evidence and result.
-    await h.current.reconcileActive();
-    const recovered = await h.current.get(actor, monitoring.planId);
-    expect(recovered).toMatchObject({
-      status: "monitoring",
+    await expect(h.current.get(actor, waiting.planId)).resolves.toMatchObject({ status: "awaiting_confirmation" });
+  });
+
+  it("settles an old monitoring plan once, and leaves it readable", async () => {
+    const h = fixture();
+    const monitoring = await h.oldPlan("monitoring");
+
+    await expect(h.current.reconcileActive()).resolves.toHaveLength(1);
+    const settled = await h.current.get(actor, monitoring.planId);
+    expect(settled).toMatchObject({
+      status: "manual_required",
       kind: "capability_pack",
       adapter: { adapterId: "capability-pack-execution", version: 1 },
       evidenceRefs: monitoring.evidenceRefs,
       rollbackRefs: monitoring.rollbackRefs,
-      result: monitoring.result,
+      result: { summary: RETIRED.message, failureCode: "capability_packs_retired" },
     });
-    await expect(h.current.get(actor, waiting.planId)).resolves.toMatchObject({ status: "awaiting_confirmation" });
+
+    // It is no longer active, so the next start doesn't touch it again.
+    await expect(h.current.reconcileActive()).resolves.toEqual([]);
+    await expect(h.current.get(actor, monitoring.planId)).resolves.toEqual(settled);
+  });
+
+  it("settles an old plan stopped while applying", async () => {
+    const h = fixture();
+    const waiting = await h.oldPlan();
+    // An older Gateway stopped after it started applying: the step it writes before calling the adapter.
+    const applying = await h.repository.transition(waiting.planId, {
+      expectedRevision: waiting.revision,
+      status: "applying",
+      actionNonce: waiting.requiredAction!.actionNonce,
+      requiredAction: null,
+      eventType: "apply_started",
+      actorId: actor.actorId,
+    });
+    expect(applying.status).toBe("applying");
+
+    await expect(h.current.reconcileActive()).resolves.toHaveLength(1);
+    await expect(h.current.get(actor, waiting.planId)).resolves.toMatchObject({
+      status: "manual_required",
+      evidenceRefs: applying.evidenceRefs,
+      result: { summary: RETIRED.message, failureCode: "capability_packs_retired" },
+    });
   });
 
   it("lets startup expire an old waiting plan", async () => {
@@ -181,6 +212,14 @@ describe("retired capability pack plans", () => {
         values: {},
       }),
     );
+    await expectRetired(
+      h.current.resumeOwnerInput(actor, waiting.planId, waiting.revision, nonce, {
+        actionId: waiting.requiredAction!.actionId,
+        actionKind: "secure_input",
+        ownerId: "secret_owner",
+        ownerResourceId: "pack-secret",
+      }),
+    );
     await expectRetired(h.current.cancel(actor, waiting.planId, waiting.revision, nonce));
     await expectRetired(h.current.requestRollback(actor, completed.planId, completed.revision));
     await expectRetired(h.current.verifyMonitoringPlan(actor, monitoring.planId, monitoring.revision));
@@ -201,12 +240,12 @@ describe("retired capability pack plans", () => {
     await expectRetired(adapter.reviewArtifacts());
     await expectRetired(adapter.resumeOwnerInput());
     await expect(adapter.discard()).resolves.toBeUndefined();
-    await expect(adapter.reconcile(context, monitoring)).resolves.toMatchObject({
-      status: "monitoring",
+    await expect(adapter.reconcile(context, monitoring)).resolves.toEqual({
+      status: "manual_required",
       effectObserved: false,
       evidenceRefs: monitoring.evidenceRefs,
       rollbackRefs: monitoring.rollbackRefs,
-      result: monitoring.result,
+      result: { summary: RETIRED.message, failureCode: "capability_packs_retired" },
     });
   });
 
