@@ -491,7 +491,8 @@ describe("PluginSnapshotStore.sweep", () => {
     const third = await store.importDirectory(makeFolder({ "a.txt": "three" }));
     fs.mkdirSync(path.join(storeRoot, "not-a-snapshot"));
 
-    const { removed } = await store.sweep(new Set([first.treeSha256]), { olderThanMs: 0 });
+    // A fresh folder's mtime can land a fraction after Date.now(), so sweep with a "now" past it.
+    const { removed } = await store.sweep(new Set([first.treeSha256]), { olderThanMs: 0, now: Date.now() + 60_000 });
 
     expect(removed.sort()).toEqual([second.treeSha256, third.treeSha256].sort());
     expect(store.resolve(first.treeSha256)).toBe(first.dir);
