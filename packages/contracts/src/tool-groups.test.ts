@@ -31,7 +31,7 @@ describe("tool group map contract", () => {
         seen.set(toolName, group.id);
       }
     }
-    expect(seen.size).toBe(105);
+    expect(seen.size).toBe(106);
   });
 
   it("keeps mcp.invoke and the session tools in Core", () => {

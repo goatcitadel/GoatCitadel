@@ -204,6 +204,8 @@ export interface RuntimeSettings {
     claudeCliToolBridgeEnabled?: boolean;
     claudeCliWarmContinuationEnabled?: boolean;
     /** Gateway-owned governed Change Plan authority. */
+    /** Browser errands in GoatCitadel's own Chrome window on this PC (off by default). */
+    browserErrandsEnabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
     /** The operator's own Settings saves and Capabilities installs apply without a separate approval (opt-in; ignored under remote_hardened). */
     settingsApprovalSkipEnabled?: boolean;

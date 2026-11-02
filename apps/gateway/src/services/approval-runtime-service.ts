@@ -100,6 +100,10 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     return approvalLifecycleService.rejectPendingChatTurnApprovals(this.host, sessionId, turnId, actorId);
   }
 
+  public withdrawApproval(approvalId: string, actorId: string): Promise<void> {
+    return approvalLifecycleService.withdrawApproval(this.host, approvalId, actorId);
+  }
+
   public async listToolGrants(scope?: ToolGrantScope, scopeRef?: string, limit = 200): Promise<ToolGrantRecord[]> {
     return approvalLifecycleService.listToolGrants(this.host, scope, scopeRef, limit);
   }

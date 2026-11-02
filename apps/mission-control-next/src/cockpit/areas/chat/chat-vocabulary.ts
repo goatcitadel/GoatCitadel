@@ -178,6 +178,7 @@ export function presentAttachmentType(file: { fileName: string; mimeType?: strin
 const actionKinds: Record<string, string> = {
   "code_mode.run": "Run code (Code Mode)",
   "code_mode.request": "Run code",
+  "browser.errand.action": "Browser errand step",
   "remote_worker.native_runtime": "Run on a remote worker",
   change_plan_effect: "Apply a change plan",
   "tool.invoke": "Use a tool",

@@ -45,6 +45,12 @@ export const CHANGE_REQUEST_TOOL_NAME = "change.request";
  */
 export const CODE_MODE_REQUEST_TOOL_NAME = "code_mode.request";
 
+/**
+ * Model-callable browser errand: the Gateway drives GoatCitadel's own visible Chrome window by looking and clicking.
+ * Risky steps inside the errand ask through Gateway approvals; the call itself does not.
+ */
+export const BROWSER_ERRAND_TOOL_NAME = "browser.errand";
+
 /** tests.run, lint.run and build.run only ever run a package script; they accept no command. */
 const RESTRICTED_PACKAGE_SCRIPT_ARG_SCHEMA = {
   type: "object",
@@ -1735,6 +1741,26 @@ const BUILTIN_TOOLS: ToolDefinition[] = [
         fullPage: { type: "boolean" },
       },
       required: ["url", "steps"],
+    },
+  },
+  {
+    name: BROWSER_ERRAND_TOOL_NAME,
+    category: "browser",
+    riskLevel: "caution",
+    requiresApproval: false,
+    readOnly: false,
+    codeModeAllowed: false,
+    description:
+      "Do an errand in GoatCitadel's own visible browser window by looking at the screen and clicking, like a person. Use for tasks on websites that need signing in or clicking through pages. Asks the user before spending money, sending, deleting, or changing account settings.",
+    pack: "core",
+    recommendedContexts: ["chat"],
+    argSchema: {
+      type: "object",
+      properties: {
+        goal: { type: "string", minLength: 1, description: "The errand, in plain words." },
+      },
+      required: ["goal"],
+      additionalProperties: false,
     },
   },
   {

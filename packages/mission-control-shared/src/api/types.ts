@@ -648,6 +648,8 @@ export interface RuntimeSettingsResponse {
     claudeCliToolBridgeEnabled?: boolean;
     /** Lets a bridged Claude Code CLI tool step park its process and resume it (on by default). false => each step spawns a fresh process. */
     claudeCliWarmContinuationEnabled?: boolean;
+    /** Browser errands in GoatCitadel's own Chrome window on this PC (off by default). */
+    browserErrandsEnabled?: boolean;
     evolutionControlPlaneV1Enabled?: boolean;
     settingsApprovalSkipEnabled?: boolean;
     improvementLocalObservationV1Enabled?: boolean;

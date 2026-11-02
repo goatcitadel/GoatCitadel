@@ -14,6 +14,7 @@ export type SettingsApprovalOwner =
   | "claude-cli-warm-continuation"
   | "chat-thinking-stream"
   | "settings-approval-skip"
+  | "browser-errands"
   | "firecrawl"
   | "search-engine-order"
   | "public-web-address";
@@ -140,7 +141,8 @@ export function settingsApprovalOwnerBinding(
     owner === "claude-cli-tool-bridge" ||
     owner === "claude-cli-warm-continuation" ||
     owner === "chat-thinking-stream" ||
-    owner === "settings-approval-skip"
+    owner === "settings-approval-skip" ||
+    owner === "browser-errands"
   ) {
     // A registered rollout gate: the plan names this one flag, never another.
     const flag =
@@ -150,7 +152,9 @@ export function settingsApprovalOwnerBinding(
           ? "claudeCliWarmContinuationEnabled"
           : owner === "chat-thinking-stream"
             ? "chatThinkingStreamV1Enabled"
-            : "settingsApprovalSkipEnabled";
+            : owner === "browser-errands"
+              ? "browserErrandsEnabled"
+              : "settingsApprovalSkipEnabled";
     expectedWorkspace = "default";
     matches =
       plan.kind === "runtime_configuration" &&
