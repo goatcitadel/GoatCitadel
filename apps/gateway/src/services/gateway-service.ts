@@ -2478,6 +2478,7 @@ export class GatewayService {
       subscribeRealtime: (listener) => this.realtimeEventService.subscribeRealtime(listener),
       readDiscordPairings: () => this.readDiscordPairings(),
       sendChannelMessage: (input) => this.commsSend(input, OWN_DELIVERY),
+      clearChannelMessageButtons: (input) => this.buildIntegrationChannelService().clearMessageButtons(input),
     });
     this.steerService = new ChatSteerService();
     this.chatCompactionBreakerActionService = createChatCompactionBreakerActionServiceForGateway({

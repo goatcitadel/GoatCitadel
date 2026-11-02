@@ -12,6 +12,7 @@ import {
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { ChannelSecretCustodyService } from "./channel-secret-custody-service.js";
 import {
+  IntegrationChannelService,
   collectConnectionSecretRefs,
   createIntegrationConnection,
   deleteIntegrationConnection,
@@ -90,6 +91,7 @@ function createDeps(): IntegrationChannelPort {
     writeDiscordPairings: vi.fn(),
     discordRuntimeService: {
       reconnectConnection: vi.fn(async () => undefined),
+      clearMessageComponents: vi.fn(async () => undefined),
       sendTyping: vi.fn(async () => ({
         channelKey: "discord",
         connectionId: "connection-1",
@@ -823,5 +825,67 @@ describe("integration-channel-service removing a channel", () => {
       cyclic.self = cyclic;
       expect(collectConnectionSecretRefs(id, cyclic)).toEqual([own]);
     });
+  });
+});
+
+describe("integration-channel-service removing a message's buttons", () => {
+  async function connected(key: "telegram" | "discord" | "slack") {
+    const deps = createDeps();
+    const connection = await createIntegrationConnection(deps, {
+      catalogId: `channel.${key}`,
+      kind: "channel",
+      key,
+      label: key,
+      config: {},
+    });
+    return { deps, service: new IntegrationChannelService(deps), connectionId: connection.connectionId };
+  }
+
+  it("clears a Telegram message's keyboard with the connection's own bot token", async () => {
+    const { deps, service, connectionId } = await connected("telegram");
+    vi.mocked(deps.resolveConnectionSecret).mockReturnValue("123:bot-token");
+    vi.mocked(deps.fetchWithDiagnosticsTimeout).mockResolvedValue(
+      new Response(JSON.stringify({ ok: true, result: true })),
+    );
+
+    await service.clearMessageButtons({ connectionId, target: "4242", messageId: "77" });
+
+    expect(deps.fetchWithDiagnosticsTimeout).toHaveBeenCalledWith(
+      "https://api.telegram.org/bot123:bot-token/editMessageReplyMarkup",
+      expect.objectContaining({ method: "POST" }),
+    );
+  });
+
+  it("refuses a Telegram connection with no token, or a Telegram host the allowlist blocks", async () => {
+    const { deps, service, connectionId } = await connected("telegram");
+    await expect(service.clearMessageButtons({ connectionId, target: "4242", messageId: "77" })).rejects.toThrow(
+      "is missing a Telegram bot token.",
+    );
+    vi.mocked(deps.resolveConnectionSecret).mockReturnValue("123:bot-token");
+    vi.mocked(deps.isConnectionUrlAllowlisted).mockReturnValue(false);
+    await expect(service.clearMessageButtons({ connectionId, target: "4242", messageId: "77" })).rejects.toThrow(
+      "Telegram API host is not in the current outbound allowlist.",
+    );
+    expect(deps.fetchWithDiagnosticsTimeout).not.toHaveBeenCalled();
+  });
+
+  it("edits a Discord message's components through the bot runtime", async () => {
+    const { deps, service, connectionId } = await connected("discord");
+
+    await service.clearMessageButtons({ connectionId, target: "channel_1", messageId: "message_1" });
+
+    expect(deps.discordRuntimeService.clearMessageComponents).toHaveBeenCalledWith(
+      connectionId,
+      "channel_1",
+      "message_1",
+    );
+  });
+
+  it("refuses a channel whose messages never carry buttons", async () => {
+    const { service, connectionId } = await connected("slack");
+
+    await expect(service.clearMessageButtons({ connectionId, target: "C1", messageId: "1" })).rejects.toThrow(
+      "slack messages have no buttons to remove.",
+    );
   });
 });

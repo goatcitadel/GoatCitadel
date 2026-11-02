@@ -131,6 +131,43 @@ describe("DiscordRuntimeService approval buttons", () => {
   });
 });
 
+describe("DiscordRuntimeService clearMessageComponents", () => {
+  function serviceWithChannel(channel: unknown, options: { ready?: boolean } = {}) {
+    const service = createHarness().service;
+    const edit = vi.fn(async () => undefined);
+    const resolved = channel === "text" ? { messages: { edit } } : channel;
+    const fetchChannel = vi.fn(async () => resolved);
+    const createDM = vi.fn(async () => ({ messages: { edit } }));
+    (service as unknown as { runtimesByToken: Map<string, unknown> }).runtimesByToken.set("token-1", {
+      connectionIds: new Set([CONNECTION_ID]),
+      ready: options.ready ?? true,
+      client: { channels: { fetch: fetchChannel }, users: { fetch: vi.fn(async () => ({ createDM })) } },
+    });
+    return { service, edit, fetchChannel, createDM };
+  }
+
+  it("removes every component from the message the bot sent", async () => {
+    const { service, edit, fetchChannel } = serviceWithChannel("text");
+
+    await service.clearMessageComponents(CONNECTION_ID, "channel_1", "message_1");
+
+    expect(fetchChannel).toHaveBeenCalledWith("channel_1");
+    expect(edit).toHaveBeenCalledWith("message_1", { components: [] });
+  });
+
+  it("refuses when the bot isn't connected, or the target holds no messages", async () => {
+    await expect(
+      serviceWithChannel("text", { ready: false }).service.clearMessageComponents(CONNECTION_ID, "channel_1", "m"),
+    ).rejects.toThrow("Discord gateway runtime is not ready.");
+    await expect(
+      serviceWithChannel({ type: "voice" }).service.clearMessageComponents(CONNECTION_ID, "channel_1", "m"),
+    ).rejects.toThrow("The Discord target has no messages to edit.");
+    await expect(
+      serviceWithChannel("text").service.clearMessageComponents("other-connection", "channel_1", "m"),
+    ).rejects.toThrow("Discord gateway runtime is not ready.");
+  });
+});
+
 function createHarness(
   options: { pairing?: DiscordPairingRecord; config?: Record<string, unknown>; connectionsRead?: Promise<void> } = {},
 ) {
@@ -161,7 +198,7 @@ function createHarness(
     (
       service as unknown as { handleApprovalButton(runtime: unknown, interaction: unknown): Promise<void> }
     ).handleApprovalButton(runtime, interaction);
-  return { press, listConnections, touchPairing, acceptSlashCommand, awaitSlashCommandResult };
+  return { service, press, listConnections, touchPairing, acceptSlashCommand, awaitSlashCommandResult };
 }
 
 function createButtonInteraction(customId: string, options: { guild?: { channelId: string } } = {}) {

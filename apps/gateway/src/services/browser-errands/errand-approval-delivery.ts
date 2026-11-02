@@ -32,12 +32,16 @@ export interface ErrandApprovalDeliveryRecord {
   connectionId: string;
   target: string;
   deliveryRunId: string;
+  /** Whether the message was sent with Approve / Deny buttons, which come off once the approval is answered. */
+  buttons?: boolean;
 }
 
 /** A queued delivery the running errand keeps, with how to read when its provider send completed. */
 export interface ErrandTrackedDelivery extends ErrandApprovalDeliveryRecord {
   /** When the provider send completed (epoch ms); undefined while it is still queued, or when it failed. */
   sentAt(): Promise<number | undefined>;
+  /** The provider message id of the completed send; undefined while it is queued, or when it failed. */
+  providerMessageId?(): Promise<string | undefined>;
 }
 
 export interface ErrandApprovalDeliveryDeps {
@@ -108,10 +112,11 @@ export async function deliverErrandApproval(
     origin.conversation === "direct"
       ? await readOwnScreenshot(attachmentSessionId, approval, input.screenshotAttachmentId)
       : undefined;
+  // The same readiness the delivery payload uses to attach the Approve / Deny buttons.
+  const buttons = supportsInlineApprovalActions(connector, { toConversation: true });
   const delivery = buildErrandApprovalDelivery(
     { approval, origin, ...(screenshotAttachmentId ? { screenshotAttachmentId } : {}) },
-    // The same readiness the delivery payload uses to attach the Approve / Deny buttons.
-    supportsInlineApprovalActions(connector, { toConversation: true }),
+    buttons,
   );
   const issued = await createApprovalRemoteActionToken(approval.approvalId, {
     connectorId,
@@ -140,6 +145,7 @@ export async function deliverErrandApproval(
     connectionId: origin.connectionId,
     target: origin.target,
     deliveryRunId,
+    buttons,
   });
   return { delivered: true };
 }

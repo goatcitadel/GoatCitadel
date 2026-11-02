@@ -19,6 +19,7 @@ import {
   type ErrandApprovalDeliveryDeps,
   type ErrandTrackedDelivery,
 } from "./errand-approval-delivery.js";
+import { connectorDeliveryProviderMessageId } from "./errand-approval-buttons.js";
 import { createErrandEscalation, type ErrandEscalate } from "./errand-escalation.js";
 import { approvedDiscordActorIds } from "./errand-origin.js";
 import { isErrandOwner } from "./errand-owner.js";
@@ -158,6 +159,7 @@ export function createGatewayErrandEscalation(
       errandService().recordDelivery({
         ...record,
         sentAt: () => connectorDeliverySentAt(durableRuns, record.deliveryRunId),
+        providerMessageId: () => connectorDeliveryProviderMessageId(durableRuns, record.deliveryRunId),
       }),
     attachmentSessionId: async (attachmentId) => (await chatAttachments.get(attachmentId)).sessionId,
     now: () => Date.now(),

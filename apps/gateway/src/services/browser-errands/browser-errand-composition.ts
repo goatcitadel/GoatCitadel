@@ -22,6 +22,7 @@ import {
   type ErrandChannelReplies,
   type ErrandReplyHandlerOptions,
 } from "./errand-channel-replies.js";
+import { createGatewayErrandButtonClearer, type ClearChannelMessageButtons } from "./errand-approval-buttons.js";
 import { createGatewayErrandChannelNotices } from "./errand-channel-notices-gateway.js";
 import { createErrandOriginDeps } from "./errand-origin.js";
 import { createGatewayErrandEscalation, type ErrandEscalationSources } from "./errand-escalation-gateway.js";
@@ -44,6 +45,8 @@ export interface GatewayBrowserErrandInputs {
   readDiscordPairings(): Promise<DiscordPairingRecord[]>;
   /** Sends a channel message as GoatCitadel's own delivery. */
   sendChannelMessage(input: ChannelSendInput & { idempotencyKey?: string }): Promise<unknown>;
+  /** Removes the Approve / Deny buttons from one sent channel message. */
+  clearChannelMessageButtons: ClearChannelMessageButtons;
 }
 
 /** Where the errand browser keeps its own logins, apart from the operator's everyday Chrome. */
@@ -77,6 +80,7 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
         // The answer is fixed copy, sent without the channel's markup parsing.
         send: async (input) => void (await sendChannelMessage({ ...input, plainText: true })),
         notices: createGatewayErrandChannelNotices(inputs),
+        clearButtons: createGatewayErrandButtonClearer(inputs),
       };
     },
     launchBrowser: (signal) =>

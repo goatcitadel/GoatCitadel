@@ -333,6 +333,26 @@ export class DiscordRuntimeService {
     }
   }
 
+  /**
+   * Takes every component (the Approve / Deny buttons) off a message the bot sent, once what it asked was answered.
+   * Throws when the bot isn't connected for this connection, the target holds no messages, or Discord refuses.
+   */
+  public async clearMessageComponents(connectionId: string, target: string, messageId: string): Promise<void> {
+    const runtime = [...this.runtimesByToken.values()].find((entry) => entry.connectionIds.has(connectionId));
+    if (!runtime || !runtime.ready) {
+      throw new Error("Discord gateway runtime is not ready.");
+    }
+    const normalized = normalizeDiscordRuntimeTarget(target);
+    const channel: unknown =
+      normalized.kind === "user"
+        ? await (await runtime.client.users.fetch(normalized.id)).createDM()
+        : await runtime.client.channels.fetch(normalized.id);
+    if (!holdsEditableMessages(channel)) {
+      throw new Error("The Discord target has no messages to edit.");
+    }
+    await channel.messages.edit(messageId, { components: [] });
+  }
+
   public async close(): Promise<void> {
     if (this.closeState === "closed") return;
     if (this.closePromise) return this.closePromise;
@@ -1381,6 +1401,18 @@ function buildDiscordDirectConversation(
 // A server channel (or thread) is a group, titled after the channel when Discord names it.
 function buildDiscordGuildConversation(channelName: string | null | undefined): ChatChannelConversation {
   return buildChannelConversation({ kind: "group", title: channelName ? `#${channelName}` : undefined });
+}
+
+function holdsEditableMessages(
+  channel: unknown,
+): channel is { messages: { edit(messageId: string, options: { components: [] }): Promise<unknown> } } {
+  if (typeof channel !== "object" || channel === null || !("messages" in channel)) {
+    return false;
+  }
+  const messages = (channel as { messages?: unknown }).messages;
+  return (
+    typeof messages === "object" && messages !== null && typeof (messages as { edit?: unknown }).edit === "function"
+  );
 }
 
 function supportsTyping(channel: Channel): channel is Channel & { sendTyping: () => Promise<unknown> } {

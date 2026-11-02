@@ -12,6 +12,7 @@ import {
 import { runErrandLoop, type ErrandLoopDeps, type ErrandOutcome, type ErrandProgress } from "./errand-loop.js";
 import { resolveOwnedErrandOrigin, type ErrandOrigin, type ErrandOriginDeps } from "./errand-origin.js";
 import type { ErrandTrackedDelivery } from "./errand-approval-delivery.js";
+import { warnErrandButtonClearFailure } from "./errand-approval-buttons.js";
 import type { ErrandChannelReplies, PendingErrandDelivery } from "./errand-channel-replies.js";
 import { warnErrandNoticeFailure } from "./errand-channel-notices.js";
 
@@ -122,6 +123,8 @@ interface ActiveErrand {
    * its provider send has completed (`deliveredAt`, read from the delivery and kept once known).
    */
   deliveries: ReadonlyArray<ErrandTrackedDelivery & { deliveredAt?: number }>;
+  /** The deliveries whose buttons were already sent for removal, by delivery run id. */
+  buttonsCleared: Set<string>;
 }
 
 /**
@@ -188,8 +191,19 @@ export class BrowserErrandService {
     if (!errand) {
       return;
     }
-    const { approvalId, connectionId, target, deliveryRunId, sentAt } = record;
-    errand.deliveries = [...errand.deliveries, { approvalId, connectionId, target, deliveryRunId, sentAt }];
+    const { approvalId, connectionId, target, deliveryRunId, sentAt, buttons, providerMessageId } = record;
+    errand.deliveries = [
+      ...errand.deliveries,
+      {
+        approvalId,
+        connectionId,
+        target,
+        deliveryRunId,
+        sentAt,
+        ...(buttons !== undefined ? { buttons } : {}),
+        ...(providerMessageId ? { providerMessageId } : {}),
+      },
+    ];
   }
 
   /**
@@ -307,6 +321,7 @@ export class BrowserErrandService {
       approvalUnrecorded: false,
       stopping: false,
       deliveries: [],
+      buttonsCleared: new Set(),
     };
     // Claimed before any await, so a second call in the same tick is refused.
     this.active = errand;
@@ -453,6 +468,8 @@ export class BrowserErrandService {
           return "stopped";
         } finally {
           this.settleState(errand);
+          // Answered, from whichever surface: the channel messages that asked lose their buttons.
+          this.clearAnsweredButtons(errand);
         }
       },
       afterApprovedAction: async (png) => {
@@ -529,6 +546,8 @@ export class BrowserErrandService {
         ...(finalScreenshotAttachmentId ? { finalScreenshotAttachmentId } : {}),
       };
     } finally {
+      // A delivery recorded after its approval was answered loses its buttons when the errand ends.
+      this.clearAnsweredButtons(errand);
       offClosed();
       offOverlay();
       if (!browser.isClosed()) {
@@ -656,6 +675,22 @@ export class BrowserErrandService {
     } finally {
       cancelNotice?.();
     }
+  }
+
+  /**
+   * Takes the buttons off every channel message this errand has asked with so far, once each; it runs when an approval
+   * is answered, so none of them is still waiting. Best effort, in the background, never failing the errand.
+   */
+  private clearAnsweredButtons(errand: ActiveErrand): void {
+    const clearButtons = this.channelReplies?.clearButtons;
+    const answered = errand.deliveries.filter((item) => !errand.buttonsCleared.has(item.deliveryRunId));
+    if (!clearButtons || answered.length === 0 || this.disposed) {
+      return;
+    }
+    for (const item of answered) {
+      errand.buttonsCleared.add(item.deliveryRunId);
+    }
+    void clearButtons(answered).catch(warnErrandButtonClearFailure);
   }
 
   private resolveHandBack(errand: ActiveErrand, answer: "resumed" | "stopped"): void {
