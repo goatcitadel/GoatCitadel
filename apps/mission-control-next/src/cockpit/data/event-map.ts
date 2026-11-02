@@ -123,7 +123,7 @@ function uniqueKeys(keys: readonly QueryKey[]): readonly QueryKey[] {
 // "Removed with <plugin>", "held by"), which no event of their own refreshes. An install also saves settings (the
 // network and hooks allowlists), and its holds change which tool groups read as off, with no settings event either, so
 // every settings reader refreshes as for a settings save.
-const PLUGIN_PLAN_KEYS: readonly QueryKey[] = uniqueKeys([
+export const PLUGIN_PLAN_KEYS: readonly QueryKey[] = uniqueKeys([
   ...CAPABILITY_PLUGIN_KEYS,
   ...CAPABILITY_SKILL_KEYS,
   ...CAPABILITY_CONNECTOR_KEYS,

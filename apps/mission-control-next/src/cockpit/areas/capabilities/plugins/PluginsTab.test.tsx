@@ -28,6 +28,13 @@ const route = vi.hoisted(() => ({ search: "", navigate: vi.fn() }));
 vi.mock("../../../app/use-cockpit-route", () => ({ useCockpitRoute: () => route }));
 const opener = vi.hoisted(() => ({ install: vi.fn(), resume: vi.fn(), openSource: vi.fn() }));
 vi.mock("./use-plugin-install-panel", () => ({ usePluginInstallPanel: () => opener }));
+// The plugin's own panel opens from View by moving the address, as its hook does (its own test covers the rest).
+vi.mock("./use-plugin-panel", async () => {
+  const { pluginItemHref: itemHref } = await import("./plugin-links");
+  return {
+    usePluginPanel: () => ({ open: (item: { pluginId: string }) => route.navigate(itemHref(item.pluginId)) }),
+  };
+});
 
 const LIST_KEY = pluginListQuery("ws-1").queryKey;
 

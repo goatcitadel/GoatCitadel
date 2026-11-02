@@ -8,7 +8,7 @@ import { SIGN_IN_NEXT, SKIP_ON_NEXT, UNVERIFIED_WARNING, skipOffNext, sourceLine
 export type ShownPlugin = CapabilityPluginInspection | CapabilityPluginDetail;
 
 /** "What it is": the name, version, author (when the manifest names one) and description. */
-export function WhatItIs({ plugin }: { plugin: ShownPlugin }) {
+export function WhatItIs({ plugin }: { plugin: Pick<ShownPlugin, "name" | "version" | "author" | "description"> }) {
   return (
     <Section title="What it is" headingLevel={3}>
       <div className="space-y-1">

@@ -13,6 +13,7 @@ import { WhatHappensNext, WhatItIs, WhereItComesFrom, type ShownPlugin } from ".
 import { PluginInstallProgress } from "./PluginInstallProgress";
 import { PluginPieceList } from "./PluginPieceList";
 import { PluginSourceForm } from "./PluginSourceForm";
+import { PluginUninstall } from "./PluginUninstall";
 import { signingSecretProblem } from "./plugin-install-view";
 import {
   isDraftPluginInstallKey,
@@ -253,6 +254,8 @@ function PluginInstallBody({
         onInstall={secrets.install}
         {...(offerCheckAgain && source ? { onCheckAgain: () => flow.inspect(source) } : {})}
       />
+      {/* A stopped install that left a record can only be cleaned up by uninstalling it, which is offered here. */}
+      {state.phase === "failed" && state.detail ? <PluginUninstall detail={state.detail} /> : null}
       <FlowDetails flow={flow} installKey={installKey} {...(plugin ? { plugin } : {})} />
     </div>
   );

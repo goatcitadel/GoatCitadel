@@ -1,11 +1,14 @@
-import { useRef, type ReactNode } from "react";
+import { Fragment, useRef, type ReactNode } from "react";
 import type { CapabilityToolGroupItem } from "@goatcitadel/contracts";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { cn } from "../../../lib/cn";
 import { Button } from "../../../ui/Button";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { Switch } from "../../../ui/Switch";
 import { inboxApprovalLink } from "../capability-links";
+import { OpenInPluginsLink } from "../plugins/FromPluginLink";
+import { pluginItemHref } from "../plugins/plugin-links";
 import { presentToolGroupState } from "./tool-view";
 import { useToolGroupSwitch, type ToolGroupSwitch } from "./use-tool-group-switch";
 
@@ -13,6 +16,37 @@ const ALWAYS_ON = presentToolGroupState("always_on");
 const ON_NOTE = "Takes effect in new chats.";
 const OFF_NOTE = "The AI can't use these in any chat.";
 const WAITING = "Waiting on you in Inbox";
+
+type Holders = NonNullable<ToolGroupSwitch["heldOffBy"]>;
+
+/** The switch's word for a group plugins keep off: "Off · held by A", "… by A and B", "… by A and 2 more plugins". */
+export function heldOffText(holders: Holders): string {
+  const [first, second] = holders;
+  if (!first) return "Off";
+  if (holders.length === 1) return `Off · held by ${first.name}`;
+  if (holders.length === 2 && second) return `Off · held by ${first.name} and ${second.name}`;
+  return `Off · held by ${first.name} and ${plural(holders.length - 1, "more plugin")}`;
+}
+
+/** Why the switch can't turn the group on: every plugin that keeps it off, each linked to its panel. */
+function HeldOffNote({ holders }: { holders: Holders }) {
+  return (
+    <p>
+      {"Kept off by "}
+      {holders.map((holder, index) => (
+        <Fragment key={holder.pluginId}>
+          {index === 0 ? null : index === holders.length - 1 ? " and " : ", "}
+          <NativeOwnerLink scope={holder.pluginId} href={pluginItemHref(holder.pluginId)}>
+            {holder.name}
+          </NativeOwnerLink>
+        </Fragment>
+      ))}
+      {holders.length === 1
+        ? ". Uninstalling it turns the group back on."
+        : ". Uninstalling all of them turns the group back on."}
+    </p>
+  );
+}
 
 // A group's switch comes in three pieces so a row can lay them out where they fit: the switch itself is small and
 // stays beside the name, while the lines about it are sentences and run the width of the card, where they wrap. All
@@ -67,6 +101,8 @@ export function GroupSwitch({
   describedBy: string;
 }) {
   if (!control) return <StatusBadge status={ALWAYS_ON} />;
+  // A group plugins keep off can't be switched on here; the note under it says which plugins and how to lift it.
+  const held = control.heldOffBy;
   return (
     <Switch
       checked={control.checked}
@@ -74,6 +110,7 @@ export function GroupSwitch({
       label={label}
       pending={control.pending || control.waiting}
       describedBy={describedBy}
+      {...(held ? { disabled: true, offText: heldOffText(held) } : {})}
     />
   );
 }
@@ -130,13 +167,23 @@ export function GroupSwitchNotes({
               </>
             ) : null}
           </p>
+        ) : control.heldOffBy ? (
+          <HeldOffNote holders={control.heldOffBy} />
         ) : (
           <p>{group.state === "off" ? OFF_NOTE : ON_NOTE}</p>
         )}
       </div>
       {control.failure ? (
         <div role={announceFailure ? "alert" : undefined} className="space-y-1 text-status-failed">
-          <p>{control.failure.message}</p>
+          <p>
+            {control.failure.message}
+            {control.failure.pluginId ? (
+              <>
+                {" "}
+                <OpenInPluginsLink pluginId={control.failure.pluginId} />
+              </>
+            ) : null}
+          </p>
           {control.failure.conflict ? (
             <Button size="sm" variant="ghost" onClick={control.reload}>
               Reload

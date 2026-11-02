@@ -1,6 +1,7 @@
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { SECRET_REDACTION_MARKER, type HookRecord } from "@goatcitadel/contracts";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { HooksSettings } from "./HooksSettings";
 import { Dialog } from "../../ui/Dialog";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
@@ -140,4 +141,31 @@ it("keeps observer deletion explicitly dangerous", async () => {
   expect(review).toBeDefined();
   expect(review?.props.children.props.children[0].props.variant).toBe("danger");
   expect(api.deleteWorkspaceHook).not.toHaveBeenCalled();
+});
+
+it("answers a plugin's hook deletion with the plugin's own sentence", async () => {
+  // Hooks carry no plugin mark yet, so Delete stays on a plugin's hook; GoatCitadel refuses it in its own words (D10).
+  api.deleteWorkspaceHook.mockRejectedValue(
+    new ApiRequestError("refused", {
+      kind: "http",
+      method: "DELETE",
+      path: "/api/v1/workspaces/fixture/hooks/hook",
+      status: 409,
+      body: {
+        error: "From Meeting tools. Uninstall it to remove this.",
+        code: "PLUGIN_OWNED",
+        details: { pluginId: "meeting-tools" },
+      },
+    }),
+  );
+  await act(async () => {
+    root = create(<HooksSettings workspaceId="fixture" />);
+  });
+  await act(async () => button("Observer · After a tool call · Enabled").props.onClick());
+  await act(async () => button("Review hook deletion").props.onClick());
+  const review = root.root.findAllByType(Dialog).find((item) => item.props.open && item.props.title.includes("Delete"));
+  await act(async () => review?.props.children.props.children[0].props.onClick());
+
+  expect(api.deleteWorkspaceHook).toHaveBeenCalledTimes(1);
+  expect(text(root.root)).toContain("From Meeting tools. Uninstall it to remove this.");
 });

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState, type SetStateAction } from "react";
 import type { HookRecord, HookRunRecord } from "@goatcitadel/contracts";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
 import { useSessionDraft } from "../../library/session-drafts";
 import { useDraftLeave } from "../../library/DraftLeaveDialog";
 import { useFormDirty } from "../../library/use-form-dirty";
@@ -299,7 +300,8 @@ export function useHooksSettings(workspaceId: string) {
     } catch (error) {
       if (reviewed.current()) {
         cancelReview();
-        setNotice({ tone: "error", message: getErrorMessage(error) });
+        // A plugin's hook: GoatCitadel's own sentence says which plugin, and that uninstalling it removes the hook.
+        setNotice({ tone: "error", message: readPluginOwnedRefusal(error)?.message ?? getErrorMessage(error) });
       }
       return false;
     } finally {

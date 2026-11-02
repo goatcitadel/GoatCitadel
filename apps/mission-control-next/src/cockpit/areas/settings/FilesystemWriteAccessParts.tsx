@@ -1,5 +1,7 @@
+import { Fragment } from "react";
 import type { ToolGroupId } from "@goatcitadel/contracts";
 import { settingsChangeIsConfirmed } from "../../../features/native-routes/settings/use-settings-change";
+import { pluginItemHref } from "../capabilities/plugins/plugin-links";
 import { toolGroupItemHref } from "../capabilities/tools/tool-links";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
@@ -152,18 +154,64 @@ export function ConfiguredFolders({ title, paths }: { title: string; paths: read
   );
 }
 
+/** A plugin that keeps a tool group off, as Settings names it. */
+interface ToolGroupHold {
+  groupId: ToolGroupId;
+  pluginId: string;
+  pluginName: string;
+}
+
+/** The plugins that keep the Files tools off, each linked to its panel, where it is uninstalled. */
+function FilesHeldNote({ holders }: { holders: readonly ToolGroupHold[] }) {
+  return (
+    <p className="mt-2 text-sm text-status-waiting">
+      {"The Files tools are kept off by "}
+      {holders.map((hold, index) => (
+        <Fragment key={hold.pluginId}>
+          {index === 0 ? null : index === holders.length - 1 ? " and " : ", "}
+          <NativeOwnerLink scope={hold.pluginId} href={pluginItemHref(hold.pluginId)}>
+            {hold.pluginName}
+          </NativeOwnerLink>
+        </Fragment>
+      ))}
+      {holders.length === 1
+        ? ". These settings have no effect until it's uninstalled."
+        : ". These settings have no effect until they're all uninstalled."}
+    </p>
+  );
+}
+
 /**
- * One line at the top of the Files tools' access settings when the group is switched off in Capabilities › Tools.
- * Those tool settings still save, but nothing reads them until the group is back on, so the page says so rather than
- * implying the AI can use them. It belongs to the tool list only: write roots and the outside-root mode also govern
- * document, slide and browser outputs, which belong to other groups.
+ * One line at the top of the Files tools' access settings when the group is off. Those tool settings still save, but
+ * nothing reads them until the group is back on, so the page says so rather than implying the AI can use them. A
+ * plugin that keeps the group off is named, with a link to its panel, since the Tools switch can't lift its hold; the
+ * operator's own switch keeps the link to Capabilities › Tools. Without the operator's own list, a group off with no
+ * plugin holding it is the operator's switch. It belongs to the tool list only: write roots and the outside-root mode
+ * also govern document, slide and browser outputs, which belong to other groups.
  */
 export function FilesToolsOffNote({
   switchedOffToolGroups,
+  operatorSwitchedOffToolGroups,
+  pluginToolGroupHolds,
 }: {
   switchedOffToolGroups: readonly ToolGroupId[] | undefined;
+  operatorSwitchedOffToolGroups?: readonly ToolGroupId[];
+  pluginToolGroupHolds?: readonly ToolGroupHold[];
 }) {
   if (!switchedOffToolGroups?.includes("files")) return null;
+  const holders = (pluginToolGroupHolds ?? []).filter((hold) => hold.groupId === "files");
+  const operatorOff = operatorSwitchedOffToolGroups
+    ? operatorSwitchedOffToolGroups.includes("files")
+    : holders.length === 0;
+  return (
+    <>
+      {holders.length > 0 ? <FilesHeldNote holders={holders} /> : null}
+      {operatorOff ? <OperatorSwitchNote /> : null}
+    </>
+  );
+}
+
+function OperatorSwitchNote() {
   return (
     <p className="mt-2 text-sm text-status-waiting">
       The Files tools are switched off in{" "}

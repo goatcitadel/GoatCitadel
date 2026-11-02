@@ -26,6 +26,7 @@ import {
   pluginInstallKey,
   readPluginInstall,
   usePluginInstallEntry,
+  type PluginInstallEntry,
 } from "./plugin-install-store";
 import { resetPluginInstall, shownOf, startPluginInspection } from "./use-plugin-install";
 
@@ -43,6 +44,22 @@ interface PanelTarget {
   title?: string;
   form?: PluginSourceFormKind;
   pluginWorkspaceId?: string;
+}
+
+/**
+ * Whether a plugin's address (`?item=plugin:<id>`) opens its install panel rather than the plugin's own: while this app
+ * session follows its install (one that finished hands over), or while the list reads it as not finished, unless it is
+ * being uninstalled. Every other plugin address belongs to the plugin's panel.
+ */
+export function installPanelHolds(
+  entry: PluginInstallEntry | undefined,
+  row: Pick<CapabilityPluginListItem, "state"> | undefined,
+): boolean {
+  if (row?.state === "uninstalling") return false;
+  const state = entry?.state;
+  if (state?.phase === "failed" && state.detail?.state === "uninstalling") return false;
+  if (state && state.phase !== "done") return true;
+  return row?.state === "install_not_finished";
 }
 
 /**
@@ -70,7 +87,7 @@ function usePanelTarget(search: string, list: CapabilityPluginListResponse | und
   }
   if (!pluginId) return undefined;
   const row = list?.installed.find((item) => item.pluginId === pluginId);
-  if (!pluginEntry && row?.state !== "install_not_finished") return undefined;
+  if (!installPanelHolds(pluginEntry, row)) return undefined;
   return {
     key: pluginInstallKey(pluginId),
     title: shownOf(pluginEntry?.state)?.name || row?.name || UNNAMED_TITLE,

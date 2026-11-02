@@ -261,9 +261,17 @@ describe("Plugins tab install panel", () => {
   });
 
   it("leaves an installed plugin's address to its own panel", async () => {
+    gateway.installed = true;
+    gateway.workspaceId = "ws-plugin";
+    gateway.pieces = { calendar: "added", notes: "added" };
     list = { ...list, installed: [{ ...HALF_DONE, state: "installed" }], builtIn: [] };
     await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
-    expect(body()).toBeNull();
-    expect(api.fetchCapabilityPluginDetail).not.toHaveBeenCalled();
+    // The panel opens, then reads the plugin's detail: one more pass for each.
+    await settle();
+    await settle();
+    // The plugin's own panel, with Uninstall, never the install panel's Continue.
+    expect(inspectorNamed("Meeting tools")).not.toBeNull();
+    expect(button("Uninstall", body())).toBeDefined();
+    expect(button("Continue", body())).toBeUndefined();
   });
 });

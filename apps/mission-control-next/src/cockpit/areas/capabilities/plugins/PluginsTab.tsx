@@ -4,7 +4,6 @@ import type { CapabilityPluginListItem, CapabilityPluginListResponse } from "@go
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { useCockpitRoute } from "../../../app/use-cockpit-route";
 import { pluginListQuery } from "../../../data/capability-plugins-query";
 import { CHECKING_FOR_CHANGES, lastVersionNote, recordView, type RecordView } from "../../../data/record-view";
 import { Button } from "../../../ui/Button";
@@ -14,10 +13,11 @@ import { CapabilitySearch } from "../CapabilitySearch";
 import { CategoryFilter } from "../CategoryFilter";
 import { NoticeLine } from "../NoticeLine";
 import { PluginRow } from "./PluginRow";
-import { pluginItemHref, type PluginSourceFormKind } from "./plugin-links";
+import { PLUGINS_LIST_ID, type PluginSourceFormKind } from "./plugin-links";
 import { filterPlugins, noPluginsDescription, pluginSearchPlaceholder, pluginTrustOptions } from "./plugin-view";
 import { usePluginFilters, type PluginFilterState } from "./use-plugin-filters";
 import { usePluginInstallPanel, type PluginInstallPanelOpener } from "./use-plugin-install-panel";
+import { usePluginPanel } from "./use-plugin-panel";
 
 type PluginListQuery = UseQueryResult<CapabilityPluginListResponse>;
 type PluginListView = RecordView<CapabilityPluginListResponse>;
@@ -30,17 +30,17 @@ type OpenPlugin = (item: CapabilityPluginListItem) => void;
  * whether a plugin is installed, finished or installable, and it never reads another catalog.
  *
  * Install (a built-in plugin), Continue (an install that isn't finished) and the source buttons open the install panel;
- * View moves the address to the plugin's own panel (`?item=plugin:<id>`).
+ * View opens the plugin's own panel (`?item=plugin:<id>`), where it can be uninstalled.
  */
 export function PluginsTab() {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
-  const { navigate } = useCockpitRoute();
   // The list is install-wide, but the route takes a workspace, so the read and its key follow the active one.
   const query = useQuery(pluginListQuery(workspaceId));
   // The loaded list stays while it is read again, and beside a failed recheck.
   const view = recordView(query);
   const filters = usePluginFilters();
   const installPanel = usePluginInstallPanel(view.record);
+  const pluginPanel = usePluginPanel(view.record, installPanel.install);
   const response = view.record;
   if (!response) return <FirstRead query={query} view={view} />;
   return (
@@ -49,7 +49,7 @@ export function PluginsTab() {
       view={view}
       response={response}
       filters={filters}
-      actions={{ ...installPanel, view: (item) => navigate(pluginItemHref(item.pluginId)) }}
+      actions={{ ...installPanel, view: pluginPanel.open }}
     />
   );
 }
@@ -100,7 +100,8 @@ function PluginsList({ query, view, response, filters, actions }: PluginsListPro
     filtersRegion.current?.querySelector("input")?.focus();
   };
   return (
-    <div className="space-y-4">
+    // Focus comes back here once a plugin whose panel was open is uninstalled and its row is gone.
+    <div id={PLUGINS_LIST_ID} tabIndex={-1} className="space-y-4 focus:outline-none">
       <div ref={filtersRegion}>
         <PluginsSearchBar
           all={all}

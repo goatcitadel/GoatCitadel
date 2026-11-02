@@ -76,6 +76,7 @@ import {
   filterPromptPackTestsByResult,
   formatPromptPackExecutionStyle,
   isPromptPackV2UiEnabled,
+  promptPackChangeError,
   summarizePromptPackTestOutcomes,
 } from "./PromptPacksWorkbenchPage.helpers";
 import {
@@ -799,7 +800,7 @@ export function usePromptPacksWorkbenchState(options: UsePromptPacksWorkbenchSta
       setSuccess(`Reset complete: removed ${result.deletedRuns} run(s) and ${result.deletedScores} score(s).`);
       setConfirmResetArmed(false);
     } catch (err) {
-      setError(describeApiError(err).summary);
+      setError(promptPackChangeError(err));
     } finally {
       setResetting(false);
     }

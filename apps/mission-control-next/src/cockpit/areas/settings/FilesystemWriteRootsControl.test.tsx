@@ -20,7 +20,14 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 type Root_ = { path: string; allowDelete: boolean; preset?: "os_temp"; label?: string; addedAt?: string };
 function settingsAt(
   revision: number,
-  overrides: { roots?: Root_[]; deny?: string[]; allow?: string[]; switchedOffToolGroups?: string[] } = {},
+  overrides: {
+    roots?: Root_[];
+    deny?: string[];
+    allow?: string[];
+    switchedOffToolGroups?: string[];
+    operatorSwitchedOffToolGroups?: string[];
+    pluginToolGroupHolds?: Array<{ groupId: string; pluginId: string; pluginName: string }>;
+  } = {},
 ) {
   return {
     revision,
@@ -29,6 +36,10 @@ function settingsAt(
     operatorWriteRoots: overrides.roots ?? [],
     globalToolAccess: { deny: overrides.deny ?? ["fs.delete"], allow: overrides.allow ?? [] },
     ...(overrides.switchedOffToolGroups ? { switchedOffToolGroups: overrides.switchedOffToolGroups } : {}),
+    ...(overrides.operatorSwitchedOffToolGroups
+      ? { operatorSwitchedOffToolGroups: overrides.operatorSwitchedOffToolGroups }
+      : {}),
+    ...(overrides.pluginToolGroupHolds ? { pluginToolGroupHolds: overrides.pluginToolGroupHolds } : {}),
   };
 }
 
@@ -413,6 +424,25 @@ describe("global filesystem tool access", () => {
     expect(toolAccessPanel.contains(container.querySelector("#outside-root-writes-title")!)).toBe(false);
     // The settings stay editable; the note is information, not a lock.
     expect(pathInput().disabled).toBe(false);
+  });
+
+  it("names the plugin that keeps the Files tools off, with a link to it rather than the Tools switch", async () => {
+    api.fetchSettings.mockResolvedValue(
+      settingsAt(4, {
+        switchedOffToolGroups: ["files"],
+        operatorSwitchedOffToolGroups: [],
+        pluginToolGroupHolds: [{ groupId: "files", pluginId: "meeting-tools", pluginName: "Meeting tools" }],
+      }),
+    );
+    await render();
+    expect(text()).toContain(
+      "The Files tools are kept off by Meeting tools. These settings have no effect until it's uninstalled.",
+    );
+    expect(text()).not.toContain("switched off in Capabilities › Tools");
+    const link = container.querySelector<HTMLAnchorElement>('a[href^="/capabilities/plugins"]');
+    expect(link?.textContent).toBe("Meeting tools");
+    expect(link?.getAttribute("href")).toContain("item=plugin%3Ameeting-tools");
+    expect(container.querySelector('a[href^="/capabilities/tools"]')).toBeNull();
   });
 
   it.each([

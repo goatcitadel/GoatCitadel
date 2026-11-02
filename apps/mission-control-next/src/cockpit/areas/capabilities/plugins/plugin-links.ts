@@ -3,6 +3,17 @@ import type { InboxLink } from "../capability-links";
 /** The Plugins tab, without a panel open. */
 export const PLUGINS_HREF = "/capabilities/plugins";
 
+/** The id of the Plugins tab's list, which takes focus when the plugin a panel showed is gone. */
+export const PLUGINS_LIST_ID = "capabilities-plugins-list";
+
+/**
+ * Gives focus back to the plugins list once a panel whose plugin is gone has closed. It waits a turn, so the panel has
+ * closed by then and nothing hands focus to a button that left with the plugin's row.
+ */
+export function focusPluginsList() {
+  globalThis.setTimeout(() => document.getElementById(PLUGINS_LIST_ID)?.focus(), 0);
+}
+
 /** The part of `?item=` that names a plugin: `plugin:<plugin id>`. */
 const ITEM_PREFIX = "plugin:";
 /** The part of `?item=` that names an install panel: `plugin-install:<inspection id>`. It never reads as a plugin's. */

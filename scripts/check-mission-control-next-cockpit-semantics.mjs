@@ -44,7 +44,9 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 // 905: the Capabilities Plugins tab announces the one outcome that replaces its whole page, a first read that failed.
 // 907: a plugin's install panel announces its progress line and why a check, the install or a skill's step stopped
 // (+2). The source form's refusal and a signing secret's rule use Field's own alert.
-export const LIVE_REGION_BUDGET = 907;
+// 909: a plugin's uninstall announces its progress line and why a request was refused or its plan ended (+2, one
+//   place: the plugin panel, or a stopped install's panel, never both).
+export const LIVE_REGION_BUDGET = 909;
 
 const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;

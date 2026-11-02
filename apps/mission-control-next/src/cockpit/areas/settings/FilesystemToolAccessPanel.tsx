@@ -40,7 +40,13 @@ export function FilesystemToolAccessPanel({
         Denied blocks a tool everywhere. Available lets Chat call it in every write root. Not listed leaves the decision
         to permission profiles and agent policy.
       </p>
-      <FilesToolsOffNote switchedOffToolGroups={settings.data?.switchedOffToolGroups} />
+      <FilesToolsOffNote
+        switchedOffToolGroups={settings.data?.switchedOffToolGroups}
+        {...(settings.data?.operatorSwitchedOffToolGroups
+          ? { operatorSwitchedOffToolGroups: settings.data.operatorSwitchedOffToolGroups }
+          : {})}
+        {...(settings.data?.pluginToolGroupHolds ? { pluginToolGroupHolds: settings.data.pluginToolGroupHolds } : {})}
+      />
       {wildcards.length ? (
         <p className="mt-2 text-sm text-status-waiting">
           A wildcard deny rule ({wildcards.join(", ")}) still blocks matching tools. Edit it in the config file; these

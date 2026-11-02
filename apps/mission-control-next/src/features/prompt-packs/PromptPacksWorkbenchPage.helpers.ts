@@ -13,7 +13,17 @@ import {
   type TestResultFilter,
 } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-helpers";
 import type { ScoreDraft } from "@goatcitadel/mission-control-shared/pages/prompt-lab/prompt-lab-types";
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
 import type { AppRoute } from "@next/app/route-model";
+
+/**
+ * Why a change to a pack didn't happen: a plugin's pack keeps what its plugin set, and GoatCitadel's own sentence names
+ * the plugin and says uninstalling it removes the pack. Anything else reads as the plain description of the error.
+ */
+export function promptPackChangeError(error: unknown): string {
+  return readPluginOwnedRefusal(error)?.message ?? describeApiError(error).summary;
+}
 
 export const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
 
