@@ -838,6 +838,18 @@ describe("CapabilityPluginInspectionService", () => {
       });
     });
 
+    it("inspects a skill named like an Object member", async () => {
+      const { inspect } = await harness({
+        manifest: null,
+        files: ccFiles({ "skills/constructor/SKILL.md": CC_SKILL.replace("cc-notes", "constructor") }),
+      });
+
+      const inspection = await inspect();
+
+      const warnings = piece(inspection, "constructor").warnings ?? [];
+      expect(warnings.every((line) => typeof line === "string")).toBe(true);
+    });
+
     it("blocks a Claude Code skill that runs shell commands, with its own line", async () => {
       const { inspect } = await harness({
         manifest: null,

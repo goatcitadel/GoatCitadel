@@ -318,7 +318,9 @@ export class CapabilityPluginInspectionService {
   /** A piece's own check, with a Claude Code plugin's warnings for it. */
   private async checkPiece(piece: PluginPiece, context: InspectionContext): Promise<CapabilityPluginPieceView> {
     const view = await this.checkOwnPiece(piece, context);
-    const warnings = [...(view.warnings ?? []), ...(context.claudeCodeWarnings?.[piece.id] ?? [])];
+    // Own keys only: a piece id like "constructor" must not read an inherited Object member.
+    const own = context.claudeCodeWarnings && Object.hasOwn(context.claudeCodeWarnings, piece.id);
+    const warnings = [...(view.warnings ?? []), ...(own ? context.claudeCodeWarnings![piece.id]! : [])];
     return warnings.length > 0 ? { ...view, warnings } : view;
   }
 
