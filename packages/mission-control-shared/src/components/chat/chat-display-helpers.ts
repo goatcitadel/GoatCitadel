@@ -12,12 +12,16 @@ export type ChatTraceTone = "muted" | "warning" | "critical" | "success";
 
 /**
  * One short line for a turn's answer review, or null when the answer was not reviewed:
- * "Reviewed: no issues", "Reviewed: 2 issues" (", noted in the answer" for strict) or "Review unavailable".
+ * "Reviewing the answer", "Reviewed: no issues", "Reviewed: 2 issues" (", noted in the answer" for strict) or
+ * "Review unavailable".
  */
 export function formatAnswerReviewLabel(trace: Pick<ChatTurnTraceRecord, "reflection"> | undefined): string | null {
   const review = trace?.reflection?.answerReview;
   if (!review) {
     return null;
+  }
+  if (review.outcome === "running") {
+    return "Reviewing the answer";
   }
   if (review.outcome === "unavailable") {
     return "Review unavailable";

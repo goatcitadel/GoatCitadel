@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
+import type { ChatStreamChunkDraft, ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { HEARTBEAT_PERMISSION_PROFILE_ID } from "@goatcitadel/contracts";
 import { ChatSteerService } from "./chat-steer-service.js";
 import { ChatTurnExecutionRegistry } from "./chat-turn-execution-registry.js";
@@ -786,8 +786,12 @@ describe("streamPreparedAgentChatTurn", () => {
       return prepared as never;
     }
 
-    async function drain(host: ReturnType<typeof createHost>, prepared: never) {
-      const chunks = [];
+    async function drain(
+      host: ReturnType<typeof createHost>,
+      prepared: never,
+      onChunk?: (chunk: ChatStreamChunkDraft) => void,
+    ) {
+      const chunks: ChatStreamChunkDraft[] = [];
       for await (const chunk of streamPreparedAgentChatTurn(
         host,
         "session-1",
@@ -796,15 +800,49 @@ describe("streamPreparedAgentChatTurn", () => {
         "chat_thread_turn_appended",
       )) {
         chunks.push(chunk);
+        onChunk?.(chunk);
       }
       return chunks;
     }
 
     it("does not call the reviewer when review is off", async () => {
       const host = answeringHost();
-      await drain(host, preparedWithReview("off"));
+      const chunks = await drain(host, preparedWithReview("off"));
       expect(host.createChatCompletion).not.toHaveBeenCalled();
       expect(host.storage.chatTurnTraces.get("turn-1").reflection?.answerReview).toBeUndefined();
+      expect(
+        chunks.some(
+          (chunk) => chunk.type === "trace_update" && chunk.trace.reflection?.answerReview?.outcome === "running",
+        ),
+      ).toBe(false);
+    });
+
+    it("streams a running review before the reviewer call and replaces it with the saved verdict", async () => {
+      const host = answeringHost();
+      const seenBeforeReview: string[] = [];
+      let chunks: Awaited<ReturnType<typeof drain>> = [];
+      const collected: typeof chunks = [];
+      host.createChatCompletion = vi.fn(async () => {
+        seenBeforeReview.push(
+          ...collected
+            .filter((chunk) => chunk.type === "trace_update")
+            .map((chunk) =>
+              chunk.type === "trace_update" ? (chunk.trace.reflection?.answerReview?.outcome ?? "") : "",
+            ),
+        );
+        return { choices: [{ index: 0, message: { content: '{"verdict":"pass","issues":[]}' } }] };
+      }) as never;
+
+      chunks = await drain(host, preparedWithReview("standard"), (chunk) => collected.push(chunk));
+
+      expect(seenBeforeReview).toContain("running");
+      const reviewUpdates = chunks
+        .filter((chunk) => chunk.type === "trace_update" && chunk.trace.reflection?.answerReview)
+        .map((chunk) => (chunk.type === "trace_update" ? chunk.trace.reflection?.answerReview?.outcome : undefined));
+      expect(reviewUpdates[0]).toBe("running");
+      expect(reviewUpdates.at(-1)).toBe("passed");
+      // The saved trace never keeps the live-only running outcome.
+      expect(host.storage.chatTurnTraces.get("turn-1").reflection?.answerReview?.outcome).toBe("passed");
     });
 
     it("reviews the answer before the assistant message is written and records the verdict", async () => {
