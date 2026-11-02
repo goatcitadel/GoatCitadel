@@ -10,6 +10,7 @@ import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "../services/device-access-helpers.js";
 import {
   buildErrandPhoneApprovalView,
+  type ErrandPhoneApprovalView,
   type ErrandScreenshotReads,
 } from "../services/browser-errands/errand-phone-approval-view.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
@@ -243,7 +244,9 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       }
       // Only the paired phone gets an errand's plain line and spotlight screenshot.
       const errandPhoneView = await buildErrandPhoneApprovalView(approval, errandScreenshotReads(fastify));
-      return reply.send(errandPhoneView ? { ...projected, errandPhoneView } : projected);
+      return reply.send(
+        errandPhoneView ? { ...projected, errandPhoneView: projectErrandPhoneViewText(errandPhoneView) } : projected,
+      );
     } catch (error) {
       return sendRouteError(reply, error, request.log);
     }
@@ -493,6 +496,15 @@ async function refuseUnsignedCompanionDecision(
     return { statusCode: 409, error: "This approval was already answered, so the phone's decision was not used." };
   }
   return undefined;
+}
+
+/**
+ * The phone view's text goes through the same public secret projection as the rest of the response, so its line and
+ * page never show what `preview` redacts. The screenshot is bytes the approval recorded by sha256, not text.
+ */
+function projectErrandPhoneViewText(view: ErrandPhoneApprovalView): ErrandPhoneApprovalView {
+  const text = projectApprovalPublicResponse({ line: view.line, ...(view.page ? { page: view.page } : {}) });
+  return { ...view, line: text.line, ...(text.page ? { page: text.page } : {}) };
 }
 
 /** The errand screenshot reads, through the chat attachments owner; absent attachments mean no screenshot. */

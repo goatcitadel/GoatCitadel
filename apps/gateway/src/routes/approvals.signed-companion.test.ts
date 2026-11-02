@@ -401,7 +401,14 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
   const pngSha256 = createHash("sha256").update(png).digest("hex");
   const approvalId = "5b0f8a2c-1d34-4e56-8a7b-9c0d1e2f3a4b";
 
-  async function readAs(kind: string, headers: Record<string, string>) {
+  async function readAs(
+    kind: string,
+    headers: Record<string, string>,
+    preview: Record<string, unknown> = {
+      summary: "Send the message — Reply to Sam",
+      url: "https://mail.example/inbox",
+    },
+  ) {
     const app = Fastify();
     closers.push(() => app.close());
     const approval = {
@@ -411,8 +418,7 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
       riskLevel: "caution",
       payload: {},
       preview: {
-        summary: "Send the message — Reply to Sam",
-        url: "https://mail.example/inbox",
+        ...preview,
         screenshotAttachmentId: "att-1",
         screenshotSha256: pngSha256,
       },
@@ -451,6 +457,24 @@ describe("the errand view on GET /api/v1/approvals/:approvalId", () => {
       page: "https://mail.example/inbox",
       screenshot: { mimeType: "image/png", sha256: pngSha256, dataBase64: png.toString("base64") },
     });
+  });
+
+  it("redacts credential text and credential URL paths in the phone view, as in the preview", async () => {
+    const secret = "sk-live-abcdefghijklmnopqrstuvwxyz0123456789";
+    const response = await readAs("browser.errand.action", COMPANION_HEADERS, {
+      summary: `Paste the key — Bearer ${secret} into Settings at https://example.com/token/supersecretvalue`,
+      url: "https://example.com/token/supersecretvalue",
+    });
+    expect(response.statusCode).toBe(200);
+    const body = response.json();
+    const view = body.errandPhoneView;
+    expect(JSON.stringify(view.line)).not.toContain(secret);
+    expect(view.line).not.toContain("supersecretvalue");
+    expect(view.line).toMatch(/^GoatCitadel wants to: /u);
+    expect(view.page).not.toContain("supersecretvalue");
+    expect(body.preview.url).not.toContain("supersecretvalue");
+    expect(view.page).toBe(body.preview.url);
+    expect(view.screenshot.dataBase64).toBe(png.toString("base64"));
   });
 
   it("adds no errand view for other approval kinds or for the operator", async () => {
