@@ -1039,6 +1039,9 @@ describe("ChatTranscript", () => {
     await render(true);
     expect(container.textContent).toContain("Reviewing the answer");
     expect(container.textContent).not.toContain("Responding");
+    // The single transcript live region says so once, when the review starts.
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe("Reviewing the answer.");
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
   });
 
   it("keeps per-turn progress notes as plain text beside the single transcript live region", async () => {
