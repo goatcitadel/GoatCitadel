@@ -596,6 +596,7 @@ import {
   createGatewayRouteCompositionPort,
   createIntegrationChannelServiceForGateway,
   createIntegrationDiagnosticsServiceForGateway,
+  createRuntimeConfigurationOwnerChecks,
   createSettingsAuthRuntimeDependenciesForGateway,
   createSettingsRuntimeDependenciesForGateway,
   type GatewayRouteCompositionPort,
@@ -3440,10 +3441,7 @@ export class GatewayService {
           this.llamaCppSetupSelection.resolve(selectionId, workspaceId),
         discardManagedSelection: (selectionId) => this.llamaCppSetupSelection.discard(selectionId),
         refreshLlamaRuntime: () => this.llamaCppRuntime.refresh(),
-        validateSettingsUpdate: async (input) => {
-          const deps = createSettingsRuntimeDependenciesForGateway(this.getRouteCompositionPort());
-          await settingsAuthService.buildSettingsCandidate(deps, input);
-        },
+        ...createRuntimeConfigurationOwnerChecks(() => this.getRouteCompositionPort()),
         hasTemporaryAuthCredential: (planId) =>
           Boolean(this.secretStore.getSecret(runtimeTemporaryAuthAccount(planId))?.trim()),
         consumeTemporaryAuthCredential: (planId) => {

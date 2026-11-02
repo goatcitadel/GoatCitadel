@@ -179,7 +179,7 @@ export function SettingsArea() {
           <>
             <ApprovalModeControl />
             <SettingsApprovalSkipControl />
-            <BrowserErrandsControl />
+            <BrowserErrandsControl workspaceId={activeWorkspaceId || "default"} />
             <FilesystemWriteRootsControl />
             <ToolGrantSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />
             <SafetyCatalogSummary />

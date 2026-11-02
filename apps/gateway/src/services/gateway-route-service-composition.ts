@@ -19,6 +19,7 @@ export {
 } from "./gateway-route-composition-port.js";
 export {
   createChatThreadKnowledgeDependenciesForGateway,
+  createRuntimeConfigurationOwnerChecks,
   createSettingsAuthRuntimeDependenciesForGateway,
   createSettingsRuntimeDependenciesForGateway,
 } from "./gateway-route-composition-shared.js";

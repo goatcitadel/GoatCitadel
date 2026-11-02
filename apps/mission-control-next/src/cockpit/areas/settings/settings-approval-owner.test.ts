@@ -39,6 +39,16 @@ function fixture(owner: SettingsApprovalOwner): ChangePlanRecord {
       },
       target: { ...base.target, resourceId: "public_web_address_configuration" },
     };
+  if (owner === "browser-errand-approvals")
+    return {
+      ...base,
+      origin: { surface: "settings", workspaceId: "default" },
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "browser_errand_approval_conversation", config: { approvalSessionId: "session-own-dm" } },
+      },
+      target: { ...base.target, resourceId: "browser_errand_approval_conversation" },
+    };
   if (owner === "claude-cli-tool-bridge")
     return {
       ...base,
@@ -113,6 +123,7 @@ const owners: SettingsApprovalOwner[] = [
   "claude-cli-warm-continuation",
   "chat-thinking-stream",
   "public-web-address",
+  "browser-errand-approvals",
 ];
 
 describe("native Settings exact approval owner binding", () => {
@@ -176,6 +187,7 @@ describe("native Settings exact approval owner binding", () => {
     "claude-cli-warm-continuation",
     "chat-thinking-stream",
     "public-web-address",
+    "browser-errand-approvals",
   ] as const)("rejects another runtime operation for %s even with the expected target", (owner) => {
     const plan = fixture(owner);
     const foreign: ChangePlanRecord = {

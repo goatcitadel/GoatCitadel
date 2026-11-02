@@ -7,6 +7,7 @@ import type {
   IntegrationConnection,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import type { GatewayRuntimeConfig } from "../../config.js";
 import { buildGatewayConnectorRecords } from "../connector-registry.js";
 import { enqueueMobilePushApprovalRefreshNow } from "../mobile-push-service.js";
 import {
@@ -18,17 +19,32 @@ import {
 import { createErrandEscalation, type ErrandEscalate } from "./errand-escalation.js";
 import { approvedDiscordActorIds } from "./errand-origin.js";
 import { isErrandOwner } from "./errand-owner.js";
+import { readErrandApprovalSessionId as readStoredErrandApprovalSessionId } from "@goatcitadel/contracts";
 
 const INTEGRATION_CONNECTOR_PREFIX = "integration:";
 
 export interface ErrandEscalationSources {
-  /** The Gateway config; `browserErrands.approvalSessionId` names the PC errands' approval conversation. */
-  config: object;
+  /**
+   * The live Gateway config; the governed setting `assistant.browserErrands.approvalSessionId` names the PC errands'
+   * approval conversation. A settings change replaces its values in place, so each escalation reads the current one.
+   */
+  config: Pick<GatewayRuntimeConfig, "assistant">;
   storage: AsyncStorage;
   approvals: Pick<ErrandApprovalDeliveryDeps, "createApprovalRemoteActionToken">;
   /** The Gateway's Discord pairing records, for the owner rule on Discord connections; called on `sources`. */
   readDiscordPairings(): Promise<DiscordPairingRecord[]>;
 }
+
+/** What the operator's own private conversation lookup reads: the stored bindings and the Discord pairings. */
+export type OwnErrandConversationSources = Pick<ErrandEscalationSources, "storage" | "readDiscordPairings">;
+
+/** The operator's own private conversation behind a Chat session, and the name Messaging shows for it. */
+export interface OwnErrandConversation {
+  conversation: ErrandApprovalConversation;
+  title: string;
+}
+
+const OWN_CONVERSATION_TITLE_MAX_LENGTH = 80;
 
 /**
  * The bound conversation when it is the operator's own direct conversation on the connection: a direct conversation
@@ -45,7 +61,14 @@ export function ownDirectConversation(
   const connectionId = binding?.connectionId?.trim();
   const target = binding?.target?.trim();
   const counterpart = binding?.conversation?.kind === "direct" ? binding.conversation.counterpartActorId?.trim() : "";
-  if (!binding || binding.transport !== "integration" || !connectionId || !target || !counterpart) {
+  if (
+    !binding ||
+    binding.transport !== "integration" ||
+    !binding.writable ||
+    !connectionId ||
+    !target ||
+    !counterpart
+  ) {
     return undefined;
   }
   if (connection.connectionId !== connectionId) {
@@ -62,15 +85,55 @@ export function ownDirectConversation(
   return owner ? { connectionId, channelKey, target, conversation: "direct" } : undefined;
 }
 
+/** The conversation picked for PC errand approvals, from the governed setting; anything but a session id means none. */
+export function readErrandApprovalSessionId(config: Pick<GatewayRuntimeConfig, "assistant">): string | undefined {
+  return readStoredErrandApprovalSessionId(config.assistant.browserErrands?.approvalSessionId);
+}
+
 /**
- * The conversation picked for PC errand approvals. Until the governed setting exists it is read from config
- * (`browserErrands.approvalSessionId`); anything but a non-empty string means none.
+ * Finds the operator's own private conversation behind a Chat session: a writable channel binding to a direct
+ * conversation whose other person passes the errand owner rule. The same lookup answers the Settings check when the
+ * conversation is picked and the send when an approval escalates, so the two never disagree.
  */
-export function readErrandApprovalSessionId(config: object): string | undefined {
-  const section: unknown = (config as { browserErrands?: unknown }).browserErrands;
-  const value: unknown =
-    section && typeof section === "object" ? (section as { approvalSessionId?: unknown }).approvalSessionId : undefined;
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+export function createOwnErrandConversationLookup({
+  storage,
+  readDiscordPairings,
+}: OwnErrandConversationSources): (sessionId: string) => Promise<OwnErrandConversation | undefined> {
+  const { chatSessionBindings, chatSessionMeta, integrationConnections, sessions } = storage;
+  return async (sessionId) => {
+    const binding = await chatSessionBindings.get(sessionId);
+    const connectionId = binding?.connectionId?.trim();
+    if (!binding || !connectionId) {
+      return undefined;
+    }
+    const connection = await integrationConnections.get(connectionId);
+    const channelKey =
+      (await sessions.getBySessionId(sessionId).then(
+        (session) => session.channel?.trim(),
+        () => undefined,
+      )) || connection.key;
+    const discordPairings = connection.key === "discord" ? await readDiscordPairings() : [];
+    const conversation = ownDirectConversation(binding, connection, channelKey, discordPairings);
+    if (!conversation) {
+      return undefined;
+    }
+    const meta = await chatSessionMeta.get(sessionId);
+    return { conversation, title: conversationTitle(binding.conversation?.title || meta?.title) };
+  };
+}
+
+/** Messaging's name for a direct conversation, kept to one short line of printable text. */
+function conversationTitle(value: string | undefined): string {
+  const printable = [...(value ?? "")]
+    .map((character) => (character.charCodeAt(0) <= 0x1f || character.charCodeAt(0) === 0x7f ? " " : character))
+    .join("")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!printable) return "Direct message";
+  const characters = [...printable];
+  return characters.length > OWN_CONVERSATION_TITLE_MAX_LENGTH
+    ? `${characters.slice(0, OWN_CONVERSATION_TITLE_MAX_LENGTH - 1).join("")}…`
+    : printable;
 }
 
 /**
@@ -82,13 +145,8 @@ export function createGatewayErrandEscalation(
   errandService: () => { recordDelivery(record: ErrandApprovalDeliveryRecord): void },
 ): ErrandEscalate {
   const { config, storage, approvals } = sources;
-  const {
-    approvals: approvalRecords,
-    chatAttachments,
-    chatSessionBindings,
-    sessions,
-    integrationConnections,
-  } = storage;
+  const { approvals: approvalRecords, chatAttachments, integrationConnections } = storage;
+  const ownConversation = createOwnErrandConversationLookup(sources);
   const delivery: ErrandApprovalDeliveryDeps = {
     requireConnectorRecord: async (connectorId) =>
       integrationConnectorRecord(connectorId, await integrationConnections.get(connectorIdToConnectionId(connectorId))),
@@ -102,21 +160,7 @@ export function createGatewayErrandEscalation(
     readApproval: async (approvalId) => await approvalRecords.get(approvalId),
     deliver: (input) => deliverErrandApproval(delivery, input),
     approvalSessionId: () => readErrandApprovalSessionId(config),
-    conversationFor: async (sessionId): Promise<ErrandApprovalConversation | undefined> => {
-      const binding = await chatSessionBindings.get(sessionId);
-      const connectionId = binding?.connectionId?.trim();
-      if (!binding || !connectionId) {
-        return undefined;
-      }
-      const connection = await integrationConnections.get(connectionId);
-      const channelKey =
-        (await sessions.getBySessionId(sessionId).then(
-          (session) => session.channel?.trim(),
-          () => undefined,
-        )) || connection.key;
-      const discordPairings = connection.key === "discord" ? await sources.readDiscordPairings() : [];
-      return ownDirectConversation(binding, connection, channelKey, discordPairings);
-    },
+    conversationFor: async (sessionId) => (await ownConversation(sessionId))?.conversation,
     pushToPhone: (approvalId) => enqueueMobilePushApprovalRefreshNow(storage, approvalId),
   });
 }

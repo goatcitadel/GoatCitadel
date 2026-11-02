@@ -1,7 +1,9 @@
 import {
   CHANGE_PLAN_RUNTIME_FEATURE_FLAGS,
+  ERRAND_APPROVAL_CONVERSATION_NOT_OWN,
   ValidationError,
   checkPublicWebAddress,
+  readErrandApprovalSessionId,
   type ChangePlanRequest,
 } from "@goatcitadel/contracts";
 
@@ -24,6 +26,8 @@ export interface SettingsChangePlanInput {
   readonly networkAllowlist?: readonly string[];
   /** `null` clears the address. */
   readonly publicWebAddress?: string | null;
+  /** `null` or empty clears the conversation waiting errand approvals go to. */
+  readonly browserErrandApprovalSessionId?: string | null;
   readonly operatorWriteRootChange?: Omit<RuntimeChangeFor<"operator_write_root">, "operation">;
   readonly globalToolAccessChange?: Omit<RuntimeChangeFor<"tool_global_access">, "operation">;
   readonly toolGroupChange?: Omit<RuntimeChangeFor<"tool_group_access">, "operation">;
@@ -125,6 +129,17 @@ export function settingsChangePlanRequest(input: SettingsChangePlanInput): Chang
       return {
         kind: "runtime_configuration",
         change: { operation: "public_web_address_configuration", config: { publicWebAddress: checked.address } },
+      };
+    }
+    case "browserErrandApprovalSessionId": {
+      const picked = input.browserErrandApprovalSessionId;
+      if (picked === undefined) return null;
+      // The plan's owner checks that the conversation is the operator's own; an id it could never store is refused here.
+      const approvalSessionId = picked === null || !picked.trim() ? null : readErrandApprovalSessionId(picked);
+      if (approvalSessionId === undefined) throw new ValidationError({ message: ERRAND_APPROVAL_CONVERSATION_NOT_OWN });
+      return {
+        kind: "runtime_configuration",
+        change: { operation: "browser_errand_approval_conversation", config: { approvalSessionId } },
       };
     }
     case "operatorWriteRootChange":

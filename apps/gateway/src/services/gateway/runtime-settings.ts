@@ -31,6 +31,12 @@ export interface RuntimeSettings {
   workspaceDir: string;
   /** The https address the internet uses to reach this installation. Absent when the operator has not set one. */
   publicWebAddress?: string;
+  /**
+   * Browser errands. `approvalSessionId` is the operator's own private conversation that waiting errand approvals go
+   * to, absent when none is picked. GoatCitadel always reports the section, so a client can tell an empty pick from an
+   * older Gateway that has no such setting.
+   */
+  browserErrands?: { approvalSessionId?: string };
   writeJailRoots: string[];
   readOnlyRoots: string[];
   /** Operator-opened folders outside the write jail, for model-driven filesystem tools only. */

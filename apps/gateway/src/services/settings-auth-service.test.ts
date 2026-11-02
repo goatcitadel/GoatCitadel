@@ -838,6 +838,27 @@ describe("settings-auth-service durable settings", () => {
     expect(host.config.assistant.publicWebAddress).toBe("https://example.com");
   });
 
+  it("stores the errand approval conversation only when it is the operator's own, and clears it to empty", async () => {
+    const isOwnErrandApprovalConversation = vi.fn(async (sessionId: string) => sessionId === "session-own-dm");
+    const host = { ...buildHost(), isOwnErrandApprovalConversation };
+    expect((await getSettings(host)).browserErrands).toEqual({});
+
+    const set = await updateSettings(host, { browserErrandApprovalSessionId: " session-own-dm " });
+    expect(set.browserErrands).toEqual({ approvalSessionId: "session-own-dm" });
+    expect(isOwnErrandApprovalConversation).toHaveBeenCalledWith("session-own-dm");
+
+    const refused = await updateSettings(host, { browserErrandApprovalSessionId: "session-team" }).catch(
+      (caught: unknown) => caught,
+    );
+    expect(refused).toBeInstanceOf(ValidationError);
+    expect((refused as ValidationError).message).toBe("Pick one of your own private conversations.");
+    expect(host.config.assistant.browserErrands).toEqual({ approvalSessionId: "session-own-dm" });
+
+    const cleared = await updateSettings(host, { browserErrandApprovalSessionId: "" });
+    expect(cleared.browserErrands).toEqual({});
+    expect(Object.hasOwn(host.config.assistant, "browserErrands")).toBe(false);
+  });
+
   it.each([
     ["http://example.com", PUBLIC_WEB_ADDRESS_NOT_HTTPS],
     ["example.com", PUBLIC_WEB_ADDRESS_NOT_URL],

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   ApprovalRequest,
   ChatSessionBindingRecord,
@@ -15,6 +15,7 @@ import { ERRAND_APPROVAL_KIND } from "./errand-constants.js";
 import { createErrandEscalation, type ErrandEscalationDeps } from "./errand-escalation.js";
 import {
   createGatewayErrandEscalation,
+  createOwnErrandConversationLookup,
   ownDirectConversation,
   readErrandApprovalSessionId,
 } from "./errand-escalation-gateway.js";
@@ -240,6 +241,17 @@ describe("the picked conversation must be the operator's own direct conversation
     expect(ownDirectConversation(direct, discord, "discord", [])).toBeUndefined();
   });
 
+  it("refuses a binding nothing can be sent through", () => {
+    expect(
+      ownDirectConversation(
+        binding({ kind: "direct", counterpartActorId: "owner-1" }, { writable: false }),
+        connection,
+        "telegram",
+        [],
+      ),
+    ).toBeUndefined();
+  });
+
   it("refuses a binding that is not an integration conversation", () => {
     expect(
       ownDirectConversation(
@@ -253,21 +265,66 @@ describe("the picked conversation must be the operator's own direct conversation
 });
 
 describe("Gateway errand escalation", () => {
-  it("reads the picked conversation from config until the governed setting exists", () => {
-    expect(readErrandApprovalSessionId({ browserErrands: { approvalSessionId: " session-dm " } })).toBe("session-dm");
-    expect(readErrandApprovalSessionId({ browserErrands: { approvalSessionId: "  " } })).toBeUndefined();
-    expect(readErrandApprovalSessionId({ browserErrands: { approvalSessionId: 7 } })).toBeUndefined();
-    expect(readErrandApprovalSessionId({})).toBeUndefined();
+  // The Gateway wiring reads the real clock; the approval fixtures expire a minute after NOW.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
-  function gatewaySetup(options: { status?: string; conversation?: unknown } = {}) {
+  it("reads the picked conversation from the governed setting", () => {
+    const config = (browserErrands: unknown) => ({ assistant: { browserErrands } }) as never;
+    expect(readErrandApprovalSessionId(config({ approvalSessionId: " session-dm " }))).toBe("session-dm");
+    expect(readErrandApprovalSessionId(config({ approvalSessionId: "  " }))).toBeUndefined();
+    expect(readErrandApprovalSessionId(config({ approvalSessionId: 7 }))).toBeUndefined();
+    expect(readErrandApprovalSessionId(config(undefined))).toBeUndefined();
+  });
+
+  it("the settings lookup names the operator's own conversation and refuses a group", async () => {
+    const { storage } = gatewaySetup();
+    const lookup = createOwnErrandConversationLookup({ storage, readDiscordPairings: async () => [] });
+    await expect(lookup("session-dm")).resolves.toEqual({ conversation: PICKED, title: "Owner’s DM" });
+
+    const group = gatewaySetup({ conversation: { kind: "group", title: "Team" } });
+    const groupLookup = createOwnErrandConversationLookup({
+      storage: group.storage,
+      readDiscordPairings: async () => [],
+    });
+    await expect(groupLookup("session-dm")).resolves.toBeUndefined();
+  });
+
+  it("the settings lookup falls back to the session title, then a generic one, on one printable line", async () => {
+    const untitled = gatewaySetup({ conversation: { kind: "direct", counterpartActorId: "owner-1" } });
+    const lookup = createOwnErrandConversationLookup({
+      storage: untitled.storage,
+      readDiscordPairings: async () => [],
+    });
+    await expect(lookup("session-dm")).resolves.toMatchObject({ title: "Direct message" });
+
+    const titled = gatewaySetup({
+      conversation: { kind: "direct", counterpartActorId: "owner-1" },
+      sessionTitle: "Me\n\tagain",
+    });
+    const titledLookup = createOwnErrandConversationLookup({
+      storage: titled.storage,
+      readDiscordPairings: async () => [],
+    });
+    await expect(titledLookup("session-dm")).resolves.toMatchObject({ title: "Me again" });
+  });
+
+  function gatewaySetup(options: { status?: string; conversation?: unknown; sessionTitle?: string } = {}) {
     const enqueueApprovalRefresh = vi.fn(() => [{ deliveryId: "delivery-1" }]);
     const storage = {
       approvals: { get: vi.fn(async () => approval()) },
       chatAttachments: { get: vi.fn(async () => ({ sessionId: "session-errand" })) },
       chatSessionBindings: {
-        get: vi.fn(async () => binding(options.conversation ?? { kind: "direct", counterpartActorId: "owner-1" })),
+        get: vi.fn(async () =>
+          binding(options.conversation ?? { kind: "direct", counterpartActorId: "owner-1", title: "Owner’s DM" }),
+        ),
       },
+      chatSessionMeta: { get: vi.fn(async () => (options.sessionTitle ? { title: options.sessionTitle } : undefined)) },
       sessions: { getBySessionId: vi.fn(async () => ({ channel: "telegram" })) },
       integrationConnections: {
         get: vi.fn(async () => ({
@@ -287,7 +344,7 @@ describe("Gateway errand escalation", () => {
     const readDiscordPairings = vi.fn(async (): Promise<DiscordPairingRecord[]> => []);
     const escalate = createGatewayErrandEscalation(
       {
-        config: { browserErrands: { approvalSessionId: "session-dm" } },
+        config: { assistant: { browserErrands: { approvalSessionId: "session-dm" } } } as never,
         storage,
         approvals: { createApprovalRemoteActionToken },
         readDiscordPairings,
@@ -296,6 +353,7 @@ describe("Gateway errand escalation", () => {
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     return {
+      storage,
       escalate,
       enqueueApprovalRefresh,
       createApprovalRemoteActionToken,

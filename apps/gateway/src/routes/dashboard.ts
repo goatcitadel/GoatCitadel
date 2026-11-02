@@ -132,6 +132,8 @@ export const updateSettingsSchema = z.object({
   networkAllowlist: z.array(z.string().min(1)).optional(),
   // Checked and tidied by `checkPublicWebAddress` (200 characters at most); `null` clears it.
   publicWebAddress: z.string().max(400).nullable().optional(),
+  // A Chat session id; the settings owner checks it is the operator's own private conversation. Empty or `null` clears.
+  browserErrandApprovalSessionId: z.string().max(256).nullable().optional(),
   operatorWriteRootChange: operatorWriteRootChangeSchema.optional(),
   globalToolAccessChange: globalToolAccessChangeSchema.optional(),
   toolGroupChange: toolGroupChangeSchema.optional(),

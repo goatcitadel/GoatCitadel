@@ -433,6 +433,11 @@ export interface RuntimeSettingsResponse {
   workspaceDir: string;
   /** The https address the internet uses to reach this installation. Absent when the operator has not set one. */
   publicWebAddress?: string;
+  /**
+   * Browser errands. `approvalSessionId` is the operator's own private conversation that waiting errand approvals go
+   * to, absent when none is picked. An older GoatCitadel leaves the whole section out.
+   */
+  browserErrands?: { approvalSessionId?: string };
   writeJailRoots: string[];
   readOnlyRoots: string[];
   /** Operator-opened folders outside the write jail, for model-driven filesystem tools only. */

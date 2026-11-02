@@ -37,6 +37,12 @@ import {
   resumeWebSearchCredential,
   type WebSearchCredentialChangeOwner,
 } from "./web-search-credential-change.js";
+import {
+  describeErrandApprovalConversation,
+  matchesErrandApprovalConversation,
+  prepareErrandApprovalConversation,
+  type ErrandApprovalConversationTitle,
+} from "./runtime-errand-approval-conversation-change.js";
 import type { LlamaCppRuntimeStatus } from "@goatcitadel/contracts";
 import type {
   EvolutionControlPlaneAdapter,
@@ -60,6 +66,8 @@ export interface RuntimeConfigurationChangePlanAdapterDependencies {
   readonly discardTemporaryAuthCredential: (planId: string) => void | Promise<void>;
   /** OS-keychain owner for Firecrawl, Brave, and Parallel keys. */
   readonly webSearchCredentials?: WebSearchCredentialChangeOwner;
+  /** The title of the operator's own private conversation behind a session; undefined for any other session. */
+  readonly errandApprovalConversationTitle?: ErrandApprovalConversationTitle;
 }
 
 /** Registered typed runtime operations only; this adapter never accepts raw setting keys. */
@@ -71,8 +79,12 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
   /** Every Web & Search phase delegates to this one keychain owner, read once at construction. */
   private readonly webSearchCredentials: WebSearchCredentialChangeOwner | undefined;
 
+  /** Names a picked errand approval conversation and refuses one that is not the operator's own. */
+  private readonly errandApprovalConversationTitle: ErrandApprovalConversationTitle | undefined;
+
   public constructor(private readonly deps: RuntimeConfigurationChangePlanAdapterDependencies) {
     this.webSearchCredentials = deps.webSearchCredentials;
+    this.errandApprovalConversationTitle = deps.errandApprovalConversationTitle;
   }
 
   public async prepare(context: EvolutionControlPlaneAdapterContext, request: ChangePlanRuntimeConfigurationRequest) {
@@ -81,6 +93,9 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     await this.validateOwnerSelection(request, settings, context.origin.workspaceId);
     if (isWebSearchCredentialChange(request)) {
       return prepareWebSearchCredential(context, request.change, settings, this.webSearchCredentials);
+    }
+    if (request.change.operation === "browser_errand_approval_conversation") {
+      return prepareErrandApprovalConversation(context, request.change, settings, this.errandApprovalConversationTitle);
     }
     if (request.change.operation === "gateway_auth_configuration") {
       const change = request.change;
@@ -165,9 +180,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       const needsCredential = change.mode !== "none" && (change.replaceCredential === true || !configured);
       let credential: string | undefined;
       if (needsCredential) {
-        if (!(await this.deps.hasTemporaryAuthCredential(plan.planId))) {
-          throw new SemanticValidationError("The temporary Gateway credential is unavailable. Enter it again.");
-        }
+        await this.assertTemporaryAuthCredential(plan.planId);
         credential = await this.deps.consumeTemporaryAuthCredential(plan.planId);
       }
       const updated = await updateSettings({
@@ -262,9 +275,7 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
     ) {
       throw new ConflictError({ message: "Gateway auth secure-input receipt does not match this Change Plan." });
     }
-    if (!(await this.deps.hasTemporaryAuthCredential(plan.planId))) {
-      throw new SemanticValidationError("The temporary Gateway credential is unavailable. Enter it again.");
-    }
+    await this.assertTemporaryAuthCredential(plan.planId);
     return {
       status: "awaiting_confirmation",
       evidenceRefs: receipt.evidenceRefs,
@@ -287,6 +298,13 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       this.webSearchCredentials?.discardTemporary(plan.planId);
     }
     discardLlamaSetup(this.deps, plan);
+  }
+
+  /** Apply and the secure-input resume both need the Gateway credential still in temporary custody. */
+  private async assertTemporaryAuthCredential(planId: string): Promise<void> {
+    if (!(await this.deps.hasTemporaryAuthCredential(planId))) {
+      throw new SemanticValidationError("The temporary Gateway credential is unavailable. Enter it again.");
+    }
   }
 
   private async observe(plan: ChangePlanRecord) {
@@ -402,6 +420,9 @@ function settingsPatch(request: ChangePlanRuntimeConfigurationRequest): Omit<Upd
     case "public_web_address_configuration":
       // The settings owner checks and tidies it; `null` clears it.
       return { publicWebAddress: request.change.config.publicWebAddress };
+    case "browser_errand_approval_conversation":
+      // The settings owner checks the conversation again; `null` clears it.
+      return { browserErrandApprovalSessionId: request.change.config.approvalSessionId };
     case "web_search_configuration":
       return { web: { search: { engineOrder: [...request.change.config.engineOrder] } } };
     case "web_search_credential":
@@ -463,6 +484,8 @@ function matches(request: ChangePlanRuntimeConfigurationRequest, settings: Runti
       return matchesPartial(settings.web.firecrawl, request.change.config);
     case "public_web_address_configuration":
       return matchesPublicWebAddress(request.change.config.publicWebAddress, settings);
+    case "browser_errand_approval_conversation":
+      return matchesErrandApprovalConversation(request.change, settings);
     case "web_search_configuration":
       return sameList(settings.web.search.engineOrder, request.change.config.engineOrder);
     case "web_search_credential":
@@ -604,6 +627,8 @@ function describe(request: ChangePlanRuntimeConfigurationRequest, settings: Runt
       );
     case "public_web_address_configuration":
       return describePublicWebAddress(request.change.config.publicWebAddress);
+    case "browser_errand_approval_conversation":
+      return describeErrandApprovalConversation(request.change.config.approvalSessionId);
     case "web_search_configuration": {
       const [defaultEngine, ...backups] = request.change.config.engineOrder;
       const order = request.change.config.engineOrder.join(" → ");

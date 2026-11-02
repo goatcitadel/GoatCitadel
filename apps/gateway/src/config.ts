@@ -19,6 +19,7 @@ import {
   checkPublicWebAddress,
   clampInt,
   normalizeWebSearchEngineOrder,
+  readErrandApprovalSessionId,
   type WebSearchNativeEngine,
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
@@ -51,6 +52,11 @@ export interface AssistantConfig {
    * the operator has not set one. Channels build the web addresses their setup pages show from it.
    */
   publicWebAddress?: string;
+  /**
+   * Browser errands. `approvalSessionId` is the Chat session id of the operator's own private channel conversation
+   * that waiting errand approvals go to; absent when none is picked. Checked when it is picked, and again at each send.
+   */
+  browserErrands?: { approvalSessionId?: string };
   auth: AuthConfig;
   approvalExplainer: ApprovalExplainerConfig;
   shellExplainerPolicy: ShellExplainerPolicyConfig;
@@ -1206,6 +1212,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
   const webInput = (input.web ?? {}) as Partial<WebRuntimeConfig>;
   const firecrawlInput = (webInput.firecrawl ?? {}) as Partial<FirecrawlRuntimeConfig>;
   const publicWebAddress = readSavedPublicWebAddress(input.publicWebAddress);
+  const errandApprovalSessionId = readErrandApprovalSessionId(input.browserErrands?.approvalSessionId);
   const sqlite: SqliteTuningConfig = {
     cacheSizeKb: clampInt(sqliteInput.cacheSizeKb, 65_536, 4_096, 262_144),
     tempStoreMemory: sqliteInput.tempStoreMemory ?? true,
@@ -1258,6 +1265,7 @@ function withAssistantDefaults(input: Partial<AssistantConfig>): AssistantConfig
     workspaceDir: input.workspaceDir ?? "./workspace",
     worktreesDir: input.worktreesDir ?? "./.worktrees",
     ...(publicWebAddress ? { publicWebAddress } : {}),
+    ...(errandApprovalSessionId ? { browserErrands: { approvalSessionId: errandApprovalSessionId } } : {}),
     auth: {
       mode: authInput.mode ?? "none",
       allowLoopbackBypass: authInput.allowLoopbackBypass ?? false,
