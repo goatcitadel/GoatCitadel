@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { HOOK_TRIGGER_VALUES } from "./hooks.js";
 import {
+  CLAUDE_CODE_PLUGIN_MANIFEST_PATH,
   PLUGIN_LIMITS,
   PLUGIN_MANIFEST_FILENAME,
   PLUGIN_MANIFEST_REFUSAL_CODES,
@@ -767,6 +768,13 @@ describe("parsePluginManifest", () => {
 });
 
 describe("PLUGIN_MANIFEST_REFUSAL_CODES", () => {
+  it("lists the three new refusal codes once each", () => {
+    for (const code of ["CLAUDE_CODE_MANIFEST_INVALID", "NOTHING_TO_INSTALL", "TOO_MANY_PIECES"] as const) {
+      expect(PLUGIN_MANIFEST_REFUSAL_CODES.filter((listed) => listed === code)).toEqual([code]);
+    }
+    expect(CLAUDE_CODE_PLUGIN_MANIFEST_PATH).toBe(".claude-plugin/plugin.json");
+  });
+
   it("names every code a refused manifest can carry, once each, for the cockpit to word", () => {
     // Typed as the refusal code, so a list entry that isn't one fails to compile here.
     const codes: readonly PluginManifestRefusalCode[] = PLUGIN_MANIFEST_REFUSAL_CODES;
@@ -783,6 +791,9 @@ describe("PLUGIN_MANIFEST_REFUSAL_CODES", () => {
         "HOOK_MUST_ONLY_OBSERVE",
         "HOOK_CODE_NOT_ALLOWED",
         "PRESET_MUST_TIGHTEN",
+        "CLAUDE_CODE_MANIFEST_INVALID",
+        "NOTHING_TO_INSTALL",
+        "TOO_MANY_PIECES",
       ].sort(),
     );
     expect(new Set(codes).size).toBe(codes.length);
