@@ -1,6 +1,11 @@
-import type { FastifyPluginAsync } from "fastify";
+import type { FastifyInstance, FastifyPluginAsync, FastifyRequest } from "fastify";
 import { z } from "zod";
+import {
+  COMPANION_APPROVE_REFUSED_MESSAGE,
+  companionSignedDecisionSchema,
+} from "../services/companion-signed-approval.js";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
+import { DEVICE_ACCESS_APPROVAL_KIND } from "../services/device-access-helpers.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
 import { projectPublicSecretValue } from "../services/public-secret-projection.js";
 import { sendRouteError } from "./_error-handler.js";
@@ -40,6 +45,8 @@ const resolveSchema = z.object({
   decision: z.enum(["approve", "reject", "edit"]),
   editedPayload: z.record(z.string(), z.unknown()).optional(),
   resolutionNote: z.string().optional(),
+  /** A paired phone's signature over the decision; read only for a companion approve or edit. */
+  signedDecision: companionSignedDecisionSchema.optional(),
 });
 
 // SECURITY (codex finding #21): The bulk-resolve route previously accepted
@@ -258,16 +265,21 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!parsed.success) {
       return reply.code(400).send({ error: parsed.error.flatten() });
     }
-    if (request.authActorSource === "companion" && parsed.data.decision !== "reject") {
-      return reply.code(403).send({
-        error:
-          "Paired companions may review or reject approvals, but approval and edit require operator authority until a server-verifiable device approval key is registered.",
-      });
-    }
+    const { signedDecision, ...decisionInput } = parsed.data;
 
     try {
+      if (request.authActorSource === "companion" && decisionInput.decision !== "reject") {
+        const refusal = await refuseUnsignedCompanionDecision(fastify, request, approvalId, {
+          decision: decisionInput.decision,
+          editedPayload: decisionInput.editedPayload,
+          signedDecision,
+        });
+        if (refusal) {
+          return reply.code(refusal.statusCode).send({ error: refusal.error });
+        }
+      }
       const result = await approvals.resolveApproval(approvalId, {
-        ...parsed.data,
+        ...decisionInput,
         resolvedBy: resolveActorId(request),
       });
       await markMutationCommitted(request);
@@ -418,6 +430,47 @@ function readHeader(value: unknown): string | undefined {
     return undefined;
   }
   return trimmed.length > 0 ? trimmed : undefined;
+}
+
+/**
+ * A paired phone may approve or edit only with a verified signature from its grant's active approval key, and only
+ * while the signed approvals switch is on (off in shipped builds). The approval must still be waiting: its one-time
+ * move out of `pending` is what makes each signed decision, and so each nonce, usable once. Device access requests
+ * stay operator-only. Returns the refusal, or undefined to go on.
+ */
+async function refuseUnsignedCompanionDecision(
+  fastify: FastifyInstance,
+  request: FastifyRequest,
+  approvalId: string,
+  input: {
+    decision: "approve" | "edit";
+    editedPayload?: Record<string, unknown>;
+    signedDecision?: z.infer<typeof companionSignedDecisionSchema>;
+  },
+): Promise<{ statusCode: number; error: string } | undefined> {
+  const mobile = fastify.services.mobile as Partial<typeof fastify.services.mobile> | undefined;
+  if (!mobile?.admitSignedCompanionDecision) {
+    return { statusCode: 403, error: COMPANION_APPROVE_REFUSED_MESSAGE };
+  }
+  const admission = await mobile.admitSignedCompanionDecision({
+    approvalId,
+    decision: input.decision,
+    editedPayload: input.editedPayload,
+    grantId: request.authGrantId,
+    companionSessionId: request.authCompanionSessionId,
+    signedDecision: input.signedDecision,
+  });
+  if (!admission.admitted) {
+    return { statusCode: admission.statusCode, error: admission.error };
+  }
+  const approval = await fastify.services.approvals.getApproval(approvalId);
+  if (approval.kind === DEVICE_ACCESS_APPROVAL_KIND) {
+    return { statusCode: 403, error: "Device access requests are approved at the PC." };
+  }
+  if (approval.status !== "pending") {
+    return { statusCode: 409, error: "This approval was already answered, so the phone's decision was not used." };
+  }
+  return undefined;
 }
 
 interface ApprovalActorRequest {

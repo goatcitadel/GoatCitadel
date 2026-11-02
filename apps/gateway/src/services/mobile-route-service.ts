@@ -17,6 +17,11 @@ import type {
   MobileRevocationRequest,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
+import {
+  admitCompanionSignedDecision,
+  type CompanionSignedDecisionAdmission,
+  type CompanionSignedDecisionAdmissionInput,
+} from "./companion-signed-approval.js";
 import type { MobileApprovalKeyService } from "./mobile-approval-key-service.js";
 import type { MobilePushService } from "./mobile-push-service.js";
 import { createRouteService, type RoutePort, type RouteService } from "./route-service-factory.js";
@@ -31,6 +36,7 @@ export const mobileRouteMethods = [
   "listMobileApprovalKeys",
   "revokeMobileApprovalKeys",
   "revokeMobileCapabilities",
+  "admitSignedCompanionDecision",
 ] as const;
 
 export type MobileRouteMethod = (typeof mobileRouteMethods)[number];
@@ -50,9 +56,16 @@ export interface MobileRouteActorContext {
 export interface MobileRoutePortDependencies {
   storage: Pick<Storage, "audit">;
   mobilePush: Pick<MobilePushService, "register" | "revokeGrant">;
-  mobileApprovalKeys: Pick<MobileApprovalKeyService, "register" | "revokeGrant" | "listKeys">;
+  mobileApprovalKeys: Pick<
+    MobileApprovalKeyService,
+    "register" | "revokeGrant" | "listKeys" | "verifyApprovalDecisionSignature"
+  >;
+  /** The signed phone approvals switch: `COMPANION_SIGNED_APPROVALS_ENABLED` (off) in shipped builds; absent is off. */
+  signedCompanionApprovalsEnabled?: boolean;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<unknown>;
 }
+
+type AuditRecordPredicate = Parameters<MobileRoutePortDependencies["storage"]["audit"]["listRecent"]>[2];
 
 interface MobileAuditListInput {
   limit?: number;
@@ -96,12 +109,14 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
       lastCapabilitySetByDevice.delete(oldest);
     }
   };
+  const listRecentApprovalAudit = (limit: number, predicate: AuditRecordPredicate) =>
+    deps.storage.audit.listRecent("approvals", limit, predicate);
+  const revokeApprovalKeys = (grantId: string | undefined) => deps.mobileApprovalKeys.revokeGrant(grantId);
   return {
     listMobileCapabilities: async (input?: { limit?: number }): Promise<MobileCapabilityListResponse> => {
       const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
       // Heartbeats repeat, so the newest window carries every active capability; this avoids parsing the whole stream.
-      const records = await deps.storage.audit.listRecent(
-        "approvals",
+      const records = await listRecentApprovalAudit(
         MAX_CAPABILITY_HEARTBEAT_WINDOW,
         (record) => record.eventType === "mobile.capability_heartbeat",
       );
@@ -125,8 +140,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
     },
     listMobileAudit: async (input?: MobileAuditListInput): Promise<MobileAuditListResponse> => {
       const limit = Math.max(1, Math.min(input?.limit ?? 100, MAX_AUDIT_ITEMS));
-      const matching = await deps.storage.audit.listRecent(
-        "approvals",
+      const matching = await listRecentApprovalAudit(
         limit,
         (record) =>
           typeof record.eventType === "string" &&
@@ -268,7 +282,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
       input: MobileApprovalKeyRevokeRequest,
       actor: MobileRouteActorContext,
     ): Promise<{ revoked: number; keyIds: string[] }> => {
-      const revoked = await deps.mobileApprovalKeys.revokeGrant(input.grantId);
+      const revoked = await revokeApprovalKeys(input.grantId);
       const keyIds = revoked.map((record) => record.keyId);
       await deps.storage.audit.append("approvals", {
         eventType: "mobile.approval_key_revocation",
@@ -290,9 +304,7 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
     revokeMobileCapabilities: async (input: MobileRevocationRequest, actor: MobileRouteActorContext) => {
       const revokedAt = normalizeIsoTimestamp(input.revokedAt) ?? new Date().toISOString();
       const revokedPushRegistrations = shouldRevokePush(input) ? await deps.mobilePush.revokeGrant(actor.grantId) : [];
-      const revokedApprovalKeys = shouldRevokeApprovalKey(input)
-        ? await deps.mobileApprovalKeys.revokeGrant(actor.grantId)
-        : [];
+      const revokedApprovalKeys = shouldRevokeApprovalKey(input) ? await revokeApprovalKeys(actor.grantId) : [];
       await deps.storage.audit.append("approvals", {
         eventType: "mobile.revocation",
         revokedAt,
@@ -313,6 +325,14 @@ export function createMobileRoutePort(deps: MobileRoutePortDependencies): Mobile
       });
       return { revokedAt, capabilityIds: input.capabilityIds ?? [] };
     },
+    /** A paired phone's approve or edit: admitted only with a verified signature, and only while the switch is on. */
+    admitSignedCompanionDecision: async (
+      input: CompanionSignedDecisionAdmissionInput,
+    ): Promise<CompanionSignedDecisionAdmission> =>
+      await admitCompanionSignedDecision(input, {
+        enabled: deps.signedCompanionApprovalsEnabled === true,
+        verify: (request) => deps.mobileApprovalKeys.verifyApprovalDecisionSignature(request),
+      }),
   };
 }
 
