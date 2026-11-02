@@ -10,6 +10,7 @@ import type {
   OperatorActionReversibility,
   WardEffect,
 } from "@goatcitadel/contracts";
+import { redactSecretText } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { EvidenceEnvelopeService } from "./evidence-envelope-service.js";
@@ -1362,16 +1363,35 @@ async function markExternalSideEffectRunCompleted(
   checkedAt: string,
 ): Promise<void> {
   if (claim.sideEffectRunId) {
+    const providerMessageId = readExternalSideEffectProviderMessageId(value);
     await store?.markCompleted(
       claim.sideEffectRunId,
       {
         replayOutcome: claim.replayOutcome,
-        responsePayload: summarizeExternalSideEffectPayload(value),
-        externalReferenceId: readExternalReferenceId(value),
+        responsePayload: {
+          ...summarizeExternalSideEffectPayload(value),
+          ...(providerMessageId ? { providerMessageId } : {}),
+        },
+        externalReferenceId: providerMessageId ? `providerMessageId:${providerMessageId}` : readExternalReferenceId(value),
       },
       checkedAt,
     );
   }
+}
+
+/** The minimal connector receipt identity retained for recovery; never truncate an identity into a different one. */
+export function readExternalSideEffectProviderMessageId(value: unknown): string | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const nested = record.result;
+  const source =
+    typeof record.dispatchKind === "string" && typeof record.capabilityId === "string" &&
+    nested && typeof nested === "object" && !Array.isArray(nested)
+      ? nested as Record<string, unknown>
+      : record;
+  const candidate = typeof source.providerMessageId === "string" ? source.providerMessageId.trim() : "";
+  if (!/^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/u.test(candidate)) return undefined;
+  return redactSecretText(candidate).redactionCount === 0 ? candidate : undefined;
 }
 
 async function markExternalSideEffectRunFailed(

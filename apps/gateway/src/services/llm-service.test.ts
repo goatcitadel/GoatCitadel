@@ -14,6 +14,11 @@ import { LlmService, resolveOutputCapPayloadField } from "./llm-service.js";
 import { projectLlmConfigPublicValue } from "./provider-settings-public-projection.js";
 import { SecretStoreService, SecretStoreUnavailableError } from "./secret-store-service.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 describe("LlmService", () => {
   it("applies thinking effort when replacing the complete routing snapshot", () => {
     const service = new LlmService(

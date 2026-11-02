@@ -65,7 +65,9 @@ describe("clearErrandApprovalButtons", () => {
   it("never throws: a failed edit or read logs one bounded warning and the rest still go", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const clear = vi.fn(async (message: { messageId: string }) => {
-      if (message.messageId === "msg-1") throw new Error(`telegram said no ${"x".repeat(2_000)}`);
+      if (message.messageId === "msg-1") {
+        throw new Error(`opaque-credential-edit Authorization: Bearer secret-edit-token ${"x".repeat(2_000)}`);
+      }
     });
 
     await expect(
@@ -90,6 +92,9 @@ describe("clearErrandApprovalButtons", () => {
     expect(message).toBe("[goatcitadel] errand approval buttons could not be removed");
     expect(context.approvalId).toBe("approval-1");
     expect(context.detail.length).toBeLessThanOrEqual(500);
+    const warnings = JSON.stringify(warn.mock.calls);
+    expect(warnings).not.toContain("secret-edit-token");
+    expect(warnings).not.toContain("opaque-credential-edit");
   });
 
   it("is built from the Gateway's channel button clearing", async () => {

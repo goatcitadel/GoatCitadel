@@ -152,6 +152,7 @@ vi.mock("./chat-workbench-service.js", () => ({
 }));
 
 import { NotFoundError } from "@goatcitadel/contracts";
+import * as chatAttachmentService from "./chat-attachment-service.js";
 import * as chatSessionService from "./chat-session-service.js";
 import { composeChatRouteDependencies } from "./gateway-route-composition-chat.js";
 import {
@@ -1182,6 +1183,17 @@ describe("composeChatRouteDependencies", () => {
     expect(gateway.isFeatureEnabled).toHaveBeenCalledWith("chatSessionStatusV1Enabled");
     expect(forkChatSessionFromTurn).toHaveBeenCalledTimes(1);
     expect(gateway.chatSessionStatusService.getOperatorStatus).toHaveBeenCalledWith("session-1");
+  });
+
+  it("forwards bounded session attachment reads to the existing attachment owner", async () => {
+    const deps = composeChatRouteDependencies(createGateway() as never);
+    const options = { sessionId: "session-1", maxBytes: 4 * 1024 * 1024 };
+    await deps.chatAttachments.readChatAttachmentContent("att-spotlight", options);
+    expect(chatAttachmentService.readChatAttachmentContent).toHaveBeenCalledWith(
+      expect.any(Object),
+      "att-spotlight",
+      options,
+    );
   });
 
   it("preserves history owner receivers and checks scope before projection for every history route", async () => {

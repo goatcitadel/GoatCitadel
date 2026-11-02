@@ -1,6 +1,7 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ErrandTrackedDelivery } from "./errand-approval-delivery.js";
 import { buildService, errandRequest, fakeGate, outcome } from "./browser-errand-test-fixtures.js";
+import type { ConnectorDeliveryWorkflowPayload } from "@goatcitadel/contracts";
 
 const tracked = (deliveryRunId: string): ErrandTrackedDelivery => ({
   approvalId: "approval-1",
@@ -13,10 +14,11 @@ const tracked = (deliveryRunId: string): ErrandTrackedDelivery => ({
 });
 
 /** An errand that waits in one approval until `answer` (or Stop) decides it. */
-function waitingErrand() {
+function waitingErrand(approvalStatus: "pending" | "approved" = "approved") {
   const clearButtons = vi.fn(async (_deliveries: readonly ErrandTrackedDelivery[]) => undefined);
   let answer: (decision: "approved" | "stopped") => void = () => undefined;
   const gate = fakeGate(vi.fn, {
+    pendingApprovalId: () => "approval-1",
     request: vi.fn(
       () =>
         new Promise<"approved" | "stopped">((resolve) => {
@@ -25,6 +27,12 @@ function waitingErrand() {
     ),
   });
   const { service } = buildService(vi.fn, {
+    gate: {
+      approvals: {} as never,
+      storage: { approvals: { get: async () => ({ kind: "browser.errand.action", status: approvalStatus }) } } as never,
+      attachments: { upload: async () => ({ attachmentId: "att-1", sha256: "sha" }) },
+      realtime: { subscribeRealtime: () => () => undefined },
+    },
     channelReplies: () => ({
       handle: async () => ({ handled: false }) as never,
       send: async () => undefined,
@@ -39,7 +47,112 @@ function waitingErrand() {
   return { service, gate, clearButtons, answer: (decision: "approved" | "stopped") => answer(decision) };
 }
 
+const completedPayload: ConnectorDeliveryWorkflowPayload = {
+  version: "connector.delivery.v1",
+  connectorId: "integration:conn-1",
+  connectorType: "integration_connection",
+  action: "channel.send",
+  correlationId: "approval-1",
+  payload: {
+    target: "chat-1",
+    interactiveActionTemplate: { buttons: [{ label: "Approve", decision: "a" }] },
+  },
+};
+
+afterEach(() => vi.restoreAllMocks());
+
 describe("BrowserErrandService approval buttons", () => {
+  it("removes buttons when the provider send completes after the answered errand ended", async () => {
+    const { service, gate, clearButtons, answer } = waitingErrand();
+    let messageId: string | undefined = undefined;
+    const running = service.run(errandRequest());
+    await vi.waitFor(() => expect(gate.request).toHaveBeenCalled());
+    service.recordDelivery({ ...tracked("run-1"), providerMessageId: async () => messageId });
+
+    answer("approved");
+    await running;
+    expect(clearButtons).not.toHaveBeenCalled();
+
+    messageId = "msg-late";
+    await service.onConnectorDeliveryCompleted("run-1", completedPayload, { result: { providerMessageId: messageId } });
+
+    expect(clearButtons).toHaveBeenCalledTimes(1);
+    const [deliveries] = clearButtons.mock.calls[0]!;
+    await expect(deliveries[0]!.providerMessageId?.()).resolves.toBe("msg-late");
+    await service.dispose();
+  });
+
+  it("leaves a completed message actionable while its active approval is pending", async () => {
+    const { service, gate, clearButtons, answer } = waitingErrand("pending");
+    const running = service.run(errandRequest());
+    await vi.waitFor(() => expect(gate.request).toHaveBeenCalled());
+    service.recordDelivery(tracked("run-1"));
+
+    await service.onConnectorDeliveryCompleted("run-1", completedPayload, {
+      result: { providerMessageId: "msg-run-1" },
+    });
+    expect(clearButtons).not.toHaveBeenCalled();
+
+    answer("approved");
+    await running;
+    await vi.waitFor(() => expect(clearButtons).toHaveBeenCalledTimes(1));
+    await service.dispose();
+  });
+
+  it("clears an ended errand's late message even if withdrawal left its approval pending", async () => {
+    const { service, gate, clearButtons } = waitingErrand("pending");
+    const running = service.run(errandRequest());
+    await vi.waitFor(() => expect(gate.request).toHaveBeenCalled());
+    service.recordDelivery({ ...tracked("run-1"), providerMessageId: async () => undefined });
+    await service.stop(service.getStatus("tool-run-1")!.errandId, "operator");
+    await running;
+
+    await service.onConnectorDeliveryCompleted("run-1", completedPayload, {
+      result: { providerMessageId: "msg-late" },
+    });
+
+    expect(clearButtons).toHaveBeenCalledTimes(1);
+    expect(gate.withdrawPending).toHaveBeenCalledTimes(1);
+    await service.dispose();
+  });
+
+  it("claims one clear when completion and the approval answer race", async () => {
+    const { service, gate, clearButtons, answer } = waitingErrand();
+    const running = service.run(errandRequest());
+    await vi.waitFor(() => expect(gate.request).toHaveBeenCalled());
+    service.recordDelivery(tracked("run-1"));
+
+    const completed = service.onConnectorDeliveryCompleted("run-1", completedPayload, {
+      result: { providerMessageId: "msg-run-1" },
+    });
+    answer("approved");
+    await Promise.all([completed, running]);
+
+    await vi.waitFor(() => expect(clearButtons).toHaveBeenCalledTimes(1));
+    await service.dispose();
+  });
+
+  it("contains a failed late clear in one bounded redacted warning without touching the approval", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { service, clearButtons } = waitingErrand();
+    clearButtons.mockRejectedValue(
+      new Error(`opaque-credential-late-clear Authorization: Bearer secret-late-clear-token ${"x".repeat(2_000)}`),
+    );
+
+    await expect(
+      service.onConnectorDeliveryCompleted("run-1", completedPayload, { result: { providerMessageId: "msg-late" } }),
+    ).resolves.toBeUndefined();
+
+    expect(clearButtons).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [message, context] = warn.mock.calls[0] as [string, { detail: string }];
+    expect(message).toBe("[goatcitadel] errand approval buttons could not be removed");
+    expect(context.detail).not.toContain("secret-late-clear-token");
+    expect(context.detail).not.toContain("opaque-credential-late-clear");
+    expect(context.detail.length).toBeLessThanOrEqual(500);
+    await service.dispose();
+  });
+
   it("takes the buttons off the channel messages once the approval is answered", async () => {
     const { service, gate, clearButtons, answer } = waitingErrand();
     const running = service.run(errandRequest());

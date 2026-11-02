@@ -5,6 +5,11 @@ import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import { LlmService } from "./llm-service.js";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const config: LlmConfigFile = {
   activeProviderId: "moonshot",
   activeModel: "kimi-k2",

@@ -10,6 +10,7 @@ import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "../services/device-access-helpers.js";
 import {
   buildErrandPhoneApprovalView,
+  readErrandPhoneScreenshot,
   type ErrandPhoneApprovalView,
   type ErrandScreenshotReads,
 } from "../services/browser-errands/errand-phone-approval-view.js";
@@ -243,7 +244,11 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
         return reply.send(projected);
       }
       // Only the paired phone gets an errand's plain line and spotlight screenshot.
-      const errandPhoneView = await buildErrandPhoneApprovalView(approval, errandScreenshotReads(fastify));
+      const errandPhoneView = await buildErrandPhoneApprovalView(
+        approval,
+        errandScreenshotReads(fastify),
+        query.data.workspaceId,
+      );
       return reply.send(
         errandPhoneView ? { ...projected, errandPhoneView: projectErrandPhoneViewText(errandPhoneView) } : projected,
       );
@@ -251,6 +256,39 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
       return sendRouteError(reply, error, request.log);
     }
   });
+
+  fastify.get(
+    "/api/v1/approvals/:approvalId/errand-screenshot",
+    withRouteAccess(fastify, "companion", {
+      // Run before access/validation/read failures, so sensitive images and their failures cannot be cached.
+      onRequest: async (_request, reply) => {
+        reply.header("Cache-Control", "private, no-store");
+      },
+      onSend: async (_request, reply, payload) => {
+        reply.header("Cache-Control", "private, no-store");
+        return payload;
+      },
+      // Bound repeated multi-MiB image responses more tightly than ordinary metadata reads.
+      config: { rateLimit: { max: 60 } },
+    }),
+    async (request, reply) => {
+      const params = approvalParamsSchema.safeParse(request.params);
+      const query = getQuerySchema.safeParse(request.query ?? {});
+      if (!params.success || !query.success) {
+        return reply.code(400).send({ error: "Invalid approval read." });
+      }
+      try {
+        const approval = await approvals.getApproval(params.data.approvalId, query.data.workspaceId);
+        const bytes = await readErrandPhoneScreenshot(approval, errandScreenshotReads(fastify));
+        if (bytes) {
+          return reply.type("image/png").header("X-Content-Type-Options", "nosniff").send(bytes);
+        }
+      } catch {
+        // Intentionally use the same 404 below for missing/scope/read failures; owner errors may contain secrets.
+      }
+      return reply.code(404).send({ error: "Errand screenshot unavailable." });
+    },
+  );
 
   fastify.post("/api/v1/approvals/bulk-resolve", operatorOnly, async (request, reply) => {
     const parsed = bulkResolveSchema.safeParse(request.body ?? {});
@@ -509,15 +547,15 @@ function projectErrandPhoneViewText(view: ErrandPhoneApprovalView): ErrandPhoneA
 
 /** The errand screenshot reads, through the chat attachments owner; absent attachments mean no screenshot. */
 function errandScreenshotReads(fastify: FastifyInstance): ErrandScreenshotReads {
-  const attachments = fastify.services.chatAttachments as Partial<typeof fastify.services.chatAttachments> | undefined;
+  const attachments = fastify.services.chatAttachments;
   return {
     record: async (attachmentId) => {
       if (!attachments?.getChatAttachment) throw new Error("Chat attachments are unavailable.");
       return await attachments.getChatAttachment(attachmentId);
     },
-    bytes: async (attachmentId) => {
+    bytes: async (attachmentId, options) => {
       if (!attachments?.readChatAttachmentContent) throw new Error("Chat attachments are unavailable.");
-      return (await attachments.readChatAttachmentContent(attachmentId)).bytes;
+      return (await attachments.readChatAttachmentContent(attachmentId, options)).bytes;
     },
   };
 }

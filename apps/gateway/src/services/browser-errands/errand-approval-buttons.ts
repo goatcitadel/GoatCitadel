@@ -24,7 +24,7 @@ export interface ErrandButtonSources {
   clearChannelMessageButtons: ClearChannelMessageButtons;
 }
 
-const WARNING_DETAIL_MAX_CHARS = 500;
+const BUTTON_CLEAR_FAILURE_DETAIL = "Channel button cleanup failed.";
 
 /**
  * Each delivery that was sent with buttons and whose provider message id is known has them removed. A delivery sent
@@ -83,7 +83,8 @@ export async function connectorDeliveryProviderMessageId(
 export function warnErrandButtonClearFailure(error: unknown): void {
   // eslint-disable-next-line no-console -- bounded diagnostic; the approval itself is already decided.
   console.warn("[goatcitadel] errand approval buttons could not be removed", {
-    detail: (error instanceof Error ? error.message : String(error)).slice(0, WARNING_DETAIL_MAX_CHARS),
+    detail: BUTTON_CLEAR_FAILURE_DETAIL,
+    errorType: error instanceof TypeError ? "TypeError" : error instanceof Error ? "Error" : "unknown",
   });
 }
 
@@ -92,6 +93,7 @@ function warnButtonsKept(delivery: ErrandTrackedDelivery, error: unknown): void 
   console.warn("[goatcitadel] errand approval buttons could not be removed", {
     approvalId: delivery.approvalId,
     connectionId: delivery.connectionId,
-    detail: (error instanceof Error ? error.message : String(error)).slice(0, WARNING_DETAIL_MAX_CHARS),
+    detail: BUTTON_CLEAR_FAILURE_DETAIL,
+    errorType: error instanceof TypeError ? "TypeError" : error instanceof Error ? "Error" : "unknown",
   });
 }

@@ -53,6 +53,11 @@ import { startRemoteWorkerNativeTlsListener } from "./remote-worker-native-tls-l
 import { RemoteWorkerProtectedAdmissionEvidenceVerifier } from "./remote-worker-protected-admission-evidence-verifier.js";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const cleanupRoots: string[] = [];
 const openHandles: Array<{ close(): Promise<void> }> = [];
 const openDatabases: DatabaseClient[] = [];

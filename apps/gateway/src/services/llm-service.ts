@@ -21,6 +21,7 @@ import {
   readBoundedResponseText,
 } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { fetchLlmProvider } from "./llm-provider-fetch.js";
 import { attachRetryAfter } from "./provider-retry-after.js";
 import { streamSsePayloads } from "./provider-sse-frames.js";
 import {
@@ -1505,7 +1506,7 @@ export class LlmService {
         );
         signal.throwIfAborted();
       }
-      pending = fetch(input.target.url, requestInit);
+      pending = fetchLlmProvider(input.target.url, requestInit);
       // Usage acceptance is durably persisted before the response is consumed.
       // Observe the transport immediately so a fast rejection during that await
       // cannot surface as a process-level unhandled rejection. Awaiting the
@@ -3643,7 +3644,7 @@ export class LlmService {
       };
       let response: Response;
       try {
-        response = await fetch(target.url, requestInit);
+        response = await fetchLlmProvider(target.url, requestInit);
       } catch (error) {
         rethrowIfProviderNetworkBlocked(error);
         throw error;

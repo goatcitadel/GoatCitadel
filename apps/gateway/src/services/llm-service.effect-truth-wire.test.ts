@@ -3,6 +3,11 @@ import type { ChatCompletionRequest, LlmConfigFile } from "@goatcitadel/contract
 import { LlmService } from "./llm-service.js";
 import { INTERNAL_TOOL_EFFECT_POTENTIAL_KEY } from "./chat-message-sanitize.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const CONFIG: LlmConfigFile = {
   activeProviderId: "local-wire-proof",
   providers: [

@@ -160,8 +160,10 @@ export function composeChatRouteDependencies(
   const ChatThreadKnowledgeDependencies = createChatThreadKnowledgeDependenciesForGateway(gateway);
   const chatAttachments: GatewayRouteServiceDependencies["chatAttachments"] = {
     getChatAttachment: (attachmentId) => chatAttachmentService.getChatAttachment(chatAttachmentHost, attachmentId),
-    readChatAttachmentContent: (attachmentId) =>
-      chatAttachmentService.readChatAttachmentContent(chatAttachmentHost, attachmentId),
+    readChatAttachmentContent: (
+      attachmentId: string,
+      options?: Parameters<typeof chatAttachmentService.readChatAttachmentContent>[2],
+    ) => chatAttachmentService.readChatAttachmentContent(chatAttachmentHost, attachmentId, options),
     uploadChatAttachment: (input) => chatAttachmentService.uploadChatAttachment(chatAttachmentHost, input),
   };
   const chatArtifactRenders = composeChatArtifactRenderDependencies(

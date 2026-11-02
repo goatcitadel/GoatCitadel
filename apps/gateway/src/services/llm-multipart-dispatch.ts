@@ -1,6 +1,7 @@
 import { ModelUsageDispatchUncertainError, ModelUsageSettlementError,
   type ModelUsageAccountingService, type ModelUsageAttemptHandle } from "@goatcitadel/gateway-core";
 import type { Dispatcher } from "undici";
+import { fetchLlmProvider } from "./llm-provider-fetch.js";
 
 type Reservation = Awaited<ReturnType<ModelUsageAccountingService["prepareDispatch"]>> | undefined;
 interface DispatchDependencies {
@@ -33,7 +34,7 @@ export async function dispatchTrackedMultipartRequest(input: {
   try {
     await deps.authorize(reservation);
     signal.throwIfAborted();
-    pending = fetch(input.target.url, requestInit);
+    pending = fetchLlmProvider(input.target.url, requestInit);
     // Observe transport immediately while canonical acceptance is pending.
     void pending.catch(() => undefined);
   } catch (error) {
