@@ -30,8 +30,18 @@ export {
   BROWSER_CHROMIUM_MANUAL_REQUIRED_DIAGNOSTIC_MESSAGE,
   describeBrowserSessionState,
   forgetBrowserSessionState,
+  installBrowserRequestGuards,
   type BrowserExecutionContext,
+  type BrowserRequestGuards,
 } from "./browser-tools.js";
+export {
+  startBrowserEgressProxy,
+  type BrowserEgressProxy,
+  type BrowserEgressProxyOptions,
+} from "./browser-egress-proxy.js";
+export * from "./errand-browser/computer-actions.js";
+export * from "./errand-browser/errand-browser.js";
+export * from "./errand-browser/errand-overlay.js";
 export * from "./tool-patterns.js";
 export * from "./safe-env-name.js";
 export type { FirecrawlOperatorEndpoint } from "./firecrawl-endpoint.js";

@@ -185,6 +185,39 @@ export interface ChatAnswerReviewHost extends ChatAnswerReviewDeps {
   };
 }
 
+export interface PreparedTurnReviewInput {
+  answer: string;
+  status: string | undefined;
+  trace: {
+    sessionId: string;
+    model?: string;
+    routing?: { effectiveProviderId?: string; primaryProviderId?: string; effectiveModel?: string };
+  };
+  citations: readonly ChatCitationRecord[];
+  repaired?: boolean;
+  remoteWorker?: boolean;
+  signal?: AbortSignal;
+}
+
+/** The review depth a prepared turn's answer gets, or undefined when no review runs for it. */
+export function preparedTurnReviewDepth(
+  prepared: ChatAnswerReviewPreparedTurn,
+  input: PreparedTurnReviewInput,
+): Exclude<ChatOrchestrationReviewDepth, "off"> | undefined {
+  const depth = prepared.prefs.orchestrationReviewDepth;
+  const eligible = shouldReviewChatAnswer({
+    depth,
+    answer: input.answer,
+    status: input.status,
+    parentDelegationStepId: prepared.parentDelegationStepId,
+    serverOnly: Boolean(prepared.serverOnlyPosture),
+    remoteWorker: input.remoteWorker,
+    repaired: input.repaired,
+    aborted: input.signal?.aborted,
+  });
+  return eligible && (depth === "standard" || depth === "strict") ? depth : undefined;
+}
+
 /**
  * Reviews a prepared turn's final answer when its session's review depth is on and the turn is eligible.
  * Returns undefined when no review runs; otherwise the record for the trace and, for strict review with
@@ -193,34 +226,10 @@ export interface ChatAnswerReviewHost extends ChatAnswerReviewDeps {
 export async function reviewPreparedTurnAnswer(
   host: ChatAnswerReviewHost,
   prepared: ChatAnswerReviewPreparedTurn,
-  input: {
-    answer: string;
-    status: string | undefined;
-    trace: {
-      sessionId: string;
-      model?: string;
-      routing?: { effectiveProviderId?: string; primaryProviderId?: string; effectiveModel?: string };
-    };
-    citations: readonly ChatCitationRecord[];
-    repaired?: boolean;
-    remoteWorker?: boolean;
-    signal?: AbortSignal;
-  },
+  input: PreparedTurnReviewInput,
 ): Promise<{ record: ChatAnswerReviewRecord; note?: string } | undefined> {
-  const depth = prepared.prefs.orchestrationReviewDepth;
-  if (
-    !shouldReviewChatAnswer({
-      depth,
-      answer: input.answer,
-      status: input.status,
-      parentDelegationStepId: prepared.parentDelegationStepId,
-      serverOnly: Boolean(prepared.serverOnlyPosture),
-      remoteWorker: input.remoteWorker,
-      repaired: input.repaired,
-      aborted: input.signal?.aborted,
-    }) ||
-    (depth !== "standard" && depth !== "strict")
-  ) {
+  const depth = preparedTurnReviewDepth(prepared, input);
+  if (!depth) {
     return undefined;
   }
   const routing = input.trace.routing;

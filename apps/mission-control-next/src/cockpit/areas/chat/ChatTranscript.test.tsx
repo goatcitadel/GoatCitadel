@@ -1003,6 +1003,47 @@ describe("ChatTranscript", () => {
     expect(onDraftChange).toHaveBeenCalledWith("Continue from where you stopped.");
   });
 
+  it("says the answer is being reviewed while Review answer's call runs, and Responding otherwise", async () => {
+    const live = turn("live", true);
+    live.trace.status = "running";
+    const render = async (reviewing: boolean) => {
+      live.trace = {
+        ...live.trace,
+        reflection: reviewing
+          ? {
+              attempted: false,
+              attemptCount: 0,
+              answerReview: {
+                depth: "standard",
+                outcome: "running",
+                issues: [],
+                action: "recorded",
+                reviewedAt: "2026-11-01T00:00:00.000Z",
+              },
+            }
+          : undefined,
+      };
+      await act(async () =>
+        renderWithProviders(
+          <InspectorProvider>
+            <ChatTranscript
+              props={{ ...sessionProps([{ ...live }]), hasActiveStream: true, activeStreamingTurnId: "live" }}
+            />
+          </InspectorProvider>,
+        ),
+      );
+    };
+    await render(false);
+    expect(container.textContent).toContain("Responding");
+    expect(container.textContent).not.toContain("Reviewing the answer");
+    await render(true);
+    expect(container.textContent).toContain("Reviewing the answer");
+    expect(container.textContent).not.toContain("Responding");
+    // The single transcript live region says so once, when the review starts.
+    expect(container.querySelector('[aria-live="polite"]')?.textContent).toBe("Reviewing the answer.");
+    expect(container.querySelectorAll('[aria-live="polite"]')).toHaveLength(1);
+  });
+
   it("keeps per-turn progress notes as plain text beside the single transcript live region", async () => {
     const pending = turn("pending", true, "failed");
     pending.trace.status = "running";

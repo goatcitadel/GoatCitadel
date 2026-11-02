@@ -354,6 +354,10 @@ export function buildApprovalRequestReviewEvidenceModel(approval: ApprovalReques
     const planEvidence = changePlanEffectApprovalEvidence(approval);
     if (planEvidence) return planEvidence;
   }
+  if (approval.kind === "browser.errand.action") {
+    const errandEvidence = browserErrandActionApprovalEvidence(approval);
+    if (errandEvidence) return errandEvidence;
+  }
   if (approval.kind === "skill.lifecycle") {
     const skillEvidence = skillStateApprovalEvidence(approval);
     if (skillEvidence) return skillEvidence;
@@ -437,6 +441,32 @@ export function codeModeRequestApprovalEvidence(approval: ApprovalRequest): Appr
         ? "GoatCitadel lets it read only what is listed under Reads. "
         : "GoatCitadel lets it read no files. ") +
       "Denying keeps it from running.",
+  };
+}
+
+/**
+ * A browser errand's risky step (a click or entry the errand wants to make). The Gateway's preview carries the step's
+ * title, a summary (that title plus what the step does) and the page's address; it carries no page title. The step and
+ * the page address are the targets; the screenshot the Gateway captured with it is shown beside the decision. Without
+ * a step there is nothing exact to review here, so the generic model applies.
+ */
+export function browserErrandActionApprovalEvidence(approval: ApprovalRequest): ApprovalEvidenceModel | null {
+  const preview = approval.preview as Record<string, unknown> | undefined;
+  // The summary already starts with the title, so the title stands alone only when there is no summary.
+  const step = nonEmptyText(preview?.summary) ?? nonEmptyText(preview?.title);
+  if (!step) return null;
+  const url = nonEmptyText(preview?.url);
+  const entries: ApprovalTargetEntry[] = [
+    { label: "Step", value: step },
+    ...(url ? [{ label: "Page", value: url }] : []),
+  ];
+  return {
+    targets: entries.map((entry) => `${entry.label}: ${entry.value}`),
+    targetEntries: entries,
+    commands: [],
+    changes: [],
+    supporting: [],
+    consequence: "Approving lets the browser errand take this one step. Denying ends the errand.",
   };
 }
 

@@ -24,6 +24,7 @@ import {
   BudgetModeControl,
   ApprovalModeControl,
   SettingsApprovalSkipControl,
+  BrowserErrandsControl,
   FilesystemWriteRootsControl,
   ModelsSettings,
   ClaudeCliToolBridgeControl,
@@ -175,6 +176,7 @@ export function SettingsArea() {
           <>
             <ApprovalModeControl />
             <SettingsApprovalSkipControl />
+            <BrowserErrandsControl />
             <FilesystemWriteRootsControl />
             <ToolGrantSettings key={activeWorkspaceId} workspaceId={activeWorkspaceId ?? ""} />
             <SafetyCatalogSummary />
@@ -215,6 +217,7 @@ export function SettingsArea() {
             ![
               "application-updates",
               "approval-mode",
+              "browser-errands",
               "chat-thinking-stream",
               "claude-cli-tool-bridge",
               "claude-cli-warm-continuation",

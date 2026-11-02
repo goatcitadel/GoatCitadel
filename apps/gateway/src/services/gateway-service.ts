@@ -449,6 +449,8 @@ import {
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
+import { createGatewayBrowserErrandService } from "./browser-errands/browser-errand-composition.js";
+import type { BrowserErrandService } from "./browser-errands/browser-errand-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
 import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js";
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
@@ -1182,6 +1184,7 @@ export class GatewayService {
    */
   public readonly mcpElicitationService = new McpElicitationService();
   public readonly browserSessionRuntimeService: BrowserSessionRuntimeService;
+  public readonly browserErrandService: BrowserErrandService;
   public readonly reviewReadinessService: ReviewReadinessService;
   public readonly chatSessionStatusService: ChatSessionStatusService;
   public readonly chatTimerService: ChatTimerService;
@@ -1499,6 +1502,7 @@ export class GatewayService {
       // services populate. Same contract as scheduleManage: policy/approval/
       // audit fire first in `engine.invoke`.
       subagentFanout: (request) => this.subagentFanout.execute(request),
+      runBrowserErrand: (request) => this.browserErrandService.run(request),
       getChatSessionStatus: (sessionId) => this.chatSessionStatusService.getModelProjection(sessionId),
       readToolArtifact: (request) => chatToolArtifactService.readChatToolArtifactForTool(this, request),
       searchCapabilities: (request) => this.chatCapabilityDiscovery.discover(request),
@@ -1966,7 +1970,7 @@ export class GatewayService {
       subagentFanoutV1Disabled: async () => await this.isFeatureEnabled("subagentFanoutV1Disabled"),
       durableChatFanoutV1Enabled: async () => await this.isFeatureEnabled("durableChatFanoutV1Enabled"),
       isDurableFanoutAvailable: async (input) => await this.isDurableFanoutAvailable(input),
-      delegationScopeExpansionV1Enabled: async () => await this.isFeatureEnabled("delegationScopeExpansionV1Enabled"),
+      toolExposureFlagEnabled: async (flag) => await this.isFeatureEnabled(flag),
     });
     this.researchService = new ResearchService({
       storage: this.storage,
@@ -2456,6 +2460,15 @@ export class GatewayService {
       awaitApprovalResolutionEffects: (approvalId) => this.approvalEffectsService.awaitResolutionEffects(approvalId),
       enqueueApprovalRemoteTokenDelivery: async (approval, connector, tokenRecord) =>
         await this.enqueueApprovalRemoteTokenDelivery(approval, connector, tokenRecord),
+    });
+    this.browserErrandService = createGatewayBrowserErrandService({
+      config: this.config,
+      storage: this.storage,
+      approvals: this.approvalRuntime,
+      isEnabled: () => this.isFeatureEnabled("browserErrandsEnabled"),
+      chatCompletions: (request, attribution) => this.llmService.chatCompletions(request, attribution),
+      uploadAttachment: (input) => chatAttachmentService.uploadChatAttachment(this.buildChatAttachmentHost(), input),
+      subscribeRealtime: (listener) => this.realtimeEventService.subscribeRealtime(listener),
     });
     this.steerService = new ChatSteerService();
     this.chatCompactionBreakerActionService = createChatCompactionBreakerActionServiceForGateway({
@@ -12172,6 +12185,7 @@ export class GatewayService {
     this.promptPackService?.close();
     this.stopIntervalSchedulers();
     this.orchestrationWorktreeService.close();
+    await this.browserErrandService?.dispose();
     if (this.backgroundTasks.size > 0) {
       const tasks = [...this.backgroundTasks];
       this.backgroundTasks.clear();

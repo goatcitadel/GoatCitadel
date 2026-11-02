@@ -42,6 +42,7 @@ import { readCodeModeRequestArgs } from "./tool-executor/code-mode-request-args.
 import { collectLeakDetections, sanitizeForModel } from "./tool-security.js";
 import { matchesToolPattern } from "./tool-patterns.js";
 import {
+  BROWSER_ERRAND_TOOL_NAME,
   CHANGE_REQUEST_TOOL_NAME,
   CODE_MODE_REQUEST_TOOL_NAME,
   RUNTIME_CONFIGURATION_TARGET_IDS,
@@ -233,6 +234,11 @@ export interface ToolExecutorRuntimeHooks {
    * unfulfillable and `agent.fanout` raises a clear error.
    */
   subagentFanout?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
+  /**
+   * Gateway-owned `browser.errand` run: the Gateway drives its own visible Chrome window, asks through Gateway approvals
+   * before risky steps, and returns the errand outcome. Absent means errands are unavailable in this runtime.
+   */
+  runBrowserErrand?: (request: ToolInvokeRequest) => Promise<Record<string, unknown>>;
   /** Gateway-owned canonical status projection used by the model-safe `session.status` tool. */
   getChatSessionStatus?: (sessionId: string) => Promise<ChatSessionStatusModelProjection>;
   assertOptionalUserInputAvailable?: () => Promise<void>;
@@ -368,6 +374,13 @@ export async function executeTool(
     await resolveExecutionWriteAdmission(request, config, storage, runtimeHooks.resolveOutsideRootWriteEligibility),
   );
 
+  // browser.errand is not one of the in-memory browser tools: the Gateway runs it in its own window.
+  if (request.toolName === BROWSER_ERRAND_TOOL_NAME) {
+    if (!runtimeHooks.runBrowserErrand) {
+      throw new Error("Browser errands are not available here.");
+    }
+    return finalizeToolResult(await runtimeHooks.runBrowserErrand(request));
+  }
   if (isBrowserToolName(request.toolName)) {
     const rawResult = await executeBrowserTool(request.toolName, request.args, writeConfig, {
       sessionId: request.sessionId,

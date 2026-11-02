@@ -1680,7 +1680,7 @@ function buildPlaywrightStorageState(state: BrowserSessionState | undefined): Pl
   };
 }
 
-function buildPlaywrightContextOptions(
+export function buildPlaywrightContextOptions(
   args: Record<string, unknown>,
   state: BrowserSessionState | undefined,
   proxyServer: string,
@@ -1703,6 +1703,61 @@ function buildPlaywrightContextOptions(
       bypass: "<-loopback>",
     },
   };
+}
+
+export interface BrowserRequestGuards {
+  /** True when the guard was installed on the context (otherwise the caller routes it per page). */
+  contextRouted: boolean;
+  /** The route handler, for callers that must install it on a page instead. */
+  guardRequest: (route: PlaywrightRoute) => Promise<void>;
+  /** The most recent policy refusal raised by a blocked request or socket. */
+  getError: () => Error | undefined;
+}
+
+/**
+ * Aborts every context request (and closes every WebSocket) whose URL fails any of the given host allowlists.
+ * Each list must pass independently, mirroring the base-plus-grant allowlist check.
+ */
+export async function installBrowserRequestGuards(
+  context: Pick<PlaywrightContext, "route" | "routeWebSocket">,
+  allowlists: string[][],
+): Promise<BrowserRequestGuards> {
+  let guardError: Error | undefined;
+  const assertAllowed = (target: string): void => {
+    for (const allowlist of allowlists) {
+      assertHostAllowed(target, allowlist);
+    }
+  };
+  const guardRequest = async (route: PlaywrightRoute): Promise<void> => {
+    try {
+      const requestUrl = route.request().url();
+      assertAllowedHttpUrl(requestUrl);
+      assertAllowed(requestUrl);
+    } catch (error) {
+      guardError = error instanceof Error ? error : new Error(String(error));
+      await route.abort("blockedbyclient").catch(() => undefined);
+      return;
+    }
+    await route.continue();
+  };
+  if (context.route) {
+    await context.route("**/*", guardRequest);
+  }
+  if (context.routeWebSocket) {
+    await context.routeWebSocket("**/*", async (webSocket) => {
+      try {
+        const socketUrl = webSocket.url();
+        assertAllowedWebSocketUrl(socketUrl);
+        assertAllowed(socketUrl);
+      } catch (error) {
+        guardError = error instanceof Error ? error : new Error(String(error));
+        await webSocket.close({ code: 1008, reason: "Blocked by GoatCitadel network policy" }).catch(() => undefined);
+        return;
+      }
+      webSocket.connectToServer();
+    });
+  }
+  return { contextRouted: Boolean(context.route), guardRequest, getError: () => guardError };
 }
 
 async function withBrowserPage(
@@ -1769,39 +1824,13 @@ async function withBrowserPage(
         }
       }, previousSessionState.sessionStorage);
     }
-    let navigationGuardError: Error | undefined;
-    const guardBrowserRequest = async (route: PlaywrightRoute): Promise<void> => {
-      try {
-        const requestUrl = route.request().url();
-        assertAllowedHttpUrl(requestUrl);
-        assertHostAllowedForConfig(requestUrl, config, executionContext);
-      } catch (error) {
-        navigationGuardError = error instanceof Error ? error : new Error(String(error));
-        await route.abort("blockedbyclient").catch(() => undefined);
-        return;
-      }
-      await route.continue();
-    };
-    if (context.route) {
-      await context.route("**/*", guardBrowserRequest);
-    }
-    if (context.routeWebSocket) {
-      await context.routeWebSocket("**/*", async (webSocket) => {
-        try {
-          const socketUrl = webSocket.url();
-          assertAllowedWebSocketUrl(socketUrl);
-          assertHostAllowedForConfig(socketUrl, config, executionContext);
-        } catch (error) {
-          navigationGuardError = error instanceof Error ? error : new Error(String(error));
-          await webSocket.close({ code: 1008, reason: "Blocked by GoatCitadel network policy" }).catch(() => undefined);
-          return;
-        }
-        webSocket.connectToServer();
-      });
-    }
+    const guards = await installBrowserRequestGuards(context, [
+      resolveNetworkAllowlist(config, executionContext),
+      ...(grantAllowlist.length > 0 ? [grantAllowlist] : []),
+    ]);
     const page = await context.newPage();
-    if (!context.route && page.route) {
-      await page.route("**/*", guardBrowserRequest);
+    if (!guards.contextRouted && page.route) {
+      await page.route("**/*", guards.guardRequest);
     }
     const response = await page
       .goto(url, {
@@ -1809,11 +1838,13 @@ async function withBrowserPage(
         waitUntil,
       })
       .catch((error: unknown) => {
-        if (navigationGuardError) {
-          throw navigationGuardError;
+        const guardError = guards.getError();
+        if (guardError) {
+          throw guardError;
         }
         throw error;
       });
+    const navigationGuardError = guards.getError();
     if (navigationGuardError) {
       throw navigationGuardError;
     }
@@ -1823,8 +1854,9 @@ async function withBrowserPage(
     assertHostAllowedForConfig(initialFinalUrl, config, executionContext);
 
     const result = await run(page, response?.status(), initialFinalUrl);
-    if (navigationGuardError) {
-      throw navigationGuardError;
+    const laterGuardError = guards.getError();
+    if (laterGuardError) {
+      throw laterGuardError;
     }
     const settledFinalUrl = page.url();
     assertAllowedHttpUrl(settledFinalUrl);

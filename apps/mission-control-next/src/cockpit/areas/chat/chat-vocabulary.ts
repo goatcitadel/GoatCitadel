@@ -10,6 +10,7 @@ import type {
   ChatSpecialistCandidateStatus,
   ChatToolRunRecord,
   ChatTurnFailureClass,
+  ChatTurnTraceRecord,
   ChatWebMode,
 } from "@goatcitadel/contracts";
 import { chatToolDisplayName } from "@goatcitadel/mission-control-shared/components/chat/chat-tool-display-name";
@@ -149,6 +150,13 @@ export const REVIEW_HELP =
 export const WEB_HELP =
   "Auto searches when the message needs current information; Off removes web tools; Deep searches on every message with a larger budget. GoatCitadel policy and available tools still apply.";
 
+/**
+ * The badge on a turn that is still streaming. Once the answer has streamed, Review answer's extra model call runs
+ * before the turn completes, so the badge says so instead of "Responding".
+ */
+export const liveTurnStatusLabel = (trace: Pick<ChatTurnTraceRecord, "reflection">): string =>
+  trace.reflection?.answerReview?.outcome === "running" ? "Reviewing the answer" : "Responding";
+
 const exactFileTypes: Record<string, string> = {
   "application/pdf": "PDF",
   "application/json": "JSON",
@@ -178,6 +186,7 @@ export function presentAttachmentType(file: { fileName: string; mimeType?: strin
 const actionKinds: Record<string, string> = {
   "code_mode.run": "Run code (Code Mode)",
   "code_mode.request": "Run code",
+  "browser.errand.action": "Browser errand step",
   "remote_worker.native_runtime": "Run on a remote worker",
   change_plan_effect: "Apply a change plan",
   "tool.invoke": "Use a tool",

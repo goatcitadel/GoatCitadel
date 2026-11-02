@@ -11,12 +11,14 @@ import { plural } from "../../content/format.js";
 export type ChatTraceTone = "muted" | "warning" | "critical" | "success";
 
 /**
- * One short line for a turn's answer review, or null when the answer was not reviewed:
+ * One short line for a turn's finished answer review, or null when there is no verdict:
  * "Reviewed: no issues", "Reviewed: 2 issues" (", noted in the answer" for strict) or "Review unavailable".
+ * A `running` review is a live-only signal shown by the streaming badge; a receipt or trace card kept after a
+ * failed stream must not claim a review is still running, so it gets no line.
  */
 export function formatAnswerReviewLabel(trace: Pick<ChatTurnTraceRecord, "reflection"> | undefined): string | null {
   const review = trace?.reflection?.answerReview;
-  if (!review) {
+  if (!review || review.outcome === "running") {
     return null;
   }
   if (review.outcome === "unavailable") {
