@@ -32,6 +32,7 @@ export type GoatErrorCode =
   | "TURN_CANCELLED"
   | "PLUGIN_OWNED"
   | "PLUGIN_ID_RESERVED"
+  | "CLAUDE_CODE_INSTALL_NOT_READY"
   | "CAPABILITY_PACKS_RETIRED";
 
 // ---------------------------------------------------------------------------

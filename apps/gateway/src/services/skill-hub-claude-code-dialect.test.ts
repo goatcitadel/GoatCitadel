@@ -123,7 +123,19 @@ describe("hasClaudeCodeShellLines", () => {
     expect(SKILL_RUNS_SHELL_COMMANDS).toBe("SKILL_RUNS_SHELL_COMMANDS");
   });
 
+  it("refuses the shell key, which picks the program for a skill's shell lines", () => {
+    expect(checkClaudeCodeFrontmatter({ ...BASE, shell: "powershell" })).toEqual({
+      ok: false,
+      code: "UNKNOWN_FRONTMATTER_DIMENSION",
+      key: "shell",
+    });
+  });
+
   it.each([
+    // The forms Claude Code's skills page documents, as written there.
+    ["the documented inline form", "## Current changes\n\n!`git diff HEAD`\n"],
+    ["the documented inline form in a list", "- PR diff: !`gh pr diff`\n- Changed files: !`gh pr diff --name-only`\n"],
+    ["the documented fenced form", "## Environment\n```!\nnode --version\ngit status --short\n```\n"],
     ["an inline command at a line start", "Intro.\n!`git status`\nMore."],
     ["an inline command after a space", "Check the tree first: !`git status` then go on."],
     ["a fence opened with ```!", "Steps:\n\n```!\ngit status\n```\n"],

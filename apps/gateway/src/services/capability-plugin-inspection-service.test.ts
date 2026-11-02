@@ -132,7 +132,8 @@ function reviewed(snapshotId: string, blockerCodes: string[] = [], skillName = "
 async function harness(
   options: {
     pieces?: Pieces;
-    manifest?: string;
+    /** `null` writes no goatcitadel-plugin.json, as a Claude Code plugin has none. */
+    manifest?: string | null;
     files?: Record<string, string | Buffer>;
     overrides?: Partial<CapabilityPluginInspectionSources>;
   } = {},
@@ -141,28 +142,33 @@ async function harness(
   roots.push(root);
   const pluginDir = path.join(root, "source", PLUGIN_ID);
   const manifest =
-    options.manifest ??
-    JSON.stringify({
-      schemaVersion: 1,
-      pluginId: PLUGIN_ID,
-      name: "Meeting tools",
-      description: "Notes and checks for meetings.",
-      version: "1.2.0",
-      author: "Example Author",
-      pieces: options.pieces ?? EVERY_KIND,
-    });
-  const files: Record<string, string | Buffer> = {
-    "goatcitadel-plugin.json": manifest,
-    "skills/meeting-notes/SKILL.md": SKILL_MD,
-    "skills/other-notes/SKILL.md": SKILL_MD.replace("meeting-notes", "other-notes"),
-    "prompt-packs/checks.md": PROMPT_PACK_MD,
-    // No Pack-Version, so the pack is named from the label an install saves it under.
-    "prompt-packs/one.md": (PROMPT_PACK_MD.split("### TEST-C902")[0] ?? "").replace(
-      "Pack-Version: Meeting checks\n\n",
-      "",
-    ),
-    ...options.files,
-  };
+    options.manifest !== undefined
+      ? options.manifest
+      : JSON.stringify({
+          schemaVersion: 1,
+          pluginId: PLUGIN_ID,
+          name: "Meeting tools",
+          description: "Notes and checks for meetings.",
+          version: "1.2.0",
+          author: "Example Author",
+          pieces: options.pieces ?? EVERY_KIND,
+        });
+  // A Claude Code plugin (no manifest) holds only the files the case names.
+  const files: Record<string, string | Buffer> =
+    manifest === null
+      ? { ...options.files }
+      : {
+          "goatcitadel-plugin.json": manifest,
+          "skills/meeting-notes/SKILL.md": SKILL_MD,
+          "skills/other-notes/SKILL.md": SKILL_MD.replace("meeting-notes", "other-notes"),
+          "prompt-packs/checks.md": PROMPT_PACK_MD,
+          // No Pack-Version, so the pack is named from the label an install saves it under.
+          "prompt-packs/one.md": (PROMPT_PACK_MD.split("### TEST-C902")[0] ?? "").replace(
+            "Pack-Version: Meeting checks\n\n",
+            "",
+          ),
+          ...options.files,
+        };
   for (const [relativePath, content] of Object.entries(files)) {
     const target = path.join(pluginDir, ...relativePath.split("/"));
     await fs.mkdir(path.dirname(target), { recursive: true });
@@ -774,6 +780,141 @@ describe("CapabilityPluginInspectionService", () => {
       ["one", "Plugin Meeting tools"],
     ]);
     expect(inspection.installable).toBe(true);
+  });
+
+  describe("a Claude Code plugin", () => {
+    const CC_SKILL = [
+      "---",
+      "name: cc-notes",
+      "description: Notes for meetings.",
+      "allowed-tools: Read",
+      "---",
+      "",
+      "Take notes.",
+      "",
+    ].join("\n");
+    const ccFiles = (extra: Record<string, string> = {}) => ({
+      ".claude-plugin/plugin.json": JSON.stringify({ name: "cc-notes", description: "Notes from Claude Code." }),
+      "skills/cc-notes/SKILL.md": CC_SKILL,
+      "skills/cc-notes/reference.md": "Extra.",
+      ".mcp.json": JSON.stringify({
+        mcpServers: { notes: { type: "http", url: "https://mcp.notes.test/mcp", headers: { A: "b" } } },
+      }),
+      "commands/go.md": "Go.",
+      ...extra,
+    });
+
+    it("inspects a Claude Code plugin with format, coverage, left-out parts and warnings", async () => {
+      const { inspect, reviewSkill } = await harness({ manifest: null, files: ccFiles() });
+
+      const inspection = await inspect();
+
+      expect(inspection).toMatchObject({
+        pluginId: "cc-notes",
+        sourceFormat: "claude_code",
+        claudeCode: { translatorVersion: 1, coverage: { usable: 2, total: 3 } },
+        ignored: [
+          {
+            path: "commands/go.md",
+            kind: "command",
+            label: "go",
+            reason: "A command. GoatCitadel doesn't take commands from plugins.",
+          },
+        ],
+        installable: true,
+      });
+      expect(inspection.claudeCode?.pluginJsonSha256).toMatch(/^[0-9a-f]{64}$/u);
+      expect(piece(inspection, "cc-notes").warnings).toEqual([
+        "Its pre-approved tools aren't kept. Your own tool rules and approvals apply.",
+        "1 other file in this skill is kept but never read.",
+      ]);
+      expect(piece(inspection, "connector-1")).toMatchObject({
+        label: "Notes App",
+        warnings: ["GoatCitadel signs in its own way. The plugin's own sign-in settings aren't used."],
+      });
+      expect(reviewSkill.mock.calls[0]?.[0].pluginSkill).toMatchObject({
+        dialect: "claude_code",
+        path: "skills/cc-notes",
+      });
+    });
+
+    it("blocks a Claude Code skill that runs shell commands, with its own line", async () => {
+      const { inspect } = await harness({
+        manifest: null,
+        files: ccFiles({ "skills/second/SKILL.md": CC_SKILL.replace("cc-notes", "second") }),
+        overrides: {
+          reviewSkill: vi.fn(async (input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult> => {
+            if (input.idempotencyKey.includes(":second@")) {
+              return reviewed("snap-second", ["CLAUDE_CODE_SETTING_NOT_KEPT"], "second");
+            }
+            throw new ValidationError({ field: "SKILL_RUNS_SHELL_COMMANDS", message: "Skill Hub refused it." });
+          }),
+        },
+      });
+
+      const inspection = await inspect();
+
+      expect(piece(inspection, "cc-notes").check).toEqual({
+        status: "blocked",
+        code: "SKILL_RUNS_SHELL_COMMANDS",
+        message: "This skill runs shell commands before it starts. GoatCitadel never runs them.",
+      });
+      expect(piece(inspection, "second").check).toEqual({
+        status: "blocked",
+        code: "CLAUDE_CODE_SETTING_NOT_KEPT",
+        message: "This skill uses a Claude Code setting that limits it, and GoatCitadel can't keep that limit.",
+      });
+      expect(inspection.installable).toBe(false);
+    });
+
+    it("keeps a refused translation's left-out list", async () => {
+      const { inspect, saved, reviewSkill } = await harness({
+        manifest: null,
+        files: {
+          ".claude-plugin/plugin.json": JSON.stringify({ name: "CC Notes" }),
+          "agents/helper.md": "Help.",
+        },
+      });
+
+      const refusal = await inspect().then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+
+      expect(refusal).toBeInstanceOf(CapabilityPluginManifestRefusedError);
+      const { inspection } = refusal as CapabilityPluginManifestRefusedError;
+      expect(inspection).toMatchObject({
+        sourceFormat: "claude_code",
+        installable: false,
+        refusal: {
+          code: "CLAUDE_CODE_MANIFEST_INVALID",
+          message: "Its plugin.json has no name GoatCitadel can use as an id.",
+        },
+      });
+      expect(inspection.claudeCode).toBeUndefined();
+      expect(saved.map((entry) => entry.inspection)).toEqual([inspection]);
+      expect(reviewSkill).not.toHaveBeenCalled();
+      expect(inspection.ignored).toEqual([
+        {
+          path: "agents/helper.md",
+          kind: "agent",
+          label: "helper",
+          reason: "A subagent. GoatCitadel's agents aren't set by plugins.",
+        },
+      ]);
+    });
+
+    it("reviews a native plugin's skills without the dialect", async () => {
+      const { inspect, reviewSkill } = await harness({ files: { ".claude-plugin/plugin.json": "{}" } });
+
+      const inspection = await inspect();
+
+      expect(inspection.sourceFormat).toBeUndefined();
+      expect(inspection.claudeCode).toBeUndefined();
+      expect(inspection.ignored).toEqual([]);
+      expect(inspection.pieces.every((item) => item.warnings === undefined)).toBe(true);
+      for (const [input] of reviewSkill.mock.calls) expect(input.pluginSkill).not.toHaveProperty("dialect");
+    });
   });
 
   it("keeps a refused manifest's inspection and refuses it with its own code", async () => {

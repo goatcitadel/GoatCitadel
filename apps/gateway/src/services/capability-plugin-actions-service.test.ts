@@ -215,6 +215,19 @@ describe("CapabilityPluginActionsService.install", () => {
     expect(elsewhere.state.keychain.size).toBe(0);
   });
 
+  it("refuses to install a Claude Code plugin until the panel can show what it leaves out", async () => {
+    const h = harness({ trust: "unverified" });
+    h.state.inspection = { ...h.state.inspection, sourceFormat: "claude_code" };
+
+    await expect(h.actions.install(installInput())).rejects.toMatchObject({
+      httpStatus: 409,
+      code: "CLAUDE_CODE_INSTALL_NOT_READY",
+      message: "Claude Code plugins can be checked here, but not installed yet.",
+    });
+    expect(h.state.keychain.size).toBe(0);
+    expect(await h.sync.list({ workspaceId: WORKSPACE_ID })).toEqual([]);
+  });
+
   it("refuses an unverified plugin that takes the id of one that ships with GoatCitadel", async () => {
     const h = harness({ trust: "unverified", builtInIds: ["other-plugin", PLUGIN_ID] });
 

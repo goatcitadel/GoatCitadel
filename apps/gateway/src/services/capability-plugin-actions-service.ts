@@ -40,6 +40,16 @@ const KEY_STORE_UNAVAILABLE_MESSAGE =
   "This computer's key store can't be used right now, so a hook's signing secret can't be kept. Nothing was installed.";
 
 /** 409 `PLUGIN_ID_RESERVED`: a plugin from another source takes the id of one that ships with GoatCitadel. */
+/** A Claude Code plugin can be checked, but installing one waits until the panel can show what it leaves out. */
+export class ClaudeCodeInstallNotReadyError extends GoatError {
+  public readonly code = "CLAUDE_CODE_INSTALL_NOT_READY" as const;
+  public readonly httpStatus = 409;
+
+  public constructor() {
+    super("Claude Code plugins can be checked here, but not installed yet.");
+  }
+}
+
 export class PluginIdReservedError extends GoatError {
   public readonly code = "PLUGIN_ID_RESERVED" as const;
   public readonly httpStatus = 409;
@@ -191,6 +201,7 @@ export class CapabilityPluginActionsService {
     // The same checks the plan's adapter binds to when it is made and again when it applies.
     const kept = requireInstallableInspection(await this.sources.readInspection(input.inspectionId), input.workspaceId);
     const { inspection, snapshotTreeSha256 } = kept;
+    if (inspection.sourceFormat === "claude_code") throw new ClaudeCodeInstallNotReadyError();
     if (
       inspection.trust === "unverified" &&
       (await this.sources.listBuiltInPluginIds()).includes(inspection.pluginId)

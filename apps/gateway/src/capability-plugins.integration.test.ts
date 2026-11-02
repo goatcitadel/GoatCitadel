@@ -297,6 +297,74 @@ describe("plugin inspection over the real Gateway", { timeout: 300_000 }, () => 
     expectNoTempCopies(root);
   });
 
+  it("checks a Claude Code plugin folder, reads it back, and refuses to install it for now", async () => {
+    const pluginDir = path.join(root, "sources", "cc-notes");
+    writeFiles(pluginDir, {
+      ".claude-plugin/plugin.json": JSON.stringify({ name: "cc-notes", description: "Notes from Claude Code." }),
+      "skills/cc-notes/SKILL.md": SKILL_MD.replace("name: meeting-notes", "name: cc-notes").replace(
+        "---\n\n",
+        "allowed-tools: Read\n---\n\n",
+      ),
+      ".mcp.json": JSON.stringify({
+        mcpServers: { learn: { type: "http", url: "https://learn.microsoft.com/api/mcp" }, local: { command: "node" } },
+      }),
+      "commands/go.md": "Go.\n",
+    });
+    const ownersBefore = await readOwners();
+    const pathsBefore = new Set(listPaths(root));
+
+    const created = await inject("POST", INSPECTIONS_URL, {
+      workspaceId: WORKSPACE_ID,
+      source: { kind: "folder", path: pluginDir },
+    });
+
+    expect(created.statusCode, created.body).toBe(201);
+    const inspection = created.json<CapabilityPluginInspection>();
+    expect(inspection).toMatchObject({
+      pluginId: "cc-notes",
+      trust: "unverified",
+      sourceFormat: "claude_code",
+      claudeCode: { translatorVersion: 1, coverage: { usable: 2, total: 4 } },
+      installable: true,
+    });
+    expect(inspection.ignored.map((part) => [part.kind, part.label])).toEqual([
+      ["command", "go"],
+      ["mcp_server", "local"],
+    ]);
+    expect(inspection.pieces.map((piece) => [piece.pieceId, piece.check.status, piece.warnings])).toEqual([
+      ["cc-notes", "ready", ["Its pre-approved tools aren't kept. Your own tool rules and approvals apply."]],
+      ["connector-1", "ready", undefined],
+    ]);
+    expect(created.body).not.toContain(root.replaceAll("\\", "\\\\"));
+
+    const readBack = await inject("GET", `${INSPECTIONS_URL}/${inspection.inspectionId}`);
+    expect(readBack.statusCode, readBack.body).toBe(200);
+    expect(readBack.json()).toEqual(inspection);
+
+    const install = await inject("POST", "/api/v1/capabilities/plugins/install", {
+      workspaceId: WORKSPACE_ID,
+      inspectionId: inspection.inspectionId,
+    });
+    expect(install.statusCode, install.body).toBe(409);
+    expect(install.body).toContain("Claude Code plugins can be checked here, but not installed yet.");
+    expect(install.body).toContain("CLAUDE_CODE_INSTALL_NOT_READY");
+
+    // Nothing was installed. The new paths are the snapshot and the skill's check, as for any plugin.
+    expect(await readOwners()).toEqual(ownersBefore);
+    const treeSha256 = inspection.pin.kind === "content" ? inspection.pin.treeSha256 : "";
+    const added = listPaths(root).filter((entry) => !pathsBefore.has(entry));
+    expect(added).toContain(`data/plugins/snapshots/${treeSha256}/.claude-plugin/plugin.json`);
+    expect(
+      added.filter(
+        (entry) =>
+          !entry.startsWith("data/plugins/") &&
+          !entry.startsWith("data/skill-hub/artifacts/") &&
+          !["data/plugins", "data/skill-hub", "data/skill-hub/artifacts"].includes(entry),
+      ),
+    ).toEqual([]);
+    expectNoTempCopies(root);
+  });
+
   it("refuses a built-in plugin that isn't shipped, with its code and nothing kept", async () => {
     const pathsBefore = new Set(listPaths(root));
 
@@ -338,12 +406,15 @@ function listPaths(dir: string): string[] {
 }
 
 function writePlugin(pluginDir: string): void {
-  const files: Record<string, string> = {
+  writeFiles(pluginDir, {
     "goatcitadel-plugin.json": JSON.stringify(MANIFEST, null, 2),
     "skills/meeting-notes/SKILL.md": SKILL_MD,
     "skills/meeting-notes/LICENSE": "MIT\n",
     "prompt-packs/checks.md": PROMPT_PACK_MD,
-  };
+  });
+}
+
+function writeFiles(pluginDir: string, files: Record<string, string>): void {
   for (const [relativePath, content] of Object.entries(files)) {
     const target = path.join(pluginDir, ...relativePath.split("/"));
     fs.mkdirSync(path.dirname(target), { recursive: true });
