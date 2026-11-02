@@ -46,6 +46,20 @@ describe("channel approval action secret hydration", () => {
     expect(send).toHaveBeenCalledTimes(1);
   });
 
+  it("carries a plain-text send through the durable queue, and leaves it off otherwise", async () => {
+    const plain = buildChannelDeliveryPayload({ ...createInput("keychain:x"), plainText: true }, "telegram");
+    const markup = buildChannelDeliveryPayload(createInput("keychain:y"), "telegram");
+    const send = vi.fn(async (_input: ChannelSendInput) => ({ status: "sent", providerMessageId: "provider-1" }));
+
+    await sendQueuedChannelDelivery(send, createRuntimeInput(plain));
+    await sendQueuedChannelDelivery(send, createRuntimeInput(markup));
+
+    expect(plain.plainText).toBe(true);
+    expect(markup).not.toHaveProperty("plainText");
+    expect(send.mock.calls[0]![0].plainText).toBe(true);
+    expect(send.mock.calls[1]![0]).not.toHaveProperty("plainText");
+  });
+
   it("keeps the keychain secret available when provider delivery fails before completion", async () => {
     const tokenRef = "keychain:goatcitadel:approval-remote-action:rat_retry";
     const persistedPayload = buildChannelDeliveryPayload(createInput(tokenRef), "discord");

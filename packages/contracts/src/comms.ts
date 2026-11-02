@@ -45,6 +45,11 @@ export interface ChannelSendInput extends ChannelGovernanceInput {
     expiresAt: string;
     buttons: Array<{ label: string; decision: "a" | "r" }>;
   };
+  /**
+   * Send the message as plain text, without the connection's configured markup parsing (Telegram `parseMode`).
+   * Runtime-only: set for messages that quote untrusted page text.
+   */
+  plainText?: boolean;
   replyToMessageId?: string;
   replyToPartIndex?: number;
   /** The original reply target, repeated on every chunk of a split delivery (replyToMessageId chains to the previous chunk). Only channels that need the original anchor (QQBot passive replies) read it. */

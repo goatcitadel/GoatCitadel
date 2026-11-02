@@ -20,6 +20,8 @@ export interface ApprovalRemoteTokenDeliveryOverride {
   target: string;
   message: string;
   attachmentIds?: string[];
+  /** Send the message without the channel's markup parsing (for text that quotes untrusted pages). */
+  plainText?: boolean;
 }
 
 export interface ApprovalRemoteTokenDeliveryRuntime {
@@ -202,6 +204,7 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
           message:
             delivery?.message ?? buildIntegrationApprovalDeliveryMessage(input, Boolean(interactiveActionTemplate)),
           ...buildDeliveryAttachments(delivery),
+          ...(delivery?.plainText === true ? { plainText: true } : {}),
           interactiveActionTemplate,
         },
       };

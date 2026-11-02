@@ -73,6 +73,7 @@ export function buildChannelDeliveryPayload(
     attachmentIds: input.attachmentIds,
     interactiveActions: input.interactiveActions,
     interactiveActionTemplate: input.interactiveActionTemplate,
+    ...(input.plainText === true ? { plainText: true } : {}),
     replyToMessageId: input.replyToMessageId,
     replyToPartIndex: input.replyToPartIndex,
     effectId: input.effectId,
@@ -175,6 +176,7 @@ export function channelDeliveryPayloadToSendInput(input: ChannelDeliveryRuntimeS
       typeof payload.interactiveActionTemplate === "object" && payload.interactiveActionTemplate !== null
         ? (payload.interactiveActionTemplate as ChannelSendInput["interactiveActionTemplate"])
         : undefined,
+    ...(payload.plainText === true ? { plainText: true } : {}),
     replyToMessageId: typeof payload.replyToMessageId === "string" ? payload.replyToMessageId : undefined,
     replyToPartIndex: typeof payload.replyToPartIndex === "number" ? payload.replyToPartIndex : undefined,
     effectId: typeof payload.effectId === "string" ? payload.effectId : undefined,

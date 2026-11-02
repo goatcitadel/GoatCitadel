@@ -243,6 +243,7 @@ export async function commsSend(
         attachments,
         interactiveActions: input.interactiveActionTemplate ? undefined : input.interactiveActions,
         interactiveActionTemplate: input.interactiveActionTemplate,
+        ...(input.plainText === true ? { plainText: true } : {}),
         outboundSanitizer: hasOutboundSanitizerEffect(sanitized)
           ? {
               removedBlockCount: sanitized.removedBlockCount,

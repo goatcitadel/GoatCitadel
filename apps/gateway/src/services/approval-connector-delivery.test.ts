@@ -377,6 +377,20 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
     expect(payload?.secretRefs).toEqual({ approvalActionToken: "keychain:goatcitadel:approval-remote-action:rat_123" });
   });
 
+  it("marks a plain-text delivery override, and only that one", () => {
+    const build = (plainText?: boolean) =>
+      buildApprovalRemoteTokenConnectorDeliveryPayload({
+        approval: createApproval(),
+        connector: createConnector("integration_connection", "active", ["outbound_messages"], { key: "telegram" }),
+        tokenId: "rat_123",
+        expiresAt: "2026-03-20T12:00:00.000Z",
+        delivery: { target: "4242", message: "GoatCitadel wants to: a_b <c>", ...(plainText ? { plainText } : {}) },
+      });
+
+    expect(build(true)?.payload?.plainText).toBe(true);
+    expect(build()?.payload).not.toHaveProperty("plainText");
+  });
+
   it("still refuses a delivery override on a connection that can't send", () => {
     expect(
       buildApprovalRemoteTokenConnectorDeliveryPayload({

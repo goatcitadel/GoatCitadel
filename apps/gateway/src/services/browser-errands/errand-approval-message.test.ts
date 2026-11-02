@@ -57,6 +57,26 @@ describe("buildErrandApprovalMessage", () => {
     },
   );
 
+  it("fits a long summary, a long page address and the group note together", () => {
+    const message = buildErrandApprovalMessage({
+      summary: "Type the delivery note ".repeat(80),
+      pageUrl: `https://shop.example/${"checkout/".repeat(150)}`,
+      buttons: false,
+      notes: [ERRAND_SCREENSHOT_PRIVATE_ONLY_LINE],
+    });
+
+    expect(message.length).toBeLessThanOrEqual(ERRAND_APPROVAL_MESSAGE_MAX_LENGTH);
+    const lines = message.split("\n");
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toMatch(/^GoatCitadel wants to: Type the delivery note .*…$/);
+    expect(lines[0]!.length).toBeGreaterThanOrEqual(256);
+    expect(lines[1]).toMatch(/^Page: https:\/\/shop\.example\/checkout\/.*…$/);
+    expect(lines.slice(2)).toEqual([
+      "Reply APPROVE or DENY. Reply STOP to end the errand.",
+      ERRAND_SCREENSHOT_PRIVATE_ONLY_LINE,
+    ]);
+  });
+
   it("never splits a surrogate pair when shortening", () => {
     const message = buildErrandApprovalMessage({ summary: "🐐".repeat(600), buttons: true });
 

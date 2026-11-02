@@ -206,6 +206,37 @@ describe("protected approval action provider boundary", () => {
     });
   });
 
+  it("sends a plain-text message without the connection's parse mode, on text and photo", async () => {
+    const harness = createHarness({ parseMode: "HTML" });
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) =>
+        new Response(JSON.stringify({ ok: true, result: { message_id: 1004 } }), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const plainText = createRequest();
+    plainText.args.message = "GoatCitadel wants to: Click <b>Buy_now</b>";
+    plainText.args.plainText = true;
+    const plainPhoto = createRequest();
+    plainPhoto.args.plainText = true;
+    plainPhoto.args.attachments = [
+      { title: "spotlight.png", mimeType: "image/png", dataBase64: Buffer.from("png-bytes").toString("base64") },
+    ];
+    const markup = createRequest();
+
+    for (const request of [plainText, plainPhoto, markup]) {
+      await expect(
+        executeTool(request, createConfig(["api.telegram.org"]), harness.storage, harness.runtime),
+      ).resolves.toMatchObject({ status: "sent" });
+    }
+
+    const [textCall, photoCall, markupCall] = fetchMock.mock.calls;
+    const textBody = JSON.parse(String(textCall![1]?.body));
+    expect(textBody.parse_mode).toBeUndefined();
+    expect(textBody.text).toBe("GoatCitadel wants to: Click <b>Buy_now</b>");
+    expect((photoCall![1]?.body as FormData).get("parse_mode")).toBeNull();
+    expect(JSON.parse(String(markupCall![1]?.body)).parse_mode).toBe("HTML");
+  });
+
   it("keeps the buttons on the text when the caption is too long for the photo", async () => {
     const harness = createHarness();
     const fetchMock = vi.fn(
@@ -255,6 +286,7 @@ function createHarness(
     enabled?: boolean;
     status?: string;
     approvalReady?: boolean;
+    parseMode?: string;
   } = {},
 ) {
   const channelKey = overrides.channelKey ?? "telegram";
@@ -279,7 +311,11 @@ function createHarness(
         status: overrides.status ?? "connected",
         config:
           channelKey === "telegram"
-            ? { botToken: "telegram-provider-token", defaultChatId: "-1001234567890" }
+            ? {
+                botToken: "telegram-provider-token",
+                defaultChatId: "-1001234567890",
+                ...(overrides.parseMode ? { parseMode: overrides.parseMode } : {}),
+              }
             : { botToken: "slack-provider-token", defaultChannel: "#approvals" },
       })),
     },

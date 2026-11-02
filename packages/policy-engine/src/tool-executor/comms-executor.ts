@@ -1462,6 +1462,8 @@ async function telegramSend(
   const chatId = asString(args.target) ?? resolvedTarget ?? asString(config.defaultChatId);
   const replyToMessageId = parseOptionalIntegerLike(args.replyToMessageId ?? args.replyTo);
   const replyMarkup = normalizeTelegramInlineKeyboard(args.interactiveActions);
+  // A plain-text send (text quoting untrusted pages) skips the connection's HTML/Markdown parse mode.
+  const sendConfig = args.plainText === true ? { ...config, parseMode: undefined } : config;
   if (!token) {
     throw new Error("Missing Telegram bot token");
   }
@@ -1470,14 +1472,23 @@ async function telegramSend(
   }
 
   if (attachments.length === 0) {
-    return telegramSendText(config, allowlist, token, chatId, message, replyToMessageId, replyMarkup, grantAllowlist);
+    return telegramSendText(
+      sendConfig,
+      allowlist,
+      token,
+      chatId,
+      message,
+      replyToMessageId,
+      replyMarkup,
+      grantAllowlist,
+    );
   }
 
   let lastMessageId: string | undefined;
   let caption = message.trim() || undefined;
   if (caption && caption.length > 1024) {
     lastMessageId = await telegramSendText(
-      config,
+      sendConfig,
       allowlist,
       token,
       chatId,
@@ -1494,7 +1505,7 @@ async function telegramSend(
   for (const [index, attachment] of attachments.entries()) {
     try {
       lastMessageId = await telegramSendAttachment(
-        config,
+        sendConfig,
         allowlist,
         token,
         chatId,

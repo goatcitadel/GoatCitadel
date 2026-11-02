@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest, ConnectorRecord } from "@goatcitadel/contracts";
 import {
   deliverErrandApproval,
@@ -8,9 +8,14 @@ import {
 
 const NOW = Date.parse("2026-11-02T10:00:00.000Z");
 const RAW_TOKEN = `grat_${"e".repeat(43)}`;
+const SESSION_ID = "session-errand";
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("deliverErrandApproval", () => {
-  it("sends text only to a group, with the private-only line", async () => {
+  it("sends plain text only to a group, with the private-only line", async () => {
     const harness = createHarness();
 
     const result = await deliverErrandApproval(harness.deps, {
@@ -26,11 +31,13 @@ describe("deliverErrandApproval", () => {
       message:
         "GoatCitadel wants to: Click Buy — Places the order\nPage: https://shop.example/cart\n" +
         "Tap Approve or Deny.\nScreenshots are only sent in a private conversation.",
+      plainText: true,
     });
-    expect(input.delivery).not.toHaveProperty("attachmentIds");
+    // A group never even looks the screenshot up.
+    expect(harness.attachmentSessionId).not.toHaveBeenCalled();
   });
 
-  it("attaches the screenshot in a private conversation", async () => {
+  it("attaches the screenshot in a private conversation when it belongs to the approval's session", async () => {
     const harness = createHarness();
 
     await deliverErrandApproval(harness.deps, {
@@ -39,21 +46,53 @@ describe("deliverErrandApproval", () => {
       screenshotAttachmentId: "att-before",
     });
 
+    expect(harness.attachmentSessionId).toHaveBeenCalledWith("att-before");
     const [, input] = harness.createToken.mock.calls[0]!;
     expect(input.delivery).toEqual({
       target: "4242",
       message:
         "GoatCitadel wants to: Click Buy — Places the order\nPage: https://shop.example/cart\nTap Approve or Deny.",
+      plainText: true,
       attachmentIds: ["att-before"],
     });
   });
 
-  it("falls back to the approval's own screenshot when none is passed", async () => {
+  it.each([
+    { name: "another session's attachment", owner: "session-other" },
+    { name: "an unreadable attachment", owner: new Error("not found") },
+  ])("still delivers, without the screenshot, for $name", async ({ owner }) => {
+    const harness = createHarness({ attachmentOwner: owner });
+
+    const result = await deliverErrandApproval(harness.deps, {
+      approval: createApproval(),
+      origin: createOrigin(),
+      screenshotAttachmentId: "att-foreign",
+    });
+
+    expect(result).toEqual({ delivered: true });
+    expect(harness.createToken.mock.calls[0]![1].delivery).not.toHaveProperty("attachmentIds");
+  });
+
+  it("skips the screenshot when the approval has no linked session", async () => {
+    const harness = createHarness();
+
+    await deliverErrandApproval(harness.deps, {
+      approval: createApproval({ linkage: {} }),
+      origin: createOrigin(),
+      screenshotAttachmentId: "att-before",
+    });
+
+    expect(harness.attachmentSessionId).not.toHaveBeenCalled();
+    expect(harness.createToken.mock.calls[0]![1].delivery).not.toHaveProperty("attachmentIds");
+  });
+
+  it("uses only the screenshot it is given, never the approval preview's", async () => {
     const harness = createHarness();
 
     await deliverErrandApproval(harness.deps, { approval: createApproval(), origin: createOrigin() });
 
-    expect(harness.createToken.mock.calls[0]![1].delivery.attachmentIds).toEqual(["att-preview"]);
+    expect(harness.attachmentSessionId).not.toHaveBeenCalled();
+    expect(harness.createToken.mock.calls[0]![1].delivery).not.toHaveProperty("attachmentIds");
   });
 
   it("asks for a reply when the connection can't take inline buttons", async () => {
@@ -90,23 +129,68 @@ describe("deliverErrandApproval", () => {
     expect(JSON.stringify(result)).not.toContain(RAW_TOKEN);
   });
 
-  it.each([
-    { name: "not queued", status: "not_configured" as const, reason: "The channel connection can't send approvals." },
-    { name: "failed", status: "failed" as const, reason: "send refused" },
-  ])("records nothing when the delivery is $name", async ({ status, reason }) => {
-    const harness = createHarness({ deliveryStatus: status, deliveryError: status === "failed" ? reason : undefined });
+  it("refuses an approval that is not an errand approval, without issuing a token", async () => {
+    const harness = createHarness();
 
     await expect(
-      deliverErrandApproval(harness.deps, { approval: createApproval(), origin: createOrigin() }),
-    ).resolves.toEqual({ delivered: false, reason });
+      deliverErrandApproval(harness.deps, {
+        approval: createApproval({ kind: "tool.invoke" }),
+        origin: createOrigin(),
+        screenshotAttachmentId: "att-before",
+      }),
+    ).resolves.toEqual({ delivered: false, reason: "not_errand_approval" });
+    expect(harness.requireConnector).not.toHaveBeenCalled();
+    expect(harness.createToken).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { name: "not queued", status: "not_configured" as const, error: undefined },
+    { name: "failed", status: "failed" as const, error: "Approval 7f3c-uuid send refused" },
+  ])("returns a fixed reason and logs the detail when the delivery is $name", async ({ status, error }) => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const harness = createHarness({ deliveryStatus: status, deliveryError: error });
+
+    const result = await deliverErrandApproval(harness.deps, { approval: createApproval(), origin: createOrigin() });
+
+    expect(result).toEqual({ delivered: false, reason: "delivery_failed" });
     expect(harness.recordDelivery).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledWith(
+      "[goatcitadel] errand approval was not sent to the conversation",
+      expect.objectContaining({ approvalId: "apr_errand", detail: error ?? status }),
+    );
+  });
+
+  it("keeps an issuance error's text out of the result", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const harness = createHarness();
+    harness.createToken.mockRejectedValueOnce(new Error("Approval 1b2c3d4e-0000 has expired."));
+
+    const result = await deliverErrandApproval(harness.deps, { approval: createApproval(), origin: createOrigin() });
+
+    expect(result).toEqual({ delivered: false, reason: "delivery_failed" });
+    expect(JSON.stringify(result)).not.toContain("1b2c3d4e");
+    expect(warn).toHaveBeenCalledWith(
+      "[goatcitadel] errand approval was not sent to the conversation",
+      expect.objectContaining({ detail: "Approval 1b2c3d4e-0000 has expired." }),
+    );
   });
 
   it("does not issue a token for a disconnected connection, a resolved approval or an expired one", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const disconnected = createHarness({ connectorStatus: "degraded" });
     await expect(
       deliverErrandApproval(disconnected.deps, { approval: createApproval(), origin: createOrigin() }),
-    ).resolves.toEqual({ delivered: false, reason: "The channel connection is not connected." });
+    ).resolves.toEqual({ delivered: false, reason: "connection_unavailable" });
+
+    const unreadable = createHarness();
+    unreadable.requireConnector.mockRejectedValueOnce(new Error("Connector integration:conn-telegram not found"));
+    await expect(
+      deliverErrandApproval(unreadable.deps, { approval: createApproval(), origin: createOrigin() }),
+    ).resolves.toEqual({ delivered: false, reason: "connection_unavailable" });
+    expect(warn).toHaveBeenCalledWith(
+      "[goatcitadel] errand approval connection could not be read",
+      expect.objectContaining({ connectionId: "conn-telegram" }),
+    );
 
     const resolved = createHarness();
     await expect(
@@ -114,7 +198,7 @@ describe("deliverErrandApproval", () => {
         approval: createApproval({ status: "approved" }),
         origin: createOrigin(),
       }),
-    ).resolves.toMatchObject({ delivered: false });
+    ).resolves.toEqual({ delivered: false, reason: "approval_not_pending" });
 
     const expired = createHarness();
     await expect(
@@ -122,21 +206,12 @@ describe("deliverErrandApproval", () => {
         approval: createApproval({ expiresAt: "2026-11-02T09:59:59.000Z" }),
         origin: createOrigin(),
       }),
-    ).resolves.toEqual({ delivered: false, reason: "The approval has expired." });
+    ).resolves.toEqual({ delivered: false, reason: "approval_expired" });
 
-    for (const harness of [disconnected, resolved, expired]) {
+    for (const harness of [disconnected, unreadable, resolved, expired]) {
       expect(harness.createToken).not.toHaveBeenCalled();
       expect(harness.recordDelivery).not.toHaveBeenCalled();
     }
-  });
-
-  it("turns an issuance error into a not-delivered result", async () => {
-    const harness = createHarness();
-    harness.createToken.mockRejectedValueOnce(new Error("Approval apr_errand has expired."));
-
-    await expect(
-      deliverErrandApproval(harness.deps, { approval: createApproval(), origin: createOrigin() }),
-    ).resolves.toEqual({ delivered: false, reason: "Approval apr_errand has expired." });
   });
 });
 
@@ -146,6 +221,7 @@ function createHarness(
     connectorStatus?: ConnectorRecord["status"];
     deliveryStatus?: "queued" | "not_configured" | "failed";
     deliveryError?: string;
+    attachmentOwner?: string | Error;
   } = {},
 ) {
   const requireConnector = vi.fn(
@@ -168,13 +244,21 @@ function createHarness(
     ...(options.deliveryError ? { deliveryError: options.deliveryError } : {}),
   }));
   const recordDelivery = vi.fn();
+  const attachmentSessionId = vi.fn(async (_attachmentId: string) => {
+    const owner = options.attachmentOwner ?? SESSION_ID;
+    if (owner instanceof Error) {
+      throw owner;
+    }
+    return owner;
+  });
   const deps: ErrandApprovalDeliveryDeps = {
     requireConnectorRecord: requireConnector,
     createApprovalRemoteActionToken: createToken,
     recordDelivery,
+    attachmentSessionId,
     now: () => NOW,
   };
-  return { deps, requireConnector, createToken, recordDelivery };
+  return { deps, requireConnector, createToken, recordDelivery, attachmentSessionId };
 }
 
 function createOrigin(overrides: Partial<ErrandApprovalConversation> = {}): ErrandApprovalConversation {
@@ -191,7 +275,7 @@ function createApproval(overrides: Partial<ApprovalRequest> = {}): ApprovalReque
   return {
     approvalId: "apr_errand",
     kind: "browser.errand.action",
-    riskLevel: "danger",
+    riskLevel: "caution",
     status: "pending",
     payload: {},
     preview: {
@@ -201,6 +285,7 @@ function createApproval(overrides: Partial<ApprovalRequest> = {}): ApprovalReque
       screenshotAttachmentId: "att-preview",
       screenshotSha256: "abc",
     },
+    linkage: { sessionId: SESSION_ID, turnId: "turn-1" },
     createdAt: "2026-11-02T09:59:00.000Z",
     expiresAt: "2026-11-02T10:02:00.000Z",
     explanationStatus: "not_requested",
