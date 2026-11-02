@@ -65,7 +65,11 @@ export type ChatOrchestrationReviewDepth = "off" | "standard" | "strict";
  */
 export interface ChatAnswerReviewRecord {
   depth: Exclude<ChatOrchestrationReviewDepth, "off">;
-  outcome: "passed" | "issues_found" | "unavailable";
+  /**
+   * `running` is only streamed live (a `trace_update` while the reviewer call runs) so Chat can say the answer is
+   * being reviewed; a saved trace always holds a finished outcome.
+   */
+  outcome: "running" | "passed" | "issues_found" | "unavailable";
   /** Short, one-sentence issues; empty unless `outcome` is `issues_found`. */
   issues: string[];
   /** Why the review is unavailable (provider error, timeout, unreadable verdict). */

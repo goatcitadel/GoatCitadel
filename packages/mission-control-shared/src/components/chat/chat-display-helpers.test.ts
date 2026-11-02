@@ -19,6 +19,10 @@ describe("formatAnswerReviewLabel", () => {
     expect(formatAnswerReviewLabel(review())).toBeNull();
   });
 
+  it("gives a live-only running review no line, so a turn kept after a failed stream never claims one", () => {
+    expect(formatAnswerReviewLabel(review({ ...base, outcome: "running", issues: [] }))).toBeNull();
+  });
+
   it("names the verdict in one short line", () => {
     expect(formatAnswerReviewLabel(review({ ...base, outcome: "passed", issues: [] }))).toBe("Reviewed: no issues");
     expect(formatAnswerReviewLabel(review({ ...base, outcome: "issues_found", issues: ["a", "b"] }))).toBe(

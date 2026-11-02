@@ -2735,7 +2735,7 @@ export async function* streamPreparedAgentChatTurn(
     if (finalText.trim()) {
       await assertChatStreamCompletionWritable(host, turnId, controller.signal, completionOwnerStatuses);
       const currentTraceBeforeWrite = await readTurnTrace();
-      const answerReview = await reviewPreparedTurnAnswer(host, prepared, {
+      const reviewInput: PreparedTurnReviewInput = {
         answer: finalText,
         status: runnerTerminalStatus ?? "completed",
         trace: currentTraceBeforeWrite,
@@ -2743,7 +2743,32 @@ export async function* streamPreparedAgentChatTurn(
         repaired: streamLayerRepaired,
         remoteWorker: Boolean(options?.remoteWorkerExecution),
         signal: controller.signal,
-      });
+      };
+      const reviewDepth = preparedTurnReviewDepth(prepared, reviewInput);
+      if (reviewDepth) {
+        // The answer has already streamed; say the review is running so the wait before completion is visible.
+        yield {
+          type: "trace_update",
+          sessionId,
+          turnId,
+          trace: {
+            ...currentTraceBeforeWrite,
+            reflection: {
+              attempted: currentTraceBeforeWrite.reflection?.attempted ?? false,
+              attemptCount: currentTraceBeforeWrite.reflection?.attemptCount ?? 0,
+              ...currentTraceBeforeWrite.reflection,
+              answerReview: {
+                depth: reviewDepth,
+                outcome: "running",
+                issues: [],
+                action: "recorded",
+                reviewedAt: new Date().toISOString(),
+              },
+            },
+          },
+        };
+      }
+      const answerReview = await reviewPreparedTurnAnswer(host, prepared, reviewInput);
       if (answerReview?.note) {
         finalText = `${finalText}${answerReview.note}`;
         yield { type: "delta", sessionId, turnId, messageId: assistantMessageId, delta: answerReview.note };
@@ -3104,4 +3129,8 @@ function bindExternalAbortToController(
   };
 }
 import { readFanoutCompletionTrace } from "./chat-fanout-wait-evidence.js";
-import { reviewPreparedTurnAnswer } from "./chat-answer-review.js";
+import {
+  preparedTurnReviewDepth,
+  reviewPreparedTurnAnswer,
+  type PreparedTurnReviewInput,
+} from "./chat-answer-review.js";
