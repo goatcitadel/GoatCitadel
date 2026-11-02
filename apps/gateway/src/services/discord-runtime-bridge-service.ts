@@ -13,6 +13,7 @@ import {
   type PersonalityCatalogResponse,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
 import { ERRAND_OWNER_ONLY_COPY, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { ChatCommandOptions } from "./chat-command-service.js";
@@ -407,6 +408,10 @@ function readDurableDiscordApproval(
 }
 
 function renderDiscordApprovalResolution(result: ApprovalResolveResult, decision: DiscordApprovalDecision): string {
+  // An errand approval's answer goes to a conversation, so it carries no approval id.
+  if (isSelfPolledApprovalKind(result.approval.kind)) {
+    return decision === "approve" ? "Approved." : "Denied.";
+  }
   return decision === "approve"
     ? `Approved ${result.approval.approvalId}. GoatCitadel will resume any waiting work it can safely resume.`
     : `Rejected ${result.approval.approvalId}. GoatCitadel will keep the requested action blocked.`;

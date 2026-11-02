@@ -42,7 +42,9 @@ function setup(kind: string, channel: "telegram" | "discord") {
   });
   const context = {
     storage: {
-      remoteActionTokens: { get: () => ({ tokenId: "tok-1", approvalId: "approval-1" }) },
+      remoteActionTokens: {
+        get: () => ({ tokenId: "tok-1", approvalId: "approval-1", connectorId: "integration:conn-1" }),
+      },
       approvals: { get: async () => ({ approvalId: "approval-1", kind }) },
     },
     assertErrandPressOwner: guard,
@@ -55,7 +57,7 @@ function setup(kind: string, channel: "telegram" | "discord") {
       decision: "approve",
       channelActorId: actorId,
     });
-  return { press, consume };
+  return { press, consume, context };
 }
 
 describe("errand approval buttons answer only to the owner", () => {
@@ -87,7 +89,9 @@ describe("errand approval buttons answer only to the owner", () => {
     const consume = vi.fn();
     const bare = {
       storage: {
-        remoteActionTokens: { get: () => ({ tokenId: "tok-1", approvalId: "approval-1" }) },
+        remoteActionTokens: {
+          get: () => ({ tokenId: "tok-1", approvalId: "approval-1", connectorId: "integration:conn-1" }),
+        },
         approvals: { get: async () => ({ approvalId: "approval-1", kind: "browser.errand.action" }) },
       },
       consumeRemoteActionTokenById: consume,
@@ -100,6 +104,32 @@ describe("errand approval buttons answer only to the owner", () => {
         channelActorId: OWNER,
       }),
     ).rejects.toBeInstanceOf(ErrandOwnerOnlyError);
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it("refuses an errand approval pressed without a channel actor", async () => {
+    const { consume, context } = setup("browser.errand.action", "telegram");
+    await expect(
+      resolveApprovalWithRemoteTokenId(context, {
+        tokenId: "tok-1",
+        connectorId: "integration:conn-1",
+        decision: "approve",
+      }),
+    ).rejects.toBeInstanceOf(ErrandOwnerOnlyError);
+    expect(consume).not.toHaveBeenCalled();
+  });
+
+  it("does not consume the token when the approval cannot be read", async () => {
+    const { consume, context } = setup("browser.errand.action", "telegram");
+    (context.storage.approvals as { get: unknown }).get = async () => Promise.reject(new Error("db down"));
+    await expect(
+      resolveApprovalWithRemoteTokenId(context, {
+        tokenId: "tok-1",
+        connectorId: "integration:conn-1",
+        decision: "approve",
+        channelActorId: OWNER,
+      }),
+    ).rejects.toThrow("db down");
     expect(consume).not.toHaveBeenCalled();
   });
 

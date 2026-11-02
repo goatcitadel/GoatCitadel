@@ -273,9 +273,7 @@ export async function resolveApprovalWithRemoteTokenId(
   if (!connectorId) {
     throw new ValidationError({ message: "Opaque remote action token resolution requires a connector binding." });
   }
-  if (input.channelActorId) {
-    await assertChannelPressMayAnswer(context, input.tokenId, connectorId, input.channelActorId);
-  }
+  await assertChannelPressMayAnswer(context, input.tokenId, input.channelActorId);
   const tokenRecord = await context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
     claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
     expectedConnectorId: connectorId,
@@ -287,18 +285,22 @@ export async function resolveApprovalWithRemoteTokenId(
 async function assertChannelPressMayAnswer(
   context: ApprovalRemoteActionContext,
   tokenId: string,
-  connectorId: string,
-  actorId: string,
+  actorId: string | undefined,
 ): Promise<void> {
-  const approvalId = (await context.storage.remoteActionTokens.get(tokenId)).approvalId;
-  const approval = approvalId ? await context.storage.approvals.get(approvalId).catch(() => undefined) : undefined;
-  if (!approval || !isSelfPolledApprovalKind(approval.kind)) {
+  const tokenRecord = await context.storage.remoteActionTokens.get(tokenId);
+  const approvalId = tokenRecord.approvalId ?? String(tokenRecord.mutation?.approvalId ?? "").trim();
+  if (!approvalId) {
     return;
   }
-  if (!context.assertErrandPressOwner) {
+  // A failed read propagates: the token is never consumed on a kind that could not be established.
+  const approval = await context.storage.approvals.get(approvalId);
+  if (!isSelfPolledApprovalKind(approval.kind)) {
+    return;
+  }
+  if (!actorId?.trim() || !context.assertErrandPressOwner) {
     throw new ErrandOwnerOnlyError();
   }
-  await context.assertErrandPressOwner({ connectorId, actorId });
+  await context.assertErrandPressOwner({ connectorId: tokenRecord.connectorId, actorId });
 }
 
 function assertApprovalPending(approval: ApprovalRequest): void {
