@@ -152,7 +152,10 @@ export class BrowserErrandService {
     return origin ? { ...origin } : undefined;
   }
 
-  /** Remembers that the running errand's approval was sent to a channel conversation. */
+  /**
+   * Remembers that the running errand's approval was sent to a channel conversation. It targets the single active
+   * errand (only one runs at a time); a record that arrives after that errand ended is dropped.
+   */
   public recordDelivery(record: ErrandApprovalDeliveryRecord): void {
     const errand = this.active;
     if (!errand) {
@@ -474,10 +477,13 @@ export class BrowserErrandService {
         errand.view.finalAttachmentId = finalScreenshotAttachmentId;
       }
       this.finishView(errand, outcome.status, outcome.summary);
-      void this.channelReplies?.notices?.finished(errand.origin, {
-        sessionId: request.sessionId,
-        ...(finalScreenshotAttachmentId ? { finalScreenshotAttachmentId } : {}),
-      });
+      // A disposed service (the Gateway is shutting down) sends nothing more to channels.
+      if (!this.disposed) {
+        void this.channelReplies?.notices?.finished(errand.origin, {
+          sessionId: request.sessionId,
+          ...(finalScreenshotAttachmentId ? { finalScreenshotAttachmentId } : {}),
+        });
+      }
       errand.view.stepCount = outcome.steps;
       errand.view.modelRequests = outcome.modelRequests;
       return {
@@ -606,8 +612,12 @@ export class BrowserErrandService {
     if (errand.controller.signal.aborted) {
       this.resolveHandBack(errand, "stopped");
     }
-    // A sign-in or bot-check pause tells the operator's channel; the notice is withdrawn once the pause ends.
-    const cancelNotice = reason === "operator" ? undefined : this.channelReplies?.notices?.signInPaused(errand.origin);
+    // A sign-in or bot-check pause tells the operator's channel, unless Stop already ended it during the render; the
+    // notice is withdrawn once the pause ends.
+    const cancelNotice =
+      reason === "operator" || errand.controller.signal.aborted
+        ? undefined
+        : this.channelReplies?.notices?.signInPaused(errand.origin, reason);
     try {
       return await handedBack;
     } finally {

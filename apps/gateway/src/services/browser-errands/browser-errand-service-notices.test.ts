@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ErrandChannelNotices } from "./errand-channel-notices.js";
-import { buildService, errandRequest, outcome } from "./browser-errand-test-fixtures.js";
+import { buildService, errandRequest, outcome, untilAborted } from "./browser-errand-test-fixtures.js";
 
 function fakeNotices() {
   const cancel = vi.fn();
@@ -27,7 +27,7 @@ describe("BrowserErrandService channel notices", () => {
         (runs += 1) === 1 ? (await deps.waitForHandBack("sign_in"), outcome("done")) : outcome("done"),
     });
     const running = service.run(errandRequest());
-    await vi.waitFor(() => expect(notices.signInPaused).toHaveBeenCalledWith({ kind: "pc" }));
+    await vi.waitFor(() => expect(notices.signInPaused).toHaveBeenCalledWith({ kind: "pc" }, "sign_in"));
     expect(cancel).not.toHaveBeenCalled();
     browser.fireOverlay({ type: "hand_back" });
     await running;
@@ -56,11 +56,42 @@ describe("BrowserErrandService channel notices", () => {
       runLoop: async (deps) => (await deps.waitForHandBack("bot_check"), outcome("stopped")),
     });
     const running = service.run(errandRequest());
-    await vi.waitFor(() => expect(notices.signInPaused).toHaveBeenCalled());
+    await vi.waitFor(() => expect(notices.signInPaused).toHaveBeenCalledWith({ kind: "pc" }, "bot_check"));
     await service.stop(service.getStatus("tool-run-1")!.errandId, "operator");
     await running;
     expect(cancel).toHaveBeenCalledOnce();
     await service.dispose();
+  });
+
+  it("starts no notice when Stop lands while the pause banner is drawn", async () => {
+    const { notices } = fakeNotices();
+    const { service, browser } = buildService(vi.fn, {
+      channelReplies: repliesWith(notices),
+      runLoop: async (deps) => (await deps.waitForHandBack("sign_in"), outcome("stopped")),
+    });
+    const render = browser.overlay.render.bind(browser.overlay);
+    browser.overlay.render = async (state) => {
+      await render(state);
+      if (state.mode === "sign_in") {
+        await service.stop(service.getStatus("tool-run-1")!.errandId, "operator");
+      }
+    };
+    await service.run(errandRequest());
+    expect(notices.signInPaused).not.toHaveBeenCalled();
+    await service.dispose();
+  });
+
+  it("sends no finished notice once the service is disposed", async () => {
+    const { notices } = fakeNotices();
+    const { service } = buildService(vi.fn, {
+      channelReplies: repliesWith(notices),
+      runLoop: untilAborted,
+    });
+    const running = service.run(errandRequest());
+    await vi.waitFor(() => expect(service.getStatus("tool-run-1")?.state).toBe("running"));
+    await service.dispose();
+    await running;
+    expect(notices.finished).not.toHaveBeenCalled();
   });
 
   it("hands the errand's own session and final screenshot to the finished notice", async () => {

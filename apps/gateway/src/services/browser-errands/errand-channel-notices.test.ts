@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ErrandApprovalConversation } from "./errand-approval-delivery.js";
 import {
   createErrandChannelNotices,
+  ERRAND_BOT_CHECK_NOTICE_COPY,
   ERRAND_SIGN_IN_NOTICE_COPY,
   sendErrandChannelMessage,
   type ErrandChannelNoticeDeps,
@@ -63,7 +64,7 @@ describe("errand channel notices", () => {
 
   it("tells a channel-started errand's conversation about a sign-in right away", async () => {
     const { notices, send } = build();
-    notices.signInPaused(group);
+    notices.signInPaused(group, "sign_in");
     await vi.advanceTimersByTimeAsync(0);
     expect(send).toHaveBeenCalledOnce();
     expect(send).toHaveBeenCalledWith({
@@ -76,7 +77,7 @@ describe("errand channel notices", () => {
 
   it("tells the picked conversation about a PC errand's sign-in only after 30 seconds", async () => {
     const { notices, send } = build();
-    notices.signInPaused(PC);
+    notices.signInPaused(PC, "sign_in");
     await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS - 1);
     expect(send).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
@@ -87,16 +88,40 @@ describe("errand channel notices", () => {
 
   it("sends nothing when the pause ends before 30 seconds", async () => {
     const { notices, send } = build();
-    const cancel = notices.signInPaused(PC);
+    const cancel = notices.signInPaused(PC, "sign_in");
     await vi.advanceTimersByTimeAsync(10_000);
     cancel();
     await vi.advanceTimersByTimeAsync(60_000);
     expect(send).not.toHaveBeenCalled();
   });
 
+  it("says the bot-check copy, not the sign-in copy, for a bot-check pause", async () => {
+    const { notices, send } = build();
+    notices.signInPaused(direct, "bot_check");
+    notices.signInPaused(PC, "bot_check");
+    await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS);
+    expect(send).toHaveBeenCalledTimes(2);
+    for (const [input] of send.mock.calls) {
+      expect((input as Record<string, unknown>).message).toBe(ERRAND_BOT_CHECK_NOTICE_COPY);
+    }
+  });
+
+  it("sends nothing when the pause ends while the picked conversation is still being read", async () => {
+    let answer: (conversation: ErrandApprovalConversation | undefined) => void = () => undefined;
+    const { notices, send } = build({
+      pickedConversation: () => new Promise((resolve) => (answer = resolve)),
+    });
+    const cancel = notices.signInPaused(PC, "sign_in");
+    await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS);
+    cancel();
+    answer(PICKED);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(send).not.toHaveBeenCalled();
+  });
+
   it("sends nothing for a PC errand when no conversation is picked", async () => {
     const { notices, send } = build({ pickedConversation: async () => undefined });
-    notices.signInPaused(PC);
+    notices.signInPaused(PC, "sign_in");
     await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS + 1);
     expect(send).not.toHaveBeenCalled();
   });

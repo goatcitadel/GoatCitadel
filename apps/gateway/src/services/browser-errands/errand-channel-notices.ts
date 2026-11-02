@@ -1,7 +1,7 @@
 /**
  * Plain channel messages about a running errand, beyond approvals:
- * - a sign-in or bot-check pause: "GoatCitadel needs you at the PC to sign in." A channel-started errand says so in
- *   its own conversation at once; a PC-started errand says so in the conversation the operator picked for errand
+ * - a sign-in pause: "GoatCitadel needs you at the PC to sign in."; a bot-check pause: "GoatCitadel needs you at the
+ *   PC." A channel-started errand says so in its own conversation at once; a PC-started errand says so in the conversation the operator picked for errand
  *   approvals, once the pause has lasted ERRAND_ESCALATE_AFTER_MS and only while it is still going. Never a phone push.
  * - the final screenshot of a channel-started errand, sent only into a private conversation; a group gets the
  *   private-only line once instead.
@@ -16,6 +16,10 @@ import { ERRAND_ESCALATE_AFTER_MS } from "./errand-constants.js";
 import type { ErrandOrigin } from "./errand-origin.js";
 
 export const ERRAND_SIGN_IN_NOTICE_COPY = "GoatCitadel needs you at the PC to sign in. The errand is paused.";
+export const ERRAND_BOT_CHECK_NOTICE_COPY = "GoatCitadel needs you at the PC. The errand is paused.";
+
+/** Why an errand paused for the operator at the PC. */
+export type ErrandPauseReason = "sign_in" | "bot_check";
 
 export interface ErrandChannelMessage {
   connectionId: string;
@@ -60,8 +64,8 @@ export interface ErrandFinishedNotice {
 }
 
 export interface ErrandChannelNotices {
-  /** Starts the sign-in notice for a pause; the returned function cancels it when the pause ends. */
-  signInPaused(origin: ErrandOrigin): () => void;
+  /** Starts the notice for a sign-in or bot-check pause; the returned function cancels it when the pause ends. */
+  signInPaused(origin: ErrandOrigin, reason: ErrandPauseReason): () => void;
   /** Sends the errand's final screenshot (or the private-only line) to a channel-started errand's conversation. */
   finished(origin: ErrandOrigin, notice: ErrandFinishedNotice): Promise<void>;
 }
@@ -86,21 +90,27 @@ export function createErrandChannelNotices(deps: ErrandChannelNoticeDeps): Erran
   };
 
   return {
-    signInPaused: (origin) => {
+    signInPaused: (origin, reason) => {
+      const copy = reason === "bot_check" ? ERRAND_BOT_CHECK_NOTICE_COPY : ERRAND_SIGN_IN_NOTICE_COPY;
       if (origin.kind === "channel") {
-        void sendSafely(origin, ERRAND_SIGN_IN_NOTICE_COPY);
+        void sendSafely(origin, copy);
         return () => undefined;
       }
+      // Set when the pause ends, so a pause that ends while the picked conversation is being read sends nothing.
+      let cancelled = false;
       const timer = setTimeout(() => {
         void pickedConversation()
           .catch(() => undefined)
           .then(async (conversation) => {
-            if (conversation) {
-              await sendSafely(conversation, ERRAND_SIGN_IN_NOTICE_COPY);
+            if (conversation && !cancelled) {
+              await sendSafely(conversation, copy);
             }
           });
       }, afterMs);
-      return () => clearTimeout(timer);
+      return () => {
+        cancelled = true;
+        clearTimeout(timer);
+      };
     },
     finished: async (origin, notice) => {
       const attachmentId = notice.finalScreenshotAttachmentId?.trim();
