@@ -284,6 +284,31 @@ describe("Plugin panel", () => {
     expect(panel.textContent).not.toContain("d".repeat(64));
   });
 
+  it("shows an installed Claude Code plugin's format, coverage, left-out list and warnings", async () => {
+    const warning = "Its pre-approved tools aren't kept. Your own tool rules and approvals apply.";
+    plugin = { ...plugin, pieces: [CALENDAR, { ...NOTES, warnings: [warning] }] };
+    api.fetchCapabilityPluginDetail.mockImplementation(async () => ({
+      ...detailOf(plugin),
+      sourceFormat: "claude_code",
+      claudeCode: { translatorVersion: 1, pluginJsonSha256: "e".repeat(64), coverage: { usable: 2, total: 3 } },
+      ignored: [
+        { kind: "command", label: "go", path: "commands/go.md", reason: "A command runs only in Claude Code." },
+      ],
+    }));
+    await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+
+    const panel = body()!;
+    expect(panel.textContent).toContain("Claude Code format · Unverified");
+    expect(panel.textContent).toContain("Experimental");
+    expect(panel.textContent).toContain("GoatCitadel can use 2 of this plugin's 3 parts.");
+    expect(panel.textContent).toContain(warning);
+    const titles = [...panel.querySelectorAll("section h3")].map((heading) => heading.textContent);
+    expect(titles.indexOf("What it leaves out")).toBe(titles.indexOf("What it added") + 1);
+    expect(panel.textContent).toContain("A command runs only in Claude Code.");
+    expect(panel.textContent).not.toContain("commands/go.md");
+    expect(panel.textContent).not.toContain("e".repeat(64));
+  });
+
   it("opens an available built-in plugin from the list alone, with Install", async () => {
     list = { ...list, installed: [], builtIn: [BUILT_IN] };
     await renderTab("/capabilities/plugins?shell=cockpit&item=plugin%3Abrowser-checks");

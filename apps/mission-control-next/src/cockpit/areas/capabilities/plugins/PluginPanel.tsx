@@ -9,10 +9,12 @@ import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { Section } from "../../../ui/Section";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
-import { WhatItIs, WhereItComesFrom } from "./PluginInstallAbout";
+import { ClaudeCodeDetails, WhatItIs, WhereItComesFrom } from "./PluginInstallAbout";
+import { PluginLeftOut } from "./PluginLeftOut";
 import { PluginUninstall } from "./PluginUninstall";
 import { PLUGIN_PIECE_KIND_LABELS, presentPieceState } from "./plugin-install-view";
-import { PLUGIN_TRUST_LABELS, presentPluginState } from "./plugin-view";
+import { pluginTrustLine } from "./plugin-format-view";
+import { presentPluginState } from "./plugin-view";
 
 const NOT_INSTALLED = "This plugin isn't installed.";
 
@@ -53,7 +55,7 @@ function AvailableBuiltIn({
       <Section title="Where it comes from" headingLevel={3}>
         <div className="space-y-1">
           <p>{item.sourceDisplay}</p>
-          <p>{PLUGIN_TRUST_LABELS[item.trust]}</p>
+          <p>{pluginTrustLine(item)}</p>
         </div>
       </Section>
       {/* The name comes last so the accessible name starts with the visible word. */}
@@ -95,6 +97,7 @@ function PluginDetailView({ detail }: { detail: CapabilityPluginDetail }) {
       <Section title="What it added" headingLevel={3}>
         <WhatItAdded detail={detail} />
       </Section>
+      <PluginLeftOut ignored={detail.ignored} />
       <PluginUninstall detail={detail} />
       <TechnicalDetails>
         <div className="space-y-1 font-mono">
@@ -103,6 +106,7 @@ function PluginDetailView({ detail }: { detail: CapabilityPluginDetail }) {
           <p>{detail.pin.kind === "commit" ? detail.pin.commit : detail.pin.treeSha256}</p>
           <p>{detail.manifestSha256}</p>
           <p>{detail.installPlanId}</p>
+          <ClaudeCodeDetails plugin={detail} />
         </div>
       </TechnicalDetails>
     </div>
@@ -124,6 +128,11 @@ function WhatItAdded({ detail }: { detail: CapabilityPluginDetail }) {
             <span className="min-w-0 font-medium text-fg">{piece.label}</span>
           )}
           <StatusBadge status={presentPieceState(piece.state)} />
+          {piece.warnings?.map((warning) => (
+            <p key={warning} className="w-full text-fg-muted">
+              {warning}
+            </p>
+          ))}
         </li>
       ))}
     </ul>
