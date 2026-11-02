@@ -23,6 +23,7 @@ import {
   type PluginSkillStepKind,
 } from "./plugin-install-store";
 import { firstUnfinishedPiece } from "./plugin-install-view";
+import { setPluginUninstall } from "./plugin-uninstall-store";
 
 // Following an install once it is confirmed: the plugin's own plan until the plugin has a record, then the plugin's
 // detail while each skill goes through its two steps, asked for here as the Skills tab asks for them. The Gateway's
@@ -227,6 +228,8 @@ function moveToPlugin(key: string, entry: PluginInstallEntry, detail: Capability
   bump(target);
   cancelPluginInstallTick(target);
   setPluginInstall(target, { state: { phase: "following", detail }, source: entry.source, chain: entry.chain });
+  // An uninstall this session saw for an earlier copy of the plugin says nothing about this one.
+  setPluginUninstall(detail.pluginId, undefined);
   setPluginInstall(key, { ...keep(entry), state: { phase: "following", detail }, movedTo: target });
   refreshInstall(target);
   receiveDetail(target, detail);

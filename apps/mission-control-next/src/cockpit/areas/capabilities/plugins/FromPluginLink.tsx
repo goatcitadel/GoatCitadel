@@ -1,3 +1,5 @@
+import { useContext } from "react";
+import { CockpitNavigationContext } from "../../../app/cockpit-navigation-context";
 import { NativeOwnerLink } from "../../../ui/NativeOwnerLink";
 import { pluginItemHref } from "./plugin-links";
 
@@ -25,5 +27,20 @@ export function OpenInPluginsLink({ pluginId, className }: { pluginId: string; c
     <NativeOwnerLink scope={pluginId} href={pluginItemHref(pluginId)} className={className}>
       Open in Plugins
     </NativeOwnerLink>
+  );
+}
+
+/**
+ * "Open in Plugins" after a sentence GoatCitadel sent when it refused a change to a plugin's piece, when it named the
+ * plugin. Outside the cockpit (the shared workbench in Classic) there is no Plugins tab to open, so nothing shows.
+ */
+export function PluginRefusalLink({ pluginId }: { pluginId: string | undefined }) {
+  const navigation = useContext(CockpitNavigationContext);
+  if (!pluginId || !navigation) return null;
+  return (
+    <>
+      {" "}
+      <OpenInPluginsLink pluginId={pluginId} />
+    </>
   );
 }

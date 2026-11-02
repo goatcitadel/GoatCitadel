@@ -124,7 +124,12 @@ function knownUncommitted(error: unknown, serverId: string, method = "PATCH") {
 }
 export type McpServerUpdateResult =
   | { status: "saved"; server: McpServerRecord }
-  | { status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked"; message: string };
+  | {
+      status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked";
+      message: string;
+      /** The plugin that owns the server, when GoatCitadel refused the change for it. */
+      pluginId?: string;
+    };
 
 /** Shared UI retry lock and exact owner acknowledgement; Gateway CAS owns the write. */
 export async function commitMcpServerUpdate({
@@ -180,7 +185,11 @@ export async function commitMcpServerUpdate({
     const refusal = dispatched ? readPluginOwnedRefusal(error) : undefined;
     if (refusal) {
       write(id, IDLE);
-      return { status: "conflict", message: refusal.message };
+      return {
+        status: "conflict",
+        message: refusal.message,
+        ...(refusal.pluginId ? { pluginId: refusal.pluginId } : {}),
+      };
     }
     if (!dispatched || knownUncommitted(error, id)) {
       write(id, IDLE);
@@ -199,7 +208,12 @@ export async function commitMcpServerUpdate({
 }
 export type McpServerDeleteResult =
   | { status: "deleted"; serverId: string }
-  | { status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked"; message: string };
+  | {
+      status: "cancelled" | "conflict" | "unavailable" | "uncertain" | "locked";
+      message: string;
+      /** The plugin that owns the server, when GoatCitadel refused the change for it. */
+      pluginId?: string;
+    };
 
 /** Exact saved revision and canonical absence; shares the update retry lock across presentations. */
 export async function commitMcpServerDelete({
@@ -263,7 +277,11 @@ export async function commitMcpServerDelete({
     const refusal = dispatched && !acknowledged ? readPluginOwnedRefusal(error) : undefined;
     if (refusal) {
       write(id, IDLE);
-      return { status: "conflict", message: refusal.message };
+      return {
+        status: "conflict",
+        message: refusal.message,
+        ...(refusal.pluginId ? { pluginId: refusal.pluginId } : {}),
+      };
     }
     if (!dispatched || (!acknowledged && knownUncommitted(error, id, "DELETE"))) {
       write(id, IDLE);

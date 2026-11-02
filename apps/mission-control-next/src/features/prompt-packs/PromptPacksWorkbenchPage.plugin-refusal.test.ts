@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
-import { promptPackChangeError } from "./PromptPacksWorkbenchPage.helpers";
+import { promptPackChangeError, promptPackRefusingPlugin } from "./PromptPacksWorkbenchPage.helpers";
 
 const refused = (status: number, body: Record<string, unknown>) =>
   new ApiRequestError("refused", { kind: "http", method: "POST", path: "/api/v1/prompt-packs/x/reset", status, body });
@@ -15,9 +15,12 @@ describe("a change to a plugin's prompt pack", () => {
     });
 
     expect(promptPackChangeError(error)).toBe("From Meeting tools. Uninstall it to remove this.");
+    // The plugin it names goes with the words, for the "Open in Plugins" link beside them.
+    expect(promptPackRefusingPlugin(error)).toBe("meeting-tools");
   });
 
   it("keeps the plain wording for any other conflict", () => {
+    expect(promptPackRefusingPlugin(refused(409, { error: "Changed.", code: "WRITE_CONFLICT" }))).toBeUndefined();
     expect(promptPackChangeError(refused(409, { error: "Changed.", code: "WRITE_CONFLICT" }))).toBe(
       "This changed somewhere else. Refresh and try again.",
     );

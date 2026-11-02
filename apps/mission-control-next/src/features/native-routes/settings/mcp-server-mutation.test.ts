@@ -137,6 +137,7 @@ describe("shared MCP update owner", () => {
     expect(await commit()).toEqual({
       status: "conflict",
       message: "From Browser checks. Uninstall it to remove this.",
+      pluginId: "browser-checks",
     });
     expect((await commit()).status).toBe("saved");
   });

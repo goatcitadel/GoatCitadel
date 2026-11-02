@@ -12,7 +12,6 @@ import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { WhatItIs, WhereItComesFrom } from "./PluginInstallAbout";
 import { PluginUninstall } from "./PluginUninstall";
 import { PLUGIN_PIECE_KIND_LABELS, presentPieceState } from "./plugin-install-view";
-import { usePluginUninstallEntry } from "./plugin-uninstall-store";
 import { PLUGIN_TRUST_LABELS, presentPluginState } from "./plugin-view";
 
 const NOT_INSTALLED = "This plugin isn't installed.";
@@ -67,8 +66,6 @@ function AvailableBuiltIn({
 
 function InstalledPlugin({ pluginId, workspaceId }: { pluginId: string; workspaceId: string }) {
   const read = useQuery(pluginDetailQuery(workspaceId, pluginId));
-  const uninstall = usePluginUninstallEntry(pluginId);
-  if (uninstall?.phase === "gone") return <p className="text-sm text-fg">{NOT_INSTALLED}</p>;
   if (!read.data) return <DetailReadLine read={read} />;
   return <PluginDetailView detail={read.data} />;
 }

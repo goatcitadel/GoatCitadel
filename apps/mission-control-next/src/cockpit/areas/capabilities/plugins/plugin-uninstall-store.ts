@@ -3,9 +3,10 @@ import { useSyncExternalStore } from "react";
 /**
  * Where one plugin's uninstall stands in this app session. `asking` while a request is on its way; `following` once
  * GoatCitadel answered, while the plugin's detail is read until the plugin is gone; `stopped` when the request was
- * refused or its plan ended without uninstalling; `gone` once the detail says the plugin isn't installed.
+ * refused or its plan ended without uninstalling. Once the plugin is gone the entry is forgotten, so a reinstall in the
+ * same session starts clean.
  */
-export type PluginUninstallPhase = "asking" | "following" | "stopped" | "gone";
+export type PluginUninstallPhase = "asking" | "following" | "stopped";
 
 export interface PluginUninstallEntry {
   readonly phase: PluginUninstallPhase;

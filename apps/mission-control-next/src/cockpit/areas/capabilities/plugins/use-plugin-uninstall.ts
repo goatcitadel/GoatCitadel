@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import type { CapabilityPluginDetail, PluginActionOutcome } from "@goatcitadel/contracts";
+import type { CapabilityPluginDetail, ChangePlanRecord, PluginActionOutcome } from "@goatcitadel/contracts";
 import { uninstallCapabilityPlugin } from "@goatcitadel/mission-control-shared/api/capability-plugins";
 import { fetchChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
 import { pluginDetailQuery } from "../../../data/capability-plugins-query";
 import { PLUGIN_PLAN_KEYS } from "../../../data/event-map";
+import { queryKeys } from "../../../data/query-keys";
 import { DONE, ENDED } from "../change-plan-outcome";
 import { refusalMessage, wasAnswered } from "./plugin-check-copy";
 import { focusPluginsList, PLUGINS_HREF } from "./plugin-links";
@@ -36,7 +37,8 @@ function refreshAfterStep(client: QueryClient) {
 /** The outcome GoatCitadel gave, as the entry follows it. */
 function followOutcome(workspaceId: string, outcome: PluginActionOutcome) {
   if (outcome.outcome === "failed") {
-    return { phase: "stopped" as const, workspaceId, message: outcome.summary, summary: outcome.summary };
+    // Said once, as the stop it is, never as a quiet summary beside it.
+    return { phase: "stopped" as const, workspaceId, message: outcome.summary };
   }
   return {
     phase: "following" as const,
@@ -69,84 +71,120 @@ async function requestUninstall(detail: CapabilityPluginDetail, client: QueryCli
   refreshAfterStep(client);
 }
 
-/** How long to wait before the next read: the waiting pace while an approval waits, else the applying pace. */
-function nextReadMs(count: number, waiting: boolean): number {
-  if (waiting) return WAITING_MS[Math.min(count, WAITING_MS.length) - 1] ?? WAITING_MS[0];
+/**
+ * How the detail is read now: at the applying pace while the plan applies or a piece is being removed, at the waiting
+ * pace while an approval waits, and not at all once the first pass is over and the next move ("Finish uninstalling")
+ * is the operator's.
+ */
+type Pace = "applying" | "waiting" | "operator";
+
+function paceOf(detail: CapabilityPluginDetail | undefined, waitingOnApproval: boolean): Pace {
+  if (waitingOnApproval) return "waiting";
+  if (detail?.state !== "uninstalling") return "applying";
+  return detail.pieces.some((piece) => piece.state === "removing") ? "applying" : "operator";
+}
+
+function nextReadMs(count: number, pace: Pace): number | false {
+  if (pace === "operator") return false;
+  if (pace === "waiting") return WAITING_MS[Math.min(count, WAITING_MS.length) - 1] ?? WAITING_MS[0];
   return count <= APPLYING_FAST_WAITS ? APPLYING_MS : APPLYING_SLOW_MS;
 }
 
-/** The plan's end, when it ended without uninstalling: a decline, an expiry or a failure, in GoatCitadel's words. */
-function useEndedPlan(pluginId: string, detail: CapabilityPluginDetail | undefined) {
+const planQueryKey = (planId: string | undefined) => ["change-plan", "plugin-uninstall", planId] as const;
+
+/** Why a plan ended without uninstalling: a decline or an expiry in plain words, else GoatCitadel's own summary. */
+function endedLine(plan: ChangePlanRecord): string {
+  const code = plan.result?.failureCode;
+  if (code === "approval_denied") return `${NOT_UNINSTALLED} The request was declined.`;
+  if (code === "approval_expired" || code === "expired") return `${NOT_UNINSTALLED} The request expired.`;
+  return plan.result?.summary?.trim() || NOT_UNINSTALLED;
+}
+
+/**
+ * The plan of the last request, read until it ends, on either pass: one that ends without uninstalling (declined,
+ * expired or failed) stops the flow with its reason. A plan that completed leaves the detail to say what's left.
+ */
+function useEndedPlan(pluginId: string) {
   const entry = usePluginUninstallEntry(pluginId);
-  const planId = entry?.phase === "following" && detail?.state !== "uninstalling" ? entry.planId : undefined;
+  const planId = entry?.phase === "following" ? entry.planId : undefined;
   const plan = useQuery({
-    queryKey: ["change-plan", "plugin-uninstall", planId],
+    queryKey: planQueryKey(planId),
     queryFn: () => fetchChangePlan(planId ?? "", { workspaceId: entry?.workspaceId ?? "default" }),
     enabled: planId !== undefined,
-    refetchInterval: 5_000,
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && (DONE.has(status) || ENDED.has(status)) ? false : 10_000;
+    },
   });
   useEffect(() => {
     const status = plan.data?.status;
-    if (!planId || !status || DONE.has(status) || !ENDED.has(status)) return;
+    if (!planId || !plan.data || !status || DONE.has(status) || !ENDED.has(status)) return;
     const current = readPluginUninstall(pluginId);
     if (current?.phase !== "following" || current.planId !== planId) return;
-    const summary = plan.data?.result?.summary?.trim();
-    setPluginUninstall(pluginId, { ...current, phase: "stopped", message: summary || NOT_UNINSTALLED });
+    setPluginUninstall(pluginId, { ...current, phase: "stopped", message: endedLine(plan.data) });
   }, [plan.data, planId, pluginId]);
 }
 
 /**
+ * Once the detail says the plugin isn't installed: the lists are refreshed, the session forgets the uninstall and the
+ * plugin's last detail (a reinstall reads the live plugin), the panel closes and focus goes back to the plugins list.
+ */
+function useGone(gone: boolean, pluginId: string, workspaceId: string | undefined) {
+  const client = useQueryClient();
+  const { navigate } = useCockpitRoute();
+  useEffect(() => {
+    if (!gone) return;
+    setPluginUninstall(pluginId, undefined);
+    resetPluginInstall(pluginInstallKey(pluginId));
+    refreshAfterStep(client);
+    navigate(PLUGINS_HREF, { replace: true });
+    client.removeQueries({ queryKey: queryKeys.capabilityPluginDetail(workspaceId ?? "default", pluginId) });
+    focusPluginsList();
+  }, [gone, pluginId, workspaceId, client, navigate]);
+}
+
+/**
  * One plugin's uninstall: the request, the approval it waits on in place, and the detail it follows until the plugin is
- * gone, when the lists are refreshed, the panel closes and focus goes back to the plugins list. "Finish uninstalling"
- * asks for the next pass while the plugin still reads as uninstalling; it is safe to press early, since GoatCitadel
- * goes on from where it stopped.
+ * gone. "Finish uninstalling" asks for the next pass while the plugin still reads as uninstalling; it is safe to press
+ * early, since GoatCitadel goes on from where it stopped.
  */
 export function usePluginUninstall(detail: CapabilityPluginDetail | undefined, pluginId: string) {
   const client = useQueryClient();
-  const { navigate } = useCockpitRoute();
   const entry = usePluginUninstallEntry(pluginId);
   const [decided, setDecided] = useState<ReadonlySet<string>>(() => new Set());
   const reads = useRef(0);
-  // While nothing is being removed (an approval waits, or the plan hasn't begun), reads slow to the waiting pace.
-  const waiting = useRef(false);
+  const pace = useRef<Pace>("applying");
   const following = entry?.phase === "following";
   const workspaceId = entry?.workspaceId ?? detail?.workspaceId;
   const read = useQuery({
     ...pluginDetailQuery(workspaceId ?? "default", pluginId),
     enabled: following && workspaceId !== undefined,
-    refetchInterval: following ? () => nextReadMs((reads.current += 1), waiting.current) : false,
+    refetchInterval: following ? () => nextReadMs((reads.current += 1), pace.current) : false,
   });
   const latest = read.data ?? detail;
   const approval = uninstallApproval(entry, latest, decided);
-  waiting.current = approval !== undefined || latest?.state !== "uninstalling";
-  useEndedPlan(pluginId, latest);
-  const gone = following && read.isError && isApiRequestError(read.error) && read.error.status === 404;
-
-  useEffect(() => {
-    if (!gone) return;
-    setPluginUninstall(pluginId, { phase: "gone", workspaceId: workspaceId ?? "default" });
-    resetPluginInstall(pluginInstallKey(pluginId));
-    refreshAfterStep(client);
-    // The panel is about a plugin that no longer exists: close it, and give focus back to the list.
-    navigate(PLUGINS_HREF, { replace: true });
-    focusPluginsList();
-  }, [gone, pluginId, workspaceId, client, navigate]);
-
-  const start = () => {
-    if (!latest) return;
-    reads.current = 0;
-    void requestUninstall(latest, client);
-  };
+  pace.current = paceOf(latest, approval !== undefined);
+  useEndedPlan(pluginId);
+  useGone(
+    following && read.isError && isApiRequestError(read.error) && read.error.status === 404,
+    pluginId,
+    workspaceId,
+  );
   return {
     entry,
     detail: latest,
     approval,
     progress: uninstallProgressLine(entry, latest, approval),
-    start,
+    start: () => {
+      if (!latest) return;
+      reads.current = 0;
+      void requestUninstall(latest, client);
+    },
     resolved: (approvalId: string) => {
       setDecided((all) => new Set([...all, approvalId]));
       reads.current = 0;
       refreshAfterStep(client);
+      void client.invalidateQueries({ queryKey: planQueryKey(entry?.planId) });
     },
   };
 }

@@ -114,7 +114,11 @@ export function useMcpEditor({
     if (result.status !== "saved") {
       // A newer editor must not inherit an old preflight's status or start its review flow.
       if (!isScopeCurrent() || editorGeneration.current !== generation) return false;
-      notify({ tone: result.status === "uncertain" ? "error" : "warning", message: result.message });
+      notify({
+        tone: result.status === "uncertain" ? "error" : "warning",
+        message: result.message,
+        ...(result.pluginId ? { pluginId: result.pluginId } : {}),
+      });
       if (["conflict", "unavailable", "uncertain"].includes(result.status)) await review.refresh();
       return false;
     }

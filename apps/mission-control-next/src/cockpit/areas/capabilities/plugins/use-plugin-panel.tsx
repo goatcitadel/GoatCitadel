@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, type RefObject } from "react";
 import type { CapabilityPluginListItem, CapabilityPluginListResponse } from "@goatcitadel/contracts";
 import { useInspector } from "../../../app/inspector";
 import { useCockpitRoute } from "../../../app/use-cockpit-route";
@@ -35,35 +35,19 @@ function usePanelPlugin(search: string, list: CapabilityPluginListResponse | und
 }
 
 /**
- * Connects the plugin's own panel to the inspector and the address, as the Skills tab's panel does: the address names
- * the plugin, the panel opens once the list has answered, and closing it clears the address. It takes over the address
- * the install panel moves to once a plugin has a record, without opening a second panel over it: while that install
- * panel is on screen it is this plugin's panel, so closing it clears the address too.
+ * Opens the panel the address names, once per inspector, and clears the address when that panel is closed. A panel of
+ * this plugin already open (its own, or its install panel) is left alone.
  */
-export function usePluginPanel(
-  list: CapabilityPluginListResponse | undefined,
-  onInstall: (item: CapabilityPluginListItem) => void,
-): { open: (item: CapabilityPluginListItem) => void } {
+function useAddressPanel(
+  target: { pluginId: string; title: string } | undefined,
+  show: (id: string, title: string) => void,
+  asked: RefObject<{ id: string; inspectorOpen: unknown } | null>,
+) {
   const { open: openInspector, content } = useInspector();
   const { search, navigate } = useCockpitRoute();
-  const target = usePanelPlugin(search, list);
   const linkedId = pluginIdFromSearch(search);
   const openId = openPluginOf(content?.source);
-  const asked = useRef<{ id: string; inspectorOpen: typeof openInspector } | null>(null);
   const shown = useRef<string | null>(null);
-
-  const show = useCallback(
-    (id: string, title: string) => {
-      asked.current = { id, inspectorOpen: openInspector };
-      openInspector({
-        source: pluginPanelSource(id),
-        title,
-        body: <PluginPanel pluginId={id} onInstall={onInstall} />,
-      });
-    },
-    [openInspector, onInstall],
-  );
-
   const targetId = target?.pluginId;
   const targetTitle = target?.title;
   useEffect(() => {
@@ -85,8 +69,35 @@ export function usePluginPanel(
     }
     const alreadyAsked = asked.current?.id === targetId && asked.current?.inspectorOpen === openInspector;
     if (targetId && targetTitle && !alreadyAsked) show(targetId, targetTitle);
-  }, [openId, content, linkedId, targetId, targetTitle, show, openInspector, navigate]);
+  }, [openId, content, linkedId, targetId, targetTitle, show, asked, openInspector, navigate]);
+}
 
+/**
+ * Connects the plugin's own panel to the inspector and the address, as the Skills tab's panel does: the address names
+ * the plugin, the panel opens once the list has answered, and closing it clears the address. It takes over the address
+ * the install panel moves to once a plugin has a record, without opening a second panel over it: while that install
+ * panel is on screen it is this plugin's panel, so closing it clears the address too.
+ */
+export function usePluginPanel(
+  list: CapabilityPluginListResponse | undefined,
+  onInstall: (item: CapabilityPluginListItem) => void,
+): { open: (item: CapabilityPluginListItem) => void } {
+  const { open: openInspector } = useInspector();
+  const { search, navigate } = useCockpitRoute();
+  const asked = useRef<{ id: string; inspectorOpen: unknown } | null>(null);
+  const show = useCallback(
+    (id: string, title: string) => {
+      asked.current = { id, inspectorOpen: openInspector };
+      openInspector({
+        source: pluginPanelSource(id),
+        title,
+        body: <PluginPanel pluginId={id} onInstall={onInstall} />,
+      });
+    },
+    [openInspector, onInstall],
+  );
+  useAddressPanel(usePanelPlugin(search, list), show, asked);
+  const linkedId = pluginIdFromSearch(search);
   return {
     open: (item) => {
       // The address already names it (the panel was closed without clearing it): there is nothing to move.

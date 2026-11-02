@@ -25,6 +25,11 @@ export function promptPackChangeError(error: unknown): string {
   return readPluginOwnedRefusal(error)?.message ?? describeApiError(error).summary;
 }
 
+/** The plugin GoatCitadel named when it refused a change to a pack, for a link to it beside the error. */
+export function promptPackRefusingPlugin(error: unknown): string | undefined {
+  return readPluginOwnedRefusal(error)?.pluginId;
+}
+
 export const DEFAULT_BENCHMARK_TEST_CODES = "TEST-03, TEST-06, TEST-10, TEST-12, TEST-15, TEST-28";
 
 /**

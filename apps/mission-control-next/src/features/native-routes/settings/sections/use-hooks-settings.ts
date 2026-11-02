@@ -301,7 +301,12 @@ export function useHooksSettings(workspaceId: string) {
       if (reviewed.current()) {
         cancelReview();
         // A plugin's hook: GoatCitadel's own sentence says which plugin, and that uninstalling it removes the hook.
-        setNotice({ tone: "error", message: readPluginOwnedRefusal(error)?.message ?? getErrorMessage(error) });
+        const refusal = readPluginOwnedRefusal(error);
+        setNotice({
+          tone: "error",
+          message: refusal?.message ?? getErrorMessage(error),
+          ...(refusal?.pluginId ? { pluginId: refusal.pluginId } : {}),
+        });
       }
       return false;
     } finally {

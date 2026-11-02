@@ -205,6 +205,16 @@ async function renderTab(at: string) {
   await settle();
 }
 
+/** Moves the address as a link would, and lets the panel it names open and read. */
+async function openAddress(at: string) {
+  await act(async () => {
+    window.history.pushState(null, "", at);
+    window.dispatchEvent(new PopStateEvent("popstate"));
+  });
+  await settle();
+  await settle();
+}
+
 async function press(element: HTMLElement | undefined | null) {
   if (!element) throw new Error("nothing to press");
   element.focus();
@@ -358,6 +368,63 @@ describe("Plugin panel", () => {
     expect(body()).toBeNull();
     expect(address()).toBe("/capabilities/plugins?shell=cockpit");
     expect(document.activeElement?.id).toBe(PLUGINS_LIST_ID);
+
+    // Installed again in the same session: its panel reads the live plugin, with nothing left of the uninstall.
+    plugin.exists = true;
+    plugin.state = "installed";
+    plugin.pieces = [CALENDAR, NOTES];
+    await openAddress(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+    expect(body()?.textContent).toContain("What it added");
+    expect(body()?.textContent).not.toContain("This plugin isn't installed.");
+    expect(body()?.textContent).not.toContain("Uninstalled Meeting tools.");
+    expect(button("Uninstall", body())).toBeDefined();
+  });
+
+  it("stops reading once the next move is the operator's, and ends when the second pass is declined", async () => {
+    plugin.state = "uninstalling";
+    plugin.pieces = [
+      { ...CALENDAR, state: "removed", href: undefined },
+      { ...NOTES, state: "removed", href: undefined },
+    ];
+    list = { ...list, installed: [{ ...ROW, state: "uninstalling" }] };
+    api.uninstallCapabilityPlugin.mockResolvedValue({
+      planId: "plan-uninstall-2",
+      outcome: "waiting",
+      approvalId: "approval-second",
+      summary: "Uninstall Meeting tools.",
+    });
+    // The operator declined the second pass in Inbox.
+    plans.fetchChangePlan.mockResolvedValue({
+      planId: "plan-uninstall-2",
+      status: "failed",
+      result: { failureCode: "approval_denied", summary: "Approval denied." },
+    });
+    await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+    await press(button("Finish uninstalling", body()));
+
+    expect(body()?.querySelector('[role="alert"]')?.textContent).toBe("Not uninstalled. The request was declined.");
+    const reads = api.fetchCapabilityPluginDetail.mock.calls.length;
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 1_500));
+    });
+    await settle();
+    expect(api.fetchCapabilityPluginDetail.mock.calls.length).toBe(reads);
+    expect(button("Finish uninstalling", body())).toBeDefined();
+  });
+
+  it("reads a failed uninstall out once, as an alert", async () => {
+    api.uninstallCapabilityPlugin.mockResolvedValue({
+      planId: "plan-uninstall",
+      outcome: "failed",
+      summary: "Calendar couldn't be removed. Uninstall Meeting tools again to finish.",
+    });
+    await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+    await press(button("Uninstall", body()));
+    await press(button("Uninstall Meeting tools", dialog()));
+
+    const alert = body()?.querySelector('[role="alert"]');
+    expect(alert?.textContent).toBe("Calendar couldn't be removed. Uninstall Meeting tools again to finish.");
+    expect(body()?.textContent?.split("Calendar couldn't be removed.").length).toBe(2);
   });
 
   it("offers Finish uninstalling for a plugin an uninstall left part way", async () => {
@@ -405,5 +472,11 @@ describe("Plugin panel", () => {
     );
     expect(button("Uninstall", body())).toBeDefined();
     expect(button("Continue", body())).toBeUndefined();
+
+    // Nothing was added for the connector whose add failed, nor for the skill that never started.
+    await press(button("Uninstall", body()));
+    const lines = [...(dialog()?.querySelectorAll("li") ?? [])].map((item) => item.textContent ?? "");
+    expect(lines.some((line) => line.startsWith("Removes"))).toBe(false);
+    expect(lines).toContain("Stays: the hosts it allowed");
   });
 });

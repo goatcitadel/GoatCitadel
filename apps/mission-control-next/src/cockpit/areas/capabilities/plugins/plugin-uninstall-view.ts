@@ -1,4 +1,8 @@
-import type { CapabilityPluginDetail, CapabilityPluginDetailPiece } from "@goatcitadel/contracts";
+import type {
+  CapabilityPluginDetail,
+  CapabilityPluginDetailPiece,
+  CapabilityPluginPieceState,
+} from "@goatcitadel/contracts";
 import { joinLabels } from "../skills/discover-view";
 import type { PluginUninstallEntry } from "./plugin-uninstall-store";
 
@@ -8,11 +12,23 @@ import type { PluginUninstallEntry } from "./plugin-uninstall-store";
 export const PROMPT_PACK_RUNS_LINE = "Deletes the runs of its prompt packs.";
 
 /**
+ * The states that show the plugin added something for the piece: only those are listed as removed. A piece whose add
+ * failed, can't be read, or never started has nothing of the plugin's to remove.
+ */
+const ADDED_STATES: ReadonlySet<CapabilityPluginPieceState> = new Set([
+  "added",
+  "installed_off",
+  "installing",
+  "waiting_for_approval",
+  "removing",
+]);
+
+/**
  * The confirmation's lines, from the detail: what the plugin added goes, what was already there stays, and so do the
  * hosts it allowed. The plan's own approval and outcome then say exactly what the Gateway did.
  */
 export function uninstallConfirmLines(pieces: readonly CapabilityPluginDetailPiece[]): string[] {
-  const owned = pieces.filter((piece) => piece.check.status !== "already_there" && piece.state !== "removed");
+  const owned = pieces.filter((piece) => piece.check.status !== "already_there" && ADDED_STATES.has(piece.state));
   const kept = pieces.filter((piece) => piece.check.status === "already_there");
   const hosts = pieces.some((piece) => (piece.hosts?.length ?? 0) > 0);
   const stays = [...kept.map((piece) => piece.label), ...(hosts ? ["the hosts it allowed"] : [])];
@@ -63,7 +79,6 @@ export function uninstallProgressLine(
   const name = detail?.name ?? "This plugin";
   if (!entry) return "";
   if (entry.phase === "asking") return "Asking…";
-  if (entry.phase === "gone") return `${name} is uninstalled.`;
   if (entry.phase === "stopped") return "";
   if (waitingFor) return "Waiting for your approval.";
   if (detail?.state !== "uninstalling") return `Uninstalling ${name}…`;

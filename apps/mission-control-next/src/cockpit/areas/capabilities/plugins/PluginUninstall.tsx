@@ -3,6 +3,7 @@ import type { CapabilityPluginDetail } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { Dialog } from "../../../ui/Dialog";
 import { SettingsApprovalDialog } from "../../settings/SettingsApprovalDialog";
+import type { PluginUninstallEntry } from "./plugin-uninstall-store";
 import { uninstallConfirmLines } from "./plugin-uninstall-view";
 import { usePluginUninstall } from "./use-plugin-uninstall";
 
@@ -18,11 +19,6 @@ export function PluginUninstall({ detail }: { detail: CapabilityPluginDetail }) 
   const current = flow.detail ?? detail;
   const { entry, approval } = flow;
   const asking = entry?.phase === "asking";
-  const uninstalling = current.state === "uninstalling";
-  const confirm = () => {
-    setConfirming(false);
-    flow.start();
-  };
   return (
     <div className="space-y-3">
       {approval ? (
@@ -36,13 +32,8 @@ export function PluginUninstall({ detail }: { detail: CapabilityPluginDetail }) 
           onResolved={() => flow.resolved(approval.approvalId)}
         />
       ) : null}
-      {entry?.summary && entry.phase !== "asking" ? <p className="text-fg">{entry.summary}</p> : null}
-      {entry?.phase === "stopped" && entry.message && entry.message !== entry.summary ? (
-        <p role="alert" className="text-status-failed">
-          {entry.message}
-        </p>
-      ) : null}
-      {uninstalling ? (
+      <UninstallOutcome entry={entry} />
+      {current.state === "uninstalling" ? (
         // It goes on removing what the first pass left, so it is red like Uninstall; it asks no confirmation again.
         <Button variant="danger" loading={asking} loadingLabel="Asking…" onClick={flow.start}>
           Finish uninstalling
@@ -55,24 +46,65 @@ export function PluginUninstall({ detail }: { detail: CapabilityPluginDetail }) 
       <p role="status" className="text-fg">
         {flow.progress}
       </p>
-      <Dialog
+      <UninstallConfirmation
+        detail={current}
         open={confirming}
         onOpenChange={setConfirming}
-        title={`Uninstall ${current.name}?`}
-        description="This can't be undone here. Installing it again adds its pieces back."
-      >
-        <div className="space-y-3 text-sm text-fg-secondary">
-          <ul className="space-y-1">
-            {uninstallConfirmLines(current.pieces).map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          <div className="flex flex-wrap justify-end gap-2">
-            <Button onClick={() => setConfirming(false)}>Keep it</Button>
-            <Button variant="danger" onClick={confirm}>{`Uninstall ${current.name}`}</Button>
-          </div>
-        </div>
-      </Dialog>
+        onConfirm={() => {
+          setConfirming(false);
+          flow.start();
+        }}
+      />
     </div>
+  );
+}
+
+/**
+ * What the last request came to: a stop is read out as one alert, in GoatCitadel's words; while the uninstall goes on,
+ * its summary stands as a quiet line.
+ */
+function UninstallOutcome({ entry }: { entry: PluginUninstallEntry | undefined }) {
+  if (!entry || entry.phase === "asking") return null;
+  if (entry.phase === "stopped") {
+    return (
+      <p role="alert" className="text-status-failed">
+        {entry.message ?? entry.summary}
+      </p>
+    );
+  }
+  return entry.summary ? <p className="text-fg">{entry.summary}</p> : null;
+}
+
+/** The confirmation: what goes, what stays, and that it can't be undone here. */
+function UninstallConfirmation({
+  detail,
+  open,
+  onOpenChange,
+  onConfirm,
+}: {
+  detail: CapabilityPluginDetail;
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={onOpenChange}
+      title={`Uninstall ${detail.name}?`}
+      description="This can't be undone here. Installing it again adds its pieces back."
+    >
+      <div className="space-y-3 text-sm text-fg-secondary">
+        <ul className="space-y-1">
+          {uninstallConfirmLines(detail.pieces).map((line) => (
+            <li key={line}>{line}</li>
+          ))}
+        </ul>
+        <div className="flex flex-wrap justify-end gap-2">
+          <Button onClick={() => onOpenChange(false)}>Keep it</Button>
+          <Button variant="danger" onClick={onConfirm}>{`Uninstall ${detail.name}`}</Button>
+        </div>
+      </div>
+    </Dialog>
   );
 }
