@@ -1,4 +1,6 @@
 import type { IntegrationConnectionUpdateInput, PersonalityCatalogResponse } from "@goatcitadel/contracts";
+import { ERRAND_OWNER_ONLY_COPY, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
+import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
 import { normalizeChannelCommandInput } from "./channel-command-contract.js";
 import type { InboundChannelCommandExecutionInput } from "./inbound-channel-event-service.js";
 import { handleTelegramChannelCommand } from "./telegram-channel-commands.js";
@@ -48,7 +50,8 @@ export interface TelegramInboundCommandHost {
     connectorId: string;
     decision: "approve" | "reject";
     resolvedBy: string;
-  }): Promise<{ approval: { approvalId: string; status: string } }>;
+    channelActorId?: string;
+  }): Promise<{ approval: { approvalId: string; status: string; kind?: string } }>;
 }
 
 export async function executeTelegramInboundCommand(
@@ -83,12 +86,26 @@ export async function executeTelegramInboundCommand(
     if (normalizedApproval.approvalDecision !== approvalDecision || normalizedApproval.approvalToken) {
       throw new Error("Durable Telegram approval command does not match its secret-free command metadata.");
     }
-    const result = await host.resolveApprovalWithRemoteTokenId({
-      tokenId: approvalActionId,
-      connectorId: `integration:${input.connectionId}`,
-      decision: approvalDecision,
-      resolvedBy: `telegram:${input.message.actorId}`,
-    });
+    let result: Awaited<ReturnType<TelegramInboundCommandHost["resolveApprovalWithRemoteTokenId"]>>;
+    try {
+      result = await host.resolveApprovalWithRemoteTokenId({
+        tokenId: approvalActionId,
+        connectorId: `integration:${input.connectionId}`,
+        decision: approvalDecision,
+        resolvedBy: `telegram:${input.message.actorId}`,
+        channelActorId: input.message.actorId,
+      });
+    } catch (error) {
+      // Not the owner: the approval stays pending and its token unspent.
+      if (error instanceof ErrandOwnerOnlyError) {
+        return { resultText: ERRAND_OWNER_ONLY_COPY };
+      }
+      throw error;
+    }
+    // An errand approval's reply carries no approval id: the answer goes to a conversation, not an operator console.
+    if (result.approval.kind && isSelfPolledApprovalKind(result.approval.kind)) {
+      return { resultText: approvalDecision === "approve" ? "Approved." : "Denied." };
+    }
     return {
       resultText:
         approvalDecision === "approve"

@@ -57,6 +57,7 @@ export interface ApprovalRuntime {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    channelActorId?: string;
   }): Promise<ApprovalResolveResult>;
   listApprovals(status?: ApprovalRequest["status"], limit?: number, workspaceId?: string): Promise<ApprovalRequest[]>;
   getApproval(approvalId: string, workspaceId?: string): Promise<ApprovalRequest>;
@@ -158,6 +159,7 @@ export class ApprovalRuntimeService implements ApprovalRuntime {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    channelActorId?: string;
   }): Promise<ApprovalResolveResult> {
     return approvalRemoteActionService.resolveApprovalWithRemoteTokenId(this.host, input);
   }

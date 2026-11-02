@@ -13,6 +13,7 @@ import {
   type PersonalityCatalogResponse,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import { ERRAND_OWNER_ONLY_COPY, ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import type { ApprovalResolveResult } from "./approval-types.js";
 import type { ChatCommandOptions } from "./chat-command-service.js";
 import {
@@ -121,6 +122,7 @@ export interface DiscordRuntimeBridgeHost {
     connectorId: string;
     decision: ApprovalResolveInput["decision"];
     resolvedBy?: string;
+    channelActorId?: string;
   }): Promise<ApprovalResolveResult>;
   respondToExistingChatMessage(sessionId: string, sourceMessageId: string): Promise<ChatSendMessageResponse>;
   setChatSessionBinding(input: {
@@ -442,8 +444,8 @@ export async function executeDiscordRuntimeInboundCommand(
           : "The approval action token was not recognized. Request a fresh approval message.",
       };
     }
-    // The press was let in by the connection's route and pairing rules. A rule tied to the approval itself (who may
-    // answer an errand approval) belongs here, before the token is consumed.
+    // The press was let in by the connection's route and pairing rules. An errand approval also needs the presser to
+    // be the operator's own account; the check runs inside the resolve, before the token is consumed.
     let result: ApprovalResolveResult;
     try {
       result = await host.resolveApprovalWithRemoteTokenId({
@@ -451,8 +453,12 @@ export async function executeDiscordRuntimeInboundCommand(
         connectorId: `integration:${input.connectionId}`,
         decision: durableApproval.decision,
         resolvedBy: `discord:${input.message.actorId}`,
+        channelActorId: input.message.actorId,
       });
     } catch (error) {
+      if (error instanceof ErrandOwnerOnlyError) {
+        return { resultText: ERRAND_OWNER_ONLY_COPY };
+      }
       // A spent or expired token, or an approval answered elsewhere: the press changes nothing.
       if (button && error instanceof ConflictError) {
         return { resultText: DISCORD_APPROVAL_BUTTON_COPY.alreadyAnswered };

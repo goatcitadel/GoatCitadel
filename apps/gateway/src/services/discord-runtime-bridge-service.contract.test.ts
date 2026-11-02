@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import { ConflictError, type ChatSendMessageResponse, type ChatSessionRecord } from "@goatcitadel/contracts";
 import {
   acceptDiscordRuntimeSlashCommand,
@@ -743,6 +744,7 @@ describe("discord-runtime-bridge-service contract behavior", () => {
       connectorId: "integration:discord-1",
       decision: "approve",
       resolvedBy: "discord:user-1",
+      channelActorId: "user-1",
     });
     expect(host.resolveApprovalWithRemoteToken).not.toHaveBeenCalled();
   });
@@ -879,7 +881,18 @@ describe("discord-runtime-bridge-service contract behavior", () => {
         connectorId: "integration:discord-1",
         decision: "approve",
         resolvedBy: "discord:user-1",
+        channelActorId: "user-1",
       });
+    });
+
+    it("answers a non-owner's press on an errand approval with the owner-only copy", async () => {
+      const host = createHost();
+      host.resolveApprovalWithRemoteTokenId = vi.fn(async () => {
+        throw new ErrandOwnerOnlyError();
+      });
+      const { execute } = await pressButton(host, "/approve grat_button_secret");
+
+      await expect(execute()).resolves.toEqual({ resultText: "Only the owner can answer this." });
     });
 
     it("rejects on Deny", async () => {

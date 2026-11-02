@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
+import { ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import type { InboundChannelCommandExecutionInput } from "./inbound-channel-event-service.js";
 import {
   executeTelegramInboundCommand,
@@ -30,12 +31,19 @@ describe("executeTelegramInboundCommand", () => {
     const { host, update } = createHost({ telegramOperatorActors: ["777"], botToken: "synthetic-original" });
     let revision = "a".repeat(64);
     let persisted: Record<string, unknown> = { telegramOperatorActors: ["777"], botToken: "synthetic-original" };
-    host.getPersonalityCatalog = async () => { revision = "b".repeat(64); persisted = { telegramOperatorActors: [], botToken: "synthetic-peer" }; return { items: [], defaultPersonalityId: "default" }; };
+    host.getPersonalityCatalog = async () => {
+      revision = "b".repeat(64);
+      persisted = { telegramOperatorActors: [], botToken: "synthetic-peer" };
+      return { items: [], defaultPersonalityId: "default" };
+    };
     update.mockImplementation((_id, input) => {
-      if (input.expectedRevision !== undefined && input.expectedRevision !== revision) throw new ConflictError({ code: "WRITE_CONFLICT", message: "Connection changed" });
+      if (input.expectedRevision !== undefined && input.expectedRevision !== revision)
+        throw new ConflictError({ code: "WRITE_CONFLICT", message: "Connection changed" });
       persisted = input.config;
     });
-    await expect(executeTelegramInboundCommand(host, createInput({ content: "/sethome" }))).rejects.toThrow("Connection changed");
+    await expect(executeTelegramInboundCommand(host, createInput({ content: "/sethome" }))).rejects.toThrow(
+      "Connection changed",
+    );
     expect(persisted).toEqual({ telegramOperatorActors: [], botToken: "synthetic-peer" });
   });
 
@@ -59,6 +67,7 @@ describe("executeTelegramInboundCommand", () => {
       connectorId: `integration:${CONNECTION_ID}`,
       decision: "approve",
       resolvedBy: "telegram:777",
+      channelActorId: "777",
     });
     expect(JSON.stringify(input)).not.toContain("grat_secret");
   });
@@ -101,6 +110,27 @@ describe("executeTelegramInboundCommand", () => {
     expect(resolveApprovalWithRemoteTokenId).not.toHaveBeenCalled();
   });
 
+  it("answers a non-owner's press on an errand approval with the owner-only copy", async () => {
+    const { host, resolveApprovalWithRemoteTokenId } = createHost();
+    resolveApprovalWithRemoteTokenId.mockRejectedValueOnce(new ErrandOwnerOnlyError());
+
+    const result = await executeTelegramInboundCommand(host, createApprovalInput());
+
+    expect(result.resultText).toBe("Only the owner can answer this.");
+    expect(resolveApprovalWithRemoteTokenId).toHaveBeenCalledWith(expect.objectContaining({ channelActorId: "777" }));
+  });
+
+  it("replies to an errand approval answer without an approval id", async () => {
+    const { host, resolveApprovalWithRemoteTokenId } = createHost();
+    resolveApprovalWithRemoteTokenId.mockResolvedValueOnce({
+      approval: { approvalId: "approval-9", status: "approved", kind: "browser.errand.action" },
+    });
+
+    const result = await executeTelegramInboundCommand(host, createApprovalInput());
+
+    expect(result.resultText).toBe("Approved.");
+  });
+
   it("rejects a command whose operation identity differs from its acceptance identity", async () => {
     const { host } = createHost();
 
@@ -140,6 +170,14 @@ function createInput(input: {
       metadata: input.metadata,
     },
   };
+}
+
+function createApprovalInput(): InboundChannelCommandExecutionInput {
+  return createInput({
+    eventType: TELEGRAM_APPROVAL_CALLBACK_EVENT_TYPE,
+    content: "/approve",
+    metadata: { approvalDecision: "approve", approvalActionId: "opaque-action-1", approvalActionLookupFailed: false },
+  });
 }
 
 function createHost(config: Record<string, unknown> = {}) {

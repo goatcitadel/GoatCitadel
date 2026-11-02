@@ -279,7 +279,13 @@ async function hydrateProtectedApprovalActionAtProviderBoundary(
   const templateValue = request.args.interactiveActionTemplate;
   if (templateValue === undefined) {
     assertNoRawRemoteApprovalBearer(request.args);
-    return { args: request.args };
+    // Approval buttons come only from a template hydrated below. Buttons a caller supplied on its own are dropped, so
+    // nothing can post look-alike Approve/Deny buttons from a bot the operator trusts.
+    if (request.args.interactiveActions === undefined) {
+      return { args: request.args };
+    }
+    const { interactiveActions: _callerButtons, ...argsWithoutButtons } = request.args;
+    return { args: argsWithoutButtons };
   }
   if (request.args.interactiveActions !== undefined) {
     throw new Error("blocked: Protected approval actions cannot include pre-hydrated callback data.");

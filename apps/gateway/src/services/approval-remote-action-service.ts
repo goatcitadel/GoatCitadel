@@ -20,6 +20,8 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { ApprovalRemoteTokenDeliveryOverride } from "./approval-connector-delivery.js";
+import { isSelfPolledApprovalKind } from "./browser-errands/errand-constants.js";
+import { ErrandOwnerOnlyError } from "./browser-errands/errand-approval-press-guard.js";
 import { hashSensitiveToken } from "./device-access-helpers.js";
 import { withApprovalFollowUp } from "./approval-follow-up.js";
 import { buildRemoteTokenConsumedObservabilityEffect } from "./approval-observability.js";
@@ -60,6 +62,8 @@ export interface ApprovalRemoteActionContext {
     input: ApprovalResolveInput,
     context?: ApprovalResolutionContext,
   ): Promise<ApprovalResolveResult>;
+  /** Throws unless the channel user is the operator's own account; asked only for errand approvals. */
+  assertErrandPressOwner?(input: { connectorId: string; actorId: string }): Promise<void>;
   enqueueApprovalObservabilityEffects(
     approvalId: string,
     items: readonly ApprovalObservabilityEffectInput[],
@@ -261,17 +265,40 @@ export async function resolveApprovalWithRemoteTokenId(
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    /** The channel user who pressed the button; an errand approval then needs that user to be the owner. */
+    channelActorId?: string;
   },
 ): Promise<ApprovalResolveResult> {
   const connectorId = input.connectorId.trim();
   if (!connectorId) {
     throw new ValidationError({ message: "Opaque remote action token resolution requires a connector binding." });
   }
+  if (input.channelActorId) {
+    await assertChannelPressMayAnswer(context, input.tokenId, connectorId, input.channelActorId);
+  }
   const tokenRecord = await context.consumeRemoteActionTokenById(input.tokenId, "approval.resolve", {
     claimFingerprint: buildRemoteApprovalClaimFingerprint(input),
     expectedConnectorId: connectorId,
   });
   return resolveApprovalWithConsumedRemoteToken(context, tokenRecord, input);
+}
+
+/** Errand approvals only take an answer from the operator's own account; checked before the token is consumed. */
+async function assertChannelPressMayAnswer(
+  context: ApprovalRemoteActionContext,
+  tokenId: string,
+  connectorId: string,
+  actorId: string,
+): Promise<void> {
+  const approvalId = (await context.storage.remoteActionTokens.get(tokenId)).approvalId;
+  const approval = approvalId ? await context.storage.approvals.get(approvalId).catch(() => undefined) : undefined;
+  if (!approval || !isSelfPolledApprovalKind(approval.kind)) {
+    return;
+  }
+  if (!context.assertErrandPressOwner) {
+    throw new ErrandOwnerOnlyError();
+  }
+  await context.assertErrandPressOwner({ connectorId, actorId });
 }
 
 function assertApprovalPending(approval: ApprovalRequest): void {

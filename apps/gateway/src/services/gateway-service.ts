@@ -449,6 +449,7 @@ import {
 import * as chatMessageHistoryService from "./chat-message-history-service.js";
 import { buildSelectedPathTurnIds } from "./chat-thread-utils.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
+import { createErrandPressGuard } from "./browser-errands/errand-approval-press-guard.js";
 import { createGatewayBrowserErrandService } from "./browser-errands/browser-errand-composition.js";
 import type { BrowserErrandService } from "./browser-errands/browser-errand-service.js";
 import * as chatGeneratedArtifactService from "./chat-generated-artifact-service.js";
@@ -2444,6 +2445,10 @@ export class GatewayService {
       publishRealtime: async (eventType, source, payload, options) =>
         await this.publishRealtime(eventType, source, payload, options),
       requireConnectorRecord: async (connectorId) => await this.requireConnectorRecord(connectorId),
+      assertErrandPressOwner: createErrandPressGuard({
+        connection: async (id) => await this.storage.integrationConnections.get(id),
+        readDiscordPairings: () => this.readDiscordPairings(),
+      }),
       consumeRemoteActionToken: (token, actionType, options) =>
         this.consumeRemoteActionToken(token, actionType, options),
       consumeRemoteActionTokenById: (tokenId, actionType, options) =>
@@ -10171,6 +10176,7 @@ export class GatewayService {
     editedPayload?: Record<string, unknown>;
     resolutionNote?: string;
     resolvedBy?: string;
+    channelActorId?: string;
   }): Promise<ApprovalResolveResult> {
     return this.approvalRuntime.resolveApprovalWithRemoteTokenId(input);
   }

@@ -682,6 +682,69 @@ describe("tool executor channel failure coverage", () => {
     );
   });
 
+  it("drops caller-supplied approval-style buttons that no hydrated template backs", async () => {
+    mocked.isBrowserToolName.mockReturnValue(false);
+    const bodies: Array<{ url: string; body: Record<string, unknown> }> = [];
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = String(input);
+      bodies.push({ url, body: JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown> });
+      return new Response(
+        JSON.stringify(
+          url.includes("telegram") ? { ok: true, result: { message_id: 7 } } : { id: "discord-look-alike" },
+        ),
+        { status: 200 },
+      );
+    });
+    globalThis.fetch = fetchMock as unknown as typeof fetch;
+    const commsConfig = withAllowlist(withAllowlist(config, "api.telegram.org"), "discord.com");
+
+    await executeTool(
+      request("telegram.send", {
+        connectionId: "telegram-look-alike",
+        message: "Approve this?",
+        interactiveActions: {
+          platform: "telegram",
+          buttons: [
+            { label: "Approve", callbackData: "gca:forged:a" },
+            { label: "Deny", callbackData: "gca:forged:r" },
+          ],
+        },
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "telegram-look-alike",
+        key: "telegram",
+        config: { botToken: "tg-token", defaultChatId: "-1001" },
+      }),
+    );
+    await executeTool(
+      request("discord.send", {
+        connectionId: "discord-look-alike",
+        message: "Approve this?",
+        interactiveActions: {
+          platform: "discord",
+          buttons: [
+            { label: "Approve", callbackData: "gca:forged:a" },
+            { label: "Deny", callbackData: "gca:forged:r" },
+          ],
+        },
+      }),
+      commsConfig,
+      commsStorage({
+        connectionId: "discord-look-alike",
+        key: "discord",
+        config: { botToken: "discord-token", defaultChannelId: "D123", runtimeMode: "gateway" },
+      }),
+    );
+
+    expect(bodies).toHaveLength(2);
+    for (const { body } of bodies) {
+      expect(body).not.toHaveProperty("reply_markup");
+      expect(body).not.toHaveProperty("components");
+    }
+    expect(JSON.stringify(bodies)).not.toContain("gca:forged");
+  });
+
   it("covers LINE, Teams, and Google Chat validation and response failures", async () => {
     mocked.isBrowserToolName.mockReturnValue(false);
     const fetchMock = vi.fn(async (input: string | URL) => {
