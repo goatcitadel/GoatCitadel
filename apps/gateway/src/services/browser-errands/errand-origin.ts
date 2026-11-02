@@ -120,12 +120,18 @@ export async function resolveOwnedErrandOrigin(
   return owner ? origin : undefined;
 }
 
-/** Builds the origin readers from Gateway storage; `readDiscordPairings` is the Gateway's own reader. */
-export function createErrandOriginDeps(sources: {
+/** The Gateway pieces the origin readers are built from. */
+export interface ErrandOriginSources {
   storage: AsyncStorage;
   readDiscordPairings(): Promise<DiscordPairingRecord[]>;
-}): ErrandOriginDeps {
-  const { storage, readDiscordPairings } = sources;
+}
+
+/**
+ * Builds the origin readers from Gateway storage; `readDiscordPairings` is the Gateway's own reader, called on
+ * `sources` so a Gateway passed whole keeps its receiver.
+ */
+export function createErrandOriginDeps(sources: ErrandOriginSources): ErrandOriginDeps {
+  const { storage } = sources;
   const { sessions, chatSessionBindings, chatTurnTraces, chatMessages, integrationConnections } = storage;
   return {
     sessionChannel: async (sessionId) => (await sessions.getBySessionId(sessionId)).channel,
@@ -144,6 +150,6 @@ export function createErrandOriginDeps(sources: {
       const record = await integrationConnections.get(connectionId);
       return { key: record.key, config: record.config };
     },
-    readDiscordPairings: () => readDiscordPairings(),
+    readDiscordPairings: () => sources.readDiscordPairings(),
   };
 }

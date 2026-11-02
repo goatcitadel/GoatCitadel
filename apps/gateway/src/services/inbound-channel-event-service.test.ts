@@ -1564,6 +1564,80 @@ describe("InboundChannelEventService", () => {
     expect(executeInboundCommand).toHaveBeenCalledTimes(1);
   });
 
+  describe("errand approval replies", () => {
+    function errandReplies(answer: { handled: false } | { handled: true; reply: string }) {
+      const replies = {
+        handle: vi.fn(async () => answer),
+        send: vi.fn(async () => undefined),
+      };
+      return { replies, errandReplies: () => replies };
+    }
+
+    it("answers an exact APPROVE without recording a Chat message or starting a turn", async () => {
+      const { replies, errandReplies: getReplies } = errandReplies({ handled: true, reply: "Approved." });
+      const harness = await createHarness({ errandReplies: getReplies });
+      const input = buildInput();
+      input.message.content = "APPROVE";
+      const accepted = await harness.service.accept(input);
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+
+      expect(replies.handle).toHaveBeenCalledWith({
+        connectionId: "connection-1",
+        channelKey: "telegram",
+        target: "chat-1",
+        actorId: "user-1",
+        text: "APPROVE",
+      });
+      expect(replies.send).toHaveBeenCalledWith({
+        connectionId: "connection-1",
+        target: "chat-1",
+        message: "Approved.",
+        idempotencyKey: expect.stringMatching(/^inbound-errand-reply-/),
+      });
+      expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
+      expect(harness.respondToExistingChatMessage).not.toHaveBeenCalled();
+    });
+
+    it("lets the message through to an ordinary turn when no errand approval is waiting there", async () => {
+      const { replies, errandReplies: getReplies } = errandReplies({ handled: false });
+      const harness = await createHarness({ errandReplies: getReplies });
+      const input = buildInput();
+      input.message.content = "APPROVE";
+      const accepted = await harness.service.accept(input);
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+
+      expect(replies.handle).toHaveBeenCalledTimes(1);
+      expect(replies.send).not.toHaveBeenCalled();
+      expect(harness.ingestChannelMessage).toHaveBeenCalledTimes(1);
+      expect(harness.respondToExistingChatMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("sends the owner-only refusal and still keeps the message out of Chat", async () => {
+      const { replies, errandReplies: getReplies } = errandReplies({
+        handled: true,
+        reply: "Only the owner can answer this.",
+      });
+      const harness = await createHarness({ errandReplies: getReplies });
+      const input = buildInput();
+      input.message.content = "APPROVE";
+      const accepted = await harness.service.accept(input);
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+
+      expect(replies.send).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Only the owner can answer this." }),
+      );
+      expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
+    });
+
+    it("never treats a durable command as an errand reply", async () => {
+      const { replies, errandReplies: getReplies } = errandReplies({ handled: true, reply: "Approved." });
+      const harness = await createHarness({ errandReplies: getReplies });
+      const accepted = await harness.service.accept(buildInput({ dispatchKind: "command" }));
+      await harness.service.awaitCommandResult(accepted.inboundEventId, { timeoutMs: 5_000 });
+      expect(replies.handle).not.toHaveBeenCalled();
+    });
+  });
+
   /**
    * The operator's own Telegram conversation with the real Chat session ensure, binding repository and binding read,
    * the Gateway's own ingest (the desk branch and ingestEvent) and its reply owner. Only turn admission, model

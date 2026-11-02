@@ -603,3 +603,63 @@ describe("BrowserErrandService dispose", () => {
     expect(launchBrowser).not.toHaveBeenCalled();
   });
 });
+
+describe("BrowserErrandService channel deliveries", () => {
+  /** Starts an errand that waits in its first approval until the returned release is called. */
+  async function runningErrand(isPending: (approvalId: string) => Promise<boolean>) {
+    let asked!: () => void;
+    const approvalAsked = new Promise<void>((resolve) => (asked = resolve));
+    const gate = fakeGate(vi.fn, { isPending: vi.fn(isPending) });
+    const built = buildService(vi.fn, {
+      createGate: (deps) => {
+        gate.request = vi.fn(
+          () =>
+            new Promise<"stopped">((resolve) => {
+              asked();
+              deps.signal.addEventListener("abort", () => resolve("stopped"), { once: true });
+            }),
+        );
+        return gate;
+      },
+      runLoop: async (deps) => outcome((await deps.requestApproval({} as never)) === "stopped" ? "stopped" : "done"),
+    });
+    const running = built.service.run(errandRequest());
+    await approvalAsked;
+    const errandId = built.service.getStatus("tool-run-1")!.errandId;
+    const finish = async () => {
+      await built.service.stop(errandId, "operator");
+      await running;
+      await built.service.dispose();
+    };
+    return { service: built.service, gate, errandId, finish };
+  }
+
+  it("answers with the newest pending approval delivered to the conversation, skipping stale ones (Review Focus 1)", async () => {
+    const pending = new Set(["approval-old", "approval-new"]);
+    const { service, errandId, finish } = await runningErrand(async (id) => pending.has(id));
+    service.recordDelivery({ approvalId: "approval-old", connectionId: "conn-1", target: "chat-1" });
+    service.recordDelivery({ approvalId: "approval-other", connectionId: "conn-1", target: "chat-2" });
+    service.recordDelivery({ approvalId: "approval-new", connectionId: "conn-1", target: "chat-1" });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toEqual({
+      approvalId: "approval-new",
+      errandId,
+    });
+    pending.delete("approval-new");
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toEqual({
+      approvalId: "approval-old",
+      errandId,
+    });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-9")).resolves.toBeUndefined();
+    await expect(service.pendingDeliveryFor("conn-2", "chat-1")).resolves.toBeUndefined();
+    await finish();
+  });
+
+  it("has nothing pending once the stored approval is resolved, or after the errand ends", async () => {
+    const { service, finish } = await runningErrand(async () => false);
+    service.recordDelivery({ approvalId: "approval-1", connectionId: "conn-1", target: "chat-1" });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    await finish();
+    service.recordDelivery({ approvalId: "approval-2", connectionId: "conn-1", target: "chat-1" });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+  });
+});

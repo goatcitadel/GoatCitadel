@@ -11,6 +11,8 @@ import {
 } from "./errand-approval-gate.js";
 import { runErrandLoop, type ErrandLoopDeps, type ErrandOutcome, type ErrandProgress } from "./errand-loop.js";
 import { resolveOwnedErrandOrigin, type ErrandOrigin, type ErrandOriginDeps } from "./errand-origin.js";
+import type { ErrandApprovalDeliveryRecord } from "./errand-approval-delivery.js";
+import type { ErrandChannelReplies, PendingErrandDelivery } from "./errand-channel-replies.js";
 
 export const BROWSER_ERRAND_DISABLED_MESSAGE = "Browser errands are turned off. Turn on Browser errands in Settings.";
 export const BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE =
@@ -90,6 +92,8 @@ export interface BrowserErrandServiceDeps {
   createGate?: (deps: ErrandApprovalGateDeps) => ErrandApprovalGate;
   idleCloseMs?: number;
   disposeSettleMs?: number;
+  /** Builds the answers to APPROVE / DENY / STOP replies in channel conversations, from this service. */
+  channelReplies?(service: BrowserErrandService): ErrandChannelReplies;
 }
 
 interface ActiveErrand {
@@ -112,6 +116,8 @@ interface ActiveErrand {
   stopping: boolean;
   /** Resolves once the run has finished its cleanup, whatever its outcome. */
   settled?: Promise<void>;
+  /** This errand's approvals sent to channel conversations, oldest first; a text reply there can answer them. */
+  deliveries: ReadonlyArray<ErrandApprovalDeliveryRecord & { deliveredAt: number }>;
 }
 
 /** Approval evidence could not be recorded: the errand stops (fail closed) and its summary says why. */
@@ -133,12 +139,51 @@ export class BrowserErrandService {
   private readonly views = new Map<string, ErrandStatusView>();
   private disposed = false;
 
-  public constructor(private readonly deps: BrowserErrandServiceDeps) {}
+  /** Answers whole-message APPROVE / DENY / STOP replies in the conversations this errand asked in. */
+  public readonly channelReplies: ErrandChannelReplies | undefined;
+
+  public constructor(private readonly deps: BrowserErrandServiceDeps) {
+    this.channelReplies = deps.channelReplies?.(this);
+  }
 
   /** Where the running errand was started, if one is running. */
   public getActiveOrigin(): ErrandOrigin | undefined {
     const origin = this.active?.origin;
     return origin ? { ...origin } : undefined;
+  }
+
+  /** Remembers that the running errand's approval was sent to a channel conversation. */
+  public recordDelivery(record: ErrandApprovalDeliveryRecord): void {
+    const errand = this.active;
+    if (!errand) {
+      return;
+    }
+    const { approvalId, connectionId, target } = record;
+    errand.deliveries = [...errand.deliveries, { approvalId, connectionId, target, deliveredAt: Date.now() }];
+  }
+
+  /**
+   * The newest approval of the running errand delivered to this conversation whose stored record is still pending.
+   * Older, stale deliveries to the same conversation are skipped.
+   */
+  public async pendingDeliveryFor(connectionId: string, target: string): Promise<PendingErrandDelivery | undefined> {
+    const errand = this.active;
+    if (!errand || errand.stopping) {
+      return undefined;
+    }
+    const gate = errand.gate;
+    if (!gate) {
+      return undefined;
+    }
+    const newestFirst = errand.deliveries
+      .filter((item) => item.connectionId === connectionId && item.target === target)
+      .reverse();
+    for (const delivery of newestFirst) {
+      if (await gate.isPending(delivery.approvalId)) {
+        return { approvalId: delivery.approvalId, errandId: errand.view.errandId };
+      }
+    }
+    return undefined;
   }
 
   public getStatus(toolRunId: string): ErrandStatusView | undefined {
@@ -222,6 +267,7 @@ export class BrowserErrandService {
       windowClosed: false,
       approvalUnrecorded: false,
       stopping: false,
+      deliveries: [],
     };
     // Claimed before any await, so a second call in the same tick is refused.
     this.active = errand;
@@ -310,7 +356,8 @@ export class BrowserErrandService {
   ): Promise<BrowserErrandToolResult> {
     const { request, turnId, toolRunId } = ids;
     const signal = errand.controller.signal;
-    const realNow = this.deps.now ?? Date.now;
+    const { now: injectedNow, gate: gateDeps } = this.deps;
+    const realNow = injectedNow ?? Date.now;
     const offClosed = browser.onClosed(() => {
       errand.windowClosed = true;
       errand.controller.abort();
@@ -318,7 +365,7 @@ export class BrowserErrandService {
     });
     const offOverlay = browser.overlay.onEvent((event) => this.onOverlayEvent(errand, browser, event, realNow));
     const gate = (this.deps.createGate ?? createErrandApprovalGate)({
-      ...this.deps.gate,
+      ...gateDeps,
       sessionId: request.sessionId,
       turnId,
       toolRunId,
@@ -334,7 +381,7 @@ export class BrowserErrandService {
     let lastThumbnailStep = -ERRAND_THUMBNAIL_EVERY_STEPS;
     const upload = async (fileName: string, png: Buffer): Promise<string> =>
       (
-        await this.deps.gate.attachments.upload({
+        await gateDeps.attachments.upload({
           sessionId: request.sessionId,
           fileName,
           mimeType: "image/png",

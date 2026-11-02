@@ -82,6 +82,8 @@ export interface ErrandApprovalGate {
   withdrawPending(actorId: string): Promise<void>;
   /** Records the after screenshot against the most recently approved request. */
   recordAfterScreenshot(png: Buffer): Promise<void>;
+  /** Whether the stored approval record is still pending; a record that cannot be read counts as not pending. */
+  isPending(approvalId: string): Promise<boolean>;
   /** Why the last `request` returned "denied" without an operator deny, for the errand summary; else undefined. */
   readonly lastReason: string | undefined;
 }
@@ -502,10 +504,17 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
     });
   };
 
+  const isPending = async (approvalId: string): Promise<boolean> =>
+    await storage.approvals.get(approvalId).then(
+      (approval) => approval.status === "pending",
+      () => false,
+    );
+
   return {
     request,
     withdrawPending,
     recordAfterScreenshot,
+    isPending,
     get lastReason() {
       return lastReason;
     },

@@ -41,6 +41,7 @@ import {
   type OperatorDeskAccepted,
 } from "./channel-desk-turn.js";
 import { buildInboundConversationLaneKey } from "./inbound-channel-lane.js";
+import type { ErrandChannelReplies } from "./browser-errands/errand-channel-replies.js";
 
 const CLAIM_LEASE_MS = 30_000;
 const CLAIM_HEARTBEAT_MS = 10_000;
@@ -151,6 +152,8 @@ export interface InboundChannelEventServiceDeps {
     participantB: string;
   }) => BotLoopGuardDecision;
   emitChannelActivity: (input: ChannelActivityInput) => Promise<unknown>;
+  /** Whole-message APPROVE / DENY / STOP replies to a waiting browser errand approval; read when a message arrives. */
+  errandReplies?: () => ErrandChannelReplies | undefined;
   recordDevDiagnostic?: (input: {
     level: "info" | "warn" | "error";
     category: string;
@@ -546,6 +549,11 @@ export class InboundChannelEventService {
       return;
     }
     assertCurrent();
+    // An answer to a waiting errand approval is settled here: it never becomes a Chat message or a turn.
+    if (!desk && claim.event.dispatchKind !== "command" && (await this.answerErrandReply(claim, payload, content))) {
+      return;
+    }
+    assertCurrent();
     const ingestResult = await this.deps.ingestChannelMessage(
       claim.event.channelKey,
       claim.event.eventId,
@@ -734,6 +742,39 @@ export class InboundChannelEventService {
   }
 
   /**
+   * Answers a whole-message APPROVE / DENY / STOP reply to the errand approval waiting in this conversation, and
+   * settles the event. False when the message is not one, so it goes on as ordinary chat.
+   */
+  private async answerErrandReply(
+    claim: InboundChannelEventClaim,
+    payload: StoredInboundPayload,
+    content: string,
+  ): Promise<boolean> {
+    const replies = this.deps.errandReplies?.();
+    const target = payload.bindingTarget?.trim();
+    const actorId = payload.message.actorId?.trim();
+    if (!replies || !target || !actorId) {
+      return false;
+    }
+    const { connectionId, channelKey, eventId } = claim.event;
+    const answer = await replies.handle({ connectionId, channelKey, target, actorId, text: content });
+    if (!answer.handled) {
+      return false;
+    }
+    await replies.send({
+      connectionId,
+      target,
+      message: answer.reply,
+      idempotencyKey: stableInboundId("errand-reply", eventId),
+    });
+    this.requireTransition(
+      claim,
+      await this.deps.storage.inboundChannelEvents.transitionClaimed(claim, { status: "completed" }),
+    );
+    return true;
+  }
+
+  /**
    * The desk question's session, while its binding still lets it be answered; otherwise the question is settled as
    * suppressed, the way any suppressed event is, and nothing is recorded, answered or delivered.
    */
@@ -776,7 +817,8 @@ export class InboundChannelEventService {
     claim: InboundChannelEventClaim,
     payload: StoredInboundPayload,
   ): Promise<BotLoopGuardDecision> {
-    const evaluation = await this.deps.storage.inboundChannelEvents.beginBotLoopEvaluation(claim);
+    const { inboundChannelEvents } = this.deps.storage;
+    const evaluation = await inboundChannelEvents.beginBotLoopEvaluation(claim);
     if (!evaluation) {
       throw new InboundChannelClaimLostError(claim.eventId);
     }
@@ -796,7 +838,7 @@ export class InboundChannelEventService {
       // whether the guard mutated its in-memory bucket. Fail open for this one
       // already-accepted event and persist that recovery decision without
       // charging the guard a second time.
-      const recovered = await this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
+      const recovered = await inboundChannelEvents.completeBotLoopEvaluation(claim, {
         decision: "allow",
         reason: "recovered_incomplete_evaluation",
       });
@@ -817,7 +859,7 @@ export class InboundChannelEventService {
       participantA: payload.message.actorId,
       participantB: claim.event.connectionId,
     });
-    const completed = await this.deps.storage.inboundChannelEvents.completeBotLoopEvaluation(claim, {
+    const completed = await inboundChannelEvents.completeBotLoopEvaluation(claim, {
       decision: guard.action,
       reason: guard.action === "suppress" ? guard.reason : undefined,
     });

@@ -1,5 +1,5 @@
 import type { DiscordPairingRecord } from "@goatcitadel/contracts";
-import { approvedDiscordActorIds } from "./errand-origin.js";
+import { approvedDiscordActorIds, createErrandOriginDeps, type ErrandOriginSources } from "./errand-origin.js";
 import { isErrandOwner } from "./errand-owner.js";
 
 /** What a channel shows someone who presses an errand approval button without being the operator's own account. */
@@ -54,4 +54,11 @@ export function createErrandPressGuard(deps: ErrandPressGuardDeps): (input: Erra
       throw new ErrandOwnerOnlyError();
     }
   };
+}
+
+/** The press guard over Gateway storage and the Gateway's Discord pairing reader. */
+export function createGatewayErrandPressGuard(
+  sources: ErrandOriginSources,
+): (input: ErrandPressInput) => Promise<void> {
+  return createErrandPressGuard(createErrandOriginDeps(sources));
 }
