@@ -138,6 +138,22 @@ describe("normalizeComputerActions", () => {
     expect(result.errors[0]).toContain("action 5");
     expect(result.errors[1]).toContain("action 6");
   });
+
+  it("keeps a literal space key, alone and in a chord", () => {
+    const result = normalizeComputerActions([
+      { type: "keypress", keys: [" "] },
+      { type: "keypress", keys: ["Control", " "] },
+      { type: "keypress", keys: ["Ctrl+ "] },
+      { type: "keypress", keys: ["SPACE"] },
+    ]);
+    expect(result.errors).toEqual([]);
+    expect(result.actions).toEqual([
+      { type: "keypress", keys: [" "] },
+      { type: "keypress", keys: ["Control", " "] },
+      { type: "keypress", keys: ["Control", " "] },
+      { type: "keypress", keys: [" "] },
+    ]);
+  });
 });
 
 describe("errand browser computer actions", () => {
