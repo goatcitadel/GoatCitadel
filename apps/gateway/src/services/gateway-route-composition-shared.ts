@@ -11,6 +11,8 @@ import {
   createOwnErrandConversationLookup,
   type OwnErrandConversation,
 } from "./browser-errands/errand-escalation-gateway.js";
+import { INTEGRATION_CATALOG } from "./integration-catalog.js";
+import { errandApprovalConversationLabel } from "./runtime-errand-approval-conversation-change.js";
 
 export const DEFAULT_WORKSPACE_ID = "default";
 
@@ -88,8 +90,16 @@ export function createRuntimeConfigurationOwnerChecks(
     validateSettingsUpdate: async (input) => {
       await settingsAuthService.buildSettingsCandidate(createSettingsRuntimeDependenciesForGateway(port()), input);
     },
-    errandApprovalConversationTitle: async (sessionId) => (await findOwnErrandConversation(port(), sessionId))?.title,
+    errandApprovalConversationTitle: async (sessionId) => {
+      const own = await findOwnErrandConversation(port(), sessionId);
+      return own ? errandApprovalConversationLabel(own.title, channelName(own.conversation.channelKey)) : undefined;
+    },
   };
+}
+
+/** The channel's name as the integration catalog shows it, such as "Telegram". */
+function channelName(channelKey: string): string | undefined {
+  return INTEGRATION_CATALOG.find((entry) => entry.kind === "channel" && entry.key === channelKey)?.label;
 }
 
 /** The operator's own private conversation behind a session; a session or connection that no longer exists is none. */

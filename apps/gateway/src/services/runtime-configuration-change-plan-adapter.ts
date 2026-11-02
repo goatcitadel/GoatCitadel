@@ -38,6 +38,7 @@ import {
   type WebSearchCredentialChangeOwner,
 } from "./web-search-credential-change.js";
 import {
+  completedErrandApprovalConversationSummary,
   describeErrandApprovalConversation,
   matchesErrandApprovalConversation,
   prepareErrandApprovalConversation,
@@ -216,7 +217,13 @@ export class RuntimeConfigurationChangePlanAdapter implements EvolutionControlPl
       status: "verifying",
       evidenceRefs: [`runtime_settings:revision:${updated.revision}`],
       result: {
-        summary: describe(plan.request, current).completedSummary,
+        summary:
+          plan.request.change.operation === "browser_errand_approval_conversation"
+            ? await completedErrandApprovalConversationSummary(
+                plan.request.change.config.approvalSessionId,
+                this.errandApprovalConversationTitle,
+              )
+            : describe(plan.request, current).completedSummary,
         appliedRevision: updated.revision,
       },
     };
