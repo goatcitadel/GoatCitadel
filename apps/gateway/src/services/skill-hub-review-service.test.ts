@@ -37,6 +37,24 @@ const REVIEW_SKILL_MD = [
   "",
 ].join("\n");
 
+/** A Claude Code-format skill: Claude Code keys beside GoatCitadel's own, on top of the same instructions. */
+const CLAUDE_CODE_SKILL_MD = [
+  "---",
+  "name: review-skill",
+  "description: A production review admission fixture skill.",
+  "allowed-tools: Read, Grep",
+  "argument-hint: [file]",
+  "version: 9.9.9",
+  "metadata:",
+  "  version: 1.0.0",
+  "  author: Example Author",
+  "  tools: [memory.read]",
+  "---",
+  "",
+  "Review exact immutable bytes safely.",
+  "",
+].join("\n");
+
 interface Harness {
   rootDir: string;
   sourceDir: string;
@@ -597,6 +615,168 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
     expect(databaseCount(harness.storage, "skill_lifecycle")).toBe(0);
   });
 
+  it("reviews a native plugin skill exactly as before", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness);
+
+    const reviewed = await fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill));
+
+    // Recorded before the Claude Code dialect was added: a GoatCitadel-format skill gains no code and no provenance key.
+    expect(reviewed.snapshot.audit.findingCodes).toEqual([
+      "BUNDLE_METADATA_VALIDATED",
+      "CONTENT_TREE_VALIDATED",
+      "FRONTMATTER_VALIDATED",
+      "LICENSE_PRESENT",
+      "PERMISSION_ENVELOPE_DERIVED",
+      "PROMPTWARE_SCAN_CLEAN",
+      "SECURITY_SCAN_COMPLETE",
+    ]);
+    expect(reviewed.snapshot.audit.policyRevision).toBe(1);
+    expect(reviewed.snapshot.provenance).toEqual({
+      reviewSchemaVersion: SKILL_HUB_REVIEW_SCHEMA_VERSION,
+      sourceProvider: "goatcitadel_plugin",
+      sourceType: "local_path",
+      sourceRef: `plugin:${PLUGIN_ID}/${PIECE_ID}@${fixture.pluginSkill.pinLabel}`,
+      pluginTrust: "unverified",
+      skillName: "review-skill",
+      nonCallableUntilActivated: true,
+    });
+  });
+
+  it("reviews a Claude Code skill with allowed-tools and argument-hint and keeps its bytes", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness, {
+      skillFiles: { "SKILL.md": CLAUDE_CODE_SKILL_MD, LICENSE: "MIT\n" },
+      dialect: "claude_code",
+    });
+
+    const reviewed = await fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill));
+
+    const skillTree = (await captureSkillContentIntegrity(fixture.skillDir)).treeSha256;
+    expect(reviewed.snapshot).toMatchObject({
+      contentTreeSha256: skillTree,
+      declaredVersion: "1.0.0",
+      trustDisposition: "candidate",
+      blockerCodes: [],
+    });
+    expect(reviewed.artifact.contentTreeSha256).toBe(skillTree);
+    // Nothing rewrote the file: the kept copy holds the same bytes, Claude Code keys included.
+    const keptDir = harness.artifactStore.resolveBundlePath(reviewed.artifact.bundleRelPath);
+    expect(await fs.readFile(path.join(keptDir, "SKILL.md"), "utf8")).toBe(CLAUDE_CODE_SKILL_MD);
+  });
+
+  it("records the ignored keys in provenance and the finding codes", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness, {
+      skillFiles: {
+        "SKILL.md": CLAUDE_CODE_SKILL_MD.replace("argument-hint:", "user-invocable: false\nargument-hint:"),
+        LICENSE: "MIT\n",
+      },
+      dialect: "claude_code",
+    });
+
+    const reviewed = await fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill));
+
+    expect(reviewed.snapshot.provenance).toMatchObject({
+      frontmatterDialect: "claude_code",
+      ignoredFrontmatterKeys: ["allowed-tools", "argument-hint", "metadata.author", "user-invocable", "version"],
+    });
+    // A top-level version is ignored; the declared version still comes from metadata.version only.
+    expect(reviewed.snapshot.declaredVersion).toBe("1.0.0");
+    expect(reviewed.snapshot.audit.findingCodes).toEqual(
+      expect.arrayContaining([
+        "CLAUDE_CODE_DIALECT_APPLIED",
+        "CLAUDE_CODE_KEYS_IGNORED",
+        "CLAUDE_CODE_USER_INVOCABLE_WIDENED",
+      ]),
+    );
+    expect(reviewed.snapshot.audit.policyRevision).toBe(1);
+    // The dialect never blocks: it refuses or passes.
+    expect(reviewed.snapshot.blockerCodes).toEqual([]);
+  });
+
+  it("records the dialect alone when a Claude Code skill sets nothing to ignore", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness, { dialect: "claude_code" });
+
+    const reviewed = await fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill));
+
+    expect(reviewed.snapshot.provenance).toMatchObject({
+      frontmatterDialect: "claude_code",
+      ignoredFrontmatterKeys: [],
+    });
+    expect(reviewed.snapshot.audit.findingCodes).toContain("CLAUDE_CODE_DIALECT_APPLIED");
+    expect(reviewed.snapshot.audit.findingCodes).not.toContain("CLAUDE_CODE_KEYS_IGNORED");
+    expect(reviewed.snapshot.audit.findingCodes).not.toContain("CLAUDE_CODE_USER_INVOCABLE_WIDENED");
+  });
+
+  it("refuses disable-model-invocation in a Claude Code skill", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness, {
+      skillFiles: {
+        "SKILL.md": CLAUDE_CODE_SKILL_MD.replace("argument-hint:", "disable-model-invocation: true\nargument-hint:"),
+        LICENSE: "MIT\n",
+      },
+      dialect: "claude_code",
+    });
+
+    const refusal = await fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill)).then(
+      () => undefined,
+      (error: unknown) => error as Error,
+    );
+
+    expect(refusal).toMatchObject({ code: "FIELD_INVALID", details: { field: "CLAUDE_CODE_SETTING_NOT_KEPT" } });
+    expect(refusal?.message).toContain("disable-model-invocation");
+    expect(databaseCount(harness.storage, "skill_hub_snapshots")).toBe(0);
+    expect(databaseCount(harness.storage, "skill_hub_snapshot_artifacts")).toBe(0);
+  });
+
+  it("refuses a key no list names in a Claude Code skill", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness, {
+      skillFiles: {
+        "SKILL.md": CLAUDE_CODE_SKILL_MD.replace("argument-hint:", "foo: 1\nargument-hint:"),
+        LICENSE: "MIT\n",
+      },
+      dialect: "claude_code",
+    });
+
+    await expect(fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill))).rejects.toMatchObject({
+      code: "FIELD_INVALID",
+      details: { field: "UNKNOWN_FRONTMATTER_DIMENSION" },
+    });
+    expect(databaseCount(harness.storage, "skill_hub_snapshots")).toBe(0);
+  });
+
+  it("refuses allowed-tools when no dialect is given", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness, {
+      skillFiles: { "SKILL.md": CLAUDE_CODE_SKILL_MD, LICENSE: "MIT\n" },
+    });
+
+    await expect(fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill))).rejects.toMatchObject({
+      code: "FIELD_INVALID",
+      details: { field: "UNKNOWN_FRONTMATTER_DIMENSION" },
+      message: "Skill bundle declares an unknown permission-bearing dimension.",
+    });
+    expect(databaseCount(harness.storage, "skill_hub_snapshots")).toBe(0);
+  });
+
+  it("refuses a dialect the plugin check didn't name", async () => {
+    const resolve = vi.fn(() => "unreachable");
+    const service = refusingService({ resolvePluginSkillDir: resolve });
+
+    for (const dialect of ["other", "Claude_Code", "", 1, null]) {
+      const refusal = await refusalOf(service, validPluginSkill({ dialect } as unknown as Partial<PluginSkillInput>));
+      expect(refusal, JSON.stringify(dialect)).toMatchObject({
+        code: "FIELD_INVALID",
+        details: { field: "pluginSkill" },
+        message: "The plugin's skill format isn't one GoatCitadel knows.",
+      });
+    }
+    expect(resolve).not.toHaveBeenCalled();
+  });
+
   it("refuses a plugin skill folder that does not hold the SKILL.md itself", async () => {
     const harness = await createHarness();
     const fixture = await pluginSkillFixture(harness, {
@@ -816,7 +996,11 @@ function refusingService(options: Pick<SkillHubReviewServiceOptions, "resolvePlu
  */
 async function pluginSkillFixture(
   harness: Harness,
-  options: { skillFiles?: Record<string, string>; trust?: PluginSkillInput["trust"] } = {},
+  options: {
+    skillFiles?: Record<string, string>;
+    trust?: PluginSkillInput["trust"];
+    dialect?: PluginSkillInput["dialect"];
+  } = {},
 ): Promise<{ service: SkillHubReviewService; pluginSkill: PluginSkillInput; skillDir: string }> {
   const skillFiles = options.skillFiles ?? { "SKILL.md": REVIEW_SKILL_MD, LICENSE: "MIT\n" };
   const pluginDir = path.join(harness.rootDir, "plugin-source");
@@ -858,6 +1042,7 @@ async function pluginSkillFixture(
       pieceId: PIECE_ID,
       trust: options.trust ?? "unverified",
       pinLabel: `content:${snapshot.treeSha256}`,
+      ...(options.dialect ? { dialect: options.dialect } : {}),
     },
   };
 }

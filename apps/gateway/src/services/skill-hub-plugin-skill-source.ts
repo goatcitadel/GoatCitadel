@@ -34,6 +34,11 @@ export interface SkillHubPluginSkillInput {
   trust: PluginTrust;
   /** How the plugin was pinned: `commit:<40 hex>` or `content:<64 hex>`. */
   pinLabel: string;
+  /**
+   * The skill's frontmatter format, set only for a Claude Code-format plugin. Left out, the review reads the skill as
+   * GoatCitadel's own.
+   */
+  dialect?: "claude_code";
 }
 
 /** What the record says in place of the folder the skill was read from, which it must not keep. */
@@ -41,6 +46,7 @@ export interface PluginSkillRecord {
   sourceRef: string;
   canonicalSourceKey: string;
   trust: PluginTrust;
+  dialect?: "claude_code";
 }
 
 export interface PluginSkillSource {
@@ -87,6 +93,9 @@ export function resolvePluginSkillSource(
   if (typeof skill.trust !== "string" || !PLUGIN_TRUSTS.has(skill.trust)) {
     return refuse("The plugin's trust isn't one GoatCitadel knows.");
   }
+  if (skill.dialect !== undefined && skill.dialect !== "claude_code") {
+    return refuse("The plugin's skill format isn't one GoatCitadel knows.");
+  }
   if (typeof skill.snapshotTreeSha256 !== "string" || typeof skill.path !== "string" || skill.path.length === 0) {
     return refuse("The skill's place in the plugin isn't valid.");
   }
@@ -104,7 +113,12 @@ export function resolvePluginSkillSource(
   return {
     sourceRef: skillDir,
     sourceType: "local_path",
-    plugin: { sourceRef: `${key}@${skill.pinLabel}`, canonicalSourceKey: key, trust: skill.trust },
+    plugin: {
+      sourceRef: `${key}@${skill.pinLabel}`,
+      canonicalSourceKey: key,
+      trust: skill.trust,
+      ...(skill.dialect ? { dialect: skill.dialect } : {}),
+    },
   };
 }
 
