@@ -5,6 +5,7 @@
  */
 
 import { ConflictError } from "@goatcitadel/contracts";
+import type { ClearErrandApprovalButtons } from "./errand-approval-buttons.js";
 import type { ErrandChannelNotices } from "./errand-channel-notices.js";
 import { ErrandOwnerOnlyError, ERRAND_OWNER_ONLY_COPY, type ErrandPressInput } from "./errand-approval-press-guard.js";
 
@@ -138,6 +139,8 @@ export interface ErrandChannelReplies {
   send(input: ErrandChannelReplySend): Promise<void>;
   /** Sign-in pause notices and the final screenshot, sent to the channel an errand started from. */
   notices?: ErrandChannelNotices;
+  /** Takes the Approve / Deny buttons off the messages of answered approvals; never rejects. */
+  clearButtons?: ClearErrandApprovalButtons;
 }
 
 export interface ErrandReplyHandlerOptions {

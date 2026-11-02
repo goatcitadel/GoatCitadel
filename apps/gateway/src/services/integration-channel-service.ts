@@ -26,6 +26,7 @@ import { parseChannelSecretRef, type ChannelSecretCustodyService } from "./chann
 import type { ChannelSecretOwner } from "./channel-secret-resolution.js";
 import { resolveChannelConfigTarget } from "./channel-config.js";
 import { sendTelegramTypingIndicator } from "./telegram-typing.js";
+import { clearTelegramMessageButtons } from "./channel-message-buttons.js";
 import { emitChannelActivityImpl } from "./integration-channel-activity.js";
 
 export interface IntegrationChannelPort {
@@ -78,6 +79,7 @@ export interface IntegrationChannelPort {
       durationMs?: number,
       signal?: AbortSignal,
     ): Promise<ChannelTypingResult>;
+    clearMessageComponents(connectionId: string, target: string, messageId: string): Promise<void>;
   };
   /** Keychain custody of channel keys; absent where the host has no OS keychain. Removing a channel deletes its keys here. */
   channelSecrets?: Pick<ChannelSecretCustodyService, "delete">;
@@ -192,6 +194,26 @@ export class IntegrationChannelService {
 
   public reconnectDiscordRuntime(connectionId: string): Promise<DiscordRuntimeStatus | undefined> {
     return reconnectDiscordRuntime(this.deps, connectionId);
+  }
+
+  /**
+   * Takes the inline buttons off a message GoatCitadel sent: Telegram's reply markup, Discord's components. Throws when
+   * the channel has no buttons to remove or the edit fails.
+   */
+  public async clearMessageButtons(input: ChannelMessageButtonsInput): Promise<void> {
+    const connection = await getIntegrationConnection(this.deps, input.connectionId);
+    if (connection.key === "discord") {
+      await this.deps.discordRuntimeService.clearMessageComponents(
+        connection.connectionId,
+        input.target,
+        input.messageId,
+      );
+      return;
+    }
+    if (connection.key !== "telegram") {
+      throw new Error(`${connection.key} messages have no buttons to remove.`);
+    }
+    await clearTelegramMessageButtonsImpl(this.deps, connection, input);
   }
 
   public emitTelegramTyping(
@@ -757,6 +779,32 @@ export async function reconnectDiscordRuntime(
   const connection = await deps.getIntegrationConnection(connectionId);
   deps.assertDiscordConnection(connection);
   return deps.discordRuntimeService.reconnectConnection(connectionId);
+}
+
+/** One sent channel message, by the provider's own message id. */
+export interface ChannelMessageButtonsInput {
+  connectionId: string;
+  target: string;
+  messageId: string;
+}
+
+async function clearTelegramMessageButtonsImpl(
+  deps: IntegrationChannelPort,
+  connection: IntegrationConnection,
+  input: ChannelMessageButtonsInput,
+): Promise<void> {
+  const token =
+    deps.resolveConnectionSecret(connection.config, "botToken", "botTokenEnv", connection.catalogId, connection) ??
+    deps.resolveConnectionSecret(connection.config, "token", "tokenEnv", connection.catalogId, connection);
+  if (!token) {
+    throw new Error(`${connection.label} is missing a Telegram bot token.`);
+  }
+  if (!deps.isConnectionUrlAllowlisted(`https://api.telegram.org/bot${token}/editMessageReplyMarkup`)) {
+    throw new Error("Telegram API host is not in the current outbound allowlist.");
+  }
+  await clearTelegramMessageButtons(token, input.target.trim(), input.messageId, (url, init) =>
+    deps.fetchWithDiagnosticsTimeout(url, init),
+  );
 }
 
 export async function emitTelegramTypingImpl(

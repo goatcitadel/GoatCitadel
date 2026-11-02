@@ -302,6 +302,16 @@ These are the builder's starting values; adjust with reason:
 - An unanswered approval expires after 10 minutes. The errand then stops and says so.
 - The Chat card shows the step count, and the result reports how many model requests were used, since each one costs subscription usage.
 
+## Known follow-ups
+
+Closed after PR 2 (channels and approvals away from the PC):
+
+- **Buttons come off once answered.** When an errand approval is answered from any surface, or the errand ends, the Approve / Deny buttons are taken off the channel messages that carried them: Telegram clears the message's reply markup, Discord edits its components to none. The message is found by the provider message id the completed connector delivery recorded. It is best effort: a failure logs a bounded warning and never touches the approval. A message whose send had not completed when the approval was answered keeps its buttons; pressing one still gets "This was already answered."
+- **Discord answers a press within 3 seconds.** An Approve / Deny press is acknowledged first with a private deferred reply, before any connection, pairing or durable-command read, and the result edits that reply. The route, pairing and ownership checks are unchanged. A press Discord would not let GoatCitadel acknowledge is not acted on.
+- **A skipped phone push says why.** A push skipped because its approval was already answered is recorded as `approval_already_resolved` (still status `cancelled_revoked`), not `registration_revoked`. SQLite v276 and Postgres v225 widen the delivery table's classification CHECK; both Postgres lineages (fresh, and upgraded from v224) are tested against a real database.
+- **The picked conversation is named.** The completed Change Plan for the approval conversation says where approvals now go in plain words, the conversation's name and its channel ("Me on Telegram"), with no IDs.
+- **The inbound lane filter is proven on Postgres.** The errand control lane's prefix filter (`substr(lane_key, 1, length) = prefix`) is tested against a real Postgres, wildcard characters included; it needs no Postgres variant.
+
 ## Relationship to earlier work
 
 - `docs/review/HX_416_GOVERNED_NATIVE_DESKTOP_COMPUTER_USE_PACKET_2026-07-16.md`, on the unmerged branch `codex/hx416-computer-use-architecture-20260716`, froze a native Windows desktop design. In that design every capture and every action needs its own approval.

@@ -29,7 +29,9 @@ export type MobilePushDeliveryClassification =
   | "custody_unavailable"
   | "grant_validation_unavailable"
   | "custody_mismatch"
-  | "registration_revoked";
+  | "registration_revoked"
+  /** The approval was answered before the push went out, so nothing was sent. */
+  | "approval_already_resolved";
 
 export interface MobilePushRegistrationRecord {
   registrationId: string;
@@ -808,6 +810,7 @@ function isDeliveryClassification(value: string): value is MobilePushDeliveryCla
     "grant_validation_unavailable",
     "custody_mismatch",
     "registration_revoked",
+    "approval_already_resolved",
   ].includes(value);
 }
 

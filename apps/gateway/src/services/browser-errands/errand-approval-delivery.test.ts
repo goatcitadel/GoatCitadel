@@ -105,6 +105,8 @@ describe("deliverErrandApproval", () => {
     expect(harness.createToken.mock.calls[0]![1].delivery.message).toMatch(
       /\nReply APPROVE or DENY\. Reply STOP to end the errand\.$/,
     );
+    // No buttons were sent, so there are none to take off once it is answered.
+    expect(harness.recordDelivery).toHaveBeenCalledWith(expect.objectContaining({ buttons: false }));
   });
 
   it("issues one token bound to the conversation's connector, for the approval's remaining time", async () => {
@@ -127,6 +129,7 @@ describe("deliverErrandApproval", () => {
       connectionId: "conn-telegram",
       target: "4242",
       deliveryRunId: "run-delivery",
+      buttons: true,
     });
     // The raw bearer the issuer returns never comes back out.
     expect(JSON.stringify(result)).not.toContain(RAW_TOKEN);

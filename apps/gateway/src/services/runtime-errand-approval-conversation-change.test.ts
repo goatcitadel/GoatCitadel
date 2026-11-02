@@ -38,7 +38,7 @@ const request = (approvalSessionId: string | null) => ({
 });
 
 /** A settings owner holding the pick the way the real one does, behind the one ownership check. */
-function errandAdapter(initial?: string) {
+function errandAdapter(initial?: string, titleOf?: (sessionId: string) => Promise<string | undefined>) {
   const isOwn = async (sessionId: string) => sessionId === OWN_SESSION;
   const assistant: { browserErrands?: { approvalSessionId?: string } } = initial
     ? { browserErrands: { approvalSessionId: initial } }
@@ -58,7 +58,8 @@ function errandAdapter(initial?: string) {
     hasTemporaryAuthCredential: async () => false,
     consumeTemporaryAuthCredential: async () => "",
     discardTemporaryAuthCredential: () => undefined,
-    errandApprovalConversationTitle: async (sessionId) => ((await isOwn(sessionId)) ? "Me on Telegram" : undefined),
+    errandApprovalConversationTitle:
+      titleOf ?? (async (sessionId) => ((await isOwn(sessionId)) ? "Me on Telegram" : undefined)),
   });
   return { adapter, updateSettings, assistant };
 }
@@ -106,9 +107,24 @@ describe("the browser errand approval conversation setting", () => {
         confirmationText: "Send waiting browser errand approvals to Me on Telegram",
       },
     });
-    expect(applied).toMatchObject({ status: "verifying" });
+    const completedSummary = "Waiting browser errand approvals now go to Me on Telegram.";
+    expect(applied).toMatchObject({ status: "verifying", result: { summary: completedSummary } });
     expect(verified).toMatchObject({ status: "completed" });
     expect(assistant.browserErrands).toEqual({ approvalSessionId: OWN_SESSION });
+  });
+
+  it("completes with the plain fallback when the picked conversation's name can't be read after the write", async () => {
+    let lookups = 0;
+    const { adapter } = errandAdapter(undefined, async () => {
+      lookups += 1;
+      if (lookups > 1) throw new Error("binding store offline");
+      return "Me on Telegram";
+    });
+    const { applied } = await roundTrip(adapter, OWN_SESSION);
+
+    expect(applied).toMatchObject({
+      result: { summary: "Waiting browser errand approvals now go to the conversation you picked." },
+    });
   });
 
   it("refuses to prepare a group conversation with the one sentence, and never writes", async () => {
@@ -208,7 +224,7 @@ describe("the runtime configuration owner checks", () => {
       port({ kind: "direct", counterpartActorId: "owner-1" }, { connectionMissing: true }),
     );
 
-    await expect(own.errandApprovalConversationTitle?.(OWN_SESSION)).resolves.toBe("Me");
+    await expect(own.errandApprovalConversationTitle?.(OWN_SESSION)).resolves.toBe("Me on Telegram");
     await expect(group.errandApprovalConversationTitle?.(OWN_SESSION)).resolves.toBeUndefined();
     await expect(gone.errandApprovalConversationTitle?.(OWN_SESSION)).resolves.toBeUndefined();
   });

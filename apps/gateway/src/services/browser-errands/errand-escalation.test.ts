@@ -150,6 +150,7 @@ describe("errand escalation", () => {
       connectionId: "conn-origin",
       target: "chat-origin",
       deliveryRunId: "run-delivery",
+      buttons: expect.any(Boolean),
     });
     expect(deps.conversationFor).not.toHaveBeenCalled();
     expect(deps.pushToPhone).not.toHaveBeenCalled();
@@ -449,7 +450,10 @@ describe("Gateway errand escalation", () => {
       connectionId: "conn-dm",
       target: "chat-dm",
       deliveryRunId: "run-delivery",
+      buttons: expect.any(Boolean),
       sentAt: expect.any(Function),
+      // Read once the approval is answered, to take its buttons off the sent message.
+      providerMessageId: expect.any(Function),
     });
     expect(enqueueApprovalRefresh).toHaveBeenCalledTimes(1);
     // Telegram's pairing lives in the connection config; Discord's records are not read.

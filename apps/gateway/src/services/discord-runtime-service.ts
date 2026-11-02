@@ -333,6 +333,26 @@ export class DiscordRuntimeService {
     }
   }
 
+  /**
+   * Takes every component (the Approve / Deny buttons) off a message the bot sent, once what it asked was answered.
+   * Throws when the bot isn't connected for this connection, the target holds no messages, or Discord refuses.
+   */
+  public async clearMessageComponents(connectionId: string, target: string, messageId: string): Promise<void> {
+    const runtime = [...this.runtimesByToken.values()].find((entry) => entry.connectionIds.has(connectionId));
+    if (!runtime || !runtime.ready) {
+      throw new Error("Discord gateway runtime is not ready.");
+    }
+    const normalized = normalizeDiscordRuntimeTarget(target);
+    const channel: unknown =
+      normalized.kind === "user"
+        ? await (await runtime.client.users.fetch(normalized.id)).createDM()
+        : await runtime.client.channels.fetch(normalized.id);
+    if (!holdsEditableMessages(channel)) {
+      throw new Error("The Discord target has no messages to edit.");
+    }
+    await channel.messages.edit(messageId, { components: [] });
+  }
+
   public async close(): Promise<void> {
     if (this.closeState === "closed") return;
     if (this.closePromise) return this.closePromise;
@@ -759,10 +779,24 @@ export class DiscordRuntimeService {
    * An Approve / Deny press. Any other custom_id is not ours and is ignored. The press is let in by the same route
    * rules as a slash command, except that a DM needs the bot maker or an approved pairing even when DMs are open: an
    * approval is answered only by someone GoatCitadel already knows. The durable command owner resolves it.
+   *
+   * Discord fails an interaction it hasn't heard back on within 3 seconds, so the press is acknowledged first (a private
+   * deferred reply) and every answer after the reads and the durable commit edits that reply. A press Discord would not
+   * let us acknowledge is not acted on.
    */
   private async handleApprovalButton(runtime: ManagedClientRecord, interaction: ButtonInteraction): Promise<void> {
     const button = parseDiscordApprovalButtonId(interaction.customId);
     if (!button || (!interaction.inGuild() && !interaction.channel?.isDMBased())) {
+      return;
+    }
+    const acknowledged = await interaction.deferReply({ ephemeral: true }).then(
+      () => true,
+      (error: unknown) => {
+        this.recordInteractionResponseFailure(runtime, "discord.gateway.approval_button_defer_error", error, {});
+        return false;
+      },
+    );
+    if (!acknowledged) {
       return;
     }
     const connections = await this.listRuntimeConnections(runtime);
@@ -801,7 +835,7 @@ export class DiscordRuntimeService {
           },
           eventType: DISCORD_APPROVAL_BUTTON_EVENT_TYPE,
         },
-        { ephemeral: true },
+        { ephemeral: true, deferred: true },
       );
       runtime.lastInboundAt = new Date().toISOString();
       this.updateStatusSnapshot(runtime);
@@ -828,8 +862,9 @@ export class DiscordRuntimeService {
     interaction: ButtonInteraction,
     content: string,
   ): Promise<void> {
+    // The press was already acknowledged privately, so the answer edits that reply.
     await interaction
-      .reply({ content, ephemeral: true })
+      .editReply({ content })
       .catch((error) =>
         this.recordInteractionResponseFailure(runtime, "discord.gateway.approval_button_reply_error", error, {}),
       );
@@ -1239,14 +1274,17 @@ export class DiscordRuntimeService {
   private async handleAcceptedCommand(
     interaction: ChatInputCommandInteraction | ButtonInteraction,
     input: DiscordSlashCommandEnvelope,
-    options: { ephemeral?: boolean } = {},
+    options: { ephemeral?: boolean; deferred?: boolean } = {},
   ): Promise<void> {
     // Discord interactions have a short acknowledgement deadline. Commit the
     // bounded envelope first, defer immediately, then wait for the durable
     // command owner. The provider callback never executes the mutation itself.
     const accepted = await this.callbacks.acceptSlashCommand(input);
     const ephemeral = options.ephemeral ?? !interaction.channel?.isDMBased();
-    await interaction.deferReply({ ephemeral });
+    // An approval button press is acknowledged before its reads, so it is already deferred here.
+    if (!options.deferred) {
+      await interaction.deferReply({ ephemeral });
+    }
     const result = await this.callbacks.awaitSlashCommandResult(accepted.inboundEventId);
     await interaction.editReply({ content: truncateDiscordResponse(result) });
   }
@@ -1363,6 +1401,18 @@ function buildDiscordDirectConversation(
 // A server channel (or thread) is a group, titled after the channel when Discord names it.
 function buildDiscordGuildConversation(channelName: string | null | undefined): ChatChannelConversation {
   return buildChannelConversation({ kind: "group", title: channelName ? `#${channelName}` : undefined });
+}
+
+function holdsEditableMessages(
+  channel: unknown,
+): channel is { messages: { edit(messageId: string, options: { components: [] }): Promise<unknown> } } {
+  if (typeof channel !== "object" || channel === null || !("messages" in channel)) {
+    return false;
+  }
+  const messages = (channel as { messages?: unknown }).messages;
+  return (
+    typeof messages === "object" && messages !== null && typeof (messages as { edit?: unknown }).edit === "function"
+  );
 }
 
 function supportsTyping(channel: Channel): channel is Channel & { sendTyping: () => Promise<unknown> } {

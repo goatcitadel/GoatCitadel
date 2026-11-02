@@ -108,6 +108,24 @@ export function describeErrandApprovalConversation(approvalSessionId: string | n
   };
 }
 
+/**
+ * The completed plan's summary, naming the conversation the write just kept. The name is read again after the write;
+ * when it can't be read the summary still says the pick was saved, without a name.
+ */
+export async function completedErrandApprovalConversationSummary(
+  approvalSessionId: string | null,
+  titleOf: ErrandApprovalConversationTitle | undefined,
+): Promise<string> {
+  const title =
+    approvalSessionId === null || !titleOf ? undefined : await titleOf(approvalSessionId).catch(() => undefined);
+  return describeErrandApprovalConversation(approvalSessionId, title).completedSummary;
+}
+
+/** The conversation in plain words: its name and the channel it is on, such as "Me on Telegram". */
+export function errandApprovalConversationLabel(title: string, channelName: string | undefined): string {
+  return channelName ? `${title} on ${channelName}` : title;
+}
+
 /** Whether the settings owner holds exactly the plan's pick; a clear matches no pick. */
 export function matchesErrandApprovalConversation(
   change: BrowserErrandApprovalConversationRuntimeOperation,
