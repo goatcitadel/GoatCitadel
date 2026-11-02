@@ -1,10 +1,11 @@
 /** Builds the errand escalation from live Gateway pieces, so the errand composition only hands it over. */
 
-import type {
-  ChatSessionBindingRecord,
-  ConnectorRecord,
-  DiscordPairingRecord,
-  IntegrationConnection,
+import {
+  readErrandApprovalSessionId,
+  type ChatSessionBindingRecord,
+  type ConnectorRecord,
+  type DiscordPairingRecord,
+  type IntegrationConnection,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../../config.js";
@@ -19,7 +20,6 @@ import {
 import { createErrandEscalation, type ErrandEscalate } from "./errand-escalation.js";
 import { approvedDiscordActorIds } from "./errand-origin.js";
 import { isErrandOwner } from "./errand-owner.js";
-import { readErrandApprovalSessionId as readStoredErrandApprovalSessionId } from "@goatcitadel/contracts";
 
 const INTEGRATION_CONNECTOR_PREFIX = "integration:";
 
@@ -86,8 +86,8 @@ export function ownDirectConversation(
 }
 
 /** The conversation picked for PC errand approvals, from the governed setting; anything but a session id means none. */
-export function readErrandApprovalSessionId(config: Pick<GatewayRuntimeConfig, "assistant">): string | undefined {
-  return readStoredErrandApprovalSessionId(config.assistant.browserErrands?.approvalSessionId);
+export function readPickedErrandApprovalSessionId(config: Pick<GatewayRuntimeConfig, "assistant">): string | undefined {
+  return readErrandApprovalSessionId(config.assistant.browserErrands?.approvalSessionId);
 }
 
 /**
@@ -159,7 +159,7 @@ export function createGatewayErrandEscalation(
   return createErrandEscalation({
     readApproval: async (approvalId) => await approvalRecords.get(approvalId),
     deliver: (input) => deliverErrandApproval(delivery, input),
-    approvalSessionId: () => readErrandApprovalSessionId(config),
+    approvalSessionId: () => readPickedErrandApprovalSessionId(config),
     conversationFor: async (sessionId) => (await ownConversation(sessionId))?.conversation,
     pushToPhone: (approvalId) => enqueueMobilePushApprovalRefreshNow(storage, approvalId),
   });

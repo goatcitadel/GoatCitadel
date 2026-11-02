@@ -17,7 +17,7 @@ import {
   createGatewayErrandEscalation,
   createOwnErrandConversationLookup,
   ownDirectConversation,
-  readErrandApprovalSessionId,
+  readPickedErrandApprovalSessionId,
 } from "./errand-escalation-gateway.js";
 import type { ErrandOrigin } from "./errand-origin.js";
 
@@ -276,10 +276,10 @@ describe("Gateway errand escalation", () => {
 
   it("reads the picked conversation from the governed setting", () => {
     const config = (browserErrands: unknown) => ({ assistant: { browserErrands } }) as never;
-    expect(readErrandApprovalSessionId(config({ approvalSessionId: " session-dm " }))).toBe("session-dm");
-    expect(readErrandApprovalSessionId(config({ approvalSessionId: "  " }))).toBeUndefined();
-    expect(readErrandApprovalSessionId(config({ approvalSessionId: 7 }))).toBeUndefined();
-    expect(readErrandApprovalSessionId(config(undefined))).toBeUndefined();
+    expect(readPickedErrandApprovalSessionId(config({ approvalSessionId: " session-dm " }))).toBe("session-dm");
+    expect(readPickedErrandApprovalSessionId(config({ approvalSessionId: "  " }))).toBeUndefined();
+    expect(readPickedErrandApprovalSessionId(config({ approvalSessionId: 7 }))).toBeUndefined();
+    expect(readPickedErrandApprovalSessionId(config(undefined))).toBeUndefined();
   });
 
   it("the settings lookup names the operator's own conversation and refuses a group", async () => {

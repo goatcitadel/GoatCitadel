@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { ConfigValidationError } from "@goatcitadel/contracts";
 import { loadGatewayConfig } from "./config.js";
 import { AUTO_NATIVE_BIN_DIR } from "./postgres-runtime-config.js";
-import { syncUnifiedConfig } from "./config-sync-lib.js";
+import { buildUnifiedConfigPayloadFromRuntime, syncUnifiedConfig } from "./config-sync-lib.js";
 import { ConfigGenerationService } from "./services/config-generation-service.js";
 
 const TEMP_ROOTS: string[] = [];
@@ -303,6 +303,53 @@ describe("loadGatewayConfig", () => {
       const config = await loadWithAddress(value);
 
       expect(Object.hasOwn(config.assistant, "publicWebAddress")).toBe(false);
+    });
+  });
+
+  describe("browser errand approval conversation", () => {
+    async function loadWithAssistant(extra: Record<string, unknown>) {
+      const { rootDir, configDir } = await createConfigFixture();
+      const assistantPath = path.join(configDir, "assistant.config.json");
+      const assistantConfig = JSON.parse(await readFile(assistantPath, "utf8")) as Record<string, unknown>;
+      await writeJson(assistantPath, { ...assistantConfig, ...extra });
+      return await loadGatewayConfig(rootDir);
+    }
+    const payloadFor = (config: Awaited<ReturnType<typeof loadGatewayConfig>>) =>
+      buildUnifiedConfigPayloadFromRuntime(config, {} as never, {} as never, { jobs: [] }, (fullPath) => fullPath)
+        .assistant as Record<string, unknown>;
+
+    it("survives load and save beside the other assistant settings", async () => {
+      const config = await loadWithAssistant({
+        publicWebAddress: "https://example.com/goat",
+        browserErrands: { approvalSessionId: " session-own-dm " },
+      });
+
+      expect(config.assistant.browserErrands).toEqual({ approvalSessionId: "session-own-dm" });
+      expect(config.assistant.publicWebAddress).toBe("https://example.com/goat");
+      const saved = payloadFor(config);
+      expect(saved.browserErrands).toEqual({ approvalSessionId: "session-own-dm" });
+      expect(saved.publicWebAddress).toBe("https://example.com/goat");
+      expect(saved.environment).toBe(config.assistant.environment);
+      expect(saved.workspaceDir).toBe(config.assistant.workspaceDir);
+    });
+
+    it("is gone from the saved config once cleared", async () => {
+      const config = await loadWithAssistant({ browserErrands: { approvalSessionId: "session-own-dm" } });
+
+      delete config.assistant.browserErrands;
+
+      expect(payloadFor(config)).not.toHaveProperty("browserErrands");
+    });
+
+    it.each([
+      ["no section", {}],
+      ["an empty id", { browserErrands: { approvalSessionId: "  " } }],
+      ["an id with a control character", { browserErrands: { approvalSessionId: `bad${String.fromCharCode(7)}id` } }],
+    ])("is unset for %s", async (_label, extra) => {
+      const config = await loadWithAssistant(extra);
+
+      expect(Object.hasOwn(config.assistant, "browserErrands")).toBe(false);
+      expect(payloadFor(config)).not.toHaveProperty("browserErrands");
     });
   });
 

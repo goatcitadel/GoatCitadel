@@ -182,6 +182,37 @@ describe("sandbox root persistence", () => {
     expect(build({}).assistant).not.toHaveProperty("publicWebAddress");
     expect(build({ publicWebAddress: undefined }).assistant).not.toHaveProperty("publicWebAddress");
   });
+
+  it("persists the errand approval conversation beside its siblings, and leaves the key out when cleared", () => {
+    const build = (assistant: Record<string, unknown>) =>
+      buildUnifiedConfigPayloadFromRuntime(
+        {
+          rootDir,
+          assistant: { auth: { token: {} }, environment: "local", ...assistant },
+          budgets: {},
+          toolPolicy: { tools: {}, sandbox: { writeJailRoots: [], readOnlyRoots: [] } },
+        } as unknown as GatewayRuntimeConfig,
+        {} as never,
+        {} as never,
+        { jobs: [] },
+        relativeSerializer,
+      );
+
+    const saved = build({
+      publicWebAddress: "https://example.com",
+      browserErrands: { approvalSessionId: "session-own-dm" },
+    }).assistant;
+    expect(saved).toMatchObject({
+      environment: "local",
+      publicWebAddress: "https://example.com",
+      browserErrands: { approvalSessionId: "session-own-dm" },
+    });
+
+    const cleared = build({ publicWebAddress: "https://example.com" }).assistant;
+    expect(cleared).not.toHaveProperty("browserErrands");
+    expect(cleared).toMatchObject({ environment: "local", publicWebAddress: "https://example.com" });
+    expect(build({ browserErrands: {} }).assistant).not.toHaveProperty("browserErrands");
+  });
 });
 
 describe("syncUnifiedConfig", () => {
