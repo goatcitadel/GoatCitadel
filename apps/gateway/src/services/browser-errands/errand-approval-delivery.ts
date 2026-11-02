@@ -7,7 +7,10 @@
  */
 
 import type { ApprovalRequest, ConnectorRecord } from "@goatcitadel/contracts";
-import type { ApprovalRemoteTokenDeliveryOverride } from "../approval-connector-delivery.js";
+import {
+  supportsInlineApprovalActions,
+  type ApprovalRemoteTokenDeliveryOverride,
+} from "../approval-connector-delivery.js";
 import type { ErrandOrigin } from "./errand-origin.js";
 import { buildErrandApprovalMessage, ERRAND_SCREENSHOT_PRIVATE_ONLY_LINE } from "./errand-approval-message.js";
 import { ERRAND_APPROVAL_KIND } from "./errand-constants.js";
@@ -93,7 +96,8 @@ export async function deliverErrandApproval(
       : undefined;
   const delivery = buildErrandApprovalDelivery(
     { approval, origin, ...(screenshotAttachmentId ? { screenshotAttachmentId } : {}) },
-    canTakeInlineButtons(connector),
+    // The same readiness the delivery payload uses to attach the Approve / Deny buttons.
+    supportsInlineApprovalActions(connector, { toConversation: true }),
   );
   const issued = await createApprovalRemoteActionToken(approval.approvalId, {
     connectorId,
@@ -173,14 +177,6 @@ function warnDeliveryFailure(
     connectionId: origin.connectionId,
     detail: (detail instanceof Error ? detail.message : String(detail)).slice(0, 500),
   });
-}
-
-/** The same readiness the delivery payload uses to attach the Approve / Deny buttons. */
-function canTakeInlineButtons(connector: ConnectorRecord): boolean {
-  return (
-    connector.metadata?.approvalInlineActionsReady === true &&
-    connector.capabilities.some((capability) => capability.id === "interactive_actions" && capability.enabled)
-  );
 }
 
 function remainingTtlMs(approval: ApprovalRequest, nowMs: number): number | undefined {

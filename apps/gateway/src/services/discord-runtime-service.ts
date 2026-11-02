@@ -2,6 +2,7 @@
 import { randomUUID } from "node:crypto";
 import {
   type AutocompleteInteraction,
+  type ButtonInteraction,
   Client,
   GatewayIntentBits,
   Partials,
@@ -34,6 +35,12 @@ import {
   normalizeChannelApprovalToken,
 } from "./channel-command-contract.js";
 import { buildChannelConversation } from "./channel-conversation.js";
+import {
+  buildDiscordApprovalButtonCommandText,
+  DISCORD_APPROVAL_BUTTON_COPY,
+  DISCORD_APPROVAL_BUTTON_EVENT_TYPE,
+  parseDiscordApprovalButtonId,
+} from "./discord-approval-button.js";
 import { isAllowlistedChannelOwner } from "./channel-owner-access.js";
 import {
   createConnectionSecretReferenceResolver,
@@ -76,6 +83,8 @@ export type DiscordVoiceAttachmentRef = {
 type DiscordSlashCommandEnvelope = Omit<DiscordInboundEnvelope, "content" | "sourceMessageId" | "voiceAttachment"> & {
   commandText: string;
   sourceCommandId: string;
+  /** Set for an Approve / Deny button press; a slash command leaves it unset. */
+  eventType?: typeof DISCORD_APPROVAL_BUTTON_EVENT_TYPE;
 };
 
 interface DiscordRuntimeCallbacks {
@@ -430,6 +439,26 @@ export class DiscordRuntimeService {
         });
         return;
       }
+      if (interaction.isButton()) {
+        void this.runInboundWork("discord-approval-button", () =>
+          this.handleApprovalButton(runtime, interaction),
+        ).catch((error) => {
+          runtime.lastError = (error as Error).message;
+          this.updateStatusSnapshot(runtime);
+          this.callbacks.publishDiagnostic(
+            "discord.gateway.approval_button_error",
+            "Discord approval button handling failed.",
+            {
+              connectionIds: [...runtime.connectionIds],
+              interactionId: interaction.id,
+              channelId: interaction.channelId,
+              guildId: interaction.guildId,
+              error: (error as Error).message,
+            },
+          );
+        });
+        return;
+      }
       if (!interaction.isChatInputCommand()) {
         return;
       }
@@ -678,9 +707,7 @@ export class DiscordRuntimeService {
     if (!message.content.trim() && !(readDiscordVoiceAttachment(message) && (await this.isVoiceInboundEnabled()))) {
       return;
     }
-    const connections = (await this.callbacks.listConnections()).filter((connection) =>
-      runtime.connectionIds.has(connection.connectionId),
-    );
+    const connections = await this.listRuntimeConnections(runtime);
     for (const connection of connections) {
       const handled = await this.tryHandleMessageForConnection(runtime, connection, message);
       if (handled) {
@@ -698,9 +725,7 @@ export class DiscordRuntimeService {
     if (!interaction.inGuild() && !interaction.channel?.isDMBased()) {
       return;
     }
-    const connections = (await this.callbacks.listConnections()).filter((connection) =>
-      runtime.connectionIds.has(connection.connectionId),
-    );
+    const connections = await this.listRuntimeConnections(runtime);
     for (const connection of connections) {
       const handled = await this.tryHandleInteractionForConnection(runtime, connection, interaction);
       if (handled) {
@@ -723,6 +748,108 @@ export class DiscordRuntimeService {
     }
   }
 
+  /** The connections this bot runtime serves, as they are saved now. */
+  private async listRuntimeConnections(runtime: ManagedClientRecord): Promise<IntegrationConnection[]> {
+    return (await this.callbacks.listConnections()).filter((connection) =>
+      runtime.connectionIds.has(connection.connectionId),
+    );
+  }
+
+  /**
+   * An Approve / Deny press. Any other custom_id is not ours and is ignored. The press is let in by the same route
+   * rules as a slash command, except that a DM needs the bot maker or an approved pairing even when DMs are open: an
+   * approval is answered only by someone GoatCitadel already knows. The durable command owner resolves it.
+   */
+  private async handleApprovalButton(runtime: ManagedClientRecord, interaction: ButtonInteraction): Promise<void> {
+    const button = parseDiscordApprovalButtonId(interaction.customId);
+    if (!button || (!interaction.inGuild() && !interaction.channel?.isDMBased())) {
+      return;
+    }
+    const connections = await this.listRuntimeConnections(runtime);
+    for (const connection of connections) {
+      const admission = await this.admitApprovalButtonPress(connection, interaction);
+      if (admission === "not_routed") {
+        continue;
+      }
+      if (admission === "refused") {
+        await this.replyToApprovalButton(runtime, interaction, DISCORD_APPROVAL_BUTTON_COPY.notPaired);
+        return;
+      }
+      const dm = interaction.channel?.isDMBased() === true;
+      await this.handleAcceptedCommand(
+        interaction,
+        {
+          connectionId: connection.connectionId,
+          acceptedConnectionRevision: connection.revision,
+          target: interaction.channelId,
+          actorId: interaction.user.id,
+          displayName: interaction.user.globalName ?? interaction.user.displayName ?? interaction.user.username,
+          commandText: buildDiscordApprovalButtonCommandText(button),
+          sourceCommandId: interaction.id,
+          peer: interaction.user.id,
+          room: interaction.channelId,
+          conversation: dm
+            ? buildDiscordDirectConversation(interaction.user)
+            : buildDiscordGuildConversation(
+                interaction.channel && "name" in interaction.channel ? interaction.channel.name : undefined,
+              ),
+          threadId: interaction.channel?.isThread() ? interaction.channel.id : undefined,
+          metadata: {
+            ...(dm ? { dm: true } : { guildId: interaction.guildId, channelId: interaction.channelId }),
+            runtimeMode: "gateway",
+            interaction: true,
+          },
+          eventType: DISCORD_APPROVAL_BUTTON_EVENT_TYPE,
+        },
+        { ephemeral: true },
+      );
+      runtime.lastInboundAt = new Date().toISOString();
+      this.updateStatusSnapshot(runtime);
+      return;
+    }
+    await this.replyToApprovalButton(runtime, interaction, DISCORD_APPROVAL_BUTTON_COPY.notRouted);
+  }
+
+  private async admitApprovalButtonPress(
+    connection: IntegrationConnection,
+    interaction: ButtonInteraction,
+  ): Promise<"admitted" | "refused" | "not_routed"> {
+    if (!interaction.channel?.isDMBased()) {
+      return this.canRouteInteractionForConnection(connection, interaction) ? "admitted" : "not_routed";
+    }
+    if (getDiscordInboundDmPolicy(connection.config) === "disabled") {
+      return "not_routed";
+    }
+    return (await this.admitKnownDirectActor(connection, interaction.user.id)) ? "admitted" : "refused";
+  }
+
+  private async replyToApprovalButton(
+    runtime: ManagedClientRecord,
+    interaction: ButtonInteraction,
+    content: string,
+  ): Promise<void> {
+    await interaction
+      .reply({ content, ephemeral: true })
+      .catch((error) =>
+        this.recordInteractionResponseFailure(runtime, "discord.gateway.approval_button_reply_error", error, {}),
+      );
+  }
+
+  /**
+   * The bot maker (an owner who is also on the allowlist) or a user with an approved pairing, whose pairing is touched.
+   * Anyone else is not yet known to GoatCitadel.
+   */
+  private async admitKnownDirectActor(connection: IntegrationConnection, userId: string): Promise<boolean> {
+    if (isAllowlistedChannelOwner(connection.config, userId)) {
+      return true;
+    }
+    const approved = await this.callbacks.findApprovedPairing(connection.connectionId, userId);
+    if (approved) {
+      await this.callbacks.touchPairing(approved.pairingId);
+    }
+    return Boolean(approved);
+  }
+
   private async handleAutocompleteInteraction(
     runtime: ManagedClientRecord,
     interaction: AutocompleteInteraction,
@@ -739,10 +866,8 @@ export class DiscordRuntimeService {
       );
       return;
     }
-    const connections = (await this.callbacks.listConnections()).filter((connection) =>
-      runtime.connectionIds.has(connection.connectionId),
-    );
-    const allowed = connections.some((connection) => this.canHandleAutocompleteForConnection(connection, interaction));
+    const connections = await this.listRuntimeConnections(runtime);
+    const allowed = connections.some((connection) => this.canRouteInteractionForConnection(connection, interaction));
     if (!allowed) {
       await interaction.respond([]).catch((error) =>
         this.recordInteractionResponseFailure(runtime, "discord.gateway.autocomplete_response_error", error, {
@@ -805,9 +930,7 @@ export class DiscordRuntimeService {
     this.assertRuntimeTaskActive(runtime, signal);
 
     const configuredGuildIds = new Set<string>();
-    const connections = (await this.callbacks.listConnections()).filter((connection) =>
-      runtime.connectionIds.has(connection.connectionId),
-    );
+    const connections = await this.listRuntimeConnections(runtime);
     for (const connection of connections) {
       const guildRules = readGuildRuleMap(connection.config);
       for (const guildId of Object.keys(guildRules)) {
@@ -937,9 +1060,9 @@ export class DiscordRuntimeService {
     return true;
   }
 
-  private canHandleAutocompleteForConnection(
+  private canRouteInteractionForConnection(
     connection: IntegrationConnection,
-    interaction: AutocompleteInteraction,
+    interaction: AutocompleteInteraction | ButtonInteraction,
   ): boolean {
     if (interaction.channel?.isDMBased()) {
       return getDiscordInboundDmPolicy(connection.config) !== "disabled";
@@ -976,14 +1099,7 @@ export class DiscordRuntimeService {
     const conversation = buildDiscordDirectConversation(message.author);
     // The person who made the bot (an owner who is also on the allowlist) is let in the way an approved pairing is,
     // but with no pairing to find or touch.
-    const botMaker = isAllowlistedChannelOwner(connection.config, message.author.id);
-    const approved = botMaker
-      ? undefined
-      : await this.callbacks.findApprovedPairing(connection.connectionId, message.author.id);
-    if (botMaker || approved) {
-      if (approved) {
-        await this.callbacks.touchPairing(approved.pairingId);
-      }
+    if (await this.admitKnownDirectActor(connection, message.author.id)) {
       await this.handleAcceptedMessage(message, async () => {
         return await this.callbacks.onInboundMessage({
           connectionId: connection.connectionId,
@@ -1051,16 +1167,10 @@ export class DiscordRuntimeService {
       return false;
     }
     // A DM slash command is let in the same way as a DM message, so the person who made the bot is not asked to pair.
-    const botMaker = isAllowlistedChannelOwner(connection.config, interaction.user.id);
-    const approved = botMaker
-      ? undefined
-      : await this.callbacks.findApprovedPairing(connection.connectionId, interaction.user.id);
+    const known = await this.admitKnownDirectActor(connection, interaction.user.id);
     const commandText = buildCommandTextFromInteraction(interaction);
     const conversation = buildDiscordDirectConversation(interaction.user);
-    if (botMaker || approved) {
-      if (approved) {
-        await this.callbacks.touchPairing(approved.pairingId);
-      }
+    if (known) {
       await this.handleAcceptedCommand(interaction, {
         connectionId: connection.connectionId,
         acceptedConnectionRevision: connection.revision,
@@ -1127,14 +1237,15 @@ export class DiscordRuntimeService {
   }
 
   private async handleAcceptedCommand(
-    interaction: ChatInputCommandInteraction,
+    interaction: ChatInputCommandInteraction | ButtonInteraction,
     input: DiscordSlashCommandEnvelope,
+    options: { ephemeral?: boolean } = {},
   ): Promise<void> {
     // Discord interactions have a short acknowledgement deadline. Commit the
     // bounded envelope first, defer immediately, then wait for the durable
     // command owner. The provider callback never executes the mutation itself.
     const accepted = await this.callbacks.acceptSlashCommand(input);
-    const ephemeral = !interaction.channel?.isDMBased();
+    const ephemeral = options.ephemeral ?? !interaction.channel?.isDMBased();
     await interaction.deferReply({ ephemeral });
     const result = await this.callbacks.awaitSlashCommandResult(accepted.inboundEventId);
     await interaction.editReply({ content: truncateDiscordResponse(result) });

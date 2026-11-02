@@ -360,7 +360,7 @@ describe("buildApprovalRemoteTokenConnectorDeliveryPayload", () => {
       // No configured default approval target: the override names the conversation.
       connector: createConnector("integration_connection", "active", ["outbound_messages", "interactive_actions"], {
         key: "telegram",
-        approvalInlineActionsReady: true,
+        conversationApprovalInlineActionsReady: true,
       }),
       tokenRef: "keychain:goatcitadel:approval-remote-action:rat_123",
       tokenId: "rat_123",

@@ -916,7 +916,7 @@ import {
 } from "../browser-runtime-guardrails.js";
 import { buildGatewayConnectorRecords, filterConnectorRecords } from "./connector-registry.js";
 import {
-  isTelegramApprovalActionConnectorReady,
+  isInlineApprovalActionConnectorReady,
   resolveChannelSendEnvSecret,
   resolveConnectionConfigSecret,
   type ChannelSecretOwner,
@@ -1494,7 +1494,7 @@ export class GatewayService {
       resolveApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.resolve(secretRef),
       deleteApprovalActionTokenSecret: (secretRef) => this.approvalRemoteTokenSecrets.delete(secretRef),
       isApprovalActionConnectorReady: (connectionId) =>
-        isTelegramApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
+        isInlineApprovalActionConnectorReady(this.storage.integrationConnections, connectionId),
       resolveChannelConnectionSecret: (connectionId, ref) =>
         this.resolveConnectionSecret({ ref }, "ref", "refEnv", undefined, { connectionId }),
       resolveChannelEnvSecret: resolveChannelSendEnvSecret,

@@ -41,7 +41,8 @@ export async function enqueueApprovalRemoteTokenConnectorDelivery(
 ): Promise<DurableRunRecord | undefined> {
   const needsSecret =
     input.connector.connectorType === "browser" ||
-    (input.connector.connectorType === "integration_connection" && supportsInlineApprovalActions(input.connector));
+    (input.connector.connectorType === "integration_connection" &&
+      supportsInlineApprovalActions(input.connector, { toConversation: Boolean(input.delivery) }));
   let tokenRef: string | undefined;
   try {
     tokenRef = needsSecret ? runtime.tokenSecrets.store(input.tokenRecord.tokenId, input.tokenRecord.token) : undefined;
@@ -178,7 +179,7 @@ export function buildApprovalRemoteTokenConnectorDeliveryPayload(input: {
         return undefined;
       }
       const interactiveActionTemplate =
-        supportsInlineApprovalActions(input.connector) && input.tokenRef
+        supportsInlineApprovalActions(input.connector, { toConversation: Boolean(delivery) }) && input.tokenRef
           ? {
               platform: readIntegrationActionPlatform(input.connector),
               tokenId: input.tokenId,
@@ -284,10 +285,16 @@ function hasEnabledCapability(connector: ConnectorRecord, capabilityId: Connecto
   return connector.capabilities.some((item) => item.id === capabilityId && item.enabled);
 }
 
-function supportsInlineApprovalActions(connector: ConnectorRecord): boolean {
-  return (
-    hasEnabledCapability(connector, "interactive_actions") && connector.metadata?.approvalInlineActionsReady === true
-  );
+/**
+ * Whether an approval delivery on this connector carries the platform's Approve / Deny buttons. A delivery to a named
+ * conversation (`toConversation`) needs no default approval target, so it reads the conversation readiness.
+ */
+export function supportsInlineApprovalActions(
+  connector: ConnectorRecord,
+  options: { toConversation: boolean },
+): boolean {
+  const readinessKey = options.toConversation ? "conversationApprovalInlineActionsReady" : "approvalInlineActionsReady";
+  return hasEnabledCapability(connector, "interactive_actions") && connector.metadata?.[readinessKey] === true;
 }
 
 function readMetadataString(connector: ConnectorRecord, key: string): string | undefined {

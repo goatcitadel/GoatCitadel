@@ -272,6 +272,67 @@ describe("buildGatewayConnectorRecords", () => {
     expect(connector?.metadata?.approvalInlineActionsReady).toBe(false);
   });
 
+  it("advertises inline approval actions for a Discord bot connection, not a webhook-only one", () => {
+    const bot = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "discord", {
+          runtimeMode: "gateway",
+          botTokenEnv: "DISCORD_BOT_TOKEN",
+          defaultChannelId: "123456789012345678",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    })[1];
+    const webhook = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "discord", {
+          runtimeMode: "bridge",
+          webhookUrl: "https://discord.com/api/webhooks/1/abc",
+          defaultChannelId: "123456789012345678",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    })[1];
+
+    expect(bot?.metadata?.approvalDeliveryReady).toBe(true);
+    expect(bot?.metadata?.approvalInlineActionsReady).toBe(true);
+    expect(bot?.metadata?.conversationApprovalInlineActionsReady).toBe(true);
+    expect(webhook?.metadata?.approvalDeliveryReady).toBe(true);
+    expect(webhook?.metadata?.approvalInlineActionsReady).toBe(false);
+    expect(webhook?.metadata?.conversationApprovalInlineActionsReady).toBe(false);
+  });
+
+  it("readies buttons for a named conversation without a default approval target", () => {
+    vi.stubEnv("TELEGRAM_WEBHOOK_SECRET", "resolved-telegram-webhook-secret");
+    const [, webhookReady] = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "telegram", {
+          botTokenEnv: "TELEGRAM_BOT_TOKEN",
+          webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+    const [, longPoll] = buildGatewayConnectorRecords({
+      integrationConnections: [
+        createIntegrationConnection("channel", "telegram", {
+          botTokenEnv: "TELEGRAM_BOT_TOKEN",
+          receiveMode: "polling",
+        }),
+      ],
+      mcpServers: [],
+      mcpTools: [],
+    });
+
+    expect(webhookReady?.metadata?.approvalDeliveryReady).toBe(false);
+    expect(webhookReady?.metadata?.approvalInlineActionsReady).toBe(false);
+    expect(webhookReady?.metadata?.conversationApprovalInlineActionsReady).toBe(true);
+    expect(longPoll?.metadata?.conversationApprovalInlineActionsReady).toBe(false);
+  });
+
   it("publishes setup diagnostics for incomplete channel server configs", () => {
     const records = buildGatewayConnectorRecords({
       integrationConnections: [

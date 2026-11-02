@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { ApprovalRequest, ConnectorRecord } from "@goatcitadel/contracts";
+import type { ApprovalRequest, ConnectorRecord, IntegrationConnection } from "@goatcitadel/contracts";
+import { enqueueApprovalRemoteTokenConnectorDelivery } from "../approval-connector-delivery.js";
+import { buildGatewayConnectorRecords } from "../connector-registry.js";
 import {
   deliverErrandApproval,
   type ErrandApprovalConversation,
@@ -215,6 +217,87 @@ describe("deliverErrandApproval", () => {
   });
 });
 
+describe("errand approval buttons on a connection without a default approval target", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it("puts the buttons on a webhook-ready Telegram connection and stores the token for the provider", async () => {
+    vi.stubEnv("TELEGRAM_WEBHOOK_SECRET", "resolved-telegram-webhook-secret");
+    const delivered = await deliverThroughRegistry({
+      botTokenEnv: "TELEGRAM_BOT_TOKEN",
+      webhookSecretEnv: "TELEGRAM_WEBHOOK_SECRET",
+    });
+
+    expect(delivered.result).toEqual({ delivered: true });
+    expect(delivered.payload.message).toMatch(/\nTap Approve or Deny\.$/);
+    expect(delivered.payload.interactiveActionTemplate).toMatchObject({ platform: "telegram", tokenId: "rat_errand" });
+    expect(delivered.storeSecret).toHaveBeenCalledWith("rat_errand", RAW_TOKEN);
+    expect(delivered.secretRefs).toEqual({
+      approvalActionToken: "keychain:goatcitadel:approval-remote-action:rat_errand",
+    });
+  });
+
+  it("asks for a reply on a long-poll Telegram connection, with no buttons and no stored token", async () => {
+    const delivered = await deliverThroughRegistry({ botTokenEnv: "TELEGRAM_BOT_TOKEN" });
+
+    expect(delivered.result).toEqual({ delivered: true });
+    expect(delivered.payload.message).toMatch(/\nReply APPROVE or DENY\. Reply STOP to end the errand\.$/);
+    expect(delivered.payload.interactiveActionTemplate).toBeUndefined();
+    expect(delivered.storeSecret).not.toHaveBeenCalled();
+    expect(delivered.secretRefs).toBeUndefined();
+  });
+});
+
+/** The real connector record and payload builder behind one errand delivery to a private Telegram chat. */
+async function deliverThroughRegistry(config: Record<string, unknown>) {
+  const connection: IntegrationConnection = {
+    connectionId: "conn-telegram",
+    catalogId: "channel.telegram",
+    kind: "channel",
+    key: "telegram",
+    label: "Telegram",
+    enabled: true,
+    status: "connected",
+    config,
+    createdAt: "2026-11-01T00:00:00.000Z",
+    updatedAt: "2026-11-01T00:00:00.000Z",
+  };
+  const connector = buildGatewayConnectorRecords({
+    integrationConnections: [connection],
+    mcpServers: [],
+    mcpTools: [],
+  }).find((record) => record.connectorId === "integration:conn-telegram")!;
+  const storeSecret = vi.fn(
+    (tokenId: string, _token: string) => `keychain:goatcitadel:approval-remote-action:${tokenId}`,
+  );
+  const createDurableRun = vi.fn(async (input: { payload: unknown }) => ({ runId: "run-1", payload: input.payload }));
+  const approval = createApproval();
+  const harness = createHarness();
+  const deps: ErrandApprovalDeliveryDeps = {
+    ...harness.deps,
+    requireConnectorRecord: async () => connector,
+    createApprovalRemoteActionToken: async (_approvalId, input) => {
+      const run = await enqueueApprovalRemoteTokenConnectorDelivery(
+        { tokenSecrets: { store: storeSecret, delete: vi.fn() }, requestAttribution: {}, createDurableRun } as never,
+        {
+          approval,
+          connector,
+          tokenRecord: { token: RAW_TOKEN, tokenId: "rat_errand", expiresAt: "2026-11-02T10:02:00.000Z" },
+          delivery: input.delivery,
+        },
+      );
+      return { deliveryStatus: run ? "queued" : "not_configured" };
+    },
+  };
+  const result = await deliverErrandApproval(deps, { approval, origin: createOrigin() });
+  const workflowPayload = createDurableRun.mock.calls[0]![0].payload as {
+    payload: { message: string; interactiveActionTemplate?: Record<string, unknown> };
+    secretRefs?: Record<string, string>;
+  };
+  return { result, payload: workflowPayload.payload, secretRefs: workflowPayload.secretRefs, storeSecret };
+}
+
 function createHarness(
   options: {
     inlineReady?: boolean;
@@ -235,7 +318,7 @@ function createHarness(
         { id: "outbound_messages", enabled: true, version: "v1" },
         { id: "interactive_actions", enabled: true, version: "v1" },
       ],
-      metadata: { key: "telegram", approvalInlineActionsReady: options.inlineReady ?? true },
+      metadata: { key: "telegram", conversationApprovalInlineActionsReady: options.inlineReady ?? true },
     }),
   );
   const createToken = vi.fn<ErrandApprovalDeliveryDeps["createApprovalRemoteActionToken"]>(async () => ({

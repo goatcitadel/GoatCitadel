@@ -1,15 +1,16 @@
 import { randomUUID } from "node:crypto";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
-import type {
-  ApprovalResolveInput,
-  ChannelActivityInput,
-  ChannelActivityResult,
-  ChatChannelConversation,
-  ChatSendMessageResponse,
-  ChatSessionPrefsRecord,
-  ChatSessionRecord,
-  IntegrationConnection,
-  PersonalityCatalogResponse,
+import {
+  ConflictError,
+  type ApprovalResolveInput,
+  type ChannelActivityInput,
+  type ChannelActivityResult,
+  type ChatChannelConversation,
+  type ChatSendMessageResponse,
+  type ChatSessionPrefsRecord,
+  type ChatSessionRecord,
+  type IntegrationConnection,
+  type PersonalityCatalogResponse,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import type { ApprovalResolveResult } from "./approval-types.js";
@@ -20,6 +21,7 @@ import {
   normalizeChannelCommandInput,
 } from "./channel-command-contract.js";
 import { getPersonalityPreset, listPersonalityPresets, normalizePersonalityId } from "./channel-personalities.js";
+import { DISCORD_APPROVAL_BUTTON_COPY, DISCORD_APPROVAL_BUTTON_EVENT_TYPE } from "./discord-approval-button.js";
 import type {
   DurableInboundChannelAcceptInput,
   DurableInboundChannelAcceptResult,
@@ -34,6 +36,7 @@ const DISCORD_APPROVAL_VERSION_KEY = "discordApprovalVersion";
 const DISCORD_APPROVAL_DECISION_KEY = "discordApprovalDecision";
 const DISCORD_APPROVAL_LOOKUP_STATUS_KEY = "discordApprovalLookupStatus";
 const DISCORD_APPROVAL_ACTION_ID_KEY = "discordApprovalActionId";
+const DISCORD_SLASH_COMMAND_EVENT_TYPE = "discord-gateway-slash-command";
 
 export interface DiscordRouteSessionRecord {
   connectionId: string;
@@ -321,6 +324,8 @@ export async function acceptDiscordRuntimeSlashCommand(
     conversation?: ChatChannelConversation;
     threadId?: string;
     metadata?: Record<string, unknown>;
+    /** An Approve / Deny button press; a slash command leaves it unset. */
+    eventType?: typeof DISCORD_APPROVAL_BUTTON_EVENT_TYPE;
   },
 ): Promise<DurableInboundChannelAcceptResult> {
   const route = await resolveDiscordInboundRoute(host, input);
@@ -330,7 +335,7 @@ export async function acceptDiscordRuntimeSlashCommand(
     acceptedConnectionRevision: input.acceptedConnectionRevision,
     connectionId: input.connectionId,
     idempotencyKey: `discord:${input.connectionId}:interaction:${input.sourceCommandId}`,
-    eventType: "discord-gateway-slash-command",
+    eventType: input.eventType ?? DISCORD_SLASH_COMMAND_EVENT_TYPE,
     bindingTarget: input.target,
     conversation: input.conversation,
     dispatchKind: "command",
@@ -410,7 +415,8 @@ export async function executeDiscordRuntimeInboundCommand(
   host: DiscordRuntimeBridgeHost,
   input: InboundChannelCommandExecutionInput,
 ): Promise<{ resultText: string }> {
-  if (input.channel !== "discord" || input.eventType !== "discord-gateway-slash-command") {
+  const button = input.eventType === DISCORD_APPROVAL_BUTTON_EVENT_TYPE;
+  if (input.channel !== "discord" || (!button && input.eventType !== DISCORD_SLASH_COMMAND_EVENT_TYPE)) {
     throw new Error(`Unsupported durable inbound command event: ${input.channel}/${input.eventType}`);
   }
   const target = input.bindingTarget?.trim();
@@ -421,21 +427,45 @@ export async function executeDiscordRuntimeInboundCommand(
     throw new Error("Durable Discord slash command operation identity does not match its acceptance identity.");
   }
   const durableApproval = readDurableDiscordApproval(input.message.metadata);
+  if (button && !durableApproval) {
+    throw new Error("Durable Discord approval button is missing its secret-free approval metadata.");
+  }
   if (durableApproval) {
     const command = normalizeChannelCommandInput(input.message.content, { platform: "discord" });
     if (command.approvalDecision !== durableApproval.decision || command.approvalToken) {
       throw new Error("Durable Discord approval command does not match its secret-free command metadata.");
     }
     if (!durableApproval.tokenId) {
-      return { resultText: "The approval action token was not recognized. Request a fresh approval message." };
+      return {
+        resultText: button
+          ? DISCORD_APPROVAL_BUTTON_COPY.unknown
+          : "The approval action token was not recognized. Request a fresh approval message.",
+      };
     }
-    const result = await host.resolveApprovalWithRemoteTokenId({
-      tokenId: durableApproval.tokenId,
-      connectorId: `integration:${input.connectionId}`,
-      decision: durableApproval.decision,
-      resolvedBy: `discord:${input.message.actorId}`,
-    });
-    return { resultText: renderDiscordApprovalResolution(result, durableApproval.decision) };
+    // The press was let in by the connection's route and pairing rules. A rule tied to the approval itself (who may
+    // answer an errand approval) belongs here, before the token is consumed.
+    let result: ApprovalResolveResult;
+    try {
+      result = await host.resolveApprovalWithRemoteTokenId({
+        tokenId: durableApproval.tokenId,
+        connectorId: `integration:${input.connectionId}`,
+        decision: durableApproval.decision,
+        resolvedBy: `discord:${input.message.actorId}`,
+      });
+    } catch (error) {
+      // A spent or expired token, or an approval answered elsewhere: the press changes nothing.
+      if (button && error instanceof ConflictError) {
+        return { resultText: DISCORD_APPROVAL_BUTTON_COPY.alreadyAnswered };
+      }
+      throw error;
+    }
+    return {
+      resultText: button
+        ? durableApproval.decision === "approve"
+          ? DISCORD_APPROVAL_BUTTON_COPY.approved
+          : DISCORD_APPROVAL_BUTTON_COPY.denied
+        : renderDiscordApprovalResolution(result, durableApproval.decision),
+    };
   }
   const resultText = await handleDiscordRuntimeSlashCommand(host, {
     connectionId: input.connectionId,

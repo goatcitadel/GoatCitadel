@@ -250,12 +250,29 @@ export function isTelegramApprovalActionConnectionReady(connection: IntegrationC
   );
 }
 
-export async function isTelegramApprovalActionConnectorReady(
+/**
+ * Whether a button press on this connection comes back to GoatCitadel authenticated: Telegram with its webhook secret
+ * configured, or Discord in bot mode, whose gateway connection receives the press. A Discord webhook cannot.
+ */
+export function isInlineApprovalActionConnectionReady(connection: IntegrationConnection): boolean {
+  if (connection.key === "discord") {
+    return (
+      connection.kind === "channel" &&
+      connection.enabled &&
+      connection.status === "connected" &&
+      typeof connection.config.runtimeMode === "string" &&
+      connection.config.runtimeMode.trim() === "gateway"
+    );
+  }
+  return isTelegramApprovalActionConnectionReady(connection);
+}
+
+export async function isInlineApprovalActionConnectorReady(
   connections: { get(connectionId: string): Promise<IntegrationConnection> },
   connectionId: string,
 ): Promise<boolean> {
   try {
-    return isTelegramApprovalActionConnectionReady(await connections.get(connectionId));
+    return isInlineApprovalActionConnectionReady(await connections.get(connectionId));
   } catch {
     return false;
   }
