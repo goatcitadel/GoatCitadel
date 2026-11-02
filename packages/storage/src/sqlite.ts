@@ -125,6 +125,7 @@ import { createRemoteWorkerProtectedAdmissionEvidenceSchema } from "./sqlite/rem
 import { createRemoteWorkerMeshNodeAdmissionSchema } from "./sqlite/remote-worker-mesh-node-admission.js";
 import { upgradeGovernedRemediationRecipeBinding } from "./sqlite/governed-remediation-recipe-binding.js";
 import { createMobilePushSchema } from "./sqlite/mobile-push-schema.js";
+import { upgradeMobilePushDeliveryClassificationsSqlite } from "./mobile-push-classification-migration.js";
 import { createMobileApprovalKeySchema } from "./sqlite/mobile-approval-key-schema.js";
 import { BoundedStatementCache } from "./sqlite-statement-cache.js";
 
@@ -7540,6 +7541,12 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
             db.exec(RESET_CHAT_REVIEW_DEPTH_SQLITE_SQL);
           }
         },
+      },
+      // A phone push skipped because its approval was already answered gets its own classification.
+      {
+        version: 276,
+        name: "mobile_push_approval_already_resolved_classification",
+        up: upgradeMobilePushDeliveryClassificationsSqlite,
       },
     ],
   },

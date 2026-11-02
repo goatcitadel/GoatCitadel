@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 275,
+      "expectedCount": 276,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 275,
+      "expectedLastVersion": 276,
       "migrations": [
         {
           "version": 1,
@@ -1933,15 +1933,22 @@
           "groupName": "canonical",
           "definitionSha256": "2f1f2523f2c40edd00bee6f48218acbccdd2b01b5c48bb8bb9ef2ed1df800d97",
           "implementationSha256": "5d6be4401f4d21d37335c09558bd235446e8e8d76f661293077a9ad0edb29ccf"
+        },
+        {
+          "version": 276,
+          "name": "mobile_push_approval_already_resolved_classification",
+          "groupName": "canonical",
+          "definitionSha256": "ea07a038321d174e9f75bd8d048efcda72e460dd9228805060aabed06c0b985e",
+          "implementationSha256": "fc5b42183cf168012890110d8173c36cc37b1123968bafb2aeadbcb20edad677"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 224,
+      "expectedCount": 225,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 224,
+      "expectedLastVersion": 225,
       "migrations": [
         {
           "version": 1,
@@ -3295,6 +3302,12 @@
           "name": "reset_chat_review_depth",
           "definitionSha256": "9c4d1e8173072864ac5d3ca61d885aaca5d7b19061a24c7a4388a1ee01a92810",
           "runtimeIntegritySha256": "90755f8452ff43ef7527bed0e7d77311fdaaf271da4e524bde3227f42bbcdbf5"
+        },
+        {
+          "version": 225,
+          "name": "mobile_push_approval_already_resolved_classification",
+          "definitionSha256": "f1f6c5bb547013c509932bf5c8adff278863f69e7be9ee9b0c9cfb906a7446f9",
+          "runtimeIntegritySha256": "b1979cede74743f05a3db7f43b5757d75ed0e1890bcb9455312096c1ab2808f9"
         }
       ]
     }

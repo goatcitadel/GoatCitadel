@@ -246,9 +246,9 @@ export class MobilePushService {
       return await this.retry(delivery, "retryable");
     }
     if (approvalState === "answered") {
-      // Answered before the push went out, for every approval kind: there is nothing left to tell the phone. The
-      // storage classifications have no "approval answered" value, so the row is cancelled like a revoked one.
-      return await this.finalize(delivery, "cancelled_revoked", "registration_revoked");
+      // Answered before the push went out, for every approval kind: there is nothing left to tell the phone. The row
+      // is cancelled, and its classification says why.
+      return await this.finalize(delivery, "cancelled_revoked", "approval_already_resolved");
     }
     const registration = await this.deps.storage.mobilePush.getRegistrationById(delivery.registrationId);
     if (!registration || registration.lifecycleState !== "active") {

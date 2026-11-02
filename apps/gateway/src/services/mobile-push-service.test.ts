@@ -510,10 +510,14 @@ describe("mobile push for errand approvals", () => {
     );
     expect(sweep.outcomes).toEqual(
       expect.arrayContaining([
-        expect.objectContaining({ status: "cancelled_revoked" }),
+        expect.objectContaining({ status: "cancelled_revoked", classification: "approval_already_resolved" }),
         expect.objectContaining({ status: "delivered" }),
       ]),
     );
+    const recorded = (await harness.storage.mobilePush.listDeliveries())
+      .filter((delivery) => delivery.approvalId === "approval-answered")
+      .map((delivery) => [delivery.status, delivery.lastClassification]);
+    expect(recorded).toEqual([["cancelled_revoked", "approval_already_resolved"]]);
   });
 });
 
