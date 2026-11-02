@@ -43,12 +43,13 @@ import {
 import { buildInboundConversationLaneKey } from "./inbound-channel-lane.js";
 import {
   ERRAND_REPLY_ALREADY_ANSWERED_COPY,
+  encodeErrandReplyMarker,
+  isErrandReplyMarker,
+  parseErrandReplyMarker,
   type ErrandChannelReplies,
 } from "./browser-errands/errand-channel-replies.js";
 
 const CLAIM_LEASE_MS = 30_000;
-/** Marks an event that answered an errand approval: `errand-reply:<approvalId>`. */
-const ERRAND_REPLY_OPERATION_PREFIX = "errand-reply:";
 const CLAIM_HEARTBEAT_MS = 10_000;
 const MAX_ATTEMPTS = 8;
 const MAX_DIAGNOSTIC_TEXT = 1_000;
@@ -752,9 +753,10 @@ export class InboundChannelEventService {
    * Answers a whole-message APPROVE / DENY / STOP reply to the errand approval waiting in this conversation, and
    * settles the event. False when the message is not one, so it goes on as ordinary chat.
    *
-   * Before anything is resolved, the approval being answered is recorded on the event (`commandOperationKey`
-   * `errand-reply:<approvalId>`). A retry of an event that already carries it only answers "already answered": it
-   * never resolves a later approval and never becomes a turn.
+   * Before anything is resolved, the answer is recorded on the event (`commandOperationKey`
+   * `errand-reply:<decision>:<approvalId>`). A retry of an event that carries it never becomes a turn and never
+   * answers another approval: it retries the same decision on that approval while the errand still waits on it, and
+   * otherwise answers "This was already answered."
    */
   private async answerErrandReply(
     claim: InboundChannelEventClaim,
@@ -765,22 +767,25 @@ export class InboundChannelEventService {
     const { inboundChannelEvents } = this.deps.storage;
     const { connectionId, channelKey, eventId, acceptedAt, commandOperationKey } = claim.event;
     const target = payload.bindingTarget?.trim();
-    const settle = async (message: string | undefined, idempotencyKind: string): Promise<true> => {
+    // The key names the answer's text too, so a retry that answers differently is a different send.
+    const settle = async (message: string | undefined): Promise<true> => {
       if (replies && target && message) {
         await replies.send({
           connectionId,
           target,
           message,
-          idempotencyKey: stableInboundId(idempotencyKind, eventId),
+          idempotencyKey: stableInboundId("errand-reply", eventId, message),
         });
       }
       this.requireTransition(claim, await inboundChannelEvents.transitionClaimed(claim, { status: "completed" }));
       return true;
     };
-    if (commandOperationKey?.startsWith(ERRAND_REPLY_OPERATION_PREFIX)) {
-      return await settle(ERRAND_REPLY_ALREADY_ANSWERED_COPY, "errand-reply-retry");
-    }
     const actorId = payload.message.actorId?.trim();
+    const marked = isErrandReplyMarker(commandOperationKey);
+    const answered = marked ? parseErrandReplyMarker(commandOperationKey) : undefined;
+    if (marked && (!answered || !replies || !target || !actorId)) {
+      return await settle(ERRAND_REPLY_ALREADY_ANSWERED_COPY);
+    }
     if (!replies || !target || !actorId) {
       return false;
     }
@@ -791,17 +796,21 @@ export class InboundChannelEventService {
       actorId,
       text: content,
       sentAt: Date.parse(acceptedAt),
-      recordAnswer: async (approvalId) => {
+      ...(answered ? { answered } : {}),
+      recordAnswer: async (recorded) => {
         this.requireTransition(
           claim,
           await inboundChannelEvents.transitionClaimed(claim, {
             status: "message_recorded",
-            linkage: { commandOperationKey: `${ERRAND_REPLY_OPERATION_PREFIX}${approvalId}` },
+            linkage: { commandOperationKey: encodeErrandReplyMarker(recorded) },
           }),
         );
       },
     });
-    return answer.handled ? await settle(answer.reply, "errand-reply") : false;
+    // A marked event is never released to Chat, whatever the retry answers.
+    return answer.handled || marked
+      ? await settle(answer.handled ? answer.reply : ERRAND_REPLY_ALREADY_ANSWERED_COPY)
+      : false;
   }
 
   /**

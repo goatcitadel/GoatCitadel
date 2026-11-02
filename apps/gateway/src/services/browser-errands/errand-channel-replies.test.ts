@@ -10,6 +10,9 @@ import {
   ERRAND_REPLY_NEAR_MISS_COPY,
   ERRAND_REPLY_STOP_NEAR_MISS_COPY,
   ERRAND_REPLY_STOPPING_COPY,
+  encodeErrandReplyMarker,
+  parseErrandReplyMarker,
+  type ErrandReplyAnswer,
   type ErrandReplyHandlerOptions,
 } from "./errand-channel-replies.js";
 
@@ -54,8 +57,8 @@ function createHandler(overrides: Partial<ErrandReplyHandlerOptions> = {}) {
     now: () => clock,
     ...overrides,
   };
-  const recordAnswer = vi.fn(async (approvalId: string) => {
-    order.push(`record:${approvalId}`);
+  const recordAnswer = vi.fn(async (answer: ErrandReplyAnswer) => {
+    order.push(`record:${answer.decision}:${answer.approvalId}`);
   });
   const input = (text: string, target = "chat-1") => ({
     connectionId: "connection-1",
@@ -88,7 +91,7 @@ describe("createErrandReplyHandler", () => {
     expect(options.pendingDeliveryFor).toHaveBeenCalledWith("connection-1", "chat-1", 5_000);
     expect(options.assertOwner).toHaveBeenCalledWith({ connectorId: "integration:connection-1", actorId: "user-1" });
     expect(options.resolveApproval).toHaveBeenCalledWith("approval-1", "approve", "telegram:user-1");
-    expect(order).toEqual(["record:approval-1", "resolve"]);
+    expect(order).toEqual(["record:approve:approval-1", "resolve"]);
   });
 
   it("denies with DENY", async () => {
@@ -102,7 +105,7 @@ describe("createErrandReplyHandler", () => {
     expect(await handle(input("STOP"))).toEqual({ handled: true, reply: ERRAND_REPLY_STOPPING_COPY });
     expect(options.stopErrand).toHaveBeenCalledWith("errand-1", "telegram:user-1");
     expect(options.resolveApproval).not.toHaveBeenCalled();
-    expect(order).toEqual(["record:approval-1", "stop"]);
+    expect(order).toEqual(["record:stop:approval-1", "stop"]);
   });
 
   it.each([
@@ -150,6 +153,44 @@ describe("createErrandReplyHandler", () => {
     const { options, input, handle } = createHandler();
     expect(await handle(input("what are you doing?"))).toEqual({ handled: false });
     expect(options.pendingDeliveryFor).not.toHaveBeenCalled();
+  });
+
+  it.each(["ok", "yes", "approve", "deny", "stop", "Approve"])(
+    "lets a non-owner's %j through to Chat as an ordinary message",
+    async (text) => {
+      const { options, input, handle } = createHandler({ assertOwner: notOwner() });
+      expect(await handle(input(text))).toEqual({ handled: false });
+      expect(options.resolveApproval).not.toHaveBeenCalled();
+    },
+  );
+
+  it("on a retry, decides again on the recorded approval while the errand still waits on it", async () => {
+    const { options, recordAnswer, input, handle } = createHandler();
+    const retry = { ...input("APPROVE"), answered: { approvalId: "approval-1", decision: "deny" as const } };
+    expect(await handle(retry)).toEqual({ handled: true, reply: ERRAND_REPLY_DENIED_COPY });
+    expect(options.resolveApproval).toHaveBeenCalledWith("approval-1", "reject", "telegram:user-1");
+    expect(recordAnswer).not.toHaveBeenCalled();
+  });
+
+  it("on a retry, never answers another approval, and answers already answered when none is waiting", async () => {
+    const { options, input, handle } = createHandler();
+    const retry = { ...input("APPROVE"), answered: { approvalId: "approval-0", decision: "approve" as const } };
+    expect(await handle(retry)).toEqual({ handled: true, reply: ERRAND_REPLY_ALREADY_ANSWERED_COPY });
+    options.pendingDeliveryFor.mockResolvedValue(undefined);
+    expect(await handle({ ...retry, answered: { approvalId: "approval-1", decision: "approve" } })).toEqual({
+      handled: true,
+      reply: ERRAND_REPLY_ALREADY_ANSWERED_COPY,
+    });
+    expect(options.resolveApproval).not.toHaveBeenCalled();
+    expect(options.stopErrand).not.toHaveBeenCalled();
+  });
+
+  it("round-trips the marker and rejects unreadable ones", () => {
+    const marker = encodeErrandReplyMarker({ approvalId: "a:b-1", decision: "stop" });
+    expect(marker).toBe("errand-reply:stop:a:b-1");
+    expect(parseErrandReplyMarker(marker)).toEqual({ approvalId: "a:b-1", decision: "stop" });
+    expect(parseErrandReplyMarker("errand-reply:approval-1")).toBeUndefined();
+    expect(parseErrandReplyMarker("errand-reply:maybe:approval-1")).toBeUndefined();
   });
 
   it("refuses a sender who is not the owner and leaves the approval pending", async () => {

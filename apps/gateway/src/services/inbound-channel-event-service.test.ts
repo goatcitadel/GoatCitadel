@@ -41,7 +41,11 @@ import {
 } from "./chat-session-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 import { buildNewAdapterCases } from "./inbound-channel-event-service.new-adapters.fixtures.js";
-import type { ErrandChannelReplies } from "./browser-errands/errand-channel-replies.js";
+import {
+  createErrandReplyHandler,
+  type ErrandChannelReplies,
+  type ErrandReplyHandlerOptions,
+} from "./browser-errands/errand-channel-replies.js";
 
 describe("InboundChannelEventService", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -1659,46 +1663,92 @@ describe("InboundChannelEventService", () => {
       expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
     });
 
-    it("never lets a retried APPROVE answer a later approval or become a turn", async () => {
-      const resolved: string[] = [];
-      let pendingApprovalId = "approval-1";
-      const replies = {
-        // Resolves whatever is pending when it is called, after recording it first, like the real handler.
-        handle: vi.fn<ErrandChannelReplies["handle"]>(async (input) => {
-          const approvalId = pendingApprovalId;
-          await input.recordAnswer(approvalId);
-          resolved.push(approvalId);
-          return { handled: true, reply: "Approved." };
-        }),
-        send: vi
-          .fn<ErrandChannelReplies["send"]>()
-          .mockRejectedValueOnce(new Error("channel down"))
-          .mockResolvedValue(undefined),
+    /** The real reply handler over a fake errand whose in-flight approval the test moves on. */
+    function realErrandReplies(send: ErrandChannelReplies["send"]) {
+      const errand = { pendingApprovalId: "approval-1" as string | undefined };
+      const resolveApproval = vi.fn<ErrandReplyHandlerOptions["resolveApproval"]>(async () => ({}));
+      const replies: ErrandChannelReplies = {
+        handle: vi.fn(
+          createErrandReplyHandler({
+            pendingDeliveryFor: async () =>
+              errand.pendingApprovalId ? { approvalId: errand.pendingApprovalId, errandId: "errand-1" } : undefined,
+            assertOwner: async () => undefined,
+            resolveApproval,
+            stopErrand: async () => true,
+          }),
+        ),
+        send: vi.fn(send),
       };
+      return { errand, resolveApproval, replies };
+    }
+
+    async function acceptApproveAndFailFirstAttempt(replies: ErrandChannelReplies) {
       const harness = await createHarness({ errandReplies: () => replies });
       const input = buildInput();
       input.message.content = "APPROVE";
       const accepted = await harness.service.accept(input);
       await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "retry_wait");
       expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.commandOperationKey).toBe(
-        "errand-reply:approval-1",
+        "errand-reply:approve:approval-1",
       );
+      const retry = async () => {
+        harness.storage.db
+          .prepare("UPDATE inbound_channel_events SET next_attempt_at = ? WHERE event_id = ?")
+          .run(new Date(0).toISOString(), accepted.inboundEventId);
+        await harness.service.drain();
+        await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+      };
+      return { harness, retry };
+    }
+
+    it("never lets a retried APPROVE answer a later approval or become a turn", async () => {
+      const send = vi
+        .fn<ErrandChannelReplies["send"]>()
+        .mockRejectedValueOnce(new Error("channel down"))
+        .mockResolvedValue(undefined);
+      const { errand, resolveApproval, replies } = realErrandReplies(send);
+      const { harness, retry } = await acceptApproveAndFailFirstAttempt(replies);
 
       // The errand moves on and a new approval is delivered to the same conversation before the retry runs.
-      pendingApprovalId = "approval-2";
-      harness.storage.db
-        .prepare("UPDATE inbound_channel_events SET next_attempt_at = ? WHERE event_id = ?")
-        .run(new Date(0).toISOString(), accepted.inboundEventId);
-      await harness.service.drain();
-      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+      errand.pendingApprovalId = "approval-2";
+      await retry();
 
-      expect(resolved).toEqual(["approval-1"]);
-      expect(replies.handle).toHaveBeenCalledTimes(1);
-      expect(replies.send).toHaveBeenLastCalledWith(
+      expect(resolveApproval.mock.calls.map(([approvalId]) => approvalId)).toEqual(["approval-1"]);
+      expect(send).toHaveBeenLastCalledWith(
         expect.objectContaining({ message: "This was already answered.", target: "chat-1" }),
       );
       expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
       expect(harness.respondToExistingChatMessage).not.toHaveBeenCalled();
+    });
+
+    it("retries the same decision on the marked approval when the first resolve failed", async () => {
+      const send = vi.fn<ErrandChannelReplies["send"]>(async () => undefined);
+      const { resolveApproval, replies } = realErrandReplies(send);
+      resolveApproval.mockRejectedValueOnce(new Error("storage busy"));
+      const { harness, retry } = await acceptApproveAndFailFirstAttempt(replies);
+      expect(send).not.toHaveBeenCalled();
+
+      // Still pending and still the errand's in-flight approval: the retry approves that same one.
+      await retry();
+
+      expect(resolveApproval.mock.calls).toEqual([
+        ["approval-1", "approve", "telegram:user-1"],
+        ["approval-1", "approve", "telegram:user-1"],
+      ]);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ message: "Approved." }));
+      expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
+    });
+
+    it("answers already answered on a retry once the errand no longer waits on the marked approval", async () => {
+      const send = vi.fn<ErrandChannelReplies["send"]>(async () => undefined);
+      const { errand, resolveApproval, replies } = realErrandReplies(send);
+      resolveApproval.mockRejectedValueOnce(new Error("storage busy"));
+      const { harness, retry } = await acceptApproveAndFailFirstAttempt(replies);
+      errand.pendingApprovalId = undefined;
+      await retry();
+      expect(resolveApproval).toHaveBeenCalledTimes(1);
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ message: "This was already answered." }));
+      expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
     });
 
     it("never treats a durable command as an errand reply", async () => {
