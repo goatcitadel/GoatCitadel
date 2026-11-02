@@ -870,11 +870,12 @@ tests. Four existing orchestration skips remain explicit.
 
 Restoration flags are independent and default off:
 `chatSkillInstructionsV1Enabled`, `boundedToolExposureV1Enabled`,
-`chatProviderFallbackV1Enabled`, `chatExplicitContextV1Enabled`,
+`chatProviderFallbackV1Enabled`,
 `chatDelegationControlsV1Enabled`, `chatAutomaticFanoutV1Enabled`,
 `scheduledChatTurnsV1Enabled`, `proactiveHeartbeatTurnsV1Enabled`,
 `commitmentScheduledTurnsV1Enabled`, `chatRequesterMcpV1Enabled`, `chatStaticMcpV1Enabled`,
-`chatMeshCapabilitiesV1Enabled`, and `chatRemotePlacementV1Enabled`. WS9's `chatWorkPassportV1Enabled`
+`chatMeshCapabilitiesV1Enabled`, and `chatRemotePlacementV1Enabled`. `chatExplicitContextV1Enabled`
+defaults on, so sources selected in the Chat composer reach the model; an explicit false still turns it off. WS9's `chatWorkPassportV1Enabled`
 defaults on after its CI lanes passed (a passport recorded in feature references; a passport-only admission
 pins the route only when one resolves), `chatModelCouncilV1Enabled` (an operator council request
 recorded in feature references; tool-free members rechecked against readiness and the Citadel Ward at

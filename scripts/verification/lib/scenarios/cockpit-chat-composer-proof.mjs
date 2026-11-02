@@ -177,7 +177,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               ),
             );
             const picker = observePendingWait(page.waitForEvent("filechooser"));
-            await revealComposerOptions(page);
+            await revealAttachControl(page);
             await page.getByRole("button", { name: "Attach files", exact: true }).click();
             await (
               await picker
@@ -475,11 +475,24 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
 
 /**
  * Phones fold attach, model, mode, media, sources and commands into the modal "Message options" sheet behind the
- * Options button in the phone "Composer controls" row; wider layouts show them inline.
+ * Options button in the phone "Composer controls" row; wider layouts keep the model chip on the draft's row.
  */
 export async function revealComposerOptions(page) {
   const toggle = page.locator('[aria-label="Composer controls"]').getByRole("button", { name: "Options", exact: true });
   if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+}
+
+/**
+ * Attach sits in the phone options sheet, or behind the + button on wider layouts. Choosing it closes the + panel,
+ * so only the phone sheet needs `closeComposerOptions` afterwards.
+ */
+export async function revealAttachControl(page) {
+  await revealComposerOptions(page);
+  const plus = page.locator('[aria-label="Composer controls"]').getByRole("button", {
+    name: "Add and options",
+    exact: true,
+  });
+  if ((await plus.count()) && (await plus.getAttribute("aria-expanded")) === "false") await plus.click();
 }
 
 /** The options sheet is modal, so phone steps close it before typing in or sending the draft. */

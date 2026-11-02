@@ -40,9 +40,15 @@ describe("ChatSessionPrefsRepository", () => {
       { providerId: "cloud", model: "test" },
       { providerId: "cloud", model: "test", allowLocalToCloud: true, runtimeAuthority: true },
     ]) {
-      assert.throws(() => repo.patchWithRevision("fallback-session", {
-        providerFallback: preference as never,
-      }, initial.revision));
+      assert.throws(() =>
+        repo.patchWithRevision(
+          "fallback-session",
+          {
+            providerFallback: preference as never,
+          },
+          initial.revision,
+        ),
+      );
       assert.equal(repo.get("fallback-session")?.revision, initial.revision);
       assert.equal(repo.get("fallback-session")?.providerFallback, undefined);
     }
@@ -67,7 +73,7 @@ describe("ChatSessionPrefsRepository", () => {
     assert.equal(prefs.orchestrationIntensity, "balanced");
     assert.equal(prefs.orchestrationVisibility, "summarized");
     assert.equal(prefs.orchestrationProviderPreference, "balanced");
-    assert.equal(prefs.orchestrationReviewDepth, "standard");
+    assert.equal(prefs.orchestrationReviewDepth, "off");
     assert.equal(prefs.orchestrationParallelism, "auto");
     assert.equal(prefs.codeAutoApply, "aggressive_auto");
   });

@@ -6,6 +6,7 @@ import {
   type ChatTurnTraceRecord,
 } from "@goatcitadel/contracts";
 import { ChatToolArtifactInspector } from "./chat/ChatToolArtifactInspector";
+import { formatAnswerReviewLabel } from "./chat/chat-display-helpers";
 import { getChatToolRunDiagnostics, getTraceFallbackAttemptCount } from "./chat/chat-tool-diagnostics";
 import { projectChatToolEffectTruth } from "./chat/chat-tool-effect-truth";
 import { ChatExecutionPlanSummary } from "./chat/ChatExecutionPlanSummary";
@@ -180,6 +181,8 @@ export function ChatTraceCard({
   const decisionTraceId = useId();
   const fallbackAttemptCount = getTraceFallbackAttemptCount(trace);
   const routingSummary = summarizeTraceRouting(trace);
+  const answerReviewLabel = formatAnswerReviewLabel(trace);
+  const answerReview = trace.reflection?.answerReview;
   const runtimeUsage = trace.completion?.usage;
   const hasRuntimeEvidence =
     Boolean(runtimeUsage) ||
@@ -194,6 +197,7 @@ export function ChatTraceCard({
             {trace.status} · {routingSummary.effectiveLabel ?? "model n/a"} · {formatTime(trace.startedAt)}
           </p>
           {routingSummary.mismatchLabel ? <p className="chat-trace-meta">{routingSummary.mismatchLabel}</p> : null}
+          {answerReviewLabel ? <p className="chat-trace-meta">{answerReviewLabel}</p> : null}
           {trace.routing.executionProfile === "sustained_local_coding" ? (
             <p className="chat-trace-meta">
               Sustained local coding · up to 90 active minutes · 120 tool calls
@@ -230,14 +234,39 @@ export function ChatTraceCard({
             <div className="chat-trace-section" aria-label="Coding run progress">
               <strong>Coding progress</strong>
               {trace.routing.executionBudget?.profile === "sustained_local_coding" ? (
-                <p>Window: {Math.round(trace.routing.executionBudget.turnBudgetMs / 60_000)} min, up to {trace.routing.executionBudget.maxToolLoops} model loops and {trace.routing.executionBudget.maxToolRunsPerTurn} tool calls · model call up to {Math.round(trace.routing.executionBudget.completionTimeoutMs / 60_000)} min · output up to {trace.routing.executionBudget.maxTokens ?? 4096} tokens</p>
+                <p>
+                  Window: {Math.round(trace.routing.executionBudget.turnBudgetMs / 60_000)} min, up to{" "}
+                  {trace.routing.executionBudget.maxToolLoops} model loops and{" "}
+                  {trace.routing.executionBudget.maxToolRunsPerTurn} tool calls · model call up to{" "}
+                  {Math.round(trace.routing.executionBudget.completionTimeoutMs / 60_000)} min · output up to{" "}
+                  {trace.routing.executionBudget.maxTokens ?? 4096} tokens
+                </p>
               ) : null}
               <p>Current step: {trace.routing.codingRun.nextAction}</p>
-              <p>Active time remaining: {Math.max(0, Math.ceil((trace.routing.codingRun.activeLimitMs - trace.routing.codingRun.activeUsedMs) / 60_000))} min</p>
-              <p>Tool calls: {trace.routing.codingRun.toolRunsUsed}/{trace.routing.codingRun.toolRunLimit}</p>
-              <p>Latest test: {trace.routing.codingRun.latestTest ? (trace.routing.codingRun.latestTest.evidenceLabel ?? (trace.routing.codingRun.latestTest.passed ? "passed" : "failed")) : "not run"}</p>
-              {trace.routing.codingRun.latestFailure ? <p>Latest failure: {trace.routing.codingRun.latestFailure}</p> : null}
-              {trace.routing.codingRun.unmetCriteria?.length ? <p>Unmet criteria: {trace.routing.codingRun.unmetCriteria.join("; ")}</p> : null}
+              <p>
+                Active time remaining:{" "}
+                {Math.max(
+                  0,
+                  Math.ceil((trace.routing.codingRun.activeLimitMs - trace.routing.codingRun.activeUsedMs) / 60_000),
+                )}{" "}
+                min
+              </p>
+              <p>
+                Tool calls: {trace.routing.codingRun.toolRunsUsed}/{trace.routing.codingRun.toolRunLimit}
+              </p>
+              <p>
+                Latest test:{" "}
+                {trace.routing.codingRun.latestTest
+                  ? (trace.routing.codingRun.latestTest.evidenceLabel ??
+                    (trace.routing.codingRun.latestTest.passed ? "passed" : "failed"))
+                  : "not run"}
+              </p>
+              {trace.routing.codingRun.latestFailure ? (
+                <p>Latest failure: {trace.routing.codingRun.latestFailure}</p>
+              ) : null}
+              {trace.routing.codingRun.unmetCriteria?.length ? (
+                <p>Unmet criteria: {trace.routing.codingRun.unmetCriteria.join("; ")}</p>
+              ) : null}
             </div>
           ) : null}
           {trace.failure ? (
@@ -259,6 +288,21 @@ export function ChatTraceCard({
                 </p>
               ) : null}
               <p>Retryable: {trace.failure.retryable === false ? "no" : "yes"}</p>
+            </div>
+          ) : null}
+          {answerReview && (answerReview.issues.length > 0 || answerReview.reason) ? (
+            <div className="chat-trace-section" aria-label="Answer review">
+              <strong>Answer review ({answerReview.depth})</strong>
+              {answerReview.reason ? <p>{answerReview.reason}</p> : null}
+              {answerReview.issues.length > 0 ? (
+                <ul className="chat-trace-list">
+                  {answerReview.issues.map((issue, index) => (
+                    <li key={`${index}-${issue}`}>
+                      <p>{issue}</p>
+                    </li>
+                  ))}
+                </ul>
+              ) : null}
             </div>
           ) : null}
           {trace.loopGuard?.events?.length ? (

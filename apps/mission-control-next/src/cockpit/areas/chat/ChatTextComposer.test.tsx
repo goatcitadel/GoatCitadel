@@ -143,6 +143,19 @@ function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
   };
 }
 
+/** Opens the composer's + panel; it renders in a portal, so it is found on the document. */
+async function openPlusPanel(): Promise<HTMLElement> {
+  await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add and options"]')!.click());
+  const panel = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Add and options"]');
+  expect(panel).not.toBeNull();
+  return panel!;
+}
+/** Matches a button's text, or a + panel row's label (its first span; the row also shows a shortcut hint). */
+const buttonIn = (scope: ParentNode, label: string) =>
+  [...scope.querySelectorAll("button")].find(
+    (button) => button.textContent?.trim() === label || button.querySelector("span")?.textContent === label,
+  );
+
 describe("cockpit text composer", () => {
   it("sends a plain reply through the existing controller callback", async () => {
     const props = composerProps();
@@ -215,8 +228,11 @@ describe("cockpit text composer", () => {
 
   it("leaves the layout switch to the sidebar instead of a generic classic link under the composer", async () => {
     await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
-    const labels = [...container.querySelectorAll("button")].map((b) => b.textContent?.trim());
-    expect(labels).toContain("Commands and context");
+    const panel = await openPlusPanel();
+    expect(buttonIn(panel, "Commands and context")).toBeDefined();
+    const labels = [...container.querySelectorAll("button"), ...panel.querySelectorAll("button")].map((b) =>
+      b.textContent?.trim(),
+    );
     expect(labels).not.toContain("Open classic view");
     expect(labels).not.toContain("More controls");
     expect(cockpitSendBlockReason(composerProps({ canSend: false })) ?? "").not.toMatch(/classic/i);
@@ -714,6 +730,57 @@ it("keeps read-only sources behind a toolbar chip until the operator opens them"
   expect(container.querySelector("textarea")?.getAttribute("rows")).toBe("2");
 });
 
+describe("composer + panel and mode pills", () => {
+  it("keeps attach, commands and modes behind the + and runs each from the panel", async () => {
+    const onOpen = vi.fn();
+    const props = composerProps({
+      composerPalette: { enabled: true, onOpen } as unknown as ComposerProps["composerPalette"],
+    });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    // Only the +, the model chip and Send sit on the row.
+    expect(container.querySelector('button[aria-label="Attach files"]')).toBeNull();
+    expect(buttonIn(container, "Plan first")).toBeUndefined();
+    expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).not.toBeNull();
+    let panel = await openPlusPanel();
+    await act(async () => buttonIn(panel, "Attach files")!.click());
+    expect(props.onAttachFiles).toHaveBeenCalledOnce();
+    expect(document.querySelector('[role="dialog"][aria-label="Add and options"]')).toBeNull();
+    panel = await openPlusPanel();
+    await act(async () => buttonIn(panel, "Plan first")!.click());
+    expect(props.onTogglePlanningMode).toHaveBeenCalledOnce();
+    // A mode toggle keeps the panel open; an action that leaves it closes it.
+    expect(document.querySelector('[role="dialog"][aria-label="Add and options"]')).not.toBeNull();
+    await act(async () => buttonIn(panel, "Commands and context")!.click());
+    expect(onOpen).toHaveBeenCalledOnce();
+  });
+
+  it("shows each mode that is not at its default as a pill that turns it back off", async () => {
+    const props = composerProps({ planningMode: "advisory", currentWebMode: "deep", currentReviewDepth: "standard" });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    const pills = container.querySelector('[aria-label="Composer controls"]')!;
+    expect(pills.textContent).toContain("Plan first");
+    expect(pills.textContent).toContain("Web: Deep");
+    expect(pills.textContent).toContain("Review answer");
+    await act(async () => pills.querySelector<HTMLButtonElement>('button[aria-label="Turn off Plan first"]')!.click());
+    expect(props.onTogglePlanningMode).toHaveBeenCalledOnce();
+    await act(async () =>
+      pills.querySelector<HTMLButtonElement>('button[aria-label="Set web search back to Auto"]')!.click(),
+    );
+    expect(props.onSetWebMode).toHaveBeenCalledWith("auto");
+    await act(async () =>
+      pills.querySelector<HTMLButtonElement>('button[aria-label="Turn off Review answer"]')!.click(),
+    );
+    expect(props.onToggleReviewMode).toHaveBeenCalledOnce();
+  });
+
+  it("shows no pills at the defaults", async () => {
+    const props = composerProps({ planningMode: "off", currentWebMode: "auto", currentReviewDepth: "off" });
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(container.querySelector('button[aria-label^="Turn off"]')).toBeNull();
+    expect(container.querySelector('button[aria-label="Set web search back to Auto"]')).toBeNull();
+  });
+});
+
 describe("touch and phone composer", () => {
   const enter = (init: KeyboardEventInit = {}) =>
     new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true, ...init });
@@ -721,7 +788,7 @@ describe("touch and phone composer", () => {
   it("keeps Enter as send and the Shift+Enter hint for a keyboard and fine pointer", async () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));
-    expect(container.textContent).toContain("Shift+Enter for a new line");
+    expect(container.querySelector("textarea")?.getAttribute("placeholder")).toContain("Shift+Enter for a new line");
     const event = enter();
     await act(async () => container.querySelector("textarea")!.dispatchEvent(event));
     expect(event.defaultPrevented).toBe(true);
@@ -733,6 +800,7 @@ describe("touch and phone composer", () => {
     const props = composerProps();
     await act(async () => root.render(<ChatTextComposer props={props} />));
     expect(container.textContent).not.toContain("Shift+Enter");
+    expect(container.querySelector("textarea")?.getAttribute("placeholder")).not.toContain("Shift+Enter");
     const textarea = container.querySelector("textarea")!;
     const plain = enter();
     await act(async () => textarea.dispatchEvent(plain));
@@ -854,16 +922,22 @@ describe("channel conversation composer", () => {
   it("hides model and attachment tools in channel conversations", async () => {
     for (const channelReply of [ask, post]) {
       await act(async () => root.render(<ChatTextComposer props={composerProps({ channelReply })} />));
-      expect(container.querySelector('button[aria-label="Attach files"]')).toBeNull();
       expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).toBeNull();
-      expect(container.querySelector('select[aria-label="Web search"]')).toBeNull();
-      expect(buttonNamed("Plan first")).toBeUndefined();
-      expect(buttonNamed("Review answer")).toBeUndefined();
-      expect(container.textContent).not.toContain("Voice and images");
+      const panel = await openPlusPanel();
+      expect(buttonIn(panel, "Attach files")).toBeUndefined();
+      expect(panel.querySelector('select[aria-label="Web search"]')).toBeNull();
+      expect(buttonIn(panel, "Plan first")).toBeUndefined();
+      expect(buttonIn(panel, "Review answer")).toBeUndefined();
+      expect(panel.textContent).not.toContain("Voice and images");
+      await act(async () => document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
     }
     await act(async () => root.render(<ChatTextComposer props={composerProps()} />));
-    expect(container.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
     expect(container.querySelector('button[aria-label$="Model and reasoning options"]')).not.toBeNull();
+    const panel = await openPlusPanel();
+    expect(buttonIn(panel, "Attach files")).toBeDefined();
+    expect(panel.querySelector('select[aria-label="Web search"]')).not.toBeNull();
+    expect(buttonIn(panel, "Plan first")).toBeDefined();
+    expect(panel.textContent).toContain("Voice and images");
   });
 
   it("keeps the queue, the route notices and the way to a command beside the draft", async () => {
@@ -872,7 +946,7 @@ describe("channel conversation composer", () => {
     expect(buttonNamed("Acknowledge fallback")).toBeDefined();
     // The model tools are hidden, so the notice cannot send the operator to a model picker.
     expect(buttonNamed("Choose another model")).toBeUndefined();
-    expect(buttonNamed("Commands and context")).toBeDefined();
+    expect(buttonIn(await openPlusPanel(), "Commands and context")).toBeDefined();
   });
 
   it("hides the Options sheet's model and attachment tools on a phone", async () => {

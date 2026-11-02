@@ -1,17 +1,18 @@
 import { useId, useRef, type ReactNode } from "react";
-import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
-import { Dialog } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { Paperclip, SlidersHorizontal } from "lucide-react";
+import { Paperclip } from "lucide-react";
 import { ChatAttachmentChips } from "./ChatAttachmentChips";
 import type { ChatCompletionReasoningEffort, ChatWebMode, RoutingPreflightRuntimeClass } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { useModelLabel } from "../../data/use-model-label";
 import { presentPreflightReason } from "./chat-model-reason";
-import { PLAN_HELP, REVIEW_HELP, presentThinkingLevel } from "./chat-vocabulary";
+import { PLAN_HELP, REVIEW_HELP, WEB_HELP } from "./chat-vocabulary";
+import { ChatModelOptionsButton, routeMatchesSelection, type ModelOptionsRequest } from "./ChatModelOptionsButton";
 
-type Controls = Pick<
+export { ChatModelOptionsButton, routeMatchesSelection, type ModelOptionsRequest } from "./ChatModelOptionsButton";
+
+export type Controls = Pick<
   MissionThreadedActiveSessionSurfaceProps,
   | "routePreflight"
   | "providerOptions"
@@ -58,10 +59,10 @@ export type ChatModelOptionsControls = Pick<
   | "sending"
 >;
 
-const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
+/** Quick is no longer offered: it only shrank the search budget and never forced a search, so it read as Auto. */
+export const WEB_MODES: readonly { value: ChatWebMode; label: string }[] = [
   { value: "auto", label: "Auto" },
   { value: "off", label: "Off" },
-  { value: "quick", label: "Quick" },
   { value: "deep", label: "Deep" },
 ];
 
@@ -72,48 +73,11 @@ const RUNTIME_CLASS_LABELS: Record<RoutingPreflightRuntimeClass, string> = {
   unknown: "It is not recorded whether it runs on this computer or in the cloud, so this conversation may leave it.",
 };
 
-type ModelPopover = typeof import("./ChatModelOptionsPopover");
-let modelPopoverLoad: Promise<ModelPopover> | undefined;
-
-const loadModelPopover = () =>
-  (modelPopoverLoad ??= import("./ChatModelOptionsPopover").catch((cause) => {
-    modelPopoverLoad = undefined;
-    throw cause;
-  }));
-
-export function ChatComposerControls({
-  props,
-  reasoningEfforts,
-  scopeKey = "",
-  sourcesChip,
-  notices = true,
-}: {
-  props: Controls;
-  reasoningEfforts?: ChatCompletionReasoningEffort[];
-  scopeKey?: string;
-  /** The read-only sources chip; it sits beside Attach because both add material to the next message. */
-  sourcesChip?: ReactNode;
-  /** False inside the phone options sheet, where the composer itself keeps the notices and the file input. */
-  notices?: boolean;
-}) {
-  const disabled = props.historicalReadOnly || props.sending;
-  const options = useDeferredOverlay({ scopeKey, load: loadModelPopover });
-  const contentId = useId();
+/** Plan first, Web search and Review answer. The desktop + panel and the phone options sheet both show these. */
+export function ChatComposerModeOptions({ props, disabled }: { props: Controls; disabled: boolean }) {
   const modeHelpId = useId();
-  const reloadCancel = useRef<HTMLButtonElement>(null);
-  const ModelPopover = options.runtime?.ChatModelOptionsPopover;
-  const modelLabel = useModelLabel(
-    props.selectedProviderId,
-    props.selectedModel ?? undefined,
-    Boolean(props.selectedModel),
-  );
-  const optionsSummary = [
-    props.selectedModel ? modelLabel : "Choose model",
-    presentThinkingLevel(props.currentThinkingLevel),
-  ].join(" · ");
-  const modeOptions = (
+  return (
     <>
-      {" "}
       <button
         type="button"
         title={PLAN_HELP}
@@ -129,12 +93,18 @@ export function ChatComposerControls({
         Web
         <select
           aria-label="Web search"
-          title="Off disables web preference; Auto chooses when useful; Quick and Deep request search depth. GoatCitadel policy and available tools still apply."
+          title={WEB_HELP}
           value={props.currentWebMode}
           disabled={disabled || !props.onSetWebMode}
           onChange={(event) => props.onSetWebMode?.(event.target.value as ChatWebMode)}
           className="rounded-md border border-line-control bg-canvas px-1 py-1 text-fg max-sm:min-h-11"
         >
+          {/* A conversation saved with Quick still runs it until another mode is chosen, so it says so. */}
+          {props.currentWebMode === "quick" ? (
+            <option value="quick" disabled>
+              Quick (retired)
+            </option>
+          ) : null}
           {WEB_MODES.map((mode) => (
             <option key={mode.value} value={mode.value}>
               {mode.label}
@@ -162,9 +132,32 @@ export function ChatComposerControls({
       </span>
     </>
   );
+}
+
+/**
+ * Every control in one wrapping row: attach, sources, model and modes. The phone options sheet uses it; wider layouts
+ * put attach, sources and modes behind the composer's + panel and keep only the model chip beside Send.
+ */
+export function ChatComposerControls({
+  props,
+  reasoningEfforts,
+  scopeKey = "",
+  sourcesChip,
+  notices = true,
+}: {
+  props: Controls;
+  reasoningEfforts?: ChatCompletionReasoningEffort[];
+  scopeKey?: string;
+  /** The read-only sources chip; it sits beside Attach because both add material to the next message. */
+  sourcesChip?: ReactNode;
+  /** False inside the phone options sheet, where the composer itself keeps the notices and the file input. */
+  notices?: boolean;
+}) {
+  const disabled = props.historicalReadOnly || props.sending;
+  const requestModelOptions: ModelOptionsRequest = useRef(null);
   return (
     <>
-      {notices ? <ChatComposerNotices props={props} onChooseModel={() => options.request(true)} /> : null}
+      {notices ? <ChatComposerNotices props={props} onChooseModel={() => requestModelOptions.current?.()} /> : null}
       <div
         role="group"
         aria-label="Composer controls"
@@ -181,109 +174,13 @@ export function ChatComposerControls({
           Attach
         </button>
         {sourcesChip}
-        <button
-          ref={(element) => {
-            options.trigger.current = element;
-          }}
-          type="button"
-          aria-label={`${optionsSummary} · Model and reasoning options`}
-          aria-haspopup="dialog"
-          aria-expanded={options.open}
-          aria-controls={options.open ? contentId : undefined}
-          aria-busy={options.loading || undefined}
-          data-state={options.open ? "open" : "closed"}
-          onClick={() => options.request(!options.open)}
-          className="inline-flex min-h-9 min-w-0 max-w-64 items-center gap-2 max-sm:max-w-full max-sm:basis-1/2 max-sm:flex-1 rounded-md border border-line-control px-2 text-left text-fg-secondary hover:border-line-strong max-sm:min-h-11"
-        >
-          <SlidersHorizontal aria-hidden="true" className="size-4 shrink-0" />
-          <span className="min-w-0 truncate">{optionsSummary}</span>
-        </button>
-        {options.loading || options.failure ? (
-          <span ref={options.status} role="status" className="text-xs text-fg-muted">
-            {options.failure ? (
-              <>
-                {"Model options could not load. "}
-                <Button
-                  size="sm"
-                  className="cockpit-deferred-recovery-control min-h-8 max-sm:min-h-11"
-                  onClick={(event) => options.requestReload(event.currentTarget)}
-                >
-                  Reload app
-                </Button>
-              </>
-            ) : (
-              "Loading model options…"
-            )}{" "}
-            <button
-              type="button"
-              className="cockpit-deferred-recovery-control min-h-8 px-2 max-sm:min-h-11"
-              onClick={() => options.close(true)}
-            >
-              Cancel model options
-            </button>
-          </span>
-        ) : null}
-        {ModelPopover ? (
-          <ModelPopover
-            props={props}
-            reasoningEfforts={reasoningEfforts}
-            open={options.open}
-            onOpenChange={(open) => options.request(open)}
-            trigger={options.trigger}
-            contentRef={options.content}
-            contentId={contentId}
-            ownsFocus={() =>
-              Boolean(
-                options.intent.current &&
-                options.isCurrent(options.intent.current.owner) &&
-                options.ownsFocus(options.intent.current),
-              )
-            }
-            isCurrent={options.isCurrent}
-            onOutside={() => {
-              if (options.intent.current) options.intent.current.restore = false;
-            }}
-            canRestore={() =>
-              Boolean(
-                options.intent.current &&
-                options.isCurrent(options.intent.current.owner) &&
-                options.intent.current.restore &&
-                options.ownsFocus(options.intent.current),
-              )
-            }
-          />
-        ) : null}
-        <Dialog
-          open={Boolean(options.reloadReview && options.reloadCurrent(options.reloadReview))}
-          onOpenChange={(open) => {
-            if (!open) options.cancelReload(options.reloadReview);
-          }}
-          title="Reload app?"
-          description="Reloading keeps the recorded conversation. Unsent question answers and unsaved edits may be lost. Reloading does not submit an answer or an approval decision."
-          onOpenAutoFocus={(event) => {
-            event.preventDefault();
-            if (options.reloadReview && options.reloadCurrent(options.reloadReview))
-              reloadCancel.current?.focus({ preventScroll: true });
-          }}
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
-            options.restoreReloadFocus();
-          }}
-        >
-          <div ref={options.registerRecoveryHost} className="flex justify-end gap-2">
-            <Button ref={reloadCancel} onClick={() => options.cancelReload(options.reloadReview)}>
-              Cancel
-            </Button>
-            <Button
-              variant="danger"
-              disabled={!options.reloadReview || !options.reloadCurrent(options.reloadReview)}
-              onClick={() => options.confirmReload(options.reloadReview)}
-            >
-              Reload app
-            </Button>
-          </div>
-        </Dialog>
-        {modeOptions}
+        <ChatModelOptionsButton
+          props={props}
+          reasoningEfforts={reasoningEfforts}
+          scopeKey={scopeKey}
+          requestRef={requestModelOptions}
+        />{" "}
+        <ChatComposerModeOptions props={props} disabled={disabled} />
       </div>
     </>
   );
@@ -329,8 +226,9 @@ export function ChatComposerNotices({ props, onChooseModel }: { props: Controls;
           ) : null}
         </div>
       ) : null}
-      {/* Uses the preflight already fetched for the composer; the notice above explains a fallback on its own. */}
-      {route?.effectiveModel && !props.routeBoundaryAckRequired ? (
+      {/* Uses the preflight already fetched for the composer; the notice above explains a fallback on its own. When the
+          route is simply the model on the chip, the chip's tooltip carries the reason and this line stays away. */}
+      {route?.effectiveModel && !props.routeBoundaryAckRequired && !routeMatchesSelection(props) ? (
         <p className="mb-1 text-xs text-fg-muted">
           Will use {routeLabel} — {presentPreflightReason(route)}
         </p>

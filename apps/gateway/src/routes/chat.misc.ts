@@ -15,7 +15,11 @@ const prefsPatchSchema = z.object({
   providerId: z.string().optional(),
   model: z.string().optional(),
   planningMode: z.enum(["off", "advisory"]).optional(),
-  webMode: z.enum(["auto", "off", "quick", "deep"]).optional(),
+  // Quick is retired (it never forced a search and read as Auto); older clients that still send it get Auto.
+  webMode: z
+    .enum(["auto", "off", "quick", "deep"])
+    .transform((mode) => (mode === "quick" ? ("auto" as const) : mode))
+    .optional(),
   memoryMode: z.enum(["auto", "on", "off"]).optional(),
   thinkingLevel: z.enum(["off", "minimal", "standard", "extended", "deep", "max", "ultra"]).optional(),
   speedMode: z.enum(["standard", "fast"]).optional(),

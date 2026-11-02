@@ -1,6 +1,4 @@
 import {
-  HEARTBEAT_PERMISSION_PROFILE_ID,
-  SCHEDULED_TURN_PERMISSION_PROFILE_ID,
   readChatDelegationResultSchema,
   type ChatDelegationResultSchema,
   type ChatSendMessageRequest,
@@ -11,6 +9,7 @@ import { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME } from "@goatci
 import { resolvePreparedTurnMode, type PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import type { ChatDurableFanoutService } from "./chat-durable-fanout-service.js";
 import type { ChatTurnStreamHost } from "./chat-turn-stream-service.js";
+import { isRestrictedAutonomousPermissionProfile } from "./code-mode-request-eligibility.js";
 
 export { SUBAGENT_FANOUT_MAX_SUBTASKS, SUBAGENT_FANOUT_TOOL_NAME };
 
@@ -86,8 +85,11 @@ export function parseSubagentFanoutSubtasks(args: Record<string, unknown>): Suba
     const label = typeof record.label === "string" ? record.label.trim() : "";
     const expectedOutput = typeof record.expectedOutput === "string" ? record.expectedOutput.trim() : "";
     let resultSchema: ChatDelegationResultSchema | undefined;
-    try { if (record.resultSchema !== undefined) resultSchema = readChatDelegationResultSchema(record.resultSchema); }
-    catch { return { ok: false, error: `Subtask ${index + 1} has an unsupported or unbounded result schema.` }; }
+    try {
+      if (record.resultSchema !== undefined) resultSchema = readChatDelegationResultSchema(record.resultSchema);
+    } catch {
+      return { ok: false, error: `Subtask ${index + 1} has an unsupported or unbounded result schema.` };
+    }
     subtasks.push({
       objective: truncateWithLimit(objective, SUBTASK_OBJECTIVE_MAX_LENGTH),
       ...(label ? { label: truncateWithLimit(label, SUBTASK_LABEL_MAX_LENGTH) } : {}),
@@ -106,13 +108,6 @@ export function parseSubagentFanoutSubtasks(args: Record<string, unknown>): Suba
  * execution and before every child dispatch; a stale UI selection cannot
  * create a child.
  */
-function isRestrictedAutonomousPermissionProfile(permissionProfileId?: string): boolean {
-  return (
-    permissionProfileId === SCHEDULED_TURN_PERMISSION_PROFILE_ID ||
-    permissionProfileId === HEARTBEAT_PERMISSION_PROFILE_ID
-  );
-}
-
 export function shouldRegisterSubagentFanoutExecutor(
   prepared: PreparedAgentChatTurn,
   permissionProfileId?: string,

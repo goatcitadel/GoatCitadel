@@ -1,6 +1,7 @@
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { formatDuration, plural } from "@goatcitadel/mission-control-shared/content/format";
+import { formatAnswerReviewLabel } from "@goatcitadel/mission-control-shared/components/chat/chat-display-helpers";
 import { useModelLabel } from "../../data/use-model-label";
 import { recordedCostLabel } from "./recorded-cost";
 import { recordedTurnTime } from "./chat-turn-timing";
@@ -37,6 +38,7 @@ export function TurnReceipt({
     turn.citations.length ? plural(turn.citations.length, "source") : null,
     timeLabel(turn),
     usage?.costUsd !== undefined ? `Cost ${recordedCostLabel(usage.costUsd, usage.costSource)}` : null,
+    formatAnswerReviewLabel(turn.trace),
   ]
     .filter(Boolean)
     .join(" · ");

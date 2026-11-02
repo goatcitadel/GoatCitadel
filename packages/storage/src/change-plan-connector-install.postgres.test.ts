@@ -98,8 +98,8 @@ test("real PostgreSQL upgraded installs keep their plans and match a fresh insta
     const before = await admin.query(`SELECT * FROM ${schema}.change_plans ORDER BY plan_id`);
 
     const migrated = await runPostgresMigrations(migrations, POSTGRES_MIGRATIONS);
-    assert.deepEqual(migrated.appliedVersions, [220, 221, 222, 223]);
-    assert.equal(migrated.latestVersion, 223);
+    assert.deepEqual(migrated.appliedVersions, [220, 221, 222, 223, 224]);
+    assert.equal(migrated.latestVersion, 224);
     assert.deepEqual(await planChecks(admin, schema), freshChecks);
     assert.deepEqual((await admin.query(`SELECT * FROM ${schema}.change_plans ORDER BY plan_id`)).rows, before.rows);
     await assertWidened(admin, schema);

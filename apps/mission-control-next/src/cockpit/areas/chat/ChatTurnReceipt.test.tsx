@@ -63,6 +63,23 @@ describe("TurnReceipt", () => {
     expect(inspector.content).toBeNull();
   });
 
+  it("says what Review answer found, and nothing when no review ran", async () => {
+    const reviewed = (answerReview: unknown) =>
+      ({ ...turn, trace: { ...turn.trace, reflection: { answerReview } } }) as unknown as ChatThreadTurnRecord;
+    await act(async () =>
+      root.render(<TurnReceipt turn={reviewed({ outcome: "passed", issues: [], action: "recorded" })} />),
+    );
+    expect(container.textContent).toContain("Reviewed: no issues");
+    await act(async () =>
+      root.render(
+        <TurnReceipt turn={reviewed({ outcome: "issues_found", issues: ["a", "b"], action: "noted_in_answer" })} />,
+      ),
+    );
+    expect(container.textContent).toContain("Reviewed: 2 issues, noted in the answer");
+    await act(async () => root.render(<TurnReceipt turn={turn} />));
+    expect(container.textContent).not.toContain("Review");
+  });
+
   it("is plain text when nothing can open the inspector", async () => {
     await act(async () => root.render(<TurnReceipt turn={turn} />));
     expect(container.querySelector("button")).toBeNull();

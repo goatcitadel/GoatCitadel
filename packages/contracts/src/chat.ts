@@ -56,6 +56,26 @@ export type ChatOrchestrationIntensity = "minimal" | "balanced" | "deep";
 export type ChatOrchestrationVisibility = "hidden" | "summarized" | "expandable" | "explicit";
 export type ChatOrchestrationProviderPreference = "speed" | "quality" | "balanced" | "low_cost";
 export type ChatOrchestrationReviewDepth = "off" | "standard" | "strict";
+
+/**
+ * One reviewer pass over a Chat turn's final answer, run when the session's review depth is on.
+ * The reviewer is a single no-tools model call on the turn's own route. `standard` records the verdict;
+ * `strict` also appends the issues it found to the answer as a labelled note (the answer is not rewritten).
+ * A failed or timed-out review never fails the turn: it is recorded as `unavailable` with a reason.
+ */
+export interface ChatAnswerReviewRecord {
+  depth: Exclude<ChatOrchestrationReviewDepth, "off">;
+  outcome: "passed" | "issues_found" | "unavailable";
+  /** Short, one-sentence issues; empty unless `outcome` is `issues_found`. */
+  issues: string[];
+  /** Why the review is unavailable (provider error, timeout, unreadable verdict). */
+  reason?: string;
+  /** `noted_in_answer` when strict review appended its issues to the answer. */
+  action: "recorded" | "noted_in_answer";
+  providerId?: string;
+  model?: string;
+  reviewedAt: string;
+}
 export type ChatOrchestrationParallelism = "auto" | "sequential" | "parallel";
 export type ChatCodeAutoApplyPosture = "manual" | "low_risk_auto" | "aggressive_auto";
 export type ChatTurnBranchKind = "append" | "retry" | "edit";
@@ -1732,6 +1752,8 @@ export interface ChatTurnTraceRecord {
     attemptCount: number;
     reason?: string;
     outcome?: "recovered" | "still_failed" | "not_needed";
+    /** The answer review pass, present when the session's review depth was on and the answer was reviewed. */
+    answerReview?: ChatAnswerReviewRecord;
   };
   proactive?: {
     runId?: string;

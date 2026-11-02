@@ -100,7 +100,7 @@ describe("Chat composer controls", () => {
       const buttons = [...container.querySelectorAll("button")];
       for (const [label, help] of [
         ["Plan first", "Plan before acting."],
-        ["Review answer", "Request review of the answer"],
+        ["Review answer", "Check each answer with one extra model call"],
       ] as const) {
         const toggle = buttons.find((button) => button.textContent === label)!;
         expect(toggle.getAttribute("aria-pressed")).toBe(pressed);
@@ -118,12 +118,21 @@ describe("Chat composer controls", () => {
     await act(async () => root.render(<ChatComposerControls props={input} />));
     const select = control('select[aria-label="Web search"]') as HTMLSelectElement;
     expect(select.value).toBe("auto");
-    expect([...select.options].map((option) => option.textContent)).toEqual(["Auto", "Off", "Quick", "Deep"]);
+    expect([...select.options].map((option) => option.textContent)).toEqual(["Auto", "Off", "Deep"]);
     await act(async () => {
       select.value = "off";
       select.dispatchEvent(new Event("change", { bubbles: true }));
     });
     expect(input.onSetWebMode).toHaveBeenCalledWith("off");
+  });
+
+  it("shows a conversation saved with the retired Quick mode as Quick (retired), not as Auto", async () => {
+    await act(async () => root.render(<ChatComposerControls props={props({ currentWebMode: "quick" })} />));
+    const select = control('select[aria-label="Web search"]') as HTMLSelectElement;
+    expect(select.value).toBe("quick");
+    const retired = [...select.options].find((option) => option.value === "quick")!;
+    expect(retired.textContent).toBe("Quick (retired)");
+    expect(retired.disabled).toBe(true);
   });
 
   it("accessible name starts with the visible text", async () => {
@@ -151,7 +160,7 @@ describe("Chat composer controls", () => {
     await openOptions();
     const help = document.querySelector('[role="dialog"] dl, [data-radix-popper-content-wrapper] dl')!;
     expect(help.textContent).toContain("Plan first: Plan before acting.");
-    expect(help.textContent).toContain("Review answer: Request review of the answer");
+    expect(help.textContent).toContain("Review answer: Check each answer with one extra model call");
     expect(help.closest(".sr-only")).toBeNull();
   });
 });
@@ -275,12 +284,41 @@ describe("File output notice", () => {
 
 describe("Why this model hint", () => {
   it("says which model the next message will use and why, never the raw source", async () => {
-    const input = props({ routePreflight: { effectiveModel: "stub-chat", selectionSource: "global" } as never });
+    const other = { selectedModel: "stub-other" } as Partial<Props>;
+    const input = props({
+      ...other,
+      routePreflight: { effectiveModel: "stub-chat", selectionSource: "global" } as never,
+    });
     await act(async () => root.render(<ChatComposerControls props={input} />));
     expect(container.textContent).toContain("Will use stub-chat — Workspace default");
-    const unknown = props({ routePreflight: { effectiveModel: "stub-chat", selectionSource: "future_kind" } as never });
+    const unknown = props({
+      ...other,
+      routePreflight: { effectiveModel: "stub-chat", selectionSource: "future_kind" } as never,
+    });
     await act(async () => root.render(<ChatComposerControls props={unknown} />));
     expect(container.textContent).toContain("Will use stub-chat — Selected by routing rules");
     expect(container.textContent).not.toContain("future_kind");
+  });
+
+  it("folds the line into the model chip's tooltip when the route is simply the chosen model", async () => {
+    const input = props({
+      routePreflight: { effectiveProviderId: "stub", effectiveModel: "stub-chat", selectionSource: "session" } as never,
+    });
+    await act(async () => root.render(<ChatComposerControls props={input} />));
+    expect(container.textContent).not.toContain("Will use");
+    expect(control('button[aria-label$="Model and reasoning options"]')?.getAttribute("title")).toBe(
+      "Set for this conversation",
+    );
+    // A fallback or adjustment is never folded away.
+    const adjusted = props({
+      routePreflight: {
+        effectiveProviderId: "stub",
+        effectiveModel: "stub-chat",
+        selectionSource: "session",
+        normalizationReason: "adjusted",
+      } as never,
+    });
+    await act(async () => root.render(<ChatComposerControls props={adjusted} />));
+    expect(container.textContent).toContain("Will use stub-chat — Set for this conversation; adjusted");
   });
 });

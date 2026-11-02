@@ -144,7 +144,10 @@ export const presentFailureClass = (value: ChatTurnFailureClass) => failureClass
 
 /** The composer's mode toggles, explained in one place for the tooltip, the screen-reader text and the options popover. */
 export const PLAN_HELP = "Plan before acting. GoatCitadel still governs every tool and approval.";
-export const REVIEW_HELP = "Request review of the answer before completion; availability follows the runtime.";
+export const REVIEW_HELP =
+  "Check each answer with one extra model call before it finishes; the result shows under the answer. Adds cost to every message.";
+export const WEB_HELP =
+  "Auto searches when the message needs current information; Off removes web tools; Deep searches on every message with a larger budget. GoatCitadel policy and available tools still apply.";
 
 const exactFileTypes: Record<string, string> = {
   "application/pdf": "PDF",

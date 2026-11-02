@@ -71,6 +71,7 @@ import {
 } from "./session-control-service.js";
 import type { ActiveTurnAdmission, ChatStreamMutationLifecycle } from "./chat-turn-types.js";
 import { persistInitialChatTurnTrace, persistPreparedChatCapabilityAdmission } from "./chat-durable-run-service.js";
+import { reviewPreparedTurnAnswer } from "./chat-answer-review.js";
 import type {
   ChatTurnActiveExecutionControl,
   ChatTurnAdmissionControl,
@@ -1092,9 +1093,20 @@ async function runAgentSendChatMessageLlmPath(
       };
     }
 
+    const answerReview = await reviewPreparedTurnAnswer(host, prepared, {
+      answer: turnResult.assistantContent,
+      status: turnResult.turnTrace.status,
+      trace: turnResult.turnTrace,
+      citations: dedupedTurnCitations,
+      signal: controller.signal,
+    });
+    if (answerReview) {
+      reflectionTrace = { ...reflectionTrace, answerReview: answerReview.record };
+      await assertChatTurnCompletionWritable(host, turnId, controller.signal, [turnResult.turnTrace.status]);
+    }
     const assistantText =
       turnResult.assistantContent.trim().length > 0
-        ? turnResult.assistantContent
+        ? `${turnResult.assistantContent}${answerReview?.note ?? ""}`
         : buildEmptyAssistantTurnFallbackText();
     const assistantUsage = withCostAttribution(turnResult.usage, {
       providerId: turnResult.turnTrace.routing.effectiveProviderId ?? input.providerId ?? prepared.prefs.providerId,

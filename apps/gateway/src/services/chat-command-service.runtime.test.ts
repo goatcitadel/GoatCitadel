@@ -717,6 +717,14 @@ describe("chat command runtime dispatch", () => {
     );
   });
 
+  it("saves the retired /web quick as Auto and says so", async () => {
+    const deps = createDeps();
+    const result = await parseChatCommand(deps, "session-1", "/web quick");
+    expect(deps.updateChatSessionPrefs).toHaveBeenLastCalledWith("session-1", { webMode: "auto" });
+    expect(result).toMatchObject({ ok: true, message: expect.stringContaining("Quick web mode was retired.") });
+    expect(listChatCommandCatalog().find((item) => item.command === "/web")?.usage).toBe("/web auto|off|deep");
+  });
+
   it("describes /research truthfully in the command catalog", () => {
     const research = listChatCommandCatalog().find((item) => item.command === "/research");
     expect(research?.description).toBe(
@@ -762,7 +770,7 @@ describe("chat command runtime dispatch", () => {
     });
     await expect(parseChatCommand(deps, "session-1", "/web maybe")).resolves.toMatchObject({
       ok: false,
-      message: "Usage: /web auto|off|quick|deep",
+      message: "Usage: /web auto|off|deep",
     });
     await expect(parseChatCommand(deps, "session-1", "/unknown")).resolves.toMatchObject({
       ok: false,

@@ -19,8 +19,9 @@ export function useChatPlanningPreferences({ preferenceActions, planningMode, se
   const handleToggleResearchMode = useCallback(() => {
     const currentWebMode = sessionData.prefs?.webMode ?? "auto";
 
+    // Quick is retired (the Gateway saves it as Auto), so arming research asks for Deep.
     void handlePrefPatch({
-      webMode: currentWebMode === "quick" || currentWebMode === "deep" ? "auto" : "quick",
+      webMode: currentWebMode === "quick" || currentWebMode === "deep" ? "auto" : "deep",
     });
   }, [handlePrefPatch, sessionData.prefs?.webMode]);
   const handleToggleReviewMode = useCallback(() => {

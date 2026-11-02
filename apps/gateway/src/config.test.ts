@@ -246,6 +246,8 @@ describe("loadGatewayConfig", () => {
     expect(config.assistant.features.improvementLocalObservationV1Enabled).toBe(true);
     expect(config.assistant.features.improvementModelEvaluationV1Enabled).toBe(false);
     expect(config.assistant.features.productSourceEvolutionV1Enabled).toBe(false);
+    // Sources selected in the Chat composer reach the model by default.
+    expect(config.assistant.features.chatExplicitContextV1Enabled).toBe(true);
   });
 
   it("defaults Firecrawl and Docker digest posture to shipped fail-closed values", async () => {
