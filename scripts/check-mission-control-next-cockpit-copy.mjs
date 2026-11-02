@@ -17,7 +17,8 @@ const cockpitRoot = path.join(repoRoot, "apps", "mission-control-next", "src", "
 /**
  * Every tree that renders operator copy in the cockpit: its own areas, the native routes and shared components. A root
  * with `files` reads just those files (relative to `dir`): copy written outside the cockpit that the cockpit shows as
- * written, such as the hook trigger labels, the plugin checks' lines, the plugin source refusals, the plugin install
+ * written, such as the hook trigger labels, the plugin checks' lines (with the line for a plugin skill named like a
+ * built-in one, in `plugin-skill-name-rules.ts`), the plugin source refusals, the plugin install
  * and uninstall refusals, a plugin install's plan and summaries (its adapter, words and the shared plan support), a
  * plugin uninstall's plan and summaries (its adapter, scope and words), the reasons Chat's capability scout gives
  * under Why? for a blocked tool, and the words Chat says while the plugin holds can't be read. A plugin
@@ -49,6 +50,7 @@ export const COPY_ROOTS = [
       "apps/gateway/src/services/plugin-snapshot-store.ts",
       "apps/gateway/src/services/plugin-git-messages.ts",
       "apps/gateway/src/services/skill-hub-plugin-skill-source.ts",
+      "apps/gateway/src/services/plugin-skill-name-rules.ts",
       "apps/gateway/src/services/chat-capability-scout.ts",
       "apps/gateway/src/services/plugin-tool-group-holds-words.ts",
     ],

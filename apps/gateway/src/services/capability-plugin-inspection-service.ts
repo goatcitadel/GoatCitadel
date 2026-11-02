@@ -369,9 +369,9 @@ export class CapabilityPluginInspectionService {
   /**
    * Whether the reviewed skill can be installed now, read from its check by id. Checking the same copy again replays
    * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused: it
-   * can't come back until skills can be removed. Another installed skill of that name refuses it too, and a name a
-   * skill that ships with GoatCitadel already has refuses it first. A check that can't be read is
-   * never taken as installable.
+   * can't come back until skills can be removed. Another installed skill of that name refuses it too. A plugin
+   * skill named like a skill that ships with GoatCitadel is refused first, with its own line. A check that can't be
+   * read is never taken as installable.
    */
   private async installableSkill(
     snapshotId: string,
