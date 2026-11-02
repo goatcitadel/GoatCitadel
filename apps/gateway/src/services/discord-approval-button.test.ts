@@ -41,9 +41,44 @@ describe("DiscordRuntimeService approval buttons", () => {
       }),
     );
     expect(harness.touchPairing).toHaveBeenCalledWith("pairing_1");
+    expect(interaction.deferReply).toHaveBeenCalledTimes(1);
     expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
     expect(harness.awaitSlashCommandResult).toHaveBeenCalledWith("inbound-button-1");
     expect(interaction.editReply).toHaveBeenCalledWith({ content: "Approved." });
+    expect(interaction.reply).not.toHaveBeenCalled();
+  });
+
+  it("acknowledges the press before it reads any connection or records the command", async () => {
+    let releaseConnections: () => void = () => {};
+    const connectionsRead = new Promise<void>((resolve) => {
+      releaseConnections = resolve;
+    });
+    const harness = createHarness({ pairing: createPairing(), connectionsRead });
+    const interaction = createButtonInteraction(`gca:${RAW_TOKEN}:a`);
+
+    const pressed = harness.press(interaction);
+    // Discord needs an answer within 3 seconds; the slow reads after the deferral don't hold it up.
+    await vi.waitFor(() => expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true }));
+    expect(harness.acceptSlashCommand).not.toHaveBeenCalled();
+    releaseConnections();
+    await pressed;
+
+    expect(interaction.deferReply.mock.invocationCallOrder[0]).toBeLessThan(
+      harness.listConnections.mock.invocationCallOrder[0]!,
+    );
+    expect(interaction.editReply).toHaveBeenCalledWith({ content: "Approved." });
+  });
+
+  it("acts on nothing when Discord refuses the acknowledgement", async () => {
+    const harness = createHarness({ pairing: createPairing() });
+    const interaction = createButtonInteraction(`gca:${RAW_TOKEN}:a`);
+    interaction.deferReply.mockRejectedValueOnce(new Error("Unknown interaction"));
+
+    await harness.press(interaction);
+
+    expect(harness.listConnections).not.toHaveBeenCalled();
+    expect(harness.acceptSlashCommand).not.toHaveBeenCalled();
+    expect(interaction.editReply).not.toHaveBeenCalled();
   });
 
   it("refuses a DM press from a user who is not paired, even when DMs are open", async () => {
@@ -53,10 +88,11 @@ describe("DiscordRuntimeService approval buttons", () => {
     await harness.press(interaction);
 
     expect(harness.acceptSlashCommand).not.toHaveBeenCalled();
-    expect(interaction.reply).toHaveBeenCalledWith({
+    expect(interaction.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(interaction.editReply).toHaveBeenCalledWith({
       content: "Approve this Discord user in GoatCitadel before answering approvals.",
-      ephemeral: true,
     });
+    expect(interaction.reply).not.toHaveBeenCalled();
   });
 
   it("ignores a button that is not an approval button", async () => {
@@ -86,17 +122,23 @@ describe("DiscordRuntimeService approval buttons", () => {
         metadata: expect.objectContaining({ guildId: "guild_1", channelId: "channel_1" }),
       }),
     );
+    expect(allowed.deferReply).toHaveBeenCalledTimes(1);
     expect(allowed.deferReply).toHaveBeenCalledWith({ ephemeral: true });
-    expect(elsewhere.reply).toHaveBeenCalledWith({
+    expect(elsewhere.deferReply).toHaveBeenCalledWith({ ephemeral: true });
+    expect(elsewhere.editReply).toHaveBeenCalledWith({
       content: "GoatCitadel is not enabled for approvals in this channel or DM route.",
-      ephemeral: true,
     });
   });
 });
 
-function createHarness(options: { pairing?: DiscordPairingRecord; config?: Record<string, unknown> } = {}) {
+function createHarness(
+  options: { pairing?: DiscordPairingRecord; config?: Record<string, unknown>; connectionsRead?: Promise<void> } = {},
+) {
   const connection = createConnection(options.config);
-  const listConnections = vi.fn(async () => [connection]);
+  const listConnections = vi.fn(async () => {
+    await options.connectionsRead;
+    return [connection];
+  });
   const touchPairing = vi.fn(async () => {});
   const acceptSlashCommand = vi.fn(async () => ({ inboundEventId: "inbound-button-1" }));
   const awaitSlashCommandResult = vi.fn(async () => "Approved.");
@@ -138,7 +180,7 @@ function createButtonInteraction(customId: string, options: { guild?: { channelI
     user: { id: "user_1", username: "goat-user", displayName: "Goat User", globalName: "Goat User" },
     member: null,
     reply: vi.fn(async () => undefined),
-    deferReply: vi.fn(async () => undefined),
+    deferReply: vi.fn(async (_options: { ephemeral: boolean }): Promise<void> => undefined),
     editReply: vi.fn(async () => undefined),
   };
 }
