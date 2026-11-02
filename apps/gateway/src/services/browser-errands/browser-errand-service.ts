@@ -103,6 +103,8 @@ interface ActiveErrand {
   windowClosed: boolean;
   /** The gate could not record (or withdraw) an approval, so the errand was stopped without one. */
   approvalUnrecorded: boolean;
+  /** Set the moment Stop starts, before its withdrawal is awaited: from then on no approval or action goes ahead. */
+  stopping: boolean;
   /** Resolves once the run has finished its cleanup, whatever its outcome. */
   settled?: Promise<void>;
 }
@@ -127,6 +129,8 @@ export class BrowserErrandService {
     if (!errand || errand.view.errandId !== errandId) {
       return false;
     }
+    // Fence first, synchronously: an approval decided while the withdrawal below is in flight must not be acted on.
+    errand.stopping = true;
     // Withdraw under the stopping actor before the abort lets the gate withdraw it as a system stop.
     await errand.gate?.withdrawPending(actorId).catch(() => undefined);
     errand.controller.abort();
@@ -140,6 +144,7 @@ export class BrowserErrandService {
     this.clearIdleTimer();
     const errand = this.active;
     if (errand) {
+      errand.stopping = true;
       // Withdraw while storage is still open, so no approval is left pending after shutdown.
       await errand.gate?.withdrawPending(ERRAND_STOPPED_ACTOR_ID).catch(() => undefined);
       errand.controller.abort();
@@ -187,6 +192,7 @@ export class BrowserErrandService {
       takeoversAtCapture: 0,
       windowClosed: false,
       approvalUnrecorded: false,
+      stopping: false,
     };
     // Claimed before any await, so a second call in the same tick is refused.
     this.active = errand;
@@ -326,7 +332,9 @@ export class BrowserErrandService {
       requestApproval: async (input) => {
         errand.view.state = "waiting_on_you";
         try {
-          return await hooks.requestApproval(input);
+          const answer = await hooks.requestApproval(input);
+          // Stop started while the decision came in: the approval is not acted on.
+          return errand.stopping ? "stopped" : answer;
         } catch (error) {
           // The approval could not be recorded or withdrawn; the errand must not act without one.
           // eslint-disable-next-line no-console -- bounded diagnostic; the errand stops and says why.
@@ -440,7 +448,12 @@ export class BrowserErrandService {
             await untilHandedBack();
             return "halt";
           }
-          return await beforeAction(action, index);
+          if (errand.stopping) {
+            return "halt";
+          }
+          const decision = await beforeAction(action, index);
+          // Re-checked after the (possibly long) approval wait, right before the action is dispatched.
+          return errand.stopping ? "halt" : decision;
         });
       },
     };

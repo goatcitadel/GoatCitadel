@@ -597,6 +597,73 @@ describe("errand approval gate", () => {
     await expect(answer).resolves.toBe("approved");
   });
 
+  describe("re-asks instead of acting when the approved target is no longer the one approved", () => {
+    const field = target({ tagName: "INPUT", role: "textbox", text: "Card number", backendNodeId: 41 });
+    const cases: Array<{
+      name: string;
+      input: Partial<ErrandApprovalInput>;
+      arrange: (state: { target: ErrandTargetInfo | null; focused: ErrandTargetInfo | null }) => void;
+    }> = [
+      {
+        name: "a readable control appeared where an unreadable target was approved",
+        input: { target: target({ role: "", text: "", tagName: "", rect: { x: 0, y: 0, width: 0, height: 0 } }) },
+        arrange: (state) => {
+          state.target = target({ text: "Delete account" });
+        },
+      },
+      {
+        name: "the focused field became a password field",
+        input: { target: field, targetsFocus: true },
+        arrange: (state) => {
+          state.focused = { ...field, isPasswordLike: true };
+        },
+      },
+      {
+        name: "the focused field became a one-time-code field",
+        input: { target: field, targetsFocus: true },
+        arrange: (state) => {
+          state.focused = { ...field, isOneTimeCode: true };
+        },
+      },
+      {
+        name: "the target became opaque",
+        input: {},
+        arrange: (state) => {
+          state.target = { ...target(), isOpaque: true };
+        },
+      },
+      {
+        name: "the approved focused field had no node identity",
+        input: { target: { ...field, backendNodeId: undefined }, targetsFocus: true },
+        arrange: (state) => {
+          state.focused = { ...field, backendNodeId: undefined };
+        },
+      },
+    ];
+    for (const { name, input, arrange } of cases) {
+      it(name, async () => {
+        const { host, fake, gate, waitForPending, SESSION_ID } = setup();
+        fake.state.focused = field;
+        const answer = gate.request(approvalInput(input));
+        const first = await waitForPending();
+        arrange(fake.state);
+        await resolveApproval(host, first, { decision: "approve", resolvedBy: "operator" });
+        await vi.waitFor(
+          async () => {
+            const pending = await host.storage.approvals.listPendingBySession(SESSION_ID);
+            expect(pending.some((approval) => approval.approvalId !== first)).toBe(true);
+          },
+          { timeout: 5_000, interval: 20 },
+        );
+        const second = (await host.storage.approvals.listPendingBySession(SESSION_ID)).find(
+          (approval) => approval.approvalId !== first,
+        )!;
+        await resolveApproval(host, second.approvalId, { decision: "reject", resolvedBy: "operator" });
+        await expect(answer).resolves.toBe("denied");
+      });
+    }
+  });
+
   it("expired approvals return expired", async () => {
     const past = Date.now() - ERRAND_APPROVAL_TTL_MS - 60_000;
     const { host, gate, waitForPending } = setup({ now: () => past });

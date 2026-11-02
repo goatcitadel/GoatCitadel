@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
 import { ErrandOverlayError, type ComputerAction, type ErrandTargetInfo } from "@goatcitadel/policy-engine";
-import { runErrandLoop, type ErrandLoopDeps } from "./errand-loop.js";
+import { ERRAND_TARGET_CHANGED_AFTER_APPROVAL, runErrandLoop, type ErrandLoopDeps } from "./errand-loop.js";
 
 const PNG = Buffer.from("png-bytes");
 const PEOPLE_PNG = Buffer.from("people-png");
@@ -192,6 +192,28 @@ describe("runErrandLoop", () => {
     expect(browser.describeFocused).toHaveBeenCalledTimes(1);
     expect(deps.waitForHandBack).toHaveBeenCalledWith("sign_in");
     expect(ran.map((a) => a.type)).toEqual(["click"]);
+  });
+
+  it("hands over instead of acting when the approved target became a password field during the decision", async () => {
+    const { deps, browser, ran } = makeDeps([click("Place the order"), textReply("done")]);
+    browser.describeTarget
+      .mockResolvedValueOnce(target({ text: "Place your order" }))
+      .mockResolvedValue(target({ tagName: "INPUT", role: "textbox", text: "Place your order", isPasswordLike: true }));
+    await runErrandLoop(deps, { goal: "buy" });
+    expect(deps.requestApproval).toHaveBeenCalledTimes(1);
+    expect(deps.waitForHandBack).toHaveBeenCalledWith("sign_in");
+    expect(ran).toHaveLength(0);
+  });
+
+  it("does not act when the approved target now needs a different kind of approval", async () => {
+    const { deps, browser, ran } = makeDeps([click("Place the order")]);
+    browser.describeTarget
+      .mockResolvedValueOnce(target({ text: "Place your order" }))
+      .mockResolvedValue(target({ text: "Delete account" }));
+    const outcome = await runErrandLoop(deps, { goal: "buy" });
+    expect(outcome.status).toBe("declined");
+    expect(outcome.summary).toBe(ERRAND_TARGET_CHANGED_AFTER_APPROVAL);
+    expect(ran).toHaveLength(0);
   });
 
   it("reports a malformed arguments error to the model and continues", async () => {

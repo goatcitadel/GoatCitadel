@@ -202,6 +202,23 @@ describe("ChatBrowserErrandCard", () => {
     }
   });
 
+  it("shows the read error, then the tool run's result, instead of a stale Running after a failed read", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    api.fetchBrowserErrandStatus.mockResolvedValueOnce(running).mockRejectedValue(new Error("Gateway unavailable"));
+    await mount({ toolRunOpen: true });
+    await vi.waitFor(() => expect(container.textContent).toContain("Searching for flights"));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(2_100);
+    });
+    await vi.waitFor(() => expect(container.querySelector("p.text-status-failed")).not.toBeNull());
+    expect(container.textContent).not.toContain("Searching for flights");
+    expect(buttons().some((button) => button.textContent === "Stop")).toBe(false);
+    await mount({ fallback: { outcome: "done", summary: "Found the cheapest flight.", steps: 5 } });
+    await vi.waitFor(() => expect(container.textContent).toContain("Found the cheapest flight."));
+    expect(container.textContent).toContain("Done");
+    expect(container.querySelector("p.text-status-failed")).toBeNull();
+  });
+
   it("stops asking after a failed read when the tool run is closed", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
     api.fetchBrowserErrandStatus.mockRejectedValue(new Error("Gateway unavailable"));

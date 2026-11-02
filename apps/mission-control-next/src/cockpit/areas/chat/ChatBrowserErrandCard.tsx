@@ -126,7 +126,9 @@ export function ChatBrowserErrandCard(props: {
   });
 
   const fromResult = fallbackResult ? statusFromResult(toolRunId, fallbackResult) : undefined;
-  const view = query.data ?? fromResult;
+  // A failed read keeps TanStack's last data, which may still say Running: the tool run's result wins then, and with
+  // no result the read error is shown rather than a stale status.
+  const view = query.isError ? fromResult : (query.data ?? fromResult);
   if (!view) {
     if (query.isError) {
       return <p className="mt-3 text-sm text-status-failed">{describeApiError(query.error).summary}</p>;

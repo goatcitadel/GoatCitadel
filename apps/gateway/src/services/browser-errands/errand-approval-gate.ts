@@ -104,11 +104,26 @@ function isReadable(target: ErrandTargetInfo): boolean {
   return target.text.trim() !== "" || target.role.trim() !== "";
 }
 
-function sameTarget(expected: ErrandTargetInfo, actual: ErrandTargetInfo | null): boolean {
+/** A password, one-time-code or unreadable (opaque) surface the operator did not approve as one. */
+function becameSensitive(expected: ErrandTargetInfo, actual: ErrandTargetInfo): boolean {
+  return (
+    (actual.isPasswordLike && !expected.isPasswordLike) ||
+    (actual.isOneTimeCode && !expected.isOneTimeCode) ||
+    (actual.isOpaque && !expected.isOpaque)
+  );
+}
+
+function sameTarget(expected: ErrandTargetInfo, actual: ErrandTargetInfo | null, targetsFocus: boolean): boolean {
   if (!isReadable(expected) && expected.backendNodeId === undefined) {
-    return true;
+    // Nothing readable was approved: it is the same only while nothing readable or sensitive has appeared there.
+    return actual === null || (!isReadable(actual) && !becameSensitive(expected, actual));
   }
-  if (!actual || actual.text !== expected.text || actual.role !== expected.role) {
+  if (!actual || actual.text !== expected.text || actual.role !== expected.role || becameSensitive(expected, actual)) {
+    return false;
+  }
+  // A key press lands on whatever has focus, and only node identity tells two identical fields apart: without it,
+  // the focused field cannot be shown to be the approved one.
+  if (targetsFocus && expected.backendNodeId === undefined) {
     return false;
   }
   // Another element with the same text, role and box (a second, identical field) is still a different target.
@@ -375,9 +390,6 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
       return { unchanged: false, originChanged: true, target: null };
     }
     const expected = asked.input.target;
-    if (!isReadable(expected) && expected.backendNodeId === undefined) {
-      return { unchanged: true, originChanged: false, target: null };
-    }
     // Read beneath the approval card: the card and its blocker cover the page until the driving banner is back. A
     // keyboard action lands on whatever has focus, so it re-reads focus, not the point: page script may have moved it.
     const target = await (
@@ -385,7 +397,11 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
         ? browser.describeFocusedBeneathOverlay()
         : browser.describeTargetBeneathOverlay(expected.x, expected.y)
     ).catch(() => null);
-    return { unchanged: sameTarget(expected, target), originChanged: false, target };
+    return {
+      unchanged: sameTarget(expected, target, asked.input.targetsFocus === true),
+      originChanged: false,
+      target,
+    };
   };
 
   let lastReason: string | undefined;

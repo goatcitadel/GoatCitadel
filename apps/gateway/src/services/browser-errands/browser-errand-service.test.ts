@@ -327,6 +327,58 @@ describe("BrowserErrandService stop", () => {
     await expect(running).resolves.toMatchObject({ outcome: "stopped" });
     await built.service.dispose();
   });
+
+  it("acts on no approval that lands while Stop is still withdrawing it", async () => {
+    let asked!: () => void;
+    const approvalAsked = new Promise<void>((resolve) => (asked = resolve));
+    let approve!: (answer: "approved") => void;
+    let releaseWithdraw!: () => void;
+    const withdrawing = new Promise<void>((resolve) => (releaseWithdraw = resolve));
+    const gate = fakeGate(vi.fn, {
+      request: vi.fn(
+        () =>
+          new Promise<"approved">((resolve) => {
+            approve = resolve;
+            asked();
+          }),
+      ),
+      // The operator's approval is recorded first, so the withdrawal only finishes after the gate answered.
+      withdrawPending: vi.fn(async () => {
+        approve("approved");
+        await withdrawing;
+      }),
+    });
+    const dispatched: number[] = [];
+    let answers: string[] = [];
+    const built = buildService(vi.fn, {
+      createGate: () => gate,
+      runLoop: async (deps) => {
+        const answer = await deps.requestApproval({} as never);
+        answers = [...answers, answer];
+        // A loop that missed the answer still never gets an action dispatched.
+        const result = await deps.browser.runActions([{ type: "wait" }], async () => "proceed");
+        return outcome(result.ran === 0 ? "stopped" : "done");
+      },
+    });
+    built.browser.runActions = async (actions, beforeAction) => {
+      let ran = 0;
+      for (const [index, action] of actions.entries()) {
+        if ((await beforeAction(action, index)) === "halt") return { ran, halted: true };
+        dispatched.push(index);
+        ran += 1;
+      }
+      return { ran, halted: false };
+    };
+    const running = built.service.run(errandRequest());
+    await approvalAsked;
+    const stopping = built.service.stop(built.service.getStatus("tool-run-1")!.errandId, "operator");
+    await vi.waitFor(() => expect(answers).toEqual(["stopped"]));
+    releaseWithdraw();
+    await expect(stopping).resolves.toBe(true);
+    await expect(running).resolves.toMatchObject({ outcome: "stopped" });
+    expect(dispatched).toEqual([]);
+    await built.service.dispose();
+  });
 });
 
 describe("BrowserErrandService dispose", () => {

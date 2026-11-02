@@ -92,6 +92,9 @@ class StopErrand extends Error {
   }
 }
 
+export const ERRAND_TARGET_CHANGED_AFTER_APPROVAL =
+  "The page changed after your OK into something that needs a different approval, so GoatCitadel didn't act.";
+
 const CAPTURE_FAILED_MESSAGE = "GoatCitadel could not safely take a screenshot of the page, so the errand was stopped.";
 
 function imageContent(text: string, png: Buffer): Array<Record<string, unknown>> {
@@ -445,19 +448,21 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
       }
       const point = actionPoint(action);
       const isKeyboard = action.type === "type" || action.type === "keypress";
-      const target = point ? await browser.describeTarget(point.x, point.y) : null;
-      // Re-read right before each keyboard action: an earlier click may have moved focus.
-      const focused = isKeyboard ? await browser.describeFocused() : null;
       const modelDeclared = carriesDeclaredRisk(action) ? declared : undefined;
-      const verdict = classifyErrandAction({
-        action,
-        target,
-        focused,
-        pageUrl: browser.currentUrl(),
-        ...(modelDeclared ? { modelDeclared } : {}),
-      });
-
-      if (verdict.kind === "handover") {
+      const inspect = async () => {
+        const target = point ? await browser.describeTarget(point.x, point.y) : null;
+        // Re-read right before each keyboard action: an earlier click may have moved focus.
+        const focused = isKeyboard ? await browser.describeFocused() : null;
+        const verdict = classifyErrandAction({
+          action,
+          target,
+          focused,
+          pageUrl: browser.currentUrl(),
+          ...(modelDeclared ? { modelDeclared } : {}),
+        });
+        return { target, focused, verdict };
+      };
+      const handOver = async (): Promise<"halt"> => {
         const answer = await paused(() => deps.waitForHandBack("sign_in"));
         if (answer === "stopped" || signal.aborted) {
           terminal = new StopErrand("stopped", "The operator stopped the errand.");
@@ -465,6 +470,11 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
           handedBack = true;
         }
         return "halt";
+      };
+      const { target, focused, verdict } = await inspect();
+
+      if (verdict.kind === "handover") {
+        return await handOver();
       }
       if (verdict.kind === "ask") {
         const subject = isKeyboard ? focused : target;
@@ -493,6 +503,16 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
                 ? "The approval request expired."
                 : "The operator stopped the errand.";
           terminal = new StopErrand(status, summary);
+          return "halt";
+        }
+        // The decision took time: classify the target as it is now. A field that became a sign-in field is handed
+        // over, and one that now needs a different kind of approval is not acted on.
+        const recheck = (await inspect()).verdict;
+        if (recheck.kind === "handover") {
+          return await handOver();
+        }
+        if (recheck.kind === "ask" && recheck.category !== verdict.category) {
+          terminal = new StopErrand("declined", ERRAND_TARGET_CHANGED_AFTER_APPROVAL);
           return "halt";
         }
         if (modelDeclared) {
