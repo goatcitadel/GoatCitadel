@@ -328,6 +328,33 @@ describe("runErrandLoop", () => {
     expect(order).toEqual(["run", "after"]);
   });
 
+  it("records no after screenshot for an approved action a Take over or Stop halted before it ran", async () => {
+    const afterApprovedAction = vi.fn(async (_png: Buffer) => undefined);
+    const { deps, browser, ran } = makeDeps([click(), textReply("ok")], { afterApprovedAction });
+    browser.describeTarget.mockResolvedValue(target({ text: "Place your order" }));
+    // The service's wrapper halts after the loop approved the action (the operator took over meanwhile).
+    browser.runActions.mockImplementation(async (actions: ComputerAction[], before: BeforeAction) => {
+      await before(actions[0]!, 0);
+      return { ran: 0, halted: true };
+    });
+    expect((await runErrandLoop(deps, { goal: "buy" })).status).toBe("done");
+    expect(deps.requestApproval).toHaveBeenCalledTimes(1);
+    expect(ran).toEqual([]);
+    expect(afterApprovedAction).not.toHaveBeenCalled();
+  });
+
+  it("records the after screenshot when the approved action ran and a later one halted", async () => {
+    const afterApprovedAction = vi.fn(async (_png: Buffer) => undefined);
+    const { deps, browser } = makeDeps([click(), textReply("ok")], { afterApprovedAction });
+    browser.describeTarget.mockResolvedValue(target({ text: "Place your order" }));
+    browser.runActions.mockImplementation(async (actions: ComputerAction[], before: BeforeAction) => {
+      await before(actions[0]!, 0);
+      return { ran: 1, halted: true };
+    });
+    await runErrandLoop(deps, { goal: "buy" });
+    expect(afterApprovedAction).toHaveBeenCalledTimes(1);
+  });
+
   it("stops, without the raw storage error, when the after-action evidence cannot be recorded", async () => {
     const controller = new AbortController();
     const afterApprovedAction = vi.fn(async (_png: Buffer) => {

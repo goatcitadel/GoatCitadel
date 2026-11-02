@@ -446,19 +446,25 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
 
     let terminal: StopErrand | null = null;
     let handedBack = false;
-    let afterPending = false;
+    /** The index of the approved action whose "after" evidence is still owed, once it has actually run. */
+    let approvedIndex: number | undefined;
 
-    const flushAfter = async (): Promise<void> => {
-      if (afterPending) {
-        afterPending = false;
-        if (deps.afterApprovedAction) {
-          await deps.afterApprovedAction(await browser.captureForPeople());
-        }
+    /** `ran` actions have been dispatched: record the "after" evidence only if the approved one is among them. */
+    const flushAfter = async (ran: number): Promise<void> => {
+      if (approvedIndex === undefined) {
+        return;
+      }
+      const index = approvedIndex;
+      approvedIndex = undefined;
+      // A halt after the approval (Take over, Stop) means it never ran: no "after" evidence for it.
+      if (ran > index && deps.afterApprovedAction) {
+        await deps.afterApprovedAction(await browser.captureForPeople());
       }
     };
 
-    const beforeAction = async (action: ComputerAction): Promise<"proceed" | "halt"> => {
-      await flushAfter();
+    const beforeAction = async (action: ComputerAction, index: number): Promise<"proceed" | "halt"> => {
+      // Asked before action `index`: every earlier action was dispatched.
+      await flushAfter(index);
       if (signal.aborted) {
         terminal = new StopErrand("stopped", "The errand was stopped.");
         return "halt";
@@ -535,13 +541,14 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
         if (modelDeclared) {
           declared = undefined;
         }
-        afterPending = true;
+        approvedIndex = index;
       }
       return "proceed";
     };
 
     const result = await browser.runActions(actions, beforeAction);
-    await flushAfter();
+    // A dispatch that failed was still attempted and may have acted on the page, so it keeps its "after" evidence.
+    await flushAfter(result.ran + (result.error && !result.halted ? 1 : 0));
     if (terminal) {
       throw terminal;
     }
