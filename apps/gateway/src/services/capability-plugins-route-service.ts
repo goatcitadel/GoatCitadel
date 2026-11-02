@@ -81,7 +81,7 @@ export interface CapabilityPluginsRouteSources {
   readInstallPlanStatus(workspaceId: string, planId: string, actorId: string): Promise<ChangePlanStatus>;
   /** Where an approval stands and whether its work still runs; undefined when it can't be read (the reader reports it). */
   readApproval(approvalId: string): Promise<ApprovalReading | undefined>;
-  /** The manifest in a snapshot, read again. */
+  /** The manifest an installed plugin was installed from: its record's kept translation first, else its snapshot's. */
   readManifest(treeSha256: string): Promise<PluginManifestParse>;
   /** A file in a snapshot, as text. */
   readSnapshotText(treeSha256: string, relativePath: string): Promise<string>;
@@ -192,6 +192,7 @@ export class CapabilityPluginsRouteService {
       installPlanId: plugin.installPlanId,
       installedAt: plugin.installedAt,
       pieces: buildPluginDetailPieces(plugin, manifest, labels, readings),
+      ...claudeCodeDetail(plugin),
     };
   }
 
@@ -372,7 +373,15 @@ function listItem(plugin: StoredPlugin, state: CapabilityPluginListItem["state"]
     pieceCounts: countPieces(plugin.pieces),
     workspaceId: plugin.workspaceId,
     sourceKind: plugin.sourceKind,
+    ...(plugin.sourceFormat ? { sourceFormat: plugin.sourceFormat } : {}),
   };
+}
+
+/** What a Claude Code plugin's record kept of its check: the left-out list and the import's facts, never its text. */
+function claudeCodeDetail(plugin: StoredPlugin): Pick<CapabilityPluginDetail, "ignored" | "claudeCode"> {
+  if (!plugin.claudeCode) return {};
+  const { translatorVersion, pluginJsonSha256, coverage, ignored } = plugin.claudeCode;
+  return { ignored: [...ignored], claudeCode: { translatorVersion, pluginJsonSha256, coverage: { ...coverage } } };
 }
 
 function countPieces(pieces: readonly { kind: PluginPieceKind }[]): Partial<Record<PluginPieceKind, number>> {

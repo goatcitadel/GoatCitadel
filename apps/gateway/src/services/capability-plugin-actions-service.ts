@@ -204,6 +204,7 @@ export class CapabilityPluginActionsService {
       input.hookSecrets ?? {},
     );
     await this.sources.verifySnapshot(snapshotTreeSha256);
+    // Read fresh: a Claude Code plugin is translated again, so a changed translation is refused like changed bytes.
     const parsed = await this.sources.readManifest(snapshotTreeSha256);
     if (!parsed.ok || parsed.manifestSha256 !== inspection.manifestSha256) throw pluginChanged();
     return {

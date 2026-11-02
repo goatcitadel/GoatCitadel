@@ -42,6 +42,11 @@ export function PluginPieceList({
           <p className={piece.check.status === "blocked" ? "text-status-failed" : undefined}>
             {checkLine(piece.check, piece.kind)}
           </p>
+          {piece.warnings?.map((warning) => (
+            <p key={warning} className="text-fg-muted">
+              {warning}
+            </p>
+          ))}
           {piece.needsSecret && secrets && onSecret ? (
             <SecretField
               pieceLabel={piece.label}

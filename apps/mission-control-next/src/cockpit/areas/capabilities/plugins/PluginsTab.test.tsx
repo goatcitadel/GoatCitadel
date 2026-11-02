@@ -241,6 +241,16 @@ describe("Plugins tab", () => {
     expect(names()).toEqual(["Release notes", "Team kit", "Browser checks"]);
   });
 
+  it("labels a Claude Code plugin in the list", async () => {
+    api.fetchCapabilityPlugins.mockResolvedValue(
+      listOf({ installed: [{ ...RELEASE_NOTES, sourceFormat: "claude_code" }, TEAM_KIT] }),
+    );
+    await render();
+
+    expect(rowOf("Release notes").querySelector("h3 + span")?.textContent).toBe("Claude Code format · Unverified");
+    expect(rowOf("Team kit").querySelector("h3 + span")?.textContent).toBe("Built in");
+  });
+
   it("drops a chosen trust label once no plugin has it", async () => {
     api.fetchCapabilityPlugins.mockResolvedValue(
       listOf({ installed: [RELEASE_NOTES, TEAM_KIT], builtIn: [BROWSER_CHECKS] }),

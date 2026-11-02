@@ -215,6 +215,20 @@ describe("CapabilityPluginActionsService.install", () => {
     expect(elsewhere.state.keychain.size).toBe(0);
   });
 
+  it("refuses to install a Claude Code plugin whose translation changed since the check", async () => {
+    const h = harness({ trust: "unverified" });
+    h.state.inspection = { ...h.state.inspection, sourceFormat: "claude_code" };
+    // Translated again with a newer catalog: the generated manifest is no longer the checked one.
+    h.state.manifestText = h.state.manifestText.replace("Notes and checks", "Notes, checks");
+
+    await expect(h.actions.install(installInput())).rejects.toMatchObject({
+      httpStatus: 409,
+      message: "This plugin changed since it was checked. Check it again.",
+    });
+    expect(h.state.keychain.size).toBe(0);
+    expect(await h.sync.list({ workspaceId: WORKSPACE_ID })).toEqual([]);
+  });
+
   it("refuses an unverified plugin that takes the id of one that ships with GoatCitadel", async () => {
     const h = harness({ trust: "unverified", builtInIds: ["other-plugin", PLUGIN_ID] });
 

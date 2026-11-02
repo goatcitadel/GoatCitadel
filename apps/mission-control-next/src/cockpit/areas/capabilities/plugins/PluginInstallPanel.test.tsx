@@ -617,3 +617,126 @@ describe("Plugin install panel: installing", () => {
     expect(text()).toContain("meeting-tools");
   });
 });
+
+describe("Plugin install panel: a Claude Code plugin", () => {
+  const IGNORED: CapabilityPluginInspection["ignored"] = [
+    {
+      kind: "manifest_field",
+      label: "userConfig",
+      path: ".claude-plugin/plugin.json",
+      reason: "GoatCitadel doesn't use it.",
+    },
+    { kind: "command", label: "go", path: "commands/go.md", reason: "A command runs only in Claude Code." },
+    { kind: "mcp_server", label: "local", path: ".mcp.json", reason: "It runs a program on this computer." },
+    { kind: "command", label: "stop", path: "commands/stop.md", reason: "A command runs only in Claude Code." },
+  ];
+  const WARNING = "Its pre-approved tools aren't kept. Your own tool rules and approvals apply.";
+  const claudeCodeInspection = (overrides: Partial<CapabilityPluginInspection> = {}) =>
+    inspectionOf([CALENDAR, { ...NOTES, warnings: [WARNING] }], {
+      trust: "unverified",
+      sourceKind: "folder",
+      sourceDisplay: "cc-notes",
+      sourceFormat: "claude_code",
+      claudeCode: { translatorVersion: 1, pluginJsonSha256: "e".repeat(64), coverage: { usable: 2, total: 5 } },
+      ignored: IGNORED,
+      ...overrides,
+    });
+  const titles = () => [...container.querySelectorAll("section h3")].map((heading) => heading.textContent);
+
+  it("labels a Claude Code plugin's source and marks it experimental", async () => {
+    await renderInspection(claudeCodeInspection());
+
+    const where = section("Where it comes from")!;
+    expect(where.textContent).toContain("Claude Code format · Unverified");
+    expect(where.textContent).toContain("GoatCitadel hasn't reviewed this plugin.");
+    const badge = where.querySelector("[data-tone]");
+    expect(badge?.textContent).toBe("Experimental");
+    expect(badge?.getAttribute("data-tone")).toBe("neutral");
+    expect(where.textContent).toContain(
+      "GoatCitadel reads this Claude Code plugin in its own way. It takes the skills and the apps it already knows, and leaves out the rest.",
+    );
+  });
+
+  it("leads with what GoatCitadel can use and what it leaves out", async () => {
+    await renderInspection(claudeCodeInspection());
+
+    expect(section("Where it comes from")?.textContent).toContain("GoatCitadel can use 2 of this plugin's 5 parts.");
+    expect(titles()).toEqual([
+      "What it is",
+      "Where it comes from",
+      "What it adds",
+      "What it leaves out",
+      "What happens next",
+    ]);
+  });
+
+  it("groups left-out parts by kind with their reasons", async () => {
+    await renderInspection(claudeCodeInspection());
+
+    const leftOut = section("What it leaves out")!;
+    expect([...leftOut.querySelectorAll("h4")].map((heading) => heading.textContent)).toEqual([
+      "Commands 2",
+      "Apps and servers 1",
+      "Other plugin details 1",
+    ]);
+    const rows = [...leftOut.querySelectorAll("li")].map((row) => row.textContent);
+    expect(rows).toEqual([
+      "goA command runs only in Claude Code.",
+      "stopA command runs only in Claude Code.",
+      "localIt runs a program on this computer.",
+      "userConfigGoatCitadel doesn't use it.",
+    ]);
+  });
+
+  it("shows the left-out list on a refused Claude Code check", async () => {
+    await renderInspection(
+      claudeCodeInspection({
+        pieces: [],
+        manifestSha256: "",
+        claudeCode: undefined,
+        refusal: { code: "NOTHING_TO_INSTALL", message: "GoatCitadel can't use any of this plugin's parts." },
+        installable: false,
+      }),
+    );
+
+    expect(alerts()).toEqual(["GoatCitadel can't use any of its parts.So it can't be installed."]);
+    const leftOut = section("What it leaves out")!;
+    expect(leftOut.textContent).toContain("A command runs only in Claude Code.");
+    // The left-out list comes before the refusal's lines.
+    const alert = container.querySelector('[role="alert"]')!;
+    expect(leftOut.compareDocumentPosition(alert) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(button("Install")).toBeUndefined();
+  });
+
+  it("shows each skill's warnings under it", async () => {
+    await renderInspection(claudeCodeInspection());
+
+    const rows = [...section("What it adds")!.querySelectorAll("li")];
+    const notes = rows.find((row) => row.textContent?.includes("Meeting notes"))!;
+    const warning = [...notes.querySelectorAll("p")].find((line) => line.textContent === WARNING);
+    expect(warning?.className).toContain("text-fg-muted");
+    expect(rows.find((row) => row.textContent?.includes("Calendar"))?.textContent).not.toContain(WARNING);
+  });
+
+  it("keeps paths and hashes inside Technical details", async () => {
+    await renderInspection(claudeCodeInspection());
+
+    expect(text()).not.toContain("commands/go.md");
+    expect(text()).not.toContain("e".repeat(64));
+    expect(text()).not.toContain("manifest_field");
+    prefs.showTechnicalDetails = true;
+    await render(INSPECTION_ID);
+    expect(text()).toContain("command: commands/go.md");
+    expect(text()).toContain("e".repeat(64));
+    expect(text()).toContain("translator 1");
+  });
+
+  it("shows nothing new for a GoatCitadel plugin", async () => {
+    await renderInspection(inspectionOf([CALENDAR, NOTES], { trust: "unverified", sourceKind: "git" }));
+
+    expect(text()).not.toContain("Claude Code");
+    expect(text()).not.toContain("Experimental");
+    expect(text()).not.toContain("GoatCitadel can use");
+    expect(section("What it leaves out")).toBeUndefined();
+  });
+});

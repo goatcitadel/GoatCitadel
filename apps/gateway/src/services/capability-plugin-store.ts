@@ -1,6 +1,7 @@
 import {
   ConflictError,
   redactStructuredSecrets,
+  type CapabilityPluginIgnoredPart,
   type CapabilityPluginInspection,
   type PluginPieceKind,
   type PluginPin,
@@ -44,6 +45,21 @@ export interface StoredPluginPiece {
    * as kept (`owned` is then false), and nothing removes it.
    */
   handedOver?: true;
+  /** Plain lines from the check: how this piece of a Claude Code plugin behaves differently here. */
+  warnings?: string[];
+}
+
+/**
+ * What an installed Claude Code plugin keeps of its translation, so its detail and its uninstall read the manifest it
+ * was installed from even after a release changes the translator or the connector catalog.
+ */
+export interface StoredClaudeCodeImport {
+  translatorVersion: number;
+  pluginJsonSha256: string;
+  /** The generated goatcitadel-plugin.json text installed; its SHA-256 is the record's manifestSha256. */
+  manifestText: string;
+  ignored: CapabilityPluginIgnoredPart[];
+  coverage: { usable: number; total: number };
 }
 
 export interface StoredPlugin {
@@ -64,6 +80,10 @@ export interface StoredPlugin {
   /** The plan removing it, from the moment its uninstall starts applying. */
   uninstallPlanId?: string;
   pieces: StoredPluginPiece[];
+  /** Only for a Claude Code plugin. Absent on a record saved before Claude Code imports: GoatCitadel's own format. */
+  sourceFormat?: "claude_code";
+  /** Only for an installed Claude Code plugin: its translation, as installed. An inspection never keeps one. */
+  claudeCode?: StoredClaudeCodeImport;
 }
 
 /** An uninstalled plugin, remembered so the skills it left behind read as removed with it. */

@@ -10,6 +10,7 @@ import {
 } from "@goatcitadel/contracts";
 import type { EvolutionControlPlaneAdapterOutcome } from "./evolution-control-plane-adapter.js";
 import type { PluginInstallSettings } from "./plugin-install-change-plan-adapter.js";
+import type { SnapshotManifestParse } from "./plugin-snapshot-manifest.js";
 import {
   boundedSentences,
   failureDetail,
@@ -44,6 +45,8 @@ export interface InstallBinding {
   readonly manifest: PluginManifest;
   readonly treeSha256: string;
   readonly views: ReadonlyMap<string, CapabilityPluginPieceView>;
+  /** A Claude Code plugin's translation, as read again when the plan bound. */
+  readonly claudeCode?: SnapshotManifestParse["claudeCode"];
 }
 
 /** What an apply has done so far, read by the summary of a finished or a stopped install. */

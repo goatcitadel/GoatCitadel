@@ -1162,6 +1162,24 @@ Expected:
 
 Result:
 
+### PLUGIN-02 Claude Code plugin from a folder (experimental)
+
+Steps:
+
+1. Make a folder holding a Claude Code plugin: `.claude-plugin/plugin.json` with a `name`; two skills under `skills/` (one with `allowed-tools` and `$ARGUMENTS`, one with a `references/` file); `.mcp.json` with one server whose address matches a shipped connector template (such as `https://learn.microsoft.com/api/mcp`), one stdio server and one unmatched address; a command, an agent and `hooks/hooks.json`.
+2. In Capabilities › Plugins, choose Add from folder and check it, at desktop and phone widths, in light and dark themes.
+3. Install it with "Apply my Settings and Capabilities changes without asking first" on, take each skill through its two steps, then uninstall it.
+4. Check a Claude Code plugin with only commands and agents, and one whose skill holds a shell line (`` !`date` ``).
+
+Expected:
+
+- The panel reads "Claude Code format · Unverified" with a neutral Experimental label, "GoatCitadel can use N of this plugin's M parts.", and "What it leaves out" grouped as Commands, Subagents, Hooks, Apps and servers, then Other plugin details, each part with its reason. These come before "What happens next".
+- Each skill shows its warnings under it; paths and hashes show only in Technical details.
+- Install adds the skills and the matched connector (switched off, reads free and changes ask); nothing left out runs. Uninstall removes them, and the connector's host stays allowed.
+- The commands-and-agents plugin is refused as nothing GoatCitadel can use, with its full left-out list; the shell-line skill is blocked in plain words.
+
+Result:
+
 ## Library: Memory, Knowledge, Notes
 
 ### LIB-MEM-01 Memory List, Edit, Forget, History

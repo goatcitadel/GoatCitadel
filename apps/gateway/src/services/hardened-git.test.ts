@@ -239,6 +239,27 @@ describe("what counts as a Git failure", () => {
     expect(isGitProcessFailure(Object.assign(new Error("aborted"), { name: "AbortError" }))).toBe(true);
   });
 
+  it("fetches a plugin's executable file as a plain file", async () => {
+    const root = fs.mkdtempSync(path.join(scratchRoot, "exec-"));
+    const work = path.join(root, "work");
+    fs.mkdirSync(work);
+    git(work, "init", "--quiet", "--initial-branch=main");
+    writeFiles(work, { "skills/one/SKILL.md": "one", "bin/run.sh": "#!/bin/sh\necho hi\n" });
+    git(work, "add", "-A");
+    git(work, "update-index", "--chmod=+x", "bin/run.sh");
+    git(work, "commit", "--quiet", "-m", "exec");
+    const bare = path.join(root, "bare.git");
+    git(root, "clone", "--quiet", "--bare", work, bare);
+    const destDir = freshDest();
+
+    await __fetchGitTreeForTests({ url: pathToFileURL(bare).href, destDir, limits: LIMITS });
+
+    expect(listFiles(destDir)).toEqual({ "skills/one/SKILL.md": "one", "bin/run.sh": "#!/bin/sh\necho hi\n" });
+    if (process.platform !== "win32") {
+      expect(fs.statSync(path.join(destDir, "bin", "run.sh")).mode & 0o111).toBe(0);
+    }
+  });
+
   it("passes a file system failure through fetchGitTree unchanged", async () => {
     const failure = Object.assign(new Error(`EPERM: operation not permitted, mkdir '${scratchRoot}'`), {
       code: "EPERM",
@@ -419,6 +440,12 @@ describe("the tree rules the Git readers share", () => {
       "Git plugin tree contains a symlink, submodule, or unsupported object at link.",
     );
     expect(() => parseBoundedGitTree(`100755 blob ${oid}\trun.sh\0`, pluginOptions)).toThrow(GitTreeRefusedError);
+    expect(parseBoundedGitTree(`100755 blob ${oid}\trun.sh\0`, { ...pluginOptions, executableAsPlain: true })).toEqual([
+      { objectId: oid, relativePath: "run.sh", bytes: 0 },
+    ]);
+    expect(() =>
+      parseBoundedGitTree(`120000 blob ${oid}\tlink\0`, { ...pluginOptions, executableAsPlain: true }),
+    ).toThrow(GitTreeRefusedError);
     expect(() => parseBoundedGitTree(`100644 blob ${oid}\t.git/config\0`, pluginOptions)).toThrow(
       "Git plugin tree contains a non-portable path: .git/config.",
     );

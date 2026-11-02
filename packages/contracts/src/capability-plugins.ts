@@ -1,4 +1,11 @@
-import type { PluginManifestRefusalCode, PluginPieceKind, PluginPin, PluginSource, PluginTrust } from "./plugins.js";
+import type {
+  PluginManifestRefusalCode,
+  PluginPieceKind,
+  PluginPin,
+  PluginSource,
+  PluginSourceFormat,
+  PluginTrust,
+} from "./plugins.js";
 
 // ---------------------------------------------------------------------------
 // Capabilities › Plugins: what the Gateway answers about a plugin before and after it is installed.
@@ -6,6 +13,71 @@ import type { PluginManifestRefusalCode, PluginPieceKind, PluginPin, PluginSourc
 // The Gateway fetches the source, reads the manifest and checks every piece with that piece's own owner. Mission
 // Control only renders these answers; it never decides whether a piece passes or a plugin can be installed.
 // ---------------------------------------------------------------------------
+
+/** What kind of part of a Claude Code plugin GoatCitadel left out. */
+export type CapabilityPluginIgnoredKind =
+  | "command"
+  | "agent"
+  | "hook"
+  | "mcp_server"
+  | "output_style"
+  | "lsp_server"
+  | "monitor"
+  | "executable"
+  | "settings"
+  | "skill"
+  | "manifest_field";
+
+export const CAPABILITY_PLUGIN_IGNORED_KINDS: readonly CapabilityPluginIgnoredKind[] = [
+  "command",
+  "agent",
+  "hook",
+  "mcp_server",
+  "output_style",
+  "lsp_server",
+  "monitor",
+  "executable",
+  "settings",
+  "skill",
+  "manifest_field",
+];
+
+/** One part of a foreign plugin format that GoatCitadel left out, and why. */
+export interface CapabilityPluginIgnoredPart {
+  /** Relative to the plugin, `/` separators; shown only in Technical details. */
+  path: string;
+  kind: CapabilityPluginIgnoredKind;
+  /** A plain name: the file's name without `.md`, the server's or event's name, or the manifest key. */
+  label: string;
+  /** A plain line written by the Gateway: why it was left out. */
+  reason: string;
+}
+
+/** What the Gateway recorded when it translated a Claude Code plugin into a GoatCitadel manifest. */
+export interface CapabilityPluginClaudeCodeImport {
+  translatorVersion: number;
+  /** Lowercase hex SHA-256 of `.claude-plugin/plugin.json`'s bytes. */
+  pluginJsonSha256: string;
+  /** Parts GoatCitadel can use (pieces), of all parts (pieces plus left-out parts that aren't manifest fields). */
+  coverage: { usable: number; total: number };
+}
+
+/** Which manifest a record was read from. A record saved before Claude Code imports carries none: GoatCitadel's own. */
+export function capabilityPluginSourceFormat(record: { sourceFormat?: PluginSourceFormat }): PluginSourceFormat {
+  return record.sourceFormat ?? "goatcitadel";
+}
+
+/** Whether a value read back from storage is a left-out part, with every field. */
+export function isCapabilityPluginIgnoredPart(value: unknown): value is CapabilityPluginIgnoredPart {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const part = value as Record<string, unknown>;
+  return (
+    typeof part.path === "string" &&
+    typeof part.label === "string" &&
+    typeof part.reason === "string" &&
+    (CAPABILITY_PLUGIN_IGNORED_KINDS as readonly unknown[]).includes(part.kind)
+  );
+}
 
 /** One piece's check: it passes, it is already there (and stays when the plugin is uninstalled), or it is blocked. */
 export type CapabilityPluginPieceCheck =
@@ -27,6 +99,8 @@ export interface CapabilityPluginPieceView {
   skillSnapshotId?: string;
   /** A hook piece needs a signing secret before it can be installed. */
   needsSecret?: boolean;
+  /** Plain lines written by the Gateway: how this piece of a Claude Code plugin behaves differently here. */
+  warnings?: string[];
 }
 
 export interface CapabilityPluginInspection {
@@ -47,7 +121,11 @@ export interface CapabilityPluginInspection {
   manifestSha256: string;
   pieces: CapabilityPluginPieceView[];
   /** Parts of a foreign plugin format that were left out. Always empty for a GoatCitadel manifest. */
-  ignored: { path: string; reason: string }[];
+  ignored: CapabilityPluginIgnoredPart[];
+  /** Which manifest it was read from. Absent reads `"goatcitadel"`. */
+  sourceFormat?: PluginSourceFormat;
+  /** Only for `"claude_code"`, once its plugin.json was read. */
+  claudeCode?: CapabilityPluginClaudeCodeImport;
   /** Why the manifest was refused; `field` names where, such as `pieces[2].mode`. */
   refusal?: { code: PluginManifestRefusalCode | string; message: string; field?: string };
   /** No refusal, and every piece is ready or already there. */
@@ -72,6 +150,8 @@ export interface CapabilityPluginListItem {
   sourceDisplay: string;
   state: CapabilityPluginState;
   pieceCounts: Partial<Record<PluginPieceKind, number>>;
+  /** Which manifest it was read from. Absent reads `"goatcitadel"`. */
+  sourceFormat?: PluginSourceFormat;
 }
 
 /** A plugin GoatCitadel has a record of: the list item, with where it was installed and where it came from. */
@@ -132,6 +212,9 @@ export interface CapabilityPluginDetail extends CapabilityPluginInstalledItem {
   installPlanId: string;
   installedAt: string;
   pieces: CapabilityPluginDetailPiece[];
+  /** The parts of a Claude Code plugin GoatCitadel left out when it was installed. */
+  ignored?: CapabilityPluginIgnoredPart[];
+  claudeCode?: CapabilityPluginClaudeCodeImport;
 }
 
 /**

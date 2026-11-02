@@ -47,6 +47,15 @@ afterEach(() => {
 });
 
 describe("Plugin source form", () => {
+  it("says which Git repositories it reads, and nothing of the kind for a folder", async () => {
+    await render("git");
+    expect(container.textContent).toContain(
+      "A GoatCitadel plugin, or a Claude Code plugin whose repository is the plugin itself.",
+    );
+    await render("folder");
+    expect(container.textContent).not.toContain("Claude Code");
+  });
+
   it("refuses a Git address that isn't https before checking", async () => {
     await render("git");
     expect(labels()).toEqual(["Git repository address*", "Commit, branch or tag"]);

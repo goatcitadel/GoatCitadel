@@ -18,6 +18,7 @@ import type {
 import { buildApp } from "./app.js";
 import { CapabilityPluginStore } from "./services/capability-plugin-store.js";
 import { GatewayService } from "./services/gateway-service.js";
+import { MCP_SERVER_TEMPLATES } from "./services/mcp-server-templates.js";
 
 /**
  * Installing a plugin over the real Gateway: its route, the real Change Plan control plane and the real owners of every
@@ -415,6 +416,149 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     });
   });
 
+  describe("a Claude Code plugin", () => {
+    const UNINSTALL_URL = "/api/v1/capabilities/plugins/uninstall";
+    const ccDetailUrl = `/api/v1/capabilities/plugins/detail?pluginId=cc-notes&workspaceId=${WORKSPACE_ID}`;
+    const readCcDetail = async () => {
+      const response = await inject("GET", ccDetailUrl);
+      expect(response.statusCode, response.body).toBe(200);
+      return response.json<CapabilityPluginDetail>();
+    };
+    const readAllowlist = async () =>
+      (await inject("GET", "/api/v1/settings")).json<{ networkAllowlist: string[] }>().networkAllowlist;
+
+    /** Takes the Microsoft Learn template out of the shipped catalog while `run` runs, as a later release might. */
+    async function withoutLearnTemplate<T>(run: () => Promise<T>): Promise<T> {
+      const index = MCP_SERVER_TEMPLATES.findIndex((template) => template.templateId === "microsoft-learn");
+      expect(index).toBeGreaterThanOrEqual(0);
+      const [learn] = MCP_SERVER_TEMPLATES.splice(index, 1);
+      try {
+        return await run();
+      } finally {
+        MCP_SERVER_TEMPLATES.splice(index, 0, learn!);
+      }
+    }
+
+    async function inspectCcNotes(): Promise<CapabilityPluginInspection> {
+      const pluginDir = path.join(root, "sources", "cc-notes");
+      if (!fs.existsSync(pluginDir)) writeClaudeCodePlugin(pluginDir);
+      const created = await inject("POST", INSPECTIONS_URL, {
+        workspaceId: WORKSPACE_ID,
+        source: { kind: "folder", path: pluginDir },
+      });
+      expect(created.statusCode, created.body).toBe(201);
+      const inspection = created.json<CapabilityPluginInspection>();
+      expect(inspection, JSON.stringify(inspection.pieces)).toMatchObject({
+        sourceFormat: "claude_code",
+        installable: true,
+      });
+      return inspection;
+    }
+
+    it("refuses to apply when the translation changed since the check", async () => {
+      const inspection = await inspectCcNotes();
+
+      // A release between the check and the install drops the template the server matched.
+      const refused = await withoutLearnTemplate(() =>
+        inject("POST", INSTALL_URL, { workspaceId: WORKSPACE_ID, inspectionId: inspection.inspectionId }),
+      );
+
+      expect(refused.statusCode, refused.body).toBe(409);
+      expect(refused.json()).toMatchObject({ error: "This plugin changed since it was checked. Check it again." });
+      await expect(new CapabilityPluginStore(gateway!.storage.systemSettings).get("cc-notes")).resolves.toBeUndefined();
+    });
+
+    it("installs a Claude Code plugin's skills and matched connector", async () => {
+      const inspection = await inspectCcNotes();
+
+      const installed = await inject("POST", INSTALL_URL, {
+        workspaceId: WORKSPACE_ID,
+        inspectionId: inspection.inspectionId,
+      });
+
+      expect(installed.statusCode, installed.body).toBe(202);
+      const outcome = installed.json<PluginActionOutcome>();
+      expect(outcome.outcome, outcome.summary).toBe("applied");
+      const servers = (await inject("GET", "/api/v1/mcp/servers")).json<{ items: McpServerRecord[] }>().items;
+      expect(servers.find((item) => item.label === "Microsoft Learn")).toMatchObject({
+        enabled: false,
+        pluginOwner: { pluginId: "cc-notes", installPlanId: outcome.planId },
+        policy: { approvalPosture: "reads_free" },
+      });
+      expect(await readAllowlist()).toContain("learn.microsoft.com");
+      // The skill goes through the Skills tab's own two steps.
+      const skillPiece = async () => (await readCcDetail()).pieces.find((piece) => piece.kind === "skill");
+      const snapshotId = (await skillPiece())!.skillSnapshotId!;
+      for (const [operationKind, settled] of [
+        ["install_inactive", "installed_off"],
+        ["activate", "added"],
+      ] as const) {
+        const step = await inject("POST", SKILL_STEPS_URL, { workspaceId: WORKSPACE_ID, snapshotId, operationKind });
+        expect(step.statusCode, step.body).toBe(202);
+        await vi.waitFor(async () => expect((await skillPiece())?.state).toBe(settled), STEP_WAIT);
+      }
+      expect((await readCcDetail()).state).toBe("installed");
+    });
+
+    it("lists a Claude Code plugin with its format", async () => {
+      const listed = (
+        await inject("GET", `/api/v1/capabilities/plugins?workspaceId=${WORKSPACE_ID}`)
+      ).json<CapabilityPluginListResponse>();
+      expect(listed.installed.find((item) => item.pluginId === "cc-notes")).toMatchObject({
+        sourceFormat: "claude_code",
+        trust: "unverified",
+      });
+      expect(listed.installed.find((item) => item.pluginId === "reference-plugin")).not.toHaveProperty("sourceFormat");
+    });
+
+    it("keeps the left-out list, coverage and warnings on the installed plugin", async () => {
+      const detail = await readCcDetail();
+      expect(detail).toMatchObject({
+        sourceFormat: "claude_code",
+        claudeCode: { translatorVersion: 1, coverage: { usable: 2, total: 4 } },
+      });
+      expect(detail.ignored?.map((part) => [part.kind, part.label])).toEqual([
+        ["command", "go"],
+        ["mcp_server", "local"],
+      ]);
+      expect(detail.pieces.map((piece) => [piece.kind, piece.warnings])).toEqual([
+        ["skill", ["Its pre-approved tools aren't kept. Your own tool rules and approvals apply."]],
+        ["connector", undefined],
+      ]);
+      const record = await new CapabilityPluginStore(gateway!.storage.systemSettings).get("cc-notes");
+      expect(record?.claudeCode?.manifestText).toEqual(expect.any(String));
+      expect(JSON.stringify(detail)).not.toContain("manifestText");
+    });
+
+    it("reads an installed plugin's manifest from its record after the translation changes", async () => {
+      const detail = await withoutLearnTemplate(() => readCcDetail());
+      // Read again, the translation would no longer hold the connector, and every piece would read by its id
+      // ("connector-1"). The record's kept text still names its template, which labels it while the catalog lacks it.
+      expect(detail.pieces.map((piece) => [piece.kind, piece.pieceId, piece.label])).toEqual([
+        ["skill", "cc-notes", "cc-notes"],
+        ["connector", "connector-1", "microsoft-learn"],
+      ]);
+      expect((await readCcDetail()).pieces[1]?.label).toBe("Microsoft Learn");
+    });
+
+    it("uninstalls a Claude Code plugin and leaves its hosts allowed", async () => {
+      const allowed = await readAllowlist();
+      expect(allowed).toContain("learn.microsoft.com");
+
+      const removed = await withoutLearnTemplate(() =>
+        inject("POST", UNINSTALL_URL, { workspaceId: WORKSPACE_ID, pluginId: "cc-notes" }),
+      );
+
+      expect(removed.statusCode, removed.body).toBe(202);
+      const outcome = removed.json<PluginActionOutcome>();
+      expect(outcome.outcome, outcome.summary).toBe("applied");
+      const servers = (await inject("GET", "/api/v1/mcp/servers")).json<{ items: McpServerRecord[] }>().items;
+      expect(servers.find((item) => item.label === "Microsoft Learn")).toBeUndefined();
+      expect(await readAllowlist()).toEqual(allowed);
+      await expect(new CapabilityPluginStore(gateway!.storage.systemSettings).get("cc-notes")).resolves.toBeUndefined();
+    });
+  });
+
   it("can't be created from Chat or the generic plan route", async () => {
     const plans = (await gateway!.storage.changePlans.list({ workspaceId: WORKSPACE_ID, limit: 200 })).length;
     const request = {
@@ -443,6 +587,35 @@ function writePlugin(pluginDir: string, manifest: object, files: Record<string, 
   for (const [relativePath, content] of Object.entries({
     ...files,
     "goatcitadel-plugin.json": JSON.stringify(manifest, null, 2),
+  })) {
+    const target = path.join(pluginDir, ...relativePath.split("/"));
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, content, "utf8");
+  }
+}
+
+/** A Claude Code plugin: a skill with pre-approved tools, a server matching a shipped template, a stdio server, a command. */
+function writeClaudeCodePlugin(pluginDir: string): void {
+  const skill = [
+    "---",
+    "name: cc-notes",
+    "description: Takes notes in meetings.",
+    "allowed-tools: Read",
+    "metadata:",
+    "  version: 1.0.0",
+    "  tools: [memory.read]",
+    "---",
+    "",
+    "Take short notes and list the actions.",
+    "",
+  ].join("\n");
+  for (const [relativePath, content] of Object.entries({
+    ".claude-plugin/plugin.json": JSON.stringify({ name: "cc-notes", description: "Notes from Claude Code." }),
+    "skills/cc-notes/SKILL.md": skill,
+    ".mcp.json": JSON.stringify({
+      mcpServers: { learn: { type: "http", url: "https://learn.microsoft.com/api/mcp" }, local: { command: "node" } },
+    }),
+    "commands/go.md": "Go.\n",
   })) {
     const target = path.join(pluginDir, ...relativePath.split("/"));
     fs.mkdirSync(path.dirname(target), { recursive: true });

@@ -1,7 +1,14 @@
 import type { ReactNode } from "react";
 import type { CapabilityPluginDetail, CapabilityPluginInspection } from "@goatcitadel/contracts";
 import { Section } from "../../../ui/Section";
-import { PLUGIN_TRUST_LABELS } from "./plugin-view";
+import { StatusBadge } from "../../../ui/StatusBadge";
+import {
+  CLAUDE_CODE_READING_LINE,
+  EXPERIMENTAL_LABEL,
+  coverageLine,
+  isClaudeCodeFormat,
+  pluginTrustLine,
+} from "./plugin-format-view";
 import { SIGN_IN_NEXT, SKIP_ON_NEXT, UNVERIFIED_WARNING, skipOffNext, sourceLine } from "./plugin-install-view";
 
 /** What the panel shows a plugin from: its inspection before the install, its detail after. */
@@ -28,19 +35,38 @@ export function WhereItComesFrom({
   plugin,
   children,
 }: {
-  plugin: Pick<ShownPlugin, "sourceKind" | "sourceDisplay" | "pin" | "trust">;
+  plugin: Pick<ShownPlugin, "sourceKind" | "sourceDisplay" | "pin" | "trust" | "sourceFormat" | "claudeCode">;
   /** Technical details about the source (the full pin, the folder path). */
   children?: ReactNode;
 }) {
+  const claudeCode = isClaudeCodeFormat(plugin);
   return (
     <Section title="Where it comes from" headingLevel={3}>
       <div className="space-y-1">
         <p>{sourceLine(plugin)}</p>
-        <p>{PLUGIN_TRUST_LABELS[plugin.trust]}</p>
+        <p>{pluginTrustLine(plugin)}</p>
         {plugin.trust === "unverified" ? <p>{UNVERIFIED_WARNING}</p> : null}
+        {claudeCode ? (
+          <>
+            <StatusBadge status={{ label: EXPERIMENTAL_LABEL, tone: "neutral" }} />
+            <p>{CLAUDE_CODE_READING_LINE}</p>
+            {plugin.claudeCode ? <p>{coverageLine(plugin.claudeCode.coverage)}</p> : null}
+          </>
+        ) : null}
         {children}
       </div>
     </Section>
+  );
+}
+
+/** A Claude Code plugin's translator version and plugin.json hash, for Technical details; nothing for any other. */
+export function ClaudeCodeDetails({ plugin }: { plugin: Pick<ShownPlugin, "claudeCode"> }) {
+  if (!plugin.claudeCode) return null;
+  return (
+    <>
+      <p>{`translator ${plugin.claudeCode.translatorVersion}`}</p>
+      <p>{plugin.claudeCode.pluginJsonSha256}</p>
+    </>
   );
 }
 

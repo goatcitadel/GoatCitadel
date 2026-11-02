@@ -11,7 +11,6 @@ import {
   type McpServerCreateInput,
   type McpServerRecord,
   type McpServerTemplateRecord,
-  type PluginManifestParse,
   type PluginPiece,
 } from "@goatcitadel/contracts";
 import type { StoredPlugin, StoredPluginPiece } from "./capability-plugin-store.js";
@@ -39,6 +38,7 @@ import {
   type InstallStep,
 } from "./plugin-install-words.js";
 import type { PluginPass } from "./plugin-owned-refusal.js";
+import { claudeCodeRecordFields, type SnapshotManifestParse } from "./plugin-snapshot-manifest.js";
 import {
   HOSTS_STAY,
   OTHER_WORKSPACE_MESSAGE,
@@ -115,8 +115,8 @@ export interface PluginInstallSources {
   ): Promise<void>;
   /** `PluginSnapshotStore.verify`: the snapshot's files still hash to its name, or a 409. */
   verifySnapshot(treeSha256: string): Promise<void>;
-  /** The manifest, read from the snapshot. */
-  readManifest(treeSha256: string): Promise<PluginManifestParse>;
+  /** The manifest, read again from the snapshot: a Claude Code plugin is translated again. */
+  readManifest(treeSha256: string): Promise<SnapshotManifestParse>;
   /** A file in the snapshot, as UTF-8 text. */
   readSnapshotText(treeSha256: string, relativePath: string): Promise<string>;
   /** The shipped connector catalog. */
@@ -383,7 +383,7 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
     }
     const installed = await this.sources.readPlugin(manifest.pluginId);
     if (installed) throw pluginAlreadyInstalled(installed);
-    return { inspection, manifest, treeSha256: request.snapshotTreeSha256, views };
+    return { inspection, manifest, treeSha256: request.snapshotTreeSha256, views, claudeCode: parsed.claudeCode };
   }
 
   /** Step 1: the record, listing every piece. A piece that was already there is kept, not owned. */
@@ -411,8 +411,10 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
           kind: piece.kind,
           owned: view?.check.status !== "already_there",
           ...(piece.kind === "skill" && view?.skillSnapshotId ? { skillSnapshotId: view.skillSnapshotId } : {}),
+          ...(view?.warnings?.length ? { warnings: [...view.warnings] } : {}),
         };
       }),
+      ...claudeCodeRecordFields(inspection, binding.claudeCode),
     };
     await this.sources.updatePlugin(manifest.pluginId, (current) => {
       if (current) throw pluginAlreadyInstalled(current);

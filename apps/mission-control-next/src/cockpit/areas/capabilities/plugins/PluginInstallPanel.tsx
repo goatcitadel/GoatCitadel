@@ -9,7 +9,8 @@ import { Button } from "../../../ui/Button";
 import { Section } from "../../../ui/Section";
 import { TechnicalDetails } from "../../../ui/TechnicalDetails";
 import { CANT_BE_INSTALLED } from "./plugin-check-copy";
-import { WhatHappensNext, WhatItIs, WhereItComesFrom, type ShownPlugin } from "./PluginInstallAbout";
+import { ClaudeCodeDetails, WhatHappensNext, WhatItIs, WhereItComesFrom, type ShownPlugin } from "./PluginInstallAbout";
+import { PluginLeftOut } from "./PluginLeftOut";
 import { PluginInstallProgress } from "./PluginInstallProgress";
 import { PluginPieceList } from "./PluginPieceList";
 import { PluginSourceForm } from "./PluginSourceForm";
@@ -69,6 +70,7 @@ function SourceDetails({ plugin, source }: { plugin: ShownPlugin; source: Plugin
         {source?.kind === "folder" ? <p>{source.path}</p> : null}
         <p>{plugin.pin.kind === "commit" ? plugin.pin.commit : plugin.pin.treeSha256}</p>
         {plugin.manifestSha256 ? <p>{plugin.manifestSha256}</p> : null}
+        <ClaudeCodeDetails plugin={plugin} />
       </div>
     </TechnicalDetails>
   );
@@ -246,6 +248,8 @@ function PluginInstallBody({
           {...(secrets.ids.length > 0 ? { secrets: secrets.values, onSecret: secrets.set } : {})}
         />
       ) : null}
+      {/* Before what happens next, and above a refusal's lines: what GoatCitadel leaves out of a Claude Code plugin. */}
+      {plugin ? <PluginLeftOut ignored={plugin.ignored} /> : null}
       {state.phase === "ready" ? <WhatHappensNext inspection={state.inspection} skip={skip} /> : null}
       <PluginInstallProgress
         flow={flow}

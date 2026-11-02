@@ -234,7 +234,7 @@ A Verified tier can come later if there is ever a reviewed external list.
 
 **Ownership and uninstall.** Pieces a plugin added show "From plugin X" and can't be edited individually, the same way Hermes treats plugin-supplied MCP servers. Uninstall removes exactly the pieces that plugin added, never ones the operator installed separately.
 
-**Claude Code plugin format.** Investigate this as a spike before promising it. A Claude Code plugin is `.claude-plugin/plugin.json` with `skills/` (the same SKILL.md format) and `.mcp.json`. Importing its skills and MCP servers as a GoatCitadel plugin looks feasible. Its commands, agents and hooks probably don't map, and would be listed as "not supported, ignored" in the panel. The spike ran on 2026-11-01 (`2026-11-01-claude-code-plugin-import-spike.md`) and corrects this paragraph. The two formats share the `SKILL.md` folder shape but not its frontmatter, so skills would come across only through a translation, labelled experimental. MCP import would cover only remote `http`/`sse` servers that exactly match a connector template GoatCitadel ships. stdio servers and other remote servers are left out. Phase 5 waits on the operator's answers there.
+**Claude Code plugin format.** Investigate this as a spike before promising it. A Claude Code plugin is `.claude-plugin/plugin.json` with `skills/` (the same SKILL.md format) and `.mcp.json`. Importing its skills and MCP servers as a GoatCitadel plugin looks feasible. Its commands, agents and hooks probably don't map, and would be listed as "not supported, ignored" in the panel. The spike ran on 2026-11-01 (`2026-11-01-claude-code-plugin-import-spike.md`) and corrects this paragraph. The two formats share the `SKILL.md` folder shape but not its frontmatter, so skills would come across only through a translation, labelled experimental. MCP import would cover only remote `http`/`sse` servers that exactly match a connector template GoatCitadel ships. stdio servers and other remote servers are left out. Phase 5 shipped at that narrow scope, labelled experimental (`2026-11-02-capabilities-hub-phase-5.md`): skills through a Claude Code frontmatter dialect, remote connectors that exactly match a shipped template, trust always Unverified, a Git source only when it is the plugin itself, and every other part listed as left out.
 
 **Removals:**
 - The Arena add-on, the add-ons service and its `/api/v1/addons/*` routes, add-on dashboard slots, and the Settings › Add-ons & packs page.
@@ -271,7 +271,7 @@ Each phase is its own PR, cut from `main`:
 2. **Tools.** The group map, the group on/off setting in policy, the call-count route and the Tools tab.
 3. **Skills.** Category metadata, the Skills tab and one-step install.
 4. **Plugins.** The bundle model on capability packs, Git and folder install, the removals (Arena, add-ons, integration plugins) and the Plugins tab.
-5. **Optional: Claude Code plugin import.** Only if the spike says it's sound.
+5. **Optional: Claude Code plugin import.** Shipped at the narrow scope, experimental: skills and exactly matched remote connectors only.
 
 ## Borrowed from Hermes
 

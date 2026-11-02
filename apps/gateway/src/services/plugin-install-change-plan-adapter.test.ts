@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { ConflictError, FeatureDisabledError, type ChangePlanRecord } from "@goatcitadel/contracts";
+import {
+  ConflictError,
+  FeatureDisabledError,
+  parsePluginManifest,
+  type ChangePlanRecord,
+} from "@goatcitadel/contracts";
 import { pluginToolGroupHolds } from "./capability-plugin-store.js";
 import { builtinDefinitionRevision } from "./prompt-pack/builtin-definition.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
@@ -820,6 +825,47 @@ describe("installing a plugin through one Change Plan", () => {
       httpStatus: 409,
       message: "This plugin changed since it was checked. Check it again.",
     });
+  });
+
+  it("keeps the left-out list, coverage and warnings on the installed plugin", async () => {
+    const h = harness({ manifest: { ...FULL_MANIFEST, pieces: [FULL_MANIFEST.pieces[1]] }, views: [fullViews()[1]!] });
+    const ignored = [{ path: "commands/go.md", kind: "command" as const, label: "go", reason: "A command." }];
+    const warnings = ["GoatCitadel signs in its own way. The plugin's own sign-in settings aren't used."];
+    h.state.inspection = {
+      ...h.state.inspection,
+      sourceFormat: "claude_code",
+      claudeCode: { translatorVersion: 1, pluginJsonSha256: "c".repeat(64), coverage: { usable: 1, total: 2 } },
+      ignored,
+      pieces: h.state.inspection.pieces.map((view) => ({ ...view, warnings })),
+    };
+    const translation = { translatorVersion: 1, pluginJsonSha256: "c".repeat(64), manifestText: h.state.manifestText };
+    h.sources.readManifest.mockImplementation(async () => ({
+      ...parsePluginManifest(h.state.manifestText),
+      claudeCode: translation,
+    }));
+
+    const settled = await h.confirm(await h.plans.create({ actor: OPERATOR, request: h.pluginRequest() }));
+
+    expect(settled.status, settled.result?.summary).toBe("completed");
+    expect(await h.store.get(PLUGIN_ID)).toMatchObject({
+      sourceFormat: "claude_code",
+      claudeCode: { ...translation, ignored, coverage: { usable: 1, total: 2 } },
+      pieces: [{ pieceId: "issues", kind: "connector", owned: true, warnings }],
+    });
+  });
+
+  it("refuses to apply when the translation changed since the check", async () => {
+    const h = harness();
+    const plan = await planFor(h);
+    // A release between the plan and apply translates the same snapshot into another manifest.
+    h.state.manifestText = h.state.manifestText.replace("Notes and checks", "Notes, checks");
+
+    const settled = await h.confirm(plan);
+
+    expect(settled.status).toBe("failed");
+    expect(settled.result?.summary).toBe("This plugin changed since it was checked. Check it again.");
+    expect(h.state.order).toEqual([]);
+    expect(await h.store.get(PLUGIN_ID)).toBeUndefined();
   });
 
   it("refuses a plugin that was installed between the plan and apply", async () => {

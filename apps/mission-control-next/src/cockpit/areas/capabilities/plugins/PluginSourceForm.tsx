@@ -4,6 +4,7 @@ import { Button } from "../../../ui/Button";
 import { Field } from "../../../ui/Field";
 import { cockpitInputClass } from "../../../ui/input-class";
 import { sendableAddress } from "../skills/SkillGitImport";
+import { GIT_SOURCE_HINT } from "./plugin-format-view";
 import type { PluginSourceFormKind } from "./plugin-links";
 
 const NO_FOLDER = "Enter the folder's full path.";
@@ -103,6 +104,7 @@ function SourceFields({
   }
   return (
     <>
+      <p className="text-sm text-fg-secondary">{GIT_SOURCE_HINT}</p>
       <Field label="Git repository address" help="From GitHub, GitLab, Bitbucket or Codeberg" {...shown} required>
         {(props) => <TextInput {...props} url value={address} onValue={onAddress} />}
       </Field>

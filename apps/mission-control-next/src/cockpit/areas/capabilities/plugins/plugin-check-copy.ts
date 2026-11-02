@@ -17,11 +17,14 @@ export const PLUGIN_REFUSAL_COPY: Readonly<Record<PluginManifestRefusalCode, str
   PRESET_MUST_TIGHTEN: "It tries to loosen a safety rule, but plugins can only tighten them.",
   UNKNOWN_PIECE_KIND: "It includes a kind of piece GoatCitadel doesn't support.",
   PIECE_PATH_INVALID: "One of its file paths points outside the plugin.",
-  // The file's name stays: it is what the plugin's author has to add.
-  MANIFEST_MISSING: "There's no goatcitadel-plugin.json at its top level.",
+  // The files' names stay: they are what the plugin's author has to add.
+  MANIFEST_MISSING: "There's no goatcitadel-plugin.json or .claude-plugin/plugin.json at its top level.",
   MANIFEST_TOO_LARGE: "Its goatcitadel-plugin.json is too large for GoatCitadel to read.",
   DUPLICATE_PIECE_ID: "Two of its pieces have the same id.",
   MANIFEST_INVALID: "Its goatcitadel-plugin.json isn't one GoatCitadel can read.",
+  CLAUDE_CODE_MANIFEST_INVALID: "Its .claude-plugin/plugin.json isn't one GoatCitadel can read.",
+  NOTHING_TO_INSTALL: "GoatCitadel can't use any of its parts.",
+  TOO_MANY_PIECES: "It has more parts GoatCitadel could take than one plugin can hold.",
 };
 
 /**

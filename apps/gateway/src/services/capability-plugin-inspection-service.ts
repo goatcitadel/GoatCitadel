@@ -24,7 +24,6 @@ import { findInstallableConnectorTemplate, missingHosts } from "./connector-inst
 import { HostLookupError, HostNotPublicError, assertHostResolvesPublic } from "./hardened-git.js";
 import { parseHookWebhookUrl } from "./hooks-service.js";
 import { mcpServerLabelKey } from "./mcp-money-moving.js";
-import { readPluginManifestFile } from "./plugin-manifest-file.js";
 import {
   distinctPluginPromptPackNames,
   pluginPromptPackId,
@@ -32,8 +31,11 @@ import {
 } from "./plugin-prompt-packs.js";
 import type { PluginSkillCheck } from "./plugin-skill-checks.js";
 import { BUNDLED_SKILL_NAME_TAKEN, BUNDLED_SKILL_NAME_TAKEN_MESSAGE } from "./plugin-skill-name-rules.js";
+import { claudeCodeInspectionFields, readSnapshotPluginManifest } from "./plugin-snapshot-manifest.js";
 import { PluginSnapshotPathError } from "./plugin-snapshot-store.js";
 import type { FetchedPluginSource } from "./plugin-source-service.js";
+import { readClaudeCodeSkillWarnings } from "./claude-code-skill-warnings.js";
+import { CLAUDE_CODE_SETTING_NOT_KEPT, SKILL_RUNS_SHELL_COMMANDS } from "./skill-hub-claude-code-dialect.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
 import type { SkillHubPluginSkillInput } from "./skill-hub-plugin-skill-source.js";
 import {
@@ -71,6 +73,12 @@ const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
 const SKILL_REMOVED_EARLIER_MESSAGE =
   "This skill was removed with an earlier install. It can't come back until skills can be removed.";
 const SKILL_NAME_TAKEN_MESSAGE = "A skill with this name is already installed.";
+/** A Claude Code skill's own refusals, in plain words. */
+const DIALECT_BLOCKED_MESSAGES: Readonly<Record<string, string>> = {
+  [CLAUDE_CODE_SETTING_NOT_KEPT]:
+    "This skill uses a Claude Code setting that limits it, and GoatCitadel can't keep that limit.",
+  [SKILL_RUNS_SHELL_COMMANDS]: "This skill runs shell commands before it starts. GoatCitadel never runs them.",
+};
 /** What GoatCitadel's checks say when this copy's skill is already installed, or was installed and removed. */
 const LEFT_OVER_BLOCKERS: ReadonlySet<string> = new Set(["SOURCE_ALREADY_INSTALLED", "CANDIDATE_ALREADY_EXISTS"]);
 const NAME_TAKEN_BLOCKER = "RUNTIME_ALREADY_EXISTS";
@@ -196,6 +204,8 @@ interface InspectionContext {
   /** This inspection's id, which a skill's fresh check is keyed by when its content key was superseded. */
   readonly inspectionId: string;
   readonly savedConnectorLabels: () => Promise<ReadonlySet<string>>;
+  /** A Claude Code plugin's connector warnings, by piece id; undefined for a GoatCitadel manifest. */
+  readonly claudeCodeWarnings?: Readonly<Record<string, string[]>>;
   readonly settings: () => Promise<CapabilityPluginInspectionSettings>;
 }
 
@@ -225,7 +235,16 @@ export class CapabilityPluginInspectionService {
     if (input.replayOnly) throw new ConflictError({ code: "STATE_CONFLICT", message: ANSWER_GONE_MESSAGE });
 
     const fetched = await this.sources.fetchSource(input.source);
-    const parsed = refuseOtherBuiltInId(await readPluginManifestFile(fetched.snapshot.dir), input.source);
+    const reading = await readSnapshotPluginManifest({
+      snapshotDir: fetched.snapshot.dir,
+      treeSha256: fetched.snapshot.treeSha256,
+      templates: this.sources.connectorTemplates(),
+      sourceKind: input.source.kind,
+      log: input.log,
+    });
+    const parsed = refuseOtherBuiltInId(reading.parsed, input.source);
+    const claudeCodeWarnings =
+      reading.format === "claude_code" ? (reading.translation?.pieceWarnings ?? {}) : undefined;
     const inspectedAt = this.sources.now();
     const frame = {
       inspectionId: this.sources.newInspectionId(),
@@ -234,7 +253,7 @@ export class CapabilityPluginInspectionService {
       sourceKind: input.source.kind,
       sourceDisplay: fetched.sourceDisplay,
       pin: fetched.pin,
-      ignored: [],
+      ...claudeCodeInspectionFields(reading),
       inspectedAt: inspectedAt.toISOString(),
       expiresAt: new Date(inspectedAt.getTime() + INSPECTION_LIFETIME_MS).toISOString(),
     };
@@ -274,6 +293,7 @@ export class CapabilityPluginInspectionService {
         async () => new Set((await this.sources.listSavedConnectorLabels()).map((label) => mcpServerLabelKey(label))),
       ),
       settings: once(() => this.sources.readSettings()),
+      ...(claudeCodeWarnings ? { claudeCodeWarnings } : {}),
     };
     const checked: CapabilityPluginPieceView[] = [];
     // One at a time, in manifest order: a skill's review writes its own record, and the answer keeps that order.
@@ -295,7 +315,16 @@ export class CapabilityPluginInspectionService {
     return inspection;
   }
 
-  private checkPiece(piece: PluginPiece, context: InspectionContext): Promise<CapabilityPluginPieceView> {
+  /** A piece's own check, with a Claude Code plugin's warnings for it. */
+  private async checkPiece(piece: PluginPiece, context: InspectionContext): Promise<CapabilityPluginPieceView> {
+    const view = await this.checkOwnPiece(piece, context);
+    // Own keys only: a piece id like "constructor" must not read an inherited Object member.
+    const own = context.claudeCodeWarnings && Object.hasOwn(context.claudeCodeWarnings, piece.id);
+    const warnings = [...(view.warnings ?? []), ...(own ? context.claudeCodeWarnings![piece.id]! : [])];
+    return warnings.length > 0 ? { ...view, warnings } : view;
+  }
+
+  private checkOwnPiece(piece: PluginPiece, context: InspectionContext): Promise<CapabilityPluginPieceView> {
     switch (piece.kind) {
       case "skill":
         return this.checkSkill(piece, context);
@@ -323,8 +352,9 @@ export class CapabilityPluginInspectionService {
     const { input } = context;
     const view = { pieceId: piece.id, kind: "skill" as const, asksFirst: ASKS_FIRST.skill };
     // The folder the review will read, as the snapshot store answers it: a path it refuses is a blocked piece.
+    let skillDir: string;
     try {
-      this.sources.resolveSnapshotPath(context.treeSha256, piece.path);
+      skillDir = this.sources.resolveSnapshotPath(context.treeSha256, piece.path);
     } catch (error) {
       if (!(error instanceof PluginSnapshotPathError)) throw error;
       return { ...view, label: piece.id, check: blocked("PIECE_PATH_INVALID", error.message) };
@@ -336,6 +366,8 @@ export class CapabilityPluginInspectionService {
       pieceId: piece.id,
       trust: context.trust,
       pinLabel: context.pin.kind === "commit" ? `commit:${context.pin.commit}` : `content:${context.pin.treeSha256}`,
+      // Only a Claude Code plugin's skill is read with Claude Code's frontmatter keys.
+      ...(context.claudeCodeWarnings ? { dialect: "claude_code" as const } : {}),
     };
     const review = (idempotencyKey: string) =>
       this.sources.reviewSkill({ workspaceId: input.workspaceId, pluginSkill, idempotencyKey, actorId: input.actorId });
@@ -356,13 +388,15 @@ export class CapabilityPluginInspectionService {
     const skillName = reviewed.snapshot.provenance.skillName;
     const blocker = reviewed.snapshot.blockerCodes[0];
     const snapshotId = reviewed.snapshot.snapshotId;
+    const warnings = context.claudeCodeWarnings
+      ? await readClaudeCodeSkillWarnings(skillDir, context.manifest.pluginId)
+      : [];
     return {
       ...view,
       label: typeof skillName === "string" && skillName ? skillName : piece.id,
-      check: blocker
-        ? blocked(blocker, SKILL_BLOCKED_MESSAGE)
-        : await this.installableSkill(snapshotId, piece.id, input),
+      check: blocker ? reviewBlocked(blocker) : await this.installableSkill(snapshotId, piece.id, input),
       skillSnapshotId: snapshotId,
+      ...(warnings.length > 0 ? { warnings } : {}),
     };
   }
 
@@ -556,7 +590,7 @@ function skillRefusal(error: unknown, pieceId: string, log: CapabilityPluginInsp
       return blocked("PLUGIN_SKILL_UNAVAILABLE", error.message);
     }
     if (field === "sourceRef") return blocked("SOURCE_REFUSED", SKILL_UNREADABLE_MESSAGE);
-    if (typeof field === "string" && REVIEW_CODE.test(field)) return blocked(field, SKILL_BLOCKED_MESSAGE);
+    if (typeof field === "string" && REVIEW_CODE.test(field)) return reviewBlocked(field);
   }
   if (error instanceof ConflictError) {
     warn(log, pieceId, error, "a plugin's skill check broke");
@@ -638,6 +672,14 @@ async function readSnapshotText(file: string): Promise<string | CapabilityPlugin
   } catch {
     return blocked("PROMPT_PACK_NOT_TEXT", PROMPT_PACK_NOT_TEXT_MESSAGE);
   }
+}
+
+/** A review code as a blocked piece: a Claude Code skill's own refusal in its own words, any other in the plain line. */
+function reviewBlocked(code: string): CapabilityPluginPieceCheck {
+  return blocked(
+    code,
+    Object.hasOwn(DIALECT_BLOCKED_MESSAGES, code) ? DIALECT_BLOCKED_MESSAGES[code]! : SKILL_BLOCKED_MESSAGE,
+  );
 }
 
 function blocked(code: string, message: string): CapabilityPluginPieceCheck {

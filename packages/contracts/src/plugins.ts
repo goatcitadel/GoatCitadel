@@ -16,6 +16,12 @@ import { sha256BytesHex } from "./sha256.js";
 /** The manifest's file name, at the top of a plugin folder. */
 export const PLUGIN_MANIFEST_FILENAME = "goatcitadel-plugin.json";
 
+/** A Claude Code plugin's manifest, relative to the plugin folder. GoatCitadel translates it; its own manifest wins. */
+export const CLAUDE_CODE_PLUGIN_MANIFEST_PATH = ".claude-plugin/plugin.json";
+
+/** Which manifest a plugin was read from. Absent on a record means `"goatcitadel"`. */
+export type PluginSourceFormat = "goatcitadel" | "claude_code";
+
 /** What a plugin folder and its manifest may hold. The Gateway enforces the folder limits when it fetches a source. */
 export const PLUGIN_LIMITS = {
   maxManifestBytes: 64 * 1024,
@@ -68,6 +74,12 @@ export const PLUGIN_MANIFEST_REFUSAL_CODES = [
   "HOOK_MUST_ONLY_OBSERVE",
   "HOOK_CODE_NOT_ALLOWED",
   "PRESET_MUST_TIGHTEN",
+  /** A Claude Code plugin.json missing a name, unreadable, over 64 KiB, or with a name GoatCitadel can't use. */
+  "CLAUDE_CODE_MANIFEST_INVALID",
+  /** A Claude Code plugin with no skill and no matched connector. */
+  "NOTHING_TO_INSTALL",
+  /** A Claude Code plugin with more pieces GoatCitadel could take than `PLUGIN_LIMITS.maxPieces`. */
+  "TOO_MANY_PIECES",
 ] as const;
 
 export type PluginManifestRefusalCode = (typeof PLUGIN_MANIFEST_REFUSAL_CODES)[number];

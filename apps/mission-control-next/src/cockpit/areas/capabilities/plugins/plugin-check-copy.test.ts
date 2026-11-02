@@ -52,7 +52,16 @@ describe("plugin check copy", () => {
     expect(PLUGIN_REFUSAL_COPY.HOOK_MUST_ONLY_OBSERVE).toBe(
       "Its hooks try to change what happens, but plugin hooks can only watch.",
     );
-    expect(PLUGIN_REFUSAL_COPY.MANIFEST_MISSING).toBe("There's no goatcitadel-plugin.json at its top level.");
+    expect(PLUGIN_REFUSAL_COPY.MANIFEST_MISSING).toBe(
+      "There's no goatcitadel-plugin.json or .claude-plugin/plugin.json at its top level.",
+    );
+    expect(PLUGIN_REFUSAL_COPY.CLAUDE_CODE_MANIFEST_INVALID).toBe(
+      "Its .claude-plugin/plugin.json isn't one GoatCitadel can read.",
+    );
+    expect(PLUGIN_REFUSAL_COPY.NOTHING_TO_INSTALL).toBe("GoatCitadel can't use any of its parts.");
+    expect(PLUGIN_REFUSAL_COPY.TOO_MANY_PIECES).toBe(
+      "It has more parts GoatCitadel could take than one plugin can hold.",
+    );
   });
 
   it("keeps the refusal's own sentence for a code it has no words for, and still says it can't be installed", () => {

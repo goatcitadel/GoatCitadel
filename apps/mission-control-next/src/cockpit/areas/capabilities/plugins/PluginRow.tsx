@@ -2,7 +2,8 @@ import type { CapabilityPluginListItem } from "@goatcitadel/contracts";
 import { Button } from "../../../ui/Button";
 import { StatusBadge } from "../../../ui/StatusBadge";
 import { LetterIcon } from "../LetterIcon";
-import { PLUGIN_TRUST_LABELS, pluginRowAction, pluginStateNote, presentPluginState } from "./plugin-view";
+import { pluginTrustLine } from "./plugin-format-view";
+import { pluginRowAction, pluginStateNote, presentPluginState } from "./plugin-view";
 
 export interface PluginRowProps {
   /** The row as the Gateway sent it. */
@@ -30,7 +31,7 @@ export function PluginRow({ item, onInstall, onContinue, onView }: PluginRowProp
         <div className="min-w-0 flex-1">
           <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
             <h3 className="min-w-0 truncate text-base font-semibold text-fg">{item.name}</h3>
-            <span className="shrink-0 text-xs text-fg-muted">{PLUGIN_TRUST_LABELS[item.trust]}</span>
+            <span className="shrink-0 text-xs text-fg-muted">{pluginTrustLine(item)}</span>
           </div>
           {item.description ? <p className="mt-0.5 truncate text-sm text-fg-secondary">{item.description}</p> : null}
           {/* The badge holds the state; the pieces sit beside it, so the badge never wraps at phone width. */}
