@@ -308,13 +308,13 @@ export function pluginToolGroupHolds(
  * What marks a skill switched on from one of them as the plugin's.
  */
 export function pluginsBySkillCheck(
-  plugins: readonly Pick<StoredPlugin, "pluginId" | "name" | "pieces">[],
-): Map<string, { pluginId: string; name: string }> {
+  plugins: readonly Pick<StoredPlugin, "pluginId" | "name" | "trust" | "pieces">[],
+): Map<string, { pluginId: string; name: string; trust: PluginTrust }> {
   return new Map(
     plugins.flatMap((plugin) =>
       plugin.pieces.flatMap((piece) =>
         piece.kind === "skill" && piece.skillSnapshotId !== undefined
-          ? [[piece.skillSnapshotId, { pluginId: plugin.pluginId, name: plugin.name }] as const]
+          ? [[piece.skillSnapshotId, { pluginId: plugin.pluginId, name: plugin.name, trust: plugin.trust }] as const]
           : [],
       ),
     ),

@@ -210,14 +210,14 @@ function switchedOffGroupLabel(toolName: string): string {
 
 /**
  * What turns a switched-off tool's group back on: the operator's Tools switch, or, for a group a plugin holds off,
- * uninstalling that plugin, as the Tools switch can't lift a plugin's hold. While GoatCitadel can't read which groups
+ * uninstalling every plugin that holds it in Capabilities › Plugins, as the Tools switch can't lift a plugin's hold. While GoatCitadel can't read which groups
  * plugins hold off, nothing lifts it in this turn.
  */
 function switchedOffRemedy(toolName: string, held: ReadonlySet<string>, unreadable: ReadonlySet<string>): string {
   if (unreadable.has(toolName)) return PLUGIN_HOLDS_UNREADABLE_REMEDY;
   const label = switchedOffGroupLabel(toolName);
   return held.has(toolName)
-    ? `the operator uninstalls the plugin that keeps the ${label} tools off, which turns them back on.`
+    ? `the operator uninstalls every plugin that keeps the ${label} tools off in Capabilities › Plugins, which turns them back on.`
     : `the operator switches the ${label} tools back on in Capabilities › Tools.`;
 }
 

@@ -129,6 +129,22 @@ describe("CapabilityToolsService", () => {
     ).toEqual(["browser", "git"]);
   });
 
+  it("says once, while plugins' holds can't be read, that every switchable group's tools are kept off", async () => {
+    const unavailable = vi.fn(() => true);
+    const { service } = build({ readPluginToolGroupHoldsUnavailable: unavailable });
+
+    const response = await service.list("default", ACTOR);
+
+    expect(response.issues).toEqual([
+      "Which tool groups plugins keep off can't be read right now, so the tools in every group that can be switched off are kept off.",
+    ]);
+    // The switches still read as Settings has them.
+    expect(response.groups.find((group) => group.groupId === "git")).toMatchObject({ state: "on" });
+
+    unavailable.mockReturnValue(false);
+    expect((await service.list("default", ACTOR)).issues).toEqual([]);
+  });
+
   it("reports the workspace, the settings revision and when the list was made", async () => {
     const { service } = build();
 

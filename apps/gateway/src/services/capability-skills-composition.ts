@@ -13,7 +13,12 @@ import {
 } from "@goatcitadel/contracts";
 import { logger } from "@goatcitadel/gateway-core";
 import type { SkillUseCount } from "@goatcitadel/storage";
-import { pluginsBySkillCheck, removedPluginSkills, type RemovedPlugin } from "./capability-plugin-store.js";
+import {
+  pluginsBySkillCheck,
+  removedPluginSkills,
+  type RemovedPlugin,
+  type StoredPlugin,
+} from "./capability-plugin-store.js";
 import {
   CapabilitySkillActionsService,
   type CapabilitySkillActionStep,
@@ -116,7 +121,7 @@ export interface CapabilitySkillsOwners {
    * read as removed with them.
    */
   pluginRecords: {
-    list(): Promise<readonly PluginSkillListing[]>;
+    list(): Promise<readonly (PluginSkillListing & Pick<StoredPlugin, "trust">)[]>;
     listRemoved(): Promise<readonly RemovedPlugin[]>;
   };
   /**

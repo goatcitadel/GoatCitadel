@@ -36,6 +36,8 @@ export interface CapabilityToolListOwners {
   settings: {
     getSettings(): Promise<Pick<RuntimeSettings, "revision" | "switchedOffToolGroups" | "pluginToolGroupHolds">>;
   };
+  /** The policy engine, read on every list for whether plugins' holds can be read. Absent reads as readable. */
+  policy?: { pluginToolGroupHoldsUnavailable(): boolean };
   /** The install's deployment profile, read on every list. */
   deploymentProfile(): DeploymentProfile;
   /** The folder the write tools' probes aim at, the way Chat's own probes do. */
@@ -46,6 +48,7 @@ export interface CapabilityToolListOwners {
 export function composeCapabilityTools({
   tools,
   settings,
+  policy,
   deploymentProfile,
   safeWriteFallbackDir,
 }: CapabilityToolListOwners): CapabilityToolsService {
@@ -60,6 +63,7 @@ export function composeCapabilityTools({
         pluginToolGroupHolds: current.pluginToolGroupHolds,
       };
     },
+    readPluginToolGroupHoldsUnavailable: () => policy?.pluginToolGroupHoldsUnavailable() === true,
     resolvePolicyContext: (input) => tools.resolveToolPolicyContext(input),
     inspectAccess: (request) => tools.inspectToolAccess(request),
     probeArgs: (toolName) => buildToolAccessProbeArgs(toolName, safeWriteFallbackDir()),

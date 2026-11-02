@@ -155,7 +155,7 @@ describe("ChatChangePlanCard", () => {
     ],
     [
       "plugin_uninstall",
-      "Remove a plugin",
+      "Uninstall a plugin",
       { kind: "plugin_uninstall", pluginId: "acme-helper", installPlanId: "plan-0" },
     ],
   ] as const)("names a %s plan in its details instead of the generic Change label", (kind, label, request) => {

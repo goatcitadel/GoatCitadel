@@ -272,9 +272,9 @@ function readRevoke(
 }
 
 /**
- * The link to the piece's own item, written here, never by the cockpit: a skill once its check names it, a saved
- * connector by the item id the Connectors list gives it, a tool group by its id, a prompt pack by its id, and a hook
- * to the hooks settings. A piece that is removed, failed, unknown or not added yet has none.
+ * The link to the piece's own item, written here, never by the cockpit: a skill once it reads added (only then does the
+ * Skills list hold its item), a saved connector by the item id the Connectors list gives it, a tool group by its id, a
+ * prompt pack by its id, and a hook to the hooks settings. A piece that is removed, failed, unknown or not added yet has none.
  */
 function pieceHref(
   piece: StoredPluginPiece,
@@ -285,7 +285,7 @@ function pieceHref(
   if (state === "removed" || state === "failed" || state === "unknown") return undefined;
   switch (piece.kind) {
     case "skill":
-      return check?.skillId ? `/capabilities/skills?item=skill:${check.skillId}` : undefined;
+      return check?.skillId && state === "added" ? `/capabilities/skills?item=skill:${check.skillId}` : undefined;
     case "connector":
       return piece.ref && state === "added"
         ? `/capabilities/connectors?item=${encodeURIComponent(`mcp-server:${piece.ref}`)}`

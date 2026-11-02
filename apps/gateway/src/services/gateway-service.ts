@@ -3918,6 +3918,7 @@ export class GatewayService {
       capabilityTools: composeCapabilityTools({
         tools: this,
         settings: this,
+        policy: this.policyEngine,
         deploymentProfile: () => this.config.assistant.deploymentProfile,
         safeWriteFallbackDir: () =>
           path.resolve(this.config.rootDir, this.config.assistant.workspaceDir, "goatcitadel_out"),
