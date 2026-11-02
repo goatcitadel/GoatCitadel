@@ -425,6 +425,13 @@ A plugin runs no code; each piece takes its own checks.
 After uninstall the skill reads Removed with Browser checks, the connector is gone and the Playwright host stays allowed.
 The hostile folder is refused in plain words.
 Prompt packs and Hooks show no From Browser checks (known limit).",,,,,,,,,,
+PLUGIN-02,"Library: Agents, Skills, Capabilities",Claude Code plugin from a folder (experimental),,,"Make a Claude Code plugin folder: plugin.json with a name, two skills (allowed-tools and $ARGUMENTS; a references/ file), .mcp.json with a matching, a stdio and an unmatched server, a command, an agent and hooks/hooks.json.
+Add from folder and check it at desktop and phone widths, light and dark.
+Install it with the skip setting on, take each skill through its two steps, then uninstall it.
+Check a plugin with only commands and agents, and a skill holding a shell line.","Action: check, install and uninstall the fixture Claude Code plugin in a QA workspace.","The panel shows the Claude Code format and Unverified labels, a neutral Experimental label, the coverage line and What it leaves out grouped by kind, before What happens next.
+Each skill shows its warnings; paths and hashes only in Technical details.
+Install adds the skills and the matched connector (switched off); uninstall removes them and the host stays allowed.
+The commands-and-agents plugin is refused with its full left-out list; the shell-line skill is blocked in plain words.",,,,,,,,,,
 LIB-MEM-01,"Library: Memory, Knowledge, Notes","Memory List, Edit, Forget, History",,,"Open /library/memory.
 Create or identify a test memory item.
 Edit it.

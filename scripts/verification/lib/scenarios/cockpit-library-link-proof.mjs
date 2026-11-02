@@ -1,5 +1,6 @@
 import { proveCatalogDraftNavigation } from "./cockpit-navigation-draft-proof.mjs";
-import { mkdir } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 
 // The kinds the Library catalog still lists. Skills and tools are listed in Capabilities, so a Library skill record
 // lands there and the Library's Type filter offers only these (see library-catalog-kinds.ts).
@@ -61,6 +62,7 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
         const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-library-link-${variant}.png`);
         await page.screenshot({ path: screenshot, fullPage: false });
         const pluginPanel = await provePluginPanel({ page, variant, workspaceId: seeded.body.workspaceId, screenshotDir });
+        const claudeCodePanel = await proveClaudeCodePanel({ page, variant, workspaceId: seeded.body.workspaceId, screenshotDir });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/library?shell=cockpit"), { waitUntil: "domcontentloaded" });
         const typeFilter = page.getByRole("combobox", { name: /^Type(?:\s|$)/u });
         await typeFilter.waitFor({ timeout: 30_000 });
@@ -78,8 +80,8 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
         } });
         await page.getByRole("heading", { name: "All tools", exact: true }).waitFor({ timeout: 30_000 });
         return { status: "passed", metrics: { capabilityId: item.capabilityId, libraryKind: libraryKind ?? "none", blockingAxe: 0, overflow, draftNavigation,
-          pluginId: PLUGIN_ID, pluginOverflow: pluginPanel.overflow },
-          artifacts: emptyArtifacts({ screenshots: [relativeToRun(context, screenshot), relativeToRun(context, pluginPanel.screenshot)] }) };
+          pluginId: PLUGIN_ID, pluginOverflow: pluginPanel.overflow, claudeCodeCoverage: claudeCodePanel.coverage, claudeCodeOverflow: claudeCodePanel.overflow },
+          artifacts: emptyArtifacts({ screenshots: [relativeToRun(context, screenshot), relativeToRun(context, pluginPanel.screenshot), relativeToRun(context, claudeCodePanel.screenshot)] }) };
       } finally { await browserContext.close(); }
     });
   }
@@ -116,6 +118,62 @@ export async function runCockpitLibraryLinkProof({ context, browser, stack, cita
     await page.screenshot({ path: screenshot, fullPage: false });
     return { overflow, screenshot };
   }
+
+  // A Claude Code plugin folder is checked (never installed): its panel leads with the format label, how many of its
+  // parts GoatCitadel can use, and what it leaves out, as the Gateway wrote them.
+  async function proveClaudeCodePanel({ page, variant, workspaceId, screenshotDir }) {
+    const folder = await mkdtemp(path.join(os.tmpdir(), "goatcitadel-cc-proof-"));
+    try {
+      for (const [relativePath, text] of Object.entries(CLAUDE_CODE_FIXTURE)) {
+        const target = path.join(folder, ...relativePath.split("/"));
+        await mkdir(path.dirname(target), { recursive: true });
+        await writeFile(target, text, "utf8");
+      }
+      const checked = await requestJson(stack.gatewayUrl, "/api/v1/capabilities/plugins/inspections", {
+        method: "POST", body: { workspaceId, source: { kind: "folder", path: folder } },
+      });
+      assertOk(checked, "check a Claude Code plugin folder");
+      const coverage = checked.body?.claudeCode?.coverage;
+      if (checked.body?.sourceFormat !== "claude_code" || !coverage || !checked.body.ignored?.length) {
+        throw new Error("Library proof needs the fixture read as a Claude Code plugin with parts left out.");
+      }
+      const item = `plugin-install:${checked.body.inspectionId}`;
+      await page.goto(buildVerificationUiUrl(stack.uiUrl, `/capabilities/plugins?item=${encodeURIComponent(item)}&shell=cockpit`), { waitUntil: "domcontentloaded" });
+      const parts = coverage.total === 1 ? "part" : "parts";
+      await page.getByText("Claude Code format · Unverified", { exact: true }).waitFor({ timeout: 30_000 });
+      await page.getByText(`GoatCitadel can use ${coverage.usable} of this plugin's ${coverage.total} ${parts}.`, { exact: true }).waitFor({ timeout: 30_000 });
+      await page.getByRole("heading", { name: "What it leaves out", exact: true }).waitFor({ timeout: 30_000 });
+      await page.addScriptTag({ path: axeSourcePath });
+      const axe = await auditPageAccessibility(page);
+      const blocking = axe.violations.filter((entry) => ["serious", "critical"].includes(entry.impact));
+      const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
+      if (blocking.length || overflow > 1) throw new Error(`Claude Code plugin ${variant}: accessibility ${blocking.map((entry) => entry.id).join(", ") || "clear"}; overflow ${overflow}px`);
+      const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-claude-code-plugin-${variant}.png`);
+      await page.screenshot({ path: screenshot, fullPage: false });
+      return { coverage, overflow, screenshot };
+    } finally {
+      await rm(folder, { recursive: true, force: true });
+    }
+  }
 }
 
 const PLUGIN_ID = "browser-checks";
+/** A Claude Code plugin: one skill GoatCitadel takes, a command and a local server it leaves out. */
+const CLAUDE_CODE_FIXTURE = {
+  ".claude-plugin/plugin.json": JSON.stringify({ name: "cc-proof-notes", description: "Notes from Claude Code." }),
+  "skills/cc-proof-notes/SKILL.md": [
+    "---",
+    "name: cc-proof-notes",
+    "description: Takes short notes in meetings.",
+    "allowed-tools: Read",
+    "metadata:",
+    "  version: 1.0.0",
+    "  tools: [memory.read]",
+    "---",
+    "",
+    "Take short notes and list the actions.",
+    "",
+  ].join("\n"),
+  "commands/go.md": "Go.\n",
+  ".mcp.json": JSON.stringify({ mcpServers: { local: { command: "node" } } }),
+};
