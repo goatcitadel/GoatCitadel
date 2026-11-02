@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   ConflictError,
@@ -17,6 +18,7 @@ import {
 } from "./capability-plugin-inspection-service.js";
 import type { CapabilityPluginInspectionRequestKey, StoredPlugin } from "./capability-plugin-store.js";
 import type { PluginSkillCheck } from "./plugin-skill-checks.js";
+import { isBundledSkillName } from "./plugin-skill-name-rules.js";
 import { PluginSnapshotPathError, PluginSnapshotStore } from "./plugin-snapshot-store.js";
 import { PluginSourceError, fetchPluginSource } from "./plugin-source-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
@@ -427,6 +429,55 @@ describe("CapabilityPluginInspectionService", () => {
       "default",
       piece(inspection, "meeting-notes").skillSnapshotId,
     );
+  });
+
+  it("blocks a plugin skill named like a bundled skill with the built-in line", async () => {
+    // The built-in line comes first, whatever else the check found about the name or an earlier install.
+    for (const blockers of [
+      ["BUNDLED_SKILL_NAME_TAKEN"],
+      ["BUNDLED_SKILL_NAME_TAKEN", "RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"],
+    ]) {
+      const readSkillCheck = vi.fn(async (_workspaceId: string, snapshotId: string) =>
+        skillCheck(snapshotId, { installInactive: { allowed: false, blockers } }),
+      );
+      const { inspect } = await harness({
+        pieces: [{ kind: "skill", id: "meeting-notes", path: "skills/meeting-notes" }],
+        overrides: { readSkillCheck },
+      });
+
+      const inspection = await inspect();
+
+      expect(inspection.installable).toBe(false);
+      expect(piece(inspection, "meeting-notes").check).toEqual({
+        status: "blocked",
+        code: "BUNDLED_SKILL_NAME_TAKEN",
+        message: "GoatCitadel already has a built-in skill with this name.",
+      });
+    }
+  });
+
+  it("passes the built-in Browser checks skill", async () => {
+    // The skill that ships in Browser checks is not named like a bundled skill, so the new block never refuses it.
+    const pluginRoot = path.resolve(
+      path.dirname(fileURLToPath(import.meta.url)),
+      "..",
+      "..",
+      "..",
+      "..",
+      "plugins",
+      "browser-checks",
+    );
+    const manifest = JSON.parse(await fs.readFile(path.join(pluginRoot, "goatcitadel-plugin.json"), "utf8")) as {
+      pieces: Array<{ kind: string; id: string; path?: string }>;
+    };
+    const skills = manifest.pieces.filter((item) => item.kind === "skill");
+    expect(skills.map((item) => item.id)).toEqual(["browser-qa"]);
+    for (const skill of skills) {
+      const text = await fs.readFile(path.join(pluginRoot, ...skill.path!.split("/"), "SKILL.md"), "utf8");
+      const name = /^name:\s*["']?([^"'\r\n]+?)["']?\s*$/mu.exec(text)?.[1];
+      expect(name, skill.id).toBe(skill.id);
+      expect(isBundledSkillName(name!), skill.id).toBe(false);
+    }
   });
 
   it("never reads a skill whose check can't be read as installable", async () => {

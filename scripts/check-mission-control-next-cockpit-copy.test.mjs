@@ -232,6 +232,7 @@ describe("glossary and plurals (GL-R02)", () => {
       "apps/gateway/src/services/plugin-snapshot-store.ts",
       "apps/gateway/src/services/plugin-git-messages.ts",
       "apps/gateway/src/services/skill-hub-plugin-skill-source.ts",
+      "apps/gateway/src/services/plugin-skill-name-rules.ts",
       "apps/gateway/src/services/chat-capability-scout.ts",
       "apps/gateway/src/services/plugin-tool-group-holds-words.ts",
     ]);

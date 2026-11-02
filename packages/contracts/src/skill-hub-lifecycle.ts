@@ -68,7 +68,8 @@ export function namesGitRepository(pathname: string): boolean {
 /**
  * The blocker codes an operator can meet on a Skill Hub source: the review's own (`standardizedBlockers`), every
  * governance code a stored snapshot can carry (`SkillGovernanceBlockerCode`: the sticky audit floor, the permission
- * diff and version drift), and the install guard's "already there" codes. A snapshot or guard can hold other codes;
+ * diff and version drift), and the install guard's "already there" codes. The install guard also refuses a plugin's skill
+ * named like a skill that ships with GoatCitadel (`BUNDLED_SKILL_NAME_TAKEN`). A snapshot or guard can hold other codes;
  * those pass through as stored, and this list only names the ones with their own meaning.
  */
 export const SKILL_HUB_BLOCKER_CODES = [
@@ -91,6 +92,7 @@ export const SKILL_HUB_BLOCKER_CODES = [
   "SOURCE_ALREADY_INSTALLED",
   "CANDIDATE_ALREADY_EXISTS",
   "RUNTIME_ALREADY_EXISTS",
+  "BUNDLED_SKILL_NAME_TAKEN",
 ] as const;
 
 export type SkillHubBlockerCode = (typeof SKILL_HUB_BLOCKER_CODES)[number];

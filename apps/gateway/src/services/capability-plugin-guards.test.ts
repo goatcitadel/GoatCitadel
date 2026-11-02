@@ -85,6 +85,23 @@ describe("plugin skill review guard", () => {
     );
   });
 
+  it("names a route that sets the skill's frontmatter dialect, since only the plugin inspection may", () => {
+    // The dialect rides inside the plugin skill input, so a route can only set it by naming pluginSkill.
+    const routeSettingDialect: SourceFile[] = [
+      {
+        relativePath: INSPECTION_SERVICE,
+        content: 'reviewSource({ pluginSkill: { ...skill, dialect: "claude_code" } })',
+      },
+      {
+        relativePath: "apps/gateway/src/routes/capability-plugins.ts",
+        content: 'reviewSource({ pluginSkill: { ...body.skill, dialect: "claude_code" } })',
+      },
+    ];
+    expect(() => assertPluginSkillOnlyFromOwners(routeSettingDialect)).toThrow(
+      "pluginSkill is named outside its owners: apps/gateway/src/routes/capability-plugins.ts",
+    );
+  });
+
   it("names the offending file when anything else imports the helper, or the inspection service imports more than a type", () => {
     const typeOnly = 'import type { SkillHubPluginSkillInput } from "./skill-hub-plugin-skill-source.js";';
     const multiLineTypeOnly = [

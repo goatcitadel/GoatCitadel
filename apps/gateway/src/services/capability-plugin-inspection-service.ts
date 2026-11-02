@@ -31,6 +31,7 @@ import {
   pluginPromptPackSourceLabel,
 } from "./plugin-prompt-packs.js";
 import type { PluginSkillCheck } from "./plugin-skill-checks.js";
+import { BUNDLED_SKILL_NAME_TAKEN, BUNDLED_SKILL_NAME_TAKEN_MESSAGE } from "./plugin-skill-name-rules.js";
 import { PluginSnapshotPathError } from "./plugin-snapshot-store.js";
 import type { FetchedPluginSource } from "./plugin-source-service.js";
 import { preparePromptPackImport } from "./prompt-pack/prepare-import.js";
@@ -368,8 +369,9 @@ export class CapabilityPluginInspectionService {
   /**
    * Whether the reviewed skill can be installed now, read from its check by id. Checking the same copy again replays
    * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused: it
-   * can't come back until skills can be removed. Another installed skill of that name refuses it too. A check that
-   * can't be read is never taken as installable.
+   * can't come back until skills can be removed. Another installed skill of that name refuses it too. A plugin
+   * skill named like a skill that ships with GoatCitadel is refused first, with its own line. A check that can't be
+   * read is never taken as installable.
    */
   private async installableSkill(
     snapshotId: string,
@@ -386,6 +388,10 @@ export class CapabilityPluginInspectionService {
     if (!check) return blocked("SKILL_CHECK_UNREADABLE", SKILL_UNREADABLE_MESSAGE);
     const { allowed, blockers } = check.installInactive;
     if (allowed) return READY;
+    // Named like a skill that ships with GoatCitadel: that says it all, before whether the name or an earlier copy is
+    // installed.
+    if (blockers.includes(BUNDLED_SKILL_NAME_TAKEN))
+      return blocked(BUNDLED_SKILL_NAME_TAKEN, BUNDLED_SKILL_NAME_TAKEN_MESSAGE);
     const leftOver = blockers.find((code) => LEFT_OVER_BLOCKERS.has(code));
     const runtimeLive = blockers.includes(NAME_TAKEN_BLOCKER) && !check.revoked && !check.runtimeRevoked;
     // Removed earlier only when what's left of it is revoked (through this check or another), or nothing of it runs; a

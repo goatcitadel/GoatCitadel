@@ -126,7 +126,12 @@ describe("Skill Hub blocker codes", () => {
 
   it("lists the install guard codes an operator can meet, once each", () => {
     expect(SKILL_HUB_BLOCKER_CODES).toEqual(
-      expect.arrayContaining(["SOURCE_ALREADY_INSTALLED", "CANDIDATE_ALREADY_EXISTS", "RUNTIME_ALREADY_EXISTS"]),
+      expect.arrayContaining([
+        "SOURCE_ALREADY_INSTALLED",
+        "CANDIDATE_ALREADY_EXISTS",
+        "RUNTIME_ALREADY_EXISTS",
+        "BUNDLED_SKILL_NAME_TAKEN",
+      ]),
     );
     expect(new Set(SKILL_HUB_BLOCKER_CODES).size).toBe(SKILL_HUB_BLOCKER_CODES.length);
   });
