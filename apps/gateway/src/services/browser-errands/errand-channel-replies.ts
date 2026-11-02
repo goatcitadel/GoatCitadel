@@ -5,6 +5,7 @@
  */
 
 import { ConflictError } from "@goatcitadel/contracts";
+import type { ErrandChannelNotices } from "./errand-channel-notices.js";
 import { ErrandOwnerOnlyError, ERRAND_OWNER_ONLY_COPY, type ErrandPressInput } from "./errand-approval-press-guard.js";
 
 export const ERRAND_REPLY_NEAR_MISS_COPY = "Reply APPROVE in capitals to approve.";
@@ -119,6 +120,8 @@ export interface ErrandChannelReplySend {
 export interface ErrandChannelReplies {
   handle(input: ErrandReplyInput): Promise<ErrandReplyResult>;
   send(input: ErrandChannelReplySend): Promise<void>;
+  /** Sign-in pause notices and the final screenshot, sent to the channel an errand started from. */
+  notices?: ErrandChannelNotices;
 }
 
 export interface ErrandReplyHandlerOptions {

@@ -474,6 +474,10 @@ export class BrowserErrandService {
         errand.view.finalAttachmentId = finalScreenshotAttachmentId;
       }
       this.finishView(errand, outcome.status, outcome.summary);
+      void this.channelReplies?.notices?.finished(errand.origin, {
+        sessionId: request.sessionId,
+        ...(finalScreenshotAttachmentId ? { finalScreenshotAttachmentId } : {}),
+      });
       errand.view.stepCount = outcome.steps;
       errand.view.modelRequests = outcome.modelRequests;
       return {
@@ -602,7 +606,13 @@ export class BrowserErrandService {
     if (errand.controller.signal.aborted) {
       this.resolveHandBack(errand, "stopped");
     }
-    return await handedBack;
+    // A sign-in or bot-check pause tells the operator's channel; the notice is withdrawn once the pause ends.
+    const cancelNotice = reason === "operator" ? undefined : this.channelReplies?.notices?.signInPaused(errand.origin);
+    try {
+      return await handedBack;
+    } finally {
+      cancelNotice?.();
+    }
   }
 
   private resolveHandBack(errand: ActiveErrand, answer: "resumed" | "stopped"): void {

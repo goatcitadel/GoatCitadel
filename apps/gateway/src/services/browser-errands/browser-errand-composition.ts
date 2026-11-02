@@ -17,6 +17,7 @@ import { BrowserErrandService } from "./browser-errand-service.js";
 import type { ErrandApprovalRuntime } from "./errand-approval-gate.js";
 import { createErrandPressGuard } from "./errand-approval-press-guard.js";
 import { createErrandReplyHandler, type ErrandChannelReplies } from "./errand-channel-replies.js";
+import { createGatewayErrandChannelNotices } from "./errand-channel-notices-gateway.js";
 import { createErrandOriginDeps } from "./errand-origin.js";
 import { createGatewayErrandEscalation, type ErrandEscalationSources } from "./errand-escalation-gateway.js";
 
@@ -66,6 +67,7 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
       }),
       // The answer is fixed copy, sent without the channel's markup parsing.
       send: async (input) => void (await sendChannelMessage({ ...input, plainText: true })),
+      notices: createGatewayErrandChannelNotices(inputs),
     }),
     launchBrowser: (signal) =>
       launchErrandBrowser({
