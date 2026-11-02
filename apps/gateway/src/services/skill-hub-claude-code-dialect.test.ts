@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   CLAUDE_CODE_SETTING_NOT_KEPT,
   CLAUDE_CODE_SKILL_DIALECT,
+  SKILL_RUNS_SHELL_COMMANDS,
   checkClaudeCodeFrontmatter,
+  hasClaudeCodeShellLines,
 } from "./skill-hub-claude-code-dialect.js";
 
 const BASE = { name: "pdf-notes", description: "Turns a PDF into short meeting notes for the team." };
@@ -113,5 +115,33 @@ describe("checkClaudeCodeFrontmatter", () => {
         widenedKeys: [],
       },
     });
+  });
+});
+
+describe("hasClaudeCodeShellLines", () => {
+  it("names the refusal code", () => {
+    expect(SKILL_RUNS_SHELL_COMMANDS).toBe("SKILL_RUNS_SHELL_COMMANDS");
+  });
+
+  it.each([
+    ["an inline command at a line start", "Intro.\n!`git status`\nMore."],
+    ["an inline command after a space", "Check the tree first: !`git status` then go on."],
+    ["a fence opened with ```!", "Steps:\n\n```!\ngit status\n```\n"],
+    ["an indented fence opened with ```!", "Steps:\n   ```!\nls\n```\n"],
+    ["a four-backtick fence opened with ````!", "Steps:\n````!\nls\n````\n"],
+    ["an inline command after punctuation", "Run it (!`ls`) or quote it >!`pwd`."],
+    ["an inline command inside a code block", "```md\nSee !`git log`\n```\n"],
+  ])("finds %s", (_label, markdown) => {
+    expect(hasClaudeCodeShellLines(markdown)).toBe(true);
+  });
+
+  it.each([
+    ["an inline `!important`", "Use `!important` only when you must."],
+    ["a ! in prose", "Do this now! It matters!\nReally!"],
+    ["an image", "![alt](x.png)\n"],
+    ["a plain fence", "```bash\ngit status\n```\n"],
+    ["an empty inline command", "Odd text: !`` here."],
+  ])("leaves %s alone", (_label, markdown) => {
+    expect(hasClaudeCodeShellLines(markdown)).toBe(false);
   });
 });

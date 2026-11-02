@@ -35,6 +35,7 @@ import {
 } from "./assembled-prompt-injection-guard.js";
 import { SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
 import { claudeCodeDialectFindingCodes, type ClaudeCodeFrontmatterReading } from "./skill-hub-claude-code-dialect.js";
+import { assertNoClaudeCodeShellLines } from "./skill-hub-claude-code-skill-text.js";
 import { checkSkillFrontmatterShape, type SkillFrontmatterShape } from "./skill-hub-frontmatter-shape.js";
 import {
   assertPluginSkillFolder,
@@ -465,6 +466,7 @@ async function prepareReview(context: MaterializedSkillReviewContext, source: Re
   }
   const frontmatter = await assertKnownFrontmatterShape(context.skillDir, source.plugin?.dialect);
   const declaredVersion = frontmatter.declaredVersion;
+  await assertNoClaudeCodeShellLines(context.skillDir, source.plugin?.dialect);
   const bundleScriptPaths = await assertKnownBundleShape(context.skillDir, validation);
   const networkOrigins = await extractExactNetworkOrigins(context.skillDir, validation, integrity.files);
   const permissionEnvelope = buildPermissionEnvelope(validation, networkOrigins, bundleScriptPaths);

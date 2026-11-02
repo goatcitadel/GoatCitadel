@@ -24,6 +24,13 @@ export const CLAUDE_CODE_SKILL_DIALECT = {
 } as const;
 
 export const CLAUDE_CODE_SETTING_NOT_KEPT = "CLAUDE_CODE_SETTING_NOT_KEPT" as const;
+export const SKILL_RUNS_SHELL_COMMANDS = "SKILL_RUNS_SHELL_COMMANDS" as const;
+
+// Claude Code runs these lines before the model reads the skill. A false match costs one skill; a miss hands the model
+// a command, so the patterns lean wide: an inline !`command` after anything but a backtick or word character, and a
+// fence of three or more backticks opened with `!`. Code blocks are not exempt.
+const INLINE_SHELL_LINE = /(^|[^`\w])!`[^`\n]+`/m;
+const FENCED_SHELL_BLOCK = /^\s*`{3,}!/m;
 
 export interface ClaudeCodeFrontmatterReading {
   /** Sorted; metadata keys as `metadata.<key>`. */
@@ -83,6 +90,11 @@ export function claudeCodeDialectFindingCodes(reading: ClaudeCodeFrontmatterRead
     ...(reading.ignoredKeys.length > 0 ? ["CLAUDE_CODE_KEYS_IGNORED"] : []),
     ...(reading.widenedKeys.length > 0 ? ["CLAUDE_CODE_USER_INVOCABLE_WIDENED"] : []),
   ];
+}
+
+/** Whether SKILL.md holds a Claude Code shell line: an inline !`command`, or a fenced block opened with ```!. */
+export function hasClaudeCodeShellLines(skillMarkdown: string): boolean {
+  return INLINE_SHELL_LINE.test(skillMarkdown) || FENCED_SHELL_BLOCK.test(skillMarkdown);
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {

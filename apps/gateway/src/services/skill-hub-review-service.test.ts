@@ -683,13 +683,19 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
     });
     // A top-level version is ignored; the declared version still comes from metadata.version only.
     expect(reviewed.snapshot.declaredVersion).toBe("1.0.0");
-    expect(reviewed.snapshot.audit.findingCodes).toEqual(
-      expect.arrayContaining([
-        "CLAUDE_CODE_DIALECT_APPLIED",
-        "CLAUDE_CODE_KEYS_IGNORED",
-        "CLAUDE_CODE_USER_INVOCABLE_WIDENED",
-      ]),
-    );
+    // The native list plus the three dialect codes, sorted: nothing extra, nothing duplicated, nothing dropped.
+    expect(reviewed.snapshot.audit.findingCodes).toEqual([
+      "BUNDLE_METADATA_VALIDATED",
+      "CLAUDE_CODE_DIALECT_APPLIED",
+      "CLAUDE_CODE_KEYS_IGNORED",
+      "CLAUDE_CODE_USER_INVOCABLE_WIDENED",
+      "CONTENT_TREE_VALIDATED",
+      "FRONTMATTER_VALIDATED",
+      "LICENSE_PRESENT",
+      "PERMISSION_ENVELOPE_DERIVED",
+      "PROMPTWARE_SCAN_CLEAN",
+      "SECURITY_SCAN_COMPLETE",
+    ]);
     expect(reviewed.snapshot.audit.policyRevision).toBe(1);
     // The dialect never blocks: it refuses or passes.
     expect(reviewed.snapshot.blockerCodes).toEqual([]);
@@ -760,6 +766,47 @@ describe("SkillHubReviewService", { timeout: 120_000 }, () => {
       message: "Skill bundle declares an unknown permission-bearing dimension.",
     });
     expect(databaseCount(harness.storage, "skill_hub_snapshots")).toBe(0);
+  });
+
+  it("refuses a Claude Code skill whose SKILL.md runs shell commands", async () => {
+    const harness = await createHarness();
+    for (const [index, body] of ["Check first: !`git status`\n", "Steps:\n\n```!\ngit status\n```\n"].entries()) {
+      const fixture = await pluginSkillFixture(harness, {
+        skillFiles: { "SKILL.md": `${CLAUDE_CODE_SKILL_MD}\n${body}`, LICENSE: "MIT\n" },
+        dialect: "claude_code",
+      });
+
+      await expect(
+        fixture.service.reviewSource(
+          pluginReviewInput(fixture.pluginSkill, { idempotencyKey: `review-shell-${index}` }),
+        ),
+      ).rejects.toMatchObject({ code: "FIELD_INVALID", details: { field: "SKILL_RUNS_SHELL_COMMANDS" } });
+    }
+    // The frontmatter check answers first.
+    const refusedKey = await pluginSkillFixture(harness, {
+      skillFiles: {
+        "SKILL.md": `${CLAUDE_CODE_SKILL_MD.replace("argument-hint:", "hooks: {}\nargument-hint:")}\n!\`ls\`\n`,
+        LICENSE: "MIT\n",
+      },
+      dialect: "claude_code",
+    });
+    await expect(
+      refusedKey.service.reviewSource(pluginReviewInput(refusedKey.pluginSkill, { idempotencyKey: "review-shell-k" })),
+    ).rejects.toMatchObject({ details: { field: "CLAUDE_CODE_SETTING_NOT_KEPT" } });
+    expect(databaseCount(harness.storage, "skill_hub_snapshots")).toBe(0);
+    expect(databaseCount(harness.storage, "skill_hub_snapshot_artifacts")).toBe(0);
+  });
+
+  it("leaves a native skill's shell-looking text to the existing scans", async () => {
+    const harness = await createHarness();
+    const fixture = await pluginSkillFixture(harness, {
+      skillFiles: { "SKILL.md": `${REVIEW_SKILL_MD}\nCheck first: !\`git status\`\n`, LICENSE: "MIT\n" },
+    });
+
+    const reviewed = await fixture.service.reviewSource(pluginReviewInput(fixture.pluginSkill));
+
+    // Without the dialect, GoatCitadel never runs these lines, so only the native scans judge the text.
+    expect(reviewed.snapshot).toMatchObject({ trustDisposition: "candidate", blockerCodes: [] });
   });
 
   it("refuses a dialect the plugin check didn't name", async () => {
