@@ -3,6 +3,7 @@ import { ConflictError } from "@goatcitadel/contracts";
 import { ErrandOwnerOnlyError } from "./errand-approval-press-guard.js";
 import {
   classifyErrandReply,
+  createErrandAwaitsAnswer,
   createErrandReplyHandler,
   ERRAND_REPLY_ALREADY_ANSWERED_COPY,
   ERRAND_REPLY_APPROVED_COPY,
@@ -32,8 +33,36 @@ describe("classifyErrandReply", () => {
     ["stop", "near_miss"],
     ["", null],
     ["hello there", null],
+    ["constructor", null],
+    ["toString", null],
+    ["__proto__", null],
+    ["hasOwnProperty", null],
+    ["CONSTRUCTOR", null],
   ] as const)("classifies %j as %s", (text, expected) => {
     expect(classifyErrandReply(text)).toBe(expected);
+  });
+});
+
+describe("createErrandAwaitsAnswer", () => {
+  const arrival = (text: string) => ({ connectionId: "connection-1", target: "chat-1", text, sentAt: 5_000 });
+
+  it.each(["APPROVE", " DENY ", "STOP"])(
+    "says %j waits for an answer when a delivered approval is pending",
+    async (text) => {
+      const pending = vi.fn(async () => ({ approvalId: "approval-1", errandId: "errand-1" }));
+      await expect(createErrandAwaitsAnswer(pending)(arrival(text))).resolves.toBe(true);
+      expect(pending).toHaveBeenCalledWith("connection-1", "chat-1", 5_000);
+    },
+  );
+
+  it("is false with nothing pending, and never looks up a near miss or ordinary text", async () => {
+    const pending = vi.fn(async () => undefined);
+    await expect(createErrandAwaitsAnswer(pending)(arrival("APPROVE"))).resolves.toBe(false);
+    pending.mockClear();
+    for (const text of ["approve", "ok", "hello", "constructor"]) {
+      await expect(createErrandAwaitsAnswer(pending)(arrival(text))).resolves.toBe(false);
+    }
+    expect(pending).not.toHaveBeenCalled();
   });
 });
 
@@ -148,6 +177,17 @@ describe("createErrandReplyHandler", () => {
     expect(await handle(input("APPROVE"))).toEqual({ handled: false });
     expect(options.resolveApproval).not.toHaveBeenCalled();
   });
+
+  it.each(["constructor", "toString", "__proto__", "hasOwnProperty"])(
+    "keeps the owner's %j as ordinary chat while an approval is pending",
+    async (text) => {
+      const { options, recordAnswer, input, handle } = createHandler();
+      expect(await handle(input(text))).toEqual({ handled: false });
+      expect(recordAnswer).not.toHaveBeenCalled();
+      expect(options.resolveApproval).not.toHaveBeenCalled();
+      expect(options.stopErrand).not.toHaveBeenCalled();
+    },
+  );
 
   it("passes through ordinary text without looking anything up", async () => {
     const { options, input, handle } = createHandler();

@@ -16,7 +16,12 @@ import { createUtilityModelUsageAttribution } from "../utility-model-usage-attri
 import { BrowserErrandService } from "./browser-errand-service.js";
 import type { ErrandApprovalRuntime } from "./errand-approval-gate.js";
 import { createErrandPressGuard } from "./errand-approval-press-guard.js";
-import { createErrandReplyHandler, type ErrandChannelReplies } from "./errand-channel-replies.js";
+import {
+  createErrandAwaitsAnswer,
+  createErrandReplyHandler,
+  type ErrandChannelReplies,
+  type ErrandReplyHandlerOptions,
+} from "./errand-channel-replies.js";
 import { createGatewayErrandChannelNotices } from "./errand-channel-notices-gateway.js";
 import { createErrandOriginDeps } from "./errand-origin.js";
 import { createGatewayErrandEscalation, type ErrandEscalationSources } from "./errand-escalation-gateway.js";
@@ -57,18 +62,23 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
     deploymentProfile: () => config.assistant.deploymentProfile,
     origin,
     // APPROVE / DENY / STOP replies: the service's own deliveries, the owner rule, the approval runtime, a plain send.
-    channelReplies: (service): ErrandChannelReplies => ({
-      handle: createErrandReplyHandler({
-        pendingDeliveryFor: (connectionId, target, sentAt) => service.pendingDeliveryFor(connectionId, target, sentAt),
-        assertOwner: createErrandPressGuard(origin),
-        resolveApproval: (approvalId, decision, resolvedBy) =>
-          approvals.resolveApproval(approvalId, { decision, resolvedBy }),
-        stopErrand: (errandId, actorId) => service.stop(errandId, actorId),
-      }),
-      // The answer is fixed copy, sent without the channel's markup parsing.
-      send: async (input) => void (await sendChannelMessage({ ...input, plainText: true })),
-      notices: createGatewayErrandChannelNotices(inputs),
-    }),
+    channelReplies: (service): ErrandChannelReplies => {
+      const pendingDeliveryFor: ErrandReplyHandlerOptions["pendingDeliveryFor"] = (connectionId, target, sentAt) =>
+        service.pendingDeliveryFor(connectionId, target, sentAt);
+      return {
+        handle: createErrandReplyHandler({
+          pendingDeliveryFor,
+          assertOwner: createErrandPressGuard(origin),
+          resolveApproval: (approvalId, decision, resolvedBy) =>
+            approvals.resolveApproval(approvalId, { decision, resolvedBy }),
+          stopErrand: (errandId, actorId) => service.stop(errandId, actorId),
+        }),
+        awaitsAnswer: createErrandAwaitsAnswer(pendingDeliveryFor),
+        // The answer is fixed copy, sent without the channel's markup parsing.
+        send: async (input) => void (await sendChannelMessage({ ...input, plainText: true })),
+        notices: createGatewayErrandChannelNotices(inputs),
+      };
+    },
     launchBrowser: (signal) =>
       launchErrandBrowser({
         profileDir: browserErrandProfileDir(config),

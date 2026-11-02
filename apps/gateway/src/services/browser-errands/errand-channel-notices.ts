@@ -70,6 +70,17 @@ export interface ErrandChannelNotices {
   finished(origin: ErrandOrigin, notice: ErrandFinishedNotice): Promise<void>;
 }
 
+/** A notice that could not be sent: a bounded log line, and the errand carries on. */
+export function warnErrandNoticeFailure(connectionId: string | undefined): (error: unknown) => void {
+  return (error) => {
+    // eslint-disable-next-line no-console -- bounded diagnostic; the errand carries on.
+    console.warn("[goatcitadel] errand channel notice was not sent", {
+      ...(connectionId ? { connectionId } : {}),
+      detail: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+    });
+  };
+}
+
 export function createErrandChannelNotices(deps: ErrandChannelNoticeDeps): ErrandChannelNotices {
   const { pickedConversation, attachmentSessionId } = deps;
   const afterMs = deps.afterMs ?? ERRAND_ESCALATE_AFTER_MS;
@@ -80,20 +91,14 @@ export function createErrandChannelNotices(deps: ErrandChannelNoticeDeps): Erran
       target: conversation.target,
       message,
       ...(attachmentId ? { attachmentIds: [attachmentId] } : {}),
-    }).catch((error: unknown) => {
-      // eslint-disable-next-line no-console -- bounded diagnostic; the errand carries on.
-      console.warn("[goatcitadel] errand channel notice was not sent", {
-        connectionId: conversation.connectionId,
-        detail: (error instanceof Error ? error.message : String(error)).slice(0, 500),
-      });
-    });
+    }).catch(warnErrandNoticeFailure(conversation.connectionId));
   };
 
   return {
     signInPaused: (origin, reason) => {
       const copy = reason === "bot_check" ? ERRAND_BOT_CHECK_NOTICE_COPY : ERRAND_SIGN_IN_NOTICE_COPY;
       if (origin.kind === "channel") {
-        void sendSafely(origin, copy);
+        void sendSafely(origin, copy).catch(warnErrandNoticeFailure(origin.connectionId));
         return () => undefined;
       }
       // Set when the pause ends, so a pause that ends while the picked conversation is being read sends nothing.

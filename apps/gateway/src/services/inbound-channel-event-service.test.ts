@@ -1751,6 +1751,139 @@ describe("InboundChannelEventService", () => {
       expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
     });
 
+    /**
+     * A channel-started errand: the turn that started it stays in flight (its errand waits on the approval) until the
+     * test releases it, so the event that started it stays unsettled in the conversation's lane.
+     */
+    async function errandTurnInFlight(options: { awaitsAnswer?: boolean } = {}) {
+      let release!: () => void;
+      const released = new Promise<void>((resolve) => (release = resolve));
+      const started = vi.fn();
+      const respond = vi.fn<InboundChannelEventServiceDeps["respondToExistingChatMessage"]>(
+        async (_sessionId, _eventId, respondOptions) => {
+          started();
+          await released;
+          respondOptions.inboundDurableIdentity.onDeliveryEnqueued?.({
+            deliveryId: "delivery-1",
+            providerMessageId: "provider-message-1",
+            idempotencyKey: respondOptions.inboundDurableIdentity.deliveryIdempotencyKey,
+          });
+          return buildResponse(respondOptions.inboundDurableIdentity);
+        },
+      );
+      const send = vi.fn<ErrandChannelReplies["send"]>(async () => undefined);
+      const { errand, resolveApproval, replies } = realErrandReplies(send);
+      const awaitsAnswer = vi.fn(async () => options.awaitsAnswer ?? true);
+      const executeInboundCommand = vi.fn(async () => ({ resultText: "Approved approval-1." }));
+      const harness = await createHarness({
+        respondToExistingChatMessage: respond,
+        errandReplies: () => ({ ...replies, awaitsAnswer }),
+        executeInboundCommand,
+      });
+      // Popped first: a failing test still lets the in-flight turn end before the harness closes.
+      cleanups.push(async () => release());
+      const first = await harness.service.accept(buildInput({ idempotencyKey: "telegram:update-errand" }));
+      await waitFor(() => started.mock.calls.length === 1);
+      const status = (eventId: string) => harness.storage.inboundChannelEvents.get(eventId)?.status;
+      const finish = async () => {
+        release();
+        await waitFor(() => status(first.inboundEventId) === "completed");
+      };
+      return { harness, first, status, finish, send, errand, resolveApproval, awaitsAnswer, executeInboundCommand };
+    }
+
+    it("answers APPROVE in the conversation whose own turn started the errand and still waits on it", async () => {
+      const { harness, first, status, finish, send, resolveApproval, awaitsAnswer } = await errandTurnInFlight();
+      const approve = await harness.service.accept(
+        buildInput({
+          idempotencyKey: "telegram:update-approve",
+          message: { ...buildInput().message, content: "APPROVE" },
+        }),
+      );
+      await waitFor(() => status(approve.inboundEventId) === "completed");
+
+      expect(status(first.inboundEventId)).toBe("message_recorded");
+      expect(awaitsAnswer).toHaveBeenCalledWith(
+        expect.objectContaining({ connectionId: "connection-1", target: "chat-1", text: "APPROVE" }),
+      );
+      expect(resolveApproval).toHaveBeenCalledWith("approval-1", "approve", "telegram:user-1");
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ message: "Approved.", target: "chat-1" }));
+      expect(harness.storage.inboundChannelEvents.get(approve.inboundEventId)?.commandOperationKey).toBe(
+        "errand-reply:approve:approval-1",
+      );
+      expect(harness.ingestChannelMessage).toHaveBeenCalledTimes(1);
+      await finish();
+    });
+
+    it("answers already answered, never a turn, when the approval was settled before the skipped reply ran", async () => {
+      const { harness, status, finish, send, errand, resolveApproval } = await errandTurnInFlight();
+      // Waiting when the reply arrived (awaitsAnswer); answered elsewhere before the reply is processed.
+      errand.pendingApprovalId = undefined;
+      const stop = await harness.service.accept(
+        buildInput({ idempotencyKey: "telegram:update-stop", message: { ...buildInput().message, content: "STOP" } }),
+      );
+      await waitFor(() => status(stop.inboundEventId) === "completed");
+      expect(resolveApproval).not.toHaveBeenCalled();
+      expect(send).toHaveBeenCalledWith(expect.objectContaining({ message: "This was already answered." }));
+      expect(harness.ingestChannelMessage).toHaveBeenCalledTimes(1);
+      await finish();
+    });
+
+    it("keeps ordinary messages, near misses and an APPROVE with nothing waiting behind the conversation's turn", async () => {
+      const { harness, first, status, finish } = await errandTurnInFlight({ awaitsAnswer: false });
+      const later = await Promise.all(
+        ["hello again", "approve", "APPROVE"].map((content, index) =>
+          harness.service.accept(
+            buildInput({
+              idempotencyKey: `telegram:update-later-${index}`,
+              message: { ...buildInput().message, content },
+            }),
+          ),
+        ),
+      );
+      await harness.service.drain();
+      expect(later.map((item) => status(item.inboundEventId))).toEqual(["accepted", "accepted", "accepted"]);
+      expect(status(first.inboundEventId)).toBe("message_recorded");
+      await finish();
+      await waitFor(() => later.every((item) => status(item.inboundEventId) === "completed"));
+    });
+
+    it("runs an approval button command on the connection while the errand turn still waits", async () => {
+      const { harness, first, status, finish, executeInboundCommand } = await errandTurnInFlight();
+      const button = await harness.service.accept(
+        buildInput({
+          idempotencyKey: "telegram:callback-approve",
+          eventType: "telegram-approval-callback",
+          dispatchKind: "command",
+          message: {
+            ...buildInput().message,
+            content: "/approve",
+            metadata: { approvalActionId: "rat_1", approvalDecision: "approve" },
+          },
+        }),
+      );
+      await expect(harness.service.awaitCommandResult(button.inboundEventId, { timeoutMs: 5_000 })).resolves.toEqual({
+        status: "completed",
+        resultText: "Approved approval-1.",
+      });
+      expect(executeInboundCommand).toHaveBeenCalledTimes(1);
+      expect(status(first.inboundEventId)).toBe("message_recorded");
+      await finish();
+    });
+
+    it("keeps an errand reply's lane on a provider retry after the approval it answered was settled", async () => {
+      const { harness, status, finish, awaitsAnswer } = await errandTurnInFlight();
+      const input = buildInput({
+        idempotencyKey: "telegram:update-approve-retry",
+        message: { ...buildInput().message, content: "APPROVE" },
+      });
+      const accepted = await harness.service.accept(input);
+      await waitFor(() => status(accepted.inboundEventId) === "completed");
+      awaitsAnswer.mockResolvedValue(false);
+      await expect(harness.service.accept(input)).resolves.toMatchObject({ deduped: true });
+      await finish();
+    });
+
     it("never treats a durable command as an errand reply", async () => {
       const { replies, errandReplies: getReplies } = errandReplies({ handled: true, reply: "Approved." });
       const harness = await createHarness({ errandReplies: getReplies });

@@ -161,6 +161,49 @@ describe("InboundChannelEventRepository", () => {
     }
   });
 
+  it("claims only lanes with a prefix when asked, in lane order, beside an unsettled event elsewhere", () => {
+    const { repo, close } = createRepo();
+    try {
+      const acceptedAt = "2026-07-13T10:00:00.000Z";
+      for (const [eventId, laneKey] of [
+        ["turn-1", "telegram:c:chat-1"],
+        ["turn-2", "telegram:c:chat-1"],
+        ["control-1", "errand-control:telegram:c:chat-1"],
+        ["control-2", "errand-control:telegram:c:chat-1"],
+        ["other_1", "errand_control:telegram:c:chat-1"],
+      ] as const) {
+        repo.accept(
+          {
+            eventId,
+            channelKey: "telegram",
+            connectionId: "connection-1",
+            transport: "provider_webhook",
+            dispatchKind: "agent_turn",
+            idempotencyKey: eventId,
+            laneKey,
+            payload: { eventId },
+          },
+          acceptedAt,
+        );
+      }
+      const [turn] = repo.claimDue({ ownerId: "worker-1", leaseDurationMs: 60_000, now: acceptedAt, limit: 1 });
+      assert.equal(turn?.eventId, "turn-1");
+
+      const control = (now: string) =>
+        repo
+          .claimDue({ ownerId: "worker-1", leaseDurationMs: 60_000, now, laneKeyPrefix: "errand-control:" })
+          .map((claim) => claim.eventId);
+      // An underscore in the stored lane is not a wildcard: only the exact prefix matches.
+      assert.deepEqual(control(acceptedAt), ["control-1"]);
+      assert.deepEqual(control(acceptedAt), []);
+      const [controlClaim] = repo.listDue({ now: "2026-07-13T10:05:00.000Z", laneKeyPrefix: "errand-control:" });
+      assert.equal(controlClaim?.eventId, "control-1");
+      assert.throws(() => repo.listDue({ laneKeyPrefix: " " }));
+    } finally {
+      close();
+    }
+  });
+
   it("claims in lane order and fences stale claim generations across retry and admission", () => {
     const { repo, close } = createRepo();
     try {

@@ -23,11 +23,21 @@ export type ErrandApprovalConversation = Pick<
   "connectionId" | "channelKey" | "target" | "conversation"
 >;
 
-/** One delivery of an errand approval to a conversation, which a text reply there can answer. */
+/**
+ * One delivery of an errand approval to a conversation, which a text reply there can answer once the provider send has
+ * completed: `deliveryRunId` names the durable connector delivery that sends it. Queue admission alone never counts.
+ */
 export interface ErrandApprovalDeliveryRecord {
   approvalId: string;
   connectionId: string;
   target: string;
+  deliveryRunId: string;
+}
+
+/** A queued delivery the running errand keeps, with how to read when its provider send completed. */
+export interface ErrandTrackedDelivery extends ErrandApprovalDeliveryRecord {
+  /** When the provider send completed (epoch ms); undefined while it is still queued, or when it failed. */
+  sentAt(): Promise<number | undefined>;
 }
 
 export interface ErrandApprovalDeliveryDeps {
@@ -40,8 +50,12 @@ export interface ErrandApprovalDeliveryDeps {
       expiresInMs?: number;
       delivery: ApprovalRemoteTokenDeliveryOverride;
     },
-  ): Promise<{ deliveryStatus?: "queued" | "not_configured" | "failed"; deliveryError?: string }>;
-  /** Adds the delivery to the running errand's in-memory delivery list. */
+  ): Promise<{
+    deliveryStatus?: "queued" | "not_configured" | "failed";
+    deliveryRunId?: string;
+    deliveryError?: string;
+  }>;
+  /** Adds the queued delivery to the running errand's in-memory delivery list; it counts once its run has sent. */
   recordDelivery(record: ErrandApprovalDeliveryRecord): void;
   /** The chat session a stored chat attachment was uploaded to. */
   attachmentSessionId(attachmentId: string): Promise<string | undefined>;
@@ -109,16 +123,24 @@ export async function deliverErrandApproval(
     deliveryStatus: "failed" as const,
     deliveryError: error instanceof Error ? error.message : String(error),
   }));
-  if (issued.deliveryStatus !== "queued") {
+  const deliveryRunId = issued.deliveryStatus === "queued" ? issued.deliveryRunId?.trim() : undefined;
+  if (!deliveryRunId) {
     warnDeliveryFailure(
       "errand approval was not sent to the conversation",
       approval,
       origin,
-      issued.deliveryError ?? issued.deliveryStatus ?? "no delivery status",
+      issued.deliveryError ??
+        (issued.deliveryStatus === "queued" ? "no delivery run" : issued.deliveryStatus) ??
+        "no delivery status",
     );
     return { delivered: false, reason: "delivery_failed" };
   }
-  recordDelivery({ approvalId: approval.approvalId, connectionId: origin.connectionId, target: origin.target });
+  recordDelivery({
+    approvalId: approval.approvalId,
+    connectionId: origin.connectionId,
+    target: origin.target,
+    deliveryRunId,
+  });
   return { delivered: true };
 }
 

@@ -126,9 +126,21 @@ describe("deliverErrandApproval", () => {
       approvalId: "apr_errand",
       connectionId: "conn-telegram",
       target: "4242",
+      deliveryRunId: "run-delivery",
     });
     // The raw bearer the issuer returns never comes back out.
     expect(JSON.stringify(result)).not.toContain(RAW_TOKEN);
+  });
+
+  it("records nothing a reply could match when the queued delivery names no durable run", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const harness = createHarness({ noRunId: true });
+
+    const result = await deliverErrandApproval(harness.deps, { approval: createApproval(), origin: createOrigin() });
+
+    expect(result).toEqual({ delivered: false, reason: "delivery_failed" });
+    expect(harness.recordDelivery).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it("refuses an approval that is not an errand approval, without issuing a token", async () => {
@@ -287,7 +299,7 @@ async function deliverThroughRegistry(config: Record<string, unknown>) {
           delivery: input.delivery,
         },
       );
-      return { deliveryStatus: run ? "queued" : "not_configured" };
+      return run ? { deliveryStatus: "queued", deliveryRunId: run.runId } : { deliveryStatus: "not_configured" };
     },
   };
   const result = await deliverErrandApproval(deps, { approval, origin: createOrigin() });
@@ -304,6 +316,7 @@ function createHarness(
     connectorStatus?: ConnectorRecord["status"];
     deliveryStatus?: "queued" | "not_configured" | "failed";
     deliveryError?: string;
+    noRunId?: boolean;
     attachmentOwner?: string | Error;
   } = {},
 ) {
@@ -324,6 +337,7 @@ function createHarness(
   const createToken = vi.fn<ErrandApprovalDeliveryDeps["createApprovalRemoteActionToken"]>(async () => ({
     token: RAW_TOKEN,
     deliveryStatus: options.deliveryStatus ?? "queued",
+    ...((options.deliveryStatus ?? "queued") === "queued" && !options.noRunId ? { deliveryRunId: "run-delivery" } : {}),
     ...(options.deliveryError ? { deliveryError: options.deliveryError } : {}),
   }));
   const recordDelivery = vi.fn();

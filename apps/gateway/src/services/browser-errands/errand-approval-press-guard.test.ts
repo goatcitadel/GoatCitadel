@@ -141,15 +141,37 @@ describe("errand approval buttons answer only to the owner", () => {
     expect(consume).not.toHaveBeenCalled();
   });
 
-  it("refuses when the connection cannot be read, and carries the agreed copy", async () => {
+  it("refuses when the connection cannot be read, logs which read failed, and carries the agreed copy", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
     const guard = createErrandPressGuard({
       connection: async () => Promise.reject(new Error("gone")),
       readDiscordPairings: async () => [],
     });
     await expect(guard({ connectorId: "integration:conn-1", actorId: OWNER })).rejects.toThrow(ERRAND_OWNER_ONLY_COPY);
+    expect(warn).toHaveBeenCalledWith("[goatcitadel] errand owner check could not read its source", {
+      read: "connection",
+      detail: "gone",
+    });
     await expect(guard({ connectorId: "mission-control", actorId: OWNER })).rejects.toBeInstanceOf(
       ErrandOwnerOnlyError,
     );
+    warn.mockRestore();
+  });
+
+  it("refuses a Discord press, and logs it, when the pairings cannot be read", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const guard = createErrandPressGuard({
+      connection: async () => ({ key: "discord", config: {} }),
+      readDiscordPairings: async () => Promise.reject(new Error("x".repeat(900))),
+    });
+    await expect(guard({ connectorId: "integration:conn-1", actorId: OWNER })).rejects.toBeInstanceOf(
+      ErrandOwnerOnlyError,
+    );
+    expect(warn).toHaveBeenCalledWith("[goatcitadel] errand owner check could not read its source", {
+      read: "Discord pairings",
+      detail: "x".repeat(500),
+    });
+    warn.mockRestore();
   });
 });
 

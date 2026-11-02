@@ -99,6 +99,7 @@ export class InboundChannelEventRepository {
   private readonly getByIdentityStmt;
   private readonly insertStmt;
   private readonly listDueStmt;
+  private readonly listDueInLanesStmt;
   private readonly claimStmt;
   private readonly renewStmt;
   private readonly releaseStmt;
@@ -137,7 +138,8 @@ export class InboundChannelEventRepository {
       )
       ON CONFLICT DO NOTHING
     `);
-    this.listDueStmt = db.prepare(`
+    // Due, and behind no unsettled earlier event in its lane; `laneFilter` optionally narrows the lanes served.
+    const listDueSql = (laneFilter: string) => `
       SELECT candidate.*
       FROM inbound_channel_events AS candidate
       WHERE (
@@ -156,9 +158,14 @@ export class InboundChannelEventRepository {
             AND predecessor.sequence < candidate.sequence
             AND predecessor.status NOT IN (${TERMINAL_STATUSES})
         )
-      ORDER BY candidate.sequence ASC
+${laneFilter}      ORDER BY candidate.sequence ASC
       LIMIT @limit
-    `);
+    `;
+    this.listDueStmt = db.prepare(listDueSql(""));
+    // The same rule for lanes that start with a prefix only, for a worker that serves those lanes alone.
+    this.listDueInLanesStmt = db.prepare(
+      listDueSql("        AND substr(candidate.lane_key, 1, @lanePrefixLength) = @lanePrefix\n"),
+    );
     const tokenMatches = nullableMatch(db, "claim_token", "expectedClaimToken");
     const ownerMatches = nullableMatch(db, "claim_owner_id", "expectedClaimOwnerId");
     const expiryMatches = nullableMatch(db, "claim_expires_at", "expectedClaimExpiresAt");
@@ -420,9 +427,17 @@ export class InboundChannelEventRepository {
     return this.db.transaction("immediate", () => normalized.map((item) => this.acceptNormalized(item, now)));
   }
 
-  public listDue(input: { now?: string; limit?: number } = {}): InboundChannelEventRecord[] {
+  /** Due events in sequence order; with `laneKeyPrefix`, only those whose lane starts with it. */
+  public listDue(input: { now?: string; limit?: number; laneKeyPrefix?: string } = {}): InboundChannelEventRecord[] {
     const now = normalizeTimestamp(input.now ?? this.readDatabaseNow(), "now");
-    const rows = this.listDueStmt.all({ now, limit: normalizeLimit(input.limit) }) as InboundChannelEventRow[];
+    const limit = normalizeLimit(input.limit);
+    const lanePrefix =
+      input.laneKeyPrefix === undefined ? undefined : normalizeRequired(input.laneKeyPrefix, "laneKeyPrefix");
+    const rows = (
+      lanePrefix === undefined
+        ? this.listDueStmt.all({ now, limit })
+        : this.listDueInLanesStmt.all({ now, limit, lanePrefix, lanePrefixLength: lanePrefix.length })
+    ) as InboundChannelEventRow[];
     return rows.map(mapRow);
   }
 
@@ -431,13 +446,19 @@ export class InboundChannelEventRepository {
     leaseDurationMs: number;
     now?: string;
     limit?: number;
+    /** Claim only events whose lane starts with this prefix. */
+    laneKeyPrefix?: string;
   }): InboundChannelEventClaim[] {
     const ownerId = normalizeRequired(input.ownerId, "ownerId");
     const leaseDurationMs = normalizeLeaseDuration(input.leaseDurationMs);
     const now = normalizeTimestamp(input.now ?? this.readDatabaseNow(), "now");
     const claimExpiresAt = new Date(Date.parse(now) + leaseDurationMs).toISOString();
     return this.db.transaction("immediate", () => {
-      const candidates = this.listDue({ now, limit: input.limit });
+      const candidates = this.listDue({
+        now,
+        limit: input.limit,
+        ...(input.laneKeyPrefix !== undefined ? { laneKeyPrefix: input.laneKeyPrefix } : {}),
+      });
       const claims: InboundChannelEventClaim[] = [];
       for (const candidate of candidates) {
         const claimToken = randomUUID();

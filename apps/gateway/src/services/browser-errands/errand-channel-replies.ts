@@ -17,22 +17,23 @@ export const ERRAND_REPLY_ALREADY_ANSWERED_COPY = "This was already answered.";
 
 export type ErrandReplyKind = "approve" | "deny" | "stop" | "near_miss";
 
-const EXACT_REPLIES: Readonly<Record<string, Exclude<ErrandReplyKind, "near_miss">>> = {
-  APPROVE: "approve",
-  DENY: "deny",
-  STOP: "stop",
-};
+/** A Map, not an object: an inherited key such as `constructor` or `__proto__` must never read as a decision. */
+const EXACT_REPLIES: ReadonlyMap<string, Exclude<ErrandReplyKind, "near_miss">> = new Map([
+  ["APPROVE", "approve"],
+  ["DENY", "deny"],
+  ["STOP", "stop"],
+]);
 const NEAR_MISS_WORDS = new Set(["yes", "ok"]);
 
 /** Exact `APPROVE` / `DENY` / `STOP` after trimming; another casing of them, or `yes` / `ok`, is a near miss. */
 export function classifyErrandReply(text: string): ErrandReplyKind | null {
   const trimmed = text.trim();
-  const exact = EXACT_REPLIES[trimmed];
+  const exact = EXACT_REPLIES.get(trimmed);
   if (exact) {
     return exact;
   }
   const lowered = trimmed.toLowerCase();
-  return EXACT_REPLIES[trimmed.toUpperCase()] || NEAR_MISS_WORDS.has(lowered) ? "near_miss" : null;
+  return EXACT_REPLIES.has(trimmed.toUpperCase()) || NEAR_MISS_WORDS.has(lowered) ? "near_miss" : null;
 }
 
 /** The hint for a near miss: a stop variant gets the STOP hint, anything else the APPROVE one. */
@@ -116,9 +117,24 @@ export interface ErrandChannelReplySend {
   idempotencyKey: string;
 }
 
+/** A message as it arrives in a conversation, before it is queued. */
+export interface ErrandReplyArrival {
+  connectionId: string;
+  target: string;
+  text: string;
+  /** When the message arrived (epoch ms). */
+  sentAt: number;
+}
+
 /** What the inbound channel owner calls before a message becomes a Chat turn, and how it sends the answer. */
 export interface ErrandChannelReplies {
   handle(input: ErrandReplyInput): Promise<ErrandReplyResult>;
+  /**
+   * Whether an arriving message is an exact reply to an errand approval already delivered to its conversation and
+   * still waiting. Such a reply is queued apart from the conversation's other messages: the turn that started a
+   * channel errand stays in flight until the errand ends, so a reply queued behind it could never answer.
+   */
+  awaitsAnswer?(input: ErrandReplyArrival): Promise<boolean>;
   send(input: ErrandChannelReplySend): Promise<void>;
   /** Sign-in pause notices and the final screenshot, sent to the channel an errand started from. */
   notices?: ErrandChannelNotices;
@@ -131,6 +147,19 @@ export interface ErrandReplyHandlerOptions {
   resolveApproval(approvalId: string, decision: "approve" | "reject", resolvedBy: string): Promise<unknown>;
   stopErrand(errandId: string, actorId: string): Promise<boolean>;
   now?(): number;
+}
+
+/** `awaitsAnswer` over the same delivery lookup the reply handler uses: exact replies only, never a near miss. */
+export function createErrandAwaitsAnswer(
+  pendingDeliveryFor: ErrandReplyHandlerOptions["pendingDeliveryFor"],
+): NonNullable<ErrandChannelReplies["awaitsAnswer"]> {
+  return async ({ connectionId, target, text, sentAt }) => {
+    const kind = classifyErrandReply(text);
+    if (!kind || kind === "near_miss") {
+      return false;
+    }
+    return (await pendingDeliveryFor(connectionId, target, sentAt)) !== undefined;
+  };
 }
 
 const ALREADY_ANSWERED: ErrandReplyResult = { handled: true, reply: ERRAND_REPLY_ALREADY_ANSWERED_COPY };

@@ -11,8 +11,9 @@ import {
 } from "./errand-approval-gate.js";
 import { runErrandLoop, type ErrandLoopDeps, type ErrandOutcome, type ErrandProgress } from "./errand-loop.js";
 import { resolveOwnedErrandOrigin, type ErrandOrigin, type ErrandOriginDeps } from "./errand-origin.js";
-import type { ErrandApprovalDeliveryRecord } from "./errand-approval-delivery.js";
+import type { ErrandTrackedDelivery } from "./errand-approval-delivery.js";
 import type { ErrandChannelReplies, PendingErrandDelivery } from "./errand-channel-replies.js";
+import { warnErrandNoticeFailure } from "./errand-channel-notices.js";
 
 export const BROWSER_ERRAND_DISABLED_MESSAGE = "Browser errands are turned off. Turn on Browser errands in Settings.";
 export const BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE =
@@ -116,8 +117,33 @@ interface ActiveErrand {
   stopping: boolean;
   /** Resolves once the run has finished its cleanup, whatever its outcome. */
   settled?: Promise<void>;
-  /** This errand's approvals sent to channel conversations, oldest first; a text reply there can answer them. */
-  deliveries: ReadonlyArray<ErrandApprovalDeliveryRecord & { deliveredAt: number }>;
+  /**
+   * This errand's approvals queued to channel conversations, oldest first. A text reply there can answer one only once
+   * its provider send has completed (`deliveredAt`, read from the delivery and kept once known).
+   */
+  deliveries: ReadonlyArray<ErrandTrackedDelivery & { deliveredAt?: number }>;
+}
+
+/**
+ * When the delivery's provider send completed, kept on the errand once known. A send still queued, failed or unreadable
+ * reads as undefined, so a reply in that conversation does not match it yet.
+ */
+async function confirmDelivery(
+  errand: ActiveErrand,
+  item: ActiveErrand["deliveries"][number],
+): Promise<number | undefined> {
+  const deliveredAt = await item.sentAt().catch((error: unknown) => {
+    // eslint-disable-next-line no-console -- bounded diagnostic; the reply simply does not match yet.
+    console.warn("[goatcitadel] errand approval delivery could not be read", {
+      deliveryRunId: item.deliveryRunId,
+      error: error instanceof Error ? error.message : String(error),
+    });
+    return undefined;
+  });
+  if (deliveredAt !== undefined) {
+    errand.deliveries = errand.deliveries.map((entry) => (entry === item ? { ...entry, deliveredAt } : entry));
+  }
+  return deliveredAt;
 }
 
 /** Approval evidence could not be recorded: the errand stops (fail closed) and its summary says why. */
@@ -153,20 +179,21 @@ export class BrowserErrandService {
   }
 
   /**
-   * Remembers that the running errand's approval was sent to a channel conversation. It targets the single active
-   * errand (only one runs at a time); a record that arrives after that errand ended is dropped.
+   * Remembers that the running errand's approval was queued to a channel conversation. It targets the single active
+   * errand (only one runs at a time); a record that arrives after that errand ended is dropped. Queueing is not
+   * delivery: the record counts for a reply only once `sentAt` reports the completed provider send.
    */
-  public recordDelivery(record: ErrandApprovalDeliveryRecord): void {
+  public recordDelivery(record: ErrandTrackedDelivery): void {
     const errand = this.active;
     if (!errand) {
       return;
     }
-    const { approvalId, connectionId, target } = record;
-    errand.deliveries = [...errand.deliveries, { approvalId, connectionId, target, deliveredAt: Date.now() }];
+    const { approvalId, connectionId, target, deliveryRunId, sentAt } = record;
+    errand.deliveries = [...errand.deliveries, { approvalId, connectionId, target, deliveryRunId, sentAt }];
   }
 
   /**
-   * The approval the running errand is waiting on right now, when it was delivered to this conversation no later than
+   * The approval the running errand is waiting on right now, when its send to this conversation completed no later than
    * `sentAt` (when the answering message arrived) and its stored record is still pending. An older or stale delivery
    * to the same conversation never counts, so a reply can only answer the question that was already in front of it.
    */
@@ -181,13 +208,17 @@ export class BrowserErrandService {
     if (!errand || !gate || !approvalId || errand.stopping) {
       return undefined;
     }
-    const delivered = errand.deliveries.some(
-      (item) =>
-        item.approvalId === approvalId &&
-        item.connectionId === connectionId &&
-        item.target === target &&
-        item.deliveredAt <= sentAt,
-    );
+    let delivered = false;
+    for (const item of errand.deliveries) {
+      if (item.approvalId !== approvalId || item.connectionId !== connectionId || item.target !== target) {
+        continue;
+      }
+      const deliveredAt = item.deliveredAt ?? (await confirmDelivery(errand, item));
+      if (deliveredAt !== undefined && deliveredAt <= sentAt) {
+        delivered = true;
+        break;
+      }
+    }
     if (!delivered || !(await gate.isPending(approvalId))) {
       return undefined;
     }
@@ -479,10 +510,12 @@ export class BrowserErrandService {
       this.finishView(errand, outcome.status, outcome.summary);
       // A disposed service (the Gateway is shutting down) sends nothing more to channels.
       if (!this.disposed) {
-        void this.channelReplies?.notices?.finished(errand.origin, {
-          sessionId: request.sessionId,
-          ...(finalScreenshotAttachmentId ? { finalScreenshotAttachmentId } : {}),
-        });
+        void this.channelReplies?.notices
+          ?.finished(errand.origin, {
+            sessionId: request.sessionId,
+            ...(finalScreenshotAttachmentId ? { finalScreenshotAttachmentId } : {}),
+          })
+          .catch(warnErrandNoticeFailure(errand.origin.kind === "channel" ? errand.origin.connectionId : undefined));
       }
       errand.view.stepCount = outcome.steps;
       errand.view.modelRequests = outcome.modelRequests;

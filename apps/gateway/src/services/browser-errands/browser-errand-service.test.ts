@@ -637,12 +637,64 @@ describe("BrowserErrandService channel deliveries", () => {
     return { service: built.service, errandId, finish };
   }
 
+  /** A delivery whose provider send completed at `at` (default: when it is recorded). */
+  const sent = (approvalId: string, connectionId: string, target: string, at: () => number | undefined = Date.now) => {
+    const sentAt = at();
+    return { approvalId, connectionId, target, deliveryRunId: `run-${approvalId}`, sentAt: async () => sentAt };
+  };
+
+  it("never lets a reply answer a delivery that is only queued, and matches it once the send completed", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set(["approval-1"]) };
+    const { service, finish } = await runningErrand(state);
+    const send = { at: undefined as number | undefined };
+    const readSentAt = vi.fn(async () => send.at);
+    service.recordDelivery({
+      approvalId: "approval-1",
+      connectionId: "conn-1",
+      target: "chat-1",
+      deliveryRunId: "run-1",
+      sentAt: readSentAt,
+    });
+    // Queued: a reply sent now (or an APPROVE sent before the question went out) does not match.
+    const replyBeforeSend = Date.now();
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", replyBeforeSend)).resolves.toBeUndefined();
+    send.at = replyBeforeSend + 5;
+    // The send completed after that reply arrived: it still does not match the earlier reply.
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", replyBeforeSend)).resolves.toBeUndefined();
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", replyBeforeSend + 5)).resolves.toMatchObject({
+      approvalId: "approval-1",
+    });
+    // Once known, the send time is kept and not read again.
+    const reads = readSentAt.mock.calls.length;
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toMatchObject({ approvalId: "approval-1" });
+    expect(readSentAt).toHaveBeenCalledTimes(reads);
+    await finish();
+  });
+
+  it("treats a delivery whose send cannot be read as not delivered", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set(["approval-1"]) };
+    const { service, finish } = await runningErrand(state);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    service.recordDelivery({
+      approvalId: "approval-1",
+      connectionId: "conn-1",
+      target: "chat-1",
+      deliveryRunId: "run-1",
+      sentAt: async () => {
+        throw new Error("storage unavailable");
+      },
+    });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    warn.mockRestore();
+    await finish();
+  });
+
   it("answers only the approval the errand is waiting on, never an older one (Review Focus 1)", async () => {
     const state = { current: "approval-new" as string | undefined, pending: new Set(["approval-old", "approval-new"]) };
     const { service, errandId, finish } = await runningErrand(state);
-    service.recordDelivery({ approvalId: "approval-old", connectionId: "conn-1", target: "chat-1" });
-    service.recordDelivery({ approvalId: "approval-other", connectionId: "conn-1", target: "chat-2" });
-    service.recordDelivery({ approvalId: "approval-new", connectionId: "conn-1", target: "chat-1" });
+    service.recordDelivery(sent("approval-old", "conn-1", "chat-1"));
+    service.recordDelivery(sent("approval-other", "conn-1", "chat-2"));
+    service.recordDelivery(sent("approval-new", "conn-1", "chat-1"));
     await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toEqual({
       approvalId: "approval-new",
       errandId,
@@ -660,7 +712,7 @@ describe("BrowserErrandService channel deliveries", () => {
     const state = { current: "approval-1" as string | undefined, pending: new Set(["approval-1"]) };
     const { service, finish } = await runningErrand(state);
     const before = Date.now() - 1;
-    service.recordDelivery({ approvalId: "approval-1", connectionId: "conn-1", target: "chat-1" });
+    service.recordDelivery(sent("approval-1", "conn-1", "chat-1"));
     await expect(service.pendingDeliveryFor("conn-1", "chat-1", before)).resolves.toBeUndefined();
     await expect(service.pendingDeliveryFor("conn-1", "chat-1", Date.now())).resolves.toMatchObject({
       approvalId: "approval-1",
@@ -671,13 +723,13 @@ describe("BrowserErrandService channel deliveries", () => {
   it("has nothing pending once the stored approval is resolved, while none is waiting, or after the errand ends", async () => {
     const state = { current: "approval-1" as string | undefined, pending: new Set<string>() };
     const { service, finish } = await runningErrand(state);
-    service.recordDelivery({ approvalId: "approval-1", connectionId: "conn-1", target: "chat-1" });
+    service.recordDelivery(sent("approval-1", "conn-1", "chat-1"));
     await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
     state.pending.add("approval-1");
     state.current = undefined;
     await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
     await finish();
-    service.recordDelivery({ approvalId: "approval-2", connectionId: "conn-1", target: "chat-1" });
+    service.recordDelivery(sent("approval-2", "conn-1", "chat-1"));
     await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
   });
 });

@@ -1,10 +1,12 @@
 /** Builds the errand escalation from live Gateway pieces, so the errand composition only hands it over. */
 
 import {
+  NotFoundError,
   readErrandApprovalSessionId,
   type ChatSessionBindingRecord,
   type ConnectorRecord,
   type DiscordPairingRecord,
+  type DurableRunRecord,
   type IntegrationConnection,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -15,7 +17,7 @@ import {
   deliverErrandApproval,
   type ErrandApprovalConversation,
   type ErrandApprovalDeliveryDeps,
-  type ErrandApprovalDeliveryRecord,
+  type ErrandTrackedDelivery,
 } from "./errand-approval-delivery.js";
 import { createErrandEscalation, type ErrandEscalate } from "./errand-escalation.js";
 import { approvedDiscordActorIds } from "./errand-origin.js";
@@ -137,22 +139,26 @@ function conversationTitle(value: string | undefined): string {
 }
 
 /**
- * `errandService` is read only when an approval escalates; its `recordDelivery` adds each sent approval to the running
- * errand's delivery list, which text replies answer.
+ * `errandService` is read only when an approval escalates; its `recordDelivery` adds each queued approval to the running
+ * errand's delivery list, which text replies answer once its durable connector delivery has completed the send.
  */
 export function createGatewayErrandEscalation(
   sources: ErrandEscalationSources,
-  errandService: () => { recordDelivery(record: ErrandApprovalDeliveryRecord): void },
+  errandService: () => { recordDelivery(record: ErrandTrackedDelivery): void },
 ): ErrandEscalate {
   const { config, storage, approvals } = sources;
-  const { approvals: approvalRecords, chatAttachments, integrationConnections } = storage;
+  const { approvals: approvalRecords, chatAttachments, integrationConnections, durableRuns } = storage;
   const ownConversation = createOwnErrandConversationLookup(sources);
   const delivery: ErrandApprovalDeliveryDeps = {
     requireConnectorRecord: async (connectorId) =>
       integrationConnectorRecord(connectorId, await integrationConnections.get(connectorIdToConnectionId(connectorId))),
     createApprovalRemoteActionToken: (approvalId, input) =>
       approvals.createApprovalRemoteActionToken(approvalId, input),
-    recordDelivery: (record) => errandService().recordDelivery(record),
+    recordDelivery: (record) =>
+      errandService().recordDelivery({
+        ...record,
+        sentAt: () => connectorDeliverySentAt(durableRuns, record.deliveryRunId),
+      }),
     attachmentSessionId: async (attachmentId) => (await chatAttachments.get(attachmentId)).sessionId,
     now: () => Date.now(),
   };
@@ -163,6 +169,27 @@ export function createGatewayErrandEscalation(
     conversationFor: async (sessionId) => (await ownConversation(sessionId))?.conversation,
     pushToPhone: (approvalId) => enqueueMobilePushApprovalRefreshNow(storage, approvalId),
   });
+}
+
+/**
+ * When the durable connector delivery finished its provider send (epoch ms): only a completed `connector.delivery` run
+ * counts. A run that is queued, running, failed or missing reads as undefined.
+ */
+export async function connectorDeliverySentAt(
+  runs: { getRun(runId: string): Promise<DurableRunRecord> },
+  runId: string,
+): Promise<number | undefined> {
+  const run = await runs.getRun(runId).catch((error: unknown) => {
+    if (error instanceof NotFoundError) {
+      return undefined;
+    }
+    throw error;
+  });
+  if (run?.workflowKey !== "connector.delivery" || run.status !== "completed") {
+    return undefined;
+  }
+  const finishedAt = Date.parse(run.finishedAt ?? run.updatedAt);
+  return Number.isFinite(finishedAt) ? finishedAt : undefined;
 }
 
 function connectorIdToConnectionId(connectorId: string): string {

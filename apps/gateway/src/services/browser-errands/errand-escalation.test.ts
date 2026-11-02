@@ -1,9 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type {
-  ApprovalRequest,
-  ChatSessionBindingRecord,
-  ConnectorRecord,
-  DiscordPairingRecord,
+import {
+  NotFoundError,
+  type ApprovalRequest,
+  type ChatSessionBindingRecord,
+  type ConnectorRecord,
+  type DiscordPairingRecord,
+  type DurableRunRecord,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import {
@@ -14,6 +16,7 @@ import {
 import { ERRAND_APPROVAL_KIND } from "./errand-constants.js";
 import { createErrandEscalation, type ErrandEscalationDeps } from "./errand-escalation.js";
 import {
+  connectorDeliverySentAt,
   createGatewayErrandEscalation,
   createOwnErrandConversationLookup,
   ownDirectConversation,
@@ -63,7 +66,10 @@ function connector(status: ConnectorRecord["status"]): ConnectorRecord {
 function setup(options: { stored?: ApprovalRequest; status?: ConnectorRecord["status"]; sessionId?: string } = {}) {
   const delivery: ErrandApprovalDeliveryDeps = {
     requireConnectorRecord: vi.fn(async () => connector(options.status ?? "active")),
-    createApprovalRemoteActionToken: vi.fn(async () => ({ deliveryStatus: "queued" as const })),
+    createApprovalRemoteActionToken: vi.fn(async () => ({
+      deliveryStatus: "queued" as const,
+      deliveryRunId: "run-delivery",
+    })),
     recordDelivery: vi.fn(),
     attachmentSessionId: vi.fn(async () => "session-errand"),
     now: () => NOW,
@@ -83,6 +89,54 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
+function deliveryRun(overrides: Partial<DurableRunRecord>): DurableRunRecord {
+  return {
+    runId: "run-delivery",
+    workflowKey: "connector.delivery",
+    status: "queued",
+    attemptCount: 0,
+    maxAttempts: 3,
+    version: 1,
+    payload: {},
+    createdAt: "2026-11-02T10:00:00.000Z",
+    updatedAt: "2026-11-02T10:00:01.000Z",
+    ...overrides,
+  };
+}
+
+describe("connectorDeliverySentAt", () => {
+  const runs = (result: DurableRunRecord | Error) => ({
+    getRun: vi.fn(async () => {
+      if (result instanceof Error) throw result;
+      return result;
+    }),
+  });
+
+  it("reads the finish time of a completed connector delivery", async () => {
+    const finishedAt = "2026-11-02T10:00:05.000Z";
+    await expect(
+      connectorDeliverySentAt(runs(deliveryRun({ status: "completed", finishedAt })), "run-delivery"),
+    ).resolves.toBe(Date.parse(finishedAt));
+  });
+
+  it.each(["queued", "running", "waiting", "failed", "cancelled", "dead_lettered"] as const)(
+    "reads a %s run as not sent",
+    async (status) => {
+      await expect(connectorDeliverySentAt(runs(deliveryRun({ status })), "run-delivery")).resolves.toBeUndefined();
+    },
+  );
+
+  it("reads a missing run or another workflow as not sent, and lets other read errors through", async () => {
+    await expect(
+      connectorDeliverySentAt(runs(new NotFoundError({ entity: "Durable run", id: "run-x" })), "run-x"),
+    ).resolves.toBeUndefined();
+    await expect(
+      connectorDeliverySentAt(runs(deliveryRun({ status: "completed", workflowKey: "chat.turn" })), "run-x"),
+    ).resolves.toBeUndefined();
+    await expect(connectorDeliverySentAt(runs(new Error("storage down")), "run-x")).rejects.toThrow("storage down");
+  });
+});
+
 describe("errand escalation", () => {
   it("asks a channel errand's own conversation at once, and nothing else", async () => {
     const { escalate, deps, delivery } = setup({ sessionId: "session-dm" });
@@ -95,6 +149,7 @@ describe("errand escalation", () => {
       approvalId: "approval-1",
       connectionId: "conn-origin",
       target: "chat-origin",
+      deliveryRunId: "run-delivery",
     });
     expect(deps.conversationFor).not.toHaveBeenCalled();
     expect(deps.pushToPhone).not.toHaveBeenCalled();
@@ -316,6 +371,7 @@ describe("Gateway errand escalation", () => {
 
   function gatewaySetup(options: { status?: string; conversation?: unknown; sessionTitle?: string } = {}) {
     const enqueueApprovalRefresh = vi.fn(() => [{ deliveryId: "delivery-1" }]);
+    const getRun = vi.fn(async (runId: string) => deliveryRun({ runId, status: "queued" }));
     const storage = {
       approvals: { get: vi.fn(async () => approval()) },
       chatAttachments: { get: vi.fn(async () => ({ sessionId: "session-errand" })) },
@@ -338,8 +394,12 @@ describe("Gateway errand escalation", () => {
         })),
       },
       mobilePush: { enqueueApprovalRefresh },
+      durableRuns: { getRun },
     } as unknown as AsyncStorage;
-    const createApprovalRemoteActionToken = vi.fn(async () => ({ deliveryStatus: "queued" as const }));
+    const createApprovalRemoteActionToken = vi.fn(async () => ({
+      deliveryStatus: "queued" as const,
+      deliveryRunId: "run-delivery",
+    }));
     const recordDelivery = vi.fn();
     const readDiscordPairings = vi.fn(async (): Promise<DiscordPairingRecord[]> => []);
     const escalate = createGatewayErrandEscalation(
@@ -359,9 +419,22 @@ describe("Gateway errand escalation", () => {
       createApprovalRemoteActionToken,
       recordDelivery,
       readDiscordPairings,
+      getRun,
       warn,
     };
   }
+
+  it("counts the recorded delivery as sent only once its connector delivery run completed", async () => {
+    const { escalate, recordDelivery, getRun } = gatewaySetup();
+    await escalate(approval(), { kind: "pc" }, "waited");
+    const recorded = recordDelivery.mock.calls[0]![0] as { sentAt(): Promise<number | undefined> };
+    await expect(recorded.sentAt()).resolves.toBeUndefined();
+    expect(getRun).toHaveBeenCalledWith("run-delivery");
+    getRun.mockResolvedValueOnce(
+      deliveryRun({ runId: "run-delivery", status: "completed", finishedAt: "2026-11-02T10:00:05.000Z" }),
+    );
+    await expect(recorded.sentAt()).resolves.toBe(Date.parse("2026-11-02T10:00:05.000Z"));
+  });
 
   it("sends to the operator's own conversation on a connected connection and records the delivery", async () => {
     const { escalate, enqueueApprovalRefresh, createApprovalRemoteActionToken, recordDelivery, readDiscordPairings } =
@@ -375,6 +448,8 @@ describe("Gateway errand escalation", () => {
       approvalId: "approval-1",
       connectionId: "conn-dm",
       target: "chat-dm",
+      deliveryRunId: "run-delivery",
+      sentAt: expect.any(Function),
     });
     expect(enqueueApprovalRefresh).toHaveBeenCalledTimes(1);
     // Telegram's pairing lives in the connection config; Discord's records are not read.

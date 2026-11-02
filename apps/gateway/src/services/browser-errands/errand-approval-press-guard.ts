@@ -2,7 +2,12 @@ import { ConflictError, type DiscordPairingRecord, type RemoteActionTokenRecord 
 import type { ApprovalRemoteActionContext } from "../approval-remote-action-service.js";
 import { hashSensitiveToken } from "../device-access-helpers.js";
 import { isSelfPolledApprovalKind } from "./errand-constants.js";
-import { approvedDiscordActorIds, createErrandOriginDeps, type ErrandOriginSources } from "./errand-origin.js";
+import {
+  approvedDiscordActorIds,
+  createErrandOriginDeps,
+  failClosedErrandRead,
+  type ErrandOriginSources,
+} from "./errand-origin.js";
 import { isErrandOwner } from "./errand-owner.js";
 
 /** What a channel shows someone who presses an errand approval button without being the operator's own account. */
@@ -53,13 +58,20 @@ export function createErrandPressGuard(deps: ErrandPressGuardDeps): (input: Erra
     const connectionId = connectorId.startsWith(INTEGRATION_CONNECTOR_PREFIX)
       ? connectorId.slice(INTEGRATION_CONNECTOR_PREFIX.length)
       : "";
-    const connection = connectionId ? await deps.connection(connectionId).catch(() => undefined) : undefined;
+    const connection = connectionId
+      ? await deps.connection(connectionId).catch(failClosedErrandRead("connection", undefined))
+      : undefined;
     if (!connection) {
       throw new ErrandOwnerOnlyError();
     }
     const discordApprovedActorIds =
       connection.key === "discord"
-        ? approvedDiscordActorIds(await deps.readDiscordPairings().catch(() => []), connectionId)
+        ? approvedDiscordActorIds(
+            await deps
+              .readDiscordPairings()
+              .catch(failClosedErrandRead<DiscordPairingRecord[]>("Discord pairings", [])),
+            connectionId,
+          )
         : undefined;
     const owner = isErrandOwner({
       channelKey: connection.key,

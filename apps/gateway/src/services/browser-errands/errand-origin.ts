@@ -18,6 +18,21 @@ export type ErrandOrigin =
       actorId: string;
     };
 
+/**
+ * A read the owner rule needs failed: logs a bounded line naming only the read and returns `fallback`, so the caller
+ * still fails closed (no origin, not the owner).
+ */
+export function failClosedErrandRead<T>(read: string, fallback: T): (error: unknown) => T {
+  return (error) => {
+    // eslint-disable-next-line no-console -- bounded diagnostic; the errand or answer is refused.
+    console.warn("[goatcitadel] errand owner check could not read its source", {
+      read,
+      detail: (error instanceof Error ? error.message : String(error)).slice(0, 500),
+    });
+    return fallback;
+  };
+}
+
 /** The chat session that Mission Control's own Chat uses; every other value is the channel the turn came in on. */
 export const MISSION_SESSION_CHANNEL = "mission";
 
@@ -48,7 +63,9 @@ export async function resolveErrandOrigin(
   turnId: string,
 ): Promise<ErrandOrigin | undefined> {
   const { sessionChannel, binding: readBinding, turnSender } = deps;
-  const channelKey = (await sessionChannel(sessionId).catch(() => undefined))?.trim();
+  const channelKey = (
+    await sessionChannel(sessionId).catch(failClosedErrandRead("session channel", undefined))
+  )?.trim();
   if (!channelKey) {
     return undefined;
   }
@@ -56,8 +73,8 @@ export async function resolveErrandOrigin(
     return { kind: "pc" };
   }
   const [binding, turnSent] = await Promise.all([
-    readBinding(sessionId).catch(() => undefined),
-    turnSender(sessionId, turnId).catch(() => undefined),
+    readBinding(sessionId).catch(failClosedErrandRead("session binding", undefined)),
+    turnSender(sessionId, turnId).catch(failClosedErrandRead("turn sender", undefined)),
   ]);
   // A desk turn: the operator typed it in Mission Control on a channel-bound session, and ingest recorded it with
   // operator authority. Decided by the server-owned source authority, never by the actor id, which a channel can carry.
@@ -102,14 +119,17 @@ export async function resolveOwnedErrandOrigin(
   if (!origin || origin.kind === "pc") {
     return origin;
   }
-  const connection = await readConnection(origin.connectionId).catch(() => undefined);
+  const connection = await readConnection(origin.connectionId).catch(failClosedErrandRead("connection", undefined));
   if (!connection) {
     return undefined;
   }
   // The connection's own key decides which pairing record counts, not the session's channel label.
   const discordApprovedActorIds =
     connection.key === "discord"
-      ? approvedDiscordActorIds(await readDiscordPairings().catch(() => []), origin.connectionId)
+      ? approvedDiscordActorIds(
+          await readDiscordPairings().catch(failClosedErrandRead<DiscordPairingRecord[]>("Discord pairings", [])),
+          origin.connectionId,
+        )
       : undefined;
   const owner = isErrandOwner({
     channelKey: connection.key,
