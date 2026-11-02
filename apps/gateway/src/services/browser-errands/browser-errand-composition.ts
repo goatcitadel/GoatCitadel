@@ -18,13 +18,15 @@ import type { ErrandApprovalRuntime } from "./errand-approval-gate.js";
 import { createErrandPressGuard } from "./errand-approval-press-guard.js";
 import { createErrandReplyHandler, type ErrandChannelReplies } from "./errand-channel-replies.js";
 import { createErrandOriginDeps } from "./errand-origin.js";
+import { createGatewayErrandEscalation, type ErrandEscalationSources } from "./errand-escalation-gateway.js";
 
 export const BROWSER_ERRAND_UTILITY_KIND = "browser_errand";
 
 export interface GatewayBrowserErrandInputs {
   config: GatewayRuntimeConfig;
   storage: AsyncStorage;
-  approvals: ErrandApprovalRuntime;
+  /** Also issues the remote-action token an errand approval is sent to a channel conversation with. */
+  approvals: ErrandApprovalRuntime & ErrandEscalationSources["approvals"];
   isEnabled(): Promise<boolean>;
   chatCompletions(
     request: ChatCompletionRequest,
@@ -47,7 +49,9 @@ export function browserErrandProfileDir(config: Pick<GatewayRuntimeConfig, "root
 export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandInputs): BrowserErrandService {
   const { config, approvals, sendChannelMessage } = inputs;
   const origin = createErrandOriginDeps(inputs);
-  return new BrowserErrandService({
+  // Read only once an approval escalates, after the service below exists.
+  const escalate = createGatewayErrandEscalation(inputs, () => errandService);
+  const errandService: BrowserErrandService = new BrowserErrandService({
     isEnabled: () => inputs.isEnabled(),
     deploymentProfile: () => config.assistant.deploymentProfile,
     origin,
@@ -88,6 +92,7 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
       ),
     gate: {
       approvals,
+      escalate,
       storage: inputs.storage,
       realtime: { subscribeRealtime: (listener) => inputs.subscribeRealtime(listener) },
       attachments: {
@@ -99,4 +104,5 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
       },
     },
   });
+  return errandService;
 }

@@ -5,6 +5,7 @@ import type { RealtimeEvent } from "@goatcitadel/contracts";
 import {
   createUnavailableMobilePushProvider,
   enqueueMobilePushApprovalRefresh,
+  enqueueMobilePushApprovalRefreshNow,
   MobilePushCustodyError,
   MobilePushService,
   type MobilePushProviderPort,
@@ -438,6 +439,81 @@ describe("MobilePushService", () => {
     }
     expect(thrown).toBeInstanceOf(MobilePushCustodyError);
     expect(String(thrown)).not.toContain(leakedToken);
+  });
+});
+
+describe("mobile push for errand approvals", () => {
+  async function registered(provider: MobilePushProviderPort) {
+    const harness = createHarness(provider);
+    harness.seedGrant("grant-errand");
+    await harness.service.register(
+      { provider: "expo", enabled: true, token: "ExpoPushToken[errand]" },
+      { grantId: "grant-errand" },
+    );
+    return harness;
+  }
+
+  it("enqueues nothing when an errand approval is created", async () => {
+    const harness = await registered(createUnavailableMobilePushProvider());
+    const event = approvalCreatedEvent("event-errand", "approval-errand");
+    const errandEvent = { ...event, payload: { ...event.payload, kind: "browser.errand.action" } };
+
+    await expect(enqueueMobilePushApprovalRefresh(harness.storage, errandEvent)).resolves.toBe(0);
+    await expect(harness.storage.mobilePush.listDeliveries()).resolves.toEqual([]);
+  });
+
+  it("enqueues one push when the errand approval escalates", async () => {
+    const harness = await registered(createUnavailableMobilePushProvider());
+
+    await expect(enqueueMobilePushApprovalRefreshNow(harness.storage, "approval-errand")).resolves.toBe(1);
+    await expect(enqueueMobilePushApprovalRefreshNow(harness.storage, "approval-errand")).resolves.toBe(1);
+    const deliveries = await harness.storage.mobilePush.listDeliveries();
+    expect(deliveries).toHaveLength(1);
+    expect(deliveries[0]?.payload).toEqual({
+      schemaVersion: 1,
+      type: "approval_refresh",
+      realtimeEventId: "approval-escalation:approval-errand",
+      approvalId: "approval-errand",
+      deepLink: { kind: "approval", approvalId: "approval-errand" },
+    });
+    await expect(enqueueMobilePushApprovalRefreshNow(harness.storage, "bad id with spaces")).resolves.toBe(0);
+  });
+
+  it("does not send a push for an approval answered before it went out, whatever its kind", async () => {
+    const provider: MobilePushProviderPort = {
+      isAvailable: () => true,
+      send: vi.fn(async () => ({ classification: "delivered" as const })),
+    };
+    const harness = await registered(provider);
+    const status = new Map([
+      ["approval-answered", "approved"],
+      ["approval-waiting", "pending"],
+    ]);
+    const service = new MobilePushService({
+      storage: {
+        mobilePush: harness.storage.mobilePush,
+        approvals: { get: async (approvalId: string) => ({ approvalId, status: status.get(approvalId) }) },
+      } as never,
+      secretStore: harness.secretStore as never,
+      provider,
+      isGrantActive: async () => true,
+      workerId: "worker-test",
+    });
+    await enqueueMobilePushApprovalRefresh(harness.storage, approvalCreatedEvent("event-a", "approval-answered"));
+    await enqueueMobilePushApprovalRefreshNow(harness.storage, "approval-waiting");
+
+    const sweep = await service.deliverDue();
+
+    expect(provider.send).toHaveBeenCalledTimes(1);
+    expect(provider.send).toHaveBeenCalledWith(
+      expect.objectContaining({ payload: expect.objectContaining({ approvalId: "approval-waiting" }) }),
+    );
+    expect(sweep.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: "cancelled_revoked" }),
+        expect.objectContaining({ status: "delivered" }),
+      ]),
+    );
   });
 });
 

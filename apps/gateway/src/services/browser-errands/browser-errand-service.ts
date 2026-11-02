@@ -73,7 +73,7 @@ export interface BrowserErrandToolResult extends Record<string, unknown> {
   finalScreenshotAttachmentId?: string;
 }
 
-type GateDeps = Pick<ErrandApprovalGateDeps, "approvals" | "storage" | "attachments" | "realtime">;
+type GateDeps = Pick<ErrandApprovalGateDeps, "approvals" | "storage" | "attachments" | "realtime" | "escalate">;
 
 export interface BrowserErrandServiceDeps {
   isEnabled(): Promise<boolean>;
@@ -379,6 +379,7 @@ export class BrowserErrandService {
       browser,
       signal,
       now: realNow,
+      origin: errand.origin,
     });
     errand.gate = gate;
     const hooks = errandLoopApprovalHooks(gate);

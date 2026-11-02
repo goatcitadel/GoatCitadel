@@ -1,6 +1,7 @@
 import { createHash, randomUUID, timingSafeEqual } from "node:crypto";
 import {
   canonicalJsonString,
+  NotFoundError,
   redactSecretText,
   type MobilePushApprovalRefreshPayload,
   type MobilePushProvider,
@@ -16,6 +17,7 @@ import {
   type MobilePushRegistrationRecord,
 } from "@goatcitadel/storage";
 import { SecretStoreUnavailableError, type SecretStoreService } from "./secret-store-service.js";
+import { ERRAND_APPROVAL_KIND } from "./browser-errands/errand-constants.js";
 
 const MOBILE_PUSH_SECRET_REF_PREFIX = "keychain:goatcitadel:mobile-push:";
 const DELIVERY_LEASE_MS = 30_000;
@@ -26,7 +28,8 @@ type MobilePushSecretStore = Pick<
   SecretStoreService,
   "isAvailable" | "isWriteCustodySafe" | "setSecret" | "getSecret" | "deleteSecret"
 >;
-type MobilePushStorage = Pick<Storage, "mobilePush">;
+/** `approvals`, when present, lets a delivery skip an approval that was answered before it was sent. */
+type MobilePushStorage = Pick<Storage, "mobilePush"> & Partial<Pick<Storage, "approvals">>;
 
 export type MobilePushProviderResult =
   | { classification: "delivered"; receiptId?: string }
@@ -238,6 +241,15 @@ export class MobilePushService {
   private async deliverClaimed(
     delivery: MobilePushDeliveryRecord,
   ): Promise<MobilePushDeliverySweepResult["outcomes"][number]> {
+    const approvalState = await this.approvalState(delivery.approvalId);
+    if (approvalState === "unreadable") {
+      return await this.retry(delivery, "retryable");
+    }
+    if (approvalState === "answered") {
+      // Answered before the push went out, for every approval kind: there is nothing left to tell the phone. The
+      // storage classifications have no "approval answered" value, so the row is cancelled like a revoked one.
+      return await this.finalize(delivery, "cancelled_revoked", "registration_revoked");
+    }
     const registration = await this.deps.storage.mobilePush.getRegistrationById(delivery.registrationId);
     if (!registration || registration.lifecycleState !== "active") {
       return await this.finalize(delivery, "cancelled_revoked", "registration_revoked");
@@ -323,61 +335,55 @@ export class MobilePushService {
     }
   }
 
+  /**
+   * Whether the delivery's approval was answered. Only a stored record that is no longer pending counts; storage
+   * without approvals, or an approval with no record here, keeps the earlier behavior (the refresh is sent).
+   */
+  private async approvalState(approvalId: string): Promise<"pending" | "answered" | "unreadable"> {
+    const approvals = this.deps.storage.approvals;
+    if (!approvals) return "pending";
+    try {
+      return (await approvals.get(approvalId)).status === "pending" ? "pending" : "answered";
+    } catch (error) {
+      return error instanceof NotFoundError ? "pending" : "unreadable";
+    }
+  }
+
   private async invalidateToken(
     delivery: MobilePushDeliveryRecord,
     registration: MobilePushRegistrationRecord,
   ): Promise<MobilePushDeliverySweepResult["outcomes"][number]> {
-    const outcome = await this.deps.storage.mobilePush.finalizeAndRevokeRegistration({
-      deliveryId: delivery.deliveryId,
-      expectedVersion: delivery.version,
-      expectedLeaseExpiresAt: delivery.leaseExpiresAt!,
-      workerId: this.workerId,
-      status: "invalid_token",
-      lastClassification: "invalid_token",
-      updatedAt: this.nowIso(),
-    });
-    if (!outcome.delivery) return { deliveryId: delivery.deliveryId, status: "lease_lost" };
-    this.deleteSecretBestEffort(registration, "delivery_revoke");
-    return {
-      deliveryId: delivery.deliveryId,
-      status: outcome.delivery.status,
-      classification: outcome.delivery.lastClassification,
-    };
+    return await this.finalizeAndRevoke(delivery, registration, "invalid_token", "invalid_token");
   }
 
   private async blockMismatchedCustody(
     delivery: MobilePushDeliveryRecord,
     registration: MobilePushRegistrationRecord,
   ): Promise<MobilePushDeliverySweepResult["outcomes"][number]> {
-    const outcome = await this.deps.storage.mobilePush.finalizeAndRevokeRegistration({
-      deliveryId: delivery.deliveryId,
-      expectedVersion: delivery.version,
-      expectedLeaseExpiresAt: delivery.leaseExpiresAt!,
-      workerId: this.workerId,
-      status: "custody_blocked",
-      lastClassification: "custody_mismatch",
-      updatedAt: this.nowIso(),
-    });
-    if (!outcome.delivery) return { deliveryId: delivery.deliveryId, status: "lease_lost" };
-    this.deleteSecretBestEffort(registration, "delivery_revoke");
-    return {
-      deliveryId: delivery.deliveryId,
-      status: outcome.delivery.status,
-      classification: outcome.delivery.lastClassification,
-    };
+    return await this.finalizeAndRevoke(delivery, registration, "custody_blocked", "custody_mismatch");
   }
 
   private async revokeInactiveGrant(
     delivery: MobilePushDeliveryRecord,
     registration: MobilePushRegistrationRecord,
   ): Promise<MobilePushDeliverySweepResult["outcomes"][number]> {
+    return await this.finalizeAndRevoke(delivery, registration, "cancelled_revoked", "registration_revoked");
+  }
+
+  /** Settles the delivery and revokes its registration in one step, then drops the registration's token custody. */
+  private async finalizeAndRevoke(
+    delivery: MobilePushDeliveryRecord,
+    registration: MobilePushRegistrationRecord,
+    status: "invalid_token" | "custody_blocked" | "cancelled_revoked",
+    lastClassification: "invalid_token" | "custody_mismatch" | "registration_revoked",
+  ): Promise<MobilePushDeliverySweepResult["outcomes"][number]> {
     const outcome = await this.deps.storage.mobilePush.finalizeAndRevokeRegistration({
       deliveryId: delivery.deliveryId,
       expectedVersion: delivery.version,
       expectedLeaseExpiresAt: delivery.leaseExpiresAt!,
       workerId: this.workerId,
-      status: "cancelled_revoked",
-      lastClassification: "registration_revoked",
+      status,
+      lastClassification,
       updatedAt: this.nowIso(),
     });
     if (!outcome.delivery) return { deliveryId: delivery.deliveryId, status: "lease_lost" };
@@ -494,16 +500,38 @@ export async function enqueueMobilePushApprovalRefresh(
   ) {
     return 0;
   }
+  // An errand approval's push waits for its escalation (enqueueMobilePushApprovalRefreshNow), not its creation.
+  if (event.payload.kind === ERRAND_APPROVAL_KIND) return 0;
   const payloadApprovalId = readOpaqueId(event.payload.approvalId);
   const linkedApprovalId = readOpaqueId(event.links?.approvalId);
   const realtimeEventId = readOpaqueId(event.eventId);
   if (!payloadApprovalId || payloadApprovalId !== linkedApprovalId || !realtimeEventId) return 0;
-  return (
-    await storage.mobilePush.enqueueApprovalRefresh({
-      sourceRealtimeEventId: realtimeEventId,
-      approvalId: payloadApprovalId,
-    })
-  ).length;
+  return await enqueueApprovalRefresh(storage, realtimeEventId, payloadApprovalId);
+}
+
+/** The source id an escalation's push carries in place of a realtime event id. */
+export const MOBILE_PUSH_ESCALATION_SOURCE_PREFIX = "approval-escalation:";
+
+/**
+ * Queues the approval's push now, outside the approval_created event: the escalation of a waiting errand approval.
+ * Deliveries are deduplicated per registration and approval, and each one is sent only while the approval is pending.
+ */
+export async function enqueueMobilePushApprovalRefreshNow(
+  storage: MobilePushStorage,
+  approvalIdInput: string,
+): Promise<number> {
+  const approvalId = readOpaqueId(approvalIdInput);
+  const sourceId = readOpaqueId(`${MOBILE_PUSH_ESCALATION_SOURCE_PREFIX}${approvalIdInput}`);
+  if (!approvalId || !sourceId) return 0;
+  return await enqueueApprovalRefresh(storage, sourceId, approvalId);
+}
+
+async function enqueueApprovalRefresh(
+  storage: MobilePushStorage,
+  sourceRealtimeEventId: string,
+  approvalId: string,
+): Promise<number> {
+  return (await storage.mobilePush.enqueueApprovalRefresh({ sourceRealtimeEventId, approvalId })).length;
 }
 
 export function buildMobilePushTokenSecretRef(registrationId: string): string {
