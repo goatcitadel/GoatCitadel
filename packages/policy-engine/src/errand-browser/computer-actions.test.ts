@@ -139,6 +139,18 @@ describe("normalizeComputerActions", () => {
     expect(result.errors[1]).toContain("action 6");
   });
 
+  it("rejects a chord whose last key still ends in a plus", () => {
+    const result = normalizeComputerActions([
+      { type: "keypress", keys: ["a+b+"] },
+      { type: "keypress", keys: ["Ctrl+"] },
+      { type: "keypress", keys: ["Control", "Shift+"] },
+    ]);
+    expect(result.actions).toEqual([]);
+    expect(result.errors).toHaveLength(3);
+    expect(result.errors[0]).toContain("action 1");
+    expect(result.errors[0]).toContain("malformed key combination");
+  });
+
   it("keeps a literal space key, alone and in a chord", () => {
     const result = normalizeComputerActions([
       { type: "keypress", keys: [" "] },

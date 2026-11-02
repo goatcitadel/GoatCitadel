@@ -182,6 +182,11 @@ function normalizeOne(entry: unknown, label: string): ComputerAction | string {
       if (parts.length === 0 || parts.length > MAX_KEYS || parts.some((part) => !part)) {
         return `${label} needs between 1 and ${MAX_KEYS} keys.`;
       }
+      // A key that still ends in "+" after the split ("Ctrl+", "a+b+") is a malformed chord; rejecting it here keeps
+      // dispatch from pressing the earlier keys before Playwright refuses the last one.
+      if (parts.some((part) => part.length > 1 && part.endsWith("+"))) {
+        return `${label} has a malformed key combination; separate keys with "+" and use "+" alone for the plus key.`;
+      }
       return { type: "keypress", keys: parts.map(normalizeComputerKey) };
     }
     case "wait":
