@@ -5,8 +5,18 @@ import {
   formatAnswerReviewLabel,
   getTurnPendingLabel,
   humanizeEnum,
+  summarizeDelegationSteps,
   toTitleCase,
 } from "./chat-display-helpers";
+
+describe("summarizeDelegationSteps", () => {
+  it("counts cancelled steps and treats them as settled", () => {
+    const steps = [{ status: "completed" }, { status: "cancelled" }, { status: "pending" }];
+    const summary = summarizeDelegationSteps(steps);
+    expect(summary).toMatchObject({ completedCount: 1, cancelledCount: 1, pendingCount: 1 });
+    expect(summary.currentStep).toBe(steps[1]);
+  });
+});
 
 describe("formatAnswerReviewLabel", () => {
   const review = (answerReview?: NonNullable<ChatTurnTraceRecord["reflection"]>["answerReview"]) => ({
