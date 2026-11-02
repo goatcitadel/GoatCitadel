@@ -305,6 +305,19 @@ describe("translateClaudeCodePlugin", () => {
     expect(translation.pieceWarnings).toEqual({});
   });
 
+  it("never lets a skill folder take a generated piece id", async () => {
+    const translation = ok(
+      await translate({
+        pluginJson: { name: "notes-kit" },
+        skills: { "connector-1": claudeCodeSkillMarkdown("one"), "skill-2": claudeCodeSkillMarkdown("two") },
+        mcpJson: { docs: { type: "http", url: LEARN_URL } },
+      }),
+    );
+    const ids = JSON.parse(translation.manifestText).pieces.map((piece: { id: string }) => piece.id);
+    expect(new Set(ids).size).toBe(ids.length);
+    expect(parsePluginManifest(translation.manifestText).ok).toBe(true);
+  });
+
   it("generates a manifest parsePluginManifest accepts for every fixture", async () => {
     const fixtures: ClaudeCodePluginFixture[] = [
       FULL,

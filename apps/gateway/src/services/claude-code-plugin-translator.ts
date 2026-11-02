@@ -164,7 +164,12 @@ async function skillPieces(
   const taken = new Set<string>();
   return [...folders].sort(compareStrings).map((folder, index) => {
     const folderName = folder.slice(folder.lastIndexOf("/") + 1);
-    const id = PLUGIN_PIECE_ID_PATTERN.test(folderName) && !taken.has(folderName) ? folderName : `skill-${index + 1}`;
+    // A folder named like a generated id (`skill-<n>`, `connector-<n>`) would collide with one, so it gets a fallback.
+    const generated = /^(?:skill|connector)-\d+$/u.test(folderName);
+    const id =
+      PLUGIN_PIECE_ID_PATTERN.test(folderName) && !generated && !taken.has(folderName)
+        ? folderName
+        : `skill-${index + 1}`;
     taken.add(id);
     return { kind: "skill", id, path: folder };
   });
