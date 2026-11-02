@@ -54,7 +54,7 @@ export function createGatewayBrowserErrandService(inputs: GatewayBrowserErrandIn
     // APPROVE / DENY / STOP replies: the service's own deliveries, the owner rule, the approval runtime, a plain send.
     channelReplies: (service): ErrandChannelReplies => ({
       handle: createErrandReplyHandler({
-        pendingDeliveryFor: (connectionId, target) => service.pendingDeliveryFor(connectionId, target),
+        pendingDeliveryFor: (connectionId, target, sentAt) => service.pendingDeliveryFor(connectionId, target, sentAt),
         assertOwner: createErrandPressGuard(origin),
         resolveApproval: (approvalId, decision, resolvedBy) =>
           approvals.resolveApproval(approvalId, { decision, resolvedBy }),

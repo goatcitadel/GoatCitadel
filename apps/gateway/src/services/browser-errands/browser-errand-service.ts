@@ -163,27 +163,32 @@ export class BrowserErrandService {
   }
 
   /**
-   * The newest approval of the running errand delivered to this conversation whose stored record is still pending.
-   * Older, stale deliveries to the same conversation are skipped.
+   * The approval the running errand is waiting on right now, when it was delivered to this conversation no later than
+   * `sentAt` (when the answering message arrived) and its stored record is still pending. An older or stale delivery
+   * to the same conversation never counts, so a reply can only answer the question that was already in front of it.
    */
-  public async pendingDeliveryFor(connectionId: string, target: string): Promise<PendingErrandDelivery | undefined> {
+  public async pendingDeliveryFor(
+    connectionId: string,
+    target: string,
+    sentAt: number = Number.POSITIVE_INFINITY,
+  ): Promise<PendingErrandDelivery | undefined> {
     const errand = this.active;
-    if (!errand || errand.stopping) {
+    const gate = errand?.gate;
+    const approvalId = gate?.pendingApprovalId();
+    if (!errand || !gate || !approvalId || errand.stopping) {
       return undefined;
     }
-    const gate = errand.gate;
-    if (!gate) {
+    const delivered = errand.deliveries.some(
+      (item) =>
+        item.approvalId === approvalId &&
+        item.connectionId === connectionId &&
+        item.target === target &&
+        item.deliveredAt <= sentAt,
+    );
+    if (!delivered || !(await gate.isPending(approvalId))) {
       return undefined;
     }
-    const newestFirst = errand.deliveries
-      .filter((item) => item.connectionId === connectionId && item.target === target)
-      .reverse();
-    for (const delivery of newestFirst) {
-      if (await gate.isPending(delivery.approvalId)) {
-        return { approvalId: delivery.approvalId, errandId: errand.view.errandId };
-      }
-    }
-    return undefined;
+    return { approvalId, errandId: errand.view.errandId };
   }
 
   public getStatus(toolRunId: string): ErrandStatusView | undefined {

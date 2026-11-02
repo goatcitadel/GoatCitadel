@@ -41,6 +41,7 @@ import {
 } from "./chat-session-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
 import { buildNewAdapterCases } from "./inbound-channel-event-service.new-adapters.fixtures.js";
+import type { ErrandChannelReplies } from "./browser-errands/errand-channel-replies.js";
 
 describe("InboundChannelEventService", () => {
   const cleanups: Array<() => Promise<void>> = [];
@@ -1565,7 +1566,7 @@ describe("InboundChannelEventService", () => {
   });
 
   describe("errand approval replies", () => {
-    function errandReplies(answer: { handled: false } | { handled: true; reply: string }) {
+    function errandReplies(answer: { handled: false } | { handled: true; reply?: string }) {
       const replies = {
         handle: vi.fn(async () => answer),
         send: vi.fn(async () => undefined),
@@ -1587,6 +1588,8 @@ describe("InboundChannelEventService", () => {
         target: "chat-1",
         actorId: "user-1",
         text: "APPROVE",
+        sentAt: expect.any(Number),
+        recordAnswer: expect.any(Function),
       });
       expect(replies.send).toHaveBeenCalledWith({
         connectionId: "connection-1",
@@ -1627,6 +1630,75 @@ describe("InboundChannelEventService", () => {
         expect.objectContaining({ message: "Only the owner can answer this." }),
       );
       expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
+    });
+
+    it("never treats a voice transcription as an errand reply", async () => {
+      const { replies, errandReplies: getReplies } = errandReplies({ handled: true, reply: "Approved." });
+      const transcribe = vi.fn(async () => ({ ok: true as const, transcript: "APPROVE" }));
+      const harness = await createHarness({ errandReplies: getReplies, transcribeChannelVoice: transcribe });
+      const accepted = await harness.service.accept(
+        buildInput({
+          dispatchKind: "voice_agent_turn",
+          voiceRequest: { channel: "telegram", connectionConfig: {}, fileId: "voice-file-1", mimeType: "audio/ogg" },
+          voiceFallbackContent: "[telegram voice message]",
+        }),
+      );
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+      expect(replies.handle).not.toHaveBeenCalled();
+      expect(harness.ingestChannelMessage).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a rate-limited hint out of Chat without sending anything", async () => {
+      const { replies, errandReplies: getReplies } = errandReplies({ handled: true });
+      const harness = await createHarness({ errandReplies: getReplies });
+      const input = buildInput();
+      input.message.content = "approve";
+      const accepted = await harness.service.accept(input);
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+      expect(replies.send).not.toHaveBeenCalled();
+      expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
+    });
+
+    it("never lets a retried APPROVE answer a later approval or become a turn", async () => {
+      const resolved: string[] = [];
+      let pendingApprovalId = "approval-1";
+      const replies = {
+        // Resolves whatever is pending when it is called, after recording it first, like the real handler.
+        handle: vi.fn<ErrandChannelReplies["handle"]>(async (input) => {
+          const approvalId = pendingApprovalId;
+          await input.recordAnswer(approvalId);
+          resolved.push(approvalId);
+          return { handled: true, reply: "Approved." };
+        }),
+        send: vi
+          .fn<ErrandChannelReplies["send"]>()
+          .mockRejectedValueOnce(new Error("channel down"))
+          .mockResolvedValue(undefined),
+      };
+      const harness = await createHarness({ errandReplies: () => replies });
+      const input = buildInput();
+      input.message.content = "APPROVE";
+      const accepted = await harness.service.accept(input);
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "retry_wait");
+      expect(harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.commandOperationKey).toBe(
+        "errand-reply:approval-1",
+      );
+
+      // The errand moves on and a new approval is delivered to the same conversation before the retry runs.
+      pendingApprovalId = "approval-2";
+      harness.storage.db
+        .prepare("UPDATE inbound_channel_events SET next_attempt_at = ? WHERE event_id = ?")
+        .run(new Date(0).toISOString(), accepted.inboundEventId);
+      await harness.service.drain();
+      await waitFor(() => harness.storage.inboundChannelEvents.get(accepted.inboundEventId)?.status === "completed");
+
+      expect(resolved).toEqual(["approval-1"]);
+      expect(replies.handle).toHaveBeenCalledTimes(1);
+      expect(replies.send).toHaveBeenLastCalledWith(
+        expect.objectContaining({ message: "This was already answered.", target: "chat-1" }),
+      );
+      expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
+      expect(harness.respondToExistingChatMessage).not.toHaveBeenCalled();
     });
 
     it("never treats a durable command as an errand reply", async () => {

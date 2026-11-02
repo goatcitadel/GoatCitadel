@@ -70,6 +70,7 @@ export function fakeGate(spy: Spy, overrides: Partial<ErrandApprovalGate> = {}):
     withdrawPending: spy(async () => undefined),
     recordAfterScreenshot: spy(async () => undefined),
     isPending: spy(async () => true),
+    pendingApprovalId: spy(() => undefined),
     lastReason: undefined,
     ...overrides,
   };

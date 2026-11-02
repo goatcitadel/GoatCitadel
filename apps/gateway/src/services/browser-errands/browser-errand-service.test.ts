@@ -605,11 +605,14 @@ describe("BrowserErrandService dispose", () => {
 });
 
 describe("BrowserErrandService channel deliveries", () => {
-  /** Starts an errand that waits in its first approval until the returned release is called. */
-  async function runningErrand(isPending: (approvalId: string) => Promise<boolean>) {
+  /** Starts an errand that waits in its first approval until it is stopped. */
+  async function runningErrand(state: { current?: string; pending: Set<string> }) {
     let asked!: () => void;
     const approvalAsked = new Promise<void>((resolve) => (asked = resolve));
-    const gate = fakeGate(vi.fn, { isPending: vi.fn(isPending) });
+    const gate = fakeGate(vi.fn, {
+      isPending: vi.fn(async (id: string) => state.pending.has(id)),
+      pendingApprovalId: vi.fn(() => state.current),
+    });
     const built = buildService(vi.fn, {
       createGate: (deps) => {
         gate.request = vi.fn(
@@ -631,12 +634,12 @@ describe("BrowserErrandService channel deliveries", () => {
       await running;
       await built.service.dispose();
     };
-    return { service: built.service, gate, errandId, finish };
+    return { service: built.service, errandId, finish };
   }
 
-  it("answers with the newest pending approval delivered to the conversation, skipping stale ones (Review Focus 1)", async () => {
-    const pending = new Set(["approval-old", "approval-new"]);
-    const { service, errandId, finish } = await runningErrand(async (id) => pending.has(id));
+  it("answers only the approval the errand is waiting on, never an older one (Review Focus 1)", async () => {
+    const state = { current: "approval-new" as string | undefined, pending: new Set(["approval-old", "approval-new"]) };
+    const { service, errandId, finish } = await runningErrand(state);
     service.recordDelivery({ approvalId: "approval-old", connectionId: "conn-1", target: "chat-1" });
     service.recordDelivery({ approvalId: "approval-other", connectionId: "conn-1", target: "chat-2" });
     service.recordDelivery({ approvalId: "approval-new", connectionId: "conn-1", target: "chat-1" });
@@ -644,19 +647,34 @@ describe("BrowserErrandService channel deliveries", () => {
       approvalId: "approval-new",
       errandId,
     });
-    pending.delete("approval-new");
-    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toEqual({
-      approvalId: "approval-old",
-      errandId,
-    });
+    // The current one resolves: the stale older delivery, though still pending in storage, is not a fallback.
+    state.pending.delete("approval-new");
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    state.current = "approval-old";
     await expect(service.pendingDeliveryFor("conn-1", "chat-9")).resolves.toBeUndefined();
     await expect(service.pendingDeliveryFor("conn-2", "chat-1")).resolves.toBeUndefined();
     await finish();
   });
 
-  it("has nothing pending once the stored approval is resolved, or after the errand ends", async () => {
-    const { service, finish } = await runningErrand(async () => false);
+  it("does not let a reply answer an approval delivered after the reply arrived", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set(["approval-1"]) };
+    const { service, finish } = await runningErrand(state);
+    const before = Date.now() - 1;
     service.recordDelivery({ approvalId: "approval-1", connectionId: "conn-1", target: "chat-1" });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", before)).resolves.toBeUndefined();
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1", Date.now())).resolves.toMatchObject({
+      approvalId: "approval-1",
+    });
+    await finish();
+  });
+
+  it("has nothing pending once the stored approval is resolved, while none is waiting, or after the errand ends", async () => {
+    const state = { current: "approval-1" as string | undefined, pending: new Set<string>() };
+    const { service, finish } = await runningErrand(state);
+    service.recordDelivery({ approvalId: "approval-1", connectionId: "conn-1", target: "chat-1" });
+    await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
+    state.pending.add("approval-1");
+    state.current = undefined;
     await expect(service.pendingDeliveryFor("conn-1", "chat-1")).resolves.toBeUndefined();
     await finish();
     service.recordDelivery({ approvalId: "approval-2", connectionId: "conn-1", target: "chat-1" });

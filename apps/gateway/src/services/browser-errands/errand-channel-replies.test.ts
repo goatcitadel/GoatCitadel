@@ -8,6 +8,7 @@ import {
   ERRAND_REPLY_APPROVED_COPY,
   ERRAND_REPLY_DENIED_COPY,
   ERRAND_REPLY_NEAR_MISS_COPY,
+  ERRAND_REPLY_STOP_NEAR_MISS_COPY,
   ERRAND_REPLY_STOPPING_COPY,
   type ErrandReplyHandlerOptions,
 } from "./errand-channel-replies.js";
@@ -34,80 +35,133 @@ describe("classifyErrandReply", () => {
 });
 
 function createHandler(overrides: Partial<ErrandReplyHandlerOptions> = {}) {
+  let clock = 1_000_000;
+  const order: string[] = [];
   const options = {
     pendingDeliveryFor: vi.fn<ErrandReplyHandlerOptions["pendingDeliveryFor"]>(async () => ({
       approvalId: "approval-1",
       errandId: "errand-1",
     })),
     assertOwner: vi.fn<ErrandReplyHandlerOptions["assertOwner"]>(async () => undefined),
-    resolveApproval: vi.fn<ErrandReplyHandlerOptions["resolveApproval"]>(async () => ({})),
-    stopErrand: vi.fn<ErrandReplyHandlerOptions["stopErrand"]>(async () => true),
+    resolveApproval: vi.fn<ErrandReplyHandlerOptions["resolveApproval"]>(async () => {
+      order.push("resolve");
+      return {};
+    }),
+    stopErrand: vi.fn<ErrandReplyHandlerOptions["stopErrand"]>(async () => {
+      order.push("stop");
+      return true;
+    }),
+    now: () => clock,
     ...overrides,
   };
-  return { options, handle: createErrandReplyHandler(options) };
+  const recordAnswer = vi.fn(async (approvalId: string) => {
+    order.push(`record:${approvalId}`);
+  });
+  const input = (text: string, target = "chat-1") => ({
+    connectionId: "connection-1",
+    channelKey: "telegram",
+    target,
+    actorId: "user-1",
+    text,
+    sentAt: 5_000,
+    recordAnswer,
+  });
+  return {
+    options,
+    order,
+    recordAnswer,
+    input,
+    handle: createErrandReplyHandler(options),
+    advance: (ms: number) => (clock += ms),
+  };
 }
 
-const input = (text: string) => ({
-  connectionId: "connection-1",
-  channelKey: "telegram",
-  target: "chat-1",
-  actorId: "user-1",
-  text,
-});
+const notOwner = () =>
+  vi.fn(async () => {
+    throw new ErrandOwnerOnlyError();
+  });
 
 describe("createErrandReplyHandler", () => {
-  it("approves the pending approval as the channel sender", async () => {
-    const { options, handle } = createHandler();
+  it("records the answered approval, then approves it as the channel sender", async () => {
+    const { options, order, input, handle } = createHandler();
     expect(await handle(input("APPROVE"))).toEqual({ handled: true, reply: ERRAND_REPLY_APPROVED_COPY });
-    expect(options.pendingDeliveryFor).toHaveBeenCalledWith("connection-1", "chat-1");
+    expect(options.pendingDeliveryFor).toHaveBeenCalledWith("connection-1", "chat-1", 5_000);
     expect(options.assertOwner).toHaveBeenCalledWith({ connectorId: "integration:connection-1", actorId: "user-1" });
     expect(options.resolveApproval).toHaveBeenCalledWith("approval-1", "approve", "telegram:user-1");
+    expect(order).toEqual(["record:approval-1", "resolve"]);
   });
 
   it("denies with DENY", async () => {
-    const { options, handle } = createHandler();
+    const { options, input, handle } = createHandler();
     expect(await handle(input("DENY"))).toEqual({ handled: true, reply: ERRAND_REPLY_DENIED_COPY });
     expect(options.resolveApproval).toHaveBeenCalledWith("approval-1", "reject", "telegram:user-1");
   });
 
-  it("stops the errand with STOP under the channel sender", async () => {
-    const { options, handle } = createHandler();
+  it("records, then stops the errand with STOP under the channel sender", async () => {
+    const { options, order, input, handle } = createHandler();
     expect(await handle(input("STOP"))).toEqual({ handled: true, reply: ERRAND_REPLY_STOPPING_COPY });
     expect(options.stopErrand).toHaveBeenCalledWith("errand-1", "telegram:user-1");
     expect(options.resolveApproval).not.toHaveBeenCalled();
+    expect(order).toEqual(["record:approval-1", "stop"]);
   });
 
-  it("hints at the capitals for a near miss and resolves nothing", async () => {
-    const { options, handle } = createHandler();
+  it.each([
+    ["approve", ERRAND_REPLY_NEAR_MISS_COPY],
+    ["yes", ERRAND_REPLY_NEAR_MISS_COPY],
+    ["Deny", ERRAND_REPLY_NEAR_MISS_COPY],
+    ["stop", ERRAND_REPLY_STOP_NEAR_MISS_COPY],
+    ["Stop", ERRAND_REPLY_STOP_NEAR_MISS_COPY],
+    [" sToP ", ERRAND_REPLY_STOP_NEAR_MISS_COPY],
+  ])("hints %j with %j and resolves nothing", async (text, copy) => {
+    const { options, recordAnswer, input, handle } = createHandler();
+    expect(await handle(input(text))).toEqual({ handled: true, reply: copy });
+    expect(options.resolveApproval).not.toHaveBeenCalled();
+    expect(options.stopErrand).not.toHaveBeenCalled();
+    expect(recordAnswer).not.toHaveBeenCalled();
+  });
+
+  it("sends a near-miss hint to one conversation at most once every 30 seconds", async () => {
+    const { input, handle, advance } = createHandler();
     expect(await handle(input("approve"))).toEqual({ handled: true, reply: ERRAND_REPLY_NEAR_MISS_COPY });
+    advance(29_999);
+    expect(await handle(input("stop"))).toEqual({ handled: true });
+    expect(await handle(input("approve", "chat-2"))).toEqual({ handled: true, reply: ERRAND_REPLY_NEAR_MISS_COPY });
+    advance(1);
+    expect(await handle(input("approve"))).toEqual({ handled: true, reply: ERRAND_REPLY_NEAR_MISS_COPY });
+  });
+
+  it("sends the owner-only refusal to one conversation at most once every 30 seconds", async () => {
+    const { options, input, handle, advance } = createHandler({ assertOwner: notOwner() });
+    expect(await handle(input("APPROVE"))).toEqual({ handled: true, reply: "Only the owner can answer this." });
+    advance(10_000);
+    expect(await handle(input("APPROVE"))).toEqual({ handled: true });
+    advance(20_000);
+    expect(await handle(input("APPROVE"))).toEqual({ handled: true, reply: "Only the owner can answer this." });
     expect(options.resolveApproval).not.toHaveBeenCalled();
   });
 
   it("passes through when nothing is pending in the conversation", async () => {
-    const { options, handle } = createHandler({ pendingDeliveryFor: vi.fn(async () => undefined) });
+    const { options, input, handle } = createHandler({ pendingDeliveryFor: vi.fn(async () => undefined) });
     expect(await handle(input("APPROVE"))).toEqual({ handled: false });
     expect(options.resolveApproval).not.toHaveBeenCalled();
   });
 
   it("passes through ordinary text without looking anything up", async () => {
-    const { options, handle } = createHandler();
+    const { options, input, handle } = createHandler();
     expect(await handle(input("what are you doing?"))).toEqual({ handled: false });
     expect(options.pendingDeliveryFor).not.toHaveBeenCalled();
   });
 
   it("refuses a sender who is not the owner and leaves the approval pending", async () => {
-    const { options, handle } = createHandler({
-      assertOwner: vi.fn(async () => {
-        throw new ErrandOwnerOnlyError();
-      }),
-    });
+    const { options, recordAnswer, input, handle } = createHandler({ assertOwner: notOwner() });
     expect(await handle(input("APPROVE"))).toEqual({ handled: true, reply: "Only the owner can answer this." });
     expect(options.resolveApproval).not.toHaveBeenCalled();
     expect(options.stopErrand).not.toHaveBeenCalled();
+    expect(recordAnswer).not.toHaveBeenCalled();
   });
 
   it("answers an approval resolved elsewhere first with already answered (Review Focus 2)", async () => {
-    const { handle } = createHandler({
+    const { input, handle } = createHandler({
       resolveApproval: vi.fn(async () => {
         throw new ConflictError({ message: "Approval approval-1 is already resolved" });
       }),
@@ -115,8 +169,15 @@ describe("createErrandReplyHandler", () => {
     expect(await handle(input("APPROVE"))).toEqual({ handled: true, reply: ERRAND_REPLY_ALREADY_ANSWERED_COPY });
   });
 
+  it("resolves nothing when the answer cannot be recorded first", async () => {
+    const { options, input, handle } = createHandler();
+    const failing = { ...input("APPROVE"), recordAnswer: vi.fn(async () => Promise.reject(new Error("claim lost"))) };
+    await expect(handle(failing)).rejects.toThrow("claim lost");
+    expect(options.resolveApproval).not.toHaveBeenCalled();
+  });
+
   it("lets an unexpected resolve failure through", async () => {
-    const { handle } = createHandler({
+    const { input, handle } = createHandler({
       resolveApproval: vi.fn(async () => {
         throw new Error("storage down");
       }),
