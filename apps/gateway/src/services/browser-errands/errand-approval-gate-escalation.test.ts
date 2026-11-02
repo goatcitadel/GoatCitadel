@@ -4,6 +4,7 @@ import type { ErrandTargetInfo } from "@goatcitadel/policy-engine";
 import { createErrandApprovalGate, type ErrandApprovalGateDeps } from "./errand-approval-gate.js";
 import { ERRAND_ESCALATE_AFTER_MS } from "./errand-constants.js";
 import type { ErrandApprovalInput } from "./errand-loop.js";
+import type { ErrandEscalationStage } from "./errand-escalation.js";
 import type { ErrandOrigin } from "./errand-origin.js";
 
 const PNG = Buffer.from("png");
@@ -43,7 +44,7 @@ function approvalInput(): ErrandApprovalInput {
 }
 
 /** A gate over in-memory approval records, so the 30-second timer runs on fake time. */
-function setup(origin: ErrandOrigin | undefined) {
+function setup(origin: ErrandOrigin | undefined, options: { escalateThrows?: boolean } = {}) {
   const records = new Map<string, ApprovalRequest>();
   let created = 0;
   const update = (approvalId: string, patch: Partial<ApprovalRequest>): void => {
@@ -85,7 +86,12 @@ function setup(origin: ErrandOrigin | undefined) {
     },
   };
   let uploads = 0;
-  const escalate = vi.fn(async (_approval: ApprovalRequest, _origin: ErrandOrigin) => undefined);
+  const escalate = vi.fn((_approval: ApprovalRequest, _origin: ErrandOrigin, _stage: ErrandEscalationStage) => {
+    if (options.escalateThrows) {
+      throw new Error("escalate threw before returning a promise");
+    }
+    return Promise.resolve();
+  });
   const controller = new AbortController();
   const gate = createErrandApprovalGate({
     sessionId: "session-1",
@@ -139,6 +145,7 @@ describe("errand approval gate escalation", () => {
     expect(escalate).toHaveBeenCalledWith(
       expect.objectContaining({ approvalId: "approval-1", kind: "browser.errand.action" }),
       { kind: "pc" },
+      "waited",
     );
     controller.abort();
     await vi.advanceTimersByTimeAsync(1_000);
@@ -168,17 +175,61 @@ describe("errand approval gate escalation", () => {
     expect(escalate).not.toHaveBeenCalled();
   });
 
-  it("escalates a channel errand's approval immediately to its origin", async () => {
+  it("asks a channel errand's conversation immediately and sends the phone stage at 30 seconds", async () => {
     const { gate, escalate, controller } = setup(CHANNEL_ORIGIN);
     const answer = gate.request(approvalInput());
     await settle();
     expect(escalate).toHaveBeenCalledTimes(1);
-    expect(escalate).toHaveBeenCalledWith(expect.objectContaining({ approvalId: "approval-1" }), CHANNEL_ORIGIN);
-    await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS * 2);
+    expect(escalate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ approvalId: "approval-1" }),
+      CHANNEL_ORIGIN,
+      "asked",
+    );
+    await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS - 1);
     expect(escalate).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(escalate).toHaveBeenCalledTimes(2);
+    expect(escalate).toHaveBeenLastCalledWith(
+      expect.objectContaining({ approvalId: "approval-1" }),
+      CHANNEL_ORIGIN,
+      "waited",
+    );
+    await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS * 2);
+    expect(escalate).toHaveBeenCalledTimes(2);
     controller.abort();
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(answer).resolves.toBe("stopped");
+  });
+
+  it("sends a channel errand's approval answered at 10 seconds only to its conversation, never the phone", async () => {
+    const { gate, escalate, resolve } = setup(CHANNEL_ORIGIN);
+    const answer = gate.request(approvalInput());
+    await settle();
+    await vi.advanceTimersByTimeAsync(10_000);
+    await resolve("approval-1", "reject");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(answer).resolves.toBe("denied");
+    await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS * 2);
+    expect(escalate).toHaveBeenCalledTimes(1);
+    expect(escalate).toHaveBeenCalledWith(expect.anything(), CHANNEL_ORIGIN, "asked");
+  });
+
+  it("logs an escalation that throws synchronously and keeps waiting for the decision", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const { gate, escalate, resolve } = setup(CHANNEL_ORIGIN, { escalateThrows: true });
+    const answer = gate.request(approvalInput());
+    await settle();
+    await vi.advanceTimersByTimeAsync(ERRAND_ESCALATE_AFTER_MS);
+    expect(escalate).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      "[goatcitadel] errand approval could not be sent beyond the window and Chat",
+      expect.objectContaining({ approvalId: "approval-1", stage: "asked" }),
+    );
+    await resolve("approval-1", "approve");
+    await vi.advanceTimersByTimeAsync(1_000);
+    await expect(answer).resolves.toBe("approved");
+    warn.mockRestore();
   });
 
   it("gives each re-ask its own timer", async () => {
@@ -197,7 +248,11 @@ describe("errand approval gate escalation", () => {
     // Past 30 s from the re-ask (created at about 10.5 s).
     await vi.advanceTimersByTimeAsync(10_000);
     expect(escalate).toHaveBeenCalledTimes(1);
-    expect(escalate).toHaveBeenCalledWith(expect.objectContaining({ approvalId: "approval-2" }), { kind: "pc" });
+    expect(escalate).toHaveBeenCalledWith(
+      expect.objectContaining({ approvalId: "approval-2" }),
+      { kind: "pc" },
+      "waited",
+    );
     controller.abort();
     await vi.advanceTimersByTimeAsync(1_000);
     await expect(answer).resolves.toBe("stopped");

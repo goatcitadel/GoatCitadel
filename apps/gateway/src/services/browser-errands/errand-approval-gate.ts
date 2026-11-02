@@ -13,6 +13,7 @@ import { withCanonicalApprovalOutcome } from "../approval-canonical-outcome.js";
 import { ERRAND_APPROVAL_KIND, ERRAND_APPROVAL_TTL_MS, ERRAND_ESCALATE_AFTER_MS } from "./errand-constants.js";
 import { persistableUrl, type ErrandApprovalInput, type ErrandLoopDeps } from "./errand-loop.js";
 import type { ErrandOrigin } from "./errand-origin.js";
+import type { ErrandEscalationStage } from "./errand-escalation.js";
 
 export { ERRAND_APPROVAL_KIND };
 export const ERRAND_TOOL_NAME = "browser.errand";
@@ -74,10 +75,11 @@ export interface ErrandApprovalGateDeps {
   /** Where the errand was started; with `escalate`, decides when an approval also goes beyond the window and Chat. */
   origin?: ErrandOrigin;
   /**
-   * Sends a waiting approval out beyond the window and Chat: at once for a channel errand, after
-   * ERRAND_ESCALATE_AFTER_MS for a PC errand. Never awaited by the gate, and cancelled once the approval is decided.
+   * Sends a waiting approval out beyond the window and Chat: stage "asked" at once (channel errands only), stage
+   * "waited" after ERRAND_ESCALATE_AFTER_MS (every errand). Never awaited by the gate; the "waited" timer is cancelled
+   * once the approval is decided or the errand stops.
    */
-  escalate?: (approval: ApprovalRequest, origin: ErrandOrigin) => Promise<void>;
+  escalate?: (approval: ApprovalRequest, origin: ErrandOrigin, stage: ErrandEscalationStage) => Promise<void>;
 }
 
 export interface ErrandApprovalGate {
@@ -396,28 +398,34 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
   };
 
   /**
-   * Sends the approval beyond the window and Chat: at once for a channel errand, after ERRAND_ESCALATE_AFTER_MS for a
-   * PC errand. Returns the cancel for the timer; each re-ask is a new approval with its own.
+   * Sends the approval beyond the window and Chat: a channel errand's "asked" stage at once, and every errand's
+   * "waited" stage after ERRAND_ESCALATE_AFTER_MS. Returns the cancel for the timer; each re-ask is a new approval
+   * with its own.
    */
   const scheduleEscalation = (approval: ApprovalRequest): (() => void) => {
     if (!escalate || !errandOrigin) {
       return () => undefined;
     }
-    const send = (): void => {
-      void escalate(approval, errandOrigin).catch((error: unknown) => {
-        // The approval still waits in the window and Chat; only the extra reach failed.
-        // eslint-disable-next-line no-console -- bounded diagnostic; the approval record is unaffected.
-        console.warn("[goatcitadel] errand approval could not be sent beyond the window and Chat", {
-          approvalId: approval.approvalId,
-          error: error instanceof Error ? error.message : String(error),
+    const send = (stage: ErrandEscalationStage): void => {
+      // A synchronous throw from `escalate` lands in the same catch as a rejection.
+      void Promise.resolve()
+        .then(() => escalate(approval, errandOrigin, stage))
+        .catch((error: unknown) => {
+          // The approval still waits in the window and Chat; only the extra reach failed.
+          // eslint-disable-next-line no-console -- bounded diagnostic; the approval record is unaffected.
+          console.warn("[goatcitadel] errand approval could not be sent beyond the window and Chat", {
+            approvalId: approval.approvalId,
+            stage,
+            error: error instanceof Error ? error.message : String(error),
+          });
         });
-      });
     };
     if (errandOrigin.kind === "channel") {
-      send();
-      return () => undefined;
+      send("asked");
     }
-    const timer = setTimeout(send, ERRAND_ESCALATE_AFTER_MS);
+    const timer = setTimeout(() => send("waited"), ERRAND_ESCALATE_AFTER_MS);
+    // The timer never keeps the Gateway process alive on its own.
+    timer.unref?.();
     return () => clearTimeout(timer);
   };
 

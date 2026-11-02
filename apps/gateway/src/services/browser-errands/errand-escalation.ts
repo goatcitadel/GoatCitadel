@@ -1,6 +1,8 @@
 /**
- * Sends a waiting errand approval beyond the window and Chat. A channel-started errand asks in its own conversation;
- * a PC-started errand asks in the conversation the operator picked for errand approvals, and on the phone.
+ * Sends a waiting errand approval beyond the window and Chat, in two stages:
+ * - "asked" (right after the approval is created): a channel-started errand asks in its own conversation;
+ * - "waited" (once it has waited ERRAND_ESCALATE_AFTER_MS): a PC-started errand asks in the conversation the operator
+ *   picked for errand approvals, and every errand's approval goes to the phone.
  *
  * The approval is re-read first, so an approval answered in the meantime goes nowhere. A channel that can't take the
  * approval (disconnected, unready, failed send) is skipped with a warning: the phone still gets its push, and the
@@ -22,13 +24,20 @@ export interface ErrandEscalationDeps {
   deliver(input: ErrandApprovalDeliveryInput): Promise<ErrandApprovalDeliveryResult>;
   /** The Chat session id of the conversation the operator picked for PC errand approvals; undefined when none. */
   approvalSessionId(): string | undefined;
-  /** The channel conversation a Chat session is bound to, or undefined when it isn't bound to one. */
+  /** The operator's own direct channel conversation a Chat session is bound to; undefined for anything else. */
   conversationFor(sessionId: string): Promise<ErrandApprovalConversation | undefined>;
   /** Queues the one phone push for this approval; the push itself checks the approval is still pending. */
   pushToPhone(approvalId: string): Promise<unknown>;
 }
 
-export type ErrandEscalate = (approval: ApprovalRequest, origin: ErrandOrigin) => Promise<void>;
+/** "asked": right after the approval is created; "waited": once it has waited ERRAND_ESCALATE_AFTER_MS. */
+export type ErrandEscalationStage = "asked" | "waited";
+
+export type ErrandEscalate = (
+  approval: ApprovalRequest,
+  origin: ErrandOrigin,
+  stage: ErrandEscalationStage,
+) => Promise<void>;
 
 export function createErrandEscalation(deps: ErrandEscalationDeps): ErrandEscalate {
   const { readApproval, deliver, approvalSessionId, conversationFor, pushToPhone } = deps;
@@ -58,7 +67,7 @@ export function createErrandEscalation(deps: ErrandEscalationDeps): ErrandEscala
     }
     const conversation = await conversationFor(sessionId).catch(() => undefined);
     if (!conversation) {
-      warn("errand approval conversation is not a channel conversation", approval, undefined, "no_binding");
+      warn("errand approval conversation is not your own direct conversation", approval, undefined, "not_own_direct");
     }
     return conversation;
   };
@@ -69,18 +78,27 @@ export function createErrandEscalation(deps: ErrandEscalationDeps): ErrandEscala
     });
   };
 
-  return async (approval, origin) => {
+  return async (approval, origin, stage) => {
+    // A PC errand has nothing to send until it has waited.
+    if (stage === "asked" && origin.kind !== "channel") {
+      return;
+    }
     const current = await readApproval(approval.approvalId).catch(() => undefined);
     if (!current || current.status !== "pending") {
       return;
     }
-    if (origin.kind === "channel") {
-      await sendToConversation(current, origin);
+    if (stage === "asked") {
+      // A channel errand asks in its own conversation at once.
+      if (origin.kind === "channel") {
+        await sendToConversation(current, origin);
+      }
       return;
     }
-    const conversation = await pickedConversation(current);
-    if (conversation) {
-      await sendToConversation(current, conversation);
+    if (origin.kind === "pc") {
+      const conversation = await pickedConversation(current);
+      if (conversation) {
+        await sendToConversation(current, conversation);
+      }
     }
     await sendToPhone(current);
   };

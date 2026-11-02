@@ -1,6 +1,11 @@
 /** Builds the errand escalation from live Gateway pieces, so the errand composition only hands it over. */
 
-import type { ConnectorRecord } from "@goatcitadel/contracts";
+import type {
+  ChatSessionBindingRecord,
+  ConnectorRecord,
+  DiscordPairingRecord,
+  IntegrationConnection,
+} from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { buildGatewayConnectorRecords } from "../connector-registry.js";
 import { enqueueMobilePushApprovalRefreshNow } from "../mobile-push-service.js";
@@ -11,6 +16,8 @@ import {
   type ErrandApprovalDeliveryRecord,
 } from "./errand-approval-delivery.js";
 import { createErrandEscalation, type ErrandEscalate } from "./errand-escalation.js";
+import { approvedDiscordActorIds } from "./errand-origin.js";
+import { isErrandOwner } from "./errand-owner.js";
 
 const INTEGRATION_CONNECTOR_PREFIX = "integration:";
 
@@ -19,6 +26,40 @@ export interface ErrandEscalationSources {
   config: object;
   storage: AsyncStorage;
   approvals: Pick<ErrandApprovalDeliveryDeps, "createApprovalRemoteActionToken">;
+  /** The Gateway's Discord pairing records, for the owner rule on Discord connections; called on `sources`. */
+  readDiscordPairings(): Promise<DiscordPairingRecord[]>;
+}
+
+/**
+ * The bound conversation when it is the operator's own direct conversation on the connection: a direct conversation
+ * whose other person passes the errand owner rule (marked "This is you" and still let in by the allowlist or an
+ * approved pairing). A group, a conversation whose kind was never recorded, or someone else's direct conversation is
+ * refused, so a PC errand's approval never goes to anyone but the operator.
+ */
+export function ownDirectConversation(
+  binding: ChatSessionBindingRecord | undefined,
+  connection: Pick<IntegrationConnection, "connectionId" | "key" | "config">,
+  channelKey: string,
+  discordPairings: readonly DiscordPairingRecord[],
+): ErrandApprovalConversation | undefined {
+  const connectionId = binding?.connectionId?.trim();
+  const target = binding?.target?.trim();
+  const counterpart = binding?.conversation?.kind === "direct" ? binding.conversation.counterpartActorId?.trim() : "";
+  if (!binding || binding.transport !== "integration" || !connectionId || !target || !counterpart) {
+    return undefined;
+  }
+  if (connection.connectionId !== connectionId) {
+    return undefined;
+  }
+  const owner = isErrandOwner({
+    channelKey: connection.key,
+    config: connection.config,
+    actorId: counterpart,
+    ...(connection.key === "discord"
+      ? { discordApprovedActorIds: approvedDiscordActorIds(discordPairings, connectionId) }
+      : {}),
+  });
+  return owner ? { connectionId, channelKey, target, conversation: "direct" } : undefined;
 }
 
 /**
@@ -64,22 +105,17 @@ export function createGatewayErrandEscalation(
     conversationFor: async (sessionId): Promise<ErrandApprovalConversation | undefined> => {
       const binding = await chatSessionBindings.get(sessionId);
       const connectionId = binding?.connectionId?.trim();
-      const target = binding?.target?.trim();
-      if (!binding || binding.transport !== "integration" || !connectionId || !target) {
+      if (!binding || !connectionId) {
         return undefined;
       }
+      const connection = await integrationConnections.get(connectionId);
       const channelKey =
         (await sessions.getBySessionId(sessionId).then(
           (session) => session.channel?.trim(),
           () => undefined,
-        )) || (await integrationConnections.get(connectionId)).key;
-      return {
-        connectionId,
-        channelKey,
-        target,
-        // A conversation whose kind was never recorded is treated as a group: no screenshots go to it.
-        conversation: binding.conversation?.kind === "direct" ? "direct" : "group",
-      };
+        )) || connection.key;
+      const discordPairings = connection.key === "discord" ? await sources.readDiscordPairings() : [];
+      return ownDirectConversation(binding, connection, channelKey, discordPairings);
     },
     pushToPhone: (approvalId) => enqueueMobilePushApprovalRefreshNow(storage, approvalId),
   });
