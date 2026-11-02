@@ -5,7 +5,9 @@ import {
   admitCompanionSignedDecision,
   COMPANION_SIGNED_APPROVALS_ENABLED,
   COMPANION_APPROVE_REFUSED_MESSAGE,
+  COMPANION_RESOLUTION_NOTE_MAX_LENGTH,
   companionDecisionPayloadSha256,
+  refuseCompanionReject,
   type CompanionSignedDecisionAdmissionInput,
 } from "./companion-signed-approval.js";
 import type { MobileApprovalSignatureVerification } from "./mobile-approval-key-service.js";
@@ -108,6 +110,42 @@ describe("companion signed approval admission", () => {
     const verify = vi.fn(async (): Promise<MobileApprovalSignatureVerification> => ({ verified: false, reason }));
     const result = await admitCompanionSignedDecision(admissionInput(), { enabled: true, verify });
     expect(result).toEqual({ admitted: false, statusCode, error });
+  });
+
+  it("refuses an approve that carries an edited payload, and an edit without one, before verifying", async () => {
+    const verify = vi.fn();
+    const approveWithEdit = await admitCompanionSignedDecision(admissionInput({ editedPayload: { step: 9 } }), {
+      enabled: true,
+      verify,
+    });
+    expect(approveWithEdit).toEqual({
+      admitted: false,
+      statusCode: 400,
+      error: "An approve from the phone can't change what is approved. Use edit for that.",
+    });
+    const editWithout = await admitCompanionSignedDecision(admissionInput({ decision: "edit" }), {
+      enabled: true,
+      verify,
+    });
+    expect(editWithout).toEqual({
+      admitted: false,
+      statusCode: 400,
+      error: "An edit from the phone needs the edited details.",
+    });
+    expect(verify).not.toHaveBeenCalled();
+  });
+
+  it("bounds a companion's resolution note and keeps a companion reject from changing the payload", () => {
+    expect(refuseCompanionReject({})).toBeUndefined();
+    expect(refuseCompanionReject({ resolutionNote: "n".repeat(COMPANION_RESOLUTION_NOTE_MAX_LENGTH) })).toBeUndefined();
+    expect(refuseCompanionReject({ editedPayload: {} })).toEqual({
+      statusCode: 400,
+      error: "A reject from the phone can't change the request's details.",
+    });
+    expect(refuseCompanionReject({ resolutionNote: "n".repeat(COMPANION_RESOLUTION_NOTE_MAX_LENGTH + 1) })).toEqual({
+      statusCode: 400,
+      error: `A note from the phone can be at most ${COMPANION_RESOLUTION_NOTE_MAX_LENGTH} characters.`,
+    });
   });
 
   it("fails closed when the verifier throws", async () => {

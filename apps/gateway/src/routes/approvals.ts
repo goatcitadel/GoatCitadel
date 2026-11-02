@@ -3,6 +3,8 @@ import { z } from "zod";
 import {
   COMPANION_APPROVE_REFUSED_MESSAGE,
   companionSignedDecisionSchema,
+  refuseCompanionNote,
+  refuseCompanionReject,
 } from "../services/companion-signed-approval.js";
 import { timingSafeStringEqual } from "../services/crypto-equals.js";
 import { DEVICE_ACCESS_APPROVAL_KIND } from "../services/device-access-helpers.js";
@@ -228,13 +230,17 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     if (!params.success || !query.success) {
       return reply.code(400).send({ error: "Invalid approval read." });
     }
+    const companion = request.authActorSource === "companion";
+    if (companion) {
+      // Set before the read, so a failed read is not cached either.
+      reply.header("Cache-Control", "private, no-store");
+    }
     try {
       const approval = await approvals.getApproval(params.data.approvalId, query.data.workspaceId);
       const projected = projectApprovalPublicResponse(approval);
-      if (request.authActorSource !== "companion") {
+      if (!companion) {
         return reply.send(projected);
       }
-      reply.header("Cache-Control", "private, no-store");
       // Only the paired phone gets an errand's plain line and spotlight screenshot.
       const errandPhoneView = await buildErrandPhoneApprovalView(approval, errandScreenshotReads(fastify));
       return reply.send(errandPhoneView ? { ...projected, errandPhoneView } : projected);
@@ -275,12 +281,16 @@ export const approvalsRoutes: FastifyPluginAsync = async (fastify) => {
     const { signedDecision, ...decisionInput } = parsed.data;
 
     try {
-      if (request.authActorSource === "companion" && decisionInput.decision !== "reject") {
-        const refusal = await refuseUnsignedCompanionDecision(fastify, request, approvalId, {
-          decision: decisionInput.decision,
-          editedPayload: decisionInput.editedPayload,
-          signedDecision,
-        });
+      if (request.authActorSource === "companion") {
+        const refusal =
+          decisionInput.decision === "reject"
+            ? refuseCompanionReject(decisionInput)
+            : await refuseUnsignedCompanionDecision(fastify, request, approvalId, {
+                decision: decisionInput.decision,
+                editedPayload: decisionInput.editedPayload,
+                resolutionNote: decisionInput.resolutionNote,
+                signedDecision,
+              });
         if (refusal) {
           return reply.code(refusal.statusCode).send({ error: refusal.error });
         }
@@ -452,6 +462,7 @@ async function refuseUnsignedCompanionDecision(
   input: {
     decision: "approve" | "edit";
     editedPayload?: Record<string, unknown>;
+    resolutionNote?: string;
     signedDecision?: z.infer<typeof companionSignedDecisionSchema>;
   },
 ): Promise<{ statusCode: number; error: string } | undefined> {
@@ -469,6 +480,10 @@ async function refuseUnsignedCompanionDecision(
   });
   if (!admission.admitted) {
     return { statusCode: admission.statusCode, error: admission.error };
+  }
+  const noteRefusal = refuseCompanionNote(input.resolutionNote);
+  if (noteRefusal) {
+    return noteRefusal;
   }
   const approval = await fastify.services.approvals.getApproval(approvalId);
   if (approval.kind === DEVICE_ACCESS_APPROVAL_KIND) {

@@ -74,6 +74,33 @@ const REFUSALS: Record<
   signature_mismatch: { statusCode: 403, error: "The phone's signature does not match this approval and decision." },
 };
 
+/** The longest resolution note a paired phone may send with its decision. */
+export const COMPANION_RESOLUTION_NOTE_MAX_LENGTH = 500;
+
+/** Checks every companion decision shares: no oversized note. A reject also never changes the request's payload. */
+export function refuseCompanionReject(input: {
+  editedPayload?: Record<string, unknown>;
+  resolutionNote?: string;
+}): { statusCode: 400; error: string } | undefined {
+  if (input.editedPayload !== undefined) {
+    return { statusCode: 400, error: "A reject from the phone can't change the request's details." };
+  }
+  return refuseCompanionNote(input.resolutionNote);
+}
+
+/** A companion's note is unsigned, so it stays short. */
+export function refuseCompanionNote(
+  resolutionNote: string | undefined,
+): { statusCode: 400; error: string } | undefined {
+  if (resolutionNote !== undefined && resolutionNote.length > COMPANION_RESOLUTION_NOTE_MAX_LENGTH) {
+    return {
+      statusCode: 400,
+      error: `A note from the phone can be at most ${COMPANION_RESOLUTION_NOTE_MAX_LENGTH} characters.`,
+    };
+  }
+  return undefined;
+}
+
 /** sha256 hex of what the operator confirmed: the empty string for approve, the canonical edited payload for edit. */
 export function companionDecisionPayloadSha256(
   decision: Exclude<MobileApprovalDecision, "reject">,
@@ -90,6 +117,18 @@ export async function admitCompanionSignedDecision(
 ): Promise<CompanionSignedDecisionAdmission> {
   if (!options.enabled) {
     return { admitted: false, statusCode: 403, error: COMPANION_APPROVE_REFUSED_MESSAGE };
+  }
+  // The approvals repository stores `editedPayload` for any decision, and an approve signs the empty string: an
+  // approve must carry none, and an edit must carry the payload it signed.
+  if (input.decision === "approve" && input.editedPayload !== undefined) {
+    return {
+      admitted: false,
+      statusCode: 400,
+      error: "An approve from the phone can't change what is approved. Use edit for that.",
+    };
+  }
+  if (input.decision === "edit" && input.editedPayload === undefined) {
+    return { admitted: false, statusCode: 400, error: "An edit from the phone needs the edited details." };
   }
   const grantId = input.grantId?.trim();
   const companionSessionId = input.companionSessionId?.trim();

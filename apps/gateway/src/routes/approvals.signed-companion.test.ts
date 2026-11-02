@@ -278,6 +278,70 @@ describe("signed phone approvals on POST /api/v1/approvals/:approvalId/resolve",
     expect(gateway.resolveApproval).not.toHaveBeenCalled();
   });
 
+  it("refuses a signed approve that carries an edited payload, leaving the stored payload as it was", async () => {
+    const { gateway, privateKey, createApproval } = await setUp();
+    const approval = createApproval();
+    const response = await resolve(gateway.app, approval.approvalId, {
+      decision: "approve",
+      editedPayload: { step: 99 },
+      signedDecision: signDecision(privateKey, { approvalId: approval.approvalId, decision: "approve" }),
+    });
+    expect(response.statusCode).toBe(400);
+    const stored = await gateway.storage.approvals.get(approval.approvalId);
+    expect(stored.status).toBe("pending");
+    expect(stored.payload).toEqual({ step: 1 });
+  });
+
+  it("refuses a signed edit with no edited payload", async () => {
+    const { gateway, privateKey, createApproval } = await setUp();
+    const approval = createApproval();
+    const response = await resolve(gateway.app, approval.approvalId, {
+      decision: "edit",
+      signedDecision: signDecision(privateKey, { approvalId: approval.approvalId, decision: "edit" }),
+    });
+    expect(response.statusCode).toBe(400);
+    expect((await gateway.storage.approvals.get(approval.approvalId)).status).toBe("pending");
+  });
+
+  it("refuses a phone reject that would change the payload or carries an oversized note", async () => {
+    const { gateway, createApproval } = await setUp({ signedApprovals: false });
+    const approval = createApproval();
+    const withPayload = await resolve(gateway.app, approval.approvalId, {
+      decision: "reject",
+      editedPayload: { step: 99 },
+    });
+    expect(withPayload.statusCode).toBe(400);
+    const longNote = await resolve(gateway.app, approval.approvalId, {
+      decision: "reject",
+      resolutionNote: "n".repeat(501),
+    });
+    expect(longNote.statusCode).toBe(400);
+    const stored = await gateway.storage.approvals.get(approval.approvalId);
+    expect(stored.status).toBe("pending");
+    expect(stored.payload).toEqual({ step: 1 });
+  });
+
+  it("marks a companion approval read private and uncached even when the read fails", async () => {
+    const app = Fastify();
+    closers.push(() => app.close());
+    app.decorate("services", {
+      approvals: {
+        getApproval: vi.fn(async () => {
+          throw new Error("storage down");
+        }),
+      },
+    } as never);
+    app.decorate("requireOperatorAuth", (async () => undefined) as never);
+    app.addHook("onRequest", async (request) => {
+      request.authActorSource = "companion" as never;
+      request.authPrincipalPurpose = "general_companion" as never;
+    });
+    await app.register(approvalsRoutes);
+    const response = await app.inject({ method: "GET", url: "/api/v1/approvals/5b0f8a2c-1d34-4e56-8a7b-9c0d1e2f3a4b" });
+    expect(response.statusCode).toBeGreaterThanOrEqual(400);
+    expect(response.headers["cache-control"]).toBe("private, no-store");
+  });
+
   it("refuses a valid signed approve with today's message while the switch is off, and still takes an unsigned reject", async () => {
     const { gateway, privateKey, createApproval } = await setUp({ signedApprovals: false });
     const approval = createApproval();
