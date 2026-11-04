@@ -96,13 +96,13 @@ export function useChatDocuments({
     };
   }, [refreshDocuments, readEnabled]);
   const toggleDocumentContext = useCallback(
-    (ref: ChatRoutedContextRef) => {
+    (ref: ChatRoutedContextRef, allowAddition = true) => {
       setPendingDocumentContextRefs((current) => {
         const key = `${ref.kind}:${ref.ref}`;
         if (current.some((item) => `${item.kind}:${item.ref}` === key)) {
           return current.filter((item) => `${item.kind}:${item.ref}` !== key);
         }
-        return explicitContextEnabled ? [...current, ref] : current;
+        return explicitContextEnabled && allowAddition ? [...current, ref] : current;
       });
     },
     [explicitContextEnabled],

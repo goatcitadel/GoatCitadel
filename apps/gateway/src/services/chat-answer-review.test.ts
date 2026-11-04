@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { ChatCompletionResponse } from "@goatcitadel/contracts";
+import type { ChatCompletionRequest, ChatCompletionResponse, ChatToolRunRecord } from "@goatcitadel/contracts";
 import {
   buildStrictReviewNote,
   classifyReviewFailure,
@@ -9,6 +9,7 @@ import {
   runChatAnswerReview,
   shouldReviewChatAnswer,
 } from "./chat-answer-review.js";
+import { projectToolRunsForModel } from "./chat-tool-result-projection.js";
 
 const NOW = () => new Date("2026-11-01T00:00:00.000Z");
 
@@ -232,6 +233,75 @@ describe("reviewPreparedTurnAnswer", () => {
     });
     expect(result).toBeUndefined();
     expect(reviewHost.createChatCompletion).not.toHaveBeenCalled();
+  });
+
+
+  it("projects persisted tool evidence before exposing it to the answer reviewer", async () => {
+    const authorizationMarker = "synthetic-review-authorization";
+    const errorMarker = "synthetic-error-" + "p".repeat(24);
+    const authored = "Explain the literal phrase Bearer " + "q".repeat(28);
+    const safeResult = "One useful fact from the tool";
+    const executed: ChatToolRunRecord = {
+      toolRunId: "tool-1",
+      turnId: "turn-1",
+      sessionId: "session-1",
+      toolName: "fs.read",
+      status: "executed",
+      startedAt: NOW().toISOString(),
+      result: {
+        content: safeResult,
+        authorization: authorizationMarker,
+        runtimeConfigurationPromptAuthority: { promptId: "internal-only" },
+      },
+    };
+    const failed: ChatToolRunRecord = {
+      toolRunId: "tool-2",
+      turnId: "turn-1",
+      sessionId: "session-1",
+      toolName: "fs.read",
+      status: "failed",
+      startedAt: NOW().toISOString(),
+      error: "Upstream rejected Bearer " + errorMarker,
+    };
+    const persisted = [executed, failed];
+    const before = JSON.stringify(persisted);
+    const listByTurn = vi.fn(async () => persisted);
+    const createChatCompletion = vi.fn(async (_request: ChatCompletionRequest) =>
+      completion('{"verdict":"pass","issues":[]}'),
+    );
+    const outcome = await reviewPreparedTurnAnswer(
+      { createChatCompletion, storage: { chatToolRuns: { listByTurn } } },
+      { ...prepared("standard"), content: authored },
+      { answer: "Here is the useful fact.", status: "completed", trace, citations: [] },
+    );
+
+    expect(outcome?.record.outcome).toBe("passed");
+    expect(listByTurn).toHaveBeenCalledExactlyOnceWith("turn-1");
+    expect(createChatCompletion).toHaveBeenCalledOnce();
+    const request = createChatCompletion.mock.calls[0]?.[0];
+    expect(request).toMatchObject({ providerId: "anthropic", model: "claude", stream: false });
+    const message = request?.messages[1]?.content;
+    if (typeof message !== "string") throw new Error("Expected the reviewer evidence message");
+    const payload = JSON.parse(message) as {
+      request: string;
+      evidence: { toolRuns: Array<{ tool: string; status: string; result?: string; error?: string }> };
+    };
+    expect(payload.request).toBe(authored);
+    expect(payload.evidence.toolRuns.map(({ tool, status }) => ({ tool, status }))).toEqual([
+      { tool: "fs.read", status: "executed" },
+      { tool: "fs.read", status: "failed" },
+    ]);
+    const [result, error] = payload.evidence.toolRuns;
+    expect(result?.result?.includes(safeResult)).toBe(true);
+    expect({
+      authorization: message.includes(authorizationMarker),
+      authority: message.includes("runtimeConfigurationPromptAuthority"),
+      error: message.includes(errorMarker),
+    }).toEqual({ authorization: false, authority: false, error: false });
+    const [projectedResult, projectedError] = projectToolRunsForModel(persisted);
+    expect(JSON.parse(result!.result!)).toEqual(projectedResult!.result);
+    expect(error?.error).toBe(projectedError?.error);
+    expect(JSON.stringify(persisted) === before).toBe(true);
   });
 
   it("reviews on the turn's effective route when on", async () => {

@@ -199,6 +199,7 @@ export function composeCapabilityPlugins(owners: CapabilityPluginsOwners): Capab
   const readSkillChecks = (workspaceId: string, snapshotIds: readonly string[]) =>
     readPluginSkillChecks(findSkillHubChecks(skillHub), workspaceId, snapshotIds);
   const shared: PluginInstallShared = {
+    withPluginRecordsLock: (work) => store.withLock((callback) => records.runImmediateTransaction(callback), work),
     readInspection: (inspectionId) => store.getInspection(inspectionId),
     readPlugin: (pluginId) => store.get(pluginId),
     updatePlugin: (pluginId, change) => store.update(pluginId, change),
@@ -380,8 +381,8 @@ export interface PluginToolGroupHoldsFeed {
 
 /**
  * Feeds the groups plugins hold off to the policy engine: once at startup (`load`), and again after every write to the
- * plugin store. Each read replaces the holds whole; a read that started earlier never replaces a later one. A store
- * that can't be read keeps the holds last read and reports the failure, so a hold never lifts because a read failed.
+ * plugin store. Each read replaces the holds whole; only the newest requested read may reopen tool groups. A changed
+ * store fails closed until that read lands, because its new records may hold additional groups off.
  * The first read is tried again, twice. If it still fails and no read has landed, the failure is reported and the
  * engine is told the holds are unavailable, so every tool a plugin could hold off stays off (deny-wins fails closed);
  * `load` settles then, so startup goes on. The holds are then read again in the background, after 5 s, 15 s and then
@@ -393,16 +394,29 @@ export function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): 
   const read = async (): Promise<void> => {
     const attempt = (started += 1);
     const holds = pluginToolGroupHolds(await sources.readPlugins());
-    if (attempt < applied) return;
+    if (attempt !== started) return;
     applied = attempt;
     sources.setHolds(holds);
   };
-  const landed = (): boolean => applied > 0;
-  sources.onStoreChange(() => void read().catch((error: unknown) => sources.report(error)));
+  const current = (): boolean => applied > 0 && applied === started;
+  let recovery: Promise<void> | undefined;
+  const recover = (): void => {
+    recovery ??= readInBackground().finally(() => {
+      recovery = undefined;
+    });
+    recovery.catch((error: unknown) => sources.report(error));
+  };
+  sources.onStoreChange(() => {
+    sources.setHoldsUnavailable();
+    void read().catch((error: unknown) => {
+      sources.report(error);
+      if (!current()) recover();
+    });
+  });
   const readInBackground = async (): Promise<void> => {
-    for (let attempt = 0; !landed() && !sources.isClosing(); attempt += 1) {
+    for (let attempt = 0; !current() && !sources.isClosing(); attempt += 1) {
       await sources.waitInBackground(BACKGROUND_HOLDS_READ_WAITS_MS[attempt] ?? BACKGROUND_HOLDS_READ_INTERVAL_MS);
-      if (landed() || sources.isClosing()) return;
+      if (current() || sources.isClosing()) return;
       try {
         await read();
       } catch (error) {
@@ -422,11 +436,11 @@ export function feedPluginToolGroupHolds(sources: PluginToolGroupHoldsSources): 
           continue;
         }
         // A store write's read may have landed meanwhile; then the holds are known and nothing stays closed.
-        if (landed()) return;
+        if (current()) return;
         sources.reportFirstReadFailure(error);
         sources.setHoldsUnavailable();
         // Never rejects (each read's failure is reported); the catch only satisfies the async-boundary rule.
-        readInBackground().catch((failure: unknown) => sources.report(failure));
+        recover();
         return;
       }
     }

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { backup, DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { BackupRetentionService, restoreBackupOffline, verifyBackupOffline } from "./backup-retention-service.js";
@@ -582,6 +583,140 @@ describe("BackupRetentionService", () => {
     );
   });
 
+  it.each(["data/index.db", "custom/store/runtime.sqlite3", "custom/store/runtime"])(
+    "restores a committed legacy WAL snapshot over crash-retained destination journals: %s",
+    async (databaseRelativePath) => {
+      const backupDir = await makeTempDir("gc-backups-committed-wal-");
+      const backupPath = await createCommittedWalBackup(backupDir, databaseRelativePath);
+      await expect(verifyBackupOffline({ filePath: backupPath, backupDir })).resolves.toMatchObject({
+        verified: true,
+        contractVerified: true,
+      });
+      const restoreRoot = await makeTempDir("gc-restore-crashed-wal-");
+      const databasePath = path.join(restoreRoot, databaseRelativePath);
+      await fs.mkdir(path.dirname(databasePath), { recursive: true });
+      await fs.copyFile(path.join(backupPath, "payload", databaseRelativePath), databasePath);
+      await createCrashRetainedWal(databasePath, "newer target B");
+      // Do not open the target here: SQLite could recover/checkpoint and hide the restore bug.
+      const retainedWal = await fs.readFile(`${databasePath}-wal`);
+      expect(retainedWal.length).toBeGreaterThan(32);
+      const sourceWal = await fs.readFile(path.join(backupPath, "payload", `${databaseRelativePath}-wal`));
+      expect(sourceWal.length).toBeGreaterThan(32);
+
+      const result = await restoreBackupOffline({ rootDir: restoreRoot, filePath: backupPath, backupDir, confirm: true });
+      // Capture journal presence before opening: a read-only SQLite open can itself recover/checkpoint it.
+      const journalPresence = await Promise.all(["-wal", "-shm"].map(async (suffix) =>
+        fs.stat(`${databasePath}${suffix}`).then(() => true, (error: NodeJS.ErrnoException) => {
+          if (error.code !== "ENOENT") throw error;
+          return false;
+        }),
+      ));
+      const restored = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(restored.prepare("SELECT value FROM backup_fixture WHERE id = 1").get()).toMatchObject({
+          value: "selected backup A",
+        });
+        expect(restored.prepare("PRAGMA journal_mode").get()).toMatchObject({ journal_mode: "delete" });
+        expect(restored.prepare("PRAGMA integrity_check").get()).toMatchObject({ integrity_check: "ok" });
+        expect(restored.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
+      } finally {
+        restored.close();
+      }
+      expect(result).toMatchObject({ restored: true, filesRestored: 4 });
+      expect(journalPresence).toEqual([false, false]);
+      await expect(fs.readFile(path.join(backupPath, "payload", `${databaseRelativePath}-wal`))).resolves.toEqual(sourceWal);
+    },
+  );
+  it.each([".goatcitadel-sqlite-restore", ".GOATCITADEL-SQLITE-RESTORE"])(
+    "refuses an ordinary archive entry in the reserved SQLite restore recovery namespace without mutation: %s",
+    async (namespace) => {
+      const sourceRoot = await createRuntimeFixture();
+      const backupDir = await makeTempDir("gc-backups-reserved-recovery-");
+      const backupPath = await createManualBackup(backupDir, "reserved-recovery", [
+        { payloadPath: "data/index.db", bytes: await fs.readFile(path.join(sourceRoot, "data", "index.db")) },
+        { payloadPath: "data/transcripts/session.jsonl", bytes: Buffer.from("{}\n") },
+        { payloadPath: "data/audit/events.jsonl", bytes: Buffer.from("{}\n") },
+        { payloadPath: "config/assistant.config.json", bytes: Buffer.from('{"database":{"driver":"sqlite"}}\n') },
+        { payloadPath: `${namespace}/data/index.db`, bytes: Buffer.from("ordinary entry must not overwrite retained main") },
+        { payloadPath: `${namespace}/archive-extra.txt`, bytes: Buffer.from("must not be copied") },
+      ], {
+        databasePaths: ["data/index.db"],
+        transcriptPaths: ["data/transcripts/session.jsonl"],
+        auditPaths: ["data/audit/events.jsonl"],
+        configPaths: ["config/assistant.config.json"],
+      });
+      await expect(verifyBackupOffline({ filePath: backupPath, backupDir })).resolves.toMatchObject({
+        verified: true,
+        contractVerified: true,
+      });
+      const restoreRoot = await makeTempDir("gc-restore-reserved-recovery-");
+      const retainedMain = path.join(restoreRoot, ".goatcitadel-sqlite-restore", "data", "index.db");
+      await fs.mkdir(path.dirname(retainedMain), { recursive: true });
+      await createCrashRetainedWal(retainedMain, "retained prior B");
+      const suffixes = ["", "-wal", "-shm"];
+      const retainedBefore = await Promise.all(suffixes.map(async (suffix) =>
+        createHash("sha256").update(await fs.readFile(retainedMain + suffix)).digest("hex"),
+      ));
+
+      await expect(
+        restoreBackupOffline({ rootDir: restoreRoot, filePath: backupPath, backupDir, confirm: true }),
+      ).rejects.toThrow();
+
+      await expect(Promise.all(suffixes.map(async (suffix) =>
+        createHash("sha256").update(await fs.readFile(retainedMain + suffix)).digest("hex"),
+      ))).resolves.toEqual(retainedBefore);
+      await expect(fs.stat(path.join(restoreRoot, namespace, "archive-extra.txt"))).rejects.toMatchObject({ code: "ENOENT" });
+    },
+  );
+  it.each([false, true])("retains the old SQLite family when publication fails (rollback failure: %s)", async (failRollback) => {
+    const backupDir = await makeTempDir("gc-backups-wal-rollback-");
+    const backupPath = await createCommittedWalBackup(backupDir, "data/index.db");
+    const restoreRoot = await makeTempDir("gc-restore-wal-rollback-");
+    const databasePath = path.join(restoreRoot, "data", "index.db");
+    const recoveryRoot = path.join(restoreRoot, ".goatcitadel-sqlite-restore");
+    await fs.mkdir(path.dirname(databasePath), { recursive: true });
+    await fs.copyFile(path.join(backupPath, "payload", "data", "index.db"), databasePath);
+    await createCrashRetainedWal(databasePath, "newer target B");
+    await fs.writeFile(`${databasePath}-journal`, Buffer.alloc(0));
+    const suffixes = ["", "-wal", "-shm", "-journal"];
+    const original = await Promise.all(suffixes.map((suffix) => fs.readFile(databasePath + suffix)));
+    const copyFile = fs.copyFile.bind(fs);
+    vi.spyOn(fs, "copyFile").mockImplementation(async (...args: Parameters<typeof fs.copyFile>) => {
+      if (args[1] === databasePath) {
+        await fs.writeFile(databasePath, "injected partial database");
+        throw new Error("injected SQLite publication failure");
+      }
+      await copyFile(...args);
+    });
+    const rename = fs.rename.bind(fs);
+    vi.spyOn(fs, "rename").mockImplementation(async (...args: Parameters<typeof fs.rename>) => {
+      if (failRollback && args[0] === path.join(recoveryRoot, "data", "index.db") && args[1] === databasePath) {
+        throw new Error("injected SQLite rollback failure");
+      }
+      await rename(...args);
+    });
+
+    await expect(
+      restoreBackupOffline({ rootDir: restoreRoot, filePath: backupPath, backupDir, confirm: true }),
+    ).rejects.toThrow(failRollback ? "SQLite restore rollback needs operator recovery" : "injected SQLite publication failure");
+    if (failRollback) {
+      await expect(Promise.all(suffixes.map((suffix) =>
+        fs.readFile(path.join(recoveryRoot, "data", "index.db" + suffix)),
+      ))).resolves.toEqual(original);
+      await expect(fs.stat(databasePath)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(fs.stat(recoveryRoot)).resolves.toBeDefined();
+    } else {
+      await expect(Promise.all(suffixes.map((suffix) => fs.readFile(databasePath + suffix)))).resolves.toEqual(original);
+      await expect(fs.stat(recoveryRoot)).rejects.toMatchObject({ code: "ENOENT" });
+      const restored = new DatabaseSync(databasePath, { readOnly: true });
+      try {
+        expect(restored.prepare("SELECT value FROM backup_fixture WHERE id = 1").get()).toMatchObject({ value: "newer target B" });
+        expect(restored.prepare("PRAGMA integrity_check").get()).toMatchObject({ integrity_check: "ok" });
+      } finally {
+        restored.close();
+      }
+    }
+  });
   it("verifies a WAL-mode backup repeatedly without mutating sidecars, then restores it", async () => {
     const backupDir = await makeTempDir("gc-backups-wal-sidecar-");
     const backupPath = await createWalSidecarBackup(backupDir);
@@ -717,6 +852,42 @@ async function createManualBackup(
   return backupPath;
 }
 
+/** An owned child exits without closing SQLite, retaining a real committed WAL rather than fabricated journal bytes. */
+async function createCrashRetainedWal(databasePath: string, value: string): Promise<void> {
+  const child = spawnSync(process.execPath, ["--input-type=module", "-e", `
+    import { DatabaseSync } from "node:sqlite";
+    const db = new DatabaseSync(process.argv[1]);
+    db.exec("CREATE TABLE IF NOT EXISTS backup_fixture (id INTEGER PRIMARY KEY, value TEXT NOT NULL);");
+    db.prepare("INSERT OR IGNORE INTO backup_fixture (id, value) VALUES (1, 'checkpoint base')").run();
+    db.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; PRAGMA wal_checkpoint(TRUNCATE);");
+    db.prepare("UPDATE backup_fixture SET value = ? WHERE id = 1").run(process.argv[2]);
+    process.exit(0);
+  `, databasePath, value], { encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 });
+  expect(child.error, child.stderr).toBeUndefined();
+  expect(child.status, child.stderr).toBe(0);
+  expect((await fs.stat(`${databasePath}-wal`)).size).toBeGreaterThan(32);
+}
+
+async function createCommittedWalBackup(backupDir: string, databaseRelativePath: string): Promise<string> {
+  const sourceRoot = await makeTempDir("gc-committed-wal-source-");
+  const databasePath = path.join(sourceRoot, databaseRelativePath);
+  await fs.mkdir(path.dirname(databasePath), { recursive: true });
+  await createCrashRetainedWal(databasePath, "selected backup A");
+  const entries = await Promise.all([databaseRelativePath, `${databaseRelativePath}-wal`, `${databaseRelativePath}-shm`].map(
+    async (payloadPath) => ({ payloadPath, bytes: await fs.readFile(path.join(sourceRoot, payloadPath)) }),
+  ));
+  entries.push(
+    { payloadPath: "data/transcripts/session.jsonl", bytes: Buffer.from("{}\n") },
+    { payloadPath: "data/audit/events.jsonl", bytes: Buffer.from("{}\n") },
+    { payloadPath: "config/assistant.config.json", bytes: Buffer.from('{"database":{"driver":"sqlite"}}\n') },
+  );
+  return createManualBackup(backupDir, "committed-wal", entries, {
+    databasePaths: [databaseRelativePath],
+    transcriptPaths: ["data/transcripts/session.jsonl"],
+    auditPaths: ["data/audit/events.jsonl"],
+    configPaths: ["config/assistant.config.json"],
+  });
+}
 async function createWalSidecarBackup(backupDir: string): Promise<string> {
   const sourceRoot = await makeTempDir("gc-wal-source-");
   const databasePath = path.join(sourceRoot, "index.db");

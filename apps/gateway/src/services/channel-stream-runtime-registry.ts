@@ -100,7 +100,7 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost, runtimeKey: object)
   const systemSettings = () => host.storage.systemSettings;
   const cursorStore = createSystemSettingsChannelStreamCursorStore({
     get: (key) => systemSettings().get(key),
-    set: (key, value, now) => systemSettings().set(key, value, now),
+    set: (key, value, now, telegramPoll) => systemSettings().set(key, value, now, telegramPoll),
   });
   const sharedDeps = {
     // Plain fetch: a persistent stream must not inherit the diagnostics request timeout.
@@ -124,10 +124,10 @@ function createStreamRuntime(host: ChannelStreamRuntimeHost, runtimeKey: object)
         ...sharedDeps,
         cursorStore,
         // Looked up per update: the route composition provides the handler after this runtime may have started.
-        processUpdate: async (connectionId, update) => {
+        processUpdate: async (connectionId, update, expectedConnectionRevision) => {
           const deps = channelUpdateHandlers.get(runtimeKey);
           if (!deps) throw new Error("Telegram receiving isn't ready yet.");
-          return await runTelegramUpdate(deps, connectionId, update);
+          return await runTelegramUpdate(deps, connectionId, update, expectedConnectionRevision);
         },
       }),
       createSlackSocketStreamAdapter({

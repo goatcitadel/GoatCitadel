@@ -326,6 +326,16 @@ export class ExternalSideEffectRunRepository {
     return row ? mapExternalSideEffectRunRow(row) : undefined;
   }
 
+  /** Bounded historical discovery only. Callers must validate full route, scope,
+   * operation and immutable payload identity; a shared key alone proves nothing.
+   */
+  public findByIdempotencyKey(idempotencyKey: string): ExternalSideEffectRunRecord[] {
+    const rows = toExternalSideEffectRunRows(this.db.prepare(`
+      SELECT * FROM external_side_effect_runs WHERE idempotency_key = ?
+      ORDER BY run_id ASC LIMIT 2
+    `).all(idempotencyKey));
+    return rows.map(mapExternalSideEffectRunRow);
+  }
   public listByWorkspace(workspaceId = "default", limit = 200): ExternalSideEffectRunRecord[] {
     const rows = toExternalSideEffectRunRows(
       this.listByWorkspaceStmt.all({

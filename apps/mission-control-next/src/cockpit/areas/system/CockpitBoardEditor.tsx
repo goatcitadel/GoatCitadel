@@ -296,7 +296,7 @@ function BoardEditorView({
       {preview ? (
         <section aria-label="Draft live widget preview" className="grid gap-3">
           <p className="text-sm text-fg-secondary">
-            Unsaved layout preview. Values are read just now; this does not save a board or keep a saved copy.
+            Unsaved layout preview. Widgets show the latest values they loaded.
           </p>
           {accessAvailable ? (
             <div className="grid gap-3 sm:grid-cols-2">

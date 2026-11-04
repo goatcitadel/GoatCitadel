@@ -10,6 +10,7 @@ import {
   type IntegrationWebhookRouteMethod,
   type IntegrationWebhookRoutePort,
 } from "./integration-webhook-route-service.js";
+import { publishIntegrationConnectionCommit } from "./integration-connection-commit-service.js";
 
 function ntfyConnection(): IntegrationConnection {
   return {
@@ -445,6 +446,133 @@ describe("getChannelStreamRuntime", () => {
     } finally {
       await runtime.close();
       vi.unstubAllGlobals();
+    }
+  });
+
+  it.each([
+    { name: "a replacement bot", botId: "456" },
+    { name: "the same bot", botId: "123" },
+  ])("discards the old Telegram poll after a revision change for $name", async ({ botId }) => {
+    const h = telegramHost();
+    const previous = telegramConnection();
+    const replacement: IntegrationConnection = {
+      ...previous,
+      revision: "b".repeat(64),
+      config: {
+        ...previous.config,
+        botTokenEnv: "TELEGRAM_REPLACEMENT_TOKEN",
+        telegramPairing: { approved: [{ actorId: "777", approvedAt: previous.createdAt }], pending: [] },
+      },
+    };
+    let connection = previous;
+    vi.mocked(h.value.storage.integrationConnections.list).mockImplementation(async () => [connection]);
+    vi.mocked(h.value.resolveConnectionSecret).mockImplementation((config) =>
+      config.botTokenEnv === "TELEGRAM_REPLACEMENT_TOKEN" ? `${botId}:fixture-new` : "123:fixture-old",
+    );
+    const acceptInboundChannelEvent = vi.fn(
+      async (input: { eventType: string; idempotencyKey: string; acceptedConnectionRevision?: string }) => ({
+        accepted: true,
+        durableAccepted: true,
+        deduped: false,
+        replied: false,
+        queued: true,
+        eventType: input.eventType,
+        inboundEventId: "accepted",
+      }),
+    );
+    provideChannelUpdateDeps(h.value, {
+      webhooks: fakeWebhooks({ getIntegrationConnection: async () => connection, acceptInboundChannelEvent }),
+      readPersonalityCatalog: async () => ({ items: [], defaultPersonalityId: "default" }),
+    });
+
+    const oldPoll = Promise.withResolvers<Response>();
+    const publication = Promise.withResolvers<void>();
+    const publishRealtime = vi.fn(() => publication.promise);
+    const oldPollStarted = vi.fn();
+    const replies: string[] = [];
+    const answer = (result: unknown[]) => Response.json({ ok: true, result });
+    const fetchMock = vi.fn(async (input: string | URL, init?: RequestInit) => {
+      const url = new URL(String(input));
+      const bot = url.pathname.includes(":fixture-old/") ? "old" : "new";
+      if (init?.method === "POST") {
+        replies.push(`${bot}:${url.pathname.split("/").at(-1)}`);
+        return Response.json({ ok: true, result: {} });
+      }
+      const offset = url.searchParams.get("offset");
+      if (offset === "-1") return answer([]);
+      if (bot === "new" && Number(offset) <= 21) {
+        const pendingIds = botId === "123" ? [5, 21] : [21];
+        return answer(pendingIds.filter((id) => id >= Number(offset)).map(telegramTextUpdate));
+      }
+      if (bot === "old" && offset === "0") {
+        oldPollStarted();
+        return oldPoll.promise;
+      }
+      return new Promise<Response>((_resolve, reject) => {
+        init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true });
+      });
+    });
+    vi.stubGlobal("fetch", fetchMock);
+    const runtime = getChannelStreamRuntime(h.value);
+    const cursorKey = "channel_stream_cursor_v1:telegram:conn-tg";
+    let commit: Promise<void> | undefined;
+    try {
+      await runtime.sync();
+      await vi.waitFor(() => expect(oldPollStarted).toHaveBeenCalledTimes(1));
+      // Canonical storage has changed, while commit publication still holds the old poll runner open.
+      connection = replacement;
+      commit = publishIntegrationConnectionCommit(
+        { publishRealtime, syncChannelRuntimes: () => runtime.sync() },
+        { connectionId: connection.connectionId },
+      );
+      await vi.waitFor(() => expect(publishRealtime).toHaveBeenCalledOnce());
+      oldPoll.resolve(
+        answer([
+          telegramTextUpdate(5),
+          {
+            update_id: 6,
+            callback_query: {
+              id: "old-callback",
+              from: { id: 777 },
+              message: { message_id: 6, chat: { id: 777, type: "private" } },
+              data: "unrecognized",
+            },
+          },
+        ]),
+      );
+      await vi.waitFor(() => {
+        if (runtime.getStatus("conn-tg")?.lastError === "Telegram connection changed during polling.") return;
+        expect(h.settings.get(cursorKey)).toMatchObject({ scope: "123", cursor: "7" });
+      });
+      const cursorBeforeSync = h.settings.get(cursorKey);
+
+      publication.resolve();
+      await commit;
+      await vi.waitFor(() => expect(h.settings.get(cursorKey)).toMatchObject({ scope: botId, cursor: "22" }));
+      expect({
+        cursorBeforeSync,
+        accepted: acceptInboundChannelEvent.mock.calls.map(([input]) => ({
+          id: input.idempotencyKey,
+          revision: input.acceptedConnectionRevision,
+        })),
+        replies,
+      }).toEqual({
+        cursorBeforeSync: expect.objectContaining({ scope: "123", cursor: "0" }),
+        accepted: (botId === "123" ? [5, 21] : [21]).map((id) => ({
+          id: `telegram:conn-tg:${id}`,
+          revision: replacement.revision,
+        })),
+        replies: [],
+      });
+    } finally {
+      oldPoll.resolve(answer([]));
+      publication.resolve();
+      try {
+        await commit;
+      } finally {
+        await runtime.close();
+        vi.unstubAllGlobals();
+      }
     }
   });
 

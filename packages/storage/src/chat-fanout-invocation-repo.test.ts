@@ -62,6 +62,21 @@ describe("ChatFanoutInvocationRepository", () => {
       assert.deepEqual(repo.listWaitingParentCandidateIds(100, second[0]!), []);
     } finally { db.close(); }
   });
+  it("discovers active aggregates of cancelled Chat parents for durable child cancellation recovery", () => {
+    const { db, repo } = createStore();
+    try {
+      const runs = new DurableRunRepository(db);
+      runs.createRun({ runId: "cancelled-parent", workflowKey: "chat.turn.execute", status: "cancelled" });
+      runs.createRun({ runId: "foreign-parent", workflowKey: "other", status: "cancelled" });
+      repo.createOrGet(invocation({ invocationId: "cancel-pending", parentRunId: "cancelled-parent", toolRunId: "cancel-tool",
+        delegationRunId: "cancel-delegation", status: "waiting" }));
+      repo.createOrGet(invocation({ invocationId: "cancel-finished", parentRunId: "cancelled-parent", toolRunId: "finished-tool",
+        delegationRunId: "finished-delegation", status: "cancelled", finishedAt: "2026-11-02T00:00:00.000Z" }));
+      repo.createOrGet(invocation({ invocationId: "foreign", parentRunId: "foreign-parent", toolRunId: "foreign-tool",
+        delegationRunId: "foreign-delegation", status: "waiting" }));
+      assert.deepEqual(repo.listWaitingParentCandidateIds(), ["cancel-pending"]);
+    } finally { db.close(); }
+  });
   it("converges duplicate parent/tool admission and preserves terminal aggregate truth", () => {
     const { db, repo } = createStore();
     try {

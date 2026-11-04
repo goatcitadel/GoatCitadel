@@ -836,6 +836,104 @@ describe("A2ARouteService", () => {
     expect(harness.tasks.appendTaskActivity).not.toHaveBeenCalled();
   });
 
+  it.each([1.5, -1, "1.5x", Number.MAX_SAFE_INTEGER + 1, Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER - 1])(
+    "rejects an invalid or exhausted JSON-RPC task event cursor %s before a binding write",
+    async (lastEventSequence) => {
+      const harness = createService({ allowedWorkspaceIds: ["default"] });
+      const peer = harness.service.authenticatePeerRequest({
+        headers: { authorization: "Bearer peer-token" },
+      });
+      if ("statusCode" in peer) throw new Error("Expected an authenticated fixture peer.");
+
+      const created = await harness.service.handleJsonRpc(
+        peer,
+        {
+          jsonrpc: "2.0",
+          id: "rpc-create-invalid-cursor",
+          method: "SendMessage",
+          params: { contextId: "ctx-invalid-cursor", messageId: "invalid-cursor", text: "Start fixture work." },
+        },
+        "2026-06-01T00:00:00.000Z",
+      );
+      const task = readResultTask(created);
+      expect(task.messages).toHaveLength(1);
+      const taskId = task.id;
+      const before = harness.storage.a2aTaskBindings.get(taskId);
+
+      const response = await harness.service.handleJsonRpc(
+        peer,
+        { jsonrpc: "2.0", id: "rpc-invalid-cursor", method: "SubscribeToTask", params: { taskId, lastEventSequence } },
+        "2026-06-01T00:00:01.000Z",
+      );
+
+      expect(response).toMatchObject({ error: { code: -32602 } });
+      expect(harness.storage.a2aTaskBindings.get(taskId)).toEqual(before);
+    },
+  );
+
+  it("returns a JSON-RPC task snapshot without replacing the sequence owned by cancellation", async () => {
+    const harness = createService({ allowedWorkspaceIds: ["default"] });
+    const peer = harness.service.authenticatePeerRequest({
+      headers: { authorization: "Bearer peer-token" },
+    });
+    if ("statusCode" in peer) throw new Error("Expected an authenticated fixture peer.");
+
+    const created = await harness.service.handleJsonRpc(
+      peer,
+      {
+        jsonrpc: "2.0",
+        id: "rpc-create-read-only-snapshot",
+        method: "SendMessage",
+        params: { contextId: "ctx-read-only-snapshot", messageId: "read-only-snapshot", text: "Start fixture work." },
+      },
+      "2026-06-01T00:00:00.000Z",
+    );
+    const taskId = readResultTask(created).id;
+    const before = harness.storage.a2aTaskBindings.get(taskId);
+    const snapshot = (id: string, lastEventSequence: number | string | undefined, checkedAt: string) =>
+      harness.service.handleJsonRpc(
+        peer,
+        {
+          jsonrpc: "2.0",
+          id,
+          method: "SubscribeToTask",
+          params: { taskId, ...(lastEventSequence === undefined ? {} : { lastEventSequence }) },
+        },
+        checkedAt,
+      );
+
+    const ahead = await snapshot("rpc-snapshot-ahead", "100", "2026-06-01T00:00:01.000Z");
+    expect(ahead).toMatchObject({
+      result: {
+        task: { id: taskId },
+        events: expect.arrayContaining([expect.objectContaining({ kind: "task.status", sequence: 101 })]),
+      },
+    });
+    expect(harness.storage.a2aTaskBindings.get(taskId)).toEqual(before);
+
+    const equivalent = await snapshot("rpc-snapshot-exponential", "1e2", "2026-06-01T00:00:01.000Z");
+    expect(equivalent).toEqual({ ...ahead, id: "rpc-snapshot-exponential" });
+    expect(harness.storage.a2aTaskBindings.get(taskId)).toEqual(before);
+
+    const cancelled = await harness.service.handleJsonRpc(
+      peer,
+      { jsonrpc: "2.0", id: "rpc-cancel-after-snapshot", method: "CancelTask", params: { taskId } },
+      "2026-06-01T00:00:02.000Z",
+    );
+    expect(cancelled).toMatchObject({ result: { task: { id: taskId, status: { state: "canceled" } } } });
+    const afterCancellation = harness.storage.a2aTaskBindings.get(taskId);
+    expect(afterCancellation).toMatchObject({ state: "canceled", lastEventSequence: before.lastEventSequence + 1 });
+
+    const behind = await snapshot("rpc-snapshot-behind", undefined, "2026-06-01T00:00:03.000Z");
+    expect(behind).toMatchObject({
+      result: {
+        task: { id: taskId, status: { state: "canceled" } },
+        events: expect.arrayContaining([expect.objectContaining({ kind: "task.status", sequence: 1 })]),
+      },
+    });
+    expect(harness.storage.a2aTaskBindings.get(taskId)).toEqual(afterCancellation);
+  });
+
   it("keeps A2A binding truth active and surfaces canonical cancellation failure for stable retry", async () => {
     const harness = createService();
     const created = await harness.service.handleJsonRpc(
@@ -1150,6 +1248,15 @@ describe("A2ARouteService", () => {
       { taskId: task.id, lastEventSequence: 0 },
       "2026-06-01T00:00:00.000Z",
     );
+    const binding = harness.storage.a2aTaskBindings.get(task.id);
+    await expect(
+      harness.service.getHttpJsonTaskEvents(
+        { peerId: "peer-1", scopes: ["a2a:http-json"] },
+        { taskId: task.id, lastEventSequence: Number.MAX_SAFE_INTEGER - 1 },
+        "2026-06-01T00:00:01.000Z",
+      ),
+    ).rejects.toMatchObject({ statusCode: 400, reason: "a2a_invalid_event_cursor" });
+    expect(harness.storage.a2aTaskBindings.get(task.id)).toEqual(binding);
 
     expect(card).toMatchObject({
       capabilities: {
@@ -1213,6 +1320,7 @@ describe("A2ARouteService", () => {
       "2026-06-01T00:00:01.000Z",
     );
 
+    expect(harness.storage.a2aTaskPushConfigs.get(taskId, "peer-1").lastEventSequence).toBe(1);
     const config = readResult(configured).config;
     expect(config).toMatchObject({
       taskId,
@@ -1262,6 +1370,7 @@ describe("A2ARouteService", () => {
     expect(pushDeliveryFetch).toHaveBeenCalledTimes(2);
     expect(harness.storage.a2aTaskPushConfigs.get(taskId, "peer-1")).toMatchObject({
       lastDeliveryStatus: "delivered",
+      lastEventSequence: 2,
       attemptCount: 2,
     });
   });
@@ -1900,7 +2009,7 @@ describe("A2ARouteService", () => {
 
     it("rejected approval records a blocked delivery", async () => {
       const harness = await createDeferredPush();
-      const recordDelivery = vi.spyOn(harness.storage.a2aTaskPushConfigs, "recordDelivery");
+      const recordRefusal = vi.spyOn(harness.storage.a2aTaskPushConfigs, "recordRefusedApprovalIfCurrent");
 
       await harness.service.recordRefusedPushApproval(
         {
@@ -1913,9 +2022,8 @@ describe("A2ARouteService", () => {
         "2026-06-01T00:00:02.000Z",
       );
 
-      expect(recordDelivery.mock.calls[0]?.[2]).toMatchObject({
-        status: "blocked",
-        lastEventSequence: harness.eventSequence,
+      expect(recordRefusal.mock.calls[0]?.[2]).toMatchObject({
+        eventSequence: harness.eventSequence,
         error: expect.stringMatching(/rejected/),
       });
       // Later events resume after the refusal; each still defers behind its own approval under the live ward.

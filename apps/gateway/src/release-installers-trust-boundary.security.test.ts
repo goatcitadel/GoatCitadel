@@ -125,7 +125,7 @@ describe("release-installers workflow trust boundary", () => {
   });
 
   it("pins release toolchains and verifies the immutable Inno Setup asset", () => {
-    expect(workflow).toContain("NODE_VERSION: 22.23.1");
+    expect(workflow).toContain("NODE_VERSION: 22.23.4");
     expect(workflow).toContain("DOTNET_VERSION: 10.0.300");
     expect(workflow).toContain("RUST_TOOLCHAIN: 1.94.0");
     expect(workflow).toContain("INNO_SETUP_VERSION: 6.7.3");

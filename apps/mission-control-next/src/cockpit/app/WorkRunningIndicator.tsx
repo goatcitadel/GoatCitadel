@@ -2,6 +2,7 @@ import { useQuery } from "@tanstack/react-query";
 import type { DurableRunRecord } from "@goatcitadel/contracts";
 import { fetchDurableRunHistory } from "@goatcitadel/mission-control-shared/api/durable";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { durableRunWorkspaceId } from "../data/durable-run-scope";
 import { recordTime, recordView } from "../data/record-view";
 import { projectWorkBoard } from "../areas/work/work-board";
@@ -16,7 +17,7 @@ const STATUSES = new Set([
   "failed",
   "dead_lettered",
 ]);
-const unavailable = { state: "unknown", label: "Running work unknown", count: null } as const;
+const unavailable = { state: "unknown", label: "Interactive work status unknown", count: null } as const;
 function displayRun(value: unknown): value is DurableRunRecord {
   if (!value || typeof value !== "object") return false;
   const row = value as Record<string, unknown>;
@@ -59,15 +60,15 @@ export function summarizeRecentRunningWork(page: unknown, workspaceId: string) {
     return {
       state: "running",
       count: running,
-      label: `${partial ? "At least " : ""}${running} running`,
+      label: `${partial ? "At least " : ""}${plural(running, "interactive run")} queued or running`,
     };
   if (partial)
     return {
       state: "unknown",
       count: null,
-      label: "Running work unknown",
+      label: unavailable.label,
     };
-  return { state: "none", count: 0, label: "Nothing running" };
+  return { state: "none", count: 0, label: "No queued or running interactive runs" };
 }
 
 const DOT_CLASS = {
@@ -77,10 +78,11 @@ const DOT_CLASS = {
 
 /**
  * One shared read per installation and workspace. It keeps the last good summary while it is read
- * again or after a failed read (NV-19), and polls only while work is running; events refresh it otherwise.
+ * again or after a failed read (NV-19), and polls only while interactive work is queued or running.
+ * Events refresh it otherwise.
  * It reads whenever it is rendered: the shell renders it in the sidebar or, on phones, in the Work tab.
  * `overlay` pins the dot to the icon's corner on the collapsed rail so it never squeezes the icon;
- * `showCount` shows the running count instead of a dot (the phone Work tab).
+ * `showCount` shows the queued or running count instead of a dot (the phone Work tab).
  */
 export function WorkRunningIndicator({
   workspaceId,

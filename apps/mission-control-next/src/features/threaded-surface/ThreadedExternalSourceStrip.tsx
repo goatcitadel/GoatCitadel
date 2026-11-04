@@ -18,12 +18,14 @@ export function ExternalSourceStrip({
   controls,
   disabled,
   openAttachFormToken = 0,
+  onAttachIntentHandled,
   onOpenLibrary,
   onRestoreFocus,
 }: {
   controls: ThreadedExternalSourceControls;
   disabled: boolean;
   openAttachFormToken?: number;
+  onAttachIntentHandled?: (token: number) => void;
   onOpenLibrary?: () => void;
   onRestoreFocus?: () => void;
 }) {
@@ -57,7 +59,8 @@ export function ExternalSourceStrip({
     setPickerOpen(true);
     setAttachFormOpen(true);
     stripRef.current?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-  }, [openAttachFormToken]);
+    onAttachIntentHandled?.(openAttachFormToken);
+  }, [onAttachIntentHandled, openAttachFormToken]);
 
   useEffect(() => {
     if (pickerOpen) loadCandidates?.();

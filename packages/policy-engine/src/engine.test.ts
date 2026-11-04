@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -10,7 +11,7 @@ import type {
   ToolInvokeRequest,
   ToolPolicyConfig,
 } from "@goatcitadel/contracts";
-import { HEARTBEAT_READ_ONLY_ALLOW, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
+import { buildScrubbedSpawnEnv, HEARTBEAT_READ_ONLY_ALLOW, HEARTBEAT_RESTRICTED_PROFILE } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage, type AsyncStorage } from "@goatcitadel/storage";
 import { boundAuditResultStrings, ToolPolicyEngine } from "./engine.js";
 import { ToolRegistry } from "./tool-registry.js";
@@ -5750,9 +5751,11 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
       },
     ]);
 
+    const allowedFile = path.resolve("./workspace/allowed/file.ts");
+    const outsideFile = path.resolve("./workspace/elsewhere/file.ts");
     const inside = await engine.evaluateAccess({
       toolName: "git.add",
-      args: { paths: [path.resolve("./workspace/allowed/file.ts")] },
+      args: { paths: [null, allowedFile], path: outsideFile },
       agentId: "agent",
       sessionId: "session-1",
     });
@@ -5760,20 +5763,27 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
 
     const elsewhere = await engine.evaluateAccess({
       toolName: "git.add",
-      args: { paths: [path.resolve("./workspace/elsewhere/file.ts")] },
+      args: { paths: [outsideFile], path: allowedFile },
       agentId: "agent",
       sessionId: "session-1",
     });
     expect(elsewhere.reasonCodes).toEqual(["grant_constraints_block"]);
 
-    const omitted = await engine.evaluateAccess({
-      toolName: "git.add",
-      args: {},
-      agentId: "agent",
-      sessionId: "session-1",
-    });
-    expect(omitted.allowed).toBe(false);
-    expect(omitted.reasonCodes).toEqual(["grant_constraints_block"]);
+    for (const args of [
+      {},
+      { path: allowedFile, paths: [] },
+      { cwd: allowedFile, paths: allowedFile },
+      { outputPath: allowedFile, paths: [null, 42, " "] },
+    ]) {
+      const missingOperands = await engine.evaluateAccess({
+        toolName: "git.add",
+        args,
+        agentId: "agent",
+        sessionId: "session-1",
+      });
+      expect(missingOperands.allowed).toBe(false);
+      expect(missingOperands.reasonCodes).toEqual(["grant_constraints_block"]);
+    }
 
     vi.mocked(storage.toolGrants.list).mockResolvedValue([
       {
@@ -5794,6 +5804,86 @@ describe("ToolPolicyEngine scoped mutation gating", () => {
       sessionId: "session-1",
     });
     expect(unconstrained.reasonCodes).toContain("allowed");
+  });
+
+  it("does not stage outside a scoped git.add grant through an unused path argument", async () => {
+    const root = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), "goat-policy-git-stage-")));
+    tempRoots.push(root);
+    const allowed = path.join(root, "allowed");
+    const allowedFile = path.join(allowed, "inside.txt");
+    await fs.mkdir(allowed);
+    await fs.writeFile(allowedFile, "allowed fixture\n");
+    await fs.writeFile(path.join(root, "sibling.txt"), "outside the grant\n");
+
+    const originalCwd = process.cwd();
+    try {
+      // The actual executor inherits its cwd and Git environment from this worker.
+      for (const key of Object.keys(process.env)) {
+        if (/^GIT_/i.test(key)) vi.stubEnv(key, undefined);
+      }
+      vi.stubEnv("GIT_CONFIG_NOSYSTEM", "1");
+      vi.stubEnv("GIT_CONFIG_GLOBAL", path.join(root, "empty-git-config"));
+      const git = (...args: string[]) =>
+        execFileSync("git", args, { cwd: root, env: buildScrubbedSpawnEnv(), encoding: "utf8", windowsHide: true }).trim();
+      git("init", "--quiet", "--template=");
+      expect(await fs.realpath(git("rev-parse", "--show-toplevel"))).toBe(root);
+      process.chdir(root);
+
+      const storage = createStorageStub();
+      const engine = new ToolPolicyEngine(
+        { ...policyConfig, sandbox: { ...policyConfig.sandbox, writeJailRoots: [root] } },
+        storage,
+      );
+      vi.mocked(storage.toolGrants.list).mockResolvedValue([
+        {
+          grantId: "grant-git-stage-disposable",
+          toolPattern: "git.add",
+          decision: "allow",
+          scope: "session",
+          scopeRef: "session-1",
+          grantType: "persistent",
+          constraints: { allowedPaths: [allowed] },
+          createdBy: "test",
+          createdAt: new Date().toISOString(),
+        },
+      ]);
+      const request = { toolName: "git.add", agentId: "agent", sessionId: "session-1" };
+      const approvePending = async () => {
+        const pending = vi.mocked(storage.pendingApprovalActions.upsertPending).mock.lastCall?.[0];
+        if (!pending) throw new Error("Expected the engine to persist the pending Git action");
+        vi.mocked(storage.pendingApprovalActions.find).mockResolvedValue(
+          createPendingApprovalAction({
+            approvalId: pending.approvalId,
+            request: pending.request,
+            createdAt: new Date().toISOString(),
+            expiresAt: pending.expiresAt,
+          }),
+        );
+        return engine.executeApprovedAction(pending.approvalId);
+      };
+      const stagedFiles = () => git("diff", "--cached", "--name-only").split(/\r?\n/).filter(Boolean);
+      const control = await engine.invoke({ ...request, args: { paths: [allowedFile] } });
+      expect(control.outcome).toBe("approval_required");
+      expect(stagedFiles()).toEqual([]);
+      expect(await approvePending()).toMatchObject({ outcome: "executed" });
+      expect(stagedFiles()).toEqual(["allowed/inside.txt"]);
+
+      const attempted = await engine.invoke({ ...request, args: { path: allowedFile, paths: [] } });
+      const result = attempted.outcome === "approval_required" ? await approvePending() : attempted;
+
+      expect(stagedFiles()).toEqual(["allowed/inside.txt"]);
+      expect(result).toMatchObject({ outcome: "blocked", audit: { reasonCodes: ["grant_constraints_block"] } });
+
+      vi.mocked(storage.toolGrants.list).mockResolvedValue([]);
+      const unscoped = await engine.invoke({ ...request, args: {} });
+      expect(unscoped.outcome).toBe("approval_required");
+      expect(stagedFiles()).toEqual(["allowed/inside.txt"]);
+      expect(await approvePending()).toMatchObject({ outcome: "executed" });
+      expect(stagedFiles()).toEqual(["allowed/inside.txt", "sibling.txt"]);
+    } finally {
+      process.chdir(originalCwd);
+      vi.unstubAllEnvs();
+    }
   });
 
   it("applies scoped grant constraints to safe tools", async () => {

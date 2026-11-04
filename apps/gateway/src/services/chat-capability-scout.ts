@@ -51,8 +51,8 @@ interface CapabilityScoutInput {
 }
 
 export type GapEvidence =
-  | { kind: "binary_read"; ext: string }
-  | { kind: "unreadable_attachment"; ext: string }
+  | { kind: "binary_read"; ext?: string }
+  | { kind: "unreadable_attachment"; ext?: string }
   | { kind: "tool_failed"; toolName: string };
 
 interface RankedSuggestion {
@@ -123,7 +123,7 @@ function describeAccessDenial(reasonCodes: readonly string[]): string {
     return PLUGIN_HOLDS_UNREADABLE;
   }
   if (reasonCodes.includes("tool_group_off") && reasonCodes.includes(PLUGIN_TOOL_GROUP_HOLD_REASON_CODE)) {
-    return "A plugin keeps this tool's group off. Uninstalling every plugin that keeps it off, in Capabilities › Plugins, turns the group back on.";
+    return "A plugin keeps this tool's group off. Uninstall every plugin that keeps it off in Capabilities › Plugins to release the holds. If the group stays off, you can switch it on in Capabilities › Tools.";
   }
   if (reasonCodes.includes("tool_group_off")) return "This tool's group is switched off in Capabilities › Tools.";
   return reasonCodes.length > 0
@@ -146,7 +146,9 @@ export async function scoutCapabilityUpgradeSuggestions(
   if (!legacyGate) {
     // Evidence only moves the Code Mode build; the skill, source and MCP lanes keep their original gate.
     const ranCodeMode = (input.trace?.toolRuns ?? []).some((run) => run.toolName === "code_mode.request");
-    return gapEvidence && !ranCodeMode ? [buildCodeModeCapabilityBuildSuggestion(input, gapEvidence)] : [];
+    return gapEvidence && !ranCodeMode
+      ? [buildCodeModeCapabilityBuildSuggestion(input, gapEvidence, "evidence_only")]
+      : [];
   }
 
   const ranked: RankedSuggestion[] = [];
@@ -321,7 +323,7 @@ export async function scoutCapabilityUpgradeSuggestions(
   if (!discoveryFailed && ranked.length === 0 && gapEvidence && !ranCodeModeRequest) {
     ranked.push({
       score: 0.32,
-      suggestion: buildCodeModeCapabilityBuildSuggestion(input, gapEvidence),
+      suggestion: buildCodeModeCapabilityBuildSuggestion(input, gapEvidence, "searched"),
     });
   }
 
@@ -414,6 +416,7 @@ function buildCapabilitySearchQuery(content: string): string | undefined {
 function buildCodeModeCapabilityBuildSuggestion(
   input: CapabilityScoutInput,
   evidence: GapEvidence,
+  discovery: "searched" | "evidence_only",
 ): ChatCapabilityUpgradeSuggestion {
   const sourceTurnId = input.trace?.turnId;
   const candidateId = `candidate-${sha256Text(
@@ -424,9 +427,13 @@ function buildCodeModeCapabilityBuildSuggestion(
     kind: "code_mode_build",
     title: buildCodeModeBuildTitle(evidence),
     summary:
-      "No callable, disabled, importable, or configurable capability matched this gap. GoatCitadel can stage a self-authored SKILL.md capability candidate for review from this conversation.",
+      discovery === "searched"
+        ? "No callable, disabled, importable, or configurable capability matched this gap. GoatCitadel can stage a self-authored SKILL.md capability candidate for review from this conversation."
+        : "GoatCitadel can draft a reusable skill for review from this conversation.",
     reason:
-      "A new reusable capability is justified only after the installed skill catalog, disabled skills, hosted/importable skills, MCP templates, and effective tool permissions did not produce a suitable match.",
+      discovery === "searched"
+        ? "A new reusable capability is justified only after the installed skill catalog, disabled skills, hosted/importable skills, MCP templates, and effective tool permissions did not produce a suitable match."
+        : "This suggestion comes from a file or attachment the turn could not read.",
     sourceProvider: "code_mode",
     sourceRef: `code-mode://capability-gap/${encodeURIComponent(sourceTurnId ?? input.sessionId)}`,
     riskLevel: "medium",
@@ -449,6 +456,11 @@ function buildCodeModeBuildTitle(evidence: GapEvidence): string {
   if (evidence.kind === "tool_failed") {
     return `Build a tool for what ${displayToolName(evidence.toolName)} couldn't do`;
   }
+  if (!evidence.ext) {
+    return evidence.kind === "unreadable_attachment"
+      ? "Build a tool to read this attachment"
+      : "Build a tool to read this file";
+  }
   return `Build a tool to read .${evidence.ext} files`;
 }
 
@@ -457,8 +469,8 @@ function displayToolName(toolName: string): string {
 }
 
 function fileExtension(name: string): string | undefined {
-  const match = /.([a-z0-9]{1,8})$/i.exec(name.trim());
-  return match?.[1]?.toLowerCase();
+  const basename = name.trim().split(/[\\/]/u).at(-1) ?? "";
+  return /^.+\.([a-z0-9]{1,8})$/iu.exec(basename)?.[1]?.toLowerCase();
 }
 
 /**
@@ -470,13 +482,13 @@ export function collectGapEvidence(input: CapabilityScoutInput): GapEvidence | u
   const toolRuns = input.trace?.toolRuns ?? [];
   for (const run of toolRuns) {
     if (run.toolName !== "fs.read" || run.status !== "executed" || run.result?.binary !== true) continue;
-    const target = typeof run.args?.path === "string" ? run.args.path : String(run.result.path ?? "");
-    const ext = fileExtension(target);
-    if (ext) return { kind: "binary_read", ext };
+    const target = typeof run.args?.path === "string" ? run.args.path : run.result.path;
+    if (typeof target === "string" && target.trim()) return { kind: "binary_read", ext: fileExtension(target) };
   }
   for (const attachment of input.unreadableAttachments ?? []) {
-    const ext = fileExtension(attachment.fileName);
-    if (ext) return { kind: "unreadable_attachment", ext };
+    if (attachment.fileName.trim()) {
+      return { kind: "unreadable_attachment", ext: fileExtension(attachment.fileName) };
+    }
   }
   const failed = toolRuns.find((run) => run.status === "failed" && isCodeModeReplaceableRun(run));
   return failed ? { kind: "tool_failed", toolName: failed.toolName } : undefined;

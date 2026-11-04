@@ -1,4 +1,6 @@
-import type { AsyncStorage } from "@goatcitadel/storage";
+import { CHANNEL_STREAM_CURSOR_SETTING_PREFIX, type AsyncStorage } from "@goatcitadel/storage";
+
+export { CHANNEL_STREAM_CURSOR_SETTING_PREFIX };
 
 /**
  * Durable provider cursor for a channel stream (for example a Matrix /sync `since` token).
@@ -7,10 +9,14 @@ import type { AsyncStorage } from "@goatcitadel/storage";
  */
 export interface ChannelStreamCursorStore {
   read(channelKey: string, connectionId: string): Promise<{ cursor: string; scope?: string } | undefined>;
-  write(channelKey: string, connectionId: string, value: { cursor: string; scope?: string }): Promise<void>;
+  write(
+    channelKey: string,
+    connectionId: string,
+    value: { cursor: string; scope?: string },
+    expectedRevision?: string,
+  ): Promise<void>;
 }
 
-export const CHANNEL_STREAM_CURSOR_SETTING_PREFIX = "channel_stream_cursor_v1";
 
 interface StoredCursor {
   cursor?: unknown;
@@ -33,12 +39,12 @@ export function createSystemSettingsChannelStreamCursorStore(
       if (!value || typeof value.cursor !== "string" || value.cursor.length === 0) return undefined;
       return typeof value.scope === "string" ? { cursor: value.cursor, scope: value.scope } : { cursor: value.cursor };
     },
-    async write(channelKey, connectionId, value) {
+    async write(channelKey, connectionId, value, expectedRevision) {
       await systemSettings.set(settingKey(channelKey, connectionId), {
         cursor: value.cursor,
         ...(value.scope !== undefined ? { scope: value.scope } : {}),
         updatedAt: now().toISOString(),
-      });
+      }, undefined, expectedRevision === undefined ? undefined : { connectionId, expectedRevision });
     },
   };
 }

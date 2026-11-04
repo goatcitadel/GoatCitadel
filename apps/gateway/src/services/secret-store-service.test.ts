@@ -18,6 +18,7 @@ const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 const originalDisableSecretStore = process.env.GOATCITADEL_DISABLE_SECRET_STORE;
 
 beforeEach(() => {
+  delete process.env.GOATCITADEL_DISABLE_SECRET_STORE;
   resetCommandAvailabilityCache();
 });
 

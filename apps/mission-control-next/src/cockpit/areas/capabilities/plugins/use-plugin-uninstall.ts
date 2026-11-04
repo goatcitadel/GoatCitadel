@@ -12,7 +12,13 @@ import { DONE, ENDED } from "../change-plan-outcome";
 import { refusalMessage, wasAnswered } from "./plugin-check-copy";
 import { focusPluginsList, PLUGINS_HREF } from "./plugin-links";
 import { pluginInstallKey } from "./plugin-install-store";
-import { readPluginUninstall, setPluginUninstall, usePluginUninstallEntry } from "./plugin-uninstall-store";
+import {
+  pluginUninstallCustody,
+  readPluginUninstall,
+  setPluginUninstall,
+  usePluginUninstallEntry,
+  type PluginUninstallEntry,
+} from "./plugin-uninstall-store";
 import { uninstallApproval, uninstallProgressLine } from "./plugin-uninstall-view";
 import { resetPluginInstall } from "./use-plugin-install";
 
@@ -55,11 +61,17 @@ async function requestUninstall(detail: CapabilityPluginDetail, client: QueryCli
   const before = readPluginUninstall(pluginId);
   if (before?.phase === "asking") return;
   const attemptKey = before?.lost && before.attemptKey ? before.attemptKey : crypto.randomUUID();
-  setPluginUninstall(pluginId, { phase: "asking", workspaceId, attemptKey });
+  const custody = pluginUninstallCustody();
+  const pending = { phase: "asking", workspaceId, attemptKey } as const;
+  const current = () => custody === pluginUninstallCustody() && readPluginUninstall(pluginId) === pending;
+  setPluginUninstall(pluginId, pending);
+  if (!current()) return;
   try {
     const outcome = await uninstallCapabilityPlugin({ workspaceId, pluginId }, { attemptKey });
+    if (!current()) return;
     setPluginUninstall(pluginId, followOutcome(workspaceId, outcome));
   } catch (error) {
+    if (!current()) return;
     const lost = !wasAnswered(error);
     setPluginUninstall(pluginId, {
       phase: "stopped",
@@ -68,7 +80,7 @@ async function requestUninstall(detail: CapabilityPluginDetail, client: QueryCli
       ...(lost ? { lost, attemptKey } : {}),
     });
   }
-  refreshAfterStep(client);
+  if (custody === pluginUninstallCustody()) refreshAfterStep(client);
 }
 
 /**
@@ -90,7 +102,8 @@ function nextReadMs(count: number, pace: Pace): number | false {
   return count <= APPLYING_FAST_WAITS ? APPLYING_MS : APPLYING_SLOW_MS;
 }
 
-const planQueryKey = (planId: string | undefined) => ["change-plan", "plugin-uninstall", planId] as const;
+const planQueryKey = (planId: string | undefined, custody: number) =>
+  ["change-plan", "plugin-uninstall", planId, custody] as const;
 
 /** Why a plan ended without uninstalling: a decline or an expiry in plain words, else GoatCitadel's own summary. */
 function endedLine(plan: ChangePlanRecord): string {
@@ -104,43 +117,47 @@ function endedLine(plan: ChangePlanRecord): string {
  * The plan of the last request, read until it ends, on either pass: one that ends without uninstalling (declined,
  * expired or failed) stops the flow with its reason. A plan that completed leaves the detail to say what's left.
  */
-function useEndedPlan(pluginId: string) {
-  const entry = usePluginUninstallEntry(pluginId);
+function useEndedPlan(pluginId: string, entry: PluginUninstallEntry | undefined, custody: number) {
   const planId = entry?.phase === "following" ? entry.planId : undefined;
+  const current = () => custody === pluginUninstallCustody() && readPluginUninstall(pluginId) === entry;
   const plan = useQuery({
-    queryKey: planQueryKey(planId),
-    queryFn: () => fetchChangePlan(planId ?? "", { workspaceId: entry?.workspaceId ?? "default" }),
-    enabled: planId !== undefined,
+    queryKey: planQueryKey(planId, custody),
+    queryFn: () => {
+      if (!current()) throw new Error("Plugin uninstall custody changed.");
+      return fetchChangePlan(planId ?? "", { workspaceId: entry?.workspaceId ?? "default" });
+    },
+    enabled: () => planId !== undefined && current(),
     refetchInterval: (query) => {
       const status = query.state.data?.status;
-      return status && (DONE.has(status) || ENDED.has(status)) ? false : 10_000;
+      return !current() || (status && (DONE.has(status) || ENDED.has(status))) ? false : 10_000;
     },
   });
   useEffect(() => {
     const status = plan.data?.status;
+    if (custody !== pluginUninstallCustody()) return;
     if (!planId || !plan.data || !status || DONE.has(status) || !ENDED.has(status)) return;
     const current = readPluginUninstall(pluginId);
-    if (current?.phase !== "following" || current.planId !== planId) return;
+    if (current?.phase !== "following" || current !== entry) return;
     setPluginUninstall(pluginId, { ...current, phase: "stopped", message: endedLine(plan.data) });
-  }, [plan.data, planId, pluginId]);
+  }, [plan.data, planId, pluginId, entry, custody]);
 }
 
 /**
  * Once the detail says the plugin isn't installed: the lists are refreshed, the session forgets the uninstall and the
  * plugin's last detail (a reinstall reads the live plugin), the panel closes and focus goes back to the plugins list.
  */
-function useGone(gone: boolean, pluginId: string, workspaceId: string | undefined) {
+function useGone(gone: boolean, pluginId: string, entry: PluginUninstallEntry | undefined, custody: number) {
   const client = useQueryClient();
   const { navigate } = useCockpitRoute();
   useEffect(() => {
-    if (!gone) return;
+    if (!gone || custody !== pluginUninstallCustody() || readPluginUninstall(pluginId) !== entry) return;
     setPluginUninstall(pluginId, undefined);
     resetPluginInstall(pluginInstallKey(pluginId));
     refreshAfterStep(client);
     navigate(PLUGINS_HREF, { replace: true });
-    client.removeQueries({ queryKey: queryKeys.capabilityPluginDetail(workspaceId ?? "default", pluginId) });
+    client.removeQueries({ queryKey: queryKeys.capabilityPluginDetail(entry?.workspaceId ?? "default", pluginId) });
     focusPluginsList();
-  }, [gone, pluginId, workspaceId, client, navigate]);
+  }, [gone, pluginId, entry, custody, client, navigate]);
 }
 
 /**
@@ -150,7 +167,9 @@ function useGone(gone: boolean, pluginId: string, workspaceId: string | undefine
  */
 export function usePluginUninstall(detail: CapabilityPluginDetail | undefined, pluginId: string) {
   const client = useQueryClient();
-  const entry = usePluginUninstallEntry(pluginId);
+  const [custody] = useState(pluginUninstallCustody);
+  const observed = usePluginUninstallEntry(pluginId);
+  const entry = custody === pluginUninstallCustody() ? observed : undefined;
   const [decided, setDecided] = useState<ReadonlySet<string>>(() => new Set());
   const reads = useRef(0);
   const pace = useRef<Pace>("applying");
@@ -158,17 +177,19 @@ export function usePluginUninstall(detail: CapabilityPluginDetail | undefined, p
   const workspaceId = entry?.workspaceId ?? detail?.workspaceId;
   const read = useQuery({
     ...pluginDetailQuery(workspaceId ?? "default", pluginId),
-    enabled: following && workspaceId !== undefined,
-    refetchInterval: following ? () => nextReadMs((reads.current += 1), pace.current) : false,
+    enabled: () => custody === pluginUninstallCustody() && following && workspaceId !== undefined,
+    refetchInterval: () =>
+      custody === pluginUninstallCustody() && following ? nextReadMs((reads.current += 1), pace.current) : false,
   });
   const latest = read.data ?? detail;
   const approval = uninstallApproval(entry, latest, decided);
   pace.current = paceOf(latest, approval !== undefined);
-  useEndedPlan(pluginId);
+  useEndedPlan(pluginId, entry, custody);
   useGone(
     following && read.isError && isApiRequestError(read.error) && read.error.status === 404,
     pluginId,
-    workspaceId,
+    entry,
+    custody,
   );
   return {
     entry,
@@ -176,15 +197,16 @@ export function usePluginUninstall(detail: CapabilityPluginDetail | undefined, p
     approval,
     progress: uninstallProgressLine(entry, latest, approval),
     start: () => {
-      if (!latest) return;
+      if (!latest || custody !== pluginUninstallCustody()) return;
       reads.current = 0;
       void requestUninstall(latest, client);
     },
     resolved: (approvalId: string) => {
+      if (custody !== pluginUninstallCustody() || readPluginUninstall(pluginId) !== entry) return;
       setDecided((all) => new Set([...all, approvalId]));
       reads.current = 0;
       refreshAfterStep(client);
-      void client.invalidateQueries({ queryKey: planQueryKey(entry?.planId) });
+      void client.invalidateQueries({ queryKey: planQueryKey(entry?.planId, custody) });
     },
   };
 }

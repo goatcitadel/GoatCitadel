@@ -33,6 +33,7 @@ type Input = {
   selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
   orchestration: Pick<ReturnType<typeof useChatSurfaceOrchestration>, "queuedOutbound" | "setQueuedOutbound">;
   setPinnedGoal: React.Dispatch<React.SetStateAction<string | undefined>>;
+  restorePinnedGoal?: boolean;
   sessionData: Pick<ReturnType<typeof useChatSessionData>, "thread" | "generatedArtifacts">;
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   setPendingAttachments: React.Dispatch<React.SetStateAction<ChatAttachmentRecord[]>>;
@@ -58,6 +59,7 @@ export function useChatSessionRestoration({
   selection,
   orchestration,
   setPinnedGoal,
+  restorePinnedGoal = true,
   sessionData,
   setDraft,
   setPendingAttachments,
@@ -117,6 +119,7 @@ export function useChatSessionRestoration({
   }
 
   useEffect(() => {
+    if (!restorePinnedGoal) return;
     const selectedSessionId = selection.selectedSessionId;
     if (!selectedSessionId) {
       setPinnedGoal(undefined);
@@ -136,7 +139,7 @@ export function useChatSessionRestoration({
     return () => {
       cancelled = true;
     };
-  }, [selection.selectedSessionId, setPinnedGoal]);
+  }, [restorePinnedGoal, selection.selectedSessionId, setPinnedGoal]);
 
   useEffect(() => {
     const thread = sessionData.thread;

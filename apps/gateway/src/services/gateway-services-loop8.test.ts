@@ -20,6 +20,11 @@ import type { ServiceContext } from "./service-context.js";
 import { SkillImportService } from "./skill-import-service.js";
 import { getSettings, updateSettings, type SettingsRuntimeDependencies } from "./settings-auth-service.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 interface TempHarness {
   rootDir: string;
   storage?: Storage;
@@ -303,6 +308,7 @@ describe("Loop 8 gateway service coverage", () => {
       storage: createSqliteAsyncStorage(storage),
       readFeatureFlags: () => ({ codeModeV1Enabled: false }),
       listToolCatalog: () => [createTool("tool.inspect", { codeModeAllowed: true })],
+      listSwitchedOffToolNames: () => new Set(),
       listLoadedSkills: () => [
         createLoadedSkill("skill-extra", "Loop 8 Extra", "extra", skillDir),
         createLoadedSkill("skill-disabled", "Disabled Skill", "workspace", path.join(rootDir, "workspace-skill")),

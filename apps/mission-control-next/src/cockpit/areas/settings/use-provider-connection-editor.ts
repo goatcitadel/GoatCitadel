@@ -25,9 +25,15 @@ import {
   submitReviewedProviderCredential,
 } from "../../../features/native-routes/settings/sections/provider-connection-actions";
 import {
+  CHECKABLE_MESSAGE,
+  CONNECTION_ROUTE_PATTERNS,
   canReviewConnectionPlan,
+  providerSettingsChanged,
+  matchesCurrentProviderConnectionPlan,
+  providerCredentialRegistrationChanged,
   connectionPlanCompleted,
   connectionPlanStopped,
+  getProviderConnectionCustody,
   matchesConnectionAttempt,
   providerCredentialRequest,
   providerEndpointRequest,
@@ -37,21 +43,15 @@ import {
   type ProviderConnectionAttempt,
 } from "./provider-connection-state";
 
-/** The Gateway routes this owner writes through; a lost write on any of them can be settled from its attempt record. */
-const CONNECTION_ROUTE_PATTERNS = [
-  "/api/v1/change-plans",
-  "/api/v1/change-plans/:planId/confirmations",
-  "/api/v1/change-plans/:planId/provider-secret",
-] as const;
-const CHECKABLE_MESSAGE = " Check its outcome to settle it from GoatCitadel's record of this attempt.";
-
 export function useProviderConnectionEditor(
   provider: ProviderModelCatalogOption,
   revision: number,
   reload: () => Promise<unknown>,
   available: boolean,
+  custody: number,
 ) {
   const id = provider.providerId;
+  const currentCustody = () => getProviderConnectionCustody() === custody;
   const attempt = useProviderConnectionAttempt(id);
   const [error, setError] = useState("");
   const [dialog, setDialog] = useState<ChangePlanRecord | null>(null);
@@ -69,17 +69,19 @@ export function useProviderConnectionEditor(
   /** `stillConnected`: re-checked after the reads, so another Gateway's state is never adopted as the saved draft. */
   async function verifySaved(
     next: ProviderConnectionAttempt,
-    stillConnected: () => boolean = () => true,
+    stillConnected: () => boolean = currentCustody,
   ): Promise<void> {
-    if (!connectionPlanCompleted(next.plan)) return;
-    const current = await confirmSavedProviderConnection(id, next);
-    if (!stillConnected()) throw new Error("The connection to GoatCitadel changed while checking the saved result.");
+    if (!currentCustody() || !connectionPlanCompleted(next.plan)) return;
+    const stillOwnsRead = () => currentCustody() && stillConnected();
+    const current = await confirmSavedProviderConnection(id, next, stillOwnsRead);
+    if (!stillOwnsRead()) throw new Error("The connection to GoatCitadel changed while checking the saved result.");
     if (next.request.profile?.baseUrl)
       draft.acceptSaved(next.request.profile.baseUrl, current.revision, next.request.profile.baseUrl);
     await reload();
   }
 
   async function create(request: ChangePlanProviderConnectionRequest) {
+    if (!currentCustody()) return;
     const existing = readProviderConnectionAttempt(id);
     if (
       !available ||
@@ -106,22 +108,19 @@ export function useProviderConnectionEditor(
     let submitted = false;
     try {
       const latest = await fetchLlmConfig();
-      if (
-        latest.revision !== baseRevision ||
-        latest.providers.find((item) => item.providerId === id)?.baseUrl !== provider.baseUrl
-      ) {
+      if (!currentCustody()) return;
+      if (providerSettingsChanged(latest, baseRevision, id, provider.baseUrl)) {
         setProviderConnectionAttempt(id, undefined);
         await withFreshReads(reload);
-        setError("Provider settings changed. Review the latest version before creating a change.");
+        if (currentCustody())
+          setError("Provider settings changed. Review the latest version before creating a change.");
         return;
       }
-      if (
-        request.credentialStorage === "env" &&
-        latest.providerConfigs?.find((item) => item.providerId === id)?.apiKeyEnv?.trim() !== request.credentialEnvVar
-      ) {
+      if (providerCredentialRegistrationChanged(latest, id, request)) {
         setProviderConnectionAttempt(id, undefined);
         await reload();
-        setError("The registered credential environment variable changed. Refresh and review it before continuing.");
+        if (currentCustody())
+          setError("The registered credential environment variable changed. Refresh and review it before continuing.");
         return;
       }
       submitted = true;
@@ -133,6 +132,7 @@ export function useProviderConnectionEditor(
           transport = tracked;
         },
       );
+      if (!currentCustody()) return;
       if (!matchesConnectionAttempt(plan, pending))
         throw new Error("The returned plan does not match the reviewed provider and settings version.");
       const next = {
@@ -142,9 +142,11 @@ export function useProviderConnectionEditor(
       };
       setProviderConnectionAttempt(id, next);
       await verifySaved(next);
+      if (!currentCustody()) return;
       setProviderConnectionAttempt(id, { ...next, busy: false, verified: connectionPlanCompleted(plan) });
       if (canReviewConnectionPlan(plan)) setDialog(plan);
     } catch {
+      if (!currentCustody()) return;
       if (submitted)
         setProviderConnectionAttempt(id, {
           ...readProviderConnectionAttempt(id)!,
@@ -163,6 +165,7 @@ export function useProviderConnectionEditor(
   }
 
   async function refresh() {
+    if (!currentCustody()) return;
     const current = readProviderConnectionAttempt(id);
     if (!current?.plan || current.busy || reading.current) return;
     reading.current = true;
@@ -172,11 +175,8 @@ export function useProviderConnectionEditor(
     setProviderConnectionAttempt(id, { ...current, busy: true });
     try {
       const plan = await fetchChangePlan(current.plan.planId, { workspaceId: "default" });
-      if (
-        plan.planId !== current.plan.planId ||
-        plan.revision < current.plan.revision ||
-        !matchesConnectionAttempt(plan, current)
-      ) {
+      if (!currentCustody()) return;
+      if (!matchesCurrentProviderConnectionPlan(plan, current.plan, current)) {
         throw new Error("GoatCitadel returned a different change than the one you reviewed.");
       }
       const next = {
@@ -188,18 +188,17 @@ export function useProviderConnectionEditor(
       };
       setProviderConnectionAttempt(id, next);
       await verifySaved(next);
+      if (!currentCustody()) return;
       setProviderConnectionAttempt(id, { ...next, busy: false, verified: connectionPlanCompleted(plan) });
     } catch {
-      setError("The change status could not load. Your last review is kept; nothing was sent.");
+      if (currentCustody()) setError("The change status could not load. Your last review is kept; nothing was sent.");
     } finally {
-      const saved = readProviderConnectionAttempt(id);
-      if (saved?.busy) setProviderConnectionAttempt(id, { ...saved, busy: false });
-      reading.current = false;
-      setRefreshing(false);
+      finishRead();
     }
   }
 
   async function act(reviewed: ChangePlanRecord, credential?: string) {
+    if (!currentCustody()) return;
     const current = readProviderConnectionAttempt(id);
     if (
       !current?.plan ||
@@ -216,6 +215,7 @@ export function useProviderConnectionEditor(
     let transport: TrackedAttempt | undefined;
     try {
       const latest = await fetchChangePlan(reviewed.planId, { workspaceId: "default" });
+      if (!currentCustody()) return;
       if (
         !matchesConnectionAttempt(latest, current) ||
         canonicalJsonString(latest) !== canonicalJsonString(reviewed) ||
@@ -236,13 +236,16 @@ export function useProviderConnectionEditor(
           transport = tracked;
         },
       );
+      if (!currentCustody()) return;
       if (!matchesConnectionAttempt(plan, current)) throw new Error("The action returned a different provider change.");
       const next = { ...current, plan, busy: true, verified: false, message: plan.summary };
       setProviderConnectionAttempt(id, next);
       setDialog(null);
       await verifySaved(next);
+      if (!currentCustody()) return;
       setProviderConnectionAttempt(id, { ...next, busy: false, verified: connectionPlanCompleted(plan) });
     } catch {
+      if (!currentCustody()) return;
       setDialog(null);
       if (submitted)
         setProviderConnectionAttempt(id, {
@@ -256,8 +259,7 @@ export function useProviderConnectionEditor(
         });
       else setError("Could not verify the current change. Refresh before continuing; no action was sent.");
     } finally {
-      const saved = readProviderConnectionAttempt(id);
-      if (saved?.busy) setProviderConnectionAttempt(id, { ...saved, busy: false });
+      clearBusy();
     }
   }
 
@@ -270,6 +272,7 @@ export function useProviderConnectionEditor(
    * absent or unreadable keeps the lock.
    */
   async function checkOutcome() {
+    if (!currentCustody()) return;
     const current = readProviderConnectionAttempt(id);
     const transport = current?.transport;
     if (!current?.uncertain || !transport || current.busy || reading.current || !available) return;
@@ -288,7 +291,7 @@ export function useProviderConnectionEditor(
       const verdict = classifyMutationAttempt(
         await fetchMutationAttempt(transport.attemptKey, transport.method, transport.routePattern),
       );
-      if (readProviderConnectionAttempt(id) !== checking) return;
+      if (!currentCustody() || readProviderConnectionAttempt(id) !== checking) return;
       // The operator can switch Gateway while the check runs: never replay there, and never adopt what it returns.
       const switched = () => {
         if (sentToConnectedGateway(transport)) return false;
@@ -306,6 +309,7 @@ export function useProviderConnectionEditor(
       if (!current.plan && verdict === "failed_confirm_by_readback") {
         setProviderConnectionAttempt(id, undefined);
         await reload();
+        if (!currentCustody()) return;
         setError(
           "GoatCitadel released this change after an error, so it did not run again. Your draft is kept; review it against the current settings before preparing it again.",
         );
@@ -328,7 +332,7 @@ export function useProviderConnectionEditor(
               },
             )
           : undefined;
-      if (readProviderConnectionAttempt(id) !== checking || switched()) return;
+      if (!currentCustody() || readProviderConnectionAttempt(id) !== checking || switched()) return;
       if (!plan || !matchesConnectionAttempt(plan, current))
         throw new Error("GoatCitadel returned a different change than the one you reviewed.");
       const message =
@@ -338,10 +342,11 @@ export function useProviderConnectionEditor(
       const next = { ...current, plan, transport: undefined, uncertain: false, busy: true, verified: false, message };
       setProviderConnectionAttempt(id, next);
       await withFreshReads(() => verifySaved(next, () => sentToConnectedGateway(transport)));
-      if (switched()) return;
+      if (!currentCustody() || switched()) return;
       setProviderConnectionAttempt(id, { ...next, busy: false, verified: connectionPlanCompleted(plan) });
       if (canReviewConnectionPlan(plan)) setDialog(plan);
     } catch {
+      if (!currentCustody()) return;
       const latest = readProviderConnectionAttempt(id);
       const ours = latest === checking || Boolean(latest && !latest.uncertain && !latest.verified);
       // After a Gateway switch, restore the original attempt so it can still be checked on its own Gateway.
@@ -361,14 +366,25 @@ export function useProviderConnectionEditor(
             "The change was found, but the saved provider settings do not show it yet. Refresh the change status before another request.",
         });
     } finally {
-      const saved = readProviderConnectionAttempt(id);
-      if (saved?.busy) setProviderConnectionAttempt(id, { ...saved, busy: false });
-      reading.current = false;
-      setRefreshing(false);
+      finishRead();
     }
   }
 
+  function clearBusy() {
+    if (!currentCustody()) return;
+    const saved = readProviderConnectionAttempt(id);
+    if (saved?.busy) setProviderConnectionAttempt(id, { ...saved, busy: false });
+  }
+
+  function finishRead() {
+    if (!currentCustody()) return;
+    clearBusy();
+    reading.current = false;
+    setRefreshing(false);
+  }
+
   function prepareEndpoint() {
+    if (!currentCustody()) return;
     const request = providerEndpointRequest(id, draft.value);
     if (!request) {
       setError("Enter an HTTP or HTTPS endpoint without credentials, query parameters, or a fragment.");
@@ -379,6 +395,7 @@ export function useProviderConnectionEditor(
   }
 
   function prepareCredential(storage: "keychain" | "env", envVar: string) {
+    if (!currentCustody()) return;
     const request = providerCredentialRequest(id, storage, envVar);
     if (!request) {
       setError(

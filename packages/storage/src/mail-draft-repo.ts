@@ -13,6 +13,8 @@ export interface MailDraftTransition {
   clearFailureReason?: boolean;
   sentAt?: string;
   updatedAt: string;
+  /** Optional exact snapshot of an unlinked draft. A newer fence or recorded approval refuses the transition. */
+  expectedUnlinkedUpdatedAt?: string;
 }
 
 interface MailDraftRow {
@@ -97,7 +99,7 @@ export class MailDraftRepository {
   }
 
   /**
-   * Compare-and-set: applies only while the current status is in `from`; returns undefined otherwise.
+   * Compare-and-set against the allowed status and, when supplied, the exact unlinked snapshot.
    * Omitted optional patch fields keep their stored values; `clearFailureReason` is the
    * only way to remove a stored failure reason.
    */
@@ -116,7 +118,9 @@ export class MailDraftRepository {
       throw new ValidationError({ message: "A mail draft transition cannot both set and clear its failure reason." });
     }
     const allowed = [...new Set(from)].sort();
-    const statement = this.transitionStatement(allowed.length, clearFailureReason);
+    const expectedUnlinkedUpdatedAt = patch.expectedUnlinkedUpdatedAt;
+    const requireUnlinkedSnapshot = expectedUnlinkedUpdatedAt !== undefined;
+    const statement = this.transitionStatement(allowed.length, clearFailureReason, requireUnlinkedSnapshot);
     const params: Record<string, unknown> = {
       draftId,
       status: patch.status,
@@ -124,6 +128,7 @@ export class MailDraftRepository {
       ...(clearFailureReason ? {} : { failureReason: patch.failureReason ?? null }),
       sentAt: patch.sentAt ?? null,
       updatedAt: patch.updatedAt,
+      ...(requireUnlinkedSnapshot ? { expectedUnlinkedUpdatedAt } : {}),
     };
     allowed.forEach((status, index) => {
       params[`from${index}`] = status;
@@ -134,8 +139,12 @@ export class MailDraftRepository {
     });
   }
 
-  private transitionStatement(fromCount: number, clearFailureReason: boolean): PreparedStatement {
-    const key = `${fromCount}:${clearFailureReason ? "clear" : "keep"}`;
+  private transitionStatement(
+    fromCount: number,
+    clearFailureReason: boolean,
+    requireUnlinkedSnapshot: boolean,
+  ): PreparedStatement {
+    const key = `${fromCount}:${clearFailureReason}:${requireUnlinkedSnapshot}`;
     const cached = this.transitionStmts.get(key);
     if (cached) return cached;
     const placeholders = Array.from({ length: fromCount }, (_, index) => `@from${index}`).join(", ");
@@ -148,6 +157,7 @@ export class MailDraftRepository {
         sent_at = COALESCE(@sentAt, sent_at),
         updated_at = @updatedAt
       WHERE draft_id = @draftId AND status IN (${placeholders})
+        ${requireUnlinkedSnapshot ? "AND updated_at = @expectedUnlinkedUpdatedAt AND approval_id IS NULL" : ""}
     `);
     this.transitionStmts.set(key, statement);
     return statement;

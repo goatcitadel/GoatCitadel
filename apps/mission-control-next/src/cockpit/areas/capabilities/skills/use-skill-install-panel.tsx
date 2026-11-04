@@ -17,7 +17,13 @@ import {
   skillsViewFromSearch,
 } from "./skill-links";
 import { draftInstallKey, readSkillInstall, useSkillInstallEntry } from "./skill-install-store";
-import { installOf, resetSkillInstall, startSkillInstallCheck } from "./use-skill-install";
+import {
+  installOf,
+  isSkillInstallScopeCurrent,
+  resetSkillInstall,
+  startSkillInstallCheck,
+  useSkillInstallScope,
+} from "./use-skill-install";
 
 const GIT_IMPORT_KEY = draftInstallKey("git");
 const GIT_IMPORT_TITLE = "Import from Git";
@@ -52,12 +58,16 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
   const { open: openInspector, content } = useInspector();
   const { search, navigate } = useCockpitRoute();
   const client = useQueryClient();
+  const scope = useSkillInstallScope();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
   const view = skillsViewFromSearch(search);
   const linkedId = installIdFromSearch(search);
   const openKey = installKeyFromSource(content?.source);
   const linkedEntry = useSkillInstallEntry(linkedId);
-  const linkedRead = useQuery({ ...skillInstallQuery(workspaceId, linkedId ?? ""), enabled: Boolean(linkedId) });
+  const linkedRead = useQuery({
+    ...skillInstallQuery(workspaceId, linkedId ?? ""),
+    enabled: isSkillInstallScopeCurrent(scope) && Boolean(linkedId),
+  });
   const linkedName = installOf(linkedEntry?.state)?.name ?? linkedRead.data?.name;
   const title = linkedName ?? (linkedRead.isError || linkedRead.data === null ? UNNAMED_TITLE : undefined);
   // The panel this page last asked the inspector for (and with which inspector), and the one that has been on screen.
@@ -65,26 +75,31 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
   const shown = useRef<string | null>(null);
 
   const move = useCallback(
-    (snapshotId: string, replace: boolean) =>
-      navigate(installItemHref(snapshotId, view), replace ? { replace } : undefined),
-    [navigate, view],
+    (snapshotId: string, replace: boolean) => {
+      if (isSkillInstallScopeCurrent(scope))
+        navigate(installItemHref(snapshotId, view), replace ? { replace } : undefined);
+    },
+    [navigate, view, scope],
   );
 
   const done = useCallback(
     (skillId: string, name: string) => {
+      if (!isSkillInstallScopeCurrent(scope)) return;
       const listKey = skillListQuery(workspaceId).queryKey;
       void client.refetchQueries({ queryKey: listKey, exact: true }, { cancelRefetch: false }).then(() => {
+        if (!isSkillInstallScopeCurrent(scope)) return;
         const listed = client.getQueryData(listKey)?.items.some((item) => item.skillId === skillId);
         // The install's address gives way to the skill's, so going back doesn't land on a finished install.
         if (listed) navigate(skillItemHref(skillId, view), { replace: true });
         else openSkill(skillId, name);
       });
     },
-    [client, workspaceId, navigate, view, openSkill],
+    [client, workspaceId, navigate, view, openSkill, scope],
   );
 
   const show = useCallback(
     (key: string, panelTitle: string, gitImport = false) => {
+      if (!isSkillInstallScopeCurrent(scope)) return;
       asked.current = { key, inspectorOpen: openInspector };
       openInspector({
         source: skillInstallSource(key),
@@ -92,10 +107,11 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
         body: <SkillInstallPanel installKey={key} gitImport={gitImport} onMove={move} onDone={done} />,
       });
     },
-    [openInspector, move, done],
+    [openInspector, move, done, scope],
   );
 
   useEffect(() => {
+    if (!isSkillInstallScopeCurrent(scope)) return;
     if (openKey) {
       shown.current = openKey;
       return;
@@ -115,10 +131,10 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
     }
     const alreadyAsked = asked.current?.key === linkedId && asked.current.inspectorOpen === openInspector;
     if (title && !alreadyAsked) show(linkedId, title);
-  }, [openKey, content, linkedId, title, show, openInspector, navigate, view]);
+  }, [openKey, content, linkedId, title, show, openInspector, navigate, view, scope]);
 
   const install = (item: CapabilitySkillDiscoverItem) => {
-    if (!item.install) return;
+    if (!isSkillInstallScopeCurrent(scope) || !item.install) return;
     const key = sourceDraftKey(item.install);
     // A second press while the first check runs shows that check rather than making another.
     if (readSkillInstall(key)?.state.phase !== "checking") {
@@ -131,6 +147,7 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
   return {
     install,
     resume: (item) => {
+      if (!isSkillInstallScopeCurrent(scope)) return;
       const checkId = item.installSnapshotId;
       // Every row on its way in names its check; one that doesn't (an older Gateway) is checked afresh instead.
       if (!checkId) return install(item);
@@ -140,6 +157,7 @@ export function useSkillInstallPanel(openSkill: (skillId: string, name: string) 
       navigate(installItemHref(checkId, view));
     },
     importFromGit: () => {
+      if (!isSkillInstallScopeCurrent(scope)) return;
       resetSkillInstall(GIT_IMPORT_KEY);
       show(GIT_IMPORT_KEY, GIT_IMPORT_TITLE, true);
     },

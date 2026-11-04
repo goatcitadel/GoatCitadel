@@ -1,4 +1,7 @@
+import { CHAT_ARTIFACT_RENDER_RECEIPTS_POSTGRES_SQL } from "../chat-artifact-render-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
+import { APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL } from "../approval-execution-linkage-postgres-compatibility.js";
+import { MODEL_COMPARISON_CLAIM_SCHEMA_SQL } from "../model-comparison-claim-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_POSTGRES_SQL } from "../approval-execution-linkage-index-repair.js";
 import { CHANNEL_GUIDED_SETUP_POSTGRES_SQL } from "../channel-guided-setup-schema.js";
 import { MAIL_DRAFTS_POSTGRES_SQL, MAIL_DRAFTS_SCHEMA_CONVERGENCE_POSTGRES_SQL } from "../mail-draft-schema.js";
@@ -15302,6 +15305,25 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "mobile_push_approval_already_resolved_classification",
     sql: MOBILE_PUSH_APPROVAL_RESOLVED_POSTGRES_SQL,
     integritySha256: "b1979cede74743f05a3db7f43b5757d75ed0e1890bcb9455312096c1ab2808f9",
+  },
+  {
+    // Parity with SQLite v277; run records remain repository-created for compatibility.
+    version: 226,
+    name: "model_comparison_execution_claims",
+    sql: MODEL_COMPARISON_CLAIM_SCHEMA_SQL,
+    integritySha256: "57b9918c696e86a6718db926fb4a05c48d0af3867691d56783ea6532db8005a1",
+  },
+  {
+    version: 227,
+    name: "chat_artifact_render_receipts",
+    sql: CHAT_ARTIFACT_RENDER_RECEIPTS_POSTGRES_SQL,
+    integritySha256: "4879d43e86211964076a920213605aa9b32029d431a6f89ca83bf8a6fd701217",
+  },
+  {
+    version: 228,
+    name: "approval_execution_linkage_json_compatibility",
+    sql: APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL,
+    integritySha256: "490cbe67cb9d9d250888f2048d6324061fdbde9c1f1aa8565bdbb80431bca934",
   },
 ];
 

@@ -76,9 +76,9 @@ describe("ClaudeCodeCliReadiness", () => {
     expect(readiness.peek()).toMatchObject({ status: "ready" });
   });
 
-  it("reports a logged-out CLI as missing", async () => {
+  it.each([0, 1])("reports a logged-out CLI as missing with exit code %i", async (exitCode) => {
     const readiness = new ClaudeCodeCliReadiness({
-      run: status({ loggedIn: false, authMethod: "none", apiProvider: "firstParty" }),
+      run: async () => ({ ...loggedIn(false), exitCode }),
     });
     await expect(readiness.check()).resolves.toEqual({
       status: "missing",
@@ -96,6 +96,20 @@ describe("ClaudeCodeCliReadiness", () => {
       reasonCode: "claude_cli_logged_in",
       liveVerified: true,
     });
+  });
+
+  it.each([1, 2, null])("rejects ready-looking stdout from a probe with exit code %s", async (exitCode) => {
+    const run = vi.fn<() => Promise<{ exitCode: number | null; stdout: string }>>(async () => loggedIn(true));
+    run.mockImplementationOnce(async () => ({ ...loggedIn(true), exitCode }));
+    const readiness = new ClaudeCodeCliReadiness({ run });
+
+    await expect(readiness.check()).resolves.toEqual({
+      status: "unavailable",
+      reasonCode: "claude_cli_status_failed",
+      liveVerified: false,
+    });
+    await expect(readiness.check()).resolves.toMatchObject({ status: "ready" });
+    expect(run).toHaveBeenCalledTimes(2);
   });
 
   it("rejects an API-key login because it would not bill the subscription", async () => {

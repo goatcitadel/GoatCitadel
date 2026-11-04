@@ -2,7 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { ConflictError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, readDurableChatTurnExecutionPayloadAuthority, ValidationError } from "@goatcitadel/contracts";
 import type {
   ChatMessageRecord,
   ChatTimerRecord,
@@ -20,6 +20,7 @@ import {
   type ChatMessageRouteRuntimeHost,
 } from "./chat-message-route-runtime.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
+import { loadChatTurnSessionState } from "./chat-turn-trace-hydration.js";
 import { RuntimeConfigurationService } from "./runtime-configuration-service.js";
 import {
   computeEffectiveChatTurnRequestMaterialSha256,
@@ -97,6 +98,66 @@ describe("chat-message-route-runtime", () => {
     );
     expect(selected.activeLeafTurnId).toBe("turn-child-b");
     expect(selected.turns.map((turn) => turn.turnId)).toEqual(["turn-root", "turn-child-b"]);
+  });
+
+  it.each([
+    ["running", {}],
+    ["queued before its first claim", { runStatus: "queued", traceStatus: "queued" }],
+    ["queued with its initial running trace", { runStatus: "queued" }],
+    ["executing a tool", { traceStatus: "waiting_for_tool" }],
+    ["parked for approval", { runStatus: "waiting", traceStatus: "waiting_for_approval", traceCheckpointKind: "run_waiting" }],
+    ["parked for user input", { runStatus: "waiting", traceStatus: "waiting_for_user_input", traceCheckpointKind: "run_waiting" }],
+    ["parked for a tool", { runStatus: "waiting", traceStatus: "waiting_for_tool", traceCheckpointKind: "run_waiting" }],
+    ["queued after approval wake", {
+      runStatus: "queued", traceStatus: "waiting_for_approval", traceDurableStatus: "waiting", traceCheckpointKind: "run_waiting",
+    }],
+  ] as const)("projects a live durable append after an edit when %s", async (_label, options) => {
+    const fixture = createLiveAppendProjectionFixture(options);
+    const before = await fixture.runtime.loadChatTurnSessionState("sess-1");
+    expect(before.activeLeafTurnId).toBe("turn-child-a");
+    expect(before.traces.some(({ turnId }) => turnId === fixture.live.turnId)).toBe(true);
+    expect(before.messagesById.has(fixture.live.userMessageId)).toBe(false);
+    expect(readDurableChatTurnExecutionPayloadAuthority({
+      workflowKey: fixture.run.workflowKey, durableRunId: fixture.run.runId, payload: fixture.run.payload,
+    })).toBeDefined();
+
+    const thread = await getChatThread(fixture.runtime, "sess-1");
+
+    expect(thread.turns.map(({ turnId }) => turnId)).toEqual(["turn-root", "turn-child-a", fixture.live.turnId]);
+    expect(thread.activeLeafTurnId).toBe(fixture.live.turnId);
+    expect(thread.turns.at(-1)).toMatchObject({
+      parentTurnId: "turn-child-a",
+      userMessage: { messageId: fixture.live.userMessageId, sessionId: "sess-1", content: "continue" },
+      trace: { status: fixture.live.status, durable: { runId: fixture.run.runId } },
+    });
+    expect(fixture.runtime.storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
+    expect(fixture.runtime.publishRealtime).not.toHaveBeenCalled();
+    expect((await fixture.runtime.loadChatTurnSessionState("sess-1")).activeLeafTurnId).toBe("turn-child-a");
+  });
+
+  it.each([
+    ["a competing tab selected the other branch", { selectedLeaf: "turn-child-b" }],
+    ["the run belongs to a different workspace", { runWorkspaceId: "workspace-other" }],
+    ["the run parent does not match the trace parent", { runParentTurnId: "turn-child-b" }],
+    ["the assistant identity differs from the run", { traceAssistantMessageId: "unrelated-assistant" }],
+    ["the run lease has expired", { leaseExpiresAt: "2020-01-01T00:00:00.000Z" }],
+    ["the run is terminal despite a running trace", { runStatus: "cancelled" }],
+    ["the trace is terminal despite a running run", { traceStatus: "cancelled" }],
+    ["the run is parked without a committed wait trace", { runStatus: "waiting", traceStatus: "waiting_for_approval" }],
+    ["a parked run is still paired with a running trace", { runStatus: "waiting", traceCheckpointKind: "run_waiting" }],
+    ["the exact admission is closed", { admissionStatus: "cancelled" }],
+    ["the durable binding identifies a different run", { boundRunId: "unrelated-run" }],
+    ["the user message belongs to a different session", { messageSessionId: "other-session" }],
+  ] as const)("keeps the selected branch when %s", async (_label, options) => {
+    const fixture = createLiveAppendProjectionFixture(options);
+
+    const thread = await getChatThread(fixture.runtime, "sess-1");
+
+    const selectedLeaf = "selectedLeaf" in options ? options.selectedLeaf : "turn-child-a";
+    expect(thread.activeLeafTurnId).toBe(selectedLeaf);
+    expect(thread.turns.map(({ turnId }) => turnId)).toEqual(["turn-root", selectedLeaf]);
+    expect(fixture.runtime.storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
+    expect(fixture.runtime.publishRealtime).not.toHaveBeenCalled();
   });
 
   it("projects verified historical file writes as safe workspace downloads without mutating stored content", async () => {
@@ -1119,6 +1180,92 @@ function createRuntime(input: {
     rollbackRuntimeConfiguration: vi.fn(async () => undefined),
   } as unknown as ChatMessageRouteRuntimeHost & { trace: ChatTurnTraceRecord };
   return runtime;
+}
+
+function createLiveAppendProjectionFixture(options: {
+  selectedLeaf?: string;
+  runWorkspaceId?: string;
+  runParentTurnId?: string;
+  traceAssistantMessageId?: string;
+  leaseExpiresAt?: string;
+  runStatus?: DurableRunRecord["status"];
+  traceStatus?: ChatTurnTraceRecord["status"];
+  traceDurableStatus?: DurableRunRecord["status"];
+  traceCheckpointKind?: DurableCheckpointRecord["checkpointKind"];
+  admissionStatus?: "active" | "cancelled";
+  boundRunId?: string;
+  messageSessionId?: string;
+} = {}) {
+  const state = createThreadState();
+  const branch = state.traces.find(({ turnId }) => turnId === "turn-child-a")!;
+  branch.branchKind = "edit";
+  branch.sourceTurnId = "turn-child-b";
+  const run = createDurableRun("run-live-append", options.runStatus ?? "running");
+  if (run.status === "running") {
+    run.leaseOwnerId = "worker-live";
+    run.leaseExpiresAt = options.leaseExpiresAt ?? "2099-08-07T20:00:00.000Z";
+  }
+  Object.assign(run.payload, {
+    workspaceId: options.runWorkspaceId ?? "workspace-1",
+    parentTurnId: options.runParentTurnId ?? branch.turnId,
+    turnId: "turn-live-append",
+    userMessageId: "user-live-append",
+    assistantMessageId: "assistant-live-append",
+  });
+  const live = createTrace({
+    turnId: "turn-live-append",
+    parentTurnId: branch.turnId,
+    userMessageId: "user-live-append",
+    assistantMessageId: options.traceAssistantMessageId ?? "assistant-live-append",
+    status: options.traceStatus ?? "running",
+    startedAt: "2026-03-22T12:03:00.000Z",
+    durable: {
+      runId: run.runId,
+      status: options.traceDurableStatus ?? run.status,
+      checkpointKind: options.traceCheckpointKind,
+    },
+  });
+  const userMessage: ChatMessageRecord = {
+    messageId: live.userMessageId, sessionId: options.messageSessionId ?? "sess-1",
+    role: "user", actorType: "user", actorId: TEST_RESPONDER.actorId, sourceAuthority: "operator",
+    content: "continue", timestamp: live.startedAt,
+  };
+  const messages = new Map(state.messagesById).set(userMessage.messageId, userMessage);
+  const traces = [...state.traces, live];
+  const runtime = createRuntime({ state, durableRun: run, canonicalMessageOverrides: messages });
+  const storage = runtime.storage;
+  const identity = {
+    admissionId: "admission-1", workspaceId: "workspace-1", sessionId: "sess-1",
+    sessionIncarnationId: "incarnation-1", turnId: live.turnId,
+  };
+  Object.assign(storage, {
+    chatSessionMeta: { get: vi.fn(() => ({ sessionId: "sess-1", workspaceId: "workspace-1" })) },
+    chatExecutionPlans: { get: vi.fn() },
+    chatToolRuns: { listByTurnIds: vi.fn(() => new Map()) },
+  });
+  Object.assign(storage.chatSessionBranchState, {
+    get: vi.fn(() => ({ sessionId: "sess-1", activeLeafTurnId: options.selectedLeaf ?? branch.turnId })),
+  });
+  Object.assign(storage.chatTurnTraces, {
+    listBySession: vi.fn(() => traces),
+    listSiblingsByParentTurnIds: vi.fn((_sessionId: string, parents: Array<string | undefined>) =>
+      new Map(parents.map((parent) => [parent, traces.filter((trace) => trace.parentTurnId === parent)])),
+    ),
+  });
+  Object.assign(storage.chatMessages, {
+    listByMessageIds: vi.fn((ids: string[]) => new Map([...messages].filter(([messageId]) => ids.includes(messageId)))),
+  });
+  Object.assign(storage.sessionMutationAdmissions, {
+    get: vi.fn(() => ({
+      ...identity, admissionKind: "turn_write", status: options.admissionStatus ?? "active",
+      actorKind: "operator", actorId: TEST_RESPONDER.actorId, operation: "chat_turn",
+      aggregateRevision: 7, controllerGeneration: 3, materialSha256: run.payload.admissionMaterialSha256,
+    })),
+    findDurableRunBinding: vi.fn(() => ({ ...identity, durableRunId: options.boundRunId ?? run.runId })),
+  });
+  runtime.loadChatTurnSessionState = (sessionId, loadOptions) =>
+    loadChatTurnSessionState({ storage, ensureChatMessageProjection: vi.fn(async () => undefined) }, sessionId, loadOptions);
+  return { runtime, run, live };
 }
 
 function createHeartbeatThreadFixture(): {

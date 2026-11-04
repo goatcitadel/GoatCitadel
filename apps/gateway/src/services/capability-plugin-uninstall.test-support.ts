@@ -96,6 +96,7 @@ export function pluginUninstallHarness(input: PluginUninstallFixture = {}) {
         next?.pieces.find((item) => item.pieceId === piece.pieceId)?.ref === undefined,
     ) === true;
   const sources = {
+    withPluginRecordsLock: async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => await work(),
     readPlugin: (pluginId: string) => h.store.get(pluginId),
     listPlugins: () => h.store.list(),
     updatePlugin: async (pluginId, change) => {

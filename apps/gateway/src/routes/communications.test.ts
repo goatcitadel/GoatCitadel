@@ -1,7 +1,26 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import type { ApprovalCreateInput, MailDraftRecord } from "@goatcitadel/contracts";
+import type { ApprovalCreateInput, ApprovalRequest, MailDraftRecord } from "@goatcitadel/contracts";
+import type { ApprovalCreateCommitHook } from "../services/approval-lifecycle-service.js";
 import { communicationsRoutes } from "./communications.js";
+
+function mockApprovalCreator(approvalId: string) {
+  return vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) => {
+    const approval: ApprovalRequest = {
+      approvalId,
+      kind: input.kind,
+      riskLevel: input.riskLevel,
+      status: "pending",
+      payload: input.payload,
+      preview: input.preview,
+      linkage: input.linkage,
+      createdAt: "2026-06-05T12:00:00.000Z",
+      explanationStatus: "not_requested",
+    };
+    await onCreated?.(approval);
+    return approval;
+  });
+}
 
 function decorateServices(app: FastifyInstance, services: Record<string, unknown>) {
   app.decorate("services", services as never);
@@ -70,17 +89,7 @@ describe("communications routes", () => {
 
   it("creates drafts and returns approval-required send placeholders", async () => {
     const gmailSend = vi.fn();
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
-      approvalId: "22222222-2222-4222-8222-222222222222",
-      kind: input.kind,
-      riskLevel: input.riskLevel,
-      status: "pending",
-      payload: input.payload,
-      preview: input.preview,
-      linkage: input.linkage,
-      createdAt: "2026-06-05T12:00:00.000Z",
-      explanationStatus: "not_requested",
-    }));
+    const createApproval = mockApprovalCreator("22222222-2222-4222-8222-222222222222");
     app = Fastify();
     decorateServices(app, {
       integrations: {
@@ -126,22 +135,13 @@ describe("communications routes", () => {
         riskLevel: "danger",
         payload: expect.objectContaining({ action: "mail_send", draftId: created.json().draftId }),
       }),
+      expect.any(Function),
     );
     expect(gmailSend).not.toHaveBeenCalled();
   });
 
   it("carries a bounded draft workspace into the send approval linkage", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
-      approvalId: "22222222-2222-4222-8222-222222222222",
-      kind: input.kind,
-      riskLevel: input.riskLevel,
-      status: "pending",
-      payload: input.payload,
-      preview: input.preview,
-      linkage: input.linkage,
-      createdAt: "2026-06-05T12:00:00.000Z",
-      explanationStatus: "not_requested",
-    }));
+    const createApproval = mockApprovalCreator("22222222-2222-4222-8222-222222222222");
     app = Fastify();
     decorateServices(app, {
       integrations: {
@@ -204,6 +204,7 @@ describe("communications routes", () => {
           workspaceId: "workspace-mail",
         },
       }),
+      expect.any(Function),
     );
   });
 
@@ -259,17 +260,7 @@ describe("communications routes", () => {
   });
 
   it("reads a persisted draft back and answers 404 for an unknown draft", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
-      approvalId: "22222222-2222-4222-8222-222222222222",
-      kind: input.kind,
-      riskLevel: input.riskLevel,
-      status: "pending",
-      payload: input.payload,
-      preview: input.preview,
-      linkage: input.linkage,
-      createdAt: "2026-06-05T12:00:00.000Z",
-      explanationStatus: "not_requested",
-    }));
+    const createApproval = mockApprovalCreator("22222222-2222-4222-8222-222222222222");
     app = Fastify();
     decorateServices(app, {
       integrations: { listIntegrationConnections: vi.fn(() => [mailConnection("acct-a")]) },
@@ -310,17 +301,7 @@ describe("communications routes", () => {
   });
 
   it("scopes draft reads and sends to the draft's workspace", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
-      approvalId: "33333333-3333-4333-8333-333333333333",
-      kind: input.kind,
-      riskLevel: input.riskLevel,
-      status: "pending",
-      payload: input.payload,
-      preview: input.preview,
-      linkage: input.linkage,
-      createdAt: "2026-06-05T12:00:00.000Z",
-      explanationStatus: "not_requested",
-    }));
+    const createApproval = mockApprovalCreator("33333333-3333-4333-8333-333333333333");
     app = Fastify();
     decorateServices(app, {
       integrations: { listIntegrationConnections: vi.fn(() => [mailConnection("acct-a")]) },
@@ -407,17 +388,7 @@ describe("communications routes", () => {
   });
 
   it("binds a draft or event without a workspace only to an account the default workspace can see", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
-      approvalId: "44444444-4444-4444-8444-444444444444",
-      kind: input.kind,
-      riskLevel: input.riskLevel,
-      status: "pending",
-      payload: input.payload,
-      preview: input.preview,
-      linkage: input.linkage,
-      createdAt: "2026-06-05T12:00:00.000Z",
-      explanationStatus: "not_requested",
-    }));
+    const createApproval = mockApprovalCreator("44444444-4444-4444-8444-444444444444");
     const calendar = (connectionId: string, workspaceId?: string) => ({
       ...mailConnection(connectionId, workspaceId),
       catalogId: "automation.google-calendar",
@@ -564,17 +535,7 @@ describe("communications routes", () => {
   });
 
   it("binds a calendar approval to a workspace that can see the calendar account", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => ({
-      approvalId: "33333333-3333-4333-8333-333333333333",
-      kind: input.kind,
-      riskLevel: input.riskLevel,
-      status: "pending",
-      payload: input.payload,
-      preview: input.preview,
-      linkage: input.linkage,
-      createdAt: "2026-06-05T12:00:00.000Z",
-      explanationStatus: "not_requested",
-    }));
+    const createApproval = mockApprovalCreator("33333333-3333-4333-8333-333333333333");
     const connection = (connectionId: string, workspaceId?: string) => ({
       connectionId,
       catalogId: "automation.google-calendar",

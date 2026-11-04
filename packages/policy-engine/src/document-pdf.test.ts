@@ -260,10 +260,41 @@ describe("documents.create pdf design report", () => {
     const report = result.designReport as Record<string, unknown>;
 
     expect(report.layouts).toEqual(["report-cover", "callout-box", "title-body", "data-table"]);
+    expect(result.warnings).toBeUndefined();
     expect(report.residualRisks).toContain(
       "PDF reports use Helvetica text and built-in color shapes, embedding bundled Noto glyphs only for characters Helvetica lacks; photos are not embedded, and emoji or CJK text is shown as a substitute glyph.",
     );
     expect(contentStreams(fs.readFileSync(path.join(root, "trails.pdf"))).join("\n")).toContain("0.122 0.369 0.294 rg");
+  });
+
+  it("reports when the polished PDF cover shortens a title that fits the document input limit", async () => {
+    const root = createRoot();
+    const file = path.join(root, "long-cover-title.pdf");
+    const title = `${"W".repeat(90)} END`;
+    const result = await executeArtifactTool(
+      "documents.create",
+      {
+        path: file,
+        format: "pdf",
+        title,
+        body: "The report body remains visible.",
+        design: { mode: "polished" },
+      },
+      createConfig(root),
+    );
+    const pdf = fs.readFileSync(file);
+    const cover = contentStreams(pdf)[0];
+    const metadataTitle = Buffer.from(`\ufeff${title}`, "utf16le").swap16().toString("hex");
+
+    expect(cover).toContain("(WWWW");
+    expect(cover).not.toContain("END");
+    expect(cover).toContain("(The report body remains visible.) Tj");
+    expect(pdf.toString("latin1")).toContain(`/Title <${metadataTitle}>`);
+    expect(result.title).toBe(title);
+
+    const warning = "The PDF cover title was shortened to fit in three lines. The full title is in the PDF metadata.";
+    expect(result.warnings).toEqual([warning]);
+    expect((result.designReport as Record<string, unknown>).residualRisks).toContain(warning);
   });
 
   it("shows body-only input once, but keeps an explicit section that repeats the body", async () => {
@@ -379,6 +410,46 @@ describe("documents.create pdf design report", () => {
     });
     expect(withResearchOnly.runtimeInstructions).toEqual({ status: "not_injected", skills: [] });
     expect(withNoRequest.runtimeInstructions).toEqual({ status: "not_injected", skills: [] });
+  });
+});
+
+describe("documents.create truncation warnings", () => {
+  it.each([
+    {
+      field: "section heading",
+      args: { sections: [{ heading: "", title: `${"Kept heading ".repeat(9)}discarded tail` }] },
+      kept: "## Kept heading",
+      warning: "Cut 1 section heading(s) to 100 characters.",
+    },
+    {
+      field: "document body",
+      args: { body: "", content: `${"Kept overview ".repeat(900)}discarded tail` },
+      kept: "Kept overview Kept overview",
+      warning: "Cut 1 body to 12000 characters.",
+    },
+    {
+      field: "section body",
+      args: {
+        sections: [{ heading: "Overview", body: " ", content: `${"Kept paragraph ".repeat(140)}discarded tail` }],
+      },
+      kept: "Kept paragraph Kept paragraph",
+      warning: "Cut 1 section body(ies) to 2000 characters.",
+    },
+  ])("reports the cut when a blank primary field falls back to a long $field", async ({ args, kept, warning }) => {
+    const root = createRoot();
+    const file = path.join(root, "fallback.md");
+    const result = await executeArtifactTool(
+      "documents.create",
+      { path: file, format: "markdown", title: "Fallback text", ...args },
+      createConfig(root),
+    );
+    const rendered = fs.readFileSync(file, "utf8");
+
+    expect(rendered).toContain(kept);
+    expect(rendered).not.toContain("discarded tail");
+    const message = `Some text is missing from the document: ${warning} Split the content and write the document again.`;
+    expect(result.warnings).toEqual([message]);
+    expect((result.designReport as Record<string, unknown>).residualRisks).toContain(message);
   });
 });
 

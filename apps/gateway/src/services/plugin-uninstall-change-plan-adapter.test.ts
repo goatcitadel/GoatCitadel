@@ -1216,6 +1216,27 @@ describe("uninstalling a plugin through one Change Plan", () => {
     expect(() => assertMcpServerRemovalAllowed(h.state.servers[0], undefined)).not.toThrow();
   });
 
+  it("refuses a stale connector removal when a keeper installs during earlier uninstall steps", async () => {
+    const h = harness();
+    const record = await installed(h);
+    const removePack = h.uninstallSources.deletePromptPack.getMockImplementation()!;
+    h.uninstallSources.deletePromptPack.mockImplementationOnce(async (packId) => {
+      await otherPluginKeeping(h, record);
+      return removePack(packId);
+    });
+
+    const stopped = await h.uninstall();
+
+    expect(stopped.outcome).toBe("failed");
+    expect(h.uninstallSources.disconnectConnector).not.toHaveBeenCalled();
+    expect(h.uninstallSources.deleteConnector).not.toHaveBeenCalled();
+    expect(h.state.servers).toHaveLength(1);
+    const retried = await uninstalled(h, "uninstall-with-current-keeper");
+    expect(retried.outcome, retried.summary).toBe("applied");
+    expect(h.state.servers).toHaveLength(1);
+    expect(h.state.servers[0]?.pluginOwner).toBeUndefined();
+  });
+
   it("releases, never deletes, a connector another plugin may use, when what it kept has left the catalog", async () => {
     const h = harness();
     const record = await installed(h);

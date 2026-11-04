@@ -98,6 +98,67 @@ function assertRoundTripAndCas(scoped: string): void {
   }
 }
 
+function assertUnlinkedGenerationCas(scoped: string): void {
+  const writerDb = new PostgresSyncDatabaseClient({ connectionString: scoped, database: "postgres", pool: { max: 1 } });
+  const recoveryDb = new PostgresSyncDatabaseClient({ connectionString: scoped, database: "postgres", pool: { max: 1 } });
+  try {
+    const writer = new MailDraftRepository(writerDb);
+    const recovery = new MailDraftRepository(recoveryDb);
+    const draftId = "draft-pg-recovery-generation";
+    const firstFence = draft.updatedAt;
+    const releasedAt = "2026-10-16T09:11:00.000Z";
+    const newFence = "2026-10-16T09:11:00.001Z";
+    writer.create({ ...draft, draftId, status: "approval_required" });
+    const snapshot = recovery.get(draftId);
+    assert.equal(snapshot.updatedAt, firstFence);
+    assert.equal(snapshot.approvalId, undefined);
+    assert.equal(
+      writer.transition(draftId, ["approval_required"], {
+        status: "draft",
+        updatedAt: releasedAt,
+        expectedUnlinkedUpdatedAt: snapshot.updatedAt,
+      })?.status,
+      "draft",
+    );
+    const admitted = writer.transition(draftId, ["draft"], {
+      status: "approval_required",
+      updatedAt: newFence,
+      expectedUnlinkedUpdatedAt: releasedAt,
+    });
+    assert.ok(admitted);
+    assert.equal(
+      recovery.transition(draftId, ["approval_required"], {
+        status: "draft",
+        updatedAt: newFence,
+        expectedUnlinkedUpdatedAt: snapshot.updatedAt,
+      }),
+      undefined,
+    );
+    assert.deepEqual(recovery.get(draftId), admitted);
+
+    // Keep the same timestamp across the link to prove approval_id is also compared.
+    const linked = writer.transition(draftId, ["approval_required"], {
+      status: "approval_required",
+      approvalId: "approval-current-generation",
+      updatedAt: newFence,
+      expectedUnlinkedUpdatedAt: newFence,
+    });
+    assert.equal(linked?.approvalId, "approval-current-generation");
+    assert.equal(
+      recovery.transition(draftId, ["approval_required"], {
+        status: "draft",
+        updatedAt: newFence,
+        expectedUnlinkedUpdatedAt: newFence,
+      }),
+      undefined,
+    );
+    assert.deepEqual(recovery.get(draftId), linked);
+  } finally {
+    recoveryDb.close();
+    writerDb.close();
+  }
+}
+
 /** Release of an interrupted draft first looks for a persisted send approval naming it. */
 function assertSendApprovalLookup(scoped: string): void {
   const db = new PostgresSyncDatabaseClient({ connectionString: scoped, database: "postgres", pool: { max: 1 } });
@@ -134,6 +195,7 @@ test("real PostgreSQL fresh installs persist mail drafts with CAS transitions", 
     }
     await assertSingleNamedStatusCheck(admin, schema);
     assertRoundTripAndCas(scoped);
+    assertUnlinkedGenerationCas(scoped);
     assertSendApprovalLookup(scoped);
   });
 });
@@ -159,6 +221,7 @@ test(
       }
       await assertSingleNamedStatusCheck(admin, schema);
       assertRoundTripAndCas(scoped);
+      assertUnlinkedGenerationCas(scoped);
     });
   },
 );

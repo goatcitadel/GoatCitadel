@@ -363,8 +363,10 @@ describe("Install panel: what the operator judges", () => {
     );
 
     skip = "unreadable";
+    act(() => root.unmount());
     client.clear();
     __resetSkillInstallsForTests();
+    root = createRoot(container);
     await render();
     expect(headings()).not.toContain("What happens next");
     expect(button("Install and switch on")).toBeDefined();

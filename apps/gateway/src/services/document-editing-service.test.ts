@@ -25,14 +25,92 @@ async function harness() {
     auditDir: path.join(root, "audit"),
   });
   openStorage.push(storage);
+  const asyncStorage = createSqliteAsyncStorage(storage);
   const service = new DocumentEditingService({
-    storage: createSqliteAsyncStorage(storage),
+    storage: asyncStorage,
     requireChatSession: (sessionId) => ({ sessionId, workspaceId: "workspace-1" }),
   });
-  return { storage, service, notes: new PersonalOpsStorageRepository(storage.db) };
+  return { storage, asyncStorage, service, notes: new PersonalOpsStorageRepository(storage.db) };
 }
 
 describe("DocumentEditingService", () => {
+  it("rolls the note and history back when applied proposal settlement fails", async () => {
+    const { service, notes, storage } = await harness();
+    const note = notes.createNote({ workspaceId: "workspace-1", title: "Atomic note", body: "before" });
+    const proposal = await service.createProposal({ workspaceId: "workspace-1", targetKind: "personal_note", targetId: note.noteId, baseRevision: 1, proposedContent: "after" }, "operator");
+    storage.db.exec(`CREATE TRIGGER fail_applied_settlement BEFORE UPDATE ON document_patch_proposals
+      WHEN NEW.state = 'applied' BEGIN SELECT RAISE(ABORT, 'settlement rejected'); END;`);
+    await assert.rejects(service.applyProposal(proposal.proposalId, "workspace-1", "operator"), /settlement rejected/);
+    assert.equal(notes.getNote(note.noteId).body, "before");
+    assert.equal(notes.getNote(note.noteId).revision, 1);
+    assert.equal(notes.listNoteRevisions(note.noteId, { workspaceId: "workspace-1" }).length, 1);
+    assert.equal(storage.documentPatchProposals.get(proposal.proposalId).state, "pending");
+    storage.db.exec("DROP TRIGGER fail_applied_settlement");
+    const applied = await service.applyProposal(proposal.proposalId, "workspace-1", "operator");
+    assert.equal(applied.state, "applied");
+    assert.equal(applied.appliedRevision, 2);
+    assert.equal(notes.listNoteRevisions(note.noteId, { workspaceId: "workspace-1" }).length, 2);
+  });
+
+  it("rolls an artifact successor back when applied proposal settlement fails", async () => {
+    const { service, storage } = await harness();
+    const now = "2026-11-02T00:00:00.000Z";
+    const base = storage.chatGeneratedArtifacts.create({
+      artifactId: "atomic-artifact", sessionId: "session-1", workspaceId: "workspace-1", turnId: "turn-1",
+      title: "Atomic artifact", kind: "markdown", content: "before", sourceSurface: "chat", version: 1,
+      contentHash: createHash("sha256").update("before").digest("hex"), createdAt: now, updatedAt: now,
+    });
+    const proposal = await service.createProposal({ workspaceId: "workspace-1", targetKind: "generated_artifact", targetId: base.artifactId, baseContentHash: base.contentHash, proposedContent: "after" }, "operator");
+    storage.db.exec(`CREATE TRIGGER fail_applied_settlement BEFORE UPDATE ON document_patch_proposals
+      WHEN NEW.state = 'applied' BEGIN SELECT RAISE(ABORT, 'settlement rejected'); END;`);
+    await assert.rejects(service.applyProposal(proposal.proposalId, "workspace-1", "operator"), /settlement rejected/);
+    assert.equal(storage.chatGeneratedArtifacts.findDirectSuccessor(base.artifactId), undefined);
+    assert.equal(storage.documentPatchProposals.get(proposal.proposalId).state, "pending");
+    storage.db.exec("DROP TRIGGER fail_applied_settlement");
+    const applied = await service.applyProposal(proposal.proposalId, "workspace-1", "operator");
+    assert.equal(applied.state, "applied");
+    assert.equal(storage.chatGeneratedArtifacts.findDirectSuccessor(base.artifactId)?.artifactId, applied.appliedTargetId);
+    assert.equal(applied.appliedRevision, 2);
+  });
+
+  it("refuses stale apply before touching a note when rejection wins after its precheck", async () => {
+    const { service, asyncStorage, notes, storage } = await harness();
+    const note = notes.createNote({ workspaceId: "workspace-1", title: "Race note", body: "before" });
+    const proposal = await service.createProposal({ workspaceId: "workspace-1", targetKind: "personal_note", targetId: note.noteId, baseRevision: 1, proposedContent: "after" }, "operator");
+    let entered!: () => void;
+    let release!: () => void;
+    const ready = new Promise<void>((resolve) => { entered = resolve; });
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    let intercepted = false;
+    const proposals = new Proxy(asyncStorage.documentPatchProposals, {
+      get(target, key, receiver) {
+        if (key !== "get") return Reflect.get(target, key, receiver);
+        return async (id: string) => {
+          const snapshot = await target.get(id);
+          if (!intercepted) { intercepted = true; entered(); await gate; }
+          return snapshot;
+        };
+      },
+    });
+    const applyingStorage = {
+      chatGeneratedArtifacts: asyncStorage.chatGeneratedArtifacts, chatTurnTraces: asyncStorage.chatTurnTraces,
+      documentPatchProposals: proposals, personalOps: asyncStorage.personalOps,
+      runImmediateTransaction: asyncStorage.runImmediateTransaction.bind(asyncStorage),
+    };
+    const applying = new DocumentEditingService({ storage: applyingStorage, requireChatSession: (sessionId) => ({ sessionId, workspaceId: "workspace-1" }) });
+    const apply = applying.applyProposal(proposal.proposalId, "workspace-1", "operator-apply");
+    const settled = Promise.allSettled([apply]);
+    try {
+      await ready;
+      assert.equal((await service.rejectProposal(proposal.proposalId, "workspace-1", "operator-reject")).state, "rejected");
+    } finally { release(); }
+    const [result] = await settled;
+    assert.equal(notes.getNote(note.noteId).body, "before");
+    assert.equal(storage.documentPatchProposals.get(proposal.proposalId).state, "rejected");
+    assert.equal(result?.status, "rejected");
+    assert.equal(notes.listNoteRevisions(note.noteId, { workspaceId: "workspace-1" }).length, 1);
+  });
+
   it("applies note proposals through optimistic revisions and immutable history", async () => {
     const { service, notes } = await harness();
     const note = notes.createNote({ workspaceId: "workspace-1", title: "Plan", body: "before" });

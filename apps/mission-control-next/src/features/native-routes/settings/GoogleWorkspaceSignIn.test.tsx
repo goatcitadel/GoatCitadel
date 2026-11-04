@@ -129,9 +129,35 @@ afterEach(() => {
   __resetGoogleOAuthReturnForTests();
   window.history.replaceState(null, "", "/");
   vi.resetAllMocks();
+  vi.unstubAllGlobals();
 });
 
 describe("Connect Google", () => {
+  it("opens Google setup in the browser before starting sign-in in the desktop app", async () => {
+    vi.stubGlobal("chrome", { webview: {} });
+    api.fetchGoogleWorkspaceOAuthStatus.mockResolvedValue(
+      status({ connected: true, clientSecretSource: "keychain" }),
+    );
+    await render();
+
+    const browserLink = [...container!.querySelectorAll("a")].find(
+      (link) => link.textContent?.trim() === "Open Google setup in browser",
+    );
+    expect(browserLink?.getAttribute("href")).toBe("/capabilities/connectors/advanced#integration-connections");
+    expect(browserLink?.target).toBe("_blank");
+    expect(browserLink?.rel).toBe("noopener noreferrer");
+    expect(container!.textContent).not.toContain("Reconnect Google");
+    expect(container!.textContent).not.toContain("Open Google sign-in");
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    expect(api.startGoogleWorkspaceOAuth).not.toHaveBeenCalled();
+    expect(api.completeGoogleWorkspaceOAuth).not.toHaveBeenCalled();
+
+    expect(button("Refresh sign-in status", container!)).toBeTruthy();
+    await click(button("Disconnect Google", container!));
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Disconnect Google?");
+    expect(api.disconnectGoogleWorkspaceOAuth).not.toHaveBeenCalled();
+  });
+
   it("reviews the exact scopes before opening Google, then completes when Google sends the code back", async () => {
     api.fetchGoogleWorkspaceOAuthStatus.mockResolvedValue(status());
     api.startGoogleWorkspaceOAuth.mockResolvedValue({

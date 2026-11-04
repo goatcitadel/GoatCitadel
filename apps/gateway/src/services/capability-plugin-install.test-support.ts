@@ -221,6 +221,7 @@ export function pluginInstallHarness(input: PluginInstallFixture = {}) {
       throw new Error(`The ${name} owner failed at C:\\goat\\data with token sk-test-0123456789abcdef.`);
   };
   const sources = {
+    withPluginRecordsLock: async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => await work(),
     readInspection: vi.fn(async (inspectionId: string) =>
       inspectionId === state.inspection.inspectionId && Date.parse(state.inspection.expiresAt) > Date.now()
         ? { inspection: structuredClone(state.inspection), snapshotTreeSha256: TREE_SHA256 }

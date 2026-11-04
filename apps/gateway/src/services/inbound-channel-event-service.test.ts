@@ -40,6 +40,7 @@ import {
   type ChatSessionDependencies,
 } from "./chat-session-service.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";
+import { runTelegramUpdate, TelegramPollRevisionChangedError, type TelegramUpdateDeps } from "./telegram-update-processor.js";
 import { buildNewAdapterCases } from "./inbound-channel-event-service.new-adapters.fixtures.js";
 import {
   createErrandReplyHandler,
@@ -76,6 +77,85 @@ describe("InboundChannelEventService", () => {
     ).toBe("a".repeat(64));
     // First test in the file pays the cold module and SQLite harness setup (~10s on a loaded host).
   }, 60_000);
+
+  it.each([
+    { kind: "agent_turn", content: { text: "hello" } },
+    { kind: "voice_agent_turn", content: { voice: { file_id: "fixture-voice", mime_type: "audio/ogg", duration: 3 } } },
+  ])("keeps a stale Telegram $kind poll out of durable admission after personality lookup", async ({ kind, content }) => {
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    await lifecycle.drain({ mode: "graceful", reason: "test", actorId: "test", timeoutMs: 10 });
+    const harness = await createHarness({ sharedHostLifecycle: lifecycle });
+    const { integrationConnections, inboundChannelEvents } = harness.storage;
+    const first = integrationConnections.create({
+      catalogId: "channel.telegram",
+      key: "telegram",
+      kind: "channel",
+      label: "First revision",
+      config: {
+        receiveMode: "poll",
+        inboundAccessMode: "allowlist",
+        allowedSenders: ["777"],
+        telegramPairing: { approved: [{ actorId: "777", approvedAt: "2026-10-25T10:00:00.000Z" }], pending: [] },
+      },
+    });
+    const entered = deferred<void>();
+    const release = deferred<void>();
+    const catalog = { items: [], defaultPersonalityId: "default" };
+    const readPersonalityCatalog = vi.fn(async () => catalog).mockImplementationOnce(async () => {
+      entered.resolve(undefined);
+      await release.promise;
+      return catalog;
+    });
+    const deps: TelegramUpdateDeps = {
+      webhooks: {
+        getIntegrationConnection: async (id: string) => integrationConnections.get(id),
+        isVoiceInboundEnabled: async () => true,
+        acceptInboundChannelEvent: (input: DurableInboundChannelAcceptInput) => harness.service.accept(input),
+      } as TelegramUpdateDeps["webhooks"],
+      readPersonalityCatalog,
+    };
+    const update = {
+      update_id: 9034,
+      message: {
+        message_id: 9034,
+        from: { id: 777, is_bot: false, first_name: "Fixture" },
+        chat: { id: 777, type: "private" },
+        ...content,
+      },
+    };
+    const identity = {
+      channelKey: "telegram",
+      connectionId: first.connectionId,
+      idempotencyKey: `telegram:${first.connectionId}:9034`,
+    };
+    const old = runTelegramUpdate(deps, first.connectionId, update, first.revision).then(
+      (result) => ({ result }),
+      (error: unknown) => ({ error }),
+    );
+
+    try {
+      await Promise.race([entered.promise, old.then(() => { throw new Error("Poll did not reach personality lookup."); })]);
+      const current = integrationConnections.update(first.connectionId, {
+        expectedRevision: first.revision,
+        label: "Current revision",
+      });
+      release.resolve(undefined);
+      const oldOutcome = await old;
+      const oldRow = inboundChannelEvents.getByIdentity(identity);
+
+      const result = await runTelegramUpdate(deps, current.connectionId, update, current.revision);
+      expect(result).toMatchObject({ durableAccepted: true });
+      expect(oldRow).toBeUndefined();
+      expect(oldOutcome).toEqual({ error: expect.any(TelegramPollRevisionChangedError) });
+      const stored = inboundChannelEvents.getByIdentity(identity);
+      expect(stored).toMatchObject({ dispatchKind: kind, payload: { [CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]: current.revision } });
+      expect(harness.ingestChannelMessage).not.toHaveBeenCalled();
+    } finally {
+      release.resolve(undefined);
+      await old;
+    }
+  });
 
   it("returns after durable acceptance while the model turn remains in flight", async () => {
     const response = deferred<ChatSendMessageResponse>();

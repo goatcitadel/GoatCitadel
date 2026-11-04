@@ -3,6 +3,11 @@ import type { LlmConfigFile } from "@goatcitadel/contracts";
 import { LlmService } from "./llm-service.js";
 import { SecretStoreService } from "./secret-store-service.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 describe("LlmService loop25 fallback and host checks", () => {
   it("allows IPv6 local runtime URLs but blocks reserved IPv4 provider hosts", async () => {
     expect(createService("http://[::1]:1234/v1").getRuntimeConfig()).toMatchObject({

@@ -218,6 +218,98 @@ describe("ModelComparisonExecutionService", () => {
     expect((await service.getComparison(created.comparisonId)).status).toBe("completed");
   });
 
+  it("stops a suspended old executor from saving, finishing, or dispatching after takeover", async () => {
+    const { service, repository, created } = await setup(async () => promptRun({}));
+    let now = Date.parse("2026-10-15T00:00:00.000Z");
+    let releaseOld!: () => void;
+    let releaseNew!: () => void;
+    const oldGate = new Promise<void>((resolve) => { releaseOld = resolve; });
+    const newGate = new Promise<void>((resolve) => { releaseNew = resolve; });
+    const oldCalls: AbortSignal[] = [];
+    let newCalls = 0;
+    const old = new ModelComparisonExecutionService({
+      repository, clock: () => new Date(now),
+      runPromptPackTest: async (_pack, testId, input) => {
+        oldCalls.push(input.signal);
+        await oldGate;
+        return promptRun({ testId, responseText: "old owner" });
+      },
+    });
+    const replacement = new ModelComparisonExecutionService({
+      repository, clock: () => new Date(now),
+      runPromptPackTest: async (_pack, testId) => {
+        newCalls += 1;
+        await newGate;
+        return promptRun({ testId, responseText: "new owner" });
+      },
+    });
+    try {
+      await old.startComparison(created.comparisonId);
+      await waitFor(() => oldCalls.length === 2);
+      // Model process suspension by advancing its clock without running the real renewal timer.
+      now += 6 * 60_000;
+      await replacement.startComparison(created.comparisonId);
+      await waitFor(() => newCalls === 2);
+      releaseOld();
+      await old.whenSettled(created.comparisonId);
+      const held = await service.getComparison(created.comparisonId);
+      expect(oldCalls).toHaveLength(2);
+      expect(oldCalls.every((signal) => signal.aborted)).toBe(true);
+      expect(held.status).toBe("running");
+      expect(held.results.some((result) => result.responseText === "old owner")).toBe(false);
+    } finally {
+      releaseOld();
+      releaseNew();
+      await Promise.all([old.whenSettled(created.comparisonId), replacement.whenSettled(created.comparisonId)]);
+    }
+    const done = await service.getComparison(created.comparisonId);
+    expect(done.status).toBe("completed");
+    expect(done.results.every((result) => result.responseText === "new owner")).toBe(true);
+  });
+
+  it("cancels the canonical replacement through a stale process with an active local entry", async () => {
+    const { repository, created } = await setup(async () => promptRun({}));
+    let now = Date.parse("2026-10-15T00:00:00.000Z");
+    let oldCalls = 0;
+    let newCalls = 0;
+    let releaseNew!: () => void;
+    const gate = new Promise<void>((resolve) => { releaseNew = resolve; });
+    const old = new ModelComparisonExecutionService({
+      repository, clock: () => new Date(now),
+      runPromptPackTest: (_pack, _test, input) => new Promise((_resolve, reject) => {
+        oldCalls += 1;
+        input.signal.addEventListener("abort", () => reject(new Error("aborted")), { once: true });
+      }),
+    });
+    const replacement = new ModelComparisonExecutionService({
+      repository, clock: () => new Date(now),
+      runPromptPackTest: async (_pack, testId) => {
+        newCalls += 1;
+        await gate;
+        return promptRun({ testId });
+      },
+    });
+    try {
+      await old.startComparison(created.comparisonId);
+      await waitFor(() => oldCalls === 2);
+      now += 6 * 60_000;
+      await replacement.startComparison(created.comparisonId);
+      await waitFor(() => newCalls === 2);
+      const cancelled = await old.cancelComparison(created.comparisonId);
+      expect(cancelled.status).toBe("cancelled");
+      expect((await repository.get(created.comparisonId)).status).toBe("cancelled");
+      expect(newCalls).toBe(2);
+    } finally {
+      // Also releases old work if an assertion failed before the cancellation.
+      const pendingCancel = old.cancelComparison(created.comparisonId).catch(() => undefined);
+      releaseNew();
+      await pendingCancel;
+      await Promise.all([old.whenSettled(created.comparisonId), replacement.whenSettled(created.comparisonId)]);
+    }
+    expect((await repository.get(created.comparisonId)).status).toBe("cancelled");
+    expect(newCalls).toBe(2);
+  });
+
   it("refuses to restart a fresh running comparison owned by another process", async () => {
     const dispatched: string[] = [];
     const { service, executor, repository, created } = await setup(async (_packId, testId, input) => {
@@ -368,7 +460,7 @@ describe("ModelComparisonExecutionService", () => {
   it("never ends completed while a result has no response, even if it was never run", async () => {
     const { service, executor, repository, created } = await setup(async (_packId, testId) => promptRun({ testId }));
     const orphan = { resultId: "orphan", testId: "test-a", candidateId: "unknown-candidate" };
-    await repository.upsertResult(created.comparisonId, orphan, "2026-10-15T00:00:00.000Z");
+    await repository.create({ ...created, results: [...created.results, orphan] });
     await executor.startComparison(created.comparisonId);
     await executor.whenSettled(created.comparisonId);
     const done = await service.getComparison(created.comparisonId);
@@ -411,6 +503,7 @@ describe("ModelComparisonExecutionService", () => {
 
 class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort, ModelComparisonRunStatePort {
   private readonly runs = new Map<string, ModelComparisonRun>();
+  private readonly claims = new Map<string, string>();
   public failUpsert = false;
   public failFailedStatus = false;
 
@@ -463,12 +556,13 @@ class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort
       error: update.error === undefined ? run.error : (update.error ?? undefined),
     };
     this.runs.set(comparisonId, cloneRun(next));
+    this.claims.delete(comparisonId);
     return await this.get(comparisonId);
   }
 
   async claimRun(
     comparisonId: string,
-    claim: { expectedStatus: ModelComparisonRun["status"]; expectedUpdatedAt: string; updatedAt: string },
+    claim: { expectedStatus: ModelComparisonRun["status"]; expectedUpdatedAt: string; updatedAt: string; claimId: string },
   ): Promise<ModelComparisonRun | undefined> {
     const run = this.runs.get(comparisonId);
     if (!run || run.status !== claim.expectedStatus || run.updatedAt !== claim.expectedUpdatedAt) {
@@ -478,12 +572,13 @@ class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort
       comparisonId,
       cloneRun({ ...run, status: "running", updatedAt: claim.updatedAt, completedAt: undefined, error: undefined }),
     );
+    this.claims.set(comparisonId, claim.claimId);
     return await this.get(comparisonId);
   }
 
-  async renewRunLease(comparisonId: string, updatedAt: string): Promise<boolean> {
+  async renewRunLease(comparisonId: string, updatedAt: string, claimId: string): Promise<boolean> {
     const run = this.runs.get(comparisonId);
-    if (!run || run.status !== "running") {
+    if (!run || run.status !== "running" || this.claims.get(comparisonId) !== claimId) {
       return false;
     }
     this.runs.set(comparisonId, cloneRun({ ...run, updatedAt }));
@@ -498,12 +593,17 @@ class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort
       completedAt: string | null;
       error: string | null;
     },
+    authority: Parameters<ModelComparisonRunStatePort["finishRun"]>[2],
   ): Promise<ModelComparisonRun | undefined> {
+    if (authority.kind === "operator_cancel") {
+      if (update.status !== "cancelled" || update.completedAt === null) return undefined;
+      return await this.cancelRun(comparisonId, { updatedAt: update.updatedAt, completedAt: update.completedAt });
+    }
     if (this.failFailedStatus && update.status === "failed") {
       throw new Error("status write broke");
     }
     const run = this.runs.get(comparisonId);
-    if (!run || run.status !== "running") {
+    if (!run || run.status !== "running" || this.claims.get(comparisonId) !== authority.claimId) {
       return undefined;
     }
     this.runs.set(
@@ -516,21 +616,27 @@ class InMemoryModelComparisonRepository implements ModelComparisonRepositoryPort
         error: update.error ?? undefined,
       }),
     );
+    this.claims.delete(comparisonId);
     return await this.get(comparisonId);
+  }
+
+  async cancelRun(comparisonId: string, update: { updatedAt: string; completedAt: string }): Promise<ModelComparisonRun | undefined> {
+    const run = this.runs.get(comparisonId);
+    if (!run || run.status !== "running") return undefined;
+    return await this.updateStatus(comparisonId, { ...update, status: "cancelled", error: null });
   }
 
   async upsertResult(
     comparisonId: string,
     result: ModelComparisonPromptResult,
     updatedAt: string,
-  ): Promise<ModelComparisonRun> {
+    claimId: string,
+  ): Promise<ModelComparisonRun | undefined> {
     if (this.failUpsert) {
       throw new Error("upsert broke");
     }
     const run = this.runs.get(comparisonId);
-    if (!run) {
-      throw new Error("not found");
-    }
+    if (!run || run.status !== "running" || this.claims.get(comparisonId) !== claimId) return undefined;
     const exists = run.results.some((item) => item.resultId === result.resultId);
     const results = exists
       ? run.results.map((item) => (item.resultId === result.resultId ? result : item))

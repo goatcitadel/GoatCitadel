@@ -10,6 +10,11 @@ import type {
   ChangePlanRequiredAction,
   ToolGroupId,
 } from "@goatcitadel/contracts";
+import {
+  getGatewayCallerScope,
+  notifyGatewayAccessChanged,
+  setGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toolListQuery } from "../../../data/capability-tools-query";
@@ -112,6 +117,7 @@ function deferred<T>() {
 let container: HTMLDivElement;
 let root: Root;
 let client: QueryClient;
+let previousCallerScope: string;
 /** What the Gateway's list says now; every read of the list answers it. */
 let server: CapabilityToolsResponse;
 /** The latest switch of each group, read the way a Most used card, a row or the panel reads it. */
@@ -149,10 +155,10 @@ async function render(groupIds: readonly ShownGroup[] = ["files", "git", "browse
 }
 
 /** A fresh page: no switches remembered, a new cache holding the Gateway's list. */
-function freshPage() {
+function freshPage(resetSwitches = true) {
   act(() => root.unmount());
   client.clear();
-  __resetToolGroupSwitchesForTests();
+  if (resetSwitches) __resetToolGroupSwitchesForTests();
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } });
   client.setQueryData(KEY, server);
   root = createRoot(container);
@@ -180,6 +186,7 @@ async function waitThenEnd(groupId: ShownGroup, ended: Partial<ChangePlanRecord>
 const fakePolls = () => vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
 
 beforeEach(() => {
+  previousCallerScope = getGatewayCallerScope();
   settings.patchSettings.mockReset();
   tools.fetchCapabilityTools.mockReset();
   plans.fetchChangePlan.mockReset();
@@ -200,6 +207,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   client.clear();
+  setGatewayCallerScope(previousCallerScope);
   __resetToolGroupSwitchesForTests();
   vi.useRealTimers();
 });
@@ -512,6 +520,104 @@ describe("useToolGroupSwitch", () => {
     await settle();
     expect(settings.patchSettings).toHaveBeenLastCalledWith({
       expectedRevision: 8,
+      toolGroupChange: { groupId: "git", enabled: true },
+    });
+  });
+
+  it("keeps a previous caller's save response out of a new save for the same group", async () => {
+    fakePolls();
+    setGatewayCallerScope("tool-caller-a");
+    const oldSave = deferred<unknown>();
+    const newSave = deferred<unknown>();
+    settings.patchSettings.mockReturnValueOnce(oldSave.promise).mockReturnValueOnce(newSave.promise);
+    plans.fetchChangePlan.mockImplementation(async (planId: string) => plan({ planId }));
+    await render(["git"]);
+    await act(async () => sw("git").setEnabled(true));
+    expect(settings.patchSettings).toHaveBeenCalledTimes(1);
+
+    act(() => setGatewayCallerScope("tool-caller-b"));
+    server = listOf({}, 11);
+    freshPage(false);
+    await render(["git"]);
+    await act(async () => sw("git").setEnabled(true));
+
+    expect.soft(settings.patchSettings).toHaveBeenNthCalledWith(2, {
+      expectedRevision: 11,
+      toolGroupChange: { groupId: "git", enabled: true },
+    });
+    await act(async () => oldSave.resolve(saved(8, { ...WAITING, planId: "old-plan" })));
+    await settle();
+    expect.soft(sw("git")).toMatchObject({ pending: true, waiting: false });
+    await beat(5_000);
+    expect.soft(plans.fetchChangePlan).not.toHaveBeenCalled();
+
+    await act(async () => newSave.resolve(saved(12, { ...WAITING, planId: "new-plan" })));
+    await settle();
+    expect(sw("git")).toMatchObject({ pending: false, waiting: true });
+  });
+
+  it("retires an unmounted caller's wait and stops polling its plan after access changes", async () => {
+    fakePolls();
+    setGatewayCallerScope("tool-caller");
+    settings.patchSettings.mockResolvedValueOnce(saved(7, { ...WAITING, planId: "old-plan" }));
+    plans.fetchChangePlan.mockResolvedValue(plan({ planId: "old-plan" }));
+    await render(["git"]);
+    await act(async () => sw("git").setEnabled(true));
+    await settle();
+    expect(sw("git").waiting).toBe(true);
+    await act(async () => root.render(null));
+
+    act(() => notifyGatewayAccessChanged(false));
+    await beat(5_000);
+    expect.soft(plans.fetchChangePlan).not.toHaveBeenCalled();
+
+    freshPage(false);
+    await render(["git"]);
+    expect(sw("git")).toMatchObject({ pending: false, waiting: false });
+  });
+
+  it("recovers for the new caller without publishing the previous caller's delayed recovery", async () => {
+    setGatewayCallerScope("tool-caller-a");
+    const oldRecovery = deferred<{ items: ChangePlanRecord[] }>();
+    plans.fetchChangePlans
+      .mockReturnValueOnce(oldRecovery.promise)
+      .mockResolvedValueOnce({ items: [plan({ planId: "new-plan" })] });
+    await render(["git", "browser"]);
+    expect(plans.fetchChangePlans).toHaveBeenCalledTimes(1);
+
+    act(() => setGatewayCallerScope("tool-caller-b"));
+    freshPage(false);
+    await render(["git", "browser"]);
+    expect.soft(plans.fetchChangePlans).toHaveBeenCalledTimes(2);
+    expect.soft(sw("git").waiting).toBe(true);
+
+    await act(async () => oldRecovery.resolve({ items: [plan({ planId: "old-plan" }, "browser")] }));
+    await settle();
+    expect(sw("browser").waiting).toBe(false);
+  });
+
+  it("retires callbacks at a same-caller access change and lets the remounted view save", async () => {
+    setGatewayCallerScope("tool-caller");
+    settings.patchSettings.mockResolvedValue(saved(8));
+    await render(["git"]);
+    const oldCallback = sw("git").setEnabled;
+    await act(async () => {
+      notifyGatewayAccessChanged(false);
+      oldCallback(true);
+    });
+    await settle();
+    expect.soft(settings.patchSettings).not.toHaveBeenCalled();
+
+    server = listOf({}, 11);
+    freshPage(false);
+    await render(["git"]);
+    await act(async () => oldCallback(true));
+    await settle();
+    expect.soft(settings.patchSettings).not.toHaveBeenCalled();
+    await act(async () => sw("git").setEnabled(true));
+    await settle();
+    expect(settings.patchSettings).toHaveBeenCalledExactlyOnceWith({
+      expectedRevision: 11,
       toolGroupChange: { groupId: "git", enabled: true },
     });
   });

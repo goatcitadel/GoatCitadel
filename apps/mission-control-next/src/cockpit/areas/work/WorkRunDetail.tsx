@@ -45,7 +45,8 @@ export function WorkRunDetail({ runId }: { runId: string }) {
     refetchInterval: (query) => (describeApiError(query.state.error).retryable === false ? false : 15_000),
   });
   const data = trace.isError ? undefined : trace.data;
-  const run = data?.run && durableRunWorkspaceId(data.run) === workspaceId ? data.run : undefined;
+  const recordedWorkspaceId = data?.run ? durableRunWorkspaceId(data.run) : null;
+  const run = recordedWorkspaceId === workspaceId ? data?.run : undefined;
   const sessionId =
     typeof run?.payload.sessionId === "string" && run.payload.sessionId.trim() ? run.payload.sessionId : null;
   const pendingApproval = run && data ? data.approvals.items.some((item) => item.status === "pending") : false;
@@ -115,8 +116,12 @@ export function WorkRunDetail({ runId }: { runId: string }) {
       ) : null}
       {data?.run && !run ? (
         <EmptyState
-          title="Run outside this workspace"
-          description="This run belongs to another workspace. Choose its workspace or return to Work."
+          title={recordedWorkspaceId ? "Run outside this workspace" : "Run workspace unknown"}
+          description={
+            recordedWorkspaceId
+              ? "This run belongs to another workspace. Choose its workspace or return to Work."
+              : "GoatCitadel could not confirm this run's workspace. Return to Work to choose a run."
+          }
         />
       ) : null}
       {!trace.isLoading && !trace.isError && data && !data.run ? (

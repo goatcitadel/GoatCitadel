@@ -2,6 +2,10 @@
 import { act, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import {
+  getGatewayCallerScope,
+  setGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { resetWorkerBudgetAttemptsForTests } from "../../../../features/native-routes/ops/worker-budget-attempts";
 import { __resetSessionDraftsForTests } from "../../../../features/native-routes/library/session-drafts";
 import { WorkerBudgets } from "./WorkerBudgets";
@@ -131,6 +135,50 @@ it("keeps an unconfirmed authorization across unmount and retries the same grant
   await act(async () => button("Review pending authorization").click());
   await act(async () => button("Authorize budget", host.querySelector('[role="dialog"]')!).click());
   expect(api.authorizeRemoteWorkerBudget.mock.calls[1]![0]).toEqual(first);
+});
+
+it.each([
+  ["caller", "http://127.0.0.1:8787", "operator-b"],
+  ["installation", "http://127.0.0.1:8788", "operator-a"],
+])("keeps an unconfirmed budget authorization with the original %s", async (_boundary, base, actorId) => {
+  const original = getGatewayCallerScope();
+  const scope = (gatewayBase: string, actor: string) =>
+    JSON.stringify([gatewayBase, "device", actor, true, "device-a", "grant-a"]);
+  const initial = scope("http://127.0.0.1:8787", "operator-a");
+  const replaceCaller = async (caller: string) => {
+    await act(async () => root.unmount());
+    setGatewayCallerScope(caller);
+    root = createRoot(host);
+    await render();
+  };
+  try {
+    setGatewayCallerScope(initial);
+    api.authorizeRemoteWorkerBudget.mockRejectedValue(new Error("timeout"));
+    await render();
+    await act(async () => button("New budget").click());
+    await type("Provider request limit", "5");
+    await type("Dollar limit", "1");
+    await review();
+    await act(async () => button("Authorize budget", host.querySelector('[role="dialog"]')!).click());
+    expect(api.authorizeRemoteWorkerBudget).toHaveBeenCalledTimes(1);
+    const first = api.authorizeRemoteWorkerBudget.mock.calls[0]![0];
+    expect(host.textContent).toContain("Authorization outcome unconfirmed");
+
+    await replaceCaller(scope(base, actorId));
+    expect(host.textContent).not.toContain("Authorization outcome unconfirmed");
+    expect(button("Review pending authorization")).toBeUndefined();
+    expect(button("New budget")).toBeDefined();
+    expect(api.authorizeRemoteWorkerBudget).toHaveBeenCalledTimes(1);
+
+    await replaceCaller(initial);
+    expect(host.textContent).toContain("Authorization outcome unconfirmed");
+    await act(async () => button("Review pending authorization").click());
+    await act(async () => button("Authorize budget", host.querySelector('[role="dialog"]')!).click());
+    expect(api.authorizeRemoteWorkerBudget).toHaveBeenCalledTimes(2);
+    expect(api.authorizeRemoteWorkerBudget.mock.calls[1]![0]).toEqual(first);
+  } finally {
+    act(() => setGatewayCallerScope(original));
+  }
 });
 
 it("revokes a budget only after the danger confirmation", async () => {

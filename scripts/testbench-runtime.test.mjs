@@ -346,7 +346,7 @@ test("readClaudeCodeCliAuthStatus runs `auth status --json` and reports an unava
     env: { GOATCITADEL_CLAUDE_CLI_PATH: " /opt/claude " },
     spawn: (command, args, options) => {
       calls.push({ command, args, timeout: options.timeout });
-      return { stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }) };
+      return { status: 0, stdout: JSON.stringify({ loggedIn: true, authMethod: "claude.ai" }) };
     },
   });
   assert.deepEqual(ok, { ready: true, reason: "ready" });
@@ -370,7 +370,7 @@ test("readClaudeCodeCliAuthStatus runs a Windows npm shim through its cli.js, as
       fileExists: (file) => file === cliJs,
       spawn: (command, args, options) => {
         calls.push({ command, args, shell: options?.shell });
-        return { stdout: ok };
+        return { status: 0, stdout: ok };
       },
     });
     assert.equal(status.ready, true, shim);
@@ -389,7 +389,7 @@ test("readClaudeCodeCliAuthStatus uses a shell only for a bare command on Window
   const seen = [];
   const spawn = (command, args, options) => {
     seen.push({ command, args, shell: (Array.isArray(args) ? options : args)?.shell === true });
-    return { stdout: JSON.stringify({ loggedIn: true }) };
+    return { status: 0, stdout: JSON.stringify({ loggedIn: true }) };
   };
   readClaudeCodeCliAuthStatus({ env: {}, platform: "win32", spawn });
   readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn });
@@ -417,11 +417,36 @@ test("readClaudeCodeCliAuthStatus reports a CLI that exists but cannot start by 
   assert.deepEqual(uncoded, { ready: false, reason: "cli_start_failed:unknown" });
 });
 
+test("readClaudeCodeCliAuthStatus refuses ready-looking stdout from a failed probe", () => {
+  const stdout = JSON.stringify({
+    loggedIn: true,
+    authMethod: "claude.ai",
+    apiProvider: "firstParty",
+    email: "fixture@example.test",
+  });
+  const read = (completion) =>
+    readClaudeCodeCliAuthStatus({ env: {}, platform: "linux", spawn: () => ({ stdout, ...completion }) });
+
+  assert.deepEqual(read({ status: 0, signal: null }), {
+    ready: true,
+    reason: "ready",
+    accountEmail: "fixture@example.test",
+  });
+  const failed = { ready: false, reason: "cli_status_failed" };
+  assert.deepEqual(read({ status: 1, signal: null }), failed, "contradictory logged-out exit");
+  assert.deepEqual(read({ status: 2, signal: null }), failed, "nonzero exit");
+  assert.deepEqual(read({ status: null, signal: "SIGTERM" }), failed, "terminated probe");
+  assert.deepEqual(read({ status: 1, stdout: JSON.stringify({ loggedIn: false }) }), {
+    ready: false,
+    reason: "not_logged_in",
+  });
+});
+
 test("claudeCliNotReadyMessage gives sign-in guidance only for sign-in problems", () => {
   for (const reason of ["not_logged_in", "not_subscription_login", "unparseable"]) {
     assert.match(claudeCliNotReadyMessage(reason), /sign in/, reason);
   }
-  for (const reason of ["cli_unavailable", "cli_unsupported_shim", "cli_start_failed:EACCES"]) {
+  for (const reason of ["cli_unavailable", "cli_unsupported_shim", "cli_start_failed:EACCES", "cli_status_failed"]) {
     const message = claudeCliNotReadyMessage(reason);
     assert.doesNotMatch(message, /sign in/, reason);
     assert.match(message, new RegExp(reason));

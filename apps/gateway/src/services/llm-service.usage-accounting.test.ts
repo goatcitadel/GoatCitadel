@@ -15,6 +15,11 @@ import type { SecretStoreService } from "./secret-store-service.js";
 import { RemoteWorkerToolModelBudgetRuntime } from "./remote-worker-tool-model-budget-runtime.js";
 import type { RemoteWorkerToolModelBudgetInput } from "./remote-worker-effect-runtime.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const storages: Storage[] = [];
 const roots: string[] = [];
 

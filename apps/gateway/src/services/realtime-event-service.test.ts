@@ -3,6 +3,14 @@ import type { RealtimeEvent } from "@goatcitadel/contracts";
 import { APPROVAL_OBSERVABILITY_REALTIME_ENVELOPE_KEY, RealtimeEventService } from "./realtime-event-service.js";
 
 describe("RealtimeEventService", () => {
+  it("preserves actual retention bounds from the canonical repository", async () => {
+    const storage = fakeStorage();
+    const bounds = { oldestSequence: 2, newestSequence: 3, lastPrunedSequence: 1 };
+    storage.realtimeEvents.getSequenceBounds.mockReturnValue(bounds);
+    const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node" });
+    expect(await service.getRealtimeEventSequenceBounds()).toEqual(bounds);
+  });
+
   it("publishes, emits, unsubscribes, and reads realtime events through storage", async () => {
     const storage = fakeStorage();
     const service = new RealtimeEventService({ storage, getGatewayNodeId: () => "node-1" });

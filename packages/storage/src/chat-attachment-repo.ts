@@ -1,5 +1,5 @@
 import type { DatabaseClient } from "./db.js";
-import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
+import type { ChatAttachmentRecord, ChatArtifactRenderRecord } from "@goatcitadel/contracts";
 import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 
 interface ChatAttachmentRow {
@@ -41,6 +41,15 @@ export interface ChatAttachmentInsertInput {
   analysisStatus?: "queued" | "running" | "pending" | "ready" | "failed" | "unsupported" | "skipped";
 }
 
+/** Private renderer authority; never accepted by the attachment upload API. */
+export interface ChatArtifactRenderIdentity {
+  artifactId: string;
+  artifactVersion: number;
+  sessionId: string;
+  workspaceId: string;
+  contentHash: string;
+  rendererVersion: string;
+}
 export class ChatAttachmentRepository {
   private readonly getStmt;
   private readonly insertStmt;
@@ -99,6 +108,60 @@ export class ChatAttachmentRepository {
     return this.get(input.attachmentId);
   }
 
+  /** Record only a renderer-produced attachment already committed in this exact scope. */
+  public recordArtifactRender(input: ChatArtifactRenderIdentity & {
+    viewport: string; width: number; height: number; attachmentId: string; sha256: string;
+  }): ChatArtifactRenderRecord {
+    const identity = normalizeRenderIdentity(input);
+    if (!input.viewport.trim() || input.viewport.length > 80 ||
+        !Number.isSafeInteger(input.width) || input.width < 1 ||
+        !Number.isSafeInteger(input.height) || input.height < 1) {
+      throw new ValidationError({ message: "Invalid renderer viewport identity." });
+    }
+    const sha256 = normalizeRenderHash(input.sha256);
+    const result = this.db.prepare(`
+      INSERT INTO chat_artifact_render_receipts (
+        artifact_id, artifact_version, session_id, workspace_id, content_hash, renderer_version,
+        viewport, width, height, attachment_id, attachment_sha256, created_at
+      ) SELECT artifact.artifact_id, artifact.version, artifact.session_id, @workspaceId, @contentHash, @rendererVersion,
+        @viewport, @width, @height, attachment.attachment_id, attachment.sha256, attachment.created_at
+      FROM chat_generated_artifacts artifact JOIN chat_attachments attachment ON attachment.attachment_id = @attachmentId
+      WHERE artifact.artifact_id = @artifactId AND artifact.version = @artifactVersion AND artifact.kind = 'html'
+        AND artifact.session_id = @sessionId AND COALESCE(artifact.workspace_id, 'default') = @workspaceId
+        AND (artifact.content_hash IS NULL OR length(trim(artifact.content_hash)) <> 64 OR lower(trim(artifact.content_hash)) = @contentHash)
+        AND attachment.session_id = @sessionId AND attachment.workspace_id = @workspaceId
+        AND attachment.mime_type = 'image/png' AND attachment.media_type = 'image' AND attachment.sha256 = @sha256
+      ON CONFLICT (workspace_id, artifact_id, artifact_version, content_hash, renderer_version, viewport)
+      DO UPDATE SET attachment_id = excluded.attachment_id, attachment_sha256 = excluded.attachment_sha256,
+        width = excluded.width, height = excluded.height, created_at = excluded.created_at
+    `).run({ ...identity, viewport: input.viewport.trim(), width: input.width, height: input.height,
+      attachmentId: input.attachmentId, sha256 });
+    if (result.changes !== 1) throw new ValidationError({ message: "Renderer receipt does not match its canonical artifact and attachment." });
+    const receipt = this.listArtifactRenders(identity).find((item) => item.viewport === input.viewport.trim());
+    if (!receipt) throw new ValidationError({ message: "Renderer receipt is unavailable after recording." });
+    return receipt;
+  }
+
+  /** Only joined renderer receipts count as evidence; ordinary uploads are never inferred. */
+  public listArtifactRenders(input: ChatArtifactRenderIdentity): ChatArtifactRenderRecord[] {
+    const rows = this.db.prepare(`
+      SELECT receipt.* FROM chat_artifact_render_receipts receipt
+      JOIN chat_generated_artifacts artifact ON artifact.artifact_id = receipt.artifact_id
+      JOIN chat_attachments attachment ON attachment.attachment_id = receipt.attachment_id
+      WHERE receipt.artifact_id = @artifactId AND receipt.artifact_version = @artifactVersion
+        AND receipt.session_id = @sessionId AND receipt.workspace_id = @workspaceId
+        AND receipt.content_hash = @contentHash AND receipt.renderer_version = @rendererVersion
+        AND artifact.version = receipt.artifact_version AND artifact.kind = 'html'
+        AND artifact.session_id = receipt.session_id AND COALESCE(artifact.workspace_id, 'default') = receipt.workspace_id
+        AND (artifact.content_hash IS NULL OR length(trim(artifact.content_hash)) <> 64 OR lower(trim(artifact.content_hash)) = receipt.content_hash)
+        AND attachment.session_id = receipt.session_id AND attachment.workspace_id = receipt.workspace_id
+        AND attachment.sha256 = receipt.attachment_sha256 AND attachment.mime_type = 'image/png' AND attachment.media_type = 'image'
+      ORDER BY receipt.viewport LIMIT 16
+    `).all<{ artifact_id: string; content_hash: string; viewport: string; attachment_id: string;
+      attachment_sha256: string; width: number | string; height: number | string; created_at: string }>(normalizeRenderIdentity(input));
+    return rows.map((row) => ({ artifactId: row.artifact_id, contentHash: row.content_hash, viewport: row.viewport,
+      attachmentId: row.attachment_id, sha256: row.attachment_sha256, width: Number(row.width), height: Number(row.height), createdAt: row.created_at }));
+  }
   public listBySession(sessionId: string, limit = 200, workspaceId?: string): ChatAttachmentRecord[] {
     const normalizedLimit = Math.max(1, Math.min(2000, Math.floor(limit)));
     const rows = toChatAttachmentRows(
@@ -240,4 +303,20 @@ function isAnalysisStatus(value: unknown): value is NonNullable<ChatAttachmentRo
     value === "unsupported" ||
     value === "skipped"
   );
+}
+
+function normalizeRenderHash(value: string): string {
+  const hash = value.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(hash)) throw new ValidationError({ message: "Renderer hashes must be complete SHA-256 values." });
+  return hash;
+}
+
+function normalizeRenderIdentity(input: ChatArtifactRenderIdentity): ChatArtifactRenderIdentity {
+  if (!input.artifactId.trim() || !input.sessionId.trim() || !input.rendererVersion.trim() || input.rendererVersion.length > 80 ||
+      !Number.isSafeInteger(input.artifactVersion) || input.artifactVersion < 1) {
+    throw new ValidationError({ message: "Invalid renderer artifact identity." });
+  }
+  return { artifactId: input.artifactId.trim(), artifactVersion: input.artifactVersion,
+    sessionId: input.sessionId.trim(), workspaceId: sanitizeWorkspaceId(input.workspaceId),
+    rendererVersion: input.rendererVersion.trim(), contentHash: normalizeRenderHash(input.contentHash) };
 }

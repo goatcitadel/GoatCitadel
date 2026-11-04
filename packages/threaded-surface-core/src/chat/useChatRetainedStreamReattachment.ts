@@ -1,4 +1,5 @@
-import type { ChatStreamChunk, ChatThreadResponse } from "@goatcitadel/contracts";
+import { capChatTurnReasoning, type ChatStreamChunk, type ChatThreadResponse } from "@goatcitadel/contracts";
+import { updateThreadFromStreamChunk } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 import { useEffect, useRef, type MutableRefObject } from "react";
 import { resumeChatTurnStream } from "@goatcitadel/mission-control-shared/api/client";
 import {
@@ -20,6 +21,7 @@ interface RetainedStreamReattachmentInput {
   setSending: (value: boolean) => void;
   getStreamingPreviewBuffer: () => ChatStreamingPreviewBuffer;
   clearStreamingPreview: () => void;
+  commitThreadUpdate: (updater: (current: ChatThreadResponse | null) => ChatThreadResponse | null) => void;
   loadSessionCoreState: (sessionId: string, options: { background: boolean; includeThread: boolean }) => Promise<void>;
   pushLocalNotice: (message: string, tone: "warning") => void;
 }
@@ -62,6 +64,7 @@ export function useChatRetainedStreamReattachment(input: RetainedStreamReattachm
     latestRef.current.setSending(true);
     recordChatStreamChunkActivity(sessionId);
     let terminalSeen = false;
+    let replayedThinking = "";
 
     const isCurrent = () => activeStreamRef.current === stream && !controller.signal.aborted;
     const onChunk = (chunk: ChatStreamChunk) => {
@@ -80,6 +83,22 @@ export function useChatRetainedStreamReattachment(input: RetainedStreamReattachm
           turnId,
           messageId: chunk.messageId,
           delta: chunk.delta,
+        });
+      } else if (chunk.type === "thinking_delta") {
+        // First attachment replays from the beginning, including reasoning the
+        // fetched thread may already contain. Rebuild its bounded value rather
+        // than appending that history twice; retries retain this value/cursor.
+        replayedThinking = capChatTurnReasoning(replayedThinking + chunk.delta);
+        const thinking = replayedThinking;
+        latestRef.current.commitThreadUpdate((current) => {
+          if (current?.sessionId !== sessionId) return current;
+          const turn = current.turns.find((item) => item.turnId === turnId);
+          if (!turn || turn.thinking?.startsWith(thinking)) return current;
+          const replayBase = {
+            ...current,
+            turns: current.turns.map((item) => item === turn ? { ...item, thinking: undefined } : item),
+          };
+          return updateThreadFromStreamChunk(replayBase, { ...chunk, delta: thinking }, null, sessionId, null);
         });
       } else if (chunk.type === "message_done") {
         latestRef.current.getStreamingPreviewBuffer().finish({ clear: false, finalText: chunk.content });

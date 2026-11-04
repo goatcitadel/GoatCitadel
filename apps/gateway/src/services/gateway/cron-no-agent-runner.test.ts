@@ -13,7 +13,29 @@ import { NO_AGENT_MAX_OUTPUT_CHARS, NO_AGENT_SETTLE_GRACE_MS, runNoAgentCommand 
  */
 const DETACH_GRANDCHILD = process.platform === "win32";
 
+function cleanupGrandchild(pid: number, kill: (pid: number, signal: NodeJS.Signals) => void = process.kill): void {
+  if (!Number.isSafeInteger(pid) || pid <= 0) {
+    return;
+  }
+  try {
+    kill(pid, "SIGKILL");
+  } catch {
+    // already gone
+  }
+}
+
 describe("runNoAgentCommand", () => {
+  it("only signals a positive safe integer grandchild PID during fixture cleanup", () => {
+    const signals: Array<[number, NodeJS.Signals]> = [];
+    const recordSignal = (pid: number, signal: NodeJS.Signals) => {
+      signals.push([pid, signal]);
+    };
+    for (const stdout of ["", " ", "0", "-1", "1.5", "invalid", "9007199254740992", "12345"]) {
+      cleanupGrandchild(Number(stdout), recordSignal);
+    }
+    expect(signals).toEqual([[12345, "SIGKILL"]]);
+  });
+
   it("returns empty stdout for a command that prints nothing", async () => {
     const result = await runNoAgentCommand({
       command: process.platform === "win32" ? "cmd" : "sh",
@@ -79,16 +101,12 @@ describe("runNoAgentCommand", () => {
     const grandchildPid = Number(result.stdout);
     try {
       expect(result.timedOut).toBe(true);
-      expect(Number.isInteger(grandchildPid) && grandchildPid > 0).toBe(true);
+      expect(Number.isSafeInteger(grandchildPid) && grandchildPid > 0).toBe(true);
       expect(elapsedMs).toBeLessThan(timeoutMs + NO_AGENT_SETTLE_GRACE_MS + 1500);
       // The grandchild really survived, so the forced settle (not a "close" event) ended the run.
       expect(() => process.kill(grandchildPid, 0)).not.toThrow();
     } finally {
-      try {
-        process.kill(grandchildPid, "SIGKILL");
-      } catch {
-        // already gone
-      }
+      cleanupGrandchild(grandchildPid);
     }
   }, 15_000);
 

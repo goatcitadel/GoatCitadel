@@ -51,6 +51,7 @@ import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-s
 import { projectDurableBackgroundTaskRail } from "./durable-background-task-projection.js";
 import { verifySettledChatWaitingAuthority } from "./chat-durable-waiting-authority.js";
 import { commitDurableWakeTransition } from "./durable-wake-transition-service.js";
+import { ChatFanoutLedger } from "./chat-durable-fanout-service.js";
 import {
   CHAT_TERMINAL_OUTPUT_METADATA_KEYS,
   CHAT_TURN_RUNTIME_AUTHORITY_METADATA_KEY,
@@ -701,6 +702,9 @@ export class DurableRunService {
   private workerRequested = false;
   private workerStopped = false;
   private pollTimer: ReturnType<typeof setTimeout> | undefined;
+  private fanoutCancellationPollActive = false;
+  private fanoutCancellationCursor: string | undefined;
+  private readonly fanoutLedger: ChatFanoutLedger;
   private readonly workerId = buildDurableLocalProcessLeaseOwnerId();
   private readonly activeRunAbortControllers = new Map<string, { controller: AbortController; leaseOwnerId: string }>();
   private readonly generalChatPostCommitInFlight = new Map<string, GeneralChatPostCommitInFlight>();
@@ -752,7 +756,9 @@ export class DurableRunService {
       sharedHostLifecycle?: SharedHostLifecycleAdmissionPort;
       isLocalProcessAlive?: (pid: number) => boolean;
     },
-  ) {}
+  ) {
+    this.fanoutLedger = new ChatFanoutLedger(ctx.storage);
+  }
 
   // ── queries ──────────────────────────────────────────────────────
 
@@ -816,7 +822,7 @@ export class DurableRunService {
 
   async getDurableRun(runId: string): Promise<DurableRunRecord> {
     await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
-    return deriveDurableRunOperationalState(await this.ctx.storage.durableRuns.getRun(runId));
+    return deriveDurableRunOperationalState(await this.readCanonicalDurableRun(runId));
   }
 
   async listDurableRunTimeline(runId: string, limit = 300): Promise<DurableRunTimelineEvent[]> {
@@ -849,8 +855,8 @@ export class DurableRunService {
       metadata: input.metadata ?? {},
     };
     assertDurableChildWatcherCreateRequestBounds(boundedInput);
-    await this.ctx.storage.durableRuns.getRun(parentRunId);
-    await this.ctx.storage.durableRuns.getRun(childRunId);
+    await this.readCanonicalDurableRun(parentRunId);
+    await this.readCanonicalDurableRun(childRunId);
     const metadata = redactStructuredSecrets(redactRawRemoteApprovalBearers(boundedInput.metadata ?? {})).value;
     assertDurableChildWatcherCreateRequestBounds({ ...boundedInput, metadata });
     let watcher!: DurableChildWatcherRecord;
@@ -870,7 +876,7 @@ export class DurableRunService {
   async listDurableChildWatchers(parentRunId: string, limit = 200): Promise<DurableChildWatcherRecord[]> {
     await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertDurableChildWatcherRunIdBounds(parentRunId);
-    await this.ctx.storage.durableRuns.getRun(parentRunId);
+    await this.readCanonicalDurableRun(parentRunId);
     return await this.ctx.storage.durableChildWatchers.listByParent(parentRunId, limit);
   }
 
@@ -1298,7 +1304,7 @@ export class DurableRunService {
         expectedVersion: current.version,
       });
     if (!input.expectedLeaseOwnerId) {
-      return await update(await this.ctx.storage.durableRuns.getRun(input.runId));
+      return await update(await this.readCanonicalDurableRun(input.runId));
     }
     let next!: DurableRunRecord;
     await this.ctx.storage.runImmediateTransaction(async () => {
@@ -1319,11 +1325,11 @@ export class DurableRunService {
       return false;
     }
     try {
-      let observed = await this.ctx.storage.durableRuns.getRun(runId);
+      let observed = await this.readCanonicalDurableRun(runId);
       const linkedPending = readLinkedFinalizationPending(observed);
       if (linkedPending) {
         await this.finalizePendingLinkedState(observed);
-        observed = await this.ctx.storage.durableRuns.getRun(runId);
+        observed = await this.readCanonicalDurableRun(runId);
         if (readLinkedFinalizationPending(observed)) {
           return false;
         }
@@ -1984,7 +1990,7 @@ export class DurableRunService {
   async reconcileGeneralChatPostCommit(runId: string): Promise<boolean> {
     let observed: DurableRunRecord;
     try {
-      observed = await this.ctx.storage.durableRuns.getRun(runId);
+      observed = await this.readCanonicalDurableRun(runId);
       const legacySettlement = await this.settleLegacyGeneralChatPostCommit(observed);
       if (legacySettlement?.retired) {
         return true;
@@ -3612,6 +3618,7 @@ export class DurableRunService {
     const cancellationReason = normalizeDurableCancellationReason(options?.reason);
     const current = await this.ctx.storage.durableRuns.getRun(runId);
     if (current.status === "cancelled") {
+      await this.cancelFanoutChildrenAfterCommit(current, actorId);
       return current;
     }
     if (options?.expectedVersion !== undefined && current.version !== options.expectedVersion) {
@@ -3752,11 +3759,14 @@ export class DurableRunService {
       });
       transitioned = true;
     });
+    if (transitioned) {
+      this.scheduleCommittedBackgroundAttention(runId, "run_cancelled");
+      this.abortActiveRun(runId, `Durable run ${runId} cancelled by ${actorId}.`, "cancelled");
+    }
+    await this.cancelFanoutChildrenAfterCommit(next, actorId);
     if (!transitioned) {
       return next;
     }
-    this.scheduleCommittedBackgroundAttention(runId, "run_cancelled");
-    await this.abortActiveRun(runId, `Durable run ${runId} cancelled by ${actorId}.`, "cancelled");
     await this.publishDurableRealtimeSafely(runId, {
       type: "durable_run_cancelled",
       runId,
@@ -3768,6 +3778,21 @@ export class DurableRunService {
     return next;
   }
 
+  /** Raw canonical state shared by controls; public projections remain separate. */
+  private async readCanonicalDurableRun(runId: string): Promise<DurableRunRecord> {
+    return await this.ctx.storage.durableRuns.getRun(runId);
+  }
+  private async cancelFanoutChildrenAfterCommit(run: DurableRunRecord, actorId: string): Promise<void> {
+    try {
+      await this.fanoutLedger.cancelParent(run,
+        async (childRunId) => await this.cancelDurableRun(childRunId, actorId));
+    } catch (error) {
+      // Parent cancellation has committed. Preserve it and leave unfinished
+      // fanout aggregates active for the existing reconciliation loop.
+      this.resolveLogger().warn({ error: boundedRecoveryError(error), runId: run.runId },
+        "durable fanout child cancellation deferred");
+    }
+  }
   async retryDurableRun(runId: string, reason = "manual_retry", actorId = "operator"): Promise<DurableRunRecord> {
     await this.ctx.requireFeatureEnabled("durableKernelV1Enabled");
     assertNoRawRemoteApprovalBearer({ reason, actorId });
@@ -6075,6 +6100,27 @@ export class DurableRunService {
     throw lastError instanceof Error ? lastError : new Error(`Durable run ${runId} update conflict`);
   }
 
+  private pollCancelledFanoutParents(): void {
+    if (this.workerStopped || this.fanoutCancellationPollActive || !this.isDurableFoundationEnabled() ||
+        !this.fanoutLedger.isAvailable()) return;
+    this.fanoutCancellationPollActive = true;
+    const task = this.runWithSharedHostWorkerAdmission(async () => {
+      if (this.workerStopped) return;
+      this.fanoutCancellationCursor = await this.fanoutLedger.cancelParentPage(
+        this.fanoutCancellationCursor,
+        async (childRunId) => await this.cancelDurableRun(childRunId, "fanout:parent_cancelled"),
+        () => this.workerStopped,
+        (error, invocationId) => this.resolveLogger().warn({ error: boundedRecoveryError(error), invocationId },
+          "durable fanout cancellation poll deferred"),
+      );
+    }).catch((error: unknown) => {
+      // Reporting must not create an unhandled background rejection.
+      try {
+        this.resolveLogger().warn({ error: boundedRecoveryError(error) }, "durable fanout cancellation poll deferred");
+      } catch { /* Ignore a logger failure so cleanup stays retryable and the owned background promise settles. */ }
+    }).finally(() => { this.fanoutCancellationPollActive = false; });
+    if (this.deps) trackBackgroundTask(this.deps.backgroundTasks, task);
+  }
   private ensurePollLoop(): void {
     if (this.pollTimer || this.workerStopped) {
       return;
@@ -6089,6 +6135,9 @@ export class DurableRunService {
         if (this.workerStopped) {
           return;
         }
+        // The serial worker may be waiting on an active child's provider/tool.
+        // Cancellation cleanup must still progress without dispatching work.
+        if (this.workerActive && this.activeRunAbortControllers.size > 0) this.pollCancelledFanoutParents();
         this.requestRunProcessing();
         scheduleNext();
       }, DURABLE_WORKER_POLL_MIN_MS + jitter);

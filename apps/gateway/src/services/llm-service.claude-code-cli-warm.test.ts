@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, rmSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import type { ChatCompletionRequest, LlmConfigFile } from "@goatcitadel/contracts";
@@ -19,6 +19,7 @@ import {
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import { buildClaudeCliArgs } from "./claude-code-cli-process.js";
 import { CLAUDE_CLI_WARM_ECHO_DEADLINE_MS } from "./claude-code-cli-warm-registry.js";
+import { CLAUDE_CLI_OWNER_FILE, sweepStaleClaudeCliRunDirs } from "./claude-code-cli-run-dir-sweep.js";
 import { LlmService } from "./llm-service.js";
 
 /**
@@ -193,6 +194,10 @@ describe("claude-code-cli warm continuation through LlmService", () => {
     expect(chunks.at(-1)).toMatchObject({ choices: [{ finish_reason: "tool_calls" }] });
     expect(harness.killTree).not.toHaveBeenCalled();
     expect(readdirSync(scratchRoot)).toEqual([path.basename(runDirOf(harness, 0))]);
+    expect(JSON.parse(readFileSync(path.join(runDirOf(harness, 0), CLAUDE_CLI_OWNER_FILE), "utf8"))).toEqual({ version: 1, pid: process.pid });
+    const removeDir = vi.fn(async () => undefined);
+    expect(await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, now: () => Date.now() + 3 * 60 * 60 * 1000 })).toEqual({ removed: 0, kept: 1 });
+    expect(removeDir).not.toHaveBeenCalled();
     expect(accounting.handle.succeed).toHaveBeenCalledTimes(1);
 
     await service.close();

@@ -2,6 +2,11 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LlmConfigFile } from "@goatcitadel/contracts";
 import { LlmService } from "./llm-service.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });

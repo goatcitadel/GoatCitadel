@@ -34,6 +34,14 @@ function createRepo(): ModelComparisonRunRepository {
   return new ModelComparisonRunRepository(createGatewaySql());
 }
 
+async function claimCurrent(repo: ModelComparisonRunRepository, comparisonId = "cmp-1") {
+  const current = await repo.get(comparisonId);
+  return await repo.claimRun(comparisonId, {
+    expectedStatus: current.status, expectedUpdatedAt: current.updatedAt,
+    updatedAt: current.updatedAt, claimId: "test-owner",
+  });
+}
+
 /** Records each prepared run-table statement and whether it ran inside an immediate transaction. */
 function createRecordingRepo(): {
   repo: ModelComparisonRunRepository;
@@ -96,6 +104,35 @@ function sampleRun(): ModelComparisonRun {
 }
 
 describe("ModelComparisonRunRepository", () => {
+  for (const mutation of ["renew", "result", "finish"] as const) {
+    it(`fences stale ${mutation} after a running-to-running execution takeover`, async () => {
+      const repo = createRepo();
+      await repo.create(sampleRun());
+      const firstClaim = {
+        expectedStatus: "queued" as const, expectedUpdatedAt: sampleRun().updatedAt,
+        updatedAt: "2026-11-02T00:00:00.000Z", claimId: "owner-a",
+      };
+      await repo.claimRun("cmp-1", firstClaim);
+      const secondClaim = {
+        expectedStatus: "running" as const, expectedUpdatedAt: firstClaim.updatedAt,
+        updatedAt: "2026-11-02T00:06:00.000Z", claimId: "owner-b",
+      };
+      await repo.claimRun("cmp-1", secondClaim);
+      const before = await repo.get("cmp-1");
+      const now = "2026-11-02T00:06:01.000Z";
+      if (mutation === "renew") {
+        assert.equal(await repo.renewRunLease("cmp-1", now, "owner-a"), false);
+      } else if (mutation === "result") {
+        const result = { ...before.results[0]!, responseText: "stale owner's answer" };
+        assert.equal(await repo.upsertResult("cmp-1", result, now, "owner-a"), undefined);
+      } else {
+        assert.equal(await repo.finishRun("cmp-1", { status: "completed", updatedAt: now, completedAt: now, error: null }, { kind: "execution", claimId: "owner-a" }), undefined);
+      }
+      assert.deepEqual(await repo.get("cmp-1"), before);
+      assert.equal(await repo.renewRunLease("cmp-1", now, "owner-b"), true);
+    });
+  }
+
   it("round-trips runs and preserves blind labels", async () => {
     const repo = createRepo();
     const run = await repo.create(sampleRun());
@@ -154,16 +191,20 @@ describe("ModelComparisonRunRepository", () => {
     await repo.create(sampleRun());
     const running = await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:01.000Z" });
     assert.equal(running.status, "running");
+    await claimCurrent(repo);
     await repo.upsertResult(
       "cmp-1",
       { ...running.results[0]!, responseText: "first answer", runId: "run-1" },
       "2026-10-15T00:00:02.000Z",
+      "test-owner",
     );
     const after = await repo.upsertResult(
       "cmp-1",
       { ...running.results[1]!, error: "provider down" },
       "2026-10-15T00:00:03.000Z",
+      "test-owner",
     );
+    assert.ok(after);
     assert.equal(after.results.length, 2);
     assert.equal(after.results[0]?.responseText, "first answer");
     assert.equal(after.results[1]?.error, "provider down");
@@ -244,6 +285,7 @@ describe("ModelComparisonRunRepository", () => {
     await repo.create({ ...sampleRun(), completedAt: "2026-06-05T12:30:00.000Z", error: "earlier failure" });
 
     const claimed = await repo.claimRun("cmp-1", {
+      claimId: "test-owner",
       expectedStatus: "queued",
       expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
       updatedAt: "2026-10-15T00:00:00.000Z",
@@ -255,6 +297,7 @@ describe("ModelComparisonRunRepository", () => {
 
     // A second claimer that read the same snapshot loses the race.
     const lost = await repo.claimRun("cmp-1", {
+      claimId: "loser",
       expectedStatus: "queued",
       expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
       updatedAt: "2026-10-15T00:00:01.000Z",
@@ -262,6 +305,7 @@ describe("ModelComparisonRunRepository", () => {
     assert.equal(lost, undefined);
     // Right status, stale updatedAt: also no match.
     const staleLease = await repo.claimRun("cmp-1", {
+      claimId: "stale",
       expectedStatus: "running",
       expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
       updatedAt: "2026-10-15T00:00:02.000Z",
@@ -270,6 +314,7 @@ describe("ModelComparisonRunRepository", () => {
     assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:00:00.000Z");
     assert.equal(
       await repo.claimRun("missing", {
+        claimId: "missing",
         expectedStatus: "queued",
         expectedUpdatedAt: "2026-06-05T12:00:00.000Z",
         updatedAt: "2026-10-15T00:00:00.000Z",
@@ -281,17 +326,18 @@ describe("ModelComparisonRunRepository", () => {
   it("renews a lease only while the run is running", async () => {
     const repo = createRepo();
     await repo.create(sampleRun());
-    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:00:00.000Z"), false);
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:00:00.000Z", "test-owner"), false);
     assert.equal((await repo.get("cmp-1")).updatedAt, "2026-06-05T12:00:00.000Z");
 
     await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" });
-    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:01:00.000Z"), true);
+    await claimCurrent(repo);
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:01:00.000Z", "test-owner"), true);
     assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:01:00.000Z");
 
     await repo.updateStatus("cmp-1", { status: "cancelled", updatedAt: "2026-10-15T00:02:00.000Z" });
-    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:03:00.000Z"), false);
+    assert.equal(await repo.renewRunLease("cmp-1", "2026-10-15T00:03:00.000Z", "test-owner"), false);
     assert.equal((await repo.get("cmp-1")).updatedAt, "2026-10-15T00:02:00.000Z");
-    assert.equal(await repo.renewRunLease("missing", "2026-10-15T00:03:00.000Z"), false);
+    assert.equal(await repo.renewRunLease("missing", "2026-10-15T00:03:00.000Z", "test-owner"), false);
   });
 
   it("finishes a run only while it is still running", async () => {
@@ -303,18 +349,19 @@ describe("ModelComparisonRunRepository", () => {
         updatedAt: "2026-10-15T00:00:00.000Z",
         completedAt: "2026-10-15T00:00:00.000Z",
         error: null,
-      }),
+      }, { kind: "execution", claimId: "test-owner" }),
       undefined,
     );
     assert.equal((await repo.get("cmp-1")).status, "queued");
 
     await repo.updateStatus("cmp-1", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" });
+    await claimCurrent(repo);
     const finished = await repo.finishRun("cmp-1", {
       status: "failed",
       updatedAt: "2026-10-15T00:05:00.000Z",
       completedAt: "2026-10-15T00:05:00.000Z",
       error: "1 of 2 results failed.",
-    });
+    }, { kind: "execution", claimId: "test-owner" });
     assert.equal(finished?.status, "failed");
     assert.equal(finished?.completedAt, "2026-10-15T00:05:00.000Z");
     assert.equal(finished?.error, "1 of 2 results failed.");
@@ -332,7 +379,7 @@ describe("ModelComparisonRunRepository", () => {
         updatedAt: "2026-10-15T00:08:00.000Z",
         completedAt: "2026-10-15T00:08:00.000Z",
         error: null,
-      }),
+      }, { kind: "execution", claimId: "test-owner" }),
       undefined,
     );
     assert.equal((await repo.get("cmp-1")).status, "cancelled");
@@ -342,7 +389,7 @@ describe("ModelComparisonRunRepository", () => {
         updatedAt: "2026-10-15T00:08:00.000Z",
         completedAt: "2026-10-15T00:08:00.000Z",
         error: null,
-      }),
+      }, { kind: "execution", claimId: "test-owner" }),
       undefined,
     );
   });
@@ -352,8 +399,21 @@ describe("ModelComparisonRunRepository", () => {
     await assert.rejects(() =>
       repo.updateStatus("missing", { status: "running", updatedAt: "2026-10-15T00:00:00.000Z" }),
     );
-    await assert.rejects(() =>
-      repo.upsertResult("missing", { resultId: "x", testId: "t", candidateId: "c" }, "2026-10-15T00:00:00.000Z"),
-    );
+    assert.equal(await repo.upsertResult("missing", { resultId: "x", testId: "t", candidateId: "c" }, "2026-10-15T00:00:00.000Z", "test-owner"), undefined);
+  });
+
+  it("allows only explicit operator cancellation to settle without an execution token", async () => {
+    const repo = createRepo();
+    await repo.create(sampleRun());
+    await claimCurrent(repo);
+    const before = await repo.get("cmp-1");
+    const terminal = { status: "completed" as const, updatedAt: "2026-11-02T00:00:00.000Z", completedAt: "2026-11-02T00:00:00.000Z", error: null };
+    assert.equal(await repo.finishRun("cmp-1", terminal, { kind: "operator_cancel" }), undefined);
+    assert.equal(await repo.finishRun("cmp-1", { ...terminal, status: "cancelled", completedAt: null }, { kind: "operator_cancel" }), undefined);
+    assert.equal(await repo.finishRun("cmp-1", terminal, { kind: "execution", claimId: "" }), undefined);
+    assert.deepEqual(await repo.get("cmp-1"), before);
+    const cancelled = await repo.finishRun("cmp-1", { ...terminal, status: "cancelled" }, { kind: "operator_cancel" });
+    assert.equal(cancelled?.status, "cancelled");
+    assert.equal(await repo.renewRunLease("cmp-1", terminal.updatedAt, "test-owner"), false);
   });
 });

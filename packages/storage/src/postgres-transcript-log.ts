@@ -20,6 +20,7 @@ interface TranscriptEventRow {
 }
 
 export class PostgresTranscriptLog {
+  private readonly sequenceLockStmt;
   private readonly nextSequenceStmt;
   private readonly existingSequenceStmt;
   private readonly insertStmt;
@@ -29,6 +30,9 @@ export class PostgresTranscriptLog {
   private readonly deleteOlderThanStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.sequenceLockStmt = db.prepare(`
+      SELECT pg_advisory_xact_lock(hashtextextended('goatcitadel:transcript-sequence:' || @sessionId, 0))
+    `);
     this.nextSequenceStmt = db.prepare(`
       SELECT COALESCE(MAX(event_sequence), 0) + 1 AS next_sequence
       FROM transcript_events
@@ -107,6 +111,8 @@ export class PostgresTranscriptLog {
 
   public async append(event: TranscriptEvent): Promise<number> {
     return this.db.transaction("immediate", () => {
+      // Hold the session's allocation lock through commit; duplicate events re-read the winner's offset.
+      this.sequenceLockStmt.get({ sessionId: event.sessionId });
       const existing = this.existingSequenceStmt.get(event.sessionId, event.eventId) as
         | { event_sequence?: number }
         | undefined;

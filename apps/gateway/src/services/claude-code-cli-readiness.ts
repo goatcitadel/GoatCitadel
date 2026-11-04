@@ -99,6 +99,9 @@ export class ClaudeCodeCliReadiness {
       return { status: "unavailable", reasonCode, liveVerified: false };
     }
     const parsed = parseStatus(output.stdout);
+    if (output.exitCode !== 0 && !(output.exitCode === 1 && parsed?.loggedIn === false)) {
+      return { status: "unavailable", reasonCode: "claude_cli_status_failed", liveVerified: false };
+    }
     if (!parsed) return { status: "unavailable", reasonCode: "claude_cli_status_unreadable", liveVerified: false };
     if (parsed.loggedIn !== true) {
       return { status: "missing", reasonCode: "claude_cli_logged_out", liveVerified: true };

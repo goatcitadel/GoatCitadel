@@ -124,7 +124,8 @@ async function mergeFastManifests() {
   assertSameCandidate(parts);
   const scenarios = parts.flatMap((part) => part.manifest.scenarios ?? []);
   assertNoDuplicateScenarios(scenarios);
-  assertLaneIsComplete(scenarios, maybeParseBool(options["allow-partial"], false));
+  const missingCommandIds = assertLaneIsComplete(scenarios, maybeParseBool(options["allow-partial"], false));
+  const partial = missingCommandIds.length > 0;
 
   const runId = typeof options["run-id"] === "string" ? options["run-id"] : createRunId("fast");
   const artifactRoot = path.resolve(repoRoot, String(options.out ?? path.join(artifactsRoot, runId)));
@@ -145,8 +146,13 @@ async function mergeFastManifests() {
     scenarios,
     counts: tallyScenarioCounts(scenarios),
     metadata: {
-      // commandSelection describes one part; the merged run is the whole lane.
-      ...omit(parts[0]?.manifest?.metadata ?? {}, "commandSelection"),
+      // Scope is determined by the merged union, never inherited from one part.
+      ...omit(parts[0]?.manifest?.metadata ?? {}, "commandSelection", "missingCommandIds", "fastLanePerf"),
+      ...(partial ? {
+        commandSelection: FAST_LANE_COMMANDS.map((command) => command.id)
+          .filter((id) => !missingCommandIds.includes(id)).join(","),
+        missingCommandIds,
+      } : {}),
       mergedFrom: parts.map((part) => part.manifest.runId),
       mergedPartCount: parts.length,
       mergedSelections: parts.map((part) => part.manifest.metadata?.commandSelection ?? null),
@@ -157,26 +163,29 @@ async function mergeFastManifests() {
     String(process.env.GOATCITADEL_VERIFY_PERF_BUDGET ?? "")
       .trim()
       .toLowerCase() === "strict";
-  const perf = buildFastLanePerfPayload(baseManifest, { strict });
+  const perf = partial ? undefined : buildFastLanePerfPayload(baseManifest, { strict });
   const status =
-    perf.integrityFailure || (strict && perf.status === "failed") ? "failed" : deriveManifestStatus(baseManifest);
+    perf?.integrityFailure || (strict && perf?.status === "failed") ? "failed" : deriveManifestStatus(baseManifest);
   const manifest = createVerificationRunManifest({
     ...baseManifest,
     status,
     metadata: {
       ...baseManifest.metadata,
-      fastLanePerf: {
+      ...(perf ? { fastLanePerf: {
         artifact: FAST_LANE_PERF_ARTIFACT,
         status: perf.status,
         strict,
         integrityFailure: perf.integrityFailure,
-      },
+      } } : {}),
     },
   });
 
-  await fs.mkdir(path.join(artifactRoot, "perf"), { recursive: true });
+  await fs.mkdir(artifactRoot, { recursive: true });
   await writeJson(path.join(artifactRoot, "manifest.json"), manifest);
-  await writeJson(path.join(artifactRoot, FAST_LANE_PERF_ARTIFACT), perf);
+  if (perf) {
+    await fs.mkdir(path.join(artifactRoot, "perf"), { recursive: true });
+    await writeJson(path.join(artifactRoot, FAST_LANE_PERF_ARTIFACT), perf);
+  }
   await writeText(path.join(artifactRoot, "summary.md"), buildSummaryMarkdown(manifest));
   await writeText(path.join(artifactRoot, "junit.xml"), buildJunitXml(manifest));
   // The pointer belongs beside the run it names, not in the repo's artifacts root.
@@ -278,7 +287,7 @@ function assertLaneIsComplete(scenarios, allowPartial) {
   const recorded = new Set(scenarios.map((scenario) => scenario.id));
   const missing = FAST_LANE_COMMANDS.map((command) => command.id).filter((id) => !recorded.has(id));
   if (missing.length === 0) {
-    return;
+    return missing;
   }
   const message =
     `Merged fast lane is missing ${missing.length} command(s): ${missing.join(", ")}. ` +
@@ -287,11 +296,11 @@ function assertLaneIsComplete(scenarios, allowPartial) {
     throw new Error(message);
   }
   console.warn(`[verify:fast:merge] ${message}`);
+  return missing;
 }
 
-function omit(source, key) {
-  const { [key]: _dropped, ...rest } = source;
-  return rest;
+function omit(source, ...keys) {
+  return Object.fromEntries(Object.entries(source).filter(([key]) => !keys.includes(key)));
 }
 
 function earliest(values) {

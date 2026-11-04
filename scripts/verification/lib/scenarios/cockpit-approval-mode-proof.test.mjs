@@ -11,9 +11,10 @@ import {
 describe("native approved decision receipt", () => {
   const evidence = () => ({
     approvalId: "approval-one",
+    workspaceId: "default",
     decision: { approval: { approvalId: "approval-one", status: "approved" } },
-    rendered: "Decision recorded: approved. Follow-on execution needs separate verification.",
-    recordHref: "/ops/approvals?approvalId=approval-one&shell=classic",
+    rendered: "Decision recorded: Approved. Follow-on execution needs separate verification.",
+    recordHref: "/inbox?approvalId=approval-one&workspaceId=default&view=history&shell=cockpit",
   });
   it("accepts the native owner receipt without claiming execution completed", () => {
     assert.doesNotThrow(() => assertApprovedDecisionReceipt(evidence()));
@@ -24,32 +25,38 @@ describe("native approved decision receipt", () => {
       "Approval effects settled. Linked work has its own execution outcome.",
     ])
       assert.doesNotThrow(() =>
-        assertApprovedDecisionReceipt({ ...evidence(), rendered: `Decision recorded: approved. ${suffix}` }),
+        assertApprovedDecisionReceipt({ ...evidence(), rendered: `Decision recorded: Approved. ${suffix}` }),
       );
   });
   it("preserves relative owner query ordering, encoded identity, and navigation context", () => {
     for (const recordHref of [
-      "/ops/approvals?shell=classic&approvalId=approval-one&shellScope=visit",
-      "/ops/approvals?approvalId=approval%2Done&workspaceId=default&shell=classic#record",
+      "/inbox?shell=cockpit&view=history&workspaceId=default&approvalId=approval-one",
+      "/inbox?approvalId=approval%2Done&workspaceId=default&view=history&shell=cockpit&sessionId=s%2Fone&runId=r%3Atwo#record",
     ])
       assert.doesNotThrow(() => assertApprovedDecisionReceipt({ ...evidence(), recordHref }));
   });
   for (const [label, recordHref] of Object.entries({
-    "foreign absolute origin": "https://foreign.invalid/ops/approvals?approvalId=approval-one",
-    "sentinel absolute origin": "http://verification.invalid/ops/approvals?approvalId=approval-one",
-    "protocol relative origin": "//foreign.invalid/ops/approvals?approvalId=approval-one",
-    "foreign scheme": "file:///ops/approvals?approvalId=approval-one",
-    "backslash authority": "/\\foreign.invalid/ops/approvals?approvalId=approval-one",
-    "backslash path": "/ops\\approvals?approvalId=approval-one",
-    "normalized traversal": "/other/../ops/approvals?approvalId=approval-one",
-    "trimmed prefix": " /ops/approvals?approvalId=approval-one",
-    "normalized control": "/ops/approvals?approvalId=approval-\none",
-    "duplicate substituted identity": "/ops/approvals?approvalId=approval-one&approvalId=other",
-    "duplicate identical identity": "/ops/approvals?approvalId=approval-one&approvalId=approval-one",
-    "encoded duplicate key": "/ops/approvals?approvalId=approval-one&approval%49d=other",
-    "substituted identity": "/ops/approvals?approvalId=other",
-    "missing identity": "/ops/approvals?shell=classic",
-    "substituted owner": "/ops/runs?approvalId=approval-one",
+    "foreign absolute origin": `https://foreign.invalid${evidence().recordHref}`,
+    "sentinel absolute origin": `http://verification.invalid${evidence().recordHref}`,
+    "protocol relative origin": `//foreign.invalid${evidence().recordHref}`,
+    "foreign scheme": `file://${evidence().recordHref}`,
+    "backslash authority": `/\\foreign.invalid${evidence().recordHref}`,
+    "backslash path": evidence().recordHref.replace("/inbox", "/in\\box"),
+    "normalized traversal": `/other/..${evidence().recordHref}`,
+    "trimmed prefix": ` ${evidence().recordHref}`,
+    "normalized control": evidence().recordHref.replace("approval-one", "approval-\none"),
+    "duplicate substituted identity": `${evidence().recordHref}&approvalId=other`,
+    "duplicate identical identity": `${evidence().recordHref}&approvalId=approval-one`,
+    "encoded duplicate key": `${evidence().recordHref}&approval%49d=other`,
+    "substituted identity": evidence().recordHref.replace("approval-one", "other"),
+    "missing identity": evidence().recordHref.replace("approvalId=approval-one&", ""),
+    "substituted owner": evidence().recordHref.replace("/inbox", "/ops/approvals"),
+    "foreign workspace": evidence().recordHref.replace("workspaceId=default", "workspaceId=other"),
+    "duplicate workspace": `${evidence().recordHref}&workspaceId=default`,
+    "missing workspace": evidence().recordHref.replace("workspaceId=default&", ""),
+    "wrong view": evidence().recordHref.replace("view=history", "view=active"),
+    "classic shell": evidence().recordHref.replace("shell=cockpit", "shell=classic"),
+    "one-time shell scope": `${evidence().recordHref}&shellScope=visit`,
   }))
     it(`rejects ${label}`, () => {
       assert.throws(() => assertApprovedDecisionReceipt({ ...evidence(), recordHref }));
@@ -63,10 +70,10 @@ describe("native approved decision receipt", () => {
         value.rendered = "Approved decision recorded.";
       },
       (value) => {
-        value.rendered = "Decision recorded: denied. Follow-on execution needs separate verification.";
+        value.rendered = "Decision recorded: Denied. Follow-on execution needs separate verification.";
       },
       (value) => {
-        value.rendered = "Decision recorded: approved. Execution completed.";
+        value.rendered = "Decision recorded: Approved. Execution completed.";
       },
       (value) => {
         value.decision.approval.status = "pending";
@@ -75,7 +82,7 @@ describe("native approved decision receipt", () => {
         value.decision.approval.approvalId = "other";
       },
       (value) => {
-        value.recordHref = "/ops/approvals?approvalId=other&shell=classic";
+        value.recordHref = value.recordHref.replace("approval-one", "other");
       },
     ]) {
       const value = evidence();

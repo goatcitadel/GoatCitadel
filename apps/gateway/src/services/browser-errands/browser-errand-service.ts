@@ -1,5 +1,10 @@
 import { randomUUID } from "node:crypto";
-import type { ChatCompletionRequest, ChatCompletionResponse, ToolInvokeRequest } from "@goatcitadel/contracts";
+import type {
+  ChatCompletionRequest,
+  ChatCompletionResponse,
+  ConnectorDeliveryWorkflowPayload,
+  ToolInvokeRequest,
+} from "@goatcitadel/contracts";
 import { ErrandBrowserLaunchError, type ErrandBrowser, type ErrandOverlayEvent } from "@goatcitadel/policy-engine";
 import {
   createErrandApprovalGate,
@@ -15,6 +20,7 @@ import type { ErrandTrackedDelivery } from "./errand-approval-delivery.js";
 import { warnErrandButtonClearFailure } from "./errand-approval-buttons.js";
 import type { ErrandChannelReplies, PendingErrandDelivery } from "./errand-channel-replies.js";
 import { warnErrandNoticeFailure } from "./errand-channel-notices.js";
+import { ERRAND_APPROVAL_KIND } from "./errand-constants.js";
 
 export const BROWSER_ERRAND_DISABLED_MESSAGE = "Browser errands are turned off. Turn on Browser errands in Settings.";
 export const BROWSER_ERRAND_REMOTE_HARDENED_MESSAGE =
@@ -166,12 +172,14 @@ export class BrowserErrandService {
   private browser: ErrandBrowser | undefined;
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
   private readonly views = new Map<string, ErrandStatusView>();
+  private readonly gateDependencies: GateDeps;
   private disposed = false;
 
   /** Answers whole-message APPROVE / DENY / STOP replies in the conversations this errand asked in. */
   public readonly channelReplies: ErrandChannelReplies | undefined;
 
   public constructor(private readonly deps: BrowserErrandServiceDeps) {
+    this.gateDependencies = deps.gate;
     this.channelReplies = deps.channelReplies?.(this);
   }
 
@@ -204,6 +212,64 @@ export class BrowserErrandService {
         ...(providerMessageId ? { providerMessageId } : {}),
       },
     ];
+  }
+
+  /** A committed send can finish after its approval or errand ended; no errand state is retained for that wait. */
+  public async onConnectorDeliveryCompleted(
+    deliveryRunId: string,
+    payload: ConnectorDeliveryWorkflowPayload,
+    checkpointState: Record<string, unknown>,
+  ): Promise<void> {
+    const action = payload.payload;
+    const approvalId = payload.correlationId?.trim();
+    const target = typeof action?.target === "string" ? action.target.trim() : "";
+    const template = action?.interactiveActionTemplate;
+    const result = checkpointState.result as Record<string, unknown> | undefined;
+    const messageId = typeof result?.providerMessageId === "string" ? result.providerMessageId.trim() : "";
+    if (
+      this.disposed ||
+      !this.channelReplies?.clearButtons ||
+      payload.connectorType !== "integration_connection" ||
+      payload.action !== "channel.send" ||
+      !payload.connectorId.startsWith("integration:") ||
+      !approvalId ||
+      !target ||
+      !messageId ||
+      typeof template !== "object" ||
+      template === null ||
+      !Array.isArray((template as Record<string, unknown>).buttons) ||
+      ((template as Record<string, unknown>).buttons as unknown[]).length === 0
+    ) {
+      return;
+    }
+    // Keep this reference across the read so a concurrent answer's normal cleanup shares its claim set.
+    const errand = this.active;
+    try {
+      const approval = await this.gateDependencies.storage.approvals.get(approvalId);
+      if (approval.kind !== ERRAND_APPROVAL_KIND) return;
+      const active = this.active;
+      if (
+        approval.status === "pending" &&
+        active?.gate?.pendingApprovalId() === approvalId &&
+        !active.stopping &&
+        !active.controller.signal.aborted
+      )
+        return;
+      const owner = errand?.deliveries.some((item) => item.deliveryRunId === deliveryRunId) ? errand : undefined;
+      await this.clearDeliveredButtons(owner, [
+        {
+          approvalId,
+          connectionId: payload.connectorId.slice("integration:".length),
+          target,
+          deliveryRunId,
+          buttons: true,
+          sentAt: async () => undefined,
+          providerMessageId: async () => messageId,
+        },
+      ]);
+    } catch (error) {
+      warnErrandButtonClearFailure(error);
+    }
   }
 
   /**
@@ -410,7 +476,7 @@ export class BrowserErrandService {
   ): Promise<BrowserErrandToolResult> {
     const { request, turnId, toolRunId } = ids;
     const signal = errand.controller.signal;
-    const { now: injectedNow, gate: gateDeps } = this.deps;
+    const { now: injectedNow } = this.deps;
     const realNow = injectedNow ?? Date.now;
     const offClosed = browser.onClosed(() => {
       errand.windowClosed = true;
@@ -419,7 +485,7 @@ export class BrowserErrandService {
     });
     const offOverlay = browser.overlay.onEvent((event) => this.onOverlayEvent(errand, browser, event, realNow));
     const gate = (this.deps.createGate ?? createErrandApprovalGate)({
-      ...gateDeps,
+      ...this.gateDependencies,
       sessionId: request.sessionId,
       turnId,
       toolRunId,
@@ -436,7 +502,7 @@ export class BrowserErrandService {
     let lastThumbnailStep = -ERRAND_THUMBNAIL_EVERY_STEPS;
     const upload = async (fileName: string, png: Buffer): Promise<string> =>
       (
-        await gateDeps.attachments.upload({
+        await this.gateDependencies.attachments.upload({
           sessionId: request.sessionId,
           fileName,
           mimeType: "image/png",
@@ -682,15 +748,33 @@ export class BrowserErrandService {
    * is answered, so none of them is still waiting. Best effort, in the background, never failing the errand.
    */
   private clearAnsweredButtons(errand: ActiveErrand): void {
+    void this.clearDeliveredButtons(errand, errand.deliveries).catch(warnErrandButtonClearFailure);
+  }
+
+  private async clearDeliveredButtons(
+    errand: ActiveErrand | undefined,
+    deliveries: readonly ErrandTrackedDelivery[],
+  ): Promise<void> {
     const clearButtons = this.channelReplies?.clearButtons;
-    const answered = errand.deliveries.filter((item) => !errand.buttonsCleared.has(item.deliveryRunId));
-    if (!clearButtons || answered.length === 0 || this.disposed) {
-      return;
-    }
-    for (const item of answered) {
-      errand.buttonsCleared.add(item.deliveryRunId);
-    }
-    void clearButtons(answered).catch(warnErrandButtonClearFailure);
+    if (!clearButtons || this.disposed) return;
+    const ready = await Promise.all(
+      deliveries.map(async (item): Promise<ErrandTrackedDelivery | undefined> => {
+        if (item.buttons !== true || errand?.buttonsCleared.has(item.deliveryRunId)) return undefined;
+        let messageId: string | undefined;
+        try {
+          messageId = (await item.providerMessageId?.())?.trim();
+        } catch (error) {
+          warnErrandButtonClearFailure(error);
+          return undefined;
+        }
+        // An unfinished send is not a cleanup attempt. The post-completion hook will revisit it.
+        if (!messageId || errand?.buttonsCleared.has(item.deliveryRunId)) return undefined;
+        errand?.buttonsCleared.add(item.deliveryRunId);
+        return { ...item, providerMessageId: async () => messageId };
+      }),
+    );
+    const delivered = ready.filter((item): item is ErrandTrackedDelivery => item !== undefined);
+    if (delivered.length > 0) await clearButtons(delivered);
   }
 
   private resolveHandBack(errand: ActiveErrand, answer: "resumed" | "stopped"): void {

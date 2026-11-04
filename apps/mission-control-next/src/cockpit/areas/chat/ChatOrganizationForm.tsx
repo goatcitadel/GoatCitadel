@@ -6,43 +6,17 @@ import { Field } from "../../ui/Field";
 type Dock = NonNullable<MissionThreadedRenderSurfaceInput["contextDockProps"]>;
 type OrganizationDock = Pick<
   Dock,
-  "folderName" | "tagsValue" | "onFolderNameChange" | "onTagsValueChange" | "sessionControlPending" | "selectedSession"
-> & {
-  /** Resolves true or false with the save's own outcome; a rejection is a failure. */
-  onSaveOrganization: () => Promise<boolean | void>;
-};
+  "folderName" | "tagsValue" | "onFolderNameChange" | "onTagsValueChange" | "sessionControlPending" | "onSaveOrganization"
+>;
 type Outcome = "saved" | "failed";
 
 const INPUT = "block w-full rounded-md border border-line-control bg-canvas p-2 text-md sm:text-sm";
 
-function parseTags(value: string): string[] {
-  return value
-    .split(",")
-    .map((item) => item.trim())
-    .filter(Boolean);
-}
-
-/** True when the saved conversation already carries this folder and these tags. */
-function savedMatchesDraft(dock: OrganizationDock): boolean {
-  const saved = dock.selectedSession.tags ?? [];
-  const draft = parseTags(dock.tagsValue);
-  return (
-    (dock.selectedSession.folderName ?? "") === dock.folderName.trim() &&
-    saved.length === draft.length &&
-    saved.every((tag, index) => tag === draft[index])
-  );
-}
-
-/**
- * Folder and tags for the selected conversation. The outcome comes from the save itself: true or false from the
- * action, or a rejection. Only an action that still resolves without a result falls back to comparing the saved
- * conversation with the draft. Failure details stay in the conversation's error notice.
- */
+/** Folder and tags for the selected conversation. Failure details stay in the conversation's error notice. */
 export function ChatOrganizationForm({ dock }: { dock: OrganizationDock }) {
-  const [settled, setSettled] = useState<Outcome | "unreported" | null>(null);
+  const [settled, setSettled] = useState<Outcome | null>(null);
   const saving = dock.sessionControlPending === "organization";
-  const outcome: Outcome | null =
-    !settled || saving ? null : settled === "unreported" ? (savedMatchesDraft(dock) ? "saved" : "failed") : settled;
+  const outcome = saving ? null : settled;
   return (
     <form
       className="space-y-2"
@@ -51,7 +25,7 @@ export function ChatOrganizationForm({ dock }: { dock: OrganizationDock }) {
         if (saving) return;
         setSettled(null);
         void dock.onSaveOrganization().then(
-          (result) => setSettled(result === true ? "saved" : result === false ? "failed" : "unreported"),
+          (result) => setSettled(result ? "saved" : "failed"),
           () => setSettled("failed"),
         );
       }}

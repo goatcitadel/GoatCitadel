@@ -17,7 +17,7 @@ import {
 } from "@goatcitadel/contracts";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
 import type { StoredPlugin } from "./capability-plugin-store.js";
-import { buildCapabilitySkillInstall, SKILL_HUB_LIST_LIMIT } from "./capability-skill-install-projection.js";
+import { buildCapabilitySkillInstall } from "./capability-skill-install-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import {
   PLUGIN_SKILL_STEP_DECLINED_NOTE,
@@ -28,6 +28,8 @@ import type {
   CreateSkillHubOperatorApprovalInput,
   SkillHubOperatorApprovalSummary,
   SkillHubOperatorItem,
+  SkillHubOperatorListInput,
+  SkillHubOperatorPluginPass,
 } from "./skill-hub-operator-service.js";
 import type { SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 import type { SkillStateMutationOutcome } from "./skill-state-service.js";
@@ -105,7 +107,7 @@ export interface CapabilitySkillActionSources {
     input: SkillHubSourceReviewInput,
   ): Promise<{ snapshot: { snapshotId: string }; replayed: boolean }>;
   /** Skill Hub's operator list: the workspace's newest checks, each with its approvals, settlements and guards. */
-  listSkillHub(input: { workspaceId: string; limit: number }): Promise<{ items: readonly SkillHubOperatorItem[] }>;
+  listSkillHub(input: SkillHubOperatorListInput): Promise<{ items: readonly SkillHubOperatorItem[] }>;
   /**
    * Skill Hub's approval owner. It creates the step's `skill_hub.lifecycle` approval with the operator as requester, or
    * hands back the same request's pending or approved one, and refuses a step its guard doesn't allow (a 409 whose
@@ -113,7 +115,7 @@ export interface CapabilitySkillActionSources {
    */
   createSkillHubApproval(
     input: CreateSkillHubOperatorApprovalInput,
-    options?: { pluginPass: { pluginId: string } },
+    options?: { pluginPass: SkillHubOperatorPluginPass },
   ): Promise<{ approval: Pick<SkillHubOperatorApprovalSummary, "approvalId" | "status"> }>;
   /** One Skill Hub check by its id, in any workspace: what source it read, so a plugin's skill is told apart. */
   findSkillHubSnapshot(
@@ -124,7 +126,10 @@ export interface CapabilitySkillActionSources {
 }
 
 /** What a plugin record says about its skills, for a step on one of them. */
-export type PluginSkillListing = Pick<StoredPlugin, "pluginId" | "name" | "workspaceId" | "state" | "pieces">;
+export type PluginSkillListing = Pick<
+  StoredPlugin,
+  "pluginId" | "name" | "workspaceId" | "state" | "pieces" | "installPlanId"
+>;
 
 /** One skill an uninstall removes: its check, and the revoke an earlier uninstall already asked for, if any. */
 export interface PluginUninstallRevokeInput {
@@ -221,10 +226,10 @@ export class CapabilitySkillActionsService {
     } catch (error) {
       throw refusedSource(error) ?? error;
     }
-    const { items } = await this.sources.listSkillHub({ workspaceId, limit: SKILL_HUB_LIST_LIMIT });
-    const item = items.find((candidate) => candidate.snapshotId === reviewed.snapshot.snapshotId);
+    const { snapshotId } = reviewed.snapshot;
+    const { items } = await this.sources.listSkillHub({ workspaceId, snapshotIds: [snapshotId] });
+    const item = items.find((candidate) => candidate.snapshotId === snapshotId);
     const install = item ? buildCapabilitySkillInstall(item) : undefined;
-    // The newest check heads the list; only a retried, older one can fall out of it.
     if (!install) throw new ServiceUnavailableError(UNREADABLE_CHECK_MESSAGE);
     return { install, replayed: reviewed.replayed };
   }
@@ -257,7 +262,7 @@ export class CapabilitySkillActionsService {
     // The same request hands back the approval it already made; an approved one is never resolved again.
     if (approval.status === "approved") return { status: "approved", approvalId };
     if (pluginPass) {
-      const declined = await this.declineIfPluginLeft(input, pluginPass.pluginId, approvalId);
+      const declined = await this.declineIfPluginLeft(input, pluginPass, approvalId);
       if (declined) return declined;
     }
     if (!(await allowsOperatorApprovalSkip(this.sources.deploymentProfile(), () => this.readSkipSetting()))) {
@@ -338,12 +343,16 @@ export class CapabilitySkillActionsService {
    */
   private async declineIfPluginLeft(
     input: CapabilitySkillOperationRequest & { actorId: string },
-    pluginId: string,
+    pass: Required<SkillHubOperatorPluginPass>,
     approvalId: string,
   ): Promise<CapabilitySkillActionOutcome | undefined> {
     try {
       const listings = await this.sources.listPluginRecords();
-      if (listings.some((plugin) => plugin.pluginId === pluginId && listsSkillStep(plugin, input))) return undefined;
+      if (listings.some((plugin) =>
+        plugin.pluginId === pass.pluginId &&
+        plugin.installPlanId === pass.installPlanId &&
+        listsSkillStep(plugin, input),
+      )) return undefined;
     } catch (error) {
       this.reportFailure?.("plugin_records", error);
       return { status: "waiting", approvalId };
@@ -359,7 +368,7 @@ export class CapabilitySkillActionsService {
       this.reportFailure?.("resolve", error);
       return { status: "waiting", approvalId };
     }
-    throw new PluginSkillNeedsInstallError(pluginId);
+    throw new PluginSkillNeedsInstallError(pass.pluginId);
   }
 
   /** A revoke asked for before, while it still waits; undefined once it was decided or is gone. */
@@ -381,7 +390,7 @@ export class CapabilitySkillActionsService {
    */
   private async pluginPassFor(
     input: Pick<CapabilitySkillOperationRequest, "workspaceId" | "snapshotId">,
-  ): Promise<{ pluginId: string } | undefined> {
+  ): Promise<Required<SkillHubOperatorPluginPass> | undefined> {
     const snapshot = await this.sources.findSkillHubSnapshot(input.snapshotId);
     if (!snapshot || snapshot.workspaceId !== input.workspaceId) return undefined;
     const source = pluginSkillSource(snapshot);
@@ -390,7 +399,7 @@ export class CapabilitySkillActionsService {
       (plugin) => plugin.pluginId === source.pluginId && listsSkillStep(plugin, input),
     );
     if (!listing) throw new PluginSkillNeedsInstallError(source.pluginId);
-    return { pluginId: listing.pluginId };
+    return { pluginId: listing.pluginId, installPlanId: listing.installPlanId };
   }
 
   /**

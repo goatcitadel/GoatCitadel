@@ -49,7 +49,7 @@ function buildPreflightRequest(input: {
           subagentPolicy: input.prefs.subagentPolicy,
         }
       : undefined;
-  const fullWebAccess = input.requestPrefs?.fullWebAccess ?? Boolean(input.fullWebAccess);
+  const fullWebAccess = input.requestPrefs?.fullWebAccess ?? input.fullWebAccess;
   return {
     action: input.action,
     turnId: input.turnId ?? undefined,
@@ -59,7 +59,7 @@ function buildPreflightRequest(input: {
     // reuse a cached armed/off result for the previous target.
     providerFallback: input.prefs?.providerFallback ?? null,
     prefsOverride,
-    ...(fullWebAccess ? { fullWebAccess: true } : {}),
+    ...(fullWebAccess === undefined ? {} : { fullWebAccess }),
   };
 }
 

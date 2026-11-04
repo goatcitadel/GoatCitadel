@@ -313,6 +313,53 @@ describe("admission-bound automatic fanout", () => {
     return { ...f, invocation, step, trace, childTrace, service };
   }
 
+  async function cancelledRecoveryFixture() {
+    const f = await recoveryFixture();
+    f.run.status = "cancelled";
+    f.trace.status = "cancelled";
+    const child = { runId: f.step.durableRunId, workflowKey: "chat.turn.execute", status: "running", payload: {
+      version: "chat.turn.execute.v1", workspaceId: "workspace-1", sessionId: f.step.childSessionId, turnId: f.step.childTurnId,
+      request: { parentDelegationStepId: f.step.stepId, policyRunId: f.invocation.delegationRunId },
+    } };
+    f.childTrace.status = "running";
+    f.host.storage.durableRuns.getRun = vi.fn(async (id: string) => id === f.run.runId ? f.run : child) as never;
+    f.host.storage.chatFanoutInvocations.listWaitingParentCandidateIds = vi.fn(async () =>
+      [...f.invocations.values()].filter((item) => item.status === "waiting").map((item) => item.invocationId)) as never;
+    f.host.cancelDurableChatRun = vi.fn(async () => { child.status = "cancelled"; f.childTrace.status = "cancelled"; return child; });
+    return { ...f, child };
+  }
+
+  it("retries cancelled parent child propagation after restart without grants, wake, or redispatch", async () => {
+    const f = await cancelledRecoveryFixture();
+    f.control.generation = 2;
+    f.binding.durableRunId = "replacement-parent";
+    f.host.cancelDurableChatRun = vi.fn().mockRejectedValueOnce(new Error("child cancellation unavailable"))
+      .mockImplementation(async () => { f.child.status = "cancelled"; f.childTrace.status = "cancelled"; return f.child; });
+    await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    expect(f.invocations.get(f.invocation.invocationId)?.status).toBe("waiting");
+    expect(f.child.status).toBe("running");
+    await new ChatDurableFanoutService(f.host).reconcileWaitingParents();
+    expect(f.invocations.get(f.invocation.invocationId)?.status).toBe("cancelled");
+    expect(f.host.cancelDurableChatRun).toHaveBeenCalledTimes(2);
+    expect(f.wakeDurableChatRun).not.toHaveBeenCalled();
+    expect(f.materializeTerminalDelegatedChild).not.toHaveBeenCalled();
+    expect(f.runChatDelegation).toHaveBeenCalledOnce();
+    expect(f.reserves).toHaveBeenCalledOnce();
+  });
+
+  it.each(["watcher", "child run", "child trace", "child delegation"])("retains cancelled-parent recovery when exact %s linkage differs", async (mismatch) => {
+    const f = await cancelledRecoveryFixture();
+    if (mismatch === "watcher") f.host.storage.durableChildWatchers.get = vi.fn(async () => ({
+      parentRunId: "unrelated-parent", childRunId: f.child.runId, source: "chat_delegation", metadata: {},
+    })) as never;
+    if (mismatch === "child run") f.child.payload.sessionId = "unrelated-session";
+    if (mismatch === "child trace") f.childTrace.durable.runId = "unrelated-run";
+    if (mismatch === "child delegation") f.child.payload.request.policyRunId = "unrelated-delegation";
+    await expect(f.service.reconcileWaitingParents()).rejects.toThrow("Fanout recovery");
+    expect(f.host.cancelDurableChatRun).not.toHaveBeenCalled();
+    expect(f.invocations.get(f.invocation.invocationId)?.status).toBe("waiting");
+    expect(f.wakeDurableChatRun).not.toHaveBeenCalled();
+  });
   it("recovers a terminal aggregate after a lost wake with a fresh owner and no duplicate child materialization", async () => {
     const f = await recoveryFixture();
     f.wakeDurableChatRun.mockRejectedValueOnce(new Error("process stopped before wake commit"));

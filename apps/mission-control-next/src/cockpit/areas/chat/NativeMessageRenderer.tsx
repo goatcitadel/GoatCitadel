@@ -1,5 +1,6 @@
 import { Fragment, lazy, Suspense } from "react";
 import { AssistantMessageContainer } from "@goatcitadel/mission-control-shared/components/chat/AssistantMessageShell";
+import { normalizeMathDelimiters } from "@goatcitadel/mission-control-shared/components/chat/math-delimiters";
 import { cn } from "../../lib/cn";
 const FormattedBody = lazy(async () => ({
   default: (await import("@goatcitadel/mission-control-shared/components/chat/AssistantMessageRenderer"))
@@ -13,9 +14,10 @@ type Props = Parameters<
 export function isPlainMessage(content: string): boolean {
   return (
     !content.includes("\0") &&
+    (!content.includes("$") || (!content.includes("$$") && normalizeMathDelimiters(content) === content)) &&
     !/[\\\x60*_[\]<>~|&#=]/u.test(content) &&
     !/(?:https?:\/\/|www\.|@)/iu.test(content) &&
-    !/^(?:[ \t]+|[-+]\s|[0-9]+[.)]\s|-{3,}\s*$)/mu.test(content) &&
+    !/^(?:[ \t]+|[-+]\s|[0-9]+[.)]\s|-+\s*$)/mu.test(content) &&
     !/[ \t]+(?:\r?\n|$)/u.test(content)
   );
 }

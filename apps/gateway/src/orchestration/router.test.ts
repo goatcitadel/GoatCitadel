@@ -457,6 +457,38 @@ describe("orchestration router", () => {
     expect(reviewerStep?.suggestedTools).toEqual(["browser.search", "browser.navigate", "browser.extract", "http.get"]);
   });
 
+  it("preserves an explicit non-default provider model in advisory orchestration", () => {
+    const model = "gpt-4.1";
+    const input = createInput({
+      objective: "Compare two approaches, then draft an advisory plan.",
+      prefs: createPrefs({
+        planningMode: "advisory",
+        providerId: "openai",
+        model,
+      }),
+    });
+    expect(input.capabilities.find((candidate) => candidate.providerId === "openai")?.model).toBe("gpt-4.1-mini");
+
+    const plan = buildOrchestrationPlan(input);
+
+    expect(plan.steps.length).toBeGreaterThan(0);
+    for (const step of plan.steps) {
+      expect(step).toMatchObject({
+        providerId: "openai",
+        model,
+        modelSelection: {
+          selectedProviderId: "openai",
+          selectedModel: model,
+          candidates: [expect.objectContaining({ providerId: "openai", model, selected: true })],
+        },
+      });
+    }
+    expect(plan.routeDecision.selectedProviders).toHaveLength(plan.steps.length);
+    for (const selection of plan.routeDecision.selectedProviders) {
+      expect(selection).toMatchObject({ providerId: "openai", model });
+    }
+  });
+
   it("pins the requested provider and code workflow when code mode is selected", () => {
     const input = createInput({
       mode: "code",

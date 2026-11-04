@@ -7,7 +7,7 @@ import type {
   DurableWakeResult,
   PendingApprovalAction,
 } from "@goatcitadel/contracts";
-import { ConflictError, canonicalJsonString } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, canonicalJsonString } from "@goatcitadel/contracts";
 import {
   createSqliteAsyncStorage,
   getRequestAttribution,
@@ -411,97 +411,155 @@ describe("approval-resolution-effects-service", () => {
     expect(requestRunProcessing).toHaveBeenCalledWith("durable-resumed");
   });
 
-  it("retries a linked Chat wake instead of skipping it while the turn has not parked yet", async () => {
-    // An approval answered before the turn commits its wait finds the durable run still running.
-    // Skipping that wake would strand the turn once it parks moments later.
+  it.each([
+    { label: "running trace", status: "running", retry: true },
+    { label: "approval trace before durable park", status: "waiting_for_approval", retry: true },
+    { label: "completed trace", status: "completed", retry: false },
+    { label: "failed trace", status: "failed", retry: false },
+    { label: "cancelled trace", status: "cancelled", retry: false },
+    { label: "unrelated tool wait", status: "waiting_for_tool", retry: false },
+    { label: "unrelated user-input wait", status: "waiting_for_user_input", retry: false },
+    { label: "different durable owner", status: "running", traceRunId: "other-run", retry: false },
+    { label: "different trace identity", status: "running", traceTurnId: "other-turn", retry: false },
+    { label: "transient trace read failure", status: "waiting_for_approval", readError: "unavailable", retry: true },
+    { label: "missing trace owner", status: "waiting_for_approval", readError: "missing", retry: false },
+  ] as const)("keeps an early approval wake retryable only for its exact active turn ($label)", async (scenario) => {
+    // Denial has no pending-action sibling to delay the wake. The trace can
+    // already expose its approval while the durable owner still has to park.
     const effect = createEffect({
       effectKind: "linked_chat_turn_wake",
       targetKind: "chat_turn",
       targetId: "turn-early",
       status: "running",
-      payload: { runId: "durable-early" },
+      payload: { runId: "durable-early", decision: "reject" },
     });
     let trace: ChatTurnTraceRecord = {
-      ...createWaitingChildTrace("session-early", effect.targetId),
-      status: "running",
-      durable: { runId: "durable-early", status: "running", checkpointKind: "run_started" },
+      ...createWaitingChildTrace("session-early", "traceTurnId" in scenario ? scenario.traceTurnId : effect.targetId),
+      status: scenario.status,
+      durable: {
+        runId: "traceRunId" in scenario ? scenario.traceRunId : "durable-early",
+        status: "running",
+        checkpointKind: "run_started",
+      },
     };
-    let runStatus: "running" | "completed" = "running";
-    const deferEffectForRetry = vi.fn(() => ({ ...effect, status: "pending" as const }));
+    let parked = false;
+    let transactionActive = false;
+    const traceReadFailure = "readError" in scenario
+      ? scenario.readError === "missing"
+        ? new NotFoundError({ entity: "Chat turn", id: effect.targetId })
+        : new Error("SQLITE_BUSY: transient trace read failure")
+      : undefined;
+    let failTraceRead = Boolean(traceReadFailure);
+    const getTrace = vi.fn(() => {
+      if (failTraceRead) throw traceReadFailure;
+      return trace;
+    });
+    const deferEffectForRetry = vi.fn(() => {
+      if ("readError" in scenario && scenario.readError === "unavailable") expect(transactionActive).toBe(false);
+      return { ...effect, status: "pending" as const };
+    });
     const skipEffect = vi.fn(() => ({ ...effect, status: "skipped" as const }));
-    const patchIfStatus = vi.fn();
+    const completeEffect = vi.fn(() => ({ ...effect, status: "completed" as const }));
+    const patchIfStatus = vi.fn(
+      (
+        turnId: string,
+        expectedStatuses: readonly ChatTurnTraceRecord["status"][],
+        patch: { status?: ChatTurnTraceRecord["status"] },
+      ) => {
+        if (turnId !== trace.turnId || !expectedStatuses.includes(trace.status)) return undefined;
+        trace = { ...trace, ...patch };
+        return trace;
+      },
+    );
+    const deps = createApprovalEffectDeps();
+    deps.wakeDurableRun.mockImplementation(
+      (): DurableWakeResult => ({
+        runId: "durable-early",
+        eventKey: "approval.resolved",
+        correlationId: effect.approvalId,
+        outcome: parked ? "woke" : "skipped_not_waiting",
+        run: {
+          runId: "durable-early",
+          workflowKey: "chat.turn.execute",
+          status: parked ? "queued" : "running",
+          attemptCount: 0,
+          maxAttempts: 3,
+          version: 2,
+          payload: {},
+          createdAt: "2026-10-23T00:00:00.000Z",
+          updatedAt: "2026-10-23T00:00:00.000Z",
+        },
+      }),
+    );
     const service = new ApprovalEffectsService(
       {
         storage: {
           approvalEffects: {
-            completeEffect: vi.fn(),
+            completeEffect,
             failEffect: vi.fn(),
             skipEffect,
             deferEffectForRetry,
             listByApproval: vi.fn(() => []),
           },
-          chatTurnTraces: { get: vi.fn(() => trace), patchIfStatus },
-          pendingApprovalActions: {
-            find: vi.fn(() => ({
-              approvalId: effect.approvalId,
-              actionType: "tool.invoke",
-              resolutionStatus: "executed",
-            })),
+          chatTurnTraces: { get: getTrace, patchIfStatus },
+          pendingApprovalActions: { find: vi.fn(() => undefined) },
+          runImmediateTransaction: async <T>(work: () => T | Promise<T>): Promise<T> => {
+            transactionActive = true;
+            try {
+              return await work();
+            } finally {
+              transactionActive = false;
+            }
           },
-          runImmediateTransaction: <T>(work: () => T): T => work(),
         },
         publishRealtime: vi.fn(),
       } as unknown as ServiceContext,
-      {
-        ...createApprovalEffectDeps(),
-        wakeDurableRun: vi.fn(
-          (): DurableWakeResult => ({
-            runId: "durable-early",
-            eventKey: "approval.resolved",
-            correlationId: effect.approvalId,
-            outcome: "skipped_not_waiting",
-            detail: `Durable run durable-early is ${runStatus}.`,
-            run: {
-              runId: "durable-early",
-              workflowKey: "chat.turn.execute",
-              status: runStatus,
-              attemptCount: 0,
-              maxAttempts: 3,
-              version: 2,
-              payload: {},
-              createdAt: "2026-10-23T00:00:00.000Z",
-              updatedAt: "2026-10-23T00:00:00.000Z",
-            },
-          }),
-        ),
-      },
+      deps,
     );
     const owner = service as unknown as { handleLinkedChatTurnWake(current: ApprovalEffectRecord): Promise<void> };
 
     await owner.handleLinkedChatTurnWake(effect);
 
-    expect(skipEffect).not.toHaveBeenCalled();
     expect(patchIfStatus).not.toHaveBeenCalled();
+    expect(completeEffect).not.toHaveBeenCalled();
+    expect(deps.requestRunProcessing).not.toHaveBeenCalled();
+    if (!scenario.retry) {
+      expect(deferEffectForRetry).not.toHaveBeenCalled();
+      expect(skipEffect).toHaveBeenCalledOnce();
+      return;
+    }
+    expect(skipEffect).not.toHaveBeenCalled();
     expect(deferEffectForRetry).toHaveBeenCalledWith(
       effect.effectId,
       expect.any(String),
       effect.version,
       expect.objectContaining({
         result: expect.objectContaining({
-          reason: "chat_turn_not_parked",
+          reason: "readError" in scenario ? "chat_turn_state_unavailable" : "chat_turn_not_parked",
           runId: "durable-early",
           retryDelayMs: 2_000,
         }),
       }),
     );
 
-    // Once the turn has finished without parking, the wake has nothing to resume and is skipped as before.
-    trace = { ...trace, status: "completed" };
-    runStatus = "completed";
+    // Once the canonical owner parks, the retained wake resumes that same
+    // turn through the ordinary durable wake path before requesting dispatch.
+    trace = { ...trace, status: "waiting_for_approval", durable: { ...trace.durable!, status: "waiting" } };
+    parked = true;
+    failTraceRead = false;
     deferEffectForRetry.mockClear();
     await owner.handleLinkedChatTurnWake(effect);
     expect(deferEffectForRetry).not.toHaveBeenCalled();
-    expect(skipEffect).toHaveBeenCalledTimes(1);
+    expect(skipEffect).not.toHaveBeenCalled();
+    expect(trace.status).toBe("running");
+    expect(completeEffect).toHaveBeenCalledOnce();
+    expect(deps.wakeDurableRun).toHaveBeenLastCalledWith("durable-early", {
+      eventKey: "approval.resolved",
+      correlationId: effect.approvalId,
+      payload: undefined,
+    });
+    expect(deps.requestRunProcessing).toHaveBeenCalledWith("durable-early");
+    expect(patchIfStatus.mock.invocationCallOrder[0]).toBeLessThan(completeEffect.mock.invocationCallOrder[0]!);
   });
 
   it.each(["remote_worker.native_runtime", "remote_worker.native_runtime_install"])(

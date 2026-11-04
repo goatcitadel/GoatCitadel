@@ -1,3 +1,5 @@
+import type { ChangePlanRecord } from "@goatcitadel/contracts";
+import type { PluginSkillStepKind } from "./plugin-install-store";
 import { CAPABILITY_PLUGIN_REFUSED_CODE, type PluginManifestRefusalCode } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
@@ -70,4 +72,31 @@ export function pluginRefusalOf(error: unknown): PluginRefusal | undefined {
 /** Whether a request was answered at all: one that never was may be sent again with its own attempt key. */
 export function wasAnswered(error: unknown): boolean {
   return isApiRequestError(error) && error.kind === "http";
+}
+
+export const DECLINED = "Not installed. The request was declined.";
+export const EXPIRED = "The request expired after 15 minutes. Nothing was changed.";
+export const WITHDRAWN = "This install was cancelled. Nothing was changed.";
+export const NOT_FOUND = "This plugin can't be found anymore. Reload to see where it stands.";
+export const UNINSTALLING = "This plugin is being uninstalled.";
+/**
+ * A step asked for that came back to where it was. Declined, expired or withdrawn read the same here, so the words
+ * claim no decision: the step didn't go through, and Continue asks again.
+ */
+export const stepNotDone = (skill: string, kind: PluginSkillStepKind) =>
+  kind === "install_inactive"
+    ? `${skill} wasn't installed: the step didn't go through. Continue to ask again.`
+    : `${skill} is installed, not switched on: the step didn't go through. Continue to ask again.`;
+export const stepStopped = (skill: string, kind: PluginSkillStepKind | undefined) =>
+  kind === "activate" ? `Switching on ${skill} didn't finish.` : `Installing ${skill} didn't finish.`;
+export const installStopped = (name: string) => `Installing ${name} didn't finish.`;
+export const pieceStopped = (name: string) =>
+  `${installStopped(name)} Uninstall it to remove what it added, then install it again.`;
+
+export function endedInstallNotice(plan: ChangePlanRecord): { notice: string; declined: boolean } | undefined {
+  const code = plan.result?.failureCode;
+  if (code === "approval_denied") return { notice: DECLINED, declined: true };
+  if (code === "approval_expired" || code === "expired") return { notice: EXPIRED, declined: false };
+  if (plan.status === "cancelled") return { notice: WITHDRAWN, declined: false };
+  return undefined;
 }

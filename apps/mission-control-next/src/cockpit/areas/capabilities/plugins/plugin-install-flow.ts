@@ -1,5 +1,8 @@
-import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type { CapabilityPluginDetail, CapabilityPluginDetailPiece, ChangePlanRecord } from "@goatcitadel/contracts";
+import {
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { fetchCapabilityPluginDetail } from "@goatcitadel/mission-control-shared/api/capability-plugins";
 import {
   fetchCapabilitySkillInstalls,
@@ -7,10 +10,12 @@ import {
 } from "@goatcitadel/mission-control-shared/api/capability-skills";
 import { fetchChangePlan } from "@goatcitadel/mission-control-shared/api/chat";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { pluginInstallWaitMs, type Pace } from "./plugin-install-pacing";
 import { DONE, ENDED } from "../change-plan-outcome";
-import { refusalMessage } from "./plugin-check-copy";
+import * as installCopy from "./plugin-check-copy";
+export { DECLINED, installStopped } from "./plugin-check-copy";
 import {
-  __resetPluginInstallStoreForTests,
+  clearPluginInstalls,
   cancelPluginInstallTick,
   pluginIdOfInstallKey,
   pluginInstallKey,
@@ -22,74 +27,32 @@ import {
   type PluginInstallEntry,
   type PluginSkillStepKind,
 } from "./plugin-install-store";
-import { firstUnfinishedPiece, pendingSkillStep } from "./plugin-install-view";
+import {
+  refreshPluginInstallQueries,
+  firstUnfinishedPiece,
+  isFollowing,
+  keep,
+  stateLine,
+  pluginSkillOperation,
+  pluginWaitingStep,
+  pendingSkillStep,
+  type PluginInstallContext,
+} from "./plugin-install-view";
 import { setPluginUninstall } from "./plugin-uninstall-store";
 
 // Following an install once it is confirmed: the plugin's own plan until the plugin has a record, then the plugin's
 // detail while each skill goes through its two steps, asked for here as the Skills tab asks for them. The Gateway's
 // answers are the truth; nothing here decides what a piece is or whether a step may run.
 
-/**
- * Waits between reads while something is applied: a second for the first 30, then 3 seconds. The detail read allows
- * 60 a minute, which a steady read a second would use up. A read that fails counts as one, so failing reads slow too.
- */
-const APPLYING_MS = 1_000;
-const APPLYING_FAST_WAITS = 30;
-const APPLYING_SLOW_MS = 3_000;
-/** Waits between reads while an approval waits: 5 seconds at first, then less often, at most every 30. */
-const WAITING_MS = [5_000, 5_000, 5_000, 10_000, 20_000, 30_000] as const;
 /** Failed reads in a row before the panel says it can't check. */
 const MISSED_READS_LIMIT = 3;
-
-export const DECLINED = "Not installed. The request was declined.";
-const EXPIRED = "The request expired after 15 minutes. Nothing was changed.";
-const WITHDRAWN = "This install was cancelled. Nothing was changed.";
-const NOT_FOUND = "This plugin can't be found anymore. Reload to see where it stands.";
-const UNINSTALLING = "This plugin is being uninstalled.";
-/**
- * A step asked for that came back to where it was. Declined, expired or withdrawn read the same here, so the words
- * claim no decision: the step didn't go through, and Continue asks again.
- */
-const stepNotDone = (skill: string, kind: PluginSkillStepKind) =>
-  kind === "install_inactive"
-    ? `${skill} wasn't installed: the step didn't go through. Continue to ask again.`
-    : `${skill} is installed, not switched on: the step didn't go through. Continue to ask again.`;
-const stepStopped = (skill: string, kind: PluginSkillStepKind | undefined) =>
-  kind === "activate" ? `Switching on ${skill} didn't finish.` : `Installing ${skill} didn't finish.`;
-export const installStopped = (name: string) => `Installing ${name} didn't finish.`;
-const pieceStopped = (name: string) =>
-  `${installStopped(name)} Uninstall it to remove what it added, then install it again.`;
-
-/**
- * What a step changes, which no event refreshes (skill steps send none): the plugins, their detail, and the Skills
- * tab's lists. A finished install changes the connectors and tool groups too; its plan's events refresh those, and so
- * does this.
- */
-const STEP_KEYS: readonly QueryKey[] = [
-  ["plugins", "capability-plugins"],
-  ["plugins", "capability-plugin-detail"],
-  ["skills", "capability-skills"],
-  ["skills", "capability-skill-detail"],
-  ["skills", "capability-skill-discover"],
-  ["skills", "capability-skill-installs"],
-];
-const DONE_KEYS: readonly QueryKey[] = [
-  ["mcp", "capability-connectors"],
-  ["tools", "capability-tools"],
-];
-
-/** Where a key's install is read (the workspace it was checked or installed in) and what it refreshes. */
-export interface PluginInstallContext {
-  readonly client: QueryClient;
-  readonly workspaceId: string;
-}
 
 const contexts = new Map<string, PluginInstallContext>();
 /** Keys being read now, and those to read again once that read ends. */
 const reading = new Set<string>();
 const readAgain = new Set<string>();
 /** Keys with a request on its way: they are read once it answers, never while it is out. */
-const sending = new Set<string>();
+const sending = new Map<string, symbol>();
 /** Bumped by every request, so a read that started before it is dropped. */
 const generations = new Map<string, number>();
 /** Reads at the current stage, which set how often the next one comes. */
@@ -97,24 +60,22 @@ const beats = new Map<string, { stage: string; pace: Pace; count: number }>();
 const misses = new Map<string, number>();
 /** Approvals whose step was looked up already, so each is read once. */
 const stepLookups = new Set<string>();
+let custody = 0;
 
-type Pace = "applying" | "waiting";
+subscribeGatewayAccessChange(retirePluginInstallFlow);
+subscribeGatewayCallerScope(retirePluginInstallFlow);
+
 /** The stage of a step the rate limit refused. */
 const LIMITED = "limited:";
 
 export const installContext = (key: string) => contexts.get(key);
 export const setInstallContext = (key: string, context: PluginInstallContext) => contexts.set(key, context);
 export const bump = (key: string) => generations.set(key, (generations.get(key) ?? 0) + 1);
-const generationOf = (key: string) => generations.get(key) ?? 0;
-
-/** The parts of an entry that outlast a step: the source and the attempt keys. */
-export function keep(entry: PluginInstallEntry): PluginInstallEntry {
-  return { state: entry.state, source: entry.source, checkKey: entry.checkKey, installKey: entry.installKey };
-}
+export const generationOf = (key: string) => generations.get(key) ?? 0;
+export const pluginInstallCustody = () => custody;
 
 export function refreshInstall(key: string, done = false) {
-  const client = contexts.get(key)?.client;
-  for (const queryKey of done ? [...STEP_KEYS, ...DONE_KEYS] : STEP_KEYS) void client?.invalidateQueries({ queryKey });
+  refreshPluginInstallQueries(contexts.get(key)?.client, done);
 }
 
 /** Counts one more wait at the stage and schedules the next read after it. */
@@ -122,17 +83,8 @@ function paced(key: string, stage: string, pace: Pace) {
   const beat = beats.get(key);
   const count = beat?.stage === stage ? beat.count + 1 : 1;
   beats.set(key, { stage, pace, count });
-  const ms =
-    pace === "waiting"
-      ? (WAITING_MS[Math.min(count, WAITING_MS.length) - 1] ?? WAITING_MS[0])
-      : count <= APPLYING_FAST_WAITS
-        ? APPLYING_MS
-        : APPLYING_SLOW_MS;
-  schedulePluginInstallTick(key, ms);
+  schedulePluginInstallTick(key, pluginInstallWaitMs(pace, count));
 }
-
-const isFollowing = (entry: PluginInstallEntry | undefined) =>
-  entry?.state.phase === "following" || entry?.asking === true;
 
 function missedRead(key: string) {
   const entry = readPluginInstall(key);
@@ -169,13 +121,14 @@ async function readPlan(key: string) {
   if (!context || entry?.state.phase !== "planned" || sending.has(key)) return;
   if (reading.has(key)) return void readAgain.add(key);
   const { planId, inspection } = entry.state;
+  const started = custody;
   const generation = generationOf(key);
   reading.add(key);
   let plan: ChangePlanRecord | undefined;
   let detail: CapabilityPluginDetail | undefined;
   try {
     plan = await fetchChangePlan(planId, { workspaceId: context.workspaceId });
-    if (DONE.has(plan.status)) {
+    if (started === custody && generationOf(key) === generation && DONE.has(plan.status)) {
       // Applied, so the record is there; a 404 now is a read to try again, not a plugin that went.
       detail = await fetchCapabilityPluginDetail(context.workspaceId, inspection.pluginId, {
         signal: pluginInstallSignal(key),
@@ -184,6 +137,7 @@ async function readPlan(key: string) {
   } catch {
     plan = undefined;
   }
+  if (started !== custody) return;
   reading.delete(key);
   if (readAgain.delete(key) || generationOf(key) !== generation) return void readPlan(key);
   if (!plan || (DONE.has(plan.status) && !detail)) return missedRead(key);
@@ -212,15 +166,13 @@ function receivePlan(key: string, plan: ChangePlanRecord, detail: CapabilityPlug
 function planEnded(key: string, entry: PluginInstallEntry, plan: ChangePlanRecord) {
   if (entry.state.phase !== "planned") return;
   const { inspection } = entry.state;
-  const code = plan.result?.failureCode;
   const back = (notice: string, declined: boolean) =>
     setPluginInstall(key, { ...keep(entry), state: { phase: "ready", inspection }, notice, declined });
   refreshInstall(key);
-  if (code === "approval_denied") return back(DECLINED, true);
-  if (code === "approval_expired" || code === "expired") return back(EXPIRED, false);
-  if (plan.status === "cancelled") return back(WITHDRAWN, false);
+  const outcome = installCopy.endedInstallNotice(plan);
+  if (outcome) return back(outcome.notice, outcome.declined);
   // The plan's own summary says what was added and what to do next.
-  const message = plan.result?.summary?.trim() || installStopped(inspection.name);
+  const message = plan.result?.summary?.trim() || installCopy.installStopped(inspection.name);
   setPluginInstall(key, { ...keep(entry), state: { phase: "failed", message, inspection } });
 }
 
@@ -273,6 +225,7 @@ async function readDetail(key: string, force = false) {
   const pluginId = entry?.state.phase === "following" ? entry.state.detail.pluginId : pluginIdOfInstallKey(key);
   if (!context || !pluginId || sending.has(key) || !(force || isFollowing(entry))) return;
   if (reading.has(key)) return void readAgain.add(key);
+  const started = custody;
   const generation = generationOf(key);
   reading.add(key);
   let detail: CapabilityPluginDetail | undefined;
@@ -282,6 +235,7 @@ async function readDetail(key: string, force = false) {
   } catch (error) {
     gone = isApiRequestError(error) && error.status === 404;
   }
+  if (started !== custody) return;
   reading.delete(key);
   if (readAgain.delete(key) || generationOf(key) !== generation) return void readDetail(key, force);
   if (!detail && !gone) return missedRead(key);
@@ -289,13 +243,9 @@ async function readDetail(key: string, force = false) {
   const current = readPluginInstall(key);
   if (!current || !(force || isFollowing(current))) return;
   if (detail) return receiveDetail(key, detail);
-  setPluginInstall(key, { ...keep(current), state: { phase: "failed", message: NOT_FOUND } });
+  setPluginInstall(key, { ...keep(current), state: { phase: "failed", message: installCopy.NOT_FOUND } });
   refreshInstall(key);
 }
-
-/** The pieces' states in one line, to tell whether a read moved anything. */
-const stateLine = (detail: CapabilityPluginDetail | undefined) =>
-  detail ? `${detail.state}:${detail.pieces.map((piece) => piece.state).join(",")}` : "";
 
 /** Takes on the plugin's detail and moves the install on from its first unfinished piece. */
 function receiveDetail(key: string, detail: CapabilityPluginDetail) {
@@ -308,7 +258,10 @@ function receiveDetail(key: string, detail: CapabilityPluginDetail) {
     return refreshInstall(key, true);
   }
   if (detail.state === "uninstalling") {
-    return setPluginInstall(key, { ...keep(entry), state: { phase: "failed", message: UNINSTALLING, detail } });
+    return setPluginInstall(key, {
+      ...keep(entry),
+      state: { phase: "failed", message: installCopy.UNINSTALLING, detail },
+    });
   }
   const piece = firstUnfinishedPiece(detail.pieces);
   if (piece?.kind === "skill") return skillPiece(key, entry, detail, piece);
@@ -329,7 +282,7 @@ function skillPiece(
       const kind: PluginSkillStepKind = piece.state === "check_passed" ? "install_inactive" : "activate";
       // Back where it was after asking for this very step: declined, expired or withdrawn, the detail can't tell.
       if (asked === kind) {
-        const notice = stepNotDone(piece.label, kind);
+        const notice = installCopy.stepNotDone(piece.label, kind);
         return setPluginInstall(key, { ...following, chain: false, asked: undefined, notice, declined: true });
       }
       setPluginInstall(key, following);
@@ -350,7 +303,7 @@ function skillPiece(
     case "failed":
       return setPluginInstall(key, {
         ...keep(entry),
-        state: { phase: "failed", message: stepStopped(piece.label, asked), detail },
+        state: { phase: "failed", message: installCopy.stepStopped(piece.label, asked), detail },
       });
     default:
       // Its check can't be read right now: the reads go on, and nothing is claimed about it.
@@ -376,7 +329,10 @@ function otherPiece(
     return paced(key, `${piece.pieceId}:unknown`, "waiting");
   }
   // Only uninstalling it can clean up after this, which the plugin's own panel offers.
-  setPluginInstall(key, { ...keep(entry), state: { phase: "failed", message: pieceStopped(detail.name), detail } });
+  setPluginInstall(key, {
+    ...keep(entry),
+    state: { phase: "failed", message: installCopy.pieceStopped(detail.name), detail },
+  });
   void readPlanSummary(key, detail);
 }
 
@@ -384,8 +340,11 @@ function otherPiece(
 async function readPlanSummary(key: string, detail: CapabilityPluginDetail) {
   const context = contexts.get(key);
   if (!context) return;
+  const started = custody;
+  const generation = generationOf(key);
   // A plan that can't be read leaves the panel's own line.
   const plan = await fetchChangePlan(detail.installPlanId, { workspaceId: context.workspaceId }).catch(() => undefined);
+  if (started !== custody || generationOf(key) !== generation) return;
   const summary = plan?.result?.summary?.trim();
   const entry = readPluginInstall(key);
   if (summary && entry?.state.phase === "failed" && entry.state.detail?.pluginId === detail.pluginId) {
@@ -397,20 +356,23 @@ async function readPlanSummary(key: string, detail: CapabilityPluginDetail) {
 async function lookUpWaitingStep(key: string, piece: CapabilityPluginDetailPiece, approvalId: string) {
   const context = contexts.get(key);
   if (!context || !piece.skillSnapshotId || stepLookups.has(approvalId)) return;
+  const started = custody;
   stepLookups.add(approvalId);
   try {
     const answer = await fetchCapabilitySkillInstalls(context.workspaceId, {
       snapshotId: piece.skillSnapshotId,
       signal: pluginInstallSignal(key),
     });
+    if (started !== custody) return;
     const step = answer.installs.find((install) => install.snapshotId === piece.skillSnapshotId)?.step;
-    const kind =
-      step === "waiting_install" ? "install_inactive" : step === "waiting_switch_on" ? "activate" : undefined;
+    const kind = pluginWaitingStep(step);
     const entry = readPluginInstall(key);
-    if (kind && entry) setPluginInstall(key, { ...entry, waitingStep: { approvalId, kind } });
+    if (kind && entry?.state.phase === "following" && entry.state.waitingApprovalId === approvalId) {
+      setPluginInstall(key, { ...entry, waitingStep: { approvalId, kind } });
+    }
   } catch {
     // Its approval is titled by the skill alone until a later wait looks it up again.
-    stepLookups.delete(approvalId);
+    if (started === custody) stepLookups.delete(approvalId);
   }
 }
 
@@ -418,25 +380,30 @@ async function lookUpWaitingStep(key: string, piece: CapabilityPluginDetailPiece
 async function requestStep(key: string, piece: CapabilityPluginDetailPiece, kind: PluginSkillStepKind) {
   const entry = readPluginInstall(key);
   const context = contexts.get(key);
-  if (!entry || !context || entry.asking || !piece.skillSnapshotId) return;
+  if (!entry || !context || entry.asking || sending.has(key) || !piece.skillSnapshotId) return;
+  const started = custody;
+  const request = Symbol();
   bump(key);
+  const generation = generationOf(key);
   cancelPluginInstallTick(key);
   misses.delete(key);
   // A step asked again after the rate limit refused it keeps counting its waits, so the retries slow down.
   if (!beats.get(key)?.stage.startsWith(LIMITED)) beats.delete(key);
   setPluginInstall(key, { ...entry, asking: true, asked: { pieceId: piece.pieceId, kind }, notice: undefined });
-  sending.add(key);
-  try {
-    await requestCapabilitySkillOperation({
-      workspaceId: context.workspaceId,
-      snapshotId: piece.skillSnapshotId,
-      operationKind: kind,
-    });
-  } catch (error) {
+  if (started !== custody || generationOf(key) !== generation) return;
+  sending.set(key, request);
+  const takeRequest = () => {
+    if (started !== custody || sending.get(key) !== request) return false;
     sending.delete(key);
-    return refusedStep(key, kind, error);
+    return generationOf(key) === generation;
+  };
+  try {
+    await requestCapabilitySkillOperation(pluginSkillOperation(context.workspaceId, piece.skillSnapshotId, kind));
+  } catch (error) {
+    if (takeRequest()) refusedStep(key, kind, error);
+    return;
   }
-  sending.delete(key);
+  if (!takeRequest()) return;
   beats.delete(key);
   refreshInstall(key);
   const current = readPluginInstall(key);
@@ -462,10 +429,16 @@ function refusedStep(key: string, kind: PluginSkillStepKind, error: unknown) {
   if (status === 404) {
     return setPluginInstall(key, {
       ...keep(current),
-      state: { phase: "failed", message: refusalMessage(error), ...(detail ? { detail } : {}) },
+      state: { phase: "failed", message: installCopy.refusalMessage(error), ...(detail ? { detail } : {}) },
     });
   }
-  setPluginInstall(key, { ...current, asking: false, asked: undefined, chain: false, notice: refusalMessage(error) });
+  setPluginInstall(key, {
+    ...current,
+    asking: false,
+    asked: undefined,
+    chain: false,
+    notice: installCopy.refusalMessage(error),
+  });
   // A step the checks don't allow now: the detail is read again to show why.
   if (status === 409) void readDetail(key, true);
 }
@@ -474,11 +447,13 @@ function refusedStep(key: string, kind: PluginSkillStepKind, error: unknown) {
 export function forgetFlow(key: string) {
   bump(key);
   contexts.delete(key);
+  sending.delete(key);
   beats.delete(key);
   misses.delete(key);
 }
 
-export function __resetPluginInstallFlowForTests() {
+export function retirePluginInstallFlow() {
+  custody += 1;
   contexts.clear();
   reading.clear();
   readAgain.clear();
@@ -487,5 +462,9 @@ export function __resetPluginInstallFlowForTests() {
   beats.clear();
   misses.clear();
   stepLookups.clear();
-  __resetPluginInstallStoreForTests();
+  clearPluginInstalls();
 }
+
+export type { PluginInstallContext } from "./plugin-install-view";
+
+export { keep } from "./plugin-install-view";

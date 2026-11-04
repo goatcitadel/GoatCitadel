@@ -154,8 +154,12 @@ class InMemoryAuditDb implements DatabaseClient {
   public readonly dialect = "postgres" as const;
   public readonly rows: StoredAuditRow[] = [];
   public omitNextSequenceRow = false;
+  public readonly materializedRowCounts: number[] = [];
 
   public prepare(sql: string): DbStatement {
+    if (sql.includes("pg_advisory_xact_lock")) {
+      return { run: () => ({ changes: 0 }), get: () => undefined, all: () => [] };
+    }
     if (sql.includes("COALESCE(MAX(event_sequence), 0) + 1")) {
       return {
         run: () => ({ changes: 0 }),
@@ -199,12 +203,25 @@ class InMemoryAuditDb implements DatabaseClient {
         all: () => [],
       };
     }
-    if (sql.includes("SELECT payload") && sql.includes("FROM audit_events")) {
+    if (sql.includes("SELECT") && sql.includes("payload") && sql.includes("FROM audit_events")) {
       return {
         run: () => ({ changes: 0 }),
         get: () => undefined,
-        all: <T = unknown>(streamName: unknown) =>
-          this.rows.filter((row) => row.stream_name === streamName).map((row) => ({ payload: row.payload })) as T[],
+        all: <T = unknown>(input: unknown) => {
+          const params = typeof input === "object" && input !== null ? (input as Record<string, unknown>) : undefined;
+          const streamName = params?.streamName ?? input;
+          let rows = this.rows.filter((row) => row.stream_name === streamName);
+          if (params?.beforeSequence !== undefined)
+            rows = rows.filter((row) => row.event_sequence < Number(params.beforeSequence));
+          rows.sort((a, b) =>
+            sql.includes("event_sequence DESC")
+              ? b.event_sequence - a.event_sequence
+              : a.event_sequence - b.event_sequence,
+          );
+          if (sql.includes("LIMIT") && params) rows = rows.slice(0, Number(params.limit));
+          this.materializedRowCounts.push(rows.length);
+          return rows.map((row) => ({ payload: row.payload, event_sequence: row.event_sequence })) as T[];
+        },
       };
     }
     throw new Error(`Unexpected SQL in audit test double: ${sql}`);
@@ -218,3 +235,49 @@ class InMemoryAuditDb implements DatabaseClient {
     return callback();
   }
 }
+
+test("PostgresAuditLog recent reads stop before materializing old history", async () => {
+  const db = new InMemoryAuditDb();
+  for (let sequence = 1; sequence <= 10_000; sequence += 1) {
+    db.rows.push(auditRow({ event_id: `event-${sequence}`, event_sequence: sequence, payload: { sequence } }));
+  }
+  const recent = await new PostgresAuditLog(db).listRecent("tool_invocations", 5);
+  assert.deepEqual(
+    recent.map((row) => row.sequence),
+    [9_996, 9_997, 9_998, 9_999, 10_000],
+  );
+  assert.ok(
+    db.materializedRowCounts.every((count) => count <= 256),
+    "recent reads must bound each SQL result",
+  );
+  assert.ok(
+    db.materializedRowCounts.reduce((total, count) => total + count, 0) <= 256,
+    "stop once enough recent matches are found",
+  );
+});
+
+test("PostgresAuditLog recent paging preserves sparse matches and skips malformed payloads", async () => {
+  const db = new InMemoryAuditDb();
+  for (let sequence = 1; sequence <= 2_000; sequence += 1) {
+    db.rows.push(
+      auditRow({
+        event_id: `event-${sequence}`,
+        event_sequence: sequence,
+        payload: sequence === 2_000 ? "{malformed" : JSON.stringify({ sequence, match: sequence % 300 === 0 }),
+      }),
+    );
+  }
+  const recent = await new PostgresAuditLog(db).listRecent("tool_invocations", 3, (row) => row.match === true);
+  assert.deepEqual(
+    recent.map((row) => row.sequence),
+    [1_200, 1_500, 1_800],
+  );
+  assert.ok(
+    db.materializedRowCounts.every((count) => count <= 256),
+    "sparse reads must use bounded pages",
+  );
+  assert.ok(
+    db.materializedRowCounts.reduce((total, count) => total + count, 0) < 2_000,
+    "do not scan older history after the third match",
+  );
+});

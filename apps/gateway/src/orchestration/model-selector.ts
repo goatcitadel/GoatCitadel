@@ -18,9 +18,10 @@ export function selectOrchestrationModel(input: {
   usedProviders: Set<string>;
 }): OrchestrationModelSelectionResult {
   if (input.prefs.providerId) {
+    const { providerId, model } = input.prefs;
     const selected =
-      input.capabilities.find((item) => item.providerId === input.prefs.providerId) ??
-      (input.prefs.model ? buildPinnedFallbackCandidate(input.prefs.providerId, input.prefs.model) : undefined);
+      input.capabilities.find((item) => item.providerId === providerId && (!model || item.model === model)) ??
+      (model ? buildPinnedFallbackCandidate(providerId, model) : undefined);
     return {
       selected,
       evidence: {

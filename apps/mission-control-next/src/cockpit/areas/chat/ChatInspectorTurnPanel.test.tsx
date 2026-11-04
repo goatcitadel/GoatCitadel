@@ -74,10 +74,11 @@ describe("ChatInspectorTurnPanel cost (#499)", () => {
   afterEach(() => {
     for (const key of Object.keys(authModes)) delete authModes[key];
   });
+  const cliRouting = { effectiveProviderId: "claude-code-cli", effectiveModel: "claude-sonnet-5-5" };
   const cliTurn = () =>
     turnWith({
       status: "completed",
-      routing: { effectiveProviderId: "claude-code-cli", effectiveModel: "claude-sonnet-5-5" },
+      routing: cliRouting,
       completion: { status: "complete", repaired: false, usage: { inputTokens: 1200, outputTokens: 300 } },
     });
 
@@ -85,6 +86,21 @@ describe("ChatInspectorTurnPanel cost (#499)", () => {
     authModes["claude-code-cli"] = "claude-code-cli-login";
     act(() => root.render(<ChatInspectorTurnPanel selectedTurn={cliTurn()} />));
     expect(row("Cost")).toBe("Included in Claude subscription");
+  });
+
+  it.each([
+    { state: "a queued turn", trace: { status: "running", durable: { runId: "run-1", status: "queued" } } },
+    { state: "a cancelled turn", trace: { status: "cancelled", completion: { status: "interrupted", repaired: false } } },
+    {
+      state: "a completed turn with an empty usage record",
+      trace: { status: "completed", completion: { status: "complete", repaired: false, usage: {} } },
+    },
+  ])("keeps Cost unknown for $state without recorded model usage", ({ trace }) => {
+    authModes["claude-code-cli"] = "claude-code-cli-login";
+    const selectedTurn = turnWith({ ...trace, routing: cliRouting });
+    act(() => root.render(<ChatInspectorTurnPanel selectedTurn={selectedTurn} />));
+    expect(row("Model")).toContain("claude-sonnet-5-5");
+    expect(row("Cost")).toBe("Unknown");
   });
 
   it("does not infer subscription billing from the provider id alone", () => {

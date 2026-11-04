@@ -5,6 +5,7 @@ import type {
   IntegrationConnection,
   MailDraftRecord,
 } from "@goatcitadel/contracts";
+import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import {
   computeCommunicationsPayloadHash,
   readCalendarCreateApprovalInput,
@@ -219,7 +220,7 @@ describe("communications dashboard service", () => {
   });
 
   it("marks send draft as approval required without invoking Gmail send", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
@@ -246,11 +247,12 @@ describe("communications dashboard service", () => {
         riskLevel: "danger",
         payload: expect.objectContaining({ action: "mail_send", draftId: draft.draftId }),
       }),
+      expect.any(Function),
     );
   });
 
   it("binds the send approval to the draft workspace and replays an exact repeated send without a second approval", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
@@ -272,6 +274,7 @@ describe("communications dashboard service", () => {
       expect.objectContaining({
         linkage: expect.objectContaining({ workspaceId: "workspace-mail", actionType: "communications.mail.send" }),
       }),
+      expect.any(Function),
     );
     expect(replay).toEqual(first);
     expect(first).toMatchObject({
@@ -282,7 +285,7 @@ describe("communications dashboard service", () => {
   });
 
   it("server-binds the default workspace for a draft created without one", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
@@ -304,7 +307,7 @@ describe("communications dashboard service", () => {
   });
 
   it("binds the mail account's connection revision into the hashed send approval", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
@@ -330,7 +333,7 @@ describe("communications dashboard service", () => {
   });
 
   it("binds the calendar account's revision and the default workspace into a calendar approval", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
@@ -360,9 +363,9 @@ describe("communications dashboard service", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) => {
       await gate;
-      return createApprovalRecord(input);
+      return createApprovalRecordWithCommit(input, onCreated);
     });
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
@@ -410,7 +413,7 @@ describe("communications dashboard service", () => {
   });
 
   it("never requests an approval for a draft the Gateway does not hold, even when sent twice", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
@@ -423,7 +426,7 @@ describe("communications dashboard service", () => {
   });
 
   it("hashes the exact send payload and states that approving sends it", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({
       now: () => new Date(NOW),
       createApproval,
@@ -462,7 +465,7 @@ describe("communications dashboard service", () => {
   });
 
   it("hashes the exact calendar payload and binds the approval to the workspace", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const service = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval });
 
     const event = await service.createCalendarEventPlaceholder({
@@ -504,7 +507,7 @@ describe("communications dashboard service", () => {
   });
 
   it("persists drafts so a restarted service replays the recorded approval instead of requesting another", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const mailDrafts = createMailDraftStore();
     const serviceA = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval, mailDrafts });
     const draft = await serviceA.createDraft({
@@ -540,7 +543,7 @@ describe("communications dashboard service", () => {
   });
 
   it("never requests a second approval for a draft fenced by a request that died mid-flight", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const mailDrafts = createMailDraftStore();
     // As if a previous process claimed the draft, then crashed before recording the approval id.
     const fenced = await mailDrafts.create({
@@ -569,9 +572,9 @@ describe("communications dashboard service", () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) => {
       await gate;
-      return createApprovalRecord(input);
+      return createApprovalRecordWithCommit(input, onCreated);
     });
     const mailDrafts = createMailDraftStore();
     const serviceA = createCommunicationsDashboardService({ now: () => new Date(NOW), createApproval, mailDrafts });
@@ -658,7 +661,7 @@ describe("communications dashboard service", () => {
   });
 
   it("keeps credential values and references out of the hashed send approval", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const smtp = createConnection({
       connectionId: "smtp-conn",
       catalogId: "automation.imap-smtp",
@@ -739,7 +742,7 @@ describe("releasing an interrupted send", () => {
   });
 
   it("releases a draft no approval names, audits it without content, then allows exactly one approval", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const mailDrafts = createMailDraftStore();
     const fenced = await fencedDraft(mailDrafts, { failureReason: "stale" });
     const mailDraftRecovery = recovery();
@@ -772,7 +775,7 @@ describe("releasing an interrupted send", () => {
   });
 
   it("re-links an approval that did persist instead of releasing, so no second approval is requested", async () => {
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => createApprovalRecord(input));
+    const createApproval = vi.fn(createApprovalRecordWithCommit);
     const mailDrafts = createMailDraftStore();
     const fenced = await fencedDraft(mailDrafts);
     const persisted: ApprovalRequest = {
@@ -819,9 +822,9 @@ describe("releasing an interrupted send", () => {
       finish = resolve;
     });
     let now = new Date(NOW);
-    const createApproval = vi.fn(async (input: ApprovalCreateInput) => {
+    const createApproval = vi.fn(async (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) => {
       await gate;
-      return createApprovalRecord(input);
+      return createApprovalRecordWithCommit(input, onCreated);
     });
     const mailDrafts = createMailDraftStore();
     const mailDraftRecovery = recovery();
@@ -848,6 +851,12 @@ describe("releasing an interrupted send", () => {
     expect(await sending).toMatchObject({ approvalId: "22222222-2222-4222-8222-222222222222" });
   });
 });
+
+async function createApprovalRecordWithCommit(input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) {
+  const approval = createApprovalRecord(input);
+  await onCreated?.(approval);
+  return approval;
+}
 
 function createApprovalRecord(input: ApprovalCreateInput): ApprovalRequest {
   return {
@@ -882,6 +891,10 @@ function createMailDraftStore(): CommunicationsMailDraftStore {
     transition: async (draftId, from, patch) => {
       const row = rows.get(draftId);
       if (!row || !from.includes(row.status)) {
+        return undefined;
+      }
+      if (patch.expectedUnlinkedUpdatedAt !== undefined &&
+          (row.updatedAt !== patch.expectedUnlinkedUpdatedAt || row.approvalId !== undefined)) {
         return undefined;
       }
       const next: MailDraftRecord = {

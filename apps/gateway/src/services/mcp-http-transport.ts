@@ -165,16 +165,22 @@ export async function readHttpJsonRpcEnvelope(
     return readSseJsonRpcEnvelope(response, expectedId, timeoutMs);
   }
   const body = await readHttpResponseText(response, MCP_HTTP_RESPONSE_BODY_MAX_BYTES, timeoutMs);
+  let message: JsonRpcEnvelope;
   try {
-    return JSON.parse(body) as JsonRpcEnvelope;
+    message = JSON.parse(body) as JsonRpcEnvelope;
   } catch (error) {
     throw new Error(`MCP HTTP response was not valid JSON-RPC: ${(error as Error).message}`, { cause: error });
   }
+  if (!isReplyFor(message, expectedId)) {
+    throw new Error("MCP HTTP response did not include the expected JSON-RPC response.");
+  }
+  return message;
 }
 
 // A reply has an id and no method; a server-initiated request that reuses our id must not settle our call.
 export function isReplyFor(message: JsonRpcEnvelope, expectedId: number | undefined): boolean {
-  return expectedId === undefined || (message.id === expectedId && message.method === undefined);
+  return message !== null && typeof message === "object" && !Array.isArray(message) &&
+    (expectedId === undefined || (message.id === expectedId && message.method === undefined));
 }
 
 async function readSseJsonRpcEnvelope(

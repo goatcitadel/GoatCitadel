@@ -1114,6 +1114,46 @@ describe("MissionThreadedControllerHost", () => {
     await cleanupRenderedHosts();
   });
 
+  it("skips automatic pinned-goal restoration for an opted-out surface but forwards an explicit goal command", async () => {
+    const options: Partial<React.ComponentProps<typeof MissionThreadedControllerHost>> & {
+      restorePinnedGoal: boolean;
+    } = { restorePinnedGoal: false, coworkViewModelFactory: null, surface: "chat", lockSurface: true };
+    await renderHost(options);
+    await selectDefaultSession();
+    expect(latestSurfaceInput?.activeSessionSurfaceProps).toBeTruthy();
+    expect(fetchChatSessionGoalMock).not.toHaveBeenCalled();
+
+    const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0];
+    parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/goal", message: "Goal status." });
+    await act(async () => {
+      await outboundInput.operations.handleCommandExecution("session-1", "/goal status");
+    });
+    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal status", { surface: "chat" });
+  });
+
+  it("restores the selected session's pinned goal by default", async () => {
+    fetchChatSessionGoalMock.mockResolvedValue({ goal: "Existing goal" });
+    await renderHost();
+    await selectDefaultSession();
+    expect(fetchChatSessionGoalMock).toHaveBeenCalledWith("session-1");
+    expect(latestSurfaceInput?.activeSessionSurfaceProps?.pinnedGoal).toBe("Existing goal");
+  });
+
+  it.each([true, false])("forwards organization write result %s through the production dock", async (saved) => {
+    const handleSaveOrganization = vi.fn(async () => saved);
+    useChatSessionControlsMock.mockReturnValue({ ...useChatSessionControlsMock(), handleSaveOrganization });
+    await renderHost({ coworkViewModelFactory: null, surface: "chat", lockSurface: true });
+    await selectDefaultSession();
+    const dock = latestSurfaceInput?.contextDockProps;
+    expect(dock).toBeTruthy();
+    let result: unknown;
+    await act(async () => {
+      result = await dock!.onSaveOrganization();
+    });
+    expect(handleSaveOrganization).toHaveBeenCalledOnce();
+    expect(result).toBe(saved);
+  });
+
   it("hydrates only bounded session-bound queue envelopes and canonical request preferences", () => {
     const validPersistedItem = {
       id: "queue-valid",
@@ -1408,6 +1448,64 @@ describe("MissionThreadedControllerHost", () => {
     expect(actions.handleSuggestDelegation).toHaveBeenCalledOnce();
     expect(actions.handleAcceptDelegation).toHaveBeenCalledTimes(2);
     expect(actions.handleRunCodeDelegation).toHaveBeenCalledWith("review");
+  });
+
+  it("only removes retained document selections while editing a previous message", async () => {
+    const data = useChatSessionDataMock();
+    useChatSessionDataMock.mockReturnValue({
+      ...data,
+      settings: {
+        ...data.settings,
+        chatFeatureAvailability: { ...data.settings?.chatFeatureAvailability, explicitContext: true },
+        features: { ...data.settings?.features, unifiedComposerPaletteV1Enabled: true },
+      },
+    });
+    await renderHost();
+    await selectDefaultSession();
+    const documents = () => latestSurfaceInput!.contextDockProps!.documents!;
+    const active = () => latestSurfaceInput!.activeSessionSurfaceProps!;
+    const saved = { kind: "personal_note" as const, ref: "note-a", label: "Saved note" };
+    const other = { kind: "personal_note" as const, ref: "note-b", label: "Another note" };
+    const paletteItem = {
+      key: "note-b",
+      command: other.label,
+      description: "Saved note",
+      applyValue: other.ref,
+      source: "documents" as const,
+      action: { type: "attach_document" as const, documentKind: other.kind, documentId: other.ref, label: other.label },
+    };
+    expect(documents().contextInclusionEnabled).toBe(true);
+    await act(async () => documents().onToggleInclude(saved));
+    expect(documents().includedRefs).toEqual([saved]);
+
+    useChatSurfaceOrchestrationMock.mockReturnValue({
+      ...useChatSurfaceOrchestrationMock(),
+      editingTurnId: "turn-1",
+    });
+    await commitDraft("Edited message");
+    expect(active().editingTurnId).toBe("turn-1");
+    expect(active().profileDependentAdmissionBlockReason).toContain("Remove the document selection");
+    expect(documents().contextInclusionEnabled).toBe(false);
+    await act(async () => {
+      documents().onToggleInclude(other);
+      documents().onToggleInclude(saved);
+      documents().onToggleInclude(saved);
+      active().composerPalette!.onSelect(paletteItem);
+    });
+    expect(documents().includedRefs).toEqual([]);
+    expect(active().profileDependentAdmissionBlockReason).toBeUndefined();
+    expect(active().canSend).toBe(true);
+    await act(async () => active().onSend());
+    expect(handleSendMock).toHaveBeenCalledOnce();
+
+    useChatSurfaceOrchestrationMock.mockReturnValue({
+      ...useChatSurfaceOrchestrationMock(),
+      editingTurnId: null,
+    });
+    await commitDraft("New message");
+    expect(documents().contextInclusionEnabled).toBe(true);
+    await act(async () => active().composerPalette!.onSelect(paletteItem));
+    expect(documents().includedRefs).toEqual([other]);
   });
 
   it("rejects malformed, foreign, traversing, duplicate, and oversized hydrated attachment references", () => {

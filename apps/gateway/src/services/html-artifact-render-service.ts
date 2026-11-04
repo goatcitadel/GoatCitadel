@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import {
   ConflictError,
+  NotFoundError,
   ServiceUnavailableError,
   type ChatArtifactRenderRecord,
   type ChatArtifactRenderResponse,
@@ -18,12 +19,12 @@ import {
 } from "@goatcitadel/policy-engine";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { GatewayRuntimeConfig } from "../config.js";
+import { AttachmentReadLimitError, MAX_CHAT_ATTACHMENT_BYTES, readChatAttachmentContent } from "./chat-attachment-service.js";
 import { projectChatGeneratedArtifactForPublic } from "./chat-secret-projection.js";
 
 /**
  * Renders `html` generated artifacts into PNG evidence stored as chat attachments. Renders are
- * keyed by the artifact's content hash: a repeat request for unchanged content returns the stored
- * attachments without launching the browser again.
+ * reused only through scoped, versioned renderer receipts whose stored PNG bytes still verify.
  */
 
 export interface HtmlArtifactRenderDependencies {
@@ -45,7 +46,8 @@ export interface HtmlArtifactRenderDependencies {
 const RENDER_FILE_PREFIX = "render-";
 const RENDER_FILE_SUFFIX = ".png";
 const RENDER_SCRATCH_DIR = ".artifact-renders";
-const ATTACHMENT_LIST_LIMIT = 2000;
+/** Bump when rendering semantics or the viewport profile changes. */
+export const HTML_ARTIFACT_RENDERER_VERSION = "html-snapshot.v1";
 
 /** One render per artifact and content hash at a time; concurrent callers share the same promise. */
 const inFlightRenders = new Map<string, Promise<ChatArtifactRenderResponse>>();
@@ -57,7 +59,7 @@ export async function renderChatGeneratedArtifact(
 ): Promise<ChatArtifactRenderResponse> {
   const artifact = await loadRenderableArtifact(deps, artifactId, workspaceId);
   const contentHash = resolveContentHash(artifact);
-  const flightKey = `${artifact.workspaceId}:${artifact.artifactId}:${contentHash}`;
+  const flightKey = JSON.stringify(renderIdentity(artifact, contentHash));
   const inFlight = inFlightRenders.get(flightKey);
   if (inFlight) return inFlight;
   const flight = renderOrReuse(deps, artifact, contentHash).finally(() => {
@@ -100,13 +102,17 @@ async function renderOrReuse(
         bytes,
         analysis: "skip",
       });
-      uploaded.push(
-        toRenderRecord(artifact.artifactId, contentHash, attachment, {
-          name: snapshot.viewport,
-          width: snapshot.width,
-          height: snapshot.height,
-        }),
-      );
+      const viewport = HTML_RENDER_DEFAULT_VIEWPORTS.find((item) => item.name === snapshot.viewport);
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      if (!viewport || snapshot.width !== viewport.width || snapshot.height !== viewport.height ||
+          !matchesPngViewport(bytes, viewport) || attachment.sessionId !== artifact.sessionId ||
+          (attachment.workspaceId ?? "default") !== (artifact.workspaceId ?? "default") ||
+          attachment.mimeType !== "image/png" || attachment.mediaType !== "image" ||
+          attachment.sha256 !== sha256 || attachment.sizeBytes !== bytes.length) {
+        throw new ConflictError({ code: "STATE_CONFLICT", message: "Renderer output does not match its attachment evidence." });
+      }
+      uploaded.push(await deps.storage.chatAttachments.recordArtifactRender({ ...renderIdentity(artifact, contentHash),
+        viewport: viewport.name, width: viewport.width, height: viewport.height, attachmentId: attachment.attachmentId, sha256 }));
     }
   } finally {
     await fs.rm(outputDir, { recursive: true, force: true }).catch(() => undefined);
@@ -119,7 +125,7 @@ export async function listChatArtifactRenders(
   artifactId: string,
   workspaceId: string,
 ): Promise<ChatArtifactRenderResponse> {
-  const artifact = await deps.getChatGeneratedArtifact(artifactId.trim(), { workspaceId: workspaceId.trim() });
+  const artifact = await loadArtifact(deps, artifactId, workspaceId);
   const contentHash = resolveContentHash(artifact);
   return {
     artifactId: artifact.artifactId,
@@ -133,7 +139,7 @@ async function loadRenderableArtifact(
   artifactId: string,
   workspaceId: string,
 ): Promise<ChatGeneratedArtifactRecord> {
-  const artifact = await deps.getChatGeneratedArtifact(artifactId.trim(), { workspaceId: workspaceId.trim() });
+  const artifact = await loadArtifact(deps, artifactId, workspaceId);
   if (artifact.kind !== "html") {
     throw new ConflictError({ code: "STATE_CONFLICT", message: "Only html artifacts can be rendered." });
   }
@@ -154,26 +160,52 @@ async function listStoredRenders(
   artifact: ChatGeneratedArtifactRecord,
   contentHash: string,
 ): Promise<ChatArtifactRenderRecord[]> {
-  const prefix = `${RENDER_FILE_PREFIX}${hash16(contentHash)}-`;
-  const attachments = await deps.storage.chatAttachments.listBySession(
-    artifact.sessionId,
-    ATTACHMENT_LIST_LIMIT,
-    artifact.workspaceId,
-  );
-  const byViewport = new Map<string, ChatArtifactRenderRecord>();
-  for (const attachment of attachments) {
-    if (!attachment.fileName.startsWith(prefix) || !attachment.fileName.endsWith(RENDER_FILE_SUFFIX)) continue;
-    const viewportName = attachment.fileName.slice(prefix.length, -RENDER_FILE_SUFFIX.length);
-    const viewport = HTML_RENDER_DEFAULT_VIEWPORTS.find((candidate) => candidate.name === viewportName);
-    if (!viewport || byViewport.has(viewport.name)) continue;
-    byViewport.set(viewport.name, toRenderRecord(artifact.artifactId, contentHash, attachment, viewport));
+  const receipts = await deps.storage.chatAttachments.listArtifactRenders(renderIdentity(artifact, contentHash));
+  const verified: ChatArtifactRenderRecord[] = [];
+  for (const viewport of HTML_RENDER_DEFAULT_VIEWPORTS) {
+    const receipt = receipts.find((item) => item.viewport === viewport.name && item.artifactId === artifact.artifactId &&
+      item.contentHash === contentHash && item.width === viewport.width && item.height === viewport.height);
+    if (!receipt) continue;
+    let attachment: Awaited<ReturnType<typeof readChatAttachmentContent>>;
+    try {
+      attachment = await readChatAttachmentContent(deps, receipt.attachmentId, {
+        sessionId: artifact.sessionId, maxBytes: MAX_CHAT_ATTACHMENT_BYTES,
+      });
+    } catch (error) {
+      if (
+        error instanceof AttachmentReadLimitError ||
+        error instanceof NotFoundError ||
+        (error instanceof Error && "code" in error && error.code === "ENOENT")
+      ) {
+        continue;
+      }
+      throw error;
+    }
+    const { record, bytes } = attachment;
+    if (record.attachmentId !== receipt.attachmentId || record.sessionId !== artifact.sessionId ||
+        (record.workspaceId ?? "default") !== (artifact.workspaceId ?? "default") || record.mimeType !== "image/png" ||
+        record.mediaType !== "image" || record.sha256 !== receipt.sha256 || record.sizeBytes !== bytes.length ||
+        createHash("sha256").update(bytes).digest("hex") !== receipt.sha256 || !matchesPngViewport(bytes, viewport)) continue;
+    verified.push(receipt);
   }
-  return HTML_RENDER_DEFAULT_VIEWPORTS.flatMap((viewport) => {
-    const record = byViewport.get(viewport.name);
-    return record ? [record] : [];
-  });
+  return verified;
 }
 
+async function loadArtifact(deps: HtmlArtifactRenderDependencies, artifactId: string, workspaceId: string): Promise<ChatGeneratedArtifactRecord> {
+  return await deps.getChatGeneratedArtifact(artifactId.trim(), { workspaceId: workspaceId.trim() });
+}
+
+function renderIdentity(artifact: ChatGeneratedArtifactRecord, contentHash: string) {
+  return { artifactId: artifact.artifactId, artifactVersion: artifact.version, sessionId: artifact.sessionId,
+    workspaceId: artifact.workspaceId ?? "default", contentHash, rendererVersion: HTML_ARTIFACT_RENDERER_VERSION };
+}
+
+/** IHDR is the PNG's canonical pixel geometry; the receipt also binds every file byte. */
+function matchesPngViewport(bytes: Buffer, viewport: HtmlRenderViewport): boolean {
+  return bytes.length >= 33 && bytes.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])) &&
+    bytes.readUInt32BE(8) === 13 && bytes.toString("ascii", 12, 16) === "IHDR" &&
+    bytes.readUInt32BE(16) === viewport.width && bytes.readUInt32BE(20) === viewport.height;
+}
 /**
  * Renderer failures the operator must read: a missing Chromium is a 503 carrying the manual-install
  * diagnostic, oversize markup is a 409; anything else stays a plain error (500, redacted).
@@ -192,24 +224,6 @@ function mapRenderFailure(error: unknown): Error {
 function coversEveryViewport(renders: ChatArtifactRenderRecord[]): boolean {
   const present = new Set(renders.map((render) => render.viewport));
   return HTML_RENDER_DEFAULT_VIEWPORTS.every((viewport) => present.has(viewport.name));
-}
-
-function toRenderRecord(
-  artifactId: string,
-  contentHash: string,
-  attachment: ChatAttachmentRecord,
-  viewport: HtmlRenderViewport,
-): ChatArtifactRenderRecord {
-  return {
-    artifactId,
-    contentHash,
-    viewport: viewport.name,
-    attachmentId: attachment.attachmentId,
-    sha256: attachment.sha256,
-    width: viewport.width,
-    height: viewport.height,
-    createdAt: attachment.createdAt,
-  };
 }
 
 function resolveContentHash(artifact: ChatGeneratedArtifactRecord): string {

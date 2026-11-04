@@ -32,11 +32,8 @@ export type ToolGroupSwitchEntry =
       readonly pluginId?: string;
     };
 
-export const SAVING: ToolGroupSwitchEntry = { phase: "saving" };
-export const CONFIRMING: ToolGroupSwitchEntry = { phase: "confirming" };
-
-// Entries live for this app session, outside any component. One group can show as a Most used card, a row and the open
-// panel at once, and a wait in Inbox outlasts all three (P2-R28). Nothing here is stored in the browser.
+// Entries live outside components for the current Gateway caller and access revision. One group can show as a Most
+// used card, a row and the open panel at once, and a wait in Inbox outlasts all three (P2-R28).
 const entries = new Map<ToolGroupId, ToolGroupSwitchEntry>();
 const listeners = new Set<() => void>();
 
@@ -71,11 +68,12 @@ export function setToolGroupPlanReader(read: (groupId: ToolGroupId) => unknown) 
 function syncPlanPoll(groupId: ToolGroupId, entry: ToolGroupSwitchEntry | undefined) {
   const timer = polls.get(groupId);
   if (isFollowing(entry)) {
-    if (!timer)
-      polls.set(
-        groupId,
-        globalThis.setInterval(() => void readPlanOf?.(groupId), PLAN_POLL_MS),
-      );
+    if (timer === undefined) {
+      const nextTimer = globalThis.setInterval(() => {
+        if (polls.get(groupId) === nextTimer) void readPlanOf?.(groupId);
+      }, PLAN_POLL_MS);
+      polls.set(groupId, nextTimer);
+    }
     return;
   }
   if (timer === undefined) return;
@@ -113,7 +111,7 @@ export function useToolGroupSwitchEntry(groupId: ToolGroupId): ToolGroupSwitchEn
   );
 }
 
-export function __resetToolGroupSwitchStoreForTests() {
+export function clearToolGroupSwitches() {
   for (const timer of polls.values()) globalThis.clearInterval(timer);
   polls.clear();
   entries.clear();

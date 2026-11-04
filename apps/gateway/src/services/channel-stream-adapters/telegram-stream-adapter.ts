@@ -8,7 +8,12 @@ import {
   type ChannelStreamAdapter,
   type ChannelStreamRunContext,
 } from "../channel-stream-runtime-service.js";
-import { readTelegramBotMethodCall, type TelegramBotMethodCall } from "../telegram-update-processor.js";
+import {
+  isTelegramPollRevisionConflict,
+  readTelegramBotMethodCall,
+  TelegramPollRevisionChangedError,
+  type TelegramBotMethodCall,
+} from "../telegram-update-processor.js";
 
 /**
  * Telegram inbound by long-polling the Bot API's `getUpdates`, so a connection needs no public web address.
@@ -55,7 +60,11 @@ export interface TelegramStreamAdapterDeps {
   isUrlAllowlisted(urlValue: string): boolean;
   cursorStore: ChannelStreamCursorStore;
   /** Handles one update; its result is sent to Telegram when it is a Bot API call. */
-  processUpdate(connectionId: string, update: unknown): Promise<unknown>;
+  processUpdate(
+    connectionId: string,
+    update: unknown,
+    expectedConnectionRevision: string,
+  ): Promise<unknown>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -74,18 +83,23 @@ function discardBody(response: Response): void {
 
 export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): ChannelStreamAdapter {
   // Failures of the update at the head of each connection's queue. Kept here, not per session, so the count
-  // survives the session restarts the runtime's backoff makes between tries.
-  const headFailures = new Map<string, { updateId: number; attempts: number }>();
+  // survives transport reconnects for the same revision, but not a connection change.
+  const headFailures = new Map<string, { revision: string; updateId: number; attempts: number }>();
 
-  function recordHeadFailure(connectionId: string, updateId: number): void {
-    const previous = headFailures.get(connectionId);
-    const attempts = previous?.updateId === updateId ? previous.attempts + 1 : 1;
-    headFailures.set(connectionId, { updateId, attempts });
+  function recordHeadFailure(connection: IntegrationConnection, updateId: number): void {
+    const previous = headFailures.get(connection.connectionId);
+    const attempts =
+      previous?.revision === connection.revision && previous.updateId === updateId ? previous.attempts + 1 : 1;
+    headFailures.set(connection.connectionId, { revision: connection.revision, updateId, attempts });
   }
 
-  function hasExhaustedAttempts(connectionId: string, updateId: number): boolean {
-    const failures = headFailures.get(connectionId);
-    return failures?.updateId === updateId && failures.attempts >= MAX_UPDATE_ATTEMPTS;
+  function hasExhaustedAttempts(connection: IntegrationConnection, updateId: number): boolean {
+    const failures = headFailures.get(connection.connectionId);
+    return (
+      failures?.revision === connection.revision &&
+      failures.updateId === updateId &&
+      failures.attempts >= MAX_UPDATE_ATTEMPTS
+    );
   }
 
   async function callBotApi(key: string, method: string, init: RequestInit & { signal: AbortSignal }) {
@@ -180,7 +194,9 @@ export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): Ch
   }
 
   async function handleUpdate(ctx: ChannelStreamRunContext, key: string, update: unknown): Promise<void> {
-    const reply = readTelegramBotMethodCall(await deps.processUpdate(ctx.connection.connectionId, update));
+    const reply = readTelegramBotMethodCall(
+      await deps.processUpdate(ctx.connection.connectionId, update, ctx.connection.revision),
+    );
     if (reply) await sendReply(ctx, key, reply);
   }
 
@@ -205,8 +221,8 @@ export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): Ch
       if (!botId) throw new ChannelStreamAuthError(MALFORMED_KEY);
       if (!deps.isUrlAllowlisted(BOT_API_ORIGIN)) throw new Error(NOT_ALLOWED);
       const connectionId = ctx.connection.connectionId;
-      const saveOffset = (offset: string) =>
-        deps.cursorStore.write("telegram", connectionId, { cursor: offset, scope: botId });
+      const saveOffset = (offset: string, expectedRevision?: string) =>
+        deps.cursorStore.write("telegram", connectionId, { cursor: offset, scope: botId }, expectedRevision);
 
       try {
         const stored = await deps.cursorStore.read("telegram", connectionId);
@@ -228,10 +244,10 @@ export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): Ch
             const updateId = readUpdateId(update);
             if (updateId === undefined) continue;
             const next = String(updateId + 1);
-            if (hasExhaustedAttempts(connectionId, updateId)) {
+            if (hasExhaustedAttempts(ctx.connection, updateId)) {
               // Not inbound activity: no handle, only the diagnostic (the id alone) and the offset past it.
+              await saveOffset(next, ctx.connection.revision);
               ctx.diagnostic("update_skipped", UPDATE_SKIPPED, { updateId }, "warn");
-              await saveOffset(next);
               headFailures.delete(connectionId);
               offset = next;
               continue;
@@ -239,7 +255,7 @@ export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): Ch
             try {
               await ctx.handle(() => handleUpdate(ctx, key, update), next);
             } catch (error) {
-              recordHeadFailure(connectionId, updateId);
+              if (!(error instanceof TelegramPollRevisionChangedError)) recordHeadFailure(ctx.connection, updateId);
               throw error;
             }
             headFailures.delete(connectionId);
@@ -248,8 +264,8 @@ export function createTelegramStreamAdapter(deps: TelegramStreamAdapterDeps): Ch
           }
         }
       } catch (error) {
-        // An aborted session ends quietly; the runtime decides whether to reconnect.
-        if (ctx.signal.aborted) return;
+        // Keep the cursor for the next runner when the current revision still uses the same bot.
+        if (ctx.signal.aborted || error instanceof TelegramPollRevisionChangedError || isTelegramPollRevisionConflict(error)) return;
         throw error;
       }
     },

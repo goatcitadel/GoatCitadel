@@ -302,19 +302,34 @@ describe("MeshService readiness diagnostics", () => {
     expect(diagnostics.checks.map((check) => check.key)).not.toContain("settings_visibility");
   });
 
-  it("passes lifecycle checks only when records exist", async () => {
-    const storage = createMeshStorage();
+  it("reports initial mesh records without claiming lease transitions or owner failover", async () => {
+    const storage = createMeshStorage({ activeLeases: 1, ownedSessions: 1 });
     storage.mesh.listNodes.mockReturnValue([{ nodeId: "node-local" }] as never);
-    storage.mesh.listLeases.mockReturnValue([{ leaseKey: "a" }] as never);
-    storage.mesh.listSessionOwners.mockReturnValue([{ sessionId: "s" }] as never);
+    storage.mesh.listLeases.mockReturnValue([{ leaseKey: "a", fencingToken: 1 }] as never);
+    storage.mesh.listSessionOwners.mockReturnValue([{ sessionId: "s", epoch: 1 }] as never);
     storage.mesh.listReplicationEvents.mockReturnValue([{ replicationId: "r" }] as never);
     const service = new MeshService(storage as never, baseOptions);
 
-    const { checks } = await service.readinessDiagnostics();
+    const diagnostics = await service.readinessDiagnostics();
 
-    expect(statusOf(checks, "lease_lifecycle")).toBe("pass");
-    expect(statusOf(checks, "session_owner_failover")).toBe("pass");
-    expect(statusOf(checks, "replication_offsets")).toBe("pass");
+    expect(diagnostics).toMatchObject({ status: "ready", blockers: [] });
+    expect(diagnostics.checks).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: "lease_lifecycle",
+          status: "warn",
+          message: "Active leases are recorded. Renewal and release remain unverified.",
+          evidence: { activeLeases: 1 },
+        }),
+        expect.objectContaining({
+          key: "session_owner_failover",
+          status: "warn",
+          message: "Session owners are recorded. Failover remains unverified.",
+          evidence: { ownedSessions: 1 },
+        }),
+      ]),
+    );
+    expect(statusOf(diagnostics.checks, "replication_offsets")).toBe("pass");
   });
 
   it("warns when the mesh has neither a tailnet nor required mTLS", async () => {
@@ -328,7 +343,7 @@ describe("MeshService readiness diagnostics", () => {
   });
 });
 
-function createMeshStorage() {
+function createMeshStorage({ activeLeases = 0, ownedSessions = 0 } = {}) {
   return {
     db: {
       transaction: vi.fn((_mode, callback: () => unknown) => callback()),
@@ -342,11 +357,10 @@ function createMeshStorage() {
         enabled: true,
         mode: "tailnet",
         localNodeId: "node-local",
-        nodeCount: 1,
-        onlineNodeCount: 1,
-        leaseCount: 0,
-        sessionOwnerCount: 0,
-        pendingReplicationCount: 0,
+        tailnetEnabled: true,
+        nodesOnline: 1,
+        activeLeases,
+        ownedSessions,
       })),
       join: vi.fn((request) => ({
         nodeId: request.nodeId,

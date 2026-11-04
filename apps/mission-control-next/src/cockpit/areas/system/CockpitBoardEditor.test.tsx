@@ -132,6 +132,9 @@ describe("cockpit saved-board editor", () => {
     await vi.waitFor(() =>
       expect(container.querySelector('[aria-label="Draft live widget preview"]')?.textContent).toContain("BLD"),
     );
+    expect(container.querySelector('[aria-label="Draft live widget preview"]')?.textContent).toContain(
+      "Widgets show the latest values they loaded.",
+    );
     expect(fetchHealthSummary).toHaveBeenCalledOnce();
     expect(updateOpsSavedBoard).not.toHaveBeenCalled();
     expect(createOpsSavedBoard).not.toHaveBeenCalled();

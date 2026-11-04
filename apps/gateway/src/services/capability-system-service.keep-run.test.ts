@@ -167,6 +167,7 @@ function createFixture() {
     storage: asyncStorage,
     readFeatureFlags: async () => ({ codeModeV1Enabled: true }),
     listToolCatalog: () => [docsExtractTextTool()],
+    listSwitchedOffToolNames: () => new Set(),
     listLoadedSkills: () => [],
     readSkillStates: async () => new Map(),
     invokeTool,

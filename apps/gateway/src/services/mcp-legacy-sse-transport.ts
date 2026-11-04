@@ -173,6 +173,11 @@ class LegacySseSession {
     }
     if (status === 404) {
       this.pending.get(id)?.dispose();
+      if (method === "tools/call") {
+        throw new Error(
+          `MCP SSE server ${this.input.server.label} returned HTTP 404 after the tool request was sent; its outcome is unknown.`,
+        );
+      }
       return buildExpiredSessionEnvelope(id, this.input.server.label);
     }
     return response;
@@ -425,9 +430,9 @@ class SseEventParser {
   }
 }
 
-// A legacy SSE server answers 404 when it no longer knows the session encoded
-// in the message endpoint; the message was refused before dispatch, so it is
-// surfaced as an explicitly retry-safe expired session.
+// Retain session recovery metadata for initialization/discovery only. A bare
+// HTTP status cannot prove that a sent tools/call had no effect; that path throws
+// above so the invocation owner reports an unknown outcome without replaying it.
 function buildExpiredSessionEnvelope(id: number, label: string): JsonRpcEnvelope {
   return {
     jsonrpc: "2.0",

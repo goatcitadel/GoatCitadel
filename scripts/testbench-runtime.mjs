@@ -167,7 +167,11 @@ export function readClaudeCodeCliAuthStatus({
     const code = result.error.code;
     return { ready: false, reason: code === "ENOENT" ? "cli_unavailable" : `cli_start_failed:${code ?? "unknown"}` };
   }
-  return parseClaudeAuthStatus(result?.stdout);
+  const parsed = parseClaudeAuthStatus(result?.stdout);
+  if (result?.status === 0 || (result?.status === 1 && parsed.reason === "not_logged_in")) {
+    return parsed;
+  }
+  return { ready: false, reason: "cli_status_failed" };
 }
 
 const SIGN_IN_REASONS = new Set(["not_logged_in", "not_subscription_login", "unparseable"]);
@@ -180,8 +184,11 @@ export function claudeCliNotReadyMessage(reason) {
     guidance = `Install the Claude Code CLI, or set ${CLAUDE_CLI_PATH_ENV} to its executable.`;
   } else if (reason === "cli_unsupported_shim") {
     guidance = `${CLAUDE_CLI_PATH_ENV} points at an npm shim without its cli.js; point it at claude.exe or a full npm install.`;
-  } else
+  } else if (reason === "cli_status_failed") {
+    guidance = "The Claude Code CLI status check failed. Check that the CLI is installed and can run.";
+  } else {
     guidance = `The Claude Code CLI could not start; check its install and file permissions, or ${CLAUDE_CLI_PATH_ENV}.`;
+  }
   return `Claude Code CLI is not ready (${reason}). ${guidance}`;
 }
 

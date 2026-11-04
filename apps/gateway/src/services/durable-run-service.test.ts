@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { describe, expect, it, vi } from "vitest";
 import {
   NotFoundError,
+  readDurableChatTurnExecutionPayloadAuthority,
   type ChatTurnTraceRecord,
   type DurableRetryRecord,
   type DurableRunRecord,
@@ -4179,6 +4180,219 @@ describe("DurableRunService", () => {
     },
   );
 
+  it.each([
+    { scenario: "parked parent", transientFailure: false, holdChildLock: false },
+    { scenario: "parked parent with transient failure", transientFailure: true, holdChildLock: false },
+    { scenario: "running parent abort before child lock", transientFailure: false, holdChildLock: true },
+  ])("aborts an active same-process fanout child after parent cancellation commits ($scenario)", async ({ transientFailure, holdChildLock }) => {
+    vi.useFakeTimers();
+    const fixture = createAdmittedChatRuntimeFixture({
+      runId: "cancel-fanout-parent", status: "running", sessionId: "fanout-parent-session", turnId: "fanout-parent-turn",
+    });
+    if (holdChildLock) {
+      fixture.run.leaseOwnerId = "active-parent-worker";
+      fixture.run.leaseExpiresAt = new Date(Date.now() + 60_000).toISOString();
+    } else {
+      fixture.run.status = "waiting";
+    }
+    fixture.run.payload.featureReferenceSha256 = "f".repeat(64);
+    const materialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(fixture.run.payload.request as never);
+    fixture.run.payload.admissionMaterialSha256 = materialSha256;
+    fixture.run.payload.effectiveRequestMaterialSha256 = computeEffectiveChatTurnRequestMaterialSha256(
+      materialSha256, fixture.run.payload.request as never,
+    );
+    fixture.admission.materialSha256 = materialSha256;
+    fixture.run.payload.policyRunIdDerivation = { version: 1, kind: "durable_run_id", runId: fixture.run.runId };
+    expect(readDurableChatTurnExecutionPayloadAuthority({ workflowKey: fixture.run.workflowKey,
+      durableRunId: fixture.run.runId, payload: fixture.run.payload })).toBeDefined();
+    const child = {
+      ...createRun("cancel-fanout-child", "running"),
+      leaseOwnerId: "active-child-worker",
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(),
+      payload: {
+        version: "chat.turn.execute.v1", workspaceId: "default", sessionId: "fanout-child-session", turnId: "fanout-child-turn",
+        userMessageId: "fanout-child-user", assistantMessageId: "fanout-child-answer",
+        request: { content: "Keep this bounded child active", parentDelegationStepId: "fanout-step", policyRunId: "fanout-delegation" },
+      },
+    };
+    const runs = new Map<string, DurableRunRecord>([[fixture.run.runId, fixture.run], [child.runId, child]]);
+    const context = createContext(runs, [], []);
+    await installAdmittedChatRuntimeFixture(context, fixture);
+    const traces = new Map<string, ChatTurnTraceRecord>([
+      [String(fixture.run.payload.turnId), {
+        turnId: String(fixture.run.payload.turnId), sessionId: String(fixture.run.payload.sessionId),
+        userMessageId: String(fixture.run.payload.userMessageId), assistantMessageId: String(fixture.run.payload.assistantMessageId),
+        status: holdChildLock ? "running" : "waiting_for_tool", mode: "chat", webMode: "off", memoryMode: "off", thinkingLevel: "standard",
+        branchKind: "append", routing: {}, startedAt: fixture.run.startedAt!, toolRuns: [], citations: [],
+        durable: { runId: fixture.run.runId, status: holdChildLock ? "running" : "waiting" },
+      }],
+      ["fanout-child-turn", {
+        turnId: "fanout-child-turn", sessionId: "fanout-child-session", userMessageId: "fanout-child-user",
+        assistantMessageId: "fanout-child-answer", status: "running", mode: "chat", webMode: "off", memoryMode: "off",
+        thinkingLevel: "standard", branchKind: "append", routing: {}, startedAt: child.startedAt!, toolRuns: [], citations: [],
+        durable: { runId: child.runId, status: "running" },
+      }],
+    ]);
+    let invocation = {
+      invocationId: "fanout-invocation", parentRunId: fixture.run.runId, toolRunId: "fanout-tool", delegationRunId: "fanout-delegation",
+      sessionId: String(fixture.run.payload.sessionId), workspaceId: "default", projectId: "project", status: "waiting",
+      childCount: 1, subtasks: [{ objective: "Bounded child" }], grantId: "grant", reservedActivations: 1, reservedBudgetUsd: 0.25,
+      objective: "Parent", projectBindingHash: "p".repeat(64), grantBindingHash: "g".repeat(64), createdAt: child.createdAt,
+      updatedAt: child.updatedAt, parentAdmission: {
+        admissionId: String(fixture.run.payload.admissionId), sessionIncarnationId: String(fixture.run.payload.sessionIncarnationId),
+        materialSha256: String(fixture.run.payload.admissionMaterialSha256), featureReferenceSha256: "f".repeat(64),
+      },
+    };
+    const lockRun = context.storage.durableRuns.getRunForUpdate;
+    let enteredChildLock!: () => void;
+    const childLockEntered = new Promise<void>((resolve) => { enteredChildLock = resolve; });
+    let releaseChildLock!: () => void;
+    const childLock = new Promise<void>((resolve) => { releaseChildLock = resolve; });
+    let failedOnce = false;
+    Object.assign(context.storage.durableRuns, {
+      getRunForUpdate: async (id: string) => {
+        if (id === child.runId) {
+          if (holdChildLock) {
+            enteredChildLock();
+            await childLock;
+          }
+          if (transientFailure && !failedOnce) {
+            failedOnce = true;
+            throw new Error("child cancellation storage unavailable");
+          }
+        }
+        return lockRun(id);
+      },
+    });
+    const uncertainChildTool = { status: "started", effectDisposition: "unknown", effectOutcomeKind: "uncertain",
+      effectEvidence: { reason: "dispatch_may_have_occurred", refs: [] } };
+    let inTransaction = false;
+    const transaction = context.storage.runImmediateTransaction;
+    context.storage.runImmediateTransaction = async <T>(work: () => T | Promise<T>): Promise<T> => transaction(async () => {
+      inTransaction = true;
+      try { return await work(); } finally { inTransaction = false; }
+    });
+    Object.assign(context.storage, {
+      chatTurnTraces: {
+        get: (turnId: string) => traces.get(turnId),
+        patchIfStatus: (turnId: string, statuses: string[], patch: Partial<ChatTurnTraceRecord>) => {
+          const trace = traces.get(turnId)!;
+          if (!statuses.includes(trace.status)) return undefined;
+          const next = { ...trace, ...patch }; traces.set(turnId, next); return next;
+        },
+      },
+      chatFanoutInvocations: {
+        listWaitingParentCandidateIds: () => invocation.status === "waiting" ? [invocation.invocationId] : [],
+        get: () => invocation,
+        findByParentAndTool: () => { expect(inTransaction).toBe(false); return invocation; },
+        patch: (_id: string, patch: Partial<typeof invocation>) => (invocation = { ...invocation, ...patch }),
+      },
+      chatToolRuns: { listByTurn: (turnId: string) => turnId === "fanout-child-turn" ? [uncertainChildTool] : [{
+        toolRunId: "fanout-tool", toolName: "agent.fanout", status: "executed", turnId: fixture.run.payload.turnId,
+        sessionId: fixture.run.payload.sessionId, result: { status: "waiting", fanoutInvocationId: invocation.invocationId,
+          parentRunId: fixture.run.runId, toolRunId: "fanout-tool" },
+      }] },
+      chatDelegationRuns: { get: () => ({ runId: "fanout-delegation", parentRunId: fixture.run.runId,
+        sessionId: fixture.run.payload.sessionId, executionPlanId: invocation.invocationId, workflowTemplate: "chat.durable.agent.fanout.v1" }) },
+      chatDelegationSteps: { listByRun: () => [{ stepId: "fanout-step", runId: "fanout-delegation", status: "running",
+        durableRunId: child.runId, childSessionId: "fanout-child-session", childTurnId: "fanout-child-turn" }] },
+      durableChildWatchers: { get: () => ({ parentRunId: fixture.run.runId, childRunId: child.runId, source: "chat_delegation",
+        metadata: { delegationRunId: "fanout-delegation", stepId: "fanout-step", childSessionId: "fanout-child-session", childTurnId: "fanout-child-turn" } }) },
+    });
+    const service = new DurableRunService(context as unknown as ServiceContext);
+    let childSignal: AbortSignal | undefined;
+    let started!: () => void;
+    const childStarted = new Promise<void>((resolve) => { started = resolve; });
+    const blockedChild = (service as unknown as {
+      executeWithLeaseHeartbeat<T>(run: DurableRunRecord, execute: (execution: { signal: AbortSignal }) => Promise<T>): Promise<T>;
+    }).executeWithLeaseHeartbeat(child, ({ signal }) => new Promise<void>((resolve) => {
+      childSignal = signal;
+      signal.addEventListener("abort", () => resolve(), { once: true });
+      started();
+    }));
+    const parentController = new AbortController();
+    const controls = service as unknown as {
+      activeRunAbortControllers: Map<string, { controller: AbortController; leaseOwnerId: string }>;
+      workerActive: boolean;
+      ensurePollLoop(): void;
+    };
+    if (holdChildLock) {
+      controls.activeRunAbortControllers.set(fixture.run.runId, {
+        controller: parentController,
+        leaseOwnerId: fixture.run.leaseOwnerId!,
+      });
+    }
+    let stop: Promise<DurableRunRecord> | undefined;
+    try {
+      await childStarted;
+      stop = service.cancelDurableRun(fixture.run.runId, "operator");
+      if (holdChildLock) {
+        await Promise.race([
+          childLockEntered,
+          stop.then(() => { throw new Error("Parent cancellation finished without reaching its exact child."); }),
+        ]);
+        expect(runs.get(fixture.run.runId)?.status).toBe("cancelled");
+        expect(runs.get(child.runId)?.status).toBe("running");
+        expect(parentController.signal.aborted).toBe(true);
+        releaseChildLock();
+      }
+      await stop;
+      expect(runs.get(fixture.run.runId)?.status).toBe("cancelled");
+      if (transientFailure) {
+        expect(childSignal?.aborted).toBe(false);
+        expect(invocation.status).toBe("waiting");
+        controls.workerActive = true; // The serial worker is occupied by this child.
+        controls.ensurePollLoop();
+        await vi.advanceTimersByTimeAsync(1_300);
+      }
+      expect(childSignal?.aborted).toBe(true);
+      await blockedChild;
+      expect(runs.get(child.runId)?.status).toBe("cancelled");
+      expect(invocation.status).toBe("cancelled");
+      expect(uncertainChildTool).toEqual({ status: "started", effectDisposition: "unknown", effectOutcomeKind: "uncertain",
+        effectEvidence: { reason: "dispatch_may_have_occurred", refs: [] } });
+    } finally {
+      releaseChildLock();
+      await stop?.catch(() => undefined);
+      if (!childSignal?.aborted) await service.cancelDurableRun(child.runId, "test-cleanup");
+      await blockedChild;
+      service.stopAdmission();
+      vi.useRealTimers();
+    }
+  });
+  it("keeps cancellation-only polling single-inflight and stops before reading candidates after shutdown", async () => {
+    vi.useFakeTimers();
+    const context = createContext(new Map(), [], []);
+    let release!: (ids: string[]) => void;
+    const discovery = new Promise<string[]>((resolve) => { release = resolve; });
+    const listWaitingParentCandidateIds = vi.fn(async () => await discovery);
+    const get = vi.fn();
+    Object.assign(context.storage, { chatFanoutInvocations: { listWaitingParentCandidateIds, get } });
+    const service = new DurableRunService(context as unknown as ServiceContext);
+    const controls = service as unknown as {
+      workerActive: boolean;
+      activeRunAbortControllers: Map<string, { controller: AbortController; leaseOwnerId: string }>;
+      ensurePollLoop(): void;
+    };
+    controls.workerActive = true;
+    controls.activeRunAbortControllers.set("active-child", { controller: new AbortController(), leaseOwnerId: "worker" });
+    try {
+      controls.ensurePollLoop();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(listWaitingParentCandidateIds).toHaveBeenCalledTimes(1);
+      expect(listWaitingParentCandidateIds).toHaveBeenCalledWith(100, undefined);
+      service.stopAdmission();
+      release(["cancelled-parent-fanout"]);
+      await vi.advanceTimersByTimeAsync(0);
+      expect(get).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(4_000);
+      expect(listWaitingParentCandidateIds).toHaveBeenCalledTimes(1);
+    } finally {
+      release([]);
+      service.stopAdmission();
+      vi.useRealTimers();
+    }
+  });
   it("rolls back a wake when its timeline event cannot commit", async () => {
     const run = {
       ...createRun("run-wake-rollback", "waiting"),

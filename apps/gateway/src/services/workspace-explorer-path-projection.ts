@@ -55,16 +55,18 @@ export interface WorkspaceExplorerTextStreamProjector {
   flush(): string;
 }
 
-/**
- * Projects streamed text whose fragments can split a host path anywhere, for
- * example `F` followed by `:\private\...`. Every path form the projector
- * recognises (drive, UNC, POSIX, file URL) ends at whitespace, so only the
- * trailing whitespace-free run can still grow into a path. The one exception
- * is a delegated root that itself contains whitespace: an unfinished match of
- * it is held back too, so it is still recognised once complete. The held text
- * is capped at the hold-back limit; the text before it is projected and
- * released. A held run longer than the limit is released projected as-is.
- */
+const STREAM_PATH_KINDS = [
+  { pattern: FILE_URL_PATTERN, delimiter: /[\s<>"'`]/u, fileUrl: true },
+  { pattern: WINDOWS_UNC_PATH_PATTERN, delimiter: /[\s<>"'`|?*]/u, fileUrl: false },
+  { pattern: WINDOWS_DRIVE_PATH_PATTERN, delimiter: /[\s<>"'`|?*]/u, fileUrl: false },
+  { pattern: POSIX_PATH_PATTERN, delimiter: /[\s<>"'`),;|}\]]/u, fileUrl: false },
+] as const;
+
+type SpacedStreamRoot = { variant: string; caseInsensitive: boolean };
+type HeldStreamTail = { start: number; root?: SpacedStreamRoot };
+type SuppressedStreamPath = { delimiter: RegExp; root?: SpacedStreamRoot; rootOffset: number };
+
+/** Keeps a bounded undecided tail and suppresses the continuation of any oversized path. */
 export function createWorkspaceExplorerTextStreamProjector(
   rootPaths: readonly string[],
 ): WorkspaceExplorerTextStreamProjector {
@@ -74,46 +76,112 @@ export function createWorkspaceExplorerTextStreamProjector(
       .filter((variant) => /\s/u.test(variant))
       .map((variant) => ({ variant, caseInsensitive: path.win32.isAbsolute(rootPath) })),
   );
+  const project = (text: string) => (text ? projectWorkspaceExplorerInlineText(text, rootPaths) : "");
   let held = "";
+  let suppressed: SuppressedStreamPath | undefined;
   return {
     push(fragment: string): string {
+      if (suppressed) {
+        // A recognized root can itself contain spaces. Consume a known root
+        // prefix by index instead of retaining the provider's raw text.
+        const rootChars = countSuppressedRootPrefix(suppressed, fragment);
+        const delimiterIndex = fragment.slice(rootChars).search(suppressed.delimiter);
+        if (delimiterIndex < 0) return "";
+        fragment = fragment.slice(rootChars + delimiterIndex);
+        suppressed = undefined;
+      }
       held += fragment;
-      const tailStart = heldTailStart(held, spacedRootVariants);
-      const releaseUpTo = held.length - tailStart > WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT ? held.length : tailStart;
+      const tail = findHeldStreamTail(held, spacedRootVariants);
+      let releaseUpTo = tail.start;
+      if (held.length - releaseUpTo > WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT) {
+        const pending = held.slice(releaseUpTo);
+        const candidate = tail.root ? undefined : findTrailingStreamPath(pending);
+        if (!tail.root && !candidate) {
+          releaseUpTo = held.length;
+        } else {
+          releaseUpTo += candidate?.start ?? 0;
+          if (held.length - releaseUpTo > WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT) {
+            const rawPath = held.slice(releaseUpTo);
+            const pathKind =
+              candidate?.kind ??
+              (rawPath.startsWith("/") && !rawPath.startsWith("//") ? STREAM_PATH_KINDS[3] : STREAM_PATH_KINDS[1]);
+            const marker =
+              !tail.root &&
+              (pathKind.fileUrl ? projectFileUrl(rawPath, rootPaths) : projectAbsolutePath(rawPath, rootPaths)) ===
+                "[outside-workspace-path]"
+                ? "[outside-workspace-path]"
+                : "[workspace-path-too-long]";
+            const ready = project(held.slice(0, releaseUpTo));
+            suppressed = { delimiter: pathKind.delimiter, root: tail.root, rootOffset: rawPath.length };
+            held = "";
+            return ready + marker;
+          }
+        }
+      }
       const ready = held.slice(0, releaseUpTo);
       held = held.slice(releaseUpTo);
-      return ready ? projectWorkspaceExplorerInlineText(ready, rootPaths) : "";
+      return project(ready);
     },
     flush(): string {
       const rest = held;
       held = "";
-      return rest ? projectWorkspaceExplorerInlineText(rest, rootPaths) : "";
+      suppressed = undefined;
+      return project(rest);
     },
   };
 }
 
-function heldTailStart(
-  value: string,
-  spacedRootVariants: ReadonlyArray<{ variant: string; caseInsensitive: boolean }>,
-): number {
+function findHeldStreamTail(value: string, spacedRootVariants: readonly SpacedStreamRoot[]): HeldStreamTail {
   let start = value.length;
   while (start > 0 && !/\s/u.test(value[start - 1]!)) start -= 1;
-  for (const { variant, caseInsensitive } of spacedRootVariants) {
+  let selected: SpacedStreamRoot | undefined;
+  for (const rootVariant of spacedRootVariants) {
+    const { variant, caseInsensitive } = rootVariant;
     const root = caseInsensitive ? variant.toLowerCase() : variant;
     for (let index = Math.max(0, start - root.length); index < start; index += 1) {
       const window = value.slice(index, index + root.length);
       const candidate = caseInsensitive ? window.toLowerCase() : window;
-      // Either an unfinished root prefix that reaches the end of the text, or a
-      // complete root whose following path segment is still growing.
       const unfinishedRoot = candidate.length < root.length && root.startsWith(candidate);
       const growingRootPath = candidate === root && !/\s/u.test(value.slice(index + root.length));
       if (unfinishedRoot || growingRootPath) {
         start = index;
+        selected = rootVariant;
         break;
       }
     }
   }
-  return start;
+  return { start, root: selected };
+}
+
+function findTrailingStreamPath(value: string):
+  | { start: number; kind: (typeof STREAM_PATH_KINDS)[number] }
+  | undefined {
+  let candidate: { start: number; kind: (typeof STREAM_PATH_KINDS)[number] } | undefined;
+  for (const kind of STREAM_PATH_KINDS) {
+    for (const match of value.matchAll(kind.pattern)) {
+      if (match.index + match[0].length !== value.length) continue;
+      // The POSIX pattern also matches the preceding separator, when present.
+      const start = match.index + (match[1]?.length ?? 0);
+      if (!candidate || start < candidate.start) candidate = { start, kind };
+    }
+  }
+  return candidate;
+}
+
+function countSuppressedRootPrefix(suppressed: SuppressedStreamPath, fragment: string): number {
+  const { root, rootOffset } = suppressed;
+  if (!root || rootOffset >= root.variant.length) return 0;
+  const remaining = root.variant.slice(rootOffset);
+  let matched = 0;
+  while (matched < remaining.length && matched < fragment.length) {
+    const expected = remaining.charAt(matched);
+    const actual = fragment.charAt(matched);
+    if (expected !== actual && (!root.caseInsensitive || expected.toLowerCase() !== actual.toLowerCase())) break;
+    matched += 1;
+  }
+  suppressed.rootOffset += matched;
+  if (matched < fragment.length || suppressed.rootOffset >= root.variant.length) suppressed.root = undefined;
+  return matched;
 }
 
 /**

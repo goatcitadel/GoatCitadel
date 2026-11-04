@@ -4,6 +4,7 @@ import type { ChildProcess, SpawnOptions } from "node:child_process";
 import { describe, expect, it, vi } from "vitest";
 import {
   CLAUDE_CLI_KILL_CLOSE_WAIT_MS,
+  CLAUDE_CLI_MAX_LINE_BYTES,
   ClaudeCliError,
   buildClaudeCliArgs,
   buildClaudeCliEnv,
@@ -188,6 +189,82 @@ describe("buildClaudeCliEnv", () => {
 });
 
 describe("runClaudeCli", () => {
+  function boundedOutputFixture() {
+    const fake = createFakeChild();
+    const { spawn } = spawnReturning(fake);
+    const killTree = vi.fn(() => fake.exit(null));
+    const observedBytes: number[] = [];
+    const run = async () => {
+      for await (const line of runClaudeCli({
+        invocation,
+        args: [],
+        env: {},
+        cwd: ".",
+        stdinPayload: "",
+        overallTimeoutMs: 5000,
+        idleTimeoutMs: 5000,
+        spawn,
+        killTree,
+      })) {
+        observedBytes.push(Buffer.byteLength(line, "utf8"));
+      }
+    };
+    // Start the fake ChildProcess listener, handle an early rejection, and keep
+    // only byte counts so a red assertion cannot print the oversized frame.
+    const outcome = run().then(
+      () => "completed",
+      (error: unknown) => (error instanceof ClaudeCliError ? error.reasonCode : "unexpected_error"),
+    );
+    return { fake, killTree, observedBytes, outcome };
+  }
+
+  function jsonOutputAtByteCap(): string {
+    const prefix = '{"text":"é';
+    const suffix = '"}';
+    return prefix + "x".repeat(CLAUDE_CLI_MAX_LINE_BYTES - Buffer.byteLength(prefix + suffix, "utf8")) + suffix;
+  }
+
+  it("rejects a complete stdout frame that crosses the UTF-8 byte cap in its final fragment", async () => {
+    const { fake, killTree, observedBytes, outcome } = boundedOutputFixture();
+    await new Promise((resolve) => setImmediate(resolve));
+    const line = jsonOutputAtByteCap();
+    const prefix = line.slice(0, -2);
+    const suffix = 'é"}';
+    expect(Buffer.byteLength(prefix, "utf8")).toBe(CLAUDE_CLI_MAX_LINE_BYTES - 2);
+    expect(Buffer.byteLength(prefix + suffix, "utf8")).toBe(CLAUDE_CLI_MAX_LINE_BYTES + 2);
+    expect((prefix + suffix).length).toBe(CLAUDE_CLI_MAX_LINE_BYTES);
+    fake.stdout.write(prefix);
+    expect(killTree).not.toHaveBeenCalled();
+    fake.stdout.write(suffix + "\n");
+    if (!fake.stdout.writableEnded) fake.exit(0);
+
+    expect({ result: await outcome, observedBytes, kills: killTree.mock.calls.length }).toEqual({
+      result: "claude_cli_failed",
+      observedBytes: [],
+      kills: 1,
+    });
+    expect(killTree).toHaveBeenCalledWith(4242);
+  });
+
+  it.each(["lf", "split-crlf", "eof"] as const)(
+    "accepts exactly the stdout UTF-8 byte cap with %s framing",
+    async (framing) => {
+      const { fake, killTree, observedBytes, outcome } = boundedOutputFixture();
+      await new Promise((resolve) => setImmediate(resolve));
+      const line = jsonOutputAtByteCap();
+      expect(Buffer.byteLength(line, "utf8")).toBe(CLAUDE_CLI_MAX_LINE_BYTES);
+      fake.stdout.write(line + (framing === "lf" ? "\n" : framing === "split-crlf" ? "\r" : ""));
+      if (framing === "split-crlf" && !fake.stdout.writableEnded) fake.stdout.write("\n");
+      if (!fake.stdout.writableEnded) fake.exit(0);
+
+      expect({ result: await outcome, observedBytes, kills: killTree.mock.calls.length }).toEqual({
+        result: "completed",
+        observedBytes: [CLAUDE_CLI_MAX_LINE_BYTES],
+        kills: 0,
+      });
+    },
+  );
+
   it("spawns without a shell, writes the payload to stdin as UTF-8 and yields whole stdout lines", async () => {
     const fake = createFakeChild();
     const { spawn, calls } = spawnReturning(fake);

@@ -4,6 +4,7 @@ import type {
   ApprovalRequest,
   ChatTurnTraceRecord,
   ConnectorRecord,
+  ConnectorDeliveryWorkflowPayload,
   CuratorTickWorkflowPayload,
   DurableRunRecord,
   ExternalSideEffectReplayWorkflowPayload,
@@ -64,6 +65,8 @@ import {
   HEARTBEAT_DECISION_RECEIPT_METADATA_KEY,
 } from "./chat-durable-runtime-authority.js";
 import { IDEMPOTENT_REALTIME_ENVELOPE_KEY } from "./realtime-event-service.js";
+import { buildService as buildErrandService } from "./browser-errands/browser-errand-test-fixtures.js";
+import type { ErrandTrackedDelivery } from "./browser-errands/errand-approval-delivery.js";
 
 afterEach(() => {
   vi.clearAllMocks();
@@ -187,8 +190,8 @@ function createConnectorDeliveryLedger(options?: {
         sideEffectRecord = { ...sideEffectRecord!, status: "external_call_started" };
         return sideEffectRecord;
       }),
-      markCompleted: vi.fn(() => {
-        sideEffectRecord = { ...sideEffectRecord!, status: "completed", resumeState: "completed" };
+      markCompleted: vi.fn((_runId: string, input: Partial<ExternalSideEffectRunRecord>) => {
+        sideEffectRecord = { ...sideEffectRecord!, ...input, status: "completed", resumeState: "completed" };
         return sideEffectRecord;
       }),
       markFailure: vi.fn((_runId, input: { status: ExternalSideEffectRunRecord["status"] }) => {
@@ -1673,6 +1676,175 @@ describe("durable-execution-service orchestration workflow", () => {
       expect(host.commsReply, JSON.stringify(metadata)).toHaveBeenCalledWith(expect.any(Object), undefined);
     }
     expect(readConnectorDeliveryOwnership({ metadata: { deliveryKind: { toString: () => "x" } } })).toBeUndefined();
+  });
+
+  it("runs connector completion cleanup after the deferred send and canonical completion", async () => {
+    let finishSend!: () => void;
+    const sent = new Promise<void>((resolve) => {
+      finishSend = resolve;
+    });
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      await deps.markExternalCallStarted?.();
+      await sent;
+      return { capabilityId: "comms.send", dispatchKind: "send", result: { providerMessageId: "msg-late" } } as never;
+    });
+    const run = buildRunWithPayload("connector.delivery", {
+      version: "connector.delivery.v1",
+      connectorId: "connector-effect-recovery",
+      action: "channel.send",
+      payload: { target: "chat-1" },
+    });
+    const harness = createConnectorDeliveryRecoveryHarness(run, vi.fn());
+    let terminalStateAtCleanup: { status: string; checkpointKinds: string[] } | undefined;
+    const onConnectorDeliveryCompleted = vi.fn(async () => {
+      terminalStateAtCleanup = {
+        status: harness.getCurrentRun().status,
+        checkpointKinds: harness.host.storage.durableRuns.createCheckpoint.mock.calls.map(
+          ([checkpoint]) => checkpoint.checkpointKind,
+        ),
+      };
+    });
+    const host = { ...harness.host, onConnectorDeliveryCompleted };
+
+    const work = executeDurableConnectorDeliveryRun(host as never, run);
+    await vi.waitFor(() => expect(dispatchConnectorDelivery).toHaveBeenCalled());
+    expect(onConnectorDeliveryCompleted).not.toHaveBeenCalled();
+    finishSend();
+    await work;
+
+    expect(terminalStateAtCleanup).toEqual({
+      status: "completed",
+      checkpointKinds: ["run_completed"],
+    });
+    expect(onConnectorDeliveryCompleted).toHaveBeenCalledTimes(1);
+    expect(onConnectorDeliveryCompleted).toHaveBeenCalledWith(
+      expect.objectContaining({ runId: run.runId, status: "completed" }),
+      expect.objectContaining({ connectorId: "connector-effect-recovery" }),
+      expect.objectContaining({ result: { providerMessageId: "msg-late" } }),
+    );
+  });
+
+  it("clears recovered approval buttons after the provider committed but the durable completion lost its lease", async () => {
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      await deps.markExternalCallStarted?.();
+      return {
+        capabilityId: "comms.send",
+        dispatchKind: "integration_channel_send",
+        result: { providerMessageId: "4242", privateProviderBody: "do-not-persist-provider-body" },
+      } as never;
+    });
+    const run = buildRunWithPayload("connector.delivery", {
+      version: "connector.delivery.v1",
+      connectorId: "integration:conn-1",
+      connectorType: "integration_connection",
+      action: "channel.send",
+      correlationId: "approval-1",
+      payload: {
+        target: "chat-1",
+        interactiveActionTemplate: { buttons: [{ label: "Approve", decision: "a" }] },
+      },
+    });
+    const harness = createConnectorDeliveryRecoveryHarness(run, vi.fn());
+    const lock = harness.host.storage.durableRuns.lockFreshActiveLeaseForUpdate;
+    lock.mockReturnValueOnce(undefined as never);
+    const approval = { approvalId: "approval-1", kind: "browser.errand.action", status: "pending" };
+    const readApproval = vi.fn(async () => approval);
+    const resolveApproval = vi.fn();
+    const withdrawApproval = vi.fn();
+    const clearButtons = vi.fn(async (_deliveries: readonly ErrandTrackedDelivery[]) => undefined);
+    const { service } = buildErrandService(vi.fn, {
+      gate: {
+        approvals: { resolveApproval, withdrawApproval } as never,
+        storage: { approvals: { get: readApproval } } as never,
+        attachments: { upload: async () => ({ attachmentId: "att-1", sha256: "sha" }) },
+        realtime: { subscribeRealtime: () => () => undefined },
+      },
+      channelReplies: () => ({ handle: async () => ({ handled: false }), send: async () => undefined, clearButtons }),
+    });
+    const onConnectorDeliveryCompleted = vi.fn(
+      (completed: DurableRunRecord, payload: ConnectorDeliveryWorkflowPayload, state: Record<string, unknown>) =>
+        service.onConnectorDeliveryCompleted(completed.runId, payload, state),
+    );
+    const host = { ...harness.host, onConnectorDeliveryCompleted };
+
+    await executeDurableConnectorDeliveryRun(host as never, run);
+    expect(harness.getCurrentRun().status).toBe("running");
+    expect(harness.ledger.externalSideEffectRuns.markCompleted).toHaveBeenCalledTimes(1);
+    expect(harness.host.storage.durableRuns.createCheckpoint).not.toHaveBeenCalled();
+    expect(onConnectorDeliveryCompleted).not.toHaveBeenCalled();
+    approval.status = "approved";
+    const recovered = { ...run, leaseOwnerId: "fresh-recovery-lease", attemptCount: run.attemptCount + 1 };
+    harness.setCurrentRun(recovered);
+
+    await executeDurableConnectorDeliveryRun(host as never, recovered);
+
+    expect(dispatchConnectorDelivery).toHaveBeenCalledTimes(1);
+    expect(harness.getCurrentRun().status).toBe("completed");
+    expect(onConnectorDeliveryCompleted).toHaveBeenCalledTimes(1);
+    expect(clearButtons).toHaveBeenCalledTimes(1);
+    const [deliveries] = clearButtons.mock.calls[0]!;
+    await expect(deliveries[0]!.providerMessageId?.()).resolves.toBe("4242");
+    expect(harness.host.storage.durableRuns.createCheckpoint).toHaveBeenCalledWith(expect.objectContaining({
+      state: expect.objectContaining({ deliveryStatus: "already_committed", result: { providerMessageId: "4242" } }),
+    }));
+    expect(readApproval).toHaveBeenCalledWith("approval-1");
+    expect(approval.status).toBe("approved");
+    expect(resolveApproval).not.toHaveBeenCalled();
+    expect(withdrawApproval).not.toHaveBeenCalled();
+    const receipt = await harness.ledger.externalSideEffectRuns.get();
+    expect(JSON.stringify(receipt.responsePayload)).not.toContain("do-not-persist-provider-body");
+    await service.dispose();
+  });
+
+  it("does not run connector completion cleanup when its canonical completion loses the lease", async () => {
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      await deps.markExternalCallStarted?.();
+      return { capabilityId: "comms.send", dispatchKind: "send", result: { providerMessageId: "msg-late" } } as never;
+    });
+    const run = buildRunWithPayload("connector.delivery", {
+      version: "connector.delivery.v1",
+      connectorId: "connector-effect-recovery",
+      action: "channel.send",
+    });
+    const harness = createConnectorDeliveryRecoveryHarness(run, vi.fn());
+    harness.host.storage.durableRuns.lockFreshActiveLeaseForUpdate.mockReturnValue(undefined as never);
+    const onConnectorDeliveryCompleted = vi.fn();
+
+    await executeDurableConnectorDeliveryRun({ ...harness.host, onConnectorDeliveryCompleted } as never, run);
+
+    expect(onConnectorDeliveryCompleted).not.toHaveBeenCalled();
+  });
+
+  it("never retries a committed send when connector completion cleanup fails", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.mocked(dispatchConnectorDelivery).mockImplementation(async (_connector, _payload, deps) => {
+      await deps.markExternalCallStarted?.();
+      return { capabilityId: "comms.send", dispatchKind: "send", result: { providerMessageId: "msg-late" } } as never;
+    });
+    const run = buildRunWithPayload("connector.delivery", {
+      version: "connector.delivery.v1",
+      connectorId: "connector-effect-recovery",
+      action: "channel.send",
+    });
+    const harness = createConnectorDeliveryRecoveryHarness(run, vi.fn());
+    const onConnectorDeliveryCompleted = vi.fn(async () => {
+      throw new Error(
+        `opaque-credential-completion Authorization: Bearer secret-completion-token ${"x".repeat(2_000)}`,
+      );
+    });
+
+    await expect(
+      executeDurableConnectorDeliveryRun({ ...harness.host, onConnectorDeliveryCompleted } as never, run),
+    ).resolves.toBeUndefined();
+
+    expect(harness.getCurrentRun().status).toBe("completed");
+    expect(dispatchConnectorDelivery).toHaveBeenCalledTimes(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    const [, context] = warn.mock.calls[0] as [string, { detail: string }];
+    expect(context.detail).not.toContain("secret-completion-token");
+    expect(context.detail).not.toContain("opaque-credential-completion");
+    expect(context.detail.length).toBeLessThanOrEqual(500);
+    warn.mockRestore();
   });
 
   it("executes connector delivery runs with retained domain links", async () => {

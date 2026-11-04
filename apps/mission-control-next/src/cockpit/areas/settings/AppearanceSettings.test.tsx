@@ -77,7 +77,7 @@ describe("General › Appearance and attention", () => {
   it("ST-16: says changes save automatically and briefly confirms the last change without a new live region", async () => {
     await mount();
     const note = view.root.findByProps({ "data-settings-save-model": "automatic" });
-    expect(text(note)).toContain("Saved automatically");
+    expect(text(note)).toContain("tries to save each change automatically");
     expect(note.props.role).toBeUndefined();
     const liveRegions = () =>
       view.root.findAll((node) => node.props.role === "status" || node.props.role === "alert").length;
@@ -99,12 +99,67 @@ describe("General › Appearance and attention", () => {
     try {
       await act(async () => select("Density").props.onChange({ target: { value: "compact" } }));
       const note = text(view.root.findByProps({ "data-settings-save-model": "automatic" }));
-      expect(note).toContain("Not saved in this browser");
-      expect(note).toContain("Density applied for this visit.");
+      expect(note).toContain("Couldn't save density in this browser.");
       expect(note).not.toContain("Density saved.");
-      expect(note).not.toContain("Saved automatically");
     } finally {
       setItem.mockRestore();
+    }
+  });
+
+  const densityKey = "goatcitadel.ui.density.v1";
+  const modeKey = "goatcitadel.ui.mode.v1";
+  const detailsKey = "goatcitadel.ui.technical_details.v1";
+  const saveNote = () => text(view.root.findByProps({ "data-settings-save-model": "automatic" }));
+
+  function rejectWrites(reject: (key: string) => boolean) {
+    const setItem = window.localStorage.setItem.bind(window.localStorage);
+    return vi.spyOn(window.localStorage, "setItem").mockImplementation((key, value) => {
+      if (reject(key)) throw new DOMException("Quota exceeded", "QuotaExceededError");
+      setItem(key, value);
+    });
+  }
+
+  it("confirms a density overwrite when storage has no room for a new key", async () => {
+    window.localStorage.setItem(densityKey, "comfortable");
+    await mount();
+    const writes = rejectWrites((key) => window.localStorage.getItem(key) === null);
+    try {
+      await act(async () => select("Density").props.onChange({ target: { value: "compact" } }));
+      expect(window.localStorage.getItem(densityKey)).toBe("compact");
+      expect(saveNote()).toContain("Density saved.");
+    } finally {
+      writes.mockRestore();
+    }
+  });
+
+  it("reports a refused density write even when other keys can be written", async () => {
+    window.localStorage.setItem(densityKey, "comfortable");
+    await mount();
+    const writes = rejectWrites((key) => key === densityKey);
+    try {
+      await act(async () => select("Density").props.onChange({ target: { value: "compact" } }));
+      expect(select("Density").props.value).toBe("compact");
+      expect(window.localStorage.getItem(densityKey)).toBe("comfortable");
+      expect(saveNote()).toContain("Couldn't save density in this browser.");
+    } finally {
+      writes.mockRestore();
+    }
+  });
+
+  it.each([
+    [modeKey, detailsKey, "true"],
+    [detailsKey, modeKey, "advanced"],
+  ])("reports an incomplete presentation save when %s fails", async (rejectedKey, savedKey, savedValue) => {
+    await mount();
+    const writes = rejectWrites((key) => key === rejectedKey);
+    try {
+      await act(async () => select("Settings presentation").props.onChange({ target: { value: "advanced" } }));
+      expect(select("Settings presentation").props.value).toBe("advanced");
+      expect(window.localStorage.getItem(rejectedKey)).toBeNull();
+      expect(window.localStorage.getItem(savedKey)).toBe(savedValue);
+      expect(saveNote()).toContain("Couldn't save all settings presentation changes in this browser.");
+    } finally {
+      writes.mockRestore();
     }
   });
 

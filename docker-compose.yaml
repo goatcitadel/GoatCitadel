@@ -45,6 +45,8 @@ services:
       postgres:
         condition: service_healthy
     restart: unless-stopped
+    # Outlast the Gateway drain and the supervisor termination acknowledgement.
+    stop_grace_period: 15s
     extra_hosts:
       - "host.docker.internal:host-gateway"
     cap_drop:

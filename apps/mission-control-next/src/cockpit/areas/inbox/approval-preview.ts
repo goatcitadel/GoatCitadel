@@ -32,40 +32,25 @@ import { formatBytes, plural } from "@goatcitadel/mission-control-shared/content
 // Approval kinds are open strings (tool ids, "code_mode.run"), so they have no typed presenter.
 import { humanizeToken } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 
-/**
- * Recorded review text that is diagnostics, not a decision input: content hashes and byte counts. Consequence lines
- * ("Approval permits …") stay visible even when they use internal words (DESIGN › Copy).
- */
-const TECHNICAL_SUPPORT = /SHA-256|\bhash\b|\bbytes\b/iu;
-const BYTE_COUNT = /(\d+) UTF-8 bytes( before redaction)?/u;
-// Clause boundaries: a semicolon, or a sentence end followed by a capitalised sentence (so "e.g. foo" stays whole).
-const CLAUSE_BOUNDARY = /;\s+|(?<=[.!?])\s+(?=[A-Z])/u;
-
-function endSentence(clause: string): string {
-  return /[.!?]$/u.test(clause) ? clause : `${clause}.`;
-}
+// Match the memory preview owners' exact metadata formats. A word like "hash" can be part of a title or decision.
+const ORIGINAL_CONTENT = /^Content Summary: Exact original content: (\d+) UTF-8 bytes; (SHA-256 [\da-f]{64}\.)(?:\s+([\s\S]+))?$/iu;
+const REQUESTED_CONTENT = /^(?:Content Summary: )?Requested content: (\d+) UTF-8 bytes before redaction\.$/u;
 
 /**
- * Splits preview support lines into what the operator reads and what belongs in technical details (IN-L01). A line
- * that mixes a hash with decision inputs ("Redaction does not change approved executable arguments.") is split into
- * clauses: only the hash clauses move to technical details, a byte count stays visible as a plain size, and every
- * other clause stays visible.
+ * Present the memory preview's byte count and put its digest under technical details. Keep all decision text visible.
  */
 export function splitApprovalSupport(lines: readonly string[]): { visible: string[]; technical: string[] } {
   const visible: string[] = [];
   const technical: string[] = [];
   for (const line of lines) {
-    if (!TECHNICAL_SUPPORT.test(line)) {
-      visible.push(line);
-      continue;
-    }
-    for (const raw of line.split(CLAUSE_BOUNDARY)) {
-      const clause = raw.trim();
-      if (!clause) continue;
-      const size = BYTE_COUNT.exec(clause);
-      if (size) visible.push(`Content size${size[2] ?? ""}: ${formatBytes(Number(size[1]))}`);
-      else if (TECHNICAL_SUPPORT.test(clause)) technical.push(endSentence(clause));
-      else visible.push(endSentence(clause));
+    const original = ORIGINAL_CONTENT.exec(line);
+    if (original) {
+      visible.push(`Content size: ${formatBytes(Number(original[1]))}`);
+      technical.push(original[2]!);
+      if (original[3]) visible.push(original[3]);
+    } else {
+      const requested = REQUESTED_CONTENT.exec(line);
+      visible.push(requested ? `Content size before redaction: ${formatBytes(Number(requested[1]))}` : line);
     }
   }
   return { visible, technical };

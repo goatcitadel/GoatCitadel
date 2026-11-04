@@ -679,6 +679,16 @@ describe("parsePluginManifest", () => {
     }
   });
 
+  it.each(Array.from('<>"|?*'))("refuses a Windows-forbidden path character %j", (character) => {
+    const path = `prompt-packs/checks${character}.md`;
+    expect(parsePluginManifest(JSON.stringify(withPiece(4, (piece) => ({ ...piece, path }))))).toMatchObject({
+      ok: false,
+      code: "PIECE_PATH_INVALID",
+      field: "pieces[4].path",
+    });
+    expect(isPortablePluginPath(`skills/notes${character}`)).toBe(false);
+  });
+
   it("refuses duplicate piece ids", () => {
     const manifest = {
       ...validManifest(),

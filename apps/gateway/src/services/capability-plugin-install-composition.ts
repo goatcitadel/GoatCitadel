@@ -105,6 +105,7 @@ export interface CapabilityPluginInstallOwners {
 
 /** What the install and its plan share: the plugin store, the snapshots and the key store, as plain functions. */
 export interface PluginInstallShared {
+  withPluginRecordsLock<T>(work: () => T | Promise<T>): Promise<Awaited<T>>;
   readInspection(inspectionId: string): Promise<KeptPluginInspection | undefined>;
   readPlugin(pluginId: string): Promise<StoredPlugin | undefined>;
   updatePlugin(
@@ -137,6 +138,7 @@ export function pluginInstallSources(
   }: Omit<CapabilityPluginInstallOwners, "plans" | "keychain" | "changePlanAdapters">,
 ): PluginInstallSources {
   return {
+    withPluginRecordsLock: (work) => shared.withPluginRecordsLock(work),
     readInspection: (inspectionId) => shared.readInspection(inspectionId),
     readPlugin: (pluginId) => shared.readPlugin(pluginId),
     updatePlugin: (pluginId, change) => shared.updatePlugin(pluginId, change),

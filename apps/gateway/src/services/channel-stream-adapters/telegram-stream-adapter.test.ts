@@ -1,7 +1,16 @@
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { Storage } from "@goatcitadel/storage";
 import { describe, expect, it, vi } from "vitest";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
-import type { ChannelStreamCursorStore } from "../channel-stream-cursor-store.js";
+import {
+  CHANNEL_STREAM_CURSOR_SETTING_PREFIX,
+  createSystemSettingsChannelStreamCursorStore,
+  type ChannelStreamCursorStore,
+} from "../channel-stream-cursor-store.js";
 import { ChannelStreamAuthError, type ChannelStreamRunContext } from "../channel-stream-runtime-service.js";
+import { TelegramPollRevisionChangedError } from "../telegram-update-processor.js";
 import { createTelegramStreamAdapter, type TelegramStreamAdapterDeps } from "./telegram-stream-adapter.js";
 
 const KEY = "123:abc";
@@ -52,12 +61,13 @@ function commandUpdate(updateId: number) {
 }
 
 /** Per-connection cursors; every connection starts from `initial` until it writes its own. */
-function memoryStore(initial?: { cursor: string; scope?: string }) {
+function memoryStore(initial?: { cursor: string; scope?: string }, verifyRevision?: (expected: string) => void) {
   const values = new Map<string, { cursor: string; scope?: string }>();
   const writes: Array<{ channelKey: string; connectionId: string; cursor: string; scope?: string }> = [];
   const store: ChannelStreamCursorStore = {
     read: async (_channelKey, connectionId) => values.get(connectionId) ?? initial,
-    write: async (channelKey, connectionId, next) => {
+    write: async (channelKey, connectionId, next, expectedRevision) => {
+      if (expectedRevision !== undefined) verifyRevision?.(expectedRevision);
       values.set(connectionId, next);
       writes.push({ channelKey, connectionId, ...next });
     },
@@ -118,15 +128,17 @@ function harness(options: HarnessOptions = {}) {
   const cursor = options.store ?? memoryStore();
   const store: ChannelStreamCursorStore = {
     read: (channelKey, connectionId) => cursor.store.read(channelKey, connectionId),
-    write: async (channelKey, connectionId, value) => {
+    write: async (channelKey, connectionId, value, expectedRevision) => {
       events.push(`write:${value.cursor}`);
-      await cursor.store.write(channelKey, connectionId, value);
+      await cursor.store.write(channelKey, connectionId, value, expectedRevision);
     },
   };
-  const processUpdate = vi.fn(async (connectionId: string, update: unknown) => {
-    events.push(`process:${(update as { update_id: number }).update_id}`);
-    return options.processUpdate ? options.processUpdate(connectionId, update, () => controller.abort()) : undefined;
-  });
+  const processUpdate = vi.fn(
+    async (connectionId: string, update: unknown, _expectedConnectionRevision: string) => {
+      events.push(`process:${(update as { update_id: number }).update_id}`);
+      return options.processUpdate?.(connectionId, update, () => controller.abort());
+    },
+  );
   const deps: TelegramStreamAdapterDeps = {
     fetch: fetchMock as unknown as typeof fetch,
     resolveSecret: vi.fn(() => ("token" in options ? options.token : KEY)),
@@ -139,10 +151,10 @@ function harness(options: HarnessOptions = {}) {
   const touch = vi.fn();
   const diagnostic = vi.fn();
   const handled: Array<string | undefined> = [];
-  function ctx(config?: Record<string, unknown>, connectionId = "conn-1"): ChannelStreamRunContext {
+  function ctx(config?: Record<string, unknown>, connectionId = "conn-1", revision = "r1"): ChannelStreamRunContext {
     controller = new AbortController();
     return {
-      connection: { ...connection(config), connectionId },
+      connection: { ...connection(config), connectionId, revision },
       signal: controller.signal,
       cursor: undefined,
       markReady,
@@ -243,8 +255,8 @@ describe("telegram stream adapter", () => {
     await h.adapter.run(h.ctx());
 
     expect(h.processUpdate.mock.calls).toEqual([
-      ["conn-1", textUpdate(10)],
-      ["conn-1", textUpdate(11)],
+      ["conn-1", textUpdate(10), "r1"],
+      ["conn-1", textUpdate(11), "r1"],
     ]);
     expect(h.handled).toEqual(["11", "12"]);
     expect(h.events).toEqual(["process:10", "write:11", "process:11", "write:12"]);
@@ -298,7 +310,7 @@ describe("telegram stream adapter", () => {
       ([, update]) => (update as { update_id: number }).update_id === 10,
     );
     expect(attemptsAt10).toHaveLength(8);
-    expect(h.processUpdate).toHaveBeenLastCalledWith("conn-1", textUpdate(11));
+    expect(h.processUpdate).toHaveBeenLastCalledWith("conn-1", textUpdate(11), "r1");
     expect(store.current()).toEqual({ cursor: "12", scope: BOT_ID });
   });
 
@@ -351,7 +363,7 @@ describe("telegram stream adapter", () => {
 
     // Another connection's update 10 is its own: conn-1's eight failures do not skip it.
     await expect(h.adapter.run(h.ctx(undefined, "conn-2"))).resolves.toBeUndefined();
-    expect(h.processUpdate).toHaveBeenLastCalledWith("conn-2", commandUpdate(10));
+    expect(h.processUpdate).toHaveBeenLastCalledWith("conn-2", commandUpdate(10), "r1");
     expect(h.diagnostic).not.toHaveBeenCalled();
     expect(store.current("conn-2")).toEqual({ cursor: "11", scope: BOT_ID });
 
@@ -360,7 +372,109 @@ describe("telegram stream adapter", () => {
     expect(h.diagnostic).toHaveBeenCalledTimes(1);
     expect(h.diagnostic.mock.calls[0]![2]).toEqual({ updateId: 10 });
     expect(store.current("conn-1")).toEqual({ cursor: "11", scope: BOT_ID });
-    expect(h.processUpdate.mock.calls.filter(([connectionId]) => connectionId === "conn-1")).toHaveLength(8);
+    expect(h.processUpdate.mock.calls.filter(([id]) => id === "conn-1")).toHaveLength(8);
+  });
+
+  it("keeps an exhausted head pending when the same bot changes revision before the poison cursor write", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "telegram-poison-fence-"));
+    const storage = new Storage({
+      dbPath: ":memory:",
+      transcriptsDir: path.join(root, "transcripts"),
+      auditDir: path.join(root, "audit"),
+    });
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let old: Promise<void> | undefined;
+    try {
+      const first = storage.integrationConnections.create({
+        catalogId: "channel.telegram",
+        kind: "channel",
+        key: "telegram",
+        label: "Old revision",
+        config: { receiveMode: "poll" },
+      });
+      const cursorStore = createSystemSettingsChannelStreamCursorStore({
+        get: async (key) => storage.systemSettings.get(key),
+        set: async (key, value, now, telegramPoll) => {
+          entered.resolve();
+          await release.promise;
+          return storage.systemSettings.set(key, value, now, telegramPoll);
+        },
+      });
+      const cursorKey = `${CHANNEL_STREAM_CURSOR_SETTING_PREFIX}:telegram:${first.connectionId}`;
+      storage.systemSettings.set(cursorKey, { cursor: "10", scope: BOT_ID });
+      let current = first;
+      const delivered = vi.fn();
+      const h = harness({
+        store: { ...memoryStore(), store: cursorStore },
+        respond: (offset) => (offset === "10" ? updates(commandUpdate(10)) : undefined),
+        processUpdate: async (_connectionId, update) => {
+          if (current.revision === first.revision) throw new Error("fixture head failure");
+          delivered(update);
+        },
+      });
+
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        await expect(h.adapter.run(h.ctx(undefined, first.connectionId, first.revision))).rejects.toThrow("fixture head failure");
+      }
+      expect(storage.systemSettings.get(cursorKey)?.value).toEqual({ cursor: "10", scope: BOT_ID });
+      old = h.adapter.run(h.ctx(undefined, first.connectionId, first.revision));
+      await Promise.race([entered.promise, old.then(() => { throw new Error("Old runner never reached the cursor write."); })]);
+      current = storage.integrationConnections.update(first.connectionId, {
+        expectedRevision: first.revision,
+        label: "New revision for the same bot",
+      });
+      release.resolve();
+      await old;
+      const cursorAfterOld = storage.systemSettings.get(cursorKey)?.value;
+
+      await h.adapter.run(h.ctx(undefined, first.connectionId, current.revision));
+      expect({
+        cursorAfterOld,
+        skipDiagnostics: h.diagnostic.mock.calls,
+        delivered: delivered.mock.calls,
+      }).toEqual({
+        cursorAfterOld: { cursor: "10", scope: BOT_ID },
+        skipDiagnostics: [],
+        delivered: [[commandUpdate(10)]],
+      });
+      expect(storage.systemSettings.get(cursorKey)?.value).toMatchObject({ cursor: "11", scope: BOT_ID });
+    } finally {
+      release.resolve();
+      await Promise.allSettled(old ? [old] : []);
+      storage.close();
+      await rm(root, { recursive: true, force: true });
+    }
+  }, 60_000);
+
+  it("does not skip a current update using the previous connection revision's failure budget", async () => {
+    let healthy = false;
+    let currentRevision = "r1";
+    const store = memoryStore({ cursor: "10", scope: BOT_ID }, (expected) => {
+      if (expected !== currentRevision) throw new TelegramPollRevisionChangedError();
+    });
+    const h = harness({
+      store,
+      respond: (offset) => (offset === "10" ? updates(commandUpdate(10)) : undefined),
+      processUpdate: async () => {
+        if (!healthy) throw new Error("store down");
+      },
+    });
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      await expect(h.adapter.run(h.ctx())).rejects.toThrow("store down");
+    }
+    expect(store.writes).toEqual([]);
+    healthy = true;
+    currentRevision = "r2";
+    await expect(h.adapter.run(h.ctx())).resolves.toBeUndefined();
+    expect(h.processUpdate).toHaveBeenCalledTimes(8);
+    expect(store.writes).toEqual([]);
+
+    await expect(h.adapter.run(h.ctx(undefined, "conn-1", "r2"))).resolves.toBeUndefined();
+
+    expect(h.processUpdate).toHaveBeenLastCalledWith("conn-1", commandUpdate(10), "r2");
+    expect(h.diagnostic).not.toHaveBeenCalled();
+    expect(store.current()).toEqual({ cursor: "11", scope: BOT_ID });
   });
 
   it("sends the reply the handler returns", async () => {

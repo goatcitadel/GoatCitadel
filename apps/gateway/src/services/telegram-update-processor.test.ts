@@ -140,6 +140,7 @@ describe("telegram update processor", () => {
       createDeps(webhooks),
       CONNECTION_ID,
       privateTextUpdate({ updateId: 9002, actorId: 777, isBot: true }),
+      "rev-1",
     );
 
     expect(result).toBeUndefined();
@@ -171,6 +172,7 @@ describe("telegram update processor", () => {
         createDeps(webhooks),
         CONNECTION_ID,
         privateTextUpdate({ updateId: 9003, actorId: 777 }),
+        "rev-1",
       );
 
       expect(result).toBeUndefined();
@@ -198,6 +200,7 @@ describe("telegram update processor", () => {
       createDeps(webhooks),
       CONNECTION_ID,
       privateTextUpdate({ updateId: 9010, actorId: 4242 }),
+      "rev-1",
     );
 
     expect(result).toBeUndefined();
@@ -226,6 +229,7 @@ describe("telegram update processor", () => {
         createDeps(webhooks),
         CONNECTION_ID,
         privateTextUpdate({ updateId: 9011, actorId: 4242 }),
+        "rev-1",
       );
 
       expect(result).toBeUndefined();
@@ -254,6 +258,7 @@ describe("telegram update processor", () => {
       createDeps(webhooks),
       CONNECTION_ID,
       privateTextUpdate({ updateId: 9004, actorId: 777 }),
+      "rev-7",
     );
 
     expect(acceptInboundChannelEvent).toHaveBeenCalledTimes(1);
@@ -297,7 +302,7 @@ describe("telegram update processor", () => {
     };
 
     // With the flag off, a voice note carries no content and is ignored rather than dispatched.
-    await expect(runTelegramUpdate(createDeps(webhooks), CONNECTION_ID, voiceUpdate)).resolves.toBeUndefined();
+    await expect(runTelegramUpdate(createDeps(webhooks), CONNECTION_ID, voiceUpdate, "rev-1")).resolves.toBeUndefined();
     expect(acceptInboundChannelEvent).not.toHaveBeenCalled();
   });
 
@@ -327,7 +332,7 @@ describe("telegram update processor", () => {
       },
     };
 
-    await runTelegramUpdate(createDeps(webhooks), CONNECTION_ID, voiceUpdate);
+    await runTelegramUpdate(createDeps(webhooks), CONNECTION_ID, voiceUpdate, "rev-1");
 
     expect(acceptInboundChannelEvent).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -394,6 +399,7 @@ describe("telegram update processor", () => {
       createDeps(webhooks),
       CONNECTION_ID,
       privateTextUpdate({ updateId: 9020, actorId: 4242, text: "hello from my phone" }),
+      "rev-1",
     );
 
     expect(readTelegramBotMethodCall(result)).toBeUndefined();

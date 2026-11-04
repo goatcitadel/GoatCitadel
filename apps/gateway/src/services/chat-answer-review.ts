@@ -22,6 +22,7 @@ import type {
   ModelUsageAttributionContext,
 } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
+import { projectToolRunsForModel } from "./chat-tool-result-projection.js";
 import { parseLooseJsonRecord } from "./json-record-parser.js";
 import { runBoundedUtilityModelCall } from "./utility-model-call.js";
 import { createUtilityModelUsageAttribution } from "./utility-model-usage-attribution.js";
@@ -266,6 +267,7 @@ export function buildStrictReviewNote(review: ChatAnswerReviewRecord): string | 
 }
 
 function buildReviewRequest(input: ChatAnswerReviewInput): ChatCompletionRequest {
+  const toolRuns = projectToolRunsForModel(input.toolRuns.slice(0, MAX_EVIDENCE_ITEMS));
   const strictLine =
     input.depth === "strict"
       ? "Be strict: flag any claim the evidence does not support, any part of the request left unanswered, and any instruction the answer did not follow."
@@ -305,7 +307,7 @@ function buildReviewRequest(input: ChatAnswerReviewInput): ChatCompletionRequest
               url: citation.url,
               ...(citation.snippet ? { snippet: citation.snippet.slice(0, 300) } : {}),
             })),
-            toolRuns: input.toolRuns.slice(0, MAX_EVIDENCE_ITEMS).map((run) => ({
+            toolRuns: toolRuns.map((run) => ({
               tool: run.toolName,
               status: run.status,
               ...(run.error ? { error: run.error.slice(0, 200) } : {}),

@@ -42,7 +42,7 @@ The release lane treats these files as the minimum rebuild inputs:
 
 ## Toolchain
 
-- Node `22.x` in GitHub Actions, pinned to `22.23.1` for the release producer
+- Node `22.x` in GitHub Actions, pinned to `22.23.4` for the release producer
 - pnpm `10.31.0`
 - .NET SDK `10.0.300` for the WinUI 3 / Windows App SDK host
 - Rust `1.94.0` while the Tauri desktop rollback host remains in `verify:desktop`

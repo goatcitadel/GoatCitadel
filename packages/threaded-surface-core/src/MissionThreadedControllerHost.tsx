@@ -155,6 +155,7 @@ export function MissionThreadedControllerHost({
   onResolvedModeChange,
   renderSurface,
   secondaryEvidenceEnabled,
+  restorePinnedGoal,
   coworkViewModelFactory,
 }: MissionThreadedControllerHostProps) {
   const selection = useChatSessionSelection({ initialModeOverride });
@@ -332,6 +333,7 @@ export function MissionThreadedControllerHost({
     selection,
     orchestration: submission.orchestration,
     setPinnedGoal,
+    restorePinnedGoal,
     sessionData: session.sessionData,
     setDraft,
     setPendingAttachments,
@@ -650,6 +652,7 @@ export function MissionThreadedControllerHost({
       capabilityProfileInspection: surfaceRuntime.capabilityProfileInspection,
       activeGeneratedArtifact,
       documents: session.documentContext.documents,
+      editingTurnId: submission.orchestration.editingTurnId,
       currentRoutePreflight: submission.currentRoutePreflight,
       proactiveSuggestionCount: surfaceRuntime.proactiveSuggestionCount,
       chatSessionRailPresentation,

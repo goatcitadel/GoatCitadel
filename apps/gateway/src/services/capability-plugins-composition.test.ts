@@ -225,12 +225,41 @@ describe("feedPluginToolGroupHolds", () => {
         expect.objectContaining({ message: "The saved plugin records can't be read." }),
       ),
     );
-    // Nothing is lifted because a read failed, and the holds read stay known: nothing else is kept off.
+    // An unread newer record may contain additional holds, so every switchable group stays denied.
     expect(policy.setHolds).toHaveBeenCalledTimes(1);
     expect(policy.reportFirstReadFailure).not.toHaveBeenCalled();
-    expect(policy.setHoldsUnavailable).not.toHaveBeenCalled();
-    expect(policy.engine.listSwitchedOffToolNames().has("git.status")).toBe(true);
+    expect(policy.setHoldsUnavailable).toHaveBeenCalled();
+    expect(await keptOffUnread(policy.engine, "git.status")).toBe(true);
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(true);
+    policy.gateway.closing = true;
+    await policy.endBackgroundWait();
+  });
+
+  it("fails closed for a newly saved hold after startup and retries until current records land", async () => {
+    const store = new CapabilityPluginStore(settingRows());
+    let readable = true;
+    const policy = feed(store, async () => {
+      if (!readable) throw new Error("The saved plugin records can't be read.");
+      return await store.list();
+    });
+    await policy.fed;
     expect(policy.engine.listSwitchedOffToolNames().has("browser.navigate")).toBe(false);
+
+    readable = false;
+    await store.update("meeting-tools", () => holding(["browser"]));
+    await vi.waitFor(() => expect(policy.report).toHaveBeenCalledOnce());
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(true);
+    expect(policy.waitInBackground.mock.calls.map(([ms]) => ms)).toEqual([5_000]);
+    await policy.endBackgroundWait();
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(true);
+    expect(policy.waitInBackground.mock.calls.at(-1)?.[0]).toBe(15_000);
+
+    readable = true;
+    await policy.endBackgroundWait();
+    expect(policy.engine.listSwitchedOffToolNames().has("browser.navigate")).toBe(true);
+    expect(await keptOffUnread(policy.engine, "browser.navigate")).toBe(false);
+    expect(policy.engine.listSwitchedOffToolNames().has("git.status")).toBe(false);
+    expect(policy.backgroundWaits).toHaveLength(0);
   });
 
   it("reads again when the first read fails, so the holds are set before startup goes on", async () => {

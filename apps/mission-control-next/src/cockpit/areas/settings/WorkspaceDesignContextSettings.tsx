@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { ChatGeneratedArtifactRecord, GuidanceDocType } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import {
@@ -41,6 +41,7 @@ type DocState<T> = Record<ContextDocType, T>;
 
 export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: string }) {
   const [drafts, setDrafts] = useState<DocState<string>>({ product: "", design: "" });
+  const editRevisions = useRef<DocState<number>>({ product: 0, design: 0 });
   const [status, setStatus] = useState<DocState<string | null>>({ product: null, design: null });
   const [saving, setSaving] = useState<ContextDocType | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -86,15 +87,29 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
     };
   }, [workspaceId]);
 
+  const editDraft = (docType: ContextDocType, content: string) => {
+    editRevisions.current[docType] += 1;
+    setDrafts((current) => ({ ...current, [docType]: content }));
+  };
+
   const save = useCallback(
     async (docType: ContextDocType, content: string) => {
       const fileName = DOCS.find((doc) => doc.docType === docType)?.fileName ?? docType;
+      const submittedRevision = editRevisions.current[docType];
       setSaving(docType);
       setStatus((current) => ({ ...current, [docType]: null }));
       try {
         const saved = await updateWorkspaceGuidance(workspaceId, docType, content);
-        setDrafts((current) => ({ ...current, [docType]: saved.content }));
-        setStatus((current) => ({ ...current, [docType]: `Saved ${fileName}` }));
+        const editedDuringSave = editRevisions.current[docType] !== submittedRevision;
+        if (!editedDuringSave) {
+          setDrafts((current) => ({ ...current, [docType]: saved.content }));
+        }
+        setStatus((current) => ({
+          ...current,
+          [docType]: editedDuringSave
+            ? `Saved the previous version of ${fileName}. Your newer edits are unsaved.`
+            : `Saved ${fileName}`,
+        }));
       } catch (error) {
         setStatus((current) => ({
           ...current,
@@ -118,7 +133,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
     // The applied artifact's hash travels inside the document, so the provenance stays inspectable.
     // Applying only fills the editor; the operator reviews and presses Save, so nothing is replaced silently.
     const provenance = `<!-- applied from generated artifact ${artifact.artifactId} contentHash ${artifact.contentHash ?? "unknown"} -->\n`;
-    setDrafts((current) => ({ ...current, [docType]: `${provenance}${artifact.content}` }));
+    editDraft(docType, `${provenance}${artifact.content}`);
     setStatus((current) => ({ ...current, [docType]: `Review the ${fileName} editor, then save.` }));
   };
 
@@ -150,10 +165,7 @@ export function WorkspaceDesignContextSettings({ workspaceId }: { workspaceId: s
                   value={drafts[doc.docType]}
                   disabled={!editable}
                   spellCheck={false}
-                  onChange={(event) => {
-                    const value = event.target.value;
-                    setDrafts((current) => ({ ...current, [doc.docType]: value }));
-                  }}
+                  onChange={(event) => editDraft(doc.docType, event.target.value)}
                   className={TEXTAREA_CLASS}
                 />
               )}

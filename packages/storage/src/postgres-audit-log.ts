@@ -3,12 +3,28 @@ import type { DatabaseClient } from "./db.js";
 import { sanitizeForAudit, type AuditAppendOptions, type AuditStream } from "./audit-log.js";
 import { getRequestAttribution } from "./request-attribution.js";
 
+interface AuditPayloadRow {
+  payload?: string | Record<string, unknown>;
+}
+
+interface RecentAuditRow extends AuditPayloadRow {
+  event_sequence: string | number | bigint;
+}
+
+const AUDIT_RECENT_PAGE_SIZE = 256;
+
 export class PostgresAuditLog {
+  private readonly sequenceLockStmt;
   private readonly nextSequenceStmt;
   private readonly insertStmt;
   private readonly listStmt;
+  private readonly newestPageStmt;
+  private readonly previousPageStmt;
 
   public constructor(private readonly db: DatabaseClient) {
+    this.sequenceLockStmt = db.prepare(`
+      SELECT pg_advisory_xact_lock(hashtextextended('goatcitadel:audit-sequence:' || @streamName, 0))
+    `);
     this.nextSequenceStmt = db.prepare(`
       SELECT COALESCE(MAX(event_sequence), 0) + 1 AS next_sequence
       FROM audit_events
@@ -40,6 +56,16 @@ export class PostgresAuditLog {
       WHERE stream_name = ?
       ORDER BY event_sequence ASC, occurred_at ASC
     `);
+    this.newestPageStmt = db.prepare(`
+      SELECT event_sequence, payload FROM audit_events
+      WHERE stream_name = @streamName
+      ORDER BY event_sequence DESC LIMIT @limit
+    `);
+    this.previousPageStmt = db.prepare(`
+      SELECT event_sequence, payload FROM audit_events
+      WHERE stream_name = @streamName AND event_sequence < @beforeSequence
+      ORDER BY event_sequence DESC LIMIT @limit
+    `);
   }
 
   public async append(
@@ -63,6 +89,8 @@ export class PostgresAuditLog {
     };
     const sanitizedRecord = sanitizeForAudit(baseRecord);
     this.db.transaction("immediate", () => {
+      // PostgreSQL BEGIN does not serialize MAX+1 allocation, including an empty stream.
+      this.sequenceLockStmt.get({ streamName: stream });
       const nextSequenceRow = this.nextSequenceStmt.get(stream) as { next_sequence?: number } | undefined;
       const nextSequence = Number(nextSequenceRow?.next_sequence ?? 1);
       const payloadJson = sanitizeJsonbPayloadText(JSON.stringify(sanitizeJsonValueForJsonb(sanitizedRecord)));
@@ -78,21 +106,7 @@ export class PostgresAuditLog {
   }
 
   public async list(stream: AuditStream): Promise<Record<string, unknown>[]> {
-    const rows = this.listStmt.all(stream) as Array<{ payload?: string | Record<string, unknown> }>;
-    return rows.flatMap((row) => {
-      if (!row.payload) {
-        return [];
-      }
-      if (typeof row.payload === "string") {
-        try {
-          const parsed = JSON.parse(row.payload);
-          return parsed && typeof parsed === "object" ? [parsed as Record<string, unknown>] : [];
-        } catch {
-          return [];
-        }
-      }
-      return [row.payload];
-    });
+    return (this.listStmt.all(stream) as AuditPayloadRow[]).flatMap(parseAuditPayload);
   }
 
   /** Newest `limit` matching records in stream order (parity with AuditLog.listRecent). */
@@ -101,7 +115,37 @@ export class PostgresAuditLog {
     limit: number,
     predicate: (record: Record<string, unknown>) => boolean = () => true,
   ): Promise<Record<string, unknown>[]> {
-    return (await this.list(stream)).filter(predicate).slice(-limit);
+    if (!Number.isFinite(limit) || limit < 1) return [];
+    const count = Math.floor(limit);
+    const matches: Record<string, unknown>[] = [];
+    let beforeSequence: RecentAuditRow["event_sequence"] | undefined;
+    while (matches.length < count) {
+      const rows = (
+        beforeSequence === undefined
+          ? this.newestPageStmt.all({ streamName: stream, limit: AUDIT_RECENT_PAGE_SIZE })
+          : this.previousPageStmt.all({ streamName: stream, beforeSequence, limit: AUDIT_RECENT_PAGE_SIZE })
+      ) as RecentAuditRow[];
+      for (const row of rows) {
+        const [record] = parseAuditPayload(row);
+        if (record && predicate(record)) matches.push(record);
+        if (matches.length === count) break;
+      }
+      if (rows.length < AUDIT_RECENT_PAGE_SIZE || matches.length === count) break;
+      // Preserve PostgreSQL's bigint cursor without converting it through an imprecise JS number.
+      beforeSequence = rows[rows.length - 1]!.event_sequence;
+    }
+    return matches.reverse();
+  }
+}
+
+function parseAuditPayload(row: AuditPayloadRow): Record<string, unknown>[] {
+  if (!row.payload) return [];
+  if (typeof row.payload !== "string") return [row.payload];
+  try {
+    const parsed: unknown = JSON.parse(row.payload);
+    return parsed && typeof parsed === "object" ? [parsed as Record<string, unknown>] : [];
+  } catch {
+    return [];
   }
 }
 

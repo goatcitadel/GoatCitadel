@@ -577,3 +577,40 @@ test("listen and advertised host validation rejects unsafe or unusable values", 
   );
   await assert.rejects(startDeterministicLlmStub({ publicBaseUrlHost: "0.0.0.0" }), /cannot advertise/u);
 });
+
+test("provider-error clock markers are explicit response metadata and leave native failures unchanged", async () => {
+  const stub = await startDeterministicLlmStub({
+    dispatchPlan: [
+      { type: "provider_error", code: "server_error", message: "Marked fixture failure.", faultClockMarker: "GC_CLOCK_TRANSPORT_TEST" },
+      { type: "provider_error", code: "server_error", message: "Unmarked fixture failure." },
+    ],
+  });
+  try {
+    for (const expectedMarker of ["GC_CLOCK_TRANSPORT_TEST", null]) {
+      const response = await fetch(stub.baseUrl + "/responses", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ model: stub.model, stream: true, input: "Synthetic fixture" }),
+      });
+      assert.equal(response.status, 200);
+      assert.equal(response.headers.get("x-goatcitadel-verification-fault-clock"), expectedMarker);
+      assert.match(await response.text(), /"type":"response.failed"/u);
+    }
+    assert.deepEqual(stub.dispatchPlanDispatchRecords().map(({ outcome }) => outcome), ["provider_error", "provider_error"]);
+  } finally {
+    await stub.close();
+  }
+});
+
+test("provider-error clock marker rejects values unsafe for its fixture response header", async () => {
+  let unexpectedStub;
+  try {
+    await assert.rejects(async () => {
+      unexpectedStub = await startDeterministicLlmStub({
+        dispatchPlan: [{ type: "provider_error", faultClockMarker: "bad\r\ninjected: value" }],
+      });
+    }, /faultClockMarker/u);
+  } finally {
+    await unexpectedStub?.close();
+  }
+});

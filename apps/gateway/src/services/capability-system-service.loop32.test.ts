@@ -86,6 +86,7 @@ function createService(input: {
       storage: storage as never,
       readFeatureFlags: async () => ({ codeModeV1Enabled: input.featureEnabled ?? true }),
       listToolCatalog: () => [],
+      listSwitchedOffToolNames: () => new Set(),
       listLoadedSkills: () => input.skills ?? [],
       readSkillStates: async () => input.skillStates ?? new Map(),
       invokeTool: vi.fn(

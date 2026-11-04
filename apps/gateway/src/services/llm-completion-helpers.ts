@@ -245,6 +245,11 @@ export function readProviderQuotaResetSeconds(message: string): number | undefin
  * different quota.
  */
 export function isProviderQuotaExhaustedError(error: Error): boolean {
+  // Preserve the adapter's typed quota outcome instead of reclassifying its
+  // operator-facing subscription wording as a billing/business refusal.
+  if (error.name === "ClaudeCliError" && "reasonCode" in error && error.reasonCode === "claude_cli_usage_limited") {
+    return true;
+  }
   const resetSeconds = readProviderQuotaResetSeconds(error.message);
   if (resetSeconds !== undefined) {
     return resetSeconds > PROVIDER_QUOTA_INLINE_RETRY_MAX_RESET_SECONDS;

@@ -77,6 +77,7 @@ let toastTimer: number | undefined;
 let runtimeStatusPollTimer: number | undefined;
 let runtimeStatusInFlight = false;
 let runtimeStatusRequestSequence = 0;
+let runtimeLifecycleGeneration = 0;
 
 retryButton.addEventListener("click", () => {
   void launchRuntime();
@@ -110,6 +111,7 @@ void listen("desktop://runtime-status-requested", () => {
 });
 
 void listen("desktop://runtime-restarted", () => {
+  runtimeLifecycleGeneration += 1;
   showToast("Runtime restarted. Refreshing Mission Control...");
   renderStarting();
   // A read started before the restart may carry the old runtime's URL: discard it and read fresh.
@@ -120,18 +122,39 @@ void listen("desktop://runtime-restarted", () => {
   startRuntimeStatusPolling();
 });
 
-void listen("desktop://runtime-stopped", () => {
+void listen("desktop://runtime-stopping", () => {
+  runtimeLifecycleGeneration += 1;
+  invalidateInFlightRuntimeStatus();
+  stopRuntimeStatusPolling();
+  renderRecovery("Stopping runtime...");
+});
+
+void listen<DesktopRuntimeStatus>("desktop://runtime-stopped", (event) => {
+  runtimeLifecycleGeneration += 1;
+  invalidateInFlightRuntimeStatus();
+  if (event?.payload) lastRuntime = event.payload;
   renderStopped();
   showToast("Runtime stopped. Browser fallback remains available after restart.");
+});
+
+void listen<{ message: string }>("desktop://runtime-stop-failed", (event) => {
+  runtimeLifecycleGeneration += 1;
+  invalidateInFlightRuntimeStatus();
+  showToast(event.payload.message);
+  void refreshRuntimeStatus({ syncShell: true, notify: false });
+  startRuntimeStatusPolling();
 });
 
 void launchRuntime();
 
 async function launchRuntime(): Promise<void> {
+  const generation = ++runtimeLifecycleGeneration;
+  invalidateInFlightRuntimeStatus();
   stopRuntimeStatusPolling();
   renderStarting();
   try {
     const result = await invoke<DesktopLaunchResult>("launch_runtime");
+    if (generation !== runtimeLifecycleGeneration) return;
     if (isRuntimeReady(result)) {
       showReadyRuntime(result);
     } else {
@@ -141,6 +164,7 @@ async function launchRuntime(): Promise<void> {
       startRuntimeStatusPolling();
     }
   } catch (error) {
+    if (generation !== runtimeLifecycleGeneration) return;
     renderRecovery(error instanceof Error ? error.message : String(error));
   }
 }

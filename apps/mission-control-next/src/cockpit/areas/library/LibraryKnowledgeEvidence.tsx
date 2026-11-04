@@ -176,7 +176,7 @@ export function LibraryKnowledgeEvidence({ workspaceId }: { workspaceId: string 
             </p>
             {event.sessionId ? (
               <NativeOwnerLink scope={access.identity} href={"/chat?sessionId=" + encodeURIComponent(event.sessionId)}>
-                Open source conversation
+                Open attached conversation
               </NativeOwnerLink>
             ) : null}
             {event.approvalId ? (

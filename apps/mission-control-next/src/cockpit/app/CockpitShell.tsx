@@ -9,7 +9,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { ChatArea } from "../areas/chat/ChatArea";
 import { AreaErrorBoundary } from "../ui/AreaErrorBoundary";
-import { CommandPalette } from "./CommandPalette";
+import { useDeferredOverlay } from "../ui/deferred-overlay-owner";
 import { GatewayUnavailableBanner } from "./GatewayUnavailableBanner";
 import { CockpitNavigationContext, useCockpitNavigation } from "./cockpit-navigation-context";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
@@ -38,7 +38,10 @@ import { cockpitDocumentTitle } from "./cockpit-document-title";
 import { useCockpitScroll } from "./use-cockpit-scroll";
 import { getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
+const loadCommandPalette = () => import("./CommandPalette").then((module) => module.CommandPalette);
+
 interface CockpitShellProps {
+  accessRevision?: number;
   streamState?: EventStreamConnectionState;
   gatewayReachability?: GatewayReachability;
   onVisibleSessionChange?: (sessionId: string | undefined) => void;
@@ -56,6 +59,7 @@ export function CockpitShell(props: CockpitShellProps) {
 }
 
 function CockpitShellContent({
+  accessRevision,
   streamState = "closed",
   gatewayReachability,
   onVisibleSessionChange,
@@ -82,7 +86,15 @@ function CockpitShellContent({
   const conversationVisible = nativeRoute && area === "chat" && rest[0] !== "projects";
   const projectsVisible = nativeRoute && area === "chat" && rest[0] === "projects";
   if (conversationVisible) retainedChat.current.visited = true;
-  const [paletteOpen, setPaletteOpen] = useState(false);
+  const {
+    runtime: Palette,
+    open: paletteOpen,
+    loading: paletteLoading,
+    failure: paletteUnavailable,
+    request: requestPalette,
+    status: paletteStatus,
+    trigger: paletteTrigger,
+  } = useDeferredOverlay({ scopeKey: chatScope, load: loadCommandPalette });
   const [helpOpen, setHelpOpen] = useState(false);
   const tablet = useMediaQuery(RESPONSIVE_QUERIES.tablet);
   // NV-13: phones get the tab bar and its status strip; the hidden sidebar must not keep reading.
@@ -112,9 +124,15 @@ function CockpitShellContent({
     };
   }, [theme, density]);
 
-  const openPalette = useCallback(() => {
-    if (!isTransitionPending()) setPaletteOpen(true);
-  }, [isTransitionPending]);
+  const openPaletteFrom = useCallback(
+    (trigger: HTMLButtonElement | null) => {
+      if (isTransitionPending()) return;
+      paletteTrigger.current = trigger;
+      requestPalette(true);
+    },
+    [isTransitionPending, paletteTrigger, requestPalette],
+  );
+  const openPalette = useCallback(() => openPaletteFrom(null), [openPaletteFrom]);
   const openHelp = useCallback(() => {
     if (!isTransitionPending()) setHelpOpen(true);
   }, [isTransitionPending]);
@@ -138,6 +156,15 @@ function CockpitShellContent({
         </a>
         <IncomingScopeReview />
         <ChatContextHandoffNotice />
+        {paletteLoading ? (
+          <span ref={paletteStatus} role="status" data-palette-loading className="px-3 py-2 text-sm text-fg-secondary">
+            Loading command palette…
+          </span>
+        ) : paletteUnavailable ? (
+          <p role="alert" className="px-3 py-2 text-sm text-fg-secondary">
+            The command palette could not load. You can still use Cockpit navigation.
+          </p>
+        ) : null}
         {/* Above the scrolling row, so the outage notice never scrolls away and phones see it. */}
         {gatewayReachability?.unavailable ? (
           <GatewayUnavailableBanner reachability={gatewayReachability} inChat={area === "chat"} />
@@ -145,9 +172,7 @@ function CockpitShellContent({
         <div className="relative flex min-h-0 flex-1">
           {!firstRun && wide ? (
             <Sidebar
-              onOpenPalette={() => {
-                if (!isTransitionPending()) setPaletteOpen(true);
-              }}
+              onOpenPalette={openPalette}
               streamState={streamState}
               collapsed={sidebarCollapsed}
               onToggleCollapsed={() => setCollapseOverride(!sidebarCollapsed)}
@@ -233,7 +258,7 @@ function CockpitShellContent({
                     ) : area === "work" ? (
                       <WorkArea />
                     ) : area === "capabilities" ? (
-                      <CapabilitiesArea />
+                      <CapabilitiesArea key={accessRevision} />
                     ) : area === "settings" ? (
                       <SettingsArea />
                     ) : null}
@@ -246,14 +271,12 @@ function CockpitShellContent({
         </div>
         {!firstRun ? (
           <MobileTabBar
-            onOpenPalette={() => {
-              if (!isTransitionPending()) setPaletteOpen(true);
-            }}
+            onOpenPalette={openPaletteFrom}
             streamState={streamState}
           />
         ) : null}
       </div>
-      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      {Palette ? <Palette open={paletteOpen} onOpenChange={requestPalette} /> : null}
       <ShortcutHelp open={helpOpen} onOpenChange={setHelpOpen} />
     </InspectorProvider>
   );

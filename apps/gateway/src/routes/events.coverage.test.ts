@@ -67,6 +67,56 @@ describe("events routes additional coverage", () => {
     process.env.GOATCITADEL_SSE_MAX_CONNECTIONS_PER_IP = "7";
     expect(__internal.resolveMaxSseConnectionsPerIp()).toBe(7);
   });
+
+  it("preserves the backward REST cursor gap at the pruned floor when a retained suffix exists", async () => {
+    const retained = { eventId: "event-11", sequence: 11 };
+    app = buildApp({
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 11, newestSequence: 11, lastPrunedSequence: 10 }),
+      listRealtimeEvents: (_limit: number, cursor: string) => retained.sequence < Number(cursor) ? [retained] : [],
+    });
+
+    const retainedPage = await app.inject({ method: "GET", url: "/api/v1/events?cursor=12" });
+    const atOldest = await app.inject({ method: "GET", url: "/api/v1/events?cursor=11" });
+    const atPrunedFloor = await app.inject({ method: "GET", url: "/api/v1/events?cursor=10" });
+
+    expect(retainedPage.statusCode).toBe(200);
+    expect(retainedPage.json()).toEqual({ items: [retained] });
+    expect(atOldest.statusCode).toBe(200);
+    expect(atOldest.json()).toEqual({ items: [] });
+    expect(atPrunedFloor.statusCode).toBe(409);
+    expect(atPrunedFloor.json()).toEqual({
+      error: "replay_gap",
+      requestedCursor: "10",
+      oldestCursor: "11",
+      newestCursor: "11",
+      lastPrunedCursor: "10",
+    });
+  });
+
+  it("reports a REST gap below the floor while preserving empty-store equality", async () => {
+    app = buildApp({
+      getRealtimeEventSequenceBounds: () => ({ lastPrunedSequence: 10 }),
+      listRealtimeEvents: () => [],
+    });
+    const lost = await app.inject({ method: "GET", url: "/api/v1/events?cursor=9" });
+    const atFloor = await app.inject({ method: "GET", url: "/api/v1/events?cursor=10" });
+    expect(lost.statusCode).toBe(409);
+    expect(lost.json()).toMatchObject({ error: "replay_gap", requestedCursor: "9", lastPrunedCursor: "10" });
+    expect(atFloor.statusCode).toBe(200);
+    expect(atFloor.json()).toEqual({ items: [] });
+  });
+
+  it("rechecks retention after listing when pruning advances during the REST read", async () => {
+    let reads = 0;
+    const getRealtimeEventSequenceBounds = vi.fn(() => ++reads === 1
+      ? { oldestSequence: 1, newestSequence: 3 }
+      : { lastPrunedSequence: 3 });
+    app = buildApp({ getRealtimeEventSequenceBounds, listRealtimeEvents: () => [] });
+    const response = await app.inject({ method: "GET", url: "/api/v1/events?cursor=2" });
+    expect(response.statusCode).toBe(409);
+    expect(response.json()).toMatchObject({ error: "replay_gap", requestedCursor: "2", lastPrunedCursor: "3" });
+    expect(getRealtimeEventSequenceBounds).toHaveBeenCalledTimes(2);
+  });
 });
 
 function buildApp(realtimeEvents: Record<string, unknown>): FastifyInstance {

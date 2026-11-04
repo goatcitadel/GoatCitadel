@@ -30,6 +30,7 @@ interface ChatGeneratedArtifactRow {
 export class ChatGeneratedArtifactRepository {
   private readonly insertStmt;
   private readonly getStmt;
+  private readonly versionBaseStmt;
   private readonly listBySessionStmt;
   private readonly listByTurnStmt;
   private readonly updateProjectForSessionStmt;
@@ -81,6 +82,9 @@ export class ChatGeneratedArtifactRepository {
       FROM chat_generated_artifacts
       WHERE artifact_id = ?
       LIMIT 1
+    `);
+    this.versionBaseStmt = db.prepare(`
+      SELECT * FROM chat_generated_artifacts WHERE artifact_id = ? LIMIT 1${db.dialect === "postgres" ? " FOR UPDATE" : ""}
     `);
     this.listBySessionStmt = db.prepare(`
       SELECT *
@@ -134,6 +138,13 @@ export class ChatGeneratedArtifactRepository {
     if (!row) {
       throw new NotFoundError({ entity: "Generated artifact", id: artifactId });
     }
+    return mapRow(row);
+  }
+
+  /** Caller holds an immediate owner transaction through successor validation and creation. */
+  public lockForVersion(artifactId: string): ChatGeneratedArtifactRecord {
+    const row = toChatGeneratedArtifactRow(this.versionBaseStmt.get(artifactId));
+    if (!row) throw new NotFoundError({ entity: "Generated artifact", id: artifactId });
     return mapRow(row);
   }
 

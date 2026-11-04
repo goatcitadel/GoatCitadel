@@ -390,6 +390,9 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
           targetText: input.target.text,
           targetRect: input.target.rect,
           pageOrigin: origin,
+          ...(input.dragSource
+            ? { dragSourceText: input.dragSource.text, dragSourceRect: input.dragSource.rect }
+            : {}),
         },
       },
       onCreated,
@@ -432,22 +435,34 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
   /** True when the page still shows what the operator approved. */
   const pageUnchanged = async (
     asked: Asked,
-  ): Promise<{ unchanged: boolean; originChanged: boolean; target: ErrandTargetInfo | null }> => {
+  ): Promise<{
+    unchanged: boolean;
+    originChanged: boolean;
+    target: ErrandTargetInfo | null;
+    dragSource?: ErrandTargetInfo | null;
+  }> => {
     if (originOf(browser.currentUrl()) !== asked.origin) {
       return { unchanged: false, originChanged: true, target: null };
     }
-    const expected = asked.input.target;
+    const expectedTargets = [asked.input.target, ...(asked.input.dragSource ? [asked.input.dragSource] : [])];
     // Read beneath the approval card: the card and its blocker cover the page until the driving banner is back. A
     // keyboard action lands on whatever has focus, so it re-reads focus, not the point: page script may have moved it.
-    const target = await (
-      asked.input.targetsFocus
-        ? browser.describeFocusedBeneathOverlay()
-        : browser.describeTargetBeneathOverlay(expected.x, expected.y)
-    ).catch(() => null);
+    const targets: Array<ErrandTargetInfo | null> = [];
+    // Each read temporarily hides the same overlay; finish restoring it before hiding it for the next target.
+    for (const [index, expected] of expectedTargets.entries()) {
+      targets.push(await (
+        index === 0 && asked.input.targetsFocus
+          ? browser.describeFocusedBeneathOverlay()
+          : browser.describeTargetBeneathOverlay(expected.x, expected.y)
+      ).catch(() => null));
+    }
     return {
-      unchanged: sameTarget(expected, target, asked.input.targetsFocus === true),
+      unchanged: expectedTargets.every((expected, index) =>
+        sameTarget(expected, targets[index] ?? null, index === 0 && asked.input.targetsFocus === true),
+      ),
       originChanged: false,
-      target,
+      target: targets[0] ?? null,
+      ...(asked.input.dragSource ? { dragSource: targets[1] ?? null } : {}),
     };
   };
 
@@ -513,7 +528,13 @@ export function createErrandApprovalGate(deps: ErrandApprovalGateDeps): ErrandAp
       }
       const pageUrl = browser.currentUrl();
       const peopleScreenshotPng = await browser.captureForPeople().catch(() => input.peopleScreenshotPng);
-      input = { ...input, pageUrl, peopleScreenshotPng, target: check.target ?? input.target };
+      input = {
+        ...input,
+        pageUrl,
+        peopleScreenshotPng,
+        target: check.target ?? input.target,
+        ...(input.dragSource ? { dragSource: check.dragSource ?? input.dragSource } : {}),
+      };
       title = ERRAND_PAGE_CHANGED_TITLE;
     }
   };

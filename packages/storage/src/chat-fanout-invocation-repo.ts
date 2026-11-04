@@ -157,7 +157,7 @@ export class ChatFanoutInvocationRepository {
     return mapRow(this.getByParentToolStmt.get(parentRunId, toolRunId));
   }
 
-  /** Bounded discovery only; the aggregate owner verifies the exact keyed wait. */
+  /** Bounded discovery for keyed waits and unfinished committed-parent cancellation. */
   public listWaitingParentCandidateIds(limit = 100, afterInvocationId?: string): string[] {
     const safeLimit = Math.max(1, Math.min(100, Math.floor(limit) || 100));
     // Portable SQLite/PostgreSQL join. JSON authority is validated by its shared
@@ -165,7 +165,9 @@ export class ChatFanoutInvocationRepository {
     const rows = this.db.prepare(`
       SELECT invocation.invocation_id FROM chat_fanout_invocations invocation
       JOIN durable_runs parent ON parent.run_id = invocation.parent_run_id
-      WHERE parent.workflow_key = 'chat.turn.execute' AND parent.status = 'waiting'
+      WHERE parent.workflow_key = 'chat.turn.execute'
+        AND (parent.status = 'waiting' OR (parent.status = 'cancelled'
+          AND invocation.status IN ('reserving', 'reserved', 'dispatching', 'waiting')))
         AND invocation.delegation_run_id IS NOT NULL
         AND invocation.invocation_id > @afterInvocationId
       ORDER BY invocation.invocation_id ASC LIMIT @limit

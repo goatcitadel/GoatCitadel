@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   ConflictError,
   redactStructuredSecrets,
@@ -137,6 +138,7 @@ interface PluginStoreValue {
 
 export class CapabilityPluginStore {
   private readonly changeListeners = new Set<() => void>();
+  private readonly notifications = new AsyncLocalStorage<{ changed: boolean }>();
 
   public constructor(
     private readonly rows: CapabilityPluginSettingRows,
@@ -158,6 +160,29 @@ export class CapabilityPluginStore {
 
   public async get(pluginId: string): Promise<StoredPlugin | undefined> {
     return (await this.read()).value.plugins.find((plugin) => plugin.pluginId === pluginId);
+  }
+
+  /** Locks the canonical row before connector records: CAS takes PostgreSQL's row lock, even on first insert. */
+  public async withLock<T>(
+    transaction: <R>(work: () => R | Promise<R>) => Promise<Awaited<R>>,
+    work: () => T | Promise<T>,
+  ): Promise<Awaited<T>> {
+    const pending = { changed: false };
+    try {
+      return await transaction(() =>
+        this.notifications.run(pending, async () => {
+          const { record, value } = await this.read();
+          if (!(await this.rows.compareAndSet(CAPABILITY_PLUGINS_SETTING_KEY, record, value))) {
+            throw new ConflictError({ code: "WRITE_CONFLICT", message: CHANGED_WHILE_SAVING_MESSAGE });
+          }
+          return await work();
+        }),
+      );
+    } finally {
+      // The owner transaction has committed or rolled back. Observe its committed state in the caller's context;
+      // nested fences defer into their parent, while independent operations keep separate notification scopes.
+      if (pending.changed) this.announceChange();
+    }
   }
 
   /**
@@ -275,6 +300,11 @@ export class CapabilityPluginStore {
   }
 
   private announceChange(): void {
+    const pending = this.notifications.getStore();
+    if (pending) {
+      pending.changed = true;
+      return;
+    }
     for (const listener of this.changeListeners) {
       try {
         listener();

@@ -3,7 +3,7 @@ export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
-import { ChatComposerPhoneActions, ChatComposerTools, composerControlsProps } from "./ChatComposerTools";
+import { ChatComposerPhoneActions, ChatComposerTools, composerControlsProps, useComposerSources } from "./ChatComposerTools";
 import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatComposerControls";
 import { ChatComposerModePills, ChatComposerPlusMenu } from "./ChatComposerPlusMenu";
 import { ChatComposerPalette } from "./ChatComposerPalette";
@@ -63,9 +63,6 @@ export function ChatTextComposer({
 }) {
   const capture = getWorkflowSkillCaptureDisplay(props.draft);
   useAutoGrowTextarea(props.composerRef, props.draft, { minLines: 2, maxLines: 8 });
-  const [externalSourceOpenToken, setExternalSourceOpenToken] = useState(0);
-  // Read-only sources stay behind a toolbar chip; the panel and its explainer show only once opened.
-  const [sourcesOpen, setSourcesOpen] = useState(false);
   const sourcesPanelId = useId();
   // Phones fold the mode, model, attach, sources and voice controls into one sheet; touch keyboards have no Shift.
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
@@ -73,23 +70,18 @@ export function ChatTextComposer({
   const [optionsOpen, setOptionsOpen] = useState(false);
   const modelOptionsRequest: ModelOptionsRequest = useRef(null);
   const channelConversation = Boolean(props.channelReply || props.channelCheck);
+  const sources = useComposerSources(
+    JSON.stringify([props.selectedSessionId, phone, channelConversation, Boolean(props.externalSourceControls)]),
+    sourcesPanelId,
+    props.externalSourceControls?.attachments.length,
+  );
   const openSourcePicker = () => {
-    setSourcesOpen(true);
     if (phone) setOptionsOpen(true);
-    setExternalSourceOpenToken((token) => token + 1);
+    sources.openPicker();
   };
-  const toggleSources = () => {
-    const sources = props.externalSourceControls;
-    if (sourcesOpen || !sources) return setSourcesOpen(false);
-    // With nothing attached the panel has nothing to list, so opening goes straight to the source picker.
-    if (sources.attachments.length === 0) openSourcePicker();
-    else setSourcesOpen(true);
-  };
-  const sources = {
-    open: sourcesOpen,
-    panelId: sourcesPanelId,
-    openToken: externalSourceOpenToken,
-    onToggle: toggleSources,
+  const changeOptionsOpen = (open: boolean) => {
+    if (!open) sources.close();
+    setOptionsOpen(open);
   };
   const controlsProps = composerControlsProps(props);
   const [composing, setComposing] = useState(false);
@@ -99,8 +91,11 @@ export function ChatTextComposer({
     if (projectReview.begin(item)) return;
     if (item.action?.type === "launch_external_source") {
       props.composerPalette?.onClose();
-      if (props.externalSourceControls) openSourcePicker();
-      else props.onOpenLibraryImports?.();
+      if (props.externalSourceControls) {
+        // The palette returns focus to the draft. Capture that destination before the deferred picker starts loading.
+        props.composerRef.current?.focus();
+        openSourcePicker();
+      } else props.onOpenLibraryImports?.();
       return;
     }
     props.composerPalette?.onSelect(item);
@@ -279,7 +274,7 @@ export function ChatTextComposer({
           reasoningEfforts={reasoningEfforts}
           sources={sources}
           optionsOpen={optionsOpen}
-          onOptionsOpenChange={setOptionsOpen}
+          onOptionsOpenChange={changeOptionsOpen}
           onChooseModel={() => modelOptionsRequest.current?.()}
         />
         <label htmlFor="cockpit-chat-draft" className="sr-only">

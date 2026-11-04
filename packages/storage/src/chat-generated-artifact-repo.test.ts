@@ -93,6 +93,7 @@ describe("ChatGeneratedArtifactRepository", () => {
     assert.equal(second.supersedesArtifactId, "artifact-1");
     assert.equal(second.sourceBlockIndex, 4);
     assert.equal(repo.get("artifact-2").model, "claude-sonnet-4.5");
+    assert.equal(repo.lockForVersion("artifact-2").model, "claude-sonnet-4.5");
     assert.equal(
       repo.getForContext("artifact-2", { workspaceId: "workspace-1", sessionId: "session-1" }).artifactId,
       "artifact-2",
@@ -165,6 +166,7 @@ describe("ChatGeneratedArtifactRepository", () => {
   it("rejects missing required fields and missing artifacts", () => {
     const repo = createRepo();
     assert.throws(() => repo.get("missing-artifact"), /Generated artifact missing-artifact not found/);
+    assert.throws(() => repo.lockForVersion("missing-artifact"), /Generated artifact missing-artifact not found/);
     assert.throws(
       () => repo.getForContext("missing-artifact", { workspaceId: "workspace-1", sessionId: "session-1" }),
       /Generated artifact missing-artifact not found/,
@@ -198,19 +200,30 @@ describe("ChatGeneratedArtifactRepository", () => {
       updated_at: "2026-04-22T00:00:00.000Z",
     };
     const repo = new ChatGeneratedArtifactRepository(
-      fakeDatabase([
-        fakeStatement(),
-        fakeStatement({ get: () => null }),
-        fakeStatement({ all: () => [null, { ...row, artifact_id: 42 }, row] }),
-        fakeStatement({ all: () => "not-an-array" }),
-        fakeStatement(),
-        fakeStatement({ all: () => [row] }),
-        fakeStatement({ all: () => [row] }),
-        fakeStatement({ all: () => [row] }),
-      ]),
+      fakeDatabase((sql) => {
+        const query = sql.replace(/\s+/gu, " ").trim();
+        if (!query.startsWith("SELECT ")) return fakeStatement();
+        if (query.includes("WHERE artifact_id = ?")) {
+          return fakeStatement({ get: (id) => (id === "malformed-base" ? { ...row, artifact_id: 42 } : null) });
+        }
+        if (query.includes("WHERE session_id = @sessionId")) {
+          return fakeStatement({ all: () => [null, { ...row, artifact_id: 42 }, row] });
+        }
+        if (query.includes("WHERE turn_id = @turnId")) return fakeStatement({ all: () => "not-an-array" });
+        if (
+          query.includes("WHERE session_id IN (") ||
+          query.includes("WHERE turn_id IN (") ||
+          query.includes("WHERE source_surface = ?")
+        ) {
+          return fakeStatement({ all: () => [row] });
+        }
+        assert.fail(`Unexpected generated-artifact fixture query: ${query}`);
+      }),
     );
 
     assert.throws(() => repo.get("artifact-valid"), /Generated artifact artifact-valid not found/);
+    assert.throws(() => repo.lockForVersion("artifact-valid"), /Generated artifact artifact-valid not found/);
+    assert.throws(() => repo.lockForVersion("malformed-base"), /Generated artifact malformed-base not found/);
     assert.deepEqual(
       repo.listBySession("session-1").map((item) => item.artifactId),
       ["artifact-valid"],
@@ -237,11 +250,10 @@ describe("ChatGeneratedArtifactRepository", () => {
   });
 });
 
-function fakeDatabase(statements: DbStatement[]): DatabaseClient {
-  let index = 0;
+function fakeDatabase(prepare: (sql: string) => DbStatement): DatabaseClient {
   return {
     dialect: "sqlite",
-    prepare: () => statements[index++] ?? fakeStatement(),
+    prepare,
     exec: () => undefined,
     close: () => undefined,
     transaction: (_mode, callback) => callback(),

@@ -2,6 +2,7 @@
 
 import { createHash } from "node:crypto";
 import type { PoolClient } from "pg";
+import { APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL } from "../approval-execution-linkage-postgres-compatibility.js";
 import type { DatabaseClient } from "../db.js";
 import { assertValidAppliedMigrationLedger, assertValidMigrationDefinitions } from "../migration-ledger-validation.js";
 import {
@@ -1251,6 +1252,27 @@ async function reconcileLegacyCompoundV124Ledger(
   return client.getAppliedMigrationRows(tx, migrationSchema);
 }
 
+/** Run the historical statements unchanged, with a corrected projector before the pending backfill. */
+function approvalExecutionLinkageV209Statements(migration: PostgresMigration): readonly string[] {
+  if (
+    migration.version !== 209 ||
+    migration.integritySha256 !== "f9bd51adefcc6f27142334b99af3d291bcef33d802005d5d7e6b16960e7b709d" ||
+    !isCanonicalMigration(migration, 209, "approval_execution_linkage_index")
+  ) {
+    return [migration.sql];
+  }
+  const backfill = "\nINSERT INTO approval_execution_linkages(approval_id, workspace_id, run_id, durable_run_id, session_id, created_at)";
+  const boundary = migration.sql.indexOf(backfill);
+  if (boundary < 0 || boundary !== migration.sql.lastIndexOf(backfill)) {
+    throw new Error("Postgres migration 209 approval execution linkage backfill boundary changed.");
+  }
+  return [
+    migration.sql.slice(0, boundary),
+    APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL,
+    migration.sql.slice(boundary),
+  ];
+}
+
 async function executePostgresAtomicMigration(
   tx: PoolClient,
   migrationSchema: PostgresMigrationSchemaIdentity,
@@ -1262,7 +1284,9 @@ async function executePostgresAtomicMigration(
     await prepareRemoteWorkerMeshBootstrapForAuthority(tx, migrationSchema, migration);
     await prepareMobilePushBootstrapForAuthority(tx, migrationSchema, migration);
     await prepareMobileApprovalKeyBootstrapForAuthority(tx, migrationSchema, migration);
-    await tx.query(migration.sql);
+    for (const sql of approvalExecutionLinkageV209Statements(migration)) {
+      await tx.query(sql);
+    }
     return false;
   }
 
@@ -2030,7 +2054,10 @@ function executePostgresAtomicMigrationSync(
     prepareRemoteWorkerMeshBootstrapForAuthoritySync(db, migrationSchema, migration);
     prepareMobilePushBootstrapForAuthoritySync(db, migrationSchema, migration);
     prepareMobileApprovalKeyBootstrapForAuthoritySync(db, migrationSchema, migration);
-    db.exec(migration.sql);
+    const statements = db.dialect === "postgres" ? approvalExecutionLinkageV209Statements(migration) : [migration.sql];
+    for (const sql of statements) {
+      db.exec(sql);
+    }
     return false;
   }
 

@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { isCancelledError, useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type {
   CapabilityToolGroupItem,
@@ -10,6 +10,10 @@ import type {
   ToolGroupChange,
   ToolGroupId,
 } from "@goatcitadel/contracts";
+import {
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { fetchChangePlan, fetchChangePlans } from "@goatcitadel/mission-control-shared/api/chat";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { readPluginOwnedRefusal } from "@goatcitadel/mission-control-shared/api/plugin-owned-refusal";
@@ -18,12 +22,10 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { toolListQuery } from "../../../data/capability-tools-query";
 import { DONE, ENDED } from "../change-plan-outcome";
 import {
-  __resetToolGroupSwitchStoreForTests,
-  CONFIRMING,
+  clearToolGroupSwitches,
   isAnyToolGroupSaving,
   isFollowing,
   readToolGroupSwitch,
-  SAVING,
   setToolGroupPlanReader,
   setToolGroupSwitch,
   useToolGroupSwitchEntry,
@@ -74,7 +76,20 @@ interface ListContext {
 }
 
 const contexts = new Map<ToolGroupId, ListContext>();
-const reading = new Set<ToolGroupId>();
+const reading = new Map<ToolGroupId, FollowEntry>();
+let custody = 0;
+let recovery: "reading" | "done" | undefined;
+
+function retireCustody() {
+  custody++;
+  recovery = undefined;
+  contexts.clear();
+  reading.clear();
+  clearToolGroupSwitches();
+}
+
+subscribeGatewayAccessChange(retireCustody);
+subscribeGatewayCallerScope(retireCustody);
 
 /** What a failed entry shows as `failure`, made once per entry so its identity says which failure it is. */
 const failures = new WeakMap<ToolGroupSwitchEntry, NonNullable<ToolGroupSwitch["failure"]>>();
@@ -128,10 +143,11 @@ const sameFollow = (a: FollowEntry, b: FollowEntry) =>
   a.phase === b.phase && a.planId === b.planId && approvalOf(a) === approvalOf(b);
 
 function fail(groupId: ToolGroupId, message: string, conflict = false, pluginId?: string) {
+  const started = custody;
+  const context = contexts.get(groupId);
   setToolGroupSwitch(groupId, { phase: "failed", message, conflict, ...(pluginId ? { pluginId } : {}) });
   // Whatever the plan or request did, the list shows what the Gateway holds now.
-  const context = contexts.get(groupId);
-  if (context) void context.client.invalidateQueries({ queryKey: context.listKey });
+  if (context && custody === started) void context.client.invalidateQueries({ queryKey: context.listKey });
 }
 
 /**
@@ -149,10 +165,11 @@ async function readListAgain({ client, listKey }: ListContext): Promise<boolean>
 
 /** The change is made: the switch stays pending until the list read again shows it. */
 async function confirm(groupId: ToolGroupId) {
-  setToolGroupSwitch(groupId, CONFIRMING);
   const context = contexts.get(groupId);
-  if (context) await readListAgain(context);
-  if (readToolGroupSwitch(groupId) === CONFIRMING) setToolGroupSwitch(groupId, undefined);
+  const confirming = { phase: "confirming" } as const;
+  setToolGroupSwitch(groupId, confirming);
+  if (context && readToolGroupSwitch(groupId) === confirming) await readListAgain(context);
+  if (readToolGroupSwitch(groupId) === confirming) setToolGroupSwitch(groupId, undefined);
 }
 
 /**
@@ -185,7 +202,7 @@ function planEnded(groupId: ToolGroupId, enabled: boolean, plan: ChangePlanRecor
 async function readPlan(groupId: ToolGroupId) {
   const entry = readToolGroupSwitch(groupId);
   if (!isFollowing(entry) || reading.has(groupId)) return;
-  reading.add(groupId);
+  reading.set(groupId, entry);
   let plan: ChangePlanRecord;
   try {
     plan = await fetchChangePlan(entry.planId, PLAN_CONTEXT);
@@ -193,7 +210,7 @@ async function readPlan(groupId: ToolGroupId) {
     // Ignore a missed read: the plan is still followed, and the next beat reads it again.
     return;
   } finally {
-    reading.delete(groupId);
+    if (reading.get(groupId) === entry) reading.delete(groupId);
   }
   if (readToolGroupSwitch(groupId) !== entry) return;
   const change = toolGroupChangeOf(plan);
@@ -212,9 +229,10 @@ setToolGroupPlanReader(readPlan);
 function receive(groupId: ToolGroupId, enabled: boolean, receipt: ChangePlanReceipt | undefined) {
   // No receipt: Change Plans are off on this install, and the save made the change itself.
   if (!receipt?.planId || DONE.has(receipt.status)) return void confirm(groupId);
-  setToolGroupSwitch(groupId, followEntry(receipt, { groupId, enabled }));
+  const entry = followEntry(receipt, { groupId, enabled });
+  setToolGroupSwitch(groupId, entry);
   // A plan waiting in Inbox is read at the poll's pace. One that ended or is under way is read now for its outcome.
-  if (receipt.status !== "awaiting_approval") void readPlan(groupId);
+  if (receipt.status !== "awaiting_approval" && readToolGroupSwitch(groupId) === entry) void readPlan(groupId);
 }
 
 async function save(group: CapabilityToolGroupItem, next: boolean, expectedRevision: number, context: ListContext) {
@@ -222,7 +240,10 @@ async function save(group: CapabilityToolGroupItem, next: boolean, expectedRevis
   const current = readToolGroupSwitch(groupId);
   if (before === "always_on" || isAnyToolGroupSaving() || (current && current.phase !== "failed")) return;
   contexts.set(groupId, context);
-  setToolGroupSwitch(groupId, SAVING);
+  const saving = { phase: "saving" } as const;
+  const isCurrent = () => readToolGroupSwitch(groupId) === saving;
+  setToolGroupSwitch(groupId, saving);
+  if (!isCurrent()) return;
   if (!next) {
     // Switching off is the safe direction, so it shows before the Gateway answers. A read that started before the
     // change would put the old state back; cancelling starts at once, so the row changes in the same turn as the click.
@@ -231,10 +252,13 @@ async function save(group: CapabilityToolGroupItem, next: boolean, expectedRevis
   }
   let saved: Awaited<ReturnType<typeof patchSettings>>;
   try {
+    if (!isCurrent()) return;
     saved = await patchSettings({ expectedRevision, toolGroupChange: { groupId, enabled: next } });
   } catch (error) {
+    if (!isCurrent()) return;
     // Only this group goes back, and only when it was changed. A newer list may have landed for the others.
     if (!next) putState(context, groupId, before);
+    if (!isCurrent()) return;
     // A plugin keeps the group off: GoatCitadel's own sentence names it, and reloading wouldn't change anything.
     const refusal = readPluginOwnedRefusal(error);
     if (refusal) return fail(groupId, refusal.message, false, refusal.pluginId);
@@ -243,6 +267,7 @@ async function save(group: CapabilityToolGroupItem, next: boolean, expectedRevis
     // A request that reported a failure can still have been committed, so `fail` reads the list again.
     return fail(groupId, conflict ? CONFLICT : described.summary, conflict);
   }
+  if (!isCurrent()) return;
   // The next save, of any group, has to start from the revision this one made. This says nothing about the switch.
   if (typeof saved?.revision === "number") {
     const revision = saved.revision;
@@ -250,25 +275,26 @@ async function save(group: CapabilityToolGroupItem, next: boolean, expectedRevis
       list ? { ...list, settingsRevision: revision } : list,
     );
   }
+  if (!isCurrent()) return;
   const receipt = saved?.changePlanReceipt;
   // An Off that the Gateway hasn't made yet goes back until it is made.
   if (!next && receipt?.planId && !DONE.has(receipt.status)) putState(context, groupId, before);
-  receive(groupId, next, receipt);
+  if (isCurrent()) receive(groupId, next, receipt);
 }
 
 /**
- * Plans from before a reload that still wait in Inbox are read once per app session, when the first switch shows: a
- * reload forgets every entry, and the switch would otherwise offer On again while the old request waits.
+ * Plans from before a reload or access change are read when the first switch for the current caller shows, so it
+ * can recover a wait in Inbox.
  */
-let recovery: "reading" | "done" | undefined;
-
-function recoverWaits(context: ListContext) {
-  if (recovery) return;
+function recoverWaits(context: ListContext, ownerCustody: number) {
+  if (recovery || ownerCustody !== custody) return;
   recovery = "reading";
   fetchChangePlans(PLAN_CONTEXT, { status: "awaiting_approval", limit: RECOVERY_LIMIT }).then(
     (read) => {
+      if (ownerCustody !== custody) return;
       recovery = "done";
       for (const plan of read?.items ?? []) {
+        if (ownerCustody !== custody) return;
         const change = toolGroupChangeOf(plan);
         // A group this tab already follows or saves keeps what it has.
         if (!change || plan.status !== "awaiting_approval" || readToolGroupSwitch(change.groupId)) continue;
@@ -277,6 +303,7 @@ function recoverWaits(context: ListContext) {
       }
     },
     () => {
+      if (ownerCustody !== custody) return;
       // Nothing was taken on, so the next list read (a new revision) or the next view reads the plans again.
       recovery = undefined;
     },
@@ -294,11 +321,14 @@ export function useToolGroupSwitch(group: CapabilityToolGroupItem, settingsRevis
   const client = useQueryClient();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
   const listKey = toolListQuery(workspaceId).queryKey;
-  const entry = useToolGroupSwitchEntry(group.groupId);
+  // The Capabilities branch remounts when access or caller scope changes.
+  const [ownerCustody] = useState(() => custody);
+  const currentEntry = useToolGroupSwitchEntry(group.groupId);
+  const entry = ownerCustody === custody ? currentEntry : undefined;
 
   useEffect(() => {
-    recoverWaits({ client, listKey: toolListQuery(workspaceId).queryKey });
-  }, [client, workspaceId, settingsRevision]);
+    recoverWaits({ client, listKey: toolListQuery(workspaceId).queryKey }, ownerCustody);
+  }, [client, workspaceId, settingsRevision, ownerCustody]);
 
   const waiting = entry?.phase === "waiting";
   return {
@@ -308,17 +338,17 @@ export function useToolGroupSwitch(group: CapabilityToolGroupItem, settingsRevis
     ...(entry?.phase === "waiting" && entry.approvalId ? { waitingApprovalId: entry.approvalId } : {}),
     ...(entry?.phase === "failed" ? { failure: failureOf(entry) } : {}),
     ...(group.heldOffBy && group.heldOffBy.length > 0 ? { heldOffBy: group.heldOffBy } : {}),
-    setEnabled: (next) => void save(group, next, settingsRevision, { client, listKey }),
+    setEnabled: (next) => {
+      if (ownerCustody === custody) void save(group, next, settingsRevision, { client, listKey });
+    },
     reload: () => {
+      if (ownerCustody !== custody) return;
       if (readToolGroupSwitch(group.groupId)?.phase === "failed") setToolGroupSwitch(group.groupId, undefined);
-      void client.invalidateQueries({ queryKey: listKey });
+      if (ownerCustody === custody) void client.invalidateQueries({ queryKey: listKey });
     },
   };
 }
 
 export function __resetToolGroupSwitchesForTests() {
-  recovery = undefined;
-  contexts.clear();
-  reading.clear();
-  __resetToolGroupSwitchStoreForTests();
+  retireCustody();
 }

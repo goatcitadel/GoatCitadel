@@ -364,7 +364,10 @@ describe("CapabilitySkillActionsService.checkSource", () => {
       idempotencyKey: "check-1",
       actorId: ACTOR,
     });
-    expect(parts.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "default", limit: 100 });
+    expect(parts.listSkillHub).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      snapshotIds: ["skill-hub-review-1"],
+    });
     expect(checked).toEqual({
       replayed: false,
       install: expect.objectContaining({
@@ -461,6 +464,36 @@ describe("CapabilitySkillActionsService.checkSource", () => {
     await expect(
       new CapabilitySkillActionsService(parts).checkSource(review({ kind: "pack", packId: "himalaya" })),
     ).rejects.toBe(conflict);
+  });
+
+  it("returns the older check for an idempotent review replay after 100 newer checks", async () => {
+    const older = hubItem({ snapshotId: "check-older" });
+    const newer = Array.from({ length: 100 }, (_, index) => hubItem({ snapshotId: `check-newer-${index}` }));
+    const listSkillHub = vi.fn(async ({ workspaceId, limit, snapshotIds }: {
+      workspaceId: string;
+      limit?: number;
+      snapshotIds?: readonly string[];
+    }) => ({
+      items: workspaceId !== "default"
+        ? []
+        : snapshotIds
+          ? [...newer, older].filter((item) => snapshotIds.includes(item.snapshotId))
+          : [...newer, older].slice(0, limit),
+    }));
+    const parts = sources({
+      reviewSkillHubSource: vi.fn(async () => ({ snapshot: { snapshotId: older.snapshotId }, replayed: true })),
+      listSkillHub,
+    });
+    const service = new CapabilitySkillActionsService(parts);
+
+    await expect(service.checkSource(review({ kind: "pack", packId: "himalaya" }))).resolves.toMatchObject({
+      replayed: true,
+      install: { snapshotId: older.snapshotId, step: "check_passed" },
+    });
+    expect(parts.reviewSkillHubSource).toHaveBeenCalledOnce();
+    expect(listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "default", snapshotIds: [older.snapshotId] });
+    expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
   });
 
   it("answers plainly when the new check can't be read back", async () => {
@@ -591,6 +624,7 @@ describe("CapabilitySkillActionsService.requestStep", () => {
     const listed: PluginSkillListing = {
       pluginId: "meeting-tools",
       name: "Meeting tools",
+      installPlanId: "plan-meeting-tools",
       workspaceId: "default",
       state: "installed",
       pieces: [{ pieceId: "notes", kind: "skill", owned: true, skillSnapshotId: "skill-hub-review-1" }],
@@ -621,6 +655,7 @@ describe("CapabilitySkillActionsService.requestStep", () => {
     it.each<[string, readonly PluginSkillListing[]]>([
       ["its record was removed", []],
       ["its uninstall began", [{ ...listed, state: "uninstalling" }]],
+      ["another install replaced the same check", [{ ...listed, installPlanId: "other-install" }]],
     ])("declines the step as the operator, never approves it, when %s", async (_case, afterApproval) => {
       const parts = pluginStep(afterApproval);
 
@@ -630,7 +665,7 @@ describe("CapabilitySkillActionsService.requestStep", () => {
         message: "This skill came with a plugin. Install the plugin to use it.",
       });
       expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(expect.anything(), {
-        pluginPass: { pluginId: "meeting-tools" },
+        pluginPass: { pluginId: "meeting-tools", installPlanId: "plan-meeting-tools" },
       });
       expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-activate", {
         decision: "reject",

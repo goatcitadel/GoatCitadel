@@ -825,9 +825,13 @@ function documentTruncationWarnings(args: Record<string, unknown>): string[] {
   const limits = DOCUMENT_TEXT_LIMITS;
   const counts = {
     title: normalizedTextLength(args.title) > limits.title ? 1 : 0,
-    body: normalizedTextLength(args.body ?? args.content) > limits.body ? 1 : 0,
-    headings: rawSections.filter((s) => normalizedTextLength(s.heading ?? s.title) > limits.heading).length,
-    sectionBodies: rawSections.filter((s) => normalizedTextLength(s.body ?? s.content) > limits.sectionBody).length,
+    body: normalizedTextLength(asString(args.body) ?? asString(args.content)) > limits.body ? 1 : 0,
+    headings: rawSections.filter(
+      (s) => normalizedTextLength(asString(s.heading) ?? asString(s.title)) > limits.heading,
+    ).length,
+    sectionBodies: rawSections.filter(
+      (s) => normalizedTextLength(asString(s.body) ?? asString(s.content)) > limits.sectionBody,
+    ).length,
     bullets: rawSections.reduce(
       (total, s) =>
         total + rawDocumentBullets(s.bullets).filter((item) => normalizedTextLength(item) > limits.bullet).length,

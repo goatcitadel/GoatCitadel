@@ -1154,6 +1154,7 @@ describe("agentSendChatMessage", () => {
       providerId: "backup",
       model: "backup-model",
       webMode: "on",
+      fullWebAccess: false,
       contextRefs: [{ kind: "attachment", ref: "attachment-retry" }],
     });
 
@@ -1166,6 +1167,7 @@ describe("agentSendChatMessage", () => {
         providerId: "backup",
         model: "backup-model",
         webMode: "on",
+        fullWebAccess: false,
         contextRefs: [{ kind: "attachment", ref: "attachment-retry" }],
       }),
       expect.objectContaining({
@@ -1180,6 +1182,7 @@ describe("agentSendChatMessage", () => {
       "session-1",
       expect.objectContaining({
         content: "original prompt",
+        fullWebAccess: false,
         contextRefs: [{ kind: "attachment", ref: "attachment-retry" }],
       }),
       expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),
@@ -1406,6 +1409,7 @@ describe("agentSendChatMessage", () => {
     const retryChunks = await collectChunks(
       retryChatTurnStream(host, "session-1", "turn-original", {
         mode: "chat",
+        fullWebAccess: false,
         contextRefs: [{ kind: "memory_item", ref: "memory-retry" }],
       }),
     );
@@ -1415,6 +1419,7 @@ describe("agentSendChatMessage", () => {
       "session-1",
       expect.objectContaining({
         content: "original prompt",
+        fullWebAccess: false,
         contextRefs: [{ kind: "memory_item", ref: "memory-retry" }],
       }),
       expect.objectContaining({ branchKind: "retry", sourceTurnId: "turn-original", ingestUserMessage: false }),
@@ -1425,6 +1430,7 @@ describe("agentSendChatMessage", () => {
       "session-1",
       expect.objectContaining({
         content: "original prompt",
+        fullWebAccess: false,
         contextRefs: [{ kind: "memory_item", ref: "memory-retry" }],
       }),
       expect.objectContaining({ turnId: expect.any(String), turnAdmission: expect.any(Object) }),

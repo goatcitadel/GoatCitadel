@@ -230,6 +230,46 @@ describe("desktop shell bootstrap", () => {
     expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
   });
 
+  it("does not restore the ready frame when a pre-stop status read settles late", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, () => void>();
+    tauriMocks.listen.mockImplementation((name: string, callback: () => void) => {
+      listeners.set(name, callback);
+      return Promise.resolve(() => undefined);
+    });
+    let settle!: (status: RuntimeStatus) => void;
+    tauriMocks.invoke
+      .mockResolvedValueOnce(createRuntimeStatus({ status: "ready" }))
+      .mockReturnValueOnce(new Promise<RuntimeStatus>((resolve) => { settle = resolve; }));
+    await import("./main.js");
+    await flushPromises();
+    await vi.advanceTimersByTimeAsync(10_000);
+    listeners.get("desktop://runtime-stopped")?.();
+    settle(createRuntimeStatus({ status: "ready", targetUrl: "http://127.0.0.1:5173/old" }));
+    await flushPromises();
+    expect(element("status-copy").textContent).toBe("Runtime stopped.");
+    expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(readRuntimeStatusCalls()).toHaveLength(1);
+  });
+
+  it("keeps observing a refused stop and shows its reason instead of stopped", async () => {
+    vi.useFakeTimers();
+    const listeners = new Map<string, (event: { payload: unknown }) => void>();
+    tauriMocks.listen.mockImplementation((name: string, callback: (event: { payload: unknown }) => void) => {
+      listeners.set(name, callback);
+      return Promise.resolve(() => undefined);
+    });
+    tauriMocks.invoke.mockResolvedValue(createRuntimeStatus({ status: "ready" }));
+    await import("./main.js");
+    await flushPromises();
+    listeners.get("desktop://runtime-stop-failed")?.({ payload: { message: "Runtime could not be stopped: gateway (external_override)." } });
+    await flushPromises();
+    expect(element("desktop-toast").textContent).toContain("external_override");
+    expect(element("status-copy").textContent).not.toBe("Runtime stopped.");
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(readRuntimeStatusCalls().length).toBeGreaterThan(0);
+  });
   it("single-flights native runtime status polling and times out hung reads", async () => {
     vi.useFakeTimers();
     const listeners = new Map<string, () => void>();

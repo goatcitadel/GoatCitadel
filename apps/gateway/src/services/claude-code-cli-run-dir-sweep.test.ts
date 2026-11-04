@@ -1,11 +1,16 @@
+import { spawn } from "node:child_process";
+import { once } from "node:events";
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, utimesSync, writeFileSync } from "node:fs";
 import { rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  CLAUDE_CLI_OWNER_FILE,
   CLAUDE_CLI_STALE_RUN_DIR_AGE_MS,
   CLAUDE_CLI_STALE_RUN_DIR_PARK_MARGIN,
+  hostClaudeCliRunDirSweepFs,
+  registerClaudeCliRunDirOwner,
   sweepStaleClaudeCliRunDirs,
 } from "./claude-code-cli-run-dir-sweep.js";
 
@@ -46,10 +51,12 @@ describe("sweepStaleClaudeCliRunDirs", () => {
   });
 
   it("removes stale run dirs and keeps fresh ones", async () => {
-    makeRunDir("run-stale", 3 * HOUR_MS);
+    const stale = makeRunDir("run-stale", 3 * HOUR_MS);
+    await registerClaudeCliRunDirOwner(stale);
+    backdate(stale, 3 * HOUR_MS);
     makeRunDir("run-fresh", 5 * 60 * 1000);
 
-    const result = await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir });
+    const result = await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, probeOwner: () => "dead" });
 
     expect(result).toEqual({ removed: 1, kept: 1 });
     expect(removed).toEqual(["run-stale"]);
@@ -68,6 +75,93 @@ describe("sweepStaleClaudeCliRunDirs", () => {
 
     expect(result).toEqual({ removed: 0, kept: 1 });
     expect(existsSync(dir)).toBe(true);
+  });
+
+  it("keeps an active child run when its directory age exceeds the stale threshold", async () => {
+    const dir = makeRunDir("run-active-child", 0);
+    const prompt = path.join(dir, "system-prompt.txt");
+    // Finite, task-owned and hidden. Advancing the sweep's clock represents an
+    // active long-timeout step (or a wall-clock jump), without waiting two hours.
+    const child = spawn(process.execPath, ["-e", "setTimeout(() => process.exit(0), 5000)"], {
+      cwd: dir,
+      windowsHide: true,
+      stdio: "ignore",
+    });
+    const closed = new Promise<void>((resolve) => child.once("close", () => resolve()));
+    try {
+      await once(child, "spawn");
+      expect(child.exitCode).toBeNull();
+      await registerClaudeCliRunDirOwner(dir, child.pid);
+      const attempted: string[] = [];
+      await sweepStaleClaudeCliRunDirs({
+        scratchRoot,
+        now: () => Date.now() + 3 * HOUR_MS,
+        removeDir: async (target) => {
+          attempted.push(target);
+          // Match the provider's non-throwing cleanup. Windows may refuse the
+          // final directory removal after deleting its contents; that is not
+          // proof the active run's prompt/bridge files were protected.
+          await rm(target, { recursive: true, force: true }).catch(() => undefined);
+        },
+      });
+      expect(child.exitCode).toBeNull();
+      expect(attempted).toEqual([]);
+      expect(existsSync(prompt)).toBe(true);
+    } finally {
+      if (child.exitCode === null && child.signalCode === null) child.kill();
+      await closed;
+    }
+  });
+
+  it("keeps legacy unowned directories even when stale", async () => {
+    makeRunDir("run-legacy", 3 * HOUR_MS);
+    const probeOwner = vi.fn(() => "dead" as const);
+    expect(await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, probeOwner })).toEqual({ removed: 0, kept: 1 });
+    expect(removed).toEqual([]);
+    expect(probeOwner).not.toHaveBeenCalled();
+  });
+
+  it.each(["alive", "unknown"] as const)("keeps an old declared owner that is %s (including PID reuse)", async (status) => {
+    const dir = makeRunDir("run-owned", 3 * HOUR_MS);
+    await registerClaudeCliRunDirOwner(dir);
+    backdate(dir, 3 * HOUR_MS);
+    const probeOwner = vi.fn(() => status);
+    expect(await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, probeOwner })).toEqual({ removed: 0, kept: 1 });
+    expect(removed).toEqual([]);
+    expect(probeOwner).toHaveBeenCalledWith(process.pid);
+  });
+
+  it.each([0, -1, 1.5, 2 ** 32, "123", null])("never probes invalid owner pid %s", async (pid) => {
+    const dir = makeRunDir("run-invalid-owner", 3 * HOUR_MS);
+    writeFileSync(path.join(dir, CLAUDE_CLI_OWNER_FILE), JSON.stringify({ version: 1, pid }));
+    backdate(dir, 3 * HOUR_MS);
+    const probeOwner = vi.fn(() => "dead" as const);
+    expect(await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, probeOwner })).toEqual({ removed: 0, kept: 1 });
+    expect(probeOwner).not.toHaveBeenCalled();
+  });
+
+  it.each(["not JSON", JSON.stringify({ version: 2, pid: 123 }), " ".repeat(513)])("keeps malformed or oversized ownership", async (contents) => {
+    const dir = makeRunDir("run-bad-owner", 3 * HOUR_MS);
+    writeFileSync(path.join(dir, CLAUDE_CLI_OWNER_FILE), contents);
+    backdate(dir, 3 * HOUR_MS);
+    expect(await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, probeOwner: () => "dead" })).toEqual({ removed: 0, kept: 1 });
+  });
+
+  it("keeps unreadable ownership and a failed liveness probe", async () => {
+    const dir = makeRunDir("run-unreadable-owner", 3 * HOUR_MS);
+    await registerClaudeCliRunDirOwner(dir);
+    backdate(dir, 3 * HOUR_MS);
+    const unreadable = { ...hostClaudeCliRunDirSweepFs, readOwnerPid: async () => { throw new Error("denied"); } };
+    expect(await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, fs: unreadable })).toEqual({ removed: 0, kept: 1 });
+    expect(await sweepStaleClaudeCliRunDirs({ scratchRoot, removeDir, probeOwner: () => { throw new Error("denied"); } })).toEqual({ removed: 0, kept: 1 });
+    expect(removed).toEqual([]);
+  });
+
+  it("registers once with the current Gateway pid and refuses to replace ownership", async () => {
+    const dir = makeRunDir("run-registration", 0);
+    await registerClaudeCliRunDirOwner(dir);
+    expect(await hostClaudeCliRunDirSweepFs.readOwnerPid(dir)).toBe(process.pid);
+    await expect(registerClaudeCliRunDirOwner(dir)).rejects.toMatchObject({ code: "EEXIST" });
   });
 
   it("leaves entries that are not run-* dirs alone, however old", async () => {
@@ -116,6 +210,7 @@ describe("sweepStaleClaudeCliRunDirs", () => {
           throw denied;
         },
         statNoFollow: async () => undefined,
+        readOwnerPid: async () => undefined,
       },
     });
 
@@ -140,6 +235,7 @@ describe("sweepStaleClaudeCliRunDirs", () => {
           if (name === "run-swapped") return { isDirectory: false, mtimeMs: 0 };
           return undefined;
         },
+        readOwnerPid: async () => undefined,
       },
     });
 

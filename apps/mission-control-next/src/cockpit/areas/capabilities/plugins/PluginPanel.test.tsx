@@ -11,6 +11,8 @@ import type {
   CapabilityPluginListResponse,
   PluginActionOutcome,
 } from "@goatcitadel/contracts";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CockpitNavigationProvider } from "../../../app/CockpitNavigationProvider";
 import { InspectorPanel, InspectorProvider } from "../../../app/inspector";
@@ -18,8 +20,9 @@ import { __resetSettingsApprovalDialogsForTests } from "../../settings/SettingsA
 import { PluginsTab } from "./PluginsTab";
 import { httpError } from "./plugin-install.test-support";
 import { PLUGINS_LIST_ID } from "./plugin-links";
-import { __resetPluginUninstallsForTests } from "./plugin-uninstall-store";
+import { __resetPluginUninstallsForTests, readPluginUninstall } from "./plugin-uninstall-store";
 import { __resetPluginInstallsForTests } from "./use-plugin-install";
+import { usePluginInstallPanel, type PluginInstallPanelOpener } from "./use-plugin-install-panel";
 
 const prefs = vi.hoisted(() => ({
   activeCitadelId: "default",
@@ -320,6 +323,43 @@ describe("Plugin panel", () => {
     expect(api.fetchCapabilityPluginDetail).not.toHaveBeenCalled();
   });
 
+  it("does not let a retained built-in Install action start a check after Gateway access changes", async () => {
+    let current!: PluginInstallPanelOpener;
+    function OpenerProbe() {
+      current = usePluginInstallPanel(undefined);
+      return null;
+    }
+    const mount = async (key: string) => {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <CockpitNavigationProvider>
+              <InspectorProvider>
+                <OpenerProbe key={key} />
+              </InspectorProvider>
+            </CockpitNavigationProvider>
+          </QueryClientProvider>,
+        ),
+      );
+    };
+    api.inspectCapabilityPlugin.mockReset().mockImplementation(async () => {
+      throw new Error("The test stops at the inspection request boundary");
+    });
+    await mount("old");
+    const retired = current;
+    await act(async () => notifyGatewayAccessChanged());
+    await mount("new");
+    await act(async () => retired.install(BUILT_IN));
+
+    expect(api.inspectCapabilityPlugin).not.toHaveBeenCalled();
+
+    await act(async () => current.install(BUILT_IN));
+    expect(api.inspectCapabilityPlugin).toHaveBeenCalledExactlyOnceWith(
+      { workspaceId: "ws-1", source: { kind: "built_in", pluginId: BUILT_IN.pluginId } },
+      { attemptKey: expect.any(String) },
+    );
+  });
+
   it("lists what uninstall removes and what stays", async () => {
     plugin.pieces = [CALENDAR, NOTES, NO_GIT, CHECKS];
     await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
@@ -334,6 +374,48 @@ describe("Plugin panel", () => {
     expect(dialog()?.textContent).toContain("This can't be undone here.");
     await press(button("Keep it", dialog()));
     expect(api.uninstallCapabilityPlugin).not.toHaveBeenCalled();
+  });
+
+  it("does not retain an uninstall attempt when its old transport rejects after custody changes", async () => {
+    let rejectUninstall!: (error: Error) => void;
+    api.uninstallCapabilityPlugin.mockImplementationOnce(
+      () =>
+        new Promise<PluginActionOutcome>((_resolve, reject) => {
+          rejectUninstall = reject;
+        }),
+    );
+    await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+    await press(button("Uninstall", body()));
+    await press(button("Uninstall Meeting tools", dialog()));
+    expect(api.uninstallCapabilityPlugin).toHaveBeenCalledOnce();
+    expect(readPluginUninstall(PLUGIN_ID)).toMatchObject({ phase: "asking" });
+
+    await act(async () => notifyGatewayAccessChanged());
+    await act(async () =>
+      rejectUninstall(
+        new ApiRequestError("Gateway access changed while this request was in flight.", {
+          kind: "protocol",
+          method: "POST",
+          path: "/api/v1/capabilities/plugins/uninstall",
+        }),
+      ),
+    );
+    await settle();
+
+    expect(readPluginUninstall(PLUGIN_ID)).toBeUndefined();
+    expect(api.uninstallCapabilityPlugin).toHaveBeenCalledOnce();
+    expect(plans.fetchChangePlan).not.toHaveBeenCalled();
+
+    act(() => root.unmount());
+    client.clear();
+    root = createRoot(container);
+    api.uninstallCapabilityPlugin.mockResolvedValueOnce({ outcome: "failed", summary: "Fixture stopped." });
+    await renderTab(`/capabilities/plugins?shell=cockpit&item=plugin%3A${PLUGIN_ID}`);
+    await press(button("Uninstall", body()));
+    await press(button("Uninstall Meeting tools", dialog()));
+    const [oldAttempt, newAttempt] = api.uninstallCapabilityPlugin.mock.calls.map(([, options]) => options.attemptKey);
+    expect(newAttempt).toEqual(expect.any(String));
+    expect(newAttempt).not.toBe(oldAttempt);
   });
 
   it("follows an uninstall until the plugin is gone", async () => {

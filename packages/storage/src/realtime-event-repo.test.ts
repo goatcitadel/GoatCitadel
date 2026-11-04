@@ -23,6 +23,64 @@ function taskEventOptions(taskId: string) {
 }
 
 describe("RealtimeEventRepository", () => {
+  it("prunes a sequence prefix despite delayed event timestamps", () => {
+    const repo = createRepo();
+    const first = repo.append("heartbeat", "tests", {}, undefined, "2026-11-02T12:00:00.000Z");
+    const delayed = repo.appendIdempotent("heartbeat", "tests", {}, undefined, {
+      deliveryId: "delayed", occurredAt: "2026-10-01T00:00:00.000Z",
+    }).event;
+    const last = repo.append("heartbeat", "tests", {}, undefined, "2026-11-02T12:01:00.000Z");
+    assert.equal(repo.pruneToMaxRows(2), 1);
+    assert.deepEqual(repo.listAfterSequence(first.sequence, 10).map((event) => event.sequence), [delayed.sequence, last.sequence]);
+    assert.deepEqual(repo.getSequenceBounds(), { oldestSequence: delayed.sequence, newestSequence: last.sequence, lastPrunedSequence: first.sequence });
+  });
+
+  it("age retention removes the entire sequence prefix through a delayed old event", () => {
+    const repo = createRepo();
+    repo.append("heartbeat", "tests", {}, undefined, "2026-11-02T12:00:00.000Z");
+    repo.append("heartbeat", "tests", {}, undefined, "2026-10-01T00:00:00.000Z");
+    const last = repo.append("heartbeat", "tests", {}, undefined, "2026-11-02T12:01:00.000Z");
+    assert.equal(repo.pruneOlderThan("2026-11-01T00:00:00.000Z"), 2);
+    assert.deepEqual(repo.listAfterSequence(0, 10).map((event) => event.sequence), [last.sequence]);
+    assert.equal(repo.pruneOlderThan("2026-11-01T00:00:00.000Z"), 0);
+  });
+
+  it("keeps the actual deletion watermark when retention empties the stream with an unused allocation tail", () => {
+    const db = tempDbs.open({ dbPath: tempDbs.path("event-retention-empty") });
+    const repo = new RealtimeEventRepository(db);
+    const event = repo.append("heartbeat", "tests", {}, undefined, "2026-10-01T00:00:00.000Z");
+    // Models a same-delivery loser which allocated a sequence but inserted no new row.
+    db.prepare("UPDATE realtime_event_sequence_state SET last_sequence = last_sequence + 1 WHERE stream_name = 'events'").run();
+    assert.equal(repo.pruneOlderThan("2026-11-01T00:00:00.000Z"), 1);
+    const empty = { oldestSequence: undefined, newestSequence: undefined, lastPrunedSequence: event.sequence };
+    assert.deepEqual(repo.getSequenceBounds(), empty);
+    assert.deepEqual(new RealtimeEventRepository(db).getSequenceBounds(), empty);
+    assert.equal(repo.pruneOlderThan("2026-11-01T00:00:00.000Z"), 0);
+    assert.deepEqual(repo.getSequenceBounds(), empty);
+  });
+
+  it("rolls deletion back if its retention watermark cannot commit", () => {
+    const db = tempDbs.open({ dbPath: tempDbs.path("event-retention-rollback") });
+    const repo = new RealtimeEventRepository(db);
+    const event = repo.append("heartbeat", "tests", {}, undefined, "2026-10-01T00:00:00.000Z");
+    db.exec(`CREATE TRIGGER fail_retention_floor BEFORE INSERT ON realtime_event_sequence_state
+      WHEN NEW.stream_name = 'events:retention-floor' BEGIN SELECT RAISE(ABORT, 'retention marker rejected'); END;`);
+    assert.throws(() => repo.pruneOlderThan("2026-11-01T00:00:00.000Z"), /retention marker rejected/);
+    assert.deepEqual(repo.listAfterSequence(0, 10).map((item) => item.sequence), [event.sequence]);
+    assert.deepEqual(repo.getSequenceBounds(), { oldestSequence: event.sequence, newestSequence: event.sequence });
+  });
+
+  it("preserves valid allocation gaps inside the retained suffix", () => {
+    const db = tempDbs.open({ dbPath: tempDbs.path("event-retention-allocation-gap") });
+    const repo = new RealtimeEventRepository(db);
+    repo.append("heartbeat", "tests", {});
+    db.prepare("UPDATE realtime_event_sequence_state SET last_sequence = last_sequence + 1 WHERE stream_name = 'events'").run();
+    const third = repo.append("heartbeat", "tests", {});
+    const fourth = repo.append("heartbeat", "tests", {});
+    assert.equal(repo.pruneToMaxRows(2), 1);
+    assert.deepEqual(repo.listAfterSequence(0, 10).map((event) => event.sequence), [third.sequence, fourth.sequence]);
+  });
+
   it("stores and paginates realtime events", () => {
     const repo = createRepo();
     const first = repo.append(

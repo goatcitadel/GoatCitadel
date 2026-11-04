@@ -36,6 +36,7 @@ export class A2ATaskPushConfigRepository {
   private readonly listByPeerStmt;
   private readonly deleteStmt;
   private readonly recordDeliveryStmt;
+  private readonly recordRefusedApprovalIfCurrentStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.upsertStmt = db.prepare(`
@@ -86,6 +87,20 @@ export class A2ATaskPushConfigRepository {
           updated_at = @updatedAt
       WHERE a2a_task_id = @taskId
         AND peer_id = @peerId
+    `);
+    this.recordRefusedApprovalIfCurrentStmt = db.prepare(`
+      UPDATE a2a_task_push_configs
+      SET attempt_count = attempt_count + 1,
+          last_delivery_status = 'blocked',
+          last_delivery_error = @error,
+          last_delivered_at = NULL,
+          next_retry_at = NULL,
+          last_event_sequence = @eventSequence,
+          updated_at = @updatedAt
+      WHERE a2a_task_id = @taskId
+        AND peer_id = @peerId
+        AND created_at = COALESCE(@configCreatedAt, created_at)
+        AND last_event_sequence < @eventSequence
     `);
   }
 
@@ -172,6 +187,23 @@ export class A2ATaskPushConfigRepository {
       updatedAt: now,
     });
     return this.get(taskId, peerId);
+  }
+
+  /** Legacy approvals have no generation, but still cannot move the delivery cursor backwards. */
+  public recordRefusedApprovalIfCurrent(
+    taskId: string,
+    peerId: string,
+    input: { configCreatedAt?: string; eventSequence: number; error: string },
+    now = new Date().toISOString(),
+  ): boolean {
+    return this.recordRefusedApprovalIfCurrentStmt.run({
+      taskId,
+      peerId,
+      configCreatedAt: input.configCreatedAt ?? null,
+      eventSequence: Math.max(0, Math.floor(input.eventSequence)),
+      error: input.error.slice(0, 1000),
+      updatedAt: now,
+    }).changes > 0;
   }
 }
 

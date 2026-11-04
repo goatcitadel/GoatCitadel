@@ -25,6 +25,26 @@ function splitUploadPath(path: string) {
   return { dir: slash > 0 ? normalized.slice(0, slash) : ".", name: normalized.slice(slash + 1) };
 }
 
+// Compare spelling aliases only. The Gateway still validates and writes the raw reviewed path.
+function uploadReceiptTarget(value: string): string | undefined {
+  const portable = value.replaceAll("\\", "/");
+  if (/^(?:\/|[a-z]:)/i.test(portable) || portable.includes("\0")) return undefined;
+  const parts = portable.split("/");
+  // Windows and POSIX can resolve parent segments differently when backslashes are mixed in.
+  if (value.includes("\\") && parts.includes("..")) return undefined;
+
+  const target: string[] = [];
+  for (const part of parts) {
+    if (part === "..") {
+      if (!target.length) return undefined;
+      target.pop();
+    } else if (part && part !== ".") {
+      target.push(part);
+    }
+  }
+  return target.length ? target.join("/") : undefined;
+}
+
 export function LibraryFileUpload(props: Parameters<typeof LibraryFileUploadContent>[0]) {
   const access = useLibraryOperation(JSON.stringify(["file-upload", props.workspaceId, props.citadelId]));
   return <LibraryFileUploadContent key={access.identity} {...props} />;
@@ -65,19 +85,22 @@ function LibraryFileUploadContent({ workspaceId, citadelId }: { workspaceId: str
     : undefined;
   async function submit() {
     if (!review || operation.locked || result) return;
+    const reviewedPath = review.path.trim();
+    const reviewedTarget = uploadReceiptTarget(reviewedPath);
     setBusy(true);
     try {
       const receipt = await operation.run(
-        review.path.trim(),
+        reviewedPath,
         async () => review,
         // A checked "new file" upload asks the Gateway to refuse the write if a file appeared since the review.
-        () => uploadFile(review.path.trim(), review.content, { expectAbsent: existing.data === null }),
+        () => uploadFile(reviewedPath, review.content, { expectAbsent: existing.data === null }),
         (receipt) => {
-          if (
-            receipt.relativePath !== review.path.trim() ||
-            !Number.isSafeInteger(receipt.bytes) ||
-            receipt.bytes < 0
-          ) {
+          const matchesTarget =
+            receipt.relativePath === reviewedPath ||
+            (reviewedTarget !== undefined &&
+              typeof receipt.relativePath === "string" &&
+              uploadReceiptTarget(receipt.relativePath) === reviewedTarget);
+          if (!matchesTarget || !Number.isSafeInteger(receipt.bytes) || receipt.bytes < 0) {
             throw new Error(
               "The upload receipt does not match the reviewed target. Refresh the directory to check the result before trying again.",
             );

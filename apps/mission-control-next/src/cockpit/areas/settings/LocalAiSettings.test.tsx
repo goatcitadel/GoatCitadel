@@ -53,6 +53,13 @@ afterEach(async () => {
 });
 const render = () => act(async () => root.render(<LocalAiSettings />));
 describe("native Local AI settings", () => {
+  it("describes the missing job endpoint when a local runtime is detected", async () => {
+    await render();
+    expect(container.textContent).toContain("No Local AI job endpoint is registered.");
+    expect(container.textContent).toContain("A local runtime was found.");
+    expect(container.textContent).not.toContain("Chat has not been tested");
+  });
+
   it("shows fit limitations and read-only hardware evidence without executing model work", async () => {
     await render();
     expect(container.textContent).toContain("GPU memory not measured");

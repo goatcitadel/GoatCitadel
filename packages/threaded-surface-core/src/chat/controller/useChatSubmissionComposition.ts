@@ -206,7 +206,7 @@ export function useChatSubmissionComposition({
     externalSourceAttachments: session.externalSourceAttachments,
     selectedTurnId,
     typedRunVariablesEnabled: session.typedRunVariablesEnabled,
-    documentEditingEnabled: session.documentEditingEnabled,
+    documentEditingEnabled: session.documentEditingEnabled && !orchestration.editingTurnId,
     setComposerPaletteGlobalOpen,
     setComposerPaletteQuery,
     coordination,

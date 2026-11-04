@@ -12,6 +12,25 @@ function createRepo(): ExternalSideEffectRunRepository {
   return new ExternalSideEffectRunRepository(tempDbs.open({ dbPath }));
 }
 
+describe("approval-key receipt discovery", () => {
+  it("finds historical candidates across catalog and scope drift without trusting the key as authority", () => {
+    const repo = createRepo();
+    const original = repo.createOrGet({ workspaceId: "workspace-original", boundary: "comms_gmail_send",
+      routePath: "external_side_effect:comms_gmail_send:custom.gmail:account:gmail.send", catalogId: "custom.gmail",
+      connectionId: "account", actionId: "gmail.send", actorScope: "account", idempotencyKey: "communications:approval",
+      payloadHash: "immutable-payload", requestPayload: { provider: "gmail", connectionId: "account", subject: "approved" } });
+    const first = repo.findByIdempotencyKey("communications:approval");
+    assert.equal(first.length, 1);
+    assert.equal(first[0]?.runId, original.runId);
+    assert.equal(first[0]?.workspaceId, "workspace-original");
+    assert.equal(first[0]?.catalogId, "custom.gmail");
+    assert.deepEqual(repo.findByIdempotencyKey("communications:other-approval"), []);
+    for (let index = 0; index < 3; index += 1) repo.createOrGet({ workspaceId: "foreign", boundary: "comms_smtp_send",
+      routePath: `different-route-${index}`, connectionId: `foreign-${index}`, actionId: "smtp.send", actorScope: `foreign-${index}`,
+      idempotencyKey: "communications:approval", payloadHash: "different-payload" });
+    assert.equal(repo.findByIdempotencyKey("communications:approval").length, 2, "bounded ambiguity evidence must never become a guessed success");
+  });
+});
 describe("ExternalSideEffectRunRepository", () => {
   it("persists pre-boundary intent and dedupes by route, idempotency key, and actor", () => {
     const repo = createRepo();

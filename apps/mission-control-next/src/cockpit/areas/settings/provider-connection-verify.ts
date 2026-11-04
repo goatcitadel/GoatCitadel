@@ -5,8 +5,13 @@ import type { ProviderConnectionAttempt } from "./provider-connection-state";
  * Reads the saved provider and credential storage after a completed change and throws unless both confirm what the
  * reviewed request asked for. Returns the current LLM config so the caller can accept the saved endpoint.
  */
-export async function confirmSavedProviderConnection(providerId: string, next: ProviderConnectionAttempt) {
+export async function confirmSavedProviderConnection(
+  providerId: string,
+  next: ProviderConnectionAttempt,
+  stillConnected: () => boolean,
+) {
   const current = await fetchLlmConfig();
+  if (!stillConnected()) throw new Error("The connection to GoatCitadel changed while checking the saved result.");
   const saved = current.providers.find((item) => item.providerId === providerId);
   if (
     !Number.isSafeInteger(current.revision) ||

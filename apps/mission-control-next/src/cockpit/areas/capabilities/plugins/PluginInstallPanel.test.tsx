@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { act, useLayoutEffect } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
@@ -8,6 +8,7 @@ import type {
   CapabilityPluginListResponse,
   CapabilitySkillOperationRequest,
 } from "@goatcitadel/contracts";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { __resetSettingsApprovalDialogsForTests } from "../../settings/SettingsApprovalDialog";
 import { PluginInstallPanel } from "./PluginInstallPanel";
@@ -30,7 +31,7 @@ import {
   step,
   type FakeGateway,
 } from "./plugin-install.test-support";
-import { draftPluginInstallKey } from "./plugin-install-store";
+import { draftPluginInstallKey, readPluginInstall, setPluginInstall } from "./plugin-install-store";
 import { __resetPluginInstallsForTests } from "./use-plugin-install";
 
 const prefs = vi.hoisted(() => ({
@@ -130,6 +131,32 @@ async function render(installKey: string, props: { form?: "git" | "folder"; plug
   );
   await settle();
 }
+
+it("does not consume a new caller's same-key move from a retiring install panel", async () => {
+  const key = draftPluginInstallKey("git");
+  const next = { state: { phase: "idle" as const }, movedTo: "current-check" };
+  setPluginInstall(key, { state: { phase: "idle" }, movedTo: "retired-check" });
+  function ReplaceCustody() {
+    useLayoutEffect(() => {
+      notifyGatewayAccessChanged();
+      setPluginInstall(key, next);
+    }, []);
+    return <PluginInstallPanel installKey={key} form="git" onMove={onMove} />;
+  }
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ReplaceCustody />
+      </QueryClientProvider>,
+    ),
+  );
+
+  expect(onMove).not.toHaveBeenCalled();
+  expect(readPluginInstall(key)).toBe(next);
+
+  await render(key, { form: "git" });
+  expect(onMove).toHaveBeenCalledExactlyOnceWith("current-check");
+});
 
 async function press(element: HTMLElement | undefined | null) {
   if (!element) throw new Error("nothing to press");
@@ -610,8 +637,10 @@ describe("Plugin install panel: installing", () => {
     expect(text()).toContain("D:\\plugins\\meeting-tools");
 
     // After a reload only the Gateway's answer is left, which names the folder, never its path.
+    act(() => root.unmount());
     __resetPluginInstallsForTests();
     client.clear();
+    root = createRoot(container);
     await render(INSPECTION_ID);
     expect(text()).not.toContain("D:\\plugins");
     expect(text()).toContain("meeting-tools");

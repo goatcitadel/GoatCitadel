@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, vi, describe, expect, it } from "vitest";
 import { ConflictError } from "@goatcitadel/contracts";
 import {
   ConfigGenerationApplyError,
@@ -19,7 +19,12 @@ import {
 
 const roots: string[] = [];
 
+beforeEach(() => {
+  vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", undefined);
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   await Promise.all(roots.splice(0).map((root) => fs.rm(root, { recursive: true, force: true })));
 });
 

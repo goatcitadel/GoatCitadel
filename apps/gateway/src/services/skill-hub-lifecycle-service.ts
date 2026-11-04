@@ -28,6 +28,9 @@ import {
   type SkillHubSnapshotRecord,
 } from "@goatcitadel/storage";
 import { parseSkillMarkdown } from "@goatcitadel/skills";
+import { CapabilityPluginStore } from "./capability-plugin-store.js";
+import { pluginSkillSource } from "./plugin-owned-refusal.js";
+import { readSkillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
 import { SkillHubArtifactStore, type SkillHubArtifactFilesystem } from "./skill-hub-artifact-store.js";
 import {
   PROMPTWARE_SCANNER_ID,
@@ -64,6 +67,7 @@ export interface SkillHubLifecycleServiceOptions {
     | "skillAggregateRevisions"
     | "evidenceEnvelopes"
     | "governanceJourneyEvents"
+    | "systemSettings"
     | "runImmediateTransaction"
   >;
   reloadSkills?: () => Promise<unknown>;
@@ -77,7 +81,10 @@ export interface SkillHubLifecycleServiceOptions {
 }
 
 /** Build the exact approval payload and hash-bound immutable preview a future route can submit. */
-export function buildSkillHubLifecycleApprovalInput(intent: SkillHubOperationIntentTemplate): ApprovalCreateInput {
+export function buildSkillHubLifecycleApprovalInput(
+  intent: SkillHubOperationIntentTemplate,
+  pluginInstallPlanId?: string,
+): ApprovalCreateInput {
   const requestSha256 = computeSkillHubOperationRequestSha256({ ...intent, approvalId: "approval:pending" });
   return {
     kind: SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
@@ -94,6 +101,7 @@ export function buildSkillHubLifecycleApprovalInput(intent: SkillHubOperationInt
     preview: {
       schemaVersion: SKILL_HUB_OPERATION_INTENT_PREVIEW_SCHEMA,
       intent,
+      ...(pluginInstallPlanId === undefined ? {} : { pluginInstallPlanId }),
     } satisfies SkillHubOperationIntentPreview,
     linkage: {
       workspaceId: intent.workspaceId,
@@ -134,12 +142,14 @@ export class SkillHubLifecycleService {
   private readonly candidateRoot: string;
   private readonly skillsExtraRoot: string;
   private readonly filesystem: SkillHubLifecycleFilesystem;
+  private readonly plugins: CapabilityPluginStore;
 
   public constructor(private readonly options: SkillHubLifecycleServiceOptions) {
     this.rootDir = path.resolve(options.rootDir);
     this.candidateRoot = resolveManagedRoot(this.rootDir, options.candidateRoot, "candidate root");
     this.skillsExtraRoot = resolveManagedRoot(this.rootDir, options.skillsExtraRoot, "runtime skill root");
     this.filesystem = createSkillHubLifecycleFilesystem(this.rootDir, options);
+    this.plugins = new CapabilityPluginStore(options.storage.systemSettings);
   }
 
   public async applyApprovedOperation(input: {
@@ -181,9 +191,18 @@ export class SkillHubLifecycleService {
         message: "Skill Hub lifecycle snapshot/artifact scope or byte lineage does not match.",
       });
     }
+    const pluginSource = intent.operationKind === "revoke" ? undefined : pluginSkillSource(snapshot);
+    const pluginInstallPlanId = (approval.preview as Partial<SkillHubOperationIntentPreview>).pluginInstallPlanId;
     if (
-      !(await this.options.artifactStore.verify({ bundleRelPath: artifact.bundleRelPath, manifest: artifact.manifest }))
+      pluginSource &&
+      (!pluginInstallPlanId || !readSkillHubOperationFingerprint(intent, pluginInstallPlanId))
     ) {
+      return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+        code: "plugin_install_authority_missing",
+        boundaryCrossed: false,
+      });
+    }
+    if (!(await this.artifactStillVerifies(artifact.bundleRelPath, artifact.manifest))) {
       return await this.settle(intent, artifact.artifactId, "blocked", UNKNOWN_TREE_SHA256, {
         code: "artifact_tamper",
         boundaryCrossed: false,
@@ -260,6 +279,41 @@ export class SkillHubLifecycleService {
       });
     }
 
+    const mutate = () =>
+      this.mutateVerifiedOperation(intent, snapshot, artifact, skillMarkdown, parsed.frontmatter.name, signal);
+    const result = pluginSource
+      ? await this.plugins.withLock((work) => this.runTransaction(work), async () => {
+          const plugin = pluginSource.pluginId ? await this.plugins.get(pluginSource.pluginId) : undefined;
+          if (
+            !plugin ||
+            plugin.installPlanId !== pluginInstallPlanId ||
+            plugin.workspaceId !== intent.workspaceId ||
+            (plugin.state !== "installing" && plugin.state !== "installed") ||
+            !plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === intent.snapshotId)
+          ) {
+            return await this.settle(intent, artifact.artifactId, "blocked", intent.contentTreeSha256, {
+              code: "plugin_install_authority_changed",
+              boundaryCrossed: false,
+            });
+          }
+          return await mutate();
+        })
+      : await mutate();
+    if (intent.operationKind === "activate" && result.settlement.disposition === "applied") {
+      await this.cleanupProjectionScratch(intent.operationId, signal);
+      await this.options.reloadSkills?.();
+    }
+    return result;
+  }
+
+  private async mutateVerifiedOperation(
+    intent: SkillHubOperationIntentRecord,
+    snapshot: SkillHubSnapshotRecord,
+    artifact: SkillHubSnapshotArtifactRecord,
+    skillMarkdown: string,
+    skillName: string,
+    signal: AbortSignal,
+  ): Promise<SkillHubLifecycleApplyResult> {
     let candidate: CandidateSkillVersionRecord | undefined;
     let runtimeProjected = false;
     if (
@@ -286,7 +340,7 @@ export class SkillHubLifecycleService {
         });
       }
       try {
-        const projection = await this.projectRuntimeSkill(intent, snapshot, artifact, parsed.frontmatter.name, signal);
+        const projection = await this.projectRuntimeSkill(intent, snapshot, artifact, skillName, signal);
         runtimeProjected = projection.boundaryCrossed;
       } catch (error) {
         if (!(error instanceof AmbiguousSkillRuntimeProjectionError)) throw error;
@@ -314,12 +368,7 @@ export class SkillHubLifecycleService {
 
     signal.throwIfAborted();
     try {
-      const applied = await this.applyCanonicalMutation(intent, candidate, artifact.artifactId, runtimeProjected);
-      if (intent.operationKind === "activate") {
-        await this.cleanupProjectionScratch(intent.operationId, signal);
-        await this.options.reloadSkills?.();
-      }
-      return applied;
+      return await this.applyCanonicalMutation(intent, candidate, artifact.artifactId, runtimeProjected);
     } catch (error) {
       if (runtimeProjected && isConflict(error)) {
         return await this.settle(intent, artifact.artifactId, "manual_reconciliation", intent.contentTreeSha256, {
@@ -330,6 +379,10 @@ export class SkillHubLifecycleService {
       }
       throw error;
     }
+  }
+
+  private runTransaction<T>(work: () => T | Promise<T>): Promise<Awaited<T>> {
+    return this.options.storage.runImmediateTransaction(work);
   }
 
   private async assertExpectedRevisions(intent: SkillHubOperationIntentRecord): Promise<void> {
@@ -443,7 +496,7 @@ export class SkillHubLifecycleService {
     artifactId: string,
     runtimeProjected: boolean,
   ): Promise<SkillHubLifecycleApplyResult> {
-    return await this.options.storage.runImmediateTransaction(async () => {
+    return await this.runTransaction(async () => {
       const replay = await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId);
       if (replay) return { settlement: replay, replayed: true };
       const now = this.now();
@@ -613,7 +666,7 @@ export class SkillHubLifecycleService {
     observedTreeSha256: string,
     result: Record<string, unknown>,
   ): Promise<SkillHubLifecycleApplyResult> {
-    return await this.options.storage.runImmediateTransaction(
+    return await this.runTransaction(
       async () => await this.settleInTransaction(intent, artifactId, disposition, observedTreeSha256, result),
     );
   }

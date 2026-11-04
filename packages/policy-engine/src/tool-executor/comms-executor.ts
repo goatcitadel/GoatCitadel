@@ -2560,8 +2560,7 @@ async function qqbotSend(
   }
   const { tokenFetch, apiFetch } = chinaPlatformFetchers(allowlist, grantAllowlist);
   const token = await getQqbotAccessToken({ appId, appSecret, fetcher: tokenFetch });
-  // A random base per send keeps a later send (e.g. the final answer after an earlier channel.reply to the same
-  // msg_id) from reusing seq 1 and being dropped by QQ's dedupe. The chunk index is added so chunks stay ordered.
+  // Each invocation draws a fresh base for this part. QQ rejects repeated msg_id and msg_seq pairs.
   const msgSeq = randomInt(1, 2 ** 31 - 64) + partIndex;
   const { messageId } = await qqbotSendText({
     token,

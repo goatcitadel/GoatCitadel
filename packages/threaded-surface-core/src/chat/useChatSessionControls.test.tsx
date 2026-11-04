@@ -367,6 +367,12 @@ describe("useChatSessionControls", () => {
     expect(latest!.setSending).toHaveBeenCalledWith(false);
 
     await act(async () => {
+      await latest!.controls.handleRenameSession();
+    });
+    await act(async () => {
+      await latest!.controls.handleSaveOrganization();
+    });
+    await act(async () => {
       await latest!.controls.handleArchiveWorkspaceMissionChats();
     });
     expect(apiMocks.archiveWorkspaceChatSessions).toHaveBeenCalledWith({
@@ -376,8 +382,6 @@ describe("useChatSessionControls", () => {
     expect(latest!.snapshot().selectedSessionId).toBeNull();
 
     await act(async () => {
-      await latest!.controls.handleRenameSession();
-      await latest!.controls.handleSaveOrganization();
       await latest!.controls.handleAssignProject("none");
     });
     expect(apiMocks.updateChatSession).toHaveBeenCalledWith("session-1", {
@@ -391,6 +395,55 @@ describe("useChatSessionControls", () => {
     });
     // Archive cleared the selected conversation; a retained callback must not assign its old session.
     expect(apiMocks.assignChatSessionProject).not.toHaveBeenCalled();
+  });
+
+  it.each(["write rejected", "refresh rejected", "write accepted"])("reports the organization write outcome when %s", async (scenario) => {
+    let renderer!: ReactTestRenderer;
+    const session = { ...selectedSession, folderName: "Focus", tags: ["alpha", "beta"] };
+    await act(async () => {
+      renderer = create(<Harness session={session} />);
+    });
+    try {
+      if (scenario === "write rejected") apiMocks.updateChatSession.mockRejectedValueOnce(new Error("Write refused"));
+      else apiMocks.updateChatSession.mockResolvedValueOnce(session);
+      if (scenario === "refresh rejected") latest!.loadSidebar.mockRejectedValueOnce(new Error("Read unavailable"));
+
+      let saved: unknown;
+      await act(async () => {
+        saved = await latest!.controls.handleSaveOrganization();
+      });
+      expect(apiMocks.updateChatSession).toHaveBeenCalledExactlyOnceWith("session-1", {
+        expectedRevision: 7,
+        folderName: "Focus",
+        tags: ["alpha", "beta"],
+      });
+      expect(latest!.controls.sessionControlPending).toBeNull();
+      expect(saved).toBe(scenario !== "write rejected");
+      if (scenario === "write rejected") expect(latest!.setError).toHaveBeenCalledWith("Write refused");
+      if (scenario === "refresh rejected") expect(latest!.setError).toHaveBeenCalled();
+    } finally {
+      await act(async () => renderer.unmount());
+    }
+  });
+
+  it("rejects a retained organization save after Citadel view identity changes away and back", async () => {
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness session={selectedSession} viewIdentity="citadel-a" />);
+    });
+    try {
+      const oldSave = latest!.controls.handleSaveOrganization;
+      await act(async () => renderer.update(<Harness session={selectedSession} viewIdentity="citadel-b" />));
+      await act(async () => renderer.update(<Harness session={selectedSession} viewIdentity="citadel-a" />));
+      let saved: unknown;
+      await act(async () => {
+        saved = await oldSave();
+      });
+      expect(apiMocks.updateChatSession).not.toHaveBeenCalled();
+      expect(saved).toBe(false);
+    } finally {
+      await act(async () => renderer.unmount());
+    }
   });
 
   it("rejects a retained assignment callback after Citadel view identity changes away and back", async () => {

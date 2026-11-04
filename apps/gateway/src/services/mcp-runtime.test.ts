@@ -1967,45 +1967,106 @@ describe("legacy HTTP+SSE transport", () => {
     );
   });
 
-  it("reconnects once when the message endpoint rejects the session before dispatch", async () => {
+  it.each([false, true])(
+    "does not replay a legacy tool POST after bare404 (effect before response: %s)",
+    async (effectBeforeResponse) => {
+      const toolCalls: number[] = [];
+      const effects: number[] = [];
+      await withLegacySseMcpServer(
+        {
+          onMessage: ({ message, session }) => {
+            if (message.method === "tools/call") {
+              toolCalls.push(session.connection);
+              if (session.connection === 1) {
+                if (effectBeforeResponse) effects.push(session.connection);
+                return { status: 404 };
+              }
+              effects.push(session.connection);
+              return {
+                reply: {
+                  jsonrpc: "2.0",
+                  id: message.id,
+                  result: {
+                    content: [{ type: "text", text: "legacy ok" }],
+                    structuredContent: { ok: true },
+                  },
+                },
+              };
+            }
+            return replyToLegacyHandshake(message);
+          },
+        },
+        async (sse) => {
+          const result = await invokeMcpRuntimeTool(
+            { ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" },
+            { toolName: "legacy.search", arguments: { q: "goatcitadel" } },
+            1000,
+            { networkAllowlist: [sse.host] },
+          );
+
+          expect(toolCalls).toEqual([1]);
+          expect(effects).toEqual(effectBeforeResponse ? [1] : []);
+          expect(result).toMatchObject({
+            ok: false,
+            externalOutcome: "unknown_after_send",
+            manualReconciliationRequired: true,
+          });
+          expect(result.retryCount ?? 0).toBe(0);
+          expect(sse.getCount).toBe(1);
+        },
+      );
+    },
+  );
+
+  it("retains one legacy reconnect for an explicit pre-dispatch retry-safe response", async () => {
     const toolCalls: number[] = [];
+    const effects: number[] = [];
     await withLegacySseMcpServer(
       {
         onMessage: ({ message, session }) => {
-          if (message.method === "tools/call") {
-            if (session.connection === 1) {
-              return { status: 404 };
-            }
-            toolCalls.push(session.connection);
+          if (message.method !== "tools/call") return replyToLegacyHandshake(message);
+          toolCalls.push(session.connection);
+          if (session.connection === 1) {
             return {
               reply: {
                 jsonrpc: "2.0",
                 id: message.id,
-                result: {
-                  content: [{ type: "text", text: "legacy ok" }],
-                  structuredContent: { ok: true },
+                error: {
+                  code: -32000,
+                  message: "Expired session",
+                  data: { phase: "pre_dispatch", retrySafe: true },
                 },
               },
             };
           }
-          return replyToLegacyHandshake(message);
+          effects.push(session.connection);
+          return {
+            reply: {
+              jsonrpc: "2.0",
+              id: message.id,
+              result: {
+                content: [{ type: "text", text: "legacy ok" }],
+                structuredContent: { ok: true },
+              },
+            },
+          };
         },
       },
       async (sse) => {
         const result = await invokeMcpRuntimeTool(
           { ...createRemoteTestServer(`${sse.url}/sse`), transport: "sse" },
-          { toolName: "legacy.search", arguments: { q: "goatcitadel" } },
+          { toolName: "legacy.search", arguments: { q: "fixture" } },
           1000,
           { networkAllowlist: [sse.host] },
         );
-
+        expect(toolCalls).toEqual([1, 2]);
+        expect(effects).toEqual([2]);
+        expect(sse.getCount).toBe(2);
         expect(result).toMatchObject({
           ok: true,
           retryCount: 1,
           output: { structuredContent: { ok: true }, degradedReason: "expired_session_reconnect" },
         });
-        expect(sse.getCount).toBe(2);
-        expect(toolCalls).toEqual([2]);
       },
     );
   });

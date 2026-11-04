@@ -24,6 +24,7 @@ import { HOSTS_STAY, boundedSentences, boundedTitle, requireCapabilitiesOrigin }
 import { pluginPromptPackId, pluginPromptPackSourceLabel } from "./plugin-prompt-packs.js";
 import type { ApprovalReading, PluginSkillCheck } from "./plugin-skill-checks.js";
 import {
+  readConnectorScope,
   readUninstallScope,
   scopeEvidenceRef,
   type ConnectorDecision,
@@ -85,6 +86,8 @@ export type { HookSecretHolder } from "./plugin-uninstall-scope.js";
 
 /** One plain reader or writer per owner an uninstall goes through. The adapter only orders them. */
 export interface PluginUninstallSources {
+  /** Canonical plugin-record lock, held through current keeper checks and connector mutations. */
+  withPluginRecordsLock<T>(work: () => T | Promise<T>): Promise<Awaited<T>>;
   readPlugin(pluginId: string): Promise<StoredPlugin | undefined>;
   /** Every plugin record: another plugin may keep a connector this one added. */
   listPlugins(): Promise<readonly StoredPlugin[]>;
@@ -234,7 +237,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       step = "tool_groups";
       await this.releaseHolds(record, request, progress);
       step = "connectors";
-      await this.removeConnectors(record, request, pass, scope, progress);
+      await this.removeConnectors(record, request, pass, scope, progress, labels);
       step = "skills";
       const skillIds = await this.removeSkills(record, request, actorId, labels, progress, readRevokeAgain);
       step = "finish";
@@ -447,17 +450,32 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
     pass: PluginPass,
     scope: UninstallScope,
     progress: UninstallProgress,
+    labels: ReadonlyMap<string, PluginPieceLabel>,
   ): Promise<void> {
     const decisions = scope.connectors;
     if (!decisions) throw new Error("The saved connectors or the other plugins can't be read right now.");
     const unknown = decisions.find((decision) => decision.action === "unknown");
     if (unknown?.action === "unknown") throw connectorUnknownStop(record, unknown);
-    const pieces = ownedPieces(record, "connector");
-    for (const decision of decisions) {
-      const piece = pieces.find((item) => item.pieceId === decision.pieceId);
-      progress.current = piece ?? pieces.find((item) => item.ref === undefined);
-      await this.applyConnectorDecision(request, pass, decision, piece, progress);
-    }
+    if (ownedPieces(record, "connector").length === 0) return;
+    const failed = await this.sources.withPluginRecordsLock(async () => {
+      try {
+        const current = await readConnectorScope(this.sources, record, labels);
+        if (canonicalJsonString(current) !== canonicalJsonString(decisions)) {
+          throw new ConflictError({ message: SCOPE_CHANGED_MESSAGE });
+        }
+        const pieces = ownedPieces(record, "connector");
+        for (const decision of decisions) {
+          const piece = pieces.find((item) => item.pieceId === decision.pieceId);
+          progress.current = piece ?? pieces.find((item) => item.ref === undefined);
+          await this.applyConnectorDecision(request, pass, decision, piece, progress);
+        }
+      } catch (error) {
+        // Preserve completed owner mutations if a later step fails, including an already closed live connection.
+        return { error };
+      }
+      return undefined;
+    });
+    if (failed) throw failed.error;
     progress.current = undefined;
   }
 

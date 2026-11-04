@@ -13,6 +13,8 @@ import {
 import { buildApprovalEffectIdempotencyKey, type AsyncStorage } from "@goatcitadel/storage";
 import {
   buildCommsPreApproval,
+  buildCommsMailMutationIdentity,
+  buildCommsCalendarMutationIdentity,
   commsCalendarCreate,
   commsGmailSend,
   commsSmtpSend,
@@ -27,6 +29,7 @@ import {
   readCalendarCreateApprovalInput,
   readMailSendApprovalInput,
 } from "./communications-approval-payload.js";
+import { hashExternalSideEffectPayload, resolveExternalSideEffectRouteIdentity } from "./external-side-effect-runner-service.js";
 import { resolveCalendarProvider, resolveMailProvider } from "./communications-dashboard-service.js";
 
 /**
@@ -101,6 +104,7 @@ const CALENDAR_MISSING_WORKSPACE_REASON = "The calendar create approval names no
 const SENT_PROVIDER_STATUSES = new Set(["sent", "created"]);
 
 type ProviderOutcome = { providerId?: string; replayed: boolean };
+type ApprovedCommsMutation = { kind: "mail"; input: GmailSendInput } | { kind: "calendar"; input: CalendarCreateEventInput };
 
 export class CommunicationsApprovalEffectService {
   public constructor(private readonly deps: CommunicationsApprovalEffectDeps) {}
@@ -126,27 +130,16 @@ export class CommunicationsApprovalEffectService {
     if (!workspaceId) {
       return failDraft(new CommunicationsApprovalEffectError("invalid_payload", MAIL_MISSING_WORKSPACE_REASON));
     }
+    const sendInput: GmailSendInput = { connectionId: mail.accountId, to: mail.to, cc: mail.cc, bcc: mail.bcc,
+      subject: mail.subject, bodyText: mail.bodyText, idempotencyKey: communicationsIdempotencyKey(approvalId) };
+    const completed = (runId?: unknown) => this.readCompletedReceipt(approval, workspaceId,
+      { kind: "mail", input: sendInput }, MAIL_OUTCOME_UNKNOWN_REASON, runId);
     try {
-      const connection = await this.readConnection(mail.accountId);
-      assertConnectionUnchanged(connection, mail.connectionRevision, MAIL_CONNECTION_CHANGED_REASON);
-      assertConnectionInWorkspace(connection, workspaceId, MAIL_FOREIGN_WORKSPACE_REASON);
-      const send = this.selectMailSender(connection);
-      const result = await this.invokeApproved(approval, workspaceId, (preApproval) =>
-        send(
-          {
-            connectionId: mail.accountId,
-            to: mail.to,
-            cc: mail.cc,
-            bcc: mail.bcc,
-            subject: mail.subject,
-            bodyText: mail.bodyText,
-            idempotencyKey: communicationsIdempotencyKey(approvalId),
-          },
-          preApproval,
-        ),
+      const outcome: ProviderOutcome = await completed() ? { replayed: true } : await this.classify(
+        await this.invokeFreshMail(approval, workspaceId, sendInput, mail.connectionRevision),
+        "Mail send", MAIL_OUTCOME_UNKNOWN_REASON, completed,
       );
-      const outcome = await this.classify(result, "Mail send", MAIL_OUTCOME_UNKNOWN_REASON);
-      await this.deps.storage.mailDrafts.transition(mail.draftId, ["approval_required", "failed"], {
+      await this.transitionDraft(mail.draftId, ["approval_required", "failed"], {
         status: "sent",
         clearFailureReason: true,
         sentAt: this.nowIso(),
@@ -187,27 +180,17 @@ export class CommunicationsApprovalEffectService {
     if (!workspaceId) {
       throw new CommunicationsApprovalEffectError("invalid_payload", CALENDAR_MISSING_WORKSPACE_REASON);
     }
-    const connection = await this.readConnection(event.accountId);
-    assertConnectionUnchanged(connection, event.connectionRevision, CALENDAR_CONNECTION_CHANGED_REASON);
-    assertConnectionInWorkspace(connection, workspaceId, CALENDAR_FOREIGN_WORKSPACE_REASON);
-    this.assertCalendarCanCreate(connection);
-    const result = await this.invokeApproved(approval, workspaceId, (preApproval) =>
-      this.deps.commsCalendarCreate(
-        {
-          connectionId: event.accountId,
-          ...(event.calendarId === undefined ? {} : { calendarId: event.calendarId }),
-          title: event.title,
-          ...(event.description === undefined ? {} : { description: event.description }),
-          startIso: event.startIso,
-          endIso: event.endIso,
-          attendees: event.attendees,
-          ...(event.location === undefined ? {} : { location: event.location }),
-          idempotencyKey: communicationsIdempotencyKey(approvalId),
-        },
-        preApproval,
-      ),
+    const createInput: CalendarCreateEventInput & { idempotencyKey: string } = {
+      connectionId: event.accountId, calendarId: event.calendarId, title: event.title, description: event.description,
+      startIso: event.startIso, endIso: event.endIso, attendees: event.attendees, location: event.location,
+      idempotencyKey: communicationsIdempotencyKey(approvalId),
+    };
+    const completed = (runId?: unknown) => this.readCompletedReceipt(approval, workspaceId,
+      { kind: "calendar", input: createInput }, CALENDAR_OUTCOME_UNKNOWN_REASON, runId);
+    const outcome: ProviderOutcome = await completed() ? { replayed: true } : await this.classify(
+      await this.invokeFreshCalendar(approval, workspaceId, createInput, event.connectionRevision),
+      "Calendar create", CALENDAR_OUTCOME_UNKNOWN_REASON, completed,
     );
-    const outcome = await this.classify(result, "Calendar create", CALENDAR_OUTCOME_UNKNOWN_REASON);
     return {
       disposition: "created",
       ...(outcome.providerId ? { providerEventId: outcome.providerId } : {}),
@@ -252,6 +235,22 @@ export class CommunicationsApprovalEffectService {
     return approval;
   }
 
+  private async invokeFreshMail(approval: ApprovalRequest, workspaceId: string, input: GmailSendInput, revision: string | undefined): Promise<CommsResult> {
+    const connection = await this.readConnection(input.connectionId);
+    assertConnectionUnchanged(connection, revision, MAIL_CONNECTION_CHANGED_REASON);
+    assertConnectionInWorkspace(connection, workspaceId, MAIL_FOREIGN_WORKSPACE_REASON);
+    const send = this.selectMailSender(connection);
+    return await this.invokeApproved(approval, workspaceId, (preApproval) => send(input, preApproval));
+  }
+
+  private async invokeFreshCalendar(approval: ApprovalRequest, workspaceId: string,
+    input: CalendarCreateEventInput & { idempotencyKey: string }, revision: string | undefined): Promise<CommsResult> {
+    const connection = await this.readConnection(input.connectionId);
+    assertConnectionUnchanged(connection, revision, CALENDAR_CONNECTION_CHANGED_REASON);
+    assertConnectionInWorkspace(connection, workspaceId, CALENDAR_FOREIGN_WORKSPACE_REASON);
+    this.assertCalendarCanCreate(connection);
+    return await this.invokeApproved(approval, workspaceId, (preApproval) => this.deps.commsCalendarCreate(input, preApproval));
+  }
   private async readConnection(accountId: string): Promise<IntegrationConnection> {
     try {
       return await this.deps.getIntegrationConnection(accountId);
@@ -314,7 +313,8 @@ export class CommunicationsApprovalEffectService {
    * is only "already done" when the recorded side-effect run completed; an in-progress,
    * mismatched or unreadable run is an unknown external outcome.
    */
-  private async classify(result: CommsResult, label: string, unknownReason: string): Promise<ProviderOutcome> {
+  private async classify(result: CommsResult, label: string, unknownReason: string,
+    isCompleted: (runId: unknown) => Promise<boolean>): Promise<ProviderOutcome> {
     if (typeof result === "object" && result !== null && "outcome" in result && result.outcome !== "executed") {
       const reason = (result as ToolInvokeResult).policyReason;
       throw new CommunicationsApprovalEffectError("delivery_failed", `${label} was not executed: ${reason}`);
@@ -328,7 +328,7 @@ export class CommunicationsApprovalEffectService {
       // A fenced claim that crossed the dispatch boundary is never redispatched.
       replayOutcome === "unknown_after_send"
     ) {
-      if (replayOutcome === "duplicate" && (await this.isLedgerRunCompleted(record.sideEffectRunId))) {
+      if (replayOutcome === "duplicate" && (await isCompleted(record.sideEffectRunId))) {
         return { replayed: true };
       }
       throw new CommunicationsApprovalEffectError("outcome_unknown", unknownReason);
@@ -346,20 +346,52 @@ export class CommunicationsApprovalEffectService {
     throw new CommunicationsApprovalEffectError("outcome_unknown", unknownReason);
   }
 
-  private async isLedgerRunCompleted(runId: unknown): Promise<boolean> {
-    if (typeof runId !== "string" || !runId) {
+  /** Receipt discovery never authorizes dispatch. Even a settled pending action
+   * cannot prove success without the exact recorded external outcome.
+   */
+  private async readCompletedReceipt(approval: ApprovalRequest, workspaceId: string, mutation: ApprovedCommsMutation,
+    unknownReason: string, expectedRunId?: unknown): Promise<boolean> {
+    const key = communicationsIdempotencyKey(approval.approvalId);
+    const [candidates, pending] = await Promise.all([
+      this.deps.storage.externalSideEffectRuns.findByIdempotencyKey(key),
+      this.deps.storage.pendingApprovalActions.find(approval.approvalId),
+    ]);
+    const unknown = () => new CommunicationsApprovalEffectError("outcome_unknown", unknownReason);
+    if (candidates.length === 0) {
+      if (pending?.resolutionStatus === "executed") throw unknown();
       return false;
     }
-    try {
-      return (await this.deps.storage.externalSideEffectRuns.get(runId)).status === "completed";
-    } catch (error) {
-      // Only a missing run is an unknown outcome; any other read failure propagates so the
-      // effect worker retries instead of settling a delivered send as outcome_unknown.
-      if (!(error instanceof NotFoundError)) throw error;
-      return false;
-    }
+    if (candidates.length !== 1) throw unknown();
+    const run = candidates[0]!;
+    const operation = run.actionId;
+    const identity = mutation.kind === "mail"
+      ? (operation === "gmail.send" || operation === "smtp.send" ? buildCommsMailMutationIdentity(mutation.input, operation) : undefined)
+      : (operation === "calendar.create_event" ? buildCommsCalendarMutationIdentity(mutation.input) : undefined);
+    if (!identity || !run.catalogId) throw unknown();
+    const route = resolveExternalSideEffectRouteIdentity({ boundary: identity.boundary, catalogId: run.catalogId,
+      connectionId: mutation.input.connectionId, actionId: identity.actionId });
+    if (run.idempotencyKey !== key || run.workspaceId !== workspaceId || run.connectionId !== mutation.input.connectionId ||
+        run.boundary !== identity.boundary || run.actionId !== identity.actionId || run.actorScope !== route.actorScope ||
+        run.routePath !== route.routePath || run.payloadHash !== hashExternalSideEffectPayload(identity.payload, undefined) ||
+        run.replayPolicy !== "idempotent_external" ||
+        (approval.linkage?.connectorId && approval.linkage.connectorId !== run.connectionId) ||
+        (expectedRunId !== undefined && expectedRunId !== run.runId)) throw unknown();
+    // Preserve the runner's existing retry/lease gates for provably pre-boundary
+    // work. Crossed, active or ambiguous effects never reach a fresh dispatch.
+    if (run.status === "failed_before_boundary" ||
+        (run.status === "claimed_not_sent" && !run.externalCallStartedAt)) return false;
+    if (run.status !== "completed" || !run.completedAt || !run.externalCallStartedAt ||
+        !SENT_PROVIDER_STATUSES.has(String(run.responsePayload?.workflowRunStatus)) ||
+        pending?.approvalId !== approval.approvalId || pending.actionType !== "tool.invoke" ||
+        pending.request.toolName !== identity.actionId || pending.request.workspaceId !== workspaceId ||
+        hashExternalSideEffectPayload(pending.request.args, undefined) !== hashExternalSideEffectPayload(identity.args, undefined)) throw unknown();
+    return true;
   }
 
+  /** One draft transition owner shared by successful and refused settlement. */
+  private async transitionDraft(...args: Parameters<AsyncStorage["mailDrafts"]["transition"]>): Promise<MailDraftRecord | undefined> {
+    return await this.deps.storage.mailDrafts.transition(...args);
+  }
   /**
    * Records a refusal on the draft. An `outcome_unknown` refusal may follow a delivery,
    * so the draft becomes `outcome_unknown` (never `failed`, never `sent`); every other
@@ -384,7 +416,7 @@ export class CommunicationsApprovalEffectService {
   ): Promise<MailDraftRecord | undefined> {
     const from: MailDraftRecord["status"][] =
       status === "outcome_unknown" ? ["approval_required", "failed"] : ["approval_required"];
-    return this.deps.storage.mailDrafts.transition(draftId, from, {
+    return this.transitionDraft(draftId, from, {
       status,
       failureReason: reason,
       updatedAt: this.nowIso(),

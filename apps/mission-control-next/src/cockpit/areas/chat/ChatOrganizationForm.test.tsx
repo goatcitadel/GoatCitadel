@@ -23,9 +23,8 @@ function dock(overrides: Partial<Dock> = {}): Dock {
     tagsValue: "alpha, beta",
     onFolderNameChange: vi.fn(),
     onTagsValueChange: vi.fn(),
-    onSaveOrganization: vi.fn().mockResolvedValue(undefined),
+    onSaveOrganization: vi.fn().mockResolvedValue(false),
     sessionControlPending: null,
-    selectedSession: { sessionId: "s", folderName: "", tags: [] },
     ...overrides,
   } as unknown as Dock;
 }
@@ -33,8 +32,8 @@ const render = (value: Dock) => act(async () => root.render(<ChatOrganizationFor
 const save = () => container.querySelector<HTMLButtonElement>('button[type="submit"]')!;
 const status = () => container.querySelector('[role="status"]')?.textContent;
 
-it("labels both fields, shows saving, then confirms what the saved conversation holds (CH-24)", async () => {
-  const value = dock();
+it("labels both fields, shows saving, then confirms the saved result (CH-24)", async () => {
+  const value = dock({ onSaveOrganization: vi.fn().mockResolvedValue(true) });
   await render(value);
   expect(container.querySelector("label")?.textContent).toBe("Folder");
   expect(save().textContent).toBe("Save folder and tags");
@@ -43,10 +42,7 @@ it("labels both fields, shows saving, then confirms what the saved conversation 
   await render({ ...value, sessionControlPending: "organization" });
   expect(save().getAttribute("aria-busy")).toBe("true");
   expect(save().textContent).toBe("Saving…");
-  await render({
-    ...value,
-    selectedSession: { sessionId: "s", folderName: "Research", tags: ["alpha", "beta"] } as never,
-  });
+  await render(value);
   expect(status()).toBe("Folder and tags saved.");
 });
 
@@ -63,20 +59,16 @@ it("reports a save that did not land and clears the outcome when the draft chang
   expect(status()).toBe("");
 });
 
-it("reports a save outcome from the save result, not a draft comparison", async () => {
-  // The saved conversation already matches the draft, yet the save itself failed: the form says so.
-  const matching = { sessionId: "s", folderName: "Research", tags: ["alpha", "beta"] } as never;
-  const failed = dock({ selectedSession: matching, onSaveOrganization: vi.fn().mockResolvedValue(false) });
+it("reports each outcome from the save result", async () => {
+  const failed = dock({ onSaveOrganization: vi.fn().mockResolvedValue(false) });
   await render(failed);
   await act(async () => save().click());
   expect(status()).toBe("Folder and tags weren’t saved. The reason is shown in the conversation; try again.");
-  // The saved conversation does not match the draft yet (the list has not refreshed), but the save succeeded.
   const saved = dock({ onSaveOrganization: vi.fn().mockResolvedValue(true) });
   await render(saved);
   await act(async () => save().click());
   expect(status()).toBe("Folder and tags saved.");
-  // A rejected save is a failure whatever the draft holds.
-  const rejected = dock({ selectedSession: matching, onSaveOrganization: vi.fn().mockRejectedValue(new Error("no")) });
+  const rejected = dock({ onSaveOrganization: vi.fn().mockRejectedValue(new Error("no")) });
   await render(rejected);
   await act(async () => save().click());
   expect(status()).toBe("Folder and tags weren’t saved. The reason is shown in the conversation; try again.");

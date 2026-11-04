@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../features/native-routes/library/use-form-dirty";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
@@ -26,14 +27,23 @@ vi.mock("@goatcitadel/mission-control-shared/api/durable", async (importOriginal
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/durable")>()),
   fetchDurableRunHistory: vi.fn(async () => ({ items: [], nextCursor: "more" })),
 }));
-vi.mock("./CommandPalette", () => ({
-  CommandPalette: ({ open }: { open: boolean }) =>
-    open ? (
-      <section role="dialog" aria-label="Command palette">
-        Palette fixture
-      </section>
-    ) : null,
+vi.unmock("vaul");
+const paletteCode = vi.hoisted(() => ({
+  evaluated: vi.fn(),
+  held: undefined as Promise<void> | undefined,
 }));
+vi.mock("./CommandPalette", async () => {
+  paletteCode.evaluated();
+  await paletteCode.held;
+  return {
+    CommandPalette: ({ open }: { open: boolean }) =>
+      open ? (
+        <section role="dialog" aria-label="Command palette" data-state="open">
+          Palette fixture
+        </section>
+      ) : null,
+  };
+});
 const libraryArea = vi.hoisted(() => ({ failure: null as Error | null }));
 vi.mock("../areas/library/LibraryArea", () => ({
   LibraryArea: () => {
@@ -167,6 +177,69 @@ afterEach(() => {
 });
 
 describe("CockpitShell", () => {
+  it("loads the palette controller on first open and keeps the phone More focus handoff", async () => {
+    let finish!: () => void;
+    paletteCode.held = new Promise<void>((resolve) => {
+      finish = resolve;
+    });
+    vi.stubGlobal("matchMedia", (media: string) => ({
+      media,
+      matches: false,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+    const status = () => container.querySelector('[role="status"][data-palette-loading]');
+    const palette = () => document.querySelector('[aria-label="Command palette"]');
+    try {
+      await act(async () =>
+        root.render(
+          <QueryClientProvider client={client}>
+            <CockpitShell />
+          </QueryClientProvider>,
+        ),
+      );
+      expect(paletteCode.evaluated).not.toHaveBeenCalled();
+      expect(palette()).toBeNull();
+      const more = container.querySelector<HTMLButtonElement>('button[aria-label="More areas and settings"]')!;
+      more.focus();
+      await act(async () => {
+        more.click();
+        await vi.dynamicImportSettled();
+      });
+      const sheet = document.querySelector<HTMLElement>('[data-vaul-drawer][data-state="open"]')!;
+      expect(sheet).not.toBeNull();
+      const search = [...sheet.querySelectorAll("button")].find((item) => item.textContent?.trim() === "Search")!;
+      expect(search).toBeDefined();
+      await act(async () => search.focus());
+      expect(document.activeElement).toBe(search);
+      await act(async () => search.click());
+      expect(more.getAttribute("aria-expanded")).toBe("false");
+      // The browser drawer restores its opener on close. Happy DOM does not run that animation.
+      await act(async () => more.focus());
+      expect(document.activeElement).toBe(more);
+      expect(palette()).toBeNull();
+      expect(paletteCode.evaluated).toHaveBeenCalledOnce();
+      expect(status()).not.toBeNull();
+      expect(status()?.textContent).toContain("Loading command palette");
+
+      await act(async () => notifyGatewayAccessChanged(false));
+      expect(status()).toBeNull();
+      await act(async () => finish());
+      expect(palette()).toBeNull();
+      expect(document.activeElement).toBe(more);
+
+      await act(async () =>
+        document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true })),
+      );
+      await vi.waitFor(() => expect(palette()).not.toBeNull());
+      expect(paletteCode.evaluated).toHaveBeenCalledOnce();
+    } finally {
+      finish();
+      paletteCode.held = undefined;
+      client.clear();
+    }
+  });
   it.each(["classic", undefined])(
     "preserves transferred shell ownership during real StrictMode unmount (%s)",
     async (nextOwner) => {

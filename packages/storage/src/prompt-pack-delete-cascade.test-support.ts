@@ -32,6 +32,7 @@ export const PACK_TABLES = [
 /** The child tables that hold no pack id, and go with their parent through its own `ON DELETE CASCADE`. */
 const CHILD_TABLES = [
   { table: "model_comparison_judgments", column: "comparison_id", prefix: "cmp" },
+  { table: "model_comparison_execution_claims", column: "comparison_id", prefix: "cmp" },
   { table: "prompt_retune_passes", column: "campaign_id", prefix: "campaign" },
   { table: "replay_regression_results", column: "regression_run_id", prefix: "regression" },
 ] as const;
@@ -210,6 +211,8 @@ async function seedPack(db: DatabaseClient, packId: string): Promise<void> {
     createdAt: ids.now,
     updatedAt: ids.now,
   });
+  db.prepare("INSERT INTO model_comparison_execution_claims (comparison_id, claim_id) VALUES (?, ?)")
+    .run(`cmp-${packId}`, `claim-${packId}`);
 }
 
 function insert(db: DatabaseClient, table: string, row: Record<string, string | number>): void {

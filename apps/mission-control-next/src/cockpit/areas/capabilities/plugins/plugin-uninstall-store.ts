@@ -1,4 +1,8 @@
 import { useSyncExternalStore } from "react";
+import {
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 
 /**
  * Where one plugin's uninstall stands in this app session. `asking` while a request is on its way; `following` once
@@ -30,6 +34,12 @@ export interface PluginUninstallEntry {
 // plugin's own, loses nothing. Nothing is stored in the browser.
 const entries = new Map<string, PluginUninstallEntry>();
 const listeners = new Set<() => void>();
+let custody = 0;
+
+export const pluginUninstallCustody = () => custody;
+
+subscribeGatewayAccessChange(retirePluginUninstalls);
+subscribeGatewayCallerScope(retirePluginUninstalls);
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
@@ -58,7 +68,10 @@ export function usePluginUninstallEntry(pluginId: string | undefined): PluginUni
   );
 }
 
-export function __resetPluginUninstallsForTests() {
+function retirePluginUninstalls() {
+  custody += 1;
   entries.clear();
   for (const listener of listeners) listener();
 }
+
+export const __resetPluginUninstallsForTests = retirePluginUninstalls;

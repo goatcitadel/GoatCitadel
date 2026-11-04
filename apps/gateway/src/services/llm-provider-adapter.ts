@@ -41,6 +41,8 @@ export interface LlmProviderRequestTarget {
   url: string;
   headers: Record<string, string>;
   dispatcher?: Dispatcher;
+  /** Secret-free origin of the active transport proxy, absent for direct dispatch. */
+  proxyOrigin?: string;
 }
 
 export interface LlmProviderJsonRequestInput {

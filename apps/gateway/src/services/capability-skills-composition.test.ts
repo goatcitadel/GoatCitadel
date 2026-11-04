@@ -517,7 +517,10 @@ describe("composeCapabilitySkills install steps", () => {
       idempotencyKey: "check-1",
       actorId: "operator-1",
     });
-    expect(parts.skillHub.listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: "workspace-a", limit: 100 });
+    expect(parts.skillHub.listSkillHub).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "workspace-a",
+      snapshotIds: ["skill-hub-review-1"],
+    });
     expect(checked.install).toMatchObject({ step: "check_passed", source: { kind: "pack", packId: "himalaya" } });
   });
 
@@ -556,6 +559,7 @@ describe("composeCapabilitySkills install steps", () => {
     const plugin = {
       pluginId: "browser-checks",
       name: "Browser checks",
+      installPlanId: "plan-browser-checks",
       workspaceId: "workspace-a",
       state: "installed" as const,
       pieces: [{ pieceId: "browser-qa", kind: "skill" as const, owned: true, skillSnapshotId: "skill-hub-review-1" }],
@@ -581,7 +585,7 @@ describe("composeCapabilitySkills install steps", () => {
     await composeCapabilitySkills(parts).actions.requestStep(step);
 
     expect(parts.skillHub.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(step, {
-      pluginPass: { pluginId: "browser-checks" },
+      pluginPass: { pluginId: "browser-checks", installPlanId: "plan-browser-checks" },
     });
     // The Skills list marks the skill switched on from that check with the plugin's name.
     const listed = await composeCapabilitySkills(

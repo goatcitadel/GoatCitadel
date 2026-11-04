@@ -105,6 +105,8 @@ export type PluginConnectorOwner = NonNullable<McpServerRecord["pluginOwner"]>;
 
 /** One plain reader or writer per owner an install goes through. The adapter only orders them. */
 export interface PluginInstallSources {
+  /** Canonical plugin-record lock, held through the callback's connector reads and writes. */
+  withPluginRecordsLock<T>(work: () => T | Promise<T>): Promise<Awaited<T>>;
   /** The plugin store's kept inspection, unless it ran out of time or was dropped. */
   readInspection(inspectionId: string): Promise<KeptPluginInspection | undefined>;
   readPlugin(pluginId: string): Promise<StoredPlugin | undefined>;
@@ -416,9 +418,24 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       }),
       ...claudeCodeRecordFields(inspection, binding.claudeCode),
     };
-    await this.sources.updatePlugin(manifest.pluginId, (current) => {
-      if (current) throw pluginAlreadyInstalled(current);
-      return record;
+    await this.sources.withPluginRecordsLock(async () => {
+      const kept = manifest.pieces.filter((piece) => !this.isOwned(binding, piece));
+      const saved = kept.some((piece) => piece.kind === "connector") ? await this.sources.listSavedConnectors() : [];
+      if (
+        !keptPiecesStillThere(
+          kept,
+          binding.views,
+          this.sources.connectorTemplates(),
+          saved,
+          new Set(this.sources.operatorSwitchedOffToolGroups()),
+        )
+      ) {
+        throw pluginChanged();
+      }
+      await this.sources.updatePlugin(manifest.pluginId, (current) => {
+        if (current) throw pluginAlreadyInstalled(current);
+        return record;
+      });
     });
   }
 
@@ -502,18 +519,20 @@ export class PluginInstallChangePlanAdapter implements EvolutionControlPlaneAdap
       }
       progress.current = piece;
       const template = requireInstallTemplate(this.sources.connectorTemplates(), piece.templateId);
-      const created = await saveConnectorUnlessSaved(
-        template,
-        () => this.sources.listSavedConnectors(),
-        (options) => this.sources.createConnector(pluginConnectorInput(template), owner, options),
-      );
+      const created = await this.sources.withPluginRecordsLock(async () => {
+        const saved = await saveConnectorUnlessSaved(
+          template,
+          () => this.sources.listSavedConnectors(),
+          (options) => this.sources.createConnector(pluginConnectorInput(template), owner, options),
+        );
+        await this.savePiece(binding, plan, piece.id, saved ? { ref: saved.serverId } : { owned: false });
+        return saved;
+      });
       if (!created) {
         // Saved since the check, or during this save: the operator's own, which this install keeps and never changes.
-        await this.savePiece(binding, plan, piece.id, { owned: false });
         progress.done.push(`Kept ${template.label}, which was already saved.`);
         continue;
       }
-      await this.savePiece(binding, plan, piece.id, { ref: created.serverId });
       const wanted = piece.asksFirst === "everything" ? "everything_asks" : "reads_free";
       // Written out even when it is what an unset value means, so the saved server says what the plugin asked for.
       if (created.policy.approvalPosture !== wanted) {

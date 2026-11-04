@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type {
   ApprovalRequest,
@@ -8,6 +8,7 @@ import type {
   CapabilitySkillsResponse,
   SkillRuntimeState,
 } from "@goatcitadel/contracts";
+import { subscribeGatewayAccessChange, subscribeGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { setCapabilitySkillState } from "@goatcitadel/mission-control-shared/api/capability-skills";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -16,7 +17,7 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { skillListQuery } from "../../../data/capability-skills-query";
 import { approvalExpiredUnresolved } from "../../inbox/approval-settlement";
 import {
-  __resetSkillSwitchStoreForTests,
+  clearSkillSwitchStore,
   followSignal,
   readSkillSwitch,
   SAVING,
@@ -107,6 +108,7 @@ const misses = new Map<string, number>();
 const settled = new Set<string>();
 /** Picked-up approvals already read once because the list dropped their waiting mark. */
 const checkedGone = new Set<string>();
+let custody = 0;
 
 /** What an entry shows as `failure`, made once per entry so its identity says which failure it is. */
 const failures = new WeakMap<SkillSwitchEntry, Failure>();
@@ -256,15 +258,18 @@ async function checkApproval(skillId: string) {
   const entry = readSkillSwitch(skillId);
   if (entry?.phase !== "waiting" || reading.has(skillId)) return;
   const { approvalId } = entry;
+  const scope = custody;
   reading.add(skillId);
   let approval: ApprovalRequest;
   try {
     // Skill approvals belong to no workspace, so a read scoped to one would find nothing.
     approval = await fetchApproval(approvalId, { signal: followSignal(skillId) });
   } catch {
+    if (scope !== custody) return;
     reading.delete(skillId);
     return missedRead(skillId, approvalId);
   }
+  if (scope !== custody) return;
   reading.delete(skillId);
   const current = readSkillSwitch(skillId);
   if (sameWait(current, approvalId)) approvalSettled(skillId, current, approval);
@@ -297,7 +302,7 @@ function refusalOf(error: unknown): Failure {
   return { message: describeApiError(error).summary, conflict: false };
 }
 
-function receive(item: CapabilitySkillItem, target: CapabilitySkillState, outcome: CapabilitySkillActionOutcome) {
+function receive(item: CapabilitySkillItem, target: CapabilitySkillState, outcome: CapabilitySkillActionOutcome, scope: number) {
   const { skillId, state: from } = item;
   if (outcome.status === "approved") {
     settled.add(outcome.approvalId);
@@ -313,7 +318,7 @@ function receive(item: CapabilitySkillItem, target: CapabilitySkillState, outcom
   // Unchanged: the skill already had that state, so the list is read once to show it.
   const context = contexts.get(skillId);
   void (context ? readList(context) : Promise.resolve()).then(() => {
-    if (readSkillSwitch(skillId) === SAVING) finish(skillId);
+    if (scope === custody && readSkillSwitch(skillId) === SAVING) finish(skillId);
   });
 }
 
@@ -323,7 +328,9 @@ async function send(
   target: CapabilitySkillState,
   workspaceId: string,
   context: ListContext,
+  scope: number,
 ) {
+  if (scope !== custody) return;
   const { skillId } = item;
   const current = readSkillSwitch(skillId);
   if (!item.switchable || item.state === target || (current && current.phase !== "failed")) return;
@@ -338,11 +345,12 @@ async function send(
       expectedRevision: item.revision,
     });
   } catch (error) {
+    if (scope !== custody || readSkillSwitch(skillId) !== SAVING) return;
     const refusal = refusalOf(error);
-    if (readSkillSwitch(skillId) === SAVING) fail(skillId, refusal.message, { conflict: refusal.conflict });
+    fail(skillId, refusal.message, { conflict: refusal.conflict });
     return;
   }
-  if (readSkillSwitch(skillId) === SAVING) receive(item, target, outcome);
+  if (scope === custody && readSkillSwitch(skillId) === SAVING) receive(item, target, outcome, scope);
 }
 
 /**
@@ -401,13 +409,16 @@ function observe(item: CapabilitySkillItem, context: ListContext) {
  */
 export function useSkillSwitch(item: CapabilitySkillItem): SkillSwitch {
   const client = useQueryClient();
+  const [scope] = useState(() => custody);
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
   const listKey = skillListQuery(workspaceId).queryKey;
-  const entry = useSkillSwitchEntry(item.skillId);
+  const stored = useSkillSwitchEntry(item.skillId);
+  const entry = scope === custody ? stored : undefined;
 
   useEffect(() => {
+    if (scope !== custody) return;
     observe(item, { client, listKey: skillListQuery(workspaceId).queryKey });
-  }, [client, workspaceId, item, entry]);
+  }, [client, workspaceId, item, entry, scope]);
 
   const context = { client, listKey };
   const failure = failureOf(entry);
@@ -420,22 +431,31 @@ export function useSkillSwitch(item: CapabilitySkillItem): SkillSwitch {
     ...(entry?.phase === "waiting" && entry.target ? { waitingTarget: entry.target } : {}),
     waitStartedHere: entry?.phase === "waiting" && !entry.recovered,
     ...(failure ? { failure } : {}),
-    setOn: (next) => void send(item, next ? "on" : "off", workspaceId, context),
-    setPaused: (next) => void send(item, next ? "paused" : "on", workspaceId, context),
+    setOn: (next) => void send(item, next ? "on" : "off", workspaceId, context, scope),
+    setPaused: (next) => void send(item, next ? "paused" : "on", workspaceId, context, scope),
     reload: () => {
+      if (scope !== custody) return;
       if (readSkillSwitch(item.skillId)?.phase === "failed") setSkillSwitch(item.skillId, undefined);
       void readList(context);
     },
-    checkApproval: () => checkApprovalNow(item.skillId),
+    checkApproval: () => {
+      if (scope === custody) checkApprovalNow(item.skillId);
+    },
   };
 }
 
-export function __resetSkillSwitchesForTests() {
+function retireSkillSwitches() {
+  custody += 1;
   contexts.clear();
   reading.clear();
   beats.clear();
   misses.clear();
   settled.clear();
   checkedGone.clear();
-  __resetSkillSwitchStoreForTests();
+  clearSkillSwitchStore();
 }
+
+subscribeGatewayAccessChange(retireSkillSwitches);
+subscribeGatewayCallerScope(retireSkillSwitches);
+
+export const __resetSkillSwitchesForTests = retireSkillSwitches;

@@ -24,6 +24,30 @@ it("WK-02: computes the next guided run on the wall clock of the chosen zone", (
   expect(formatInZone(new Date("2026-10-16T07:00:00.000Z"), "Europe/Paris")).toContain("09:00");
 });
 
+it("skips a daily wall time that does not exist during the spring transition", () => {
+  const now = new Date("2026-03-08T05:00:00.000Z");
+  const next = nextGuidedRun("daily", "02:30", "America/New_York", now);
+  expect(next?.toISOString()).toBe("2026-03-09T06:30:00.000Z");
+});
+
+it("still previews the first occurrence of a repeated fall-back wall time", () => {
+  const now = new Date("2026-11-01T04:00:00.000Z");
+  expect(nextGuidedRun("daily", "01:30", "America/New_York", now)?.toISOString()).toBe("2026-11-01T05:30:00.000Z");
+});
+
+it("previews the remaining fall-back occurrence for a new daily schedule", () => {
+  const now = new Date("2026-11-01T06:00:00.000Z");
+  expect(nextGuidedRun("daily", "01:30", "America/New_York", now)?.toISOString()).toBe("2026-11-01T06:30:00.000Z");
+});
+
+it("selects the next occurrence through a half-hour fall-back transition", () => {
+  const zone = "Australia/Lord_Howe";
+  const beforeBoth = new Date("2026-04-04T14:30:00.000Z");
+  const between = new Date("2026-04-04T15:00:00.000Z");
+  expect(nextGuidedRun("daily", "01:45", zone, beforeBoth)?.toISOString()).toBe("2026-04-04T14:45:00.000Z");
+  expect(nextGuidedRun("daily", "01:45", zone, between)?.toISOString()).toBe("2026-04-04T15:15:00.000Z");
+});
+
 it("offers the chosen zone, the browser zone and UTC first, without duplicates", () => {
   const options = scheduleZoneOptions("Europe/Paris", "America/New_York");
   expect(options.slice(0, 3)).toEqual(["Europe/Paris", "America/New_York", "UTC"]);

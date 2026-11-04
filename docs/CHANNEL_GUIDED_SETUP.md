@@ -166,10 +166,9 @@ min".
   ignored. The "This is you" mark on the channel page only decides whether the
   maker skips pairing in direct messages: clearing it sends them to pairing
   there, and the chosen channel still answers only the allowlist. Taking the
-  maker off the allowlist ends the bypass, and their answers in the channel while
-  someone else is still on the list. An empty allowlist does not close the
-  channel: it goes back to answering anyone who mentions the bot there, so add the
-  next person before removing the last one.
+  maker off the allowlist ends the bypass and stops the bot answering them in the
+  chosen channel. Removing the last allowed sender closes that channel to
+  mentions and slash commands until you add an allowed sender.
 - **Starting and resuming.** A setup made on this page is marked
   (`setupPage: "messaging"`) as soon as its draft is made, before the token is
   stored, so even a draft whose first check failed goes on there. Opening the

@@ -375,8 +375,8 @@ const MAX_PORTABLE_SEGMENT_LENGTH = 255;
  * Whether a path inside a plugin, relative and with `/` separators, is written the same on every disk GoatCitadel runs
  * on. The manifest's piece paths and every file GoatCitadel copies from a plugin are held to it. It refuses a path that
  * is empty, absolute or over 4,096 characters, isn't NFKC, holds a `\`, a control character or a replacement character,
- * or has a part that is empty, `.` or `..`, over 255 characters, holds a `:`, ends in a dot or a space, is `.git` in any
- * case, or is a Windows device name such as `CON` or `com1.txt`.
+ * or has a part that is empty, `.` or `..`, over 255 characters, holds Windows-forbidden punctuation, ends in a dot
+ * or a space, is `.git` in any case, or is a Windows device name such as `CON` or `com1.txt`.
  */
 export function isPortablePluginPath(relativePath: string): boolean {
   if (
@@ -401,7 +401,7 @@ function isPortableSegment(segment: string): boolean {
     segment === ".." ||
     segment.length > MAX_PORTABLE_SEGMENT_LENGTH ||
     containsControlCharacter(segment) ||
-    segment.includes(":") ||
+    /[<>:"|?*]/u.test(segment) ||
     /[. ]$/u.test(segment) ||
     segment.toLowerCase() === ".git" ||
     WINDOWS_DEVICE_NAME.test(segment)

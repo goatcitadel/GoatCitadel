@@ -218,7 +218,7 @@ describe("a plugin's skill steps", () => {
       // Only now, with the plugin's record checked, does the step carry the plugin's pass to Skill Hub's owner.
       expect(sources.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(
         { ...step, actorId: "operator-1" },
-        { pluginPass: { pluginId: PLUGIN_ID } },
+        { pluginPass: { pluginId: PLUGIN_ID, installPlanId: "plan-install-browser-checks" } },
       );
     }
 

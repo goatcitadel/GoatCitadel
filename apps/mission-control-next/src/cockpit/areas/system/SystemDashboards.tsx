@@ -260,7 +260,7 @@ function BoardDetail({
         {record && !board.isError ? (
           <p className="mt-1 text-xs text-fg-muted">
             Saved layout version {record.revision} · {record.status === "archived" ? "archived" : "active"}. Desktop
-            follows saved positions; phone stacks widgets. Values are read just now and are not saved copies.
+            follows saved positions. Phone stacks widgets. Widgets show the latest values they loaded.
           </p>
         ) : null}
       </AreaHeader>

@@ -181,6 +181,7 @@ export function useChatSessionControls(input: {
   const [showProjectCreate, setShowProjectCreate] = useState(false);
   const [sessionControlPending, setSessionControlPendingState] = useState<SessionControlPending>(null);
   const sessionControlRevisionRef = useRef(0);
+  const renderedControlRevision = sessionControlRevisionRef.current;
   const setSessionControlPending = useCallback((next: SessionControlPending) => {
     sessionControlRevisionRef.current += 1;
     setSessionControlPendingState(next);
@@ -382,9 +383,24 @@ export function useChatSessionControls(input: {
     setSessionMetadataConflictDraft,
   ]);
 
-  const handleSaveOrganization = useCallback(async () => {
-    if (!selectedSession) return;
+  const handleSaveOrganization = useCallback(async (): Promise<boolean> => {
+    if (
+      !selectedSession ||
+      selectedSession.sessionId !== renderedSelectionScope.selectedSessionId ||
+      (selectedSession.workspaceId ?? "default") !== renderedSelectionScope.workspaceId ||
+      sessionControlPending ||
+      sessionControlRevisionRef.current !== renderedControlRevision
+    ) {
+      return false;
+    }
+    const installation = getGatewayApiBaseUrl();
+    const isCurrent = () =>
+      mountedRef.current && selectionScopeRef.current === renderedSelectionScope && getGatewayApiBaseUrl() === installation;
+    if (!isCurrent()) return false;
+
     setSessionControlPending("organization");
+    const pendingRevision = sessionControlRevisionRef.current;
+    let saved = false;
     try {
       await updateChatSession(selectedSession.sessionId, {
         expectedRevision: selectedSession.revision,
@@ -394,25 +410,36 @@ export function useChatSessionControls(input: {
           .map((item) => item.trim())
           .filter(Boolean),
       });
+      saved = true;
+      if (!isCurrent()) return true;
       setSessionMetadataConflictDraft?.(null);
-      await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
+      await loadSidebar(historyView, { bypassCache: true, preserveSelection: true });
     } catch (err) {
-      if (isSessionRevisionConflict(err)) {
+      if (!isCurrent()) return saved;
+      if (saved) {
+        setError("Folder and tags were saved, but the conversation list could not refresh.");
+      } else if (isSessionRevisionConflict(err)) {
         setSessionMetadataConflictDraft?.({
           sessionId: selectedSession.sessionId,
           kind: "organization",
           folderName,
           tagsValue,
         });
-        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
-          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
-        setError("This chat changed elsewhere. Your organization draft is preserved; review it and retry.");
+        try {
+          await (refreshSessionAggregate?.(selectedSession.sessionId, { preserveSelection: true }) ??
+            loadSidebar(historyView, { bypassCache: true, preserveSelection: true }));
+        } catch {
+          // Preserve the write conflict result if reading the current version also fails.
+        }
+        if (isCurrent())
+          setError("This chat changed elsewhere. Your organization draft is preserved; review it and retry.");
       } else {
         setError((err as Error).message);
       }
     } finally {
-      setSessionControlPending(null);
+      if (mountedRef.current && sessionControlRevisionRef.current === pendingRevision) setSessionControlPending(null);
     }
+    return saved;
   }, [
     setSessionControlPending,
     folderName,
@@ -423,6 +450,9 @@ export function useChatSessionControls(input: {
     setError,
     setSessionMetadataConflictDraft,
     tagsValue,
+    renderedControlRevision,
+    renderedSelectionScope,
+    sessionControlPending,
   ]);
 
   const handleTogglePinSession = useCallback(async () => {

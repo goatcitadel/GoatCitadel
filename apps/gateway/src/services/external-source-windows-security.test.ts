@@ -5,6 +5,7 @@ import path from "node:path";
 import { promisify } from "node:util";
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  createWindowsScratchSecurity,
   ExternalSourceWindowsSecurityError,
   NodeExternalSourceWindowsSecurity,
   type ExternalSourceWindowsSecurityProtocol,
@@ -94,6 +95,39 @@ describe("NodeExternalSourceWindowsSecurity", () => {
     await expect(fs.stat(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
   });
 
+  it.runIf(process.platform === "win32")("protects an empty profile scratch file and rejects replaceable parents", async () => {
+    const security = createWindowsScratchSecurity();
+    const home = os.userInfo().homedir;
+    const owner = await security.verifyPrivateParent(home, freshSignal());
+    const parent = await fs.mkdtemp(path.join(home, ".gc-windows-security-fixture-"));
+    const file = path.join(parent, "passfile-fixture");
+    try {
+      await expect(security.applyOwnerOnlyAcl(parent, "directory", freshSignal())).resolves.toEqual(owner);
+      await runIcacls([parent, "/grant", "*S-1-1-0:RX", "/q", "/l"]);
+      await expect(security.verifyPrivateParent(parent, freshSignal())).resolves.toEqual(owner);
+
+      const handle = await fs.open(file, "wx", 0o600);
+      try {
+        await expect(security.applyOwnerOnlyAcl(file, "file", freshSignal())).resolves.toEqual(owner);
+        expect((await handle.stat()).size).toBe(0);
+        expect(await readSavedDacl(file)).toEqual({ ...owner, inheritanceFlags: [] });
+        await handle.writeFile("synthetic fixture");
+      } finally {
+        await handle.close();
+      }
+      await expect(fs.readFile(file, "utf8")).resolves.toBe("synthetic fixture");
+
+      await runIcacls([parent, "/grant:r", "*S-1-1-0:(DC)", "/q", "/l"]);
+      await expectCode(security.verifyPrivateParent(parent, freshSignal()), "command_failed");
+    } finally {
+      try {
+        await fs.rm(file, { force: true });
+      } finally {
+        await fs.rmdir(parent);
+      }
+    }
+  });
+
   it("isolates a replacement worker from late events after cancellation", async () => {
     if (process.platform !== "win32") return;
     const root = await temporaryRoot();
@@ -116,7 +150,7 @@ class RecordingProtocol implements ExternalSourceWindowsSecurityProtocol {
   public readonly requests: Array<[string, string, string]> = [];
 
   public async request(
-    operation: "acl" | "attributes",
+    operation: "acl" | "attributes" | "private-parent",
     absolutePath: string,
     kind: "directory" | "file",
   ): Promise<string> {

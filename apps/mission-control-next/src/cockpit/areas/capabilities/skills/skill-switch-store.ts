@@ -132,7 +132,7 @@ export function useSkillSwitchEntry(skillId: string): SkillSwitchEntry | undefin
   );
 }
 
-export function __resetSkillSwitchStoreForTests() {
+export function clearSkillSwitchStore() {
   for (const skillId of [...timers.keys(), ...controllers.keys()]) stopFollowing(skillId);
   entries.clear();
   publish();

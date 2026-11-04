@@ -1,9 +1,11 @@
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
-import { ExternalSourceStrip } from "../../../features/threaded-surface/ThreadedExternalSourceStrip";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
 import { ListPlus, SendHorizontal, SlidersHorizontal, Square } from "lucide-react";
 import { Button } from "../../ui/Button";
+import { Dialog } from "../../ui/Dialog";
 import { IconButton } from "../../ui/IconButton";
 import { Sheet } from "../../ui/Sheet";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -12,12 +14,61 @@ import { ChatMediaControls } from "./ChatMediaControls";
 import { ChatSourcesChip } from "./ChatSourcesChip";
 import type { ComposerProps } from "./ChatTextComposer.types";
 
-export type ComposerSources = {
-  open: boolean;
-  panelId: string;
-  openToken: number;
-  onToggle: () => void;
-};
+type SourcesCode = typeof import("../../../features/threaded-surface/ThreadedExternalSourceStrip");
+let pendingSourcesCode: Promise<SourcesCode> | undefined;
+function loadSourcesCode() {
+  return (pendingSourcesCode ??= import("../../../features/threaded-surface/ThreadedExternalSourceStrip").catch(
+    (cause) => {
+      pendingSourcesCode = undefined;
+      throw cause;
+    },
+  ));
+}
+
+export function useComposerSources(scopeKey: string, panelId: string, attachmentCount: number | undefined) {
+  const [attachIntent, setAttachIntent] = useState<{ owner: object; token: number }>();
+  const onOpenChange = useCallback((open: boolean) => {
+    if (!open) setAttachIntent(undefined);
+  }, []);
+  const view = useDeferredOverlay({ scopeKey, load: loadSourcesCode, onOpenChange });
+  const [warmOwner, setWarmOwner] = useState<typeof view.owner>();
+  const nextToken = useRef(0);
+  useEffect(() => {
+    if (view.open && view.runtime) setWarmOwner(view.owner);
+  }, [view.open, view.owner, view.runtime]);
+  const consume = useCallback((token: number) => {
+    setAttachIntent((pending) => (pending?.token === token ? undefined : pending));
+  }, []);
+  const open = () => {
+    const active = document.activeElement;
+    view.trigger.current = active instanceof HTMLElement ? active : null;
+    view.request(true);
+  };
+  const openPicker = () => {
+    setAttachIntent({ owner: view.owner, token: ++nextToken.current });
+    open();
+  };
+  const close = () => {
+    setAttachIntent(undefined);
+    view.close(true);
+  };
+  return {
+    open: view.open,
+    panelId,
+    openToken: attachIntent?.owner === view.owner && view.open ? attachIntent.token : 0,
+    onToggle: () => {
+      if (view.open || attachmentCount === undefined) close();
+      else if (attachmentCount === 0) openPicker();
+      else open();
+    },
+    openPicker,
+    close,
+    consume,
+    view,
+    Strip: view.open || warmOwner === view.owner ? view.runtime?.ExternalSourceStrip : undefined,
+  };
+}
+export type ComposerSources = ReturnType<typeof useComposerSources>;
 
 /** Attach and the other controls stay usable while an attachment uploads; only an actual send locks them. */
 export const composerControlsProps = (props: ComposerProps): ComposerProps =>
@@ -47,15 +98,77 @@ export function ChatComposerTools({
   onChooseModel?: () => void;
 }) {
   const controlsProps = composerControlsProps(props);
+  const { Strip, view } = sources;
+  const reloadCancel = useRef<HTMLButtonElement>(null);
   const sourcesPanel = props.externalSourceControls ? (
-    <div id={sources.panelId} hidden={!sources.open}>
-      <ExternalSourceStrip
-        controls={props.externalSourceControls}
-        disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
-        openAttachFormToken={sources.openToken}
-        onOpenLibrary={props.onOpenLibraryImports}
-        onRestoreFocus={() => props.composerRef.current?.focus()}
-      />
+    <div
+      id={sources.panelId}
+      hidden={!sources.open}
+      ref={(element) => {
+        view.content.current = element;
+      }}
+    >
+      {view.loading || view.failure ? (
+        <span ref={view.status} role="status" className="text-sm text-fg-muted">
+          {view.failure ? (
+            <>
+              Sources could not load.{" "}
+              <Button
+                size="sm"
+                className="cockpit-deferred-recovery-control min-h-8 max-sm:min-h-11"
+                onClick={(event) => view.requestReload(event.currentTarget)}
+              >
+                Reload app
+              </Button>{" "}
+              <Button size="sm" className="min-h-8 max-sm:min-h-11" onClick={sources.close}>
+                Cancel Sources
+              </Button>
+            </>
+          ) : (
+            "Loading sources…"
+          )}
+        </span>
+      ) : null}
+      <Dialog
+        open={Boolean(view.reloadReview && view.reloadCurrent(view.reloadReview))}
+        onOpenChange={(open) => {
+          if (!open) view.cancelReload(view.reloadReview);
+        }}
+        title="Reload app?"
+        description="Reloading keeps the recorded conversation. Unsent question answers and unsaved edits may be lost."
+        onOpenAutoFocus={(event) => {
+          event.preventDefault();
+          if (view.reloadReview && view.reloadCurrent(view.reloadReview))
+            reloadCancel.current?.focus({ preventScroll: true });
+        }}
+        onCloseAutoFocus={(event) => {
+          event.preventDefault();
+          view.restoreReloadFocus();
+        }}
+      >
+        <div ref={view.registerRecoveryHost} className="flex justify-end gap-2">
+          <Button ref={reloadCancel} onClick={() => view.cancelReload(view.reloadReview)}>
+            Cancel
+          </Button>
+          <Button
+            variant="danger"
+            disabled={!view.reloadReview || !view.reloadCurrent(view.reloadReview)}
+            onClick={() => view.confirmReload(view.reloadReview)}
+          >
+            Reload app
+          </Button>
+        </div>
+      </Dialog>
+      {Strip ? (
+        <Strip
+          controls={props.externalSourceControls}
+          disabled={props.historicalReadOnly || Boolean(props.sessionControlBanner)}
+          openAttachFormToken={sources.openToken}
+          onAttachIntentHandled={sources.consume}
+          onOpenLibrary={props.onOpenLibraryImports}
+          onRestoreFocus={() => props.composerRef.current?.focus()}
+        />
+      ) : null}
     </div>
   ) : null;
   const queue = (

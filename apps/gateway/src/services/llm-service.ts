@@ -21,6 +21,7 @@ import {
   readBoundedResponseText,
 } from "./bounded-response-reader.js";
 import { parseProviderJsonResponse } from "./llm-response-parsing.js";
+import { fetchLlmProvider } from "./llm-provider-fetch.js";
 import { attachRetryAfter } from "./provider-retry-after.js";
 import { streamSsePayloads } from "./provider-sse-frames.js";
 import {
@@ -103,6 +104,7 @@ import {
   type LlmProviderAdapterHost,
   type LlmProviderAdapterRegistry,
   type LlmProviderJsonRequestInput,
+  type LlmProviderRequestTarget,
   type LlmProviderResolution,
   type LlmTrackedJsonDispatch,
   type LlmTrackedProcessDispatch,
@@ -164,12 +166,6 @@ type ResolvedProvider = LlmProviderResolution & {
   credentialType?: GoogleCloudCredentialType;
   credentialSource?: GoogleCloudCredentialSource;
 };
-
-interface ProviderRequestTarget {
-  url: string;
-  headers: Record<string, string>;
-  dispatcher?: Dispatcher;
-}
 
 interface ModelDiscoveryResult {
   items: LlmModelRecord[];
@@ -254,6 +250,7 @@ export interface LlmDispatchWardInput {
   readonly attribution: ModelUsageAttributionContext;
   readonly route: Pick<LlmDispatchRoute, "providerId">;
   readonly providerBaseUrl?: string;
+  readonly proxyOrigin?: string;
 }
 
 export type LlmDispatchWardGuard = (input: LlmDispatchWardInput) => Promise<void>;
@@ -1454,8 +1451,8 @@ export class LlmService {
       : undefined;
     const { attribution, resolved, target } = input;
     // The ward backstop runs before any usage intent or network attempt, and it
-    // judges locality by the exact URL this attempt will fetch.
-    await this.authorizeDispatchWard(attribution, resolved.provider.providerId, target.url);
+    // judges locality by the exact model URL and the active proxy for this attempt.
+    await this.authorizeDispatchWard(attribution, resolved.provider.providerId, target.url, target.proxyOrigin);
     const reservation = await this.modelUsageAccounting?.prepareDispatch({
       source: "llm_service",
       attribution: input.attribution,
@@ -1505,7 +1502,7 @@ export class LlmService {
         );
         signal.throwIfAborted();
       }
-      pending = fetch(input.target.url, requestInit);
+      pending = fetchLlmProvider(input.target.url, requestInit);
       // Usage acceptance is durably persisted before the response is consumed.
       // Observe the transport immediately so a fast rejection during that await
       // cannot surface as a process-level unhandled rejection. Awaiting the
@@ -1713,7 +1710,7 @@ export class LlmService {
     requestedModelId?: string;
     attribution: ModelUsageAttributionContext;
     transportAttemptIndex: number;
-    target: ProviderRequestTarget;
+    target: LlmProviderRequestTarget;
     formData: FormData;
     timeoutMs: number;
     signal?: AbortSignal;
@@ -2167,7 +2164,10 @@ export class LlmService {
    * fallback selection drop a refused target instead of failing on it. */
   public async admitsDispatchWard(attribution: ModelUsageAttributionContext, providerId: string): Promise<boolean> {
     try {
-      await this.authorizeDispatchWard(attribution, providerId, this.providers.get(providerId)?.baseUrl);
+      const provider = this.providers.get(providerId);
+      const baseUrl = provider?.baseUrl;
+      const proxy = baseUrl ? selectActiveProviderProxy(new URL(baseUrl).hostname, provider?.request?.proxy) : undefined;
+      await this.authorizeDispatchWard(attribution, providerId, baseUrl, readProxyOrigin(proxy));
       return true;
     } catch (error) {
       if (error instanceof LlmDispatchGuardRejectedError) return false;
@@ -2179,11 +2179,12 @@ export class LlmService {
     attribution: ModelUsageAttributionContext,
     providerId: string,
     providerBaseUrl: string | undefined,
+    proxyOrigin?: string,
   ): Promise<void> {
     const guard = this.dispatchWardGuard;
     if (!guard) return;
     try {
-      await guard({ attribution, route: { providerId }, providerBaseUrl });
+      await guard({ attribution, route: { providerId }, providerBaseUrl, proxyOrigin });
     } catch (error) {
       throw error instanceof LlmDispatchGuardRejectedError ? error : new LlmDispatchGuardRejectedError(error);
     }
@@ -3270,51 +3271,43 @@ export class LlmService {
     purpose: "chat" | "models" | "responses" | "messages",
     endpoint: string,
     bodyKind: "json" | "multipart" = "json",
-  ): ProviderRequestTarget {
+  ): LlmProviderRequestTarget {
     const headers = this.buildHeaders(resolved, purpose, bodyKind);
-    const dispatcher = this.resolveRequestDispatcher(endpoint, resolved.provider.request);
-    const auth = resolved.provider.request?.auth;
-    if (!auth || auth.type !== "query") {
-      return { url: endpoint, headers, dispatcher };
-    }
-    const secret = resolveRequestAuthSecret(auth, this.env, this.resolveDispatchSecret(resolved));
-    if (!secret) {
-      return { url: endpoint, headers, dispatcher };
-    }
+    const requestConfig = resolved.provider.request;
     const url = new URL(endpoint);
+    const proxy = selectActiveProviderProxy(url.hostname, requestConfig?.proxy);
+    const dispatcher = this.resolveRequestDispatcher(url, requestConfig?.tls, proxy);
+    const target = { url: endpoint, headers, dispatcher, proxyOrigin: readProxyOrigin(proxy) };
+    const auth = requestConfig?.auth;
+    if (!auth || auth.type !== "query") return target;
+    const secret = resolveRequestAuthSecret(auth, this.env, this.resolveDispatchSecret(resolved));
+    if (!secret) return target;
     url.searchParams.set(auth.queryParam, `${auth.prefix ?? ""}${secret}`);
-    return {
-      url: url.toString(),
-      headers,
-      dispatcher,
-    };
+    return { ...target, url: url.toString() };
   }
 
   private resolveRequestDispatcher(
-    endpoint: string,
-    requestConfig: LlmProviderRequestConfig | undefined,
+    targetUrl: URL,
+    tls: LlmProviderRequestConfig["tls"],
+    proxy: LlmProviderRequestConfig["proxy"],
   ): Dispatcher | undefined {
-    const targetUrl = new URL(endpoint);
     // SECURITY (Finding 4): every provider request now runs through a dispatcher
     // carrying a DNS-rebinding-safe guarded lookup — including the common case
     // with no proxy/TLS, which previously fell through to the unguarded global
     // fetch dispatcher. A configured proxy resolves the origin at the proxy, so
     // the local lookup cannot see it there; that path is deliberate operator
     // egress and still passes the hostname allowlist check upstream.
-    const usesProxy = Boolean(
-      requestConfig?.proxy && !shouldBypassProxy(targetUrl.hostname, requestConfig.proxy.bypassHosts),
-    );
-    const guardedLookup = usesProxy
+    const guardedLookup = proxy
       ? undefined
-      : createProviderGuardedLookup(endpoint, this.dnsLookup, () => this.networkAllowlist);
+      : createProviderGuardedLookup(targetUrl.href, this.dnsLookup, () => this.networkAllowlist);
 
-    const cacheKey = buildRequestDispatcherCacheKey(targetUrl, requestConfig);
+    const cacheKey = buildRequestDispatcherCacheKey(targetUrl.origin, tls, proxy);
     const cached = this.requestDispatcherCache.get(cacheKey);
     if (cached) {
       return cached;
     }
 
-    const dispatcher = createRequestDispatcher(targetUrl, requestConfig, this.env, this.tlsPathPolicy, guardedLookup);
+    const dispatcher = createRequestDispatcher(targetUrl, tls, proxy, this.env, this.tlsPathPolicy, guardedLookup);
     if (!dispatcher) {
       return undefined;
     }
@@ -3643,7 +3636,7 @@ export class LlmService {
       };
       let response: Response;
       try {
-        response = await fetch(target.url, requestInit);
+        response = await fetchLlmProvider(target.url, requestInit);
       } catch (error) {
         rethrowIfProviderNetworkBlocked(error);
         throw error;
@@ -5019,15 +5012,14 @@ function shouldUseMaxCompletionTokens(providerId: string, model: string): boolea
 
 function createRequestDispatcher(
   targetUrl: URL,
-  requestConfig: LlmProviderRequestConfig | undefined,
+  tls: LlmProviderRequestConfig["tls"],
+  proxy: LlmProviderRequestConfig["proxy"],
   env: NodeJS.ProcessEnv,
   tlsPathPolicy: LlmServiceOptions["tlsPathPolicy"],
   guardedLookup?: ProviderDnsLookupFn,
 ): Dispatcher | undefined {
-  const tlsOptions =
-    targetUrl.protocol === "https:" ? buildRequestTlsOptions(requestConfig?.tls, tlsPathPolicy) : undefined;
-  const proxy = requestConfig?.proxy;
-  if (proxy && !shouldBypassProxy(targetUrl.hostname, proxy.bypassHosts)) {
+  const tlsOptions = targetUrl.protocol === "https:" ? buildRequestTlsOptions(tls, tlsPathPolicy) : undefined;
+  if (proxy) {
     const proxyHeaders = buildProxyRequestHeaders(proxy.auth, env);
     return new ProxyAgent({
       uri: proxy.url,
@@ -5051,17 +5043,18 @@ function createRequestDispatcher(
   });
 }
 
-function buildRequestDispatcherCacheKey(targetUrl: URL, requestConfig: LlmProviderRequestConfig | undefined): string {
-  const useProxy = Boolean(
-    requestConfig?.proxy && !shouldBypassProxy(targetUrl.hostname, requestConfig.proxy.bypassHosts),
-  );
+function buildRequestDispatcherCacheKey(
+  origin: string,
+  tls: LlmProviderRequestConfig["tls"],
+  proxy: LlmProviderRequestConfig["proxy"],
+): string {
   return JSON.stringify({
-    origin: targetUrl.origin,
-    useProxy,
-    proxyUrl: useProxy ? requestConfig?.proxy?.url : undefined,
-    proxyAuth: useProxy ? (requestConfig?.proxy?.auth ?? undefined) : undefined,
-    proxyTls: useProxy ? (requestConfig?.proxy?.tls ?? undefined) : undefined,
-    tls: requestConfig?.tls ?? undefined,
+    origin,
+    useProxy: Boolean(proxy),
+    proxyUrl: proxy?.url,
+    proxyAuth: proxy?.auth ?? undefined,
+    proxyTls: proxy?.tls ?? undefined,
+    tls: tls ?? undefined,
   });
 }
 
@@ -5117,6 +5110,14 @@ function buildProxyRequestHeaders(
   const headers: Record<string, string> = {};
   applyRequestAuthHeaders(headers, auth, env);
   return Object.keys(headers).length > 0 ? headers : undefined;
+}
+
+function selectActiveProviderProxy(hostname: string, proxy: LlmProviderRequestConfig["proxy"]) {
+  return proxy && !shouldBypassProxy(hostname, proxy.bypassHosts) ? proxy : undefined;
+}
+
+function readProxyOrigin(proxy: LlmProviderRequestConfig["proxy"]): string | undefined {
+  return proxy ? (URL.parse(proxy.url)?.origin ?? "invalid-provider-proxy") : undefined;
 }
 
 function shouldBypassProxy(hostname: string, bypassHosts: string[] | undefined): boolean {

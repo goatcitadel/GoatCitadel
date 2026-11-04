@@ -30,9 +30,11 @@ import type {
   ToolCatalogEntry,
   ToolInvokeRequest,
   ToolInvokeResult,
+  ToolPolicyConfig,
   TranscriptEvent,
 } from "@goatcitadel/contracts";
 import { canonicalJsonString, ConflictError } from "@goatcitadel/contracts";
+import { ToolPolicyEngine } from "@goatcitadel/policy-engine";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { CapabilitySystemService, __internal } from "./capability-system-service.js";
 import { resolveCandidateLifecycleWorkspace } from "./capability-candidate-lifecycle-scope.js";
@@ -499,6 +501,72 @@ describe("CapabilitySystemService", () => {
     };
     expect(manifest.wrappers).toHaveLength(1);
     expect(manifest.wrappers[0]).toMatchObject({ name: "tool.safe_read" });
+  });
+
+  it("keeps switched-off built-ins inspectable without freezing them as callable Code Mode capabilities", async () => {
+    const policy = codeModeCatalogPolicy();
+    policy.tools.disabledGroups = ["files", "git"];
+    const harness = await createHarness({ toolPolicy: policy });
+
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const snapshot = await harness.service.getCatalogSnapshot(run.capabilitySnapshotId);
+    const manifestPath = path.resolve(harness.rootDir, run.wrapperManifestArtifact.relPath);
+    const manifest = JSON.parse(await fs.readFile(manifestPath, "utf8")) as {
+      wrappers: Array<{ name: string }>;
+    };
+    const names = manifest.wrappers.map((wrapper) => wrapper.name);
+    expect(names).not.toContain("fs.read");
+    expect(names).toContain("docs.extract_text");
+    for (const toolName of ["fs.read", "git.status"]) {
+      expect(snapshot.inspectableEntries.find((entry) => entry.toolName === toolName)).toMatchObject({
+        callable: false,
+      });
+      expect(snapshot.callableEntries.some((entry) => entry.toolName === toolName)).toBe(false);
+    }
+    expect(snapshot.callableEntries.some((entry) => entry.toolName === "session.status")).toBe(true);
+  });
+
+  it("denies a frozen Code Mode wrapper at live invocation after a tool-group hold without changing its artifact", async () => {
+    const harness = await createHarness({ toolPolicy: codeModeCatalogPolicy() });
+    const engine = harness.policyEngine!;
+    const run = await harness.service.createCodeModeRun({
+      language: "typescript",
+      source: "return { ok: true };",
+    });
+    const manifestPath = path.resolve(harness.rootDir, run.wrapperManifestArtifact.relPath);
+    const originalManifest = await fs.readFile(manifestPath, "utf8");
+    expect(JSON.parse(originalManifest).wrappers).toContainEqual(expect.objectContaining({ name: "fs.read" }));
+
+    engine.setPluginToolGroupHolds([{ groupId: "files", pluginId: "fixture", pluginName: "Fixture" }]);
+    const beforeExecute = vi.fn();
+    const result = await engine.invoke(
+      {
+        toolName: "fs.read",
+        args: { path: path.join(harness.rootDir, "never-read.txt") },
+        agentId: `code-mode:${run.runId}`,
+        sessionId: run.runId,
+        taskId: run.runId,
+        runId: run.runId,
+        workspaceId: "default",
+      },
+      { beforeExecute },
+    );
+    expect(result).toMatchObject({
+      outcome: "blocked",
+      audit: { reasonCodes: expect.arrayContaining(["tool_group_off", "plugin_tool_group_hold"]) },
+    });
+    expect(beforeExecute).not.toHaveBeenCalled();
+    expect(await fs.readFile(manifestPath, "utf8")).toBe(originalManifest);
+    expect(createHash("sha256").update(originalManifest).digest("hex")).toBe(run.wrapperManifestArtifact.sha256);
+    expect((await harness.service.getCatalogSnapshot(run.capabilitySnapshotId)).callableEntries).toContainEqual(
+      expect.objectContaining({ toolName: "fs.read" }),
+    );
+    const next = await harness.service.freezeCatalogSnapshot();
+    expect(next.inspectableEntries.find((entry) => entry.toolName === "fs.read")).toMatchObject({ callable: false });
+    expect(next.callableEntries.some((entry) => entry.toolName === "fs.read")).toBe(false);
   });
 
   it("admits a fresh profile-free Chat Code Mode proposal through approval and checks immutable source before execution", async () => {
@@ -6294,8 +6362,24 @@ describe("CapabilitySystemService governed lifecycle (HX-402 P2)", () => {
   });
 });
 
+function codeModeCatalogPolicy(): ToolPolicyConfig {
+  return {
+    profiles: {},
+    tools: { profile: "default", allow: ["*"], deny: [] },
+    agents: {},
+    sandbox: {
+      writeJailRoots: [],
+      readOnlyRoots: [],
+      networkAllowlist: [],
+      riskyShellPatterns: [],
+      requireApprovalForRiskyShell: true,
+    },
+  };
+}
+
 async function createHarness(input?: {
   toolCatalog?: ToolCatalogEntry[];
+  toolPolicy?: ToolPolicyConfig;
   chatAsyncClarificationV1Enabled?: boolean;
   sandboxConfig?: {
     required?: boolean;
@@ -6327,6 +6411,7 @@ async function createHarness(input?: {
   tempRoots.push(rootDir);
   const approvals = new Map<string, ApprovalRequest>();
   const storage = createFakeStorage(rootDir, approvals);
+  const policyEngine = input?.toolPolicy ? new ToolPolicyEngine(input.toolPolicy, storage.policyStorage) : undefined;
   const publishRealtime = vi.fn(async () => undefined);
   const invokeTool = vi.fn(
     input?.invokeTool ??
@@ -6403,7 +6488,8 @@ async function createHarness(input?: {
       codeModeV1Enabled: true,
       chatAsyncClarificationV1Enabled: input?.chatAsyncClarificationV1Enabled,
     }),
-    listToolCatalog: () => input?.toolCatalog ?? [createTool("tool.safe_read")],
+    listToolCatalog: () => input?.toolCatalog ?? policyEngine?.listCatalog() ?? [createTool("tool.safe_read")],
+    listSwitchedOffToolNames: () => policyEngine?.listSwitchedOffToolNames() ?? new Set(),
     ...(input?.meshCatalogEntries === undefined
       ? {}
       : { listMeshCapabilityCatalogEntries: async () => input.meshCatalogEntries as CapabilityCatalogEntry[] }),
@@ -6431,6 +6517,7 @@ async function createHarness(input?: {
     resolveApproval,
     publishRealtime,
     invokeTool,
+    policyEngine,
     canonicalResolutionEvents,
     canonicalResolutionEffects,
     requestRunProcessing,
@@ -6527,6 +6614,7 @@ function createFakeStorage(rootDir: string, approvalsById = new Map<string, Appr
   const skillAggregateRevisions = new Map<string, number>();
 
   return {
+    policyStorage: asyncRealStorage,
     sessions: {
       upsert(input: { sessionId: string; sessionKey: string }) {
         const record = { sessionId: input.sessionId, sessionKey: input.sessionKey };

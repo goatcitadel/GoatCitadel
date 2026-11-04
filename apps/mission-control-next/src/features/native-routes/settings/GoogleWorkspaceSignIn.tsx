@@ -8,6 +8,8 @@ import {
 } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
+import { currentGatewayHost } from "../../../cockpit/app/gateway-host-hint";
+import { connectorSetupHref } from "../../../cockpit/app/routes";
 import { Button } from "../../../cockpit/ui/Button";
 import { Dialog } from "../../../cockpit/ui/Dialog";
 import { Field } from "../../../cockpit/ui/Field";
@@ -33,6 +35,7 @@ export function GoogleWorkspaceSignIn({
   const [confirmDisconnect, setConfirmDisconnect] = useState(false);
   const status = signIn.status.data;
   const busy = Boolean(signIn.busy);
+  const { desktopApp } = currentGatewayHost();
   return (
     <section aria-label="Google sign-in" className="space-y-3 border-t border-line-subtle pt-4 text-sm">
       <h4 className="font-semibold">Google sign-in</h4>
@@ -44,13 +47,24 @@ export function GoogleWorkspaceSignIn({
       ) : null}
       {status ? <SignInSummary status={status} /> : null}
       <div className="flex flex-wrap gap-2">
-        <Button
-          variant="primary"
-          disabled={!status || busy || !status.keychainAvailable || !status.clientIdConfigured}
-          onClick={() => setReviewOpen(true)}
-        >
-          {status?.connected ? "Reconnect Google" : "Connect Google"}
-        </Button>
+        {desktopApp ? (
+          <a
+            href={connectorSetupHref("integrations")}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="font-medium text-accent underline"
+          >
+            Open Google setup in browser
+          </a>
+        ) : (
+          <Button
+            variant="primary"
+            disabled={!status || busy || !status.keychainAvailable || !status.clientIdConfigured}
+            onClick={() => setReviewOpen(true)}
+          >
+            {status?.connected ? "Reconnect Google" : "Connect Google"}
+          </Button>
+        )}
         {status?.connected || status?.requiresReauth ? (
           <Button disabled={busy} onClick={() => setConfirmDisconnect(true)}>
             Disconnect Google
@@ -60,10 +74,16 @@ export function GoogleWorkspaceSignIn({
           Refresh sign-in status
         </Button>
       </div>
+      {desktopApp ? (
+        <p className="text-fg-muted">
+          Open the saved connection in your browser and finish Google sign-in there. Then return here and refresh
+          sign-in status.
+        </p>
+      ) : null}
       {status && !status.clientIdConfigured ? (
         <p className="text-fg-muted">Save the OAuth client ID with Edit integration connection before connecting.</p>
       ) : null}
-      {signIn.flow ? (
+      {!desktopApp && signIn.flow ? (
         <div className="space-y-2 rounded-md border border-line p-3">
           <p>
             Finish on Google&apos;s page. When Google sends you back, this page completes the connection. Keep this tab
@@ -94,7 +114,7 @@ export function GoogleWorkspaceSignIn({
         </p>
       ) : null}
       {status ? <SignInDetails status={status} /> : null}
-      {status ? (
+      {!desktopApp && status ? (
         <CapabilityReview
           key={String(reviewOpen)}
           open={reviewOpen}

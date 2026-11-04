@@ -22,13 +22,24 @@ import type {
   AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { buildSkillHubLifecycleApprovalInput } from "./skill-hub-lifecycle-service.js";
-import { assertSkillHubSnapshotNotFromPlugin, pluginSkillSource } from "./plugin-owned-refusal.js";
+import { readSkillHubOperationFingerprint, skillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
+import {
+  assertSkillHubSnapshotNotFromPlugin,
+  PluginSkillNeedsInstallError,
+  pluginSkillSource,
+} from "./plugin-owned-refusal.js";
 import { BUNDLED_SKILL_NAME_TAKEN, isBundledSkillName } from "./plugin-skill-name-rules.js";
 
 export const SKILL_HUB_OPERATOR_SCHEMA_VERSION = "goatcitadel.skill-hub-operator.v1" as const;
 export const SKILL_HUB_OPERATOR_MAX_ITEMS = 100 as const;
 
 export type SkillHubOperatorAction = SkillHubOperationKind;
+
+export interface SkillHubOperatorPluginPass {
+  pluginId: string;
+  /** Required for install/activation, omitted by an uninstall's revoke. */
+  installPlanId?: string;
+}
 
 export interface SkillHubOperatorActionGuard {
   allowed: boolean;
@@ -292,7 +303,7 @@ export class SkillHubOperatorService {
    */
   public async createApproval(
     input: CreateSkillHubOperatorApprovalInput,
-    options: { pluginPass?: { pluginId: string } } = {},
+    options: { pluginPass?: SkillHubOperatorPluginPass } = {},
   ): Promise<CreateSkillHubOperatorApprovalResponse> {
     const workspaceId = normalizeRequired(input.workspaceId, "workspace ID", 256);
     const snapshotId = normalizeRequired(input.snapshotId, "snapshot ID", 256);
@@ -302,6 +313,9 @@ export class SkillHubOperatorService {
       throw new NotFoundError({ entity: "Skill Hub snapshot", id: snapshotId });
     }
     assertSkillHubSnapshotNotFromPlugin(snapshot, options.pluginPass);
+    const pluginSource = input.operationKind === "revoke" ? undefined : pluginSkillSource(snapshot);
+    const pluginInstallPlanId = pluginSource ? options.pluginPass?.installPlanId : undefined;
+    if (pluginSource && !pluginInstallPlanId) throw new PluginSkillNeedsInstallError(pluginSource.pluginId);
     const context = await this.contextFor(snapshot, await this.loadInventory(workspaceId));
     const plan = this.plan(input.operationKind, context);
     if (!plan.guard.allowed || !context.skillId || !plan.targetCandidateId || !plan.targetVersionId) {
@@ -334,7 +348,7 @@ export class SkillHubOperatorService {
       sessionId,
       turnId,
     } satisfies Omit<SkillHubOperationIntentTemplate, "operationId" | "idempotencyKey" | "createdAt">;
-    const fingerprint = operationFingerprint(intentBase);
+    const fingerprint = skillHubOperationFingerprint(intentBase, pluginInstallPlanId);
     const existing = await this.findReusableApproval(workspaceId, fingerprint);
     if (existing) {
       return {
@@ -363,7 +377,7 @@ export class SkillHubOperatorService {
         idempotencyKey: `skill-hub:lifecycle:${fingerprint}:${attempt}`,
         createdAt: this.now(),
       };
-      const approvalInput = buildSkillHubLifecycleApprovalInput(intent);
+      const approvalInput = buildSkillHubLifecycleApprovalInput(intent, pluginInstallPlanId);
       const approval = await this.options.createApproval(approvalInput);
       assertCreatedApprovalMatchesIntent(approval, approvalInput);
       return approval;
@@ -793,7 +807,7 @@ export class SkillHubOperatorService {
       const intent = readOperatorIntent(approval);
       return Boolean(
         intent &&
-        operationFingerprintForIntent(intent) === fingerprint &&
+        intent.idempotencyKey.startsWith(`skill-hub:lifecycle:${fingerprint}:`) &&
         ["pending", "approved"].includes(approval.status),
       );
     });
@@ -802,7 +816,7 @@ export class SkillHubOperatorService {
   private async nextAttempt(workspaceId: string, fingerprint: string): Promise<number> {
     const attempts = (await this.options.storage.approvals.list(undefined, 500, workspaceId)).flatMap((approval) => {
       const intent = readOperatorIntent(approval);
-      return intent && operationFingerprintForIntent(intent) === fingerprint ? [operationAttempt(intent)] : [];
+      return intent?.idempotencyKey.startsWith(`skill-hub:lifecycle:${fingerprint}:`) ? [operationAttempt(intent)] : [];
     });
     return Math.max(0, ...attempts) + 1;
   }
@@ -815,14 +829,17 @@ function readOperatorIntent(approval: ApprovalRequest): SkillHubOperationIntentT
   if (
     preview.schemaVersion !== SKILL_HUB_OPERATION_INTENT_PREVIEW_SCHEMA ||
     !isRecord(preview.intent) ||
-    !isOperatorIntentTemplate(preview.intent)
+    !isOperatorIntentTemplate(preview.intent, preview.pluginInstallPlanId)
   ) {
     return undefined;
   }
   return preview.intent;
 }
 
-function isOperatorIntentTemplate(value: Record<string, unknown>): value is SkillHubOperationIntentTemplate {
+function isOperatorIntentTemplate(
+  value: Record<string, unknown>,
+  pluginInstallPlanId: unknown,
+): value is SkillHubOperationIntentTemplate {
   if (
     !(
       isCanonicalIntentString(value.operationId, 256) &&
@@ -848,17 +865,7 @@ function isOperatorIntentTemplate(value: Record<string, unknown>): value is Skil
   ) {
     return false;
   }
-  const intent = value as unknown as SkillHubOperationIntentTemplate;
-  const match = /^skill-hub:lifecycle:([a-f0-9]{64}):([1-9][0-9]*)$/u.exec(intent.idempotencyKey);
-  if (!match) return false;
-  const fingerprint = operationFingerprintForIntent(intent);
-  const attempt = Number(match[2]);
-  return (
-    match[1] === fingerprint &&
-    Number.isSafeInteger(attempt) &&
-    attempt > 0 &&
-    intent.operationId === `skill-hub-op-${fingerprint.slice(0, 32)}-${match[2]}`
-  );
+  return readSkillHubOperationFingerprint(value as unknown as SkillHubOperationIntentTemplate, pluginInstallPlanId) !== undefined;
 }
 
 function isCanonicalIntentString(value: unknown, maxLength: number): value is string {
@@ -890,26 +897,6 @@ function isCanonicalIsoDateTime(value: unknown): value is string {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value && typeof value === "object" && !Array.isArray(value));
-}
-
-function operationFingerprintForIntent(intent: SkillHubOperationIntentTemplate): string {
-  return operationFingerprint({
-    workspaceId: intent.workspaceId,
-    operationKind: intent.operationKind,
-    snapshotId: intent.snapshotId,
-    contentTreeSha256: intent.contentTreeSha256,
-    skillId: intent.skillId,
-    targetCandidateId: intent.targetCandidateId,
-    targetVersionId: intent.targetVersionId,
-    supersedesVersionId: intent.supersedesVersionId,
-    expectedCandidateRevision: intent.expectedCandidateRevision,
-    expectedRuntimeRevision: intent.expectedRuntimeRevision,
-    expectedCandidateAbsent: intent.expectedCandidateAbsent,
-    expectedRuntimeAbsent: intent.expectedRuntimeAbsent,
-    actorId: intent.actorId,
-    sessionId: intent.sessionId,
-    turnId: intent.turnId,
-  });
 }
 
 function operationAttempt(intent: SkillHubOperationIntentTemplate): number {
@@ -982,28 +969,6 @@ function versionIdForSnapshot(snapshot: SkillHubSnapshotRecord): string {
 
 function hashParts(...parts: Array<string | number | boolean | undefined>): string {
   return createHash("sha256").update(JSON.stringify(parts)).digest("hex");
-}
-
-function operationFingerprint(
-  input: Omit<SkillHubOperationIntentTemplate, "operationId" | "idempotencyKey" | "createdAt">,
-): string {
-  return hashParts(
-    input.workspaceId,
-    input.operationKind,
-    input.snapshotId,
-    input.contentTreeSha256,
-    input.skillId,
-    input.targetCandidateId,
-    input.targetVersionId,
-    input.supersedesVersionId,
-    input.expectedCandidateRevision,
-    input.expectedRuntimeRevision,
-    input.expectedCandidateAbsent,
-    input.expectedRuntimeAbsent,
-    input.actorId,
-    input.sessionId,
-    input.turnId,
-  );
 }
 
 function compareSnapshotPosition(left: SkillHubSnapshotRecord, right: SkillHubSnapshotRecord): number {

@@ -1,7 +1,7 @@
 import { mkdtemp, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, vi, describe, expect, it } from "vitest";
 import { upsertLocalEnvVar } from "./env-file.js";
 
 // Regression coverage for SECURITY_AUDIT_2026-05-15 — S4 (atomic credential
@@ -9,7 +9,12 @@ import { upsertLocalEnvVar } from "./env-file.js";
 
 const TEMP_ROOTS: string[] = [];
 
+beforeEach(() => {
+  vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", undefined);
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   while (TEMP_ROOTS.length > 0) {
     const next = TEMP_ROOTS.pop();
     if (next) {

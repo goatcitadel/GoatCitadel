@@ -1,5 +1,6 @@
 import type { ModelComparisonPromptResult, ModelComparisonRun, PromptPackRunRecord } from "@goatcitadel/contracts";
 import { ConflictError } from "@goatcitadel/contracts";
+import { randomUUID } from "node:crypto";
 import type { ModelComparisonRoutePort } from "./model-comparison-route-service.js";
 import {
   buildModelComparisonAdvisory,
@@ -12,10 +13,10 @@ export interface ModelComparisonRunStatePort {
   /** Compare-and-swap move to `running`; undefined when another writer changed the record first. */
   claimRun(
     comparisonId: string,
-    claim: { expectedStatus: ModelComparisonRun["status"]; expectedUpdatedAt: string; updatedAt: string },
+    claim: { expectedStatus: ModelComparisonRun["status"]; expectedUpdatedAt: string; updatedAt: string; claimId: string },
   ): Promise<ModelComparisonRun | undefined>;
   /** Extends the execution lease; false once the record is no longer `running`. */
-  renewRunLease(comparisonId: string, updatedAt: string): Promise<boolean>;
+  renewRunLease(comparisonId: string, updatedAt: string, claimId: string): Promise<boolean>;
   /** Terminal write applied only while still `running`; undefined when it no longer applies. */
   finishRun(
     comparisonId: string,
@@ -25,12 +26,14 @@ export interface ModelComparisonRunStatePort {
       completedAt: string | null;
       error: string | null;
     },
+    authority: { kind: "execution"; claimId: string } | { kind: "operator_cancel" },
   ): Promise<ModelComparisonRun | undefined>;
   upsertResult(
     comparisonId: string,
     result: ModelComparisonPromptResult,
     updatedAt: string,
-  ): Promise<ModelComparisonRun>;
+    claimId: string,
+  ): Promise<ModelComparisonRun | undefined>;
 }
 
 export type ModelComparisonPromptPackRunner = (
@@ -64,6 +67,7 @@ interface ActiveComparison {
 }
 
 type TerminalUpdate = Parameters<ModelComparisonRunStatePort["finishRun"]>[1];
+type TerminalAuthority = Parameters<ModelComparisonRunStatePort["finishRun"]>[2];
 
 /**
  * Runs blind comparisons through the governed prompt-pack runner. The in-memory
@@ -72,7 +76,6 @@ type TerminalUpdate = Parameters<ModelComparisonRunStatePort["finishRun"]>[1];
  */
 export class ModelComparisonExecutionService {
   private readonly active = new Map<string, ActiveComparison>();
-
   public constructor(private readonly deps: ModelComparisonExecutionServiceDependencies) {}
 
   public async startComparison(comparisonId: string): Promise<ModelComparisonRun> {
@@ -88,13 +91,14 @@ export class ModelComparisonExecutionService {
       markSettled();
     };
     let running: ModelComparisonRun;
+    const claimId = randomUUID();
     try {
-      running = await this.markRunning(comparisonId);
+      running = await this.markRunning(comparisonId, claimId);
     } catch (error) {
       release();
       throw error;
     }
-    void this.runInBackground(running, controller)
+    void this.runInBackground(running, controller, claimId)
       .catch((error: unknown) => this.reportBackgroundError(comparisonId, error))
       .finally(release);
     return withAdvisory(running);
@@ -102,11 +106,6 @@ export class ModelComparisonExecutionService {
 
   public async cancelComparison(comparisonId: string): Promise<ModelComparisonRun> {
     const entry = this.active.get(comparisonId);
-    if (entry) {
-      entry.controller.abort();
-      await entry.settled;
-      return withAdvisory(await this.readRun(comparisonId));
-    }
     const run = await this.readRun(comparisonId);
     if (run.status !== "running") {
       throw new ConflictError({ message: `Comparison is ${run.status}; only a running comparison can be cancelled.` });
@@ -119,8 +118,10 @@ export class ModelComparisonExecutionService {
       updatedAt: now,
       completedAt: now,
       error: null,
-    });
+    }, { kind: "operator_cancel" });
     if (cancelled) {
+      entry?.controller.abort();
+      await entry?.settled;
       return withAdvisory(cancelled);
     }
     const latest = await this.readRun(comparisonId);
@@ -134,7 +135,7 @@ export class ModelComparisonExecutionService {
     await this.active.get(comparisonId)?.settled;
   }
 
-  private async markRunning(comparisonId: string): Promise<ModelComparisonRun> {
+  private async markRunning(comparisonId: string, claimId: string): Promise<ModelComparisonRun> {
     const run = await this.readRun(comparisonId);
     if (run.status === "completed") {
       throw new ConflictError({ message: "Comparison already completed." });
@@ -146,6 +147,7 @@ export class ModelComparisonExecutionService {
       expectedStatus: run.status,
       expectedUpdatedAt: run.updatedAt,
       updatedAt: this.nowIso(),
+      claimId,
     });
     if (!claimed) {
       throw new ConflictError({ message: "Comparison was claimed by another run." });
@@ -153,10 +155,10 @@ export class ModelComparisonExecutionService {
     return claimed;
   }
 
-  private async runInBackground(run: ModelComparisonRun, controller: AbortController): Promise<void> {
-    const stopLeaseRenewal = this.startLeaseRenewal(run.comparisonId, controller);
+  private async runInBackground(run: ModelComparisonRun, controller: AbortController, claimId: string): Promise<void> {
+    const stopLeaseRenewal = this.startLeaseRenewal(run.comparisonId, controller, claimId);
     try {
-      await this.executeComparison(run, controller);
+      await this.executeComparison(run, controller, claimId);
     } catch (error) {
       const now = this.nowIso();
       await this.writeTerminal(run.comparisonId, {
@@ -164,13 +166,13 @@ export class ModelComparisonExecutionService {
         updatedAt: now,
         completedAt: now,
         error: error instanceof Error ? error.message : String(error),
-      }).catch((statusError: unknown) => this.reportBackgroundError(run.comparisonId, statusError));
+      }, { kind: "execution", claimId }).catch((statusError: unknown) => this.reportBackgroundError(run.comparisonId, statusError));
     } finally {
       stopLeaseRenewal();
     }
   }
 
-  private async executeComparison(run: ModelComparisonRun, controller: AbortController): Promise<void> {
+  private async executeComparison(run: ModelComparisonRun, controller: AbortController, claimId: string): Promise<void> {
     const signal = controller.signal;
     const queue = buildComparisonWorkItems(run);
     let failure: { error: unknown } | undefined;
@@ -180,14 +182,14 @@ export class ModelComparisonExecutionService {
         if (!item) {
           return;
         }
-        const leaseHeld = await this.renewLease(run.comparisonId, controller).catch((error: unknown) => {
+        const leaseHeld = await this.renewLease(run.comparisonId, controller, claimId).catch((error: unknown) => {
           failure ??= { error };
           return false;
         });
         if (!leaseHeld) {
           return;
         }
-        await this.runWorkItem(run, item, signal).catch((error: unknown) => {
+        await this.runWorkItem(run, item, controller, claimId).catch((error: unknown) => {
           failure ??= { error };
         });
       }
@@ -196,12 +198,13 @@ export class ModelComparisonExecutionService {
     if (failure) {
       throw failure.error;
     }
-    await this.finishComparison(run.comparisonId, signal.aborted);
+    await this.finishComparison(run.comparisonId, signal.aborted, claimId);
   }
 
-  private async runWorkItem(run: ModelComparisonRun, item: ComparisonWorkItem, signal: AbortSignal): Promise<void> {
+  private async runWorkItem(run: ModelComparisonRun, item: ComparisonWorkItem, controller: AbortController, claimId: string): Promise<void> {
+    const signal = controller.signal;
     const pending: ModelComparisonPromptResult = { ...item.result, error: undefined };
-    await this.writeResult(run.comparisonId, pending);
+    if (!await this.writeResult(run.comparisonId, pending, controller, claimId) || signal.aborted) return;
     let next: ModelComparisonPromptResult;
     try {
       const promptRun = await this.deps.runPromptPackTest(run.packId, item.result.testId, {
@@ -216,15 +219,15 @@ export class ModelComparisonExecutionService {
       }
       next = { ...pending, error: error instanceof Error ? error.message : String(error) };
     }
-    await this.writeResult(run.comparisonId, next);
+    await this.writeResult(run.comparisonId, next, controller, claimId);
   }
 
-  private async finishComparison(comparisonId: string, aborted: boolean): Promise<void> {
+  private async finishComparison(comparisonId: string, aborted: boolean, claimId: string): Promise<void> {
     const now = this.nowIso();
     // A terminal write that no longer applies (cancelled or finished elsewhere)
     // leaves the stored record untouched.
     if (aborted) {
-      await this.writeTerminal(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now, error: null });
+      await this.writeTerminal(comparisonId, { status: "cancelled", updatedAt: now, completedAt: now, error: null }, { kind: "execution", claimId });
       return;
     }
     const latest = await this.readRun(comparisonId);
@@ -236,14 +239,14 @@ export class ModelComparisonExecutionService {
       updatedAt: now,
       completedAt: now,
       error: failedCount > 0 ? `${failedCount} of ${latest.results.length} results failed.` : null,
-    });
+    }, { kind: "execution", claimId });
   }
 
   /** Periodic renewal (at least every TTL/3) so a long work item never lets the lease lapse. */
-  private startLeaseRenewal(comparisonId: string, controller: AbortController): () => void {
+  private startLeaseRenewal(comparisonId: string, controller: AbortController, claimId: string): () => void {
     const timer = setInterval(
       () => {
-        void this.renewLease(comparisonId, controller).catch((error: unknown) =>
+        void this.renewLease(comparisonId, controller, claimId).catch((error: unknown) =>
           this.reportBackgroundError(comparisonId, error),
         );
       },
@@ -254,11 +257,11 @@ export class ModelComparisonExecutionService {
   }
 
   /** Renews the lease; when the record stopped being `running` elsewhere, aborts local work. */
-  private async renewLease(comparisonId: string, controller: AbortController): Promise<boolean> {
+  private async renewLease(comparisonId: string, controller: AbortController, claimId: string): Promise<boolean> {
     if (controller.signal.aborted) {
       return false;
     }
-    const renewed = await this.deps.repository.renewRunLease(comparisonId, this.nowIso());
+    const renewed = await this.deps.repository.renewRunLease(comparisonId, this.nowIso(), claimId);
     if (!renewed) {
       controller.abort();
     }
@@ -279,12 +282,14 @@ export class ModelComparisonExecutionService {
     return await this.deps.repository.get(comparisonId);
   }
 
-  private async writeTerminal(comparisonId: string, update: TerminalUpdate): Promise<ModelComparisonRun | undefined> {
-    return await this.deps.repository.finishRun(comparisonId, update);
+  private async writeTerminal(comparisonId: string, update: TerminalUpdate, authority: TerminalAuthority): Promise<ModelComparisonRun | undefined> {
+    return await this.deps.repository.finishRun(comparisonId, update, authority);
   }
 
-  private async writeResult(comparisonId: string, result: ModelComparisonPromptResult): Promise<void> {
-    await this.deps.repository.upsertResult(comparisonId, result, this.nowIso());
+  private async writeResult(comparisonId: string, result: ModelComparisonPromptResult, controller: AbortController, claimId: string): Promise<boolean> {
+    const saved = await this.deps.repository.upsertResult(comparisonId, result, this.nowIso(), claimId);
+    if (!saved) controller.abort();
+    return Boolean(saved);
   }
 
   private now(): Date {

@@ -68,15 +68,23 @@ afterEach(() => {
 });
 
 describe("a tool group a plugin keeps off", () => {
-  it("disables a held group's switch and says why", async () => {
+  it("explains the hold and leaves an independently disabled group off after the hold is released", async () => {
     await render({ ...GIT, heldOffBy: [{ pluginId: "meeting-tools", name: "Meeting tools" }] });
 
     const control = theSwitch()!;
     expect(control.disabled).toBe(true);
     expect(container.textContent).toContain("Off · held by Meeting tools");
-    expect(container.textContent).toContain("Kept off by Meeting tools. Uninstalling it turns the group back on.");
+    expect(container.textContent).toContain("Kept off by Meeting tools. Uninstalling it releases the hold.");
+    expect(container.textContent).toContain("If the group stays off, you can switch it on here.");
     const link = [...container.querySelectorAll("a")].find((anchor) => anchor.textContent === "Meeting tools");
     expect(link?.getAttribute("href")).toContain("/capabilities/plugins?item=plugin%3Ameeting-tools");
+
+    // The list can still report off when the operator disabled the group independently of the plugin.
+    await render(GIT);
+    expect(theSwitch()?.getAttribute("aria-checked")).toBe("false");
+    expect(theSwitch()?.disabled).toBe(false);
+    expect(container.textContent).toContain("The AI can't use these in any chat.");
+    expect(container.textContent).not.toContain("Kept off by Meeting tools");
     expect(settings.patchSettings).not.toHaveBeenCalled();
   });
 

@@ -384,6 +384,11 @@ var
 begin
   Escaped := Value;
   StringChangeEx(Escaped, '''', '''''', True);
+  // PowerShell also treats U+2018 through U+201B as single-quote delimiters.
+  StringChangeEx(Escaped, #8216, #8216#8216, True);
+  StringChangeEx(Escaped, #8217, #8217#8217, True);
+  StringChangeEx(Escaped, #8218, #8218#8218, True);
+  StringChangeEx(Escaped, #8219, #8219#8219, True);
   Result := '''' + Escaped + '''';
 end;
 
@@ -993,14 +998,15 @@ begin
   end;
   if CurUninstallStep = usPostUninstall then
   begin
-    // Remove the marker last, after the [UninstallRun] long-path safety net has run.
+    // Remove the marker after uninstall completes.
     DeleteFile(GoatCitadelInstallMarkerPath());
   end;
 end;
 
 [UninstallRun]
 Filename: "powershell.exe"; Parameters: "-NoLogo -NoProfile -NonInteractive -WindowStyle Hidden -ExecutionPolicy Bypass -Command ""Get-AppxPackage {#MyIdentityPackageName} | Remove-AppxPackage -ErrorAction SilentlyContinue"""; Flags: waituntilterminated runhidden; RunOnceId: "goatcitadel-remove-identity"
-Filename: "powershell.exe"; Parameters: "-NoProfile -ExecutionPolicy Bypass -Command ""try {{ [System.IO.Directory]::Delete('\\\\?\\{app}\\app', $true) } catch {{}; try {{ [System.IO.Directory]::Delete('\\\\?\\{app}\\bin', $true) } catch {{}; Remove-Item -LiteralPath '\\\\?\\{app}\\app' -Recurse -Force -ErrorAction SilentlyContinue; Remove-Item -LiteralPath '\\\\?\\{app}\\bin' -Recurse -Force -ErrorAction SilentlyContinue; exit 0"""; Flags: waituntilterminated runhidden; Check: GoatCitadelInstallMarkerExists; RunOnceId: "goatcitadel-remove-payload"
+; Supersede the old recursive action in append-only uninstall logs. Keep this entry unconditional.
+Filename: "{cmd}"; Parameters: "/d /c exit /b 0"; Flags: waituntilterminated runhidden; RunOnceId: "goatcitadel-remove-payload"
 
 [UninstallDelete]
 Type: dirifempty; Name: "{app}\\app"

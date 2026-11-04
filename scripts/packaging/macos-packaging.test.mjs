@@ -162,8 +162,15 @@ test("Windows native installer replaces payload via a marker-guarded delete only
   assert.match(installerBuilder, /BinPayloadPath := ExpandConstant\('\{app\}\\\\bin'\)/);
   assert.match(installerBuilder, /DelTree\(AppPayloadPath/);
   assert.match(installerBuilder, /DelTree\(BinPayloadPath/);
-  // The destructive long-path uninstall delete must be gated on the marker.
-  assert.match(installerBuilder, /Remove-Item -LiteralPath[\s\S]*?Check: GoatCitadelInstallMarkerExists/);
+  // The code path checks the live marker before its long-path fallback.
+  const removePayload = installerBuilder.match(/procedure RemoveGoatCitadelPayload\(\);[\s\S]*?\nend;/)?.[0] ?? "";
+  assert.match(
+    removePayload,
+    /begin\n  if not GoatCitadelInstallMarkerExists\(\) then\n  begin\n    Exit;\n  end;[\s\S]*?RunUninstallOrFail\([\s\S]*?Remove-Item -LiteralPath \$a/,
+  );
+  const uninstallRun = installerBuilder.match(/\[UninstallRun\][\s\S]*?\[UninstallDelete\]/)?.[0] ?? "";
+  assert.match(uninstallRun, /Filename: "\{cmd\}"; Parameters: "\/d \/c exit \/b 0"; Flags: waituntilterminated runhidden; RunOnceId: "goatcitadel-remove-payload"/);
+  assert.doesNotMatch(uninstallRun, /Remove-Item|\[System\.IO\.Directory\]::Delete|\{app\}/);
   assert.match(installerBuilder, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage/);
   assert.match(
     installerBuilder,

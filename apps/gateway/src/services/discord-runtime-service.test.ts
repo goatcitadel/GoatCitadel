@@ -1054,7 +1054,10 @@ describe("DiscordRuntimeService", () => {
       expect(onInboundMessage).toHaveBeenCalledTimes(1);
     });
 
-    it("ignores slash commands in the default channel from anyone not on the allowlist", async () => {
+    it.each([
+      { label: "nonempty allowlist", allowedSenders: ["333"], makerAllowed: true },
+      { label: "explicitly empty allowlist", allowedSenders: [], makerAllowed: false },
+    ])("filters default-channel slash commands with a $label", async ({ allowedSenders, makerAllowed }) => {
       const acceptSlashCommand = vi.fn(async () => ({ inboundEventId: "inbound-interaction-owner" }));
       const service = createService({ acceptSlashCommand, awaitSlashCommandResult: vi.fn(async () => "ok") });
       const buildInteraction = (userId: string) =>
@@ -1072,7 +1075,7 @@ describe("DiscordRuntimeService", () => {
           deferred: false,
           replied: false,
         }) as any;
-      const connection = defaultChannelConnection({ ...MAKER });
+      const connection = defaultChannelConnection({ ...MAKER, allowedSenders });
 
       await expect(
         (service as any).tryHandleInteractionForConnection(runtime, connection, buildInteraction("444")),
@@ -1080,18 +1083,31 @@ describe("DiscordRuntimeService", () => {
       expect(acceptSlashCommand).not.toHaveBeenCalled();
       await expect(
         (service as any).tryHandleInteractionForConnection(runtime, connection, buildInteraction("333")),
-      ).resolves.toBe(true);
-      expect(acceptSlashCommand).toHaveBeenCalledTimes(1);
+      ).resolves.toBe(makerAllowed);
+      expect(acceptSlashCommand).toHaveBeenCalledTimes(makerAllowed ? 1 : 0);
     });
 
-    it("keeps today's channel rule for connections without allowedSenders", async () => {
+    it("denies a default-channel mention with an explicitly empty allowlist", async () => {
+      const onInboundMessage = vi.fn(async () => undefined);
+      const service = createService({ onInboundMessage });
+
+      for (const allowedSenders of [[], undefined, [" "]]) {
+        const connection = defaultChannelConnection({ ...MAKER, allowedSenders });
+        await expect(
+          (service as any).tryHandleMessageForConnection(runtime, connection, channelMessageFrom("444", true)),
+        ).resolves.toBe(false);
+      }
+      expect(onInboundMessage).not.toHaveBeenCalled();
+    });
+
+    it("keeps the open default-channel rule when allowlist mode is unset", async () => {
       const onInboundMessage = vi.fn(async () => undefined);
       const service = createService({ onInboundMessage });
 
       const configs = [
         {},
         { ownerActorIds: [] },
-        { inboundAccessMode: "allowlist", allowedSenders: [], ownerActorIds: ["333"] },
+        { allowedSenders: [], ownerActorIds: ["333"] },
       ];
       for (const config of configs) {
         const connection = defaultChannelConnection(config);
@@ -1206,12 +1222,16 @@ describe("DiscordRuntimeService", () => {
       expect(onInboundMessage).toHaveBeenCalledTimes(1);
     });
 
-    it("leaves a saved server rule as it is", async () => {
+    it.each([
+      { label: "nonempty allowlist", allowedSenders: ["333"] },
+      { label: "explicitly empty allowlist", allowedSenders: [] },
+    ])("leaves a saved server rule as it is with a $label", async ({ allowedSenders }) => {
       const onInboundMessage = vi.fn(async () => undefined);
       const service = createService({ onInboundMessage });
       // The default server also has its own rule: that rule decides, and ownerActorIds adds nothing to it.
       const connection = defaultChannelConnection({
         ...MAKER,
+        allowedSenders,
         guilds: { guild_1: { requireMention: true, channels: ["channel_1"] } },
       });
 

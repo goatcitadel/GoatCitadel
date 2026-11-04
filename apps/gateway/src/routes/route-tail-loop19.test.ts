@@ -95,7 +95,7 @@ describe("Loop 19 chat delegate and realtime route tails", () => {
       getRealtimeEventSequenceBounds: vi
         .fn()
         .mockReturnValueOnce({ oldestSequence: 10, newestSequence: 40 })
-        .mockReturnValueOnce({ oldestSequence: 1, newestSequence: 999 }),
+        .mockReturnValue({ oldestSequence: 1, newestSequence: 999 }),
       openRealtimeStreamLease: vi.fn(() => ({
         leaseId: "lease-1",
         clientId: "client-1",

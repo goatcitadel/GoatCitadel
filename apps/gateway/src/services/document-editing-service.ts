@@ -15,9 +15,11 @@ import { type AsyncStorage as Storage } from "@goatcitadel/storage";
 
 const MAX_DOCUMENT_BYTES = 256 * 1024;
 const HASH_PATTERN = /^[a-f0-9]{64}$/u;
+type ProposalSettlement = Parameters<Storage["documentPatchProposals"]["settle"]>[2];
+type ProposalApplyOutcome = { applied: DocumentPatchProposalRecord } | { conflict: ConflictError };
 
 export interface DocumentEditingDependencies {
-  storage: Pick<Storage, "chatGeneratedArtifacts" | "chatTurnTraces" | "documentPatchProposals" | "personalOps">;
+  storage: Pick<Storage, "chatGeneratedArtifacts" | "chatTurnTraces" | "documentPatchProposals" | "personalOps" | "runImmediateTransaction">;
   requireChatSession(
     sessionId: string,
   ): { sessionId: string; workspaceId?: string } | Promise<{ sessionId: string; workspaceId?: string }>;
@@ -126,49 +128,27 @@ export class DocumentEditingService {
     const proposal = await this.requireProposalScope(proposalId, workspaceId);
     if (proposal.state !== "pending") throw new ConflictError({ message: "Only pending proposals can be applied." });
     const now = new Date().toISOString();
-    try {
-      if (proposal.targetKind === "personal_note") {
-        const note = await this.notes.updateNote(
-          proposal.targetId,
-          {
-            body: proposal.proposedContent,
-            expectedRevision: proposal.baseRevision,
-            actorId,
-            proposalId: proposal.proposalId,
-          },
-          { workspaceId: proposal.workspaceId },
-          now,
-        );
-        return await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "applied", {
-          updatedAt: now,
-          resolvedBy: actorId,
-          appliedTargetId: note.noteId,
-          appliedRevision: note.revision,
-          appliedContentHash: hashText(note.body),
+    const outcome = await this.withPendingProposal(proposalId, workspaceId, async (current): Promise<ProposalApplyOutcome> => {
+      try {
+        // Roll target writes back to this savepoint before recording a conflict;
+        // keep the outer proposal lock until its authoritative decision commits.
+        const applied = await this.runTransaction(async () => {
+          const target = await this.applyTarget(current, actorId, now);
+          return await this.settleProposal(current.proposalId, "applied", target);
         });
-      }
-      const artifact = await this.createArtifactVersion(proposal.targetId, {
-        workspaceId: proposal.workspaceId,
-        baseContentHash: required(proposal.baseContentHash, "baseContentHash"),
-        content: proposal.proposedContent,
-      });
-      return await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "applied", {
-        updatedAt: now,
-        resolvedBy: actorId,
-        appliedTargetId: artifact.artifactId,
-        appliedRevision: artifact.version,
-        appliedContentHash: artifact.contentHash,
-      });
-    } catch (error) {
-      if (error instanceof ConflictError) {
-        await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "conflicted", {
+        return { applied };
+      } catch (error) {
+        if (!(error instanceof ConflictError)) throw error;
+        await this.settleProposal(current.proposalId, "conflicted", {
           updatedAt: now,
           resolvedBy: actorId,
           conflictReason: error.message,
         });
+        return { conflict: error };
       }
-      throw error;
-    }
+    });
+    if ("conflict" in outcome) throw outcome.conflict;
+    return outcome.applied;
   }
 
   public async rejectProposal(
@@ -178,48 +158,80 @@ export class DocumentEditingService {
   ): Promise<DocumentPatchProposalRecord> {
     const proposal = await this.requireProposalScope(proposalId, workspaceId);
     if (proposal.state !== "pending") throw new ConflictError({ message: "Only pending proposals can be rejected." });
-    return await this.deps.storage.documentPatchProposals.settle(proposal.proposalId, "rejected", {
+    return await this.withPendingProposal(proposalId, workspaceId, (current) => this.settleProposal(current.proposalId, "rejected", {
       updatedAt: new Date().toISOString(),
       resolvedBy: actorId,
+    }));
+  }
+
+  private async applyTarget(proposal: DocumentPatchProposalRecord, actorId: string, now: string): Promise<ProposalSettlement> {
+    if (proposal.targetKind === "personal_note") {
+      const note = await this.notes.updateNote(proposal.targetId, {
+        body: proposal.proposedContent, expectedRevision: proposal.baseRevision, actorId, proposalId: proposal.proposalId,
+      }, { workspaceId: proposal.workspaceId }, now);
+      return { updatedAt: now, resolvedBy: actorId, appliedTargetId: note.noteId, appliedRevision: note.revision, appliedContentHash: hashText(note.body) };
+    }
+    const artifact = await this.createArtifactVersion(proposal.targetId, {
+      workspaceId: proposal.workspaceId, baseContentHash: required(proposal.baseContentHash, "baseContentHash"), content: proposal.proposedContent,
     });
+    return { updatedAt: now, resolvedBy: actorId, appliedTargetId: artifact.artifactId, appliedRevision: artifact.version, appliedContentHash: artifact.contentHash };
+  }
+
+  private async withPendingProposal<T>(proposalId: string, workspaceId: string, write: (proposal: DocumentPatchProposalRecord) => T | Promise<T>): Promise<Awaited<T>> {
+    return await this.runTransaction(async () => {
+      const current = await this.deps.storage.documentPatchProposals.lockPending(proposalId, workspaceId);
+      if (!current) throw new ConflictError({ message: "Only pending proposals can be changed." });
+      return await write(current);
+    });
+  }
+
+  private async runTransaction<T>(write: () => T | Promise<T>): Promise<Awaited<T>> {
+    return await this.deps.storage.runImmediateTransaction(write);
+  }
+
+  private async settleProposal(proposalId: string, state: Exclude<DocumentPatchProposalRecord["state"], "pending">, input: ProposalSettlement): Promise<DocumentPatchProposalRecord> {
+    return await this.deps.storage.documentPatchProposals.settle(proposalId, state, input);
   }
 
   public async createArtifactVersion(
     artifactId: string,
     input: CreateGeneratedArtifactVersionRequest,
   ): Promise<ChatGeneratedArtifactRecord> {
-    const base = await this.deps.storage.chatGeneratedArtifacts.get(required(artifactId, "artifactId"));
-    if ((base.workspaceId ?? "default") !== required(input.workspaceId, "workspaceId")) {
-      throw new NotFoundError({ entity: "Generated artifact", id: artifactId });
-    }
-    if (!(DOCUMENT_EDITABLE_ARTIFACT_KINDS as readonly string[]).includes(base.kind)) {
-      throw new ValidationError({ message: `Generated ${base.kind} artifacts are read-only.` });
-    }
-    const verifiedBaseHash = hashText(base.content);
-    if (
-      !HASH_PATTERN.test(input.baseContentHash) ||
-      base.contentHash !== verifiedBaseHash ||
-      input.baseContentHash !== verifiedBaseHash
-    ) {
-      throw new ConflictError({ message: "The artifact base hash is stale or invalid." });
-    }
-    if (await this.deps.storage.chatGeneratedArtifacts.findDirectSuccessor(base.artifactId)) {
-      throw new ConflictError({ message: "A newer artifact version already supersedes this base." });
-    }
-    const content = boundedContent(input.content);
-    const contentHash = hashText(content);
-    const now = new Date().toISOString();
-    return await this.deps.storage.chatGeneratedArtifacts.create({
-      ...base,
-      artifactId: `gartv_${randomUUID()}`,
-      title: input.title?.trim() || base.title,
-      content,
-      version: base.version + 1,
-      supersedesArtifactId: base.artifactId,
-      contentHash,
-      sourceBlockIndex: undefined,
-      createdAt: now,
-      updatedAt: now,
+    return await this.runTransaction(async () => {
+      // Proposal -> base lock order; direct version requests take only the base.
+      const base = await this.deps.storage.chatGeneratedArtifacts.lockForVersion(required(artifactId, "artifactId"));
+      if ((base.workspaceId ?? "default") !== required(input.workspaceId, "workspaceId")) {
+        throw new NotFoundError({ entity: "Generated artifact", id: artifactId });
+      }
+      if (!(DOCUMENT_EDITABLE_ARTIFACT_KINDS as readonly string[]).includes(base.kind)) {
+        throw new ValidationError({ message: `Generated ${base.kind} artifacts are read-only.` });
+      }
+      const verifiedBaseHash = hashText(base.content);
+      if (
+        !HASH_PATTERN.test(input.baseContentHash) ||
+        base.contentHash !== verifiedBaseHash ||
+        input.baseContentHash !== verifiedBaseHash
+      ) {
+        throw new ConflictError({ message: "The artifact base hash is stale or invalid." });
+      }
+      if (await this.deps.storage.chatGeneratedArtifacts.findDirectSuccessor(base.artifactId)) {
+        throw new ConflictError({ message: "A newer artifact version already supersedes this base." });
+      }
+      const content = boundedContent(input.content);
+      const contentHash = hashText(content);
+      const now = new Date().toISOString();
+      return await this.deps.storage.chatGeneratedArtifacts.create({
+        ...base,
+        artifactId: `gartv_${randomUUID()}`,
+        title: input.title?.trim() || base.title,
+        content,
+        version: base.version + 1,
+        supersedesArtifactId: base.artifactId,
+        contentHash,
+        sourceBlockIndex: undefined,
+        createdAt: now,
+        updatedAt: now,
+      });
     });
   }
 

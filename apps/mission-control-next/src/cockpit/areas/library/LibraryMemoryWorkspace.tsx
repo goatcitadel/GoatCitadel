@@ -79,9 +79,17 @@ function MemoryWorkspace({ workspaceId, citadelId }: { workspaceId: string; cita
     route.navigate(`/library/memory?${next}`);
   }
   const listed = list.data?.items.length ?? 0;
-  // A first, unfiltered read with nothing in it is one empty state: no filters, bulk actions or paging to operate yet.
+  // An empty first page only proves absence when no record was withheld and no page remains.
   const nothingRemembered = Boolean(
-    list.data && !listed && !list.isError && !query && !namespace && status === "active" && cursors.length < 2,
+    list.data &&
+      !listed &&
+      !list.data.withheldCount &&
+      !list.data.nextCursor &&
+      !list.isError &&
+      !query &&
+      !namespace &&
+      status === "active" &&
+      cursors.length < 2,
   );
   const paged = cursors.length > 1 || Boolean(list.data?.nextCursor);
   return (

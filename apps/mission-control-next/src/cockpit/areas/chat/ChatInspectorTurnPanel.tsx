@@ -27,8 +27,13 @@ function totalTimeLabel(turn: ChatThreadTurnRecord): string {
 
 /** The inspector Message tab: status, model, fallback, counts, total and model time, cost and tool calls for one turn. */
 export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThreadTurnRecord | undefined }) {
-  // The effective provider's sign-in mode says whether a turn with no recorded price billed a subscription.
-  const authMode = useProviderAuthMode(selectedTurn?.trace.routing?.effectiveProviderId);
+  const usage = selectedTurn?.trace.completion?.usage;
+  const hasRecordedTokenUsage =
+    (usage?.inputTokens ?? 0) > 0 || (usage?.outputTokens ?? 0) > 0 || (usage?.cachedInputTokens ?? 0) > 0;
+  // A planned provider route alone is not evidence that the turn used a subscription.
+  const authMode = useProviderAuthMode(
+    hasRecordedTokenUsage ? selectedTurn?.trace.routing?.effectiveProviderId : undefined,
+  );
   if (!selectedTurn) return <p className="text-sm text-fg-muted">No message is available yet.</p>;
   return (
     <div className="space-y-3">
@@ -54,11 +59,7 @@ export function ChatInspectorTurnPanel({ selectedTurn }: { selectedTurn: ChatThr
         />
         <DetailRow
           label="Cost"
-          value={recordedCostLabel(
-            selectedTurn.trace.completion?.usage?.costUsd,
-            selectedTurn.trace.completion?.usage?.costSource,
-            subscriptionCostLabel(authMode),
-          )}
+          value={recordedCostLabel(usage?.costUsd, usage?.costSource, subscriptionCostLabel(authMode))}
         />
       </dl>
       <ModelTechnicalDetails

@@ -17,6 +17,11 @@ import { createGovernedChatCompletion, type GovernedLlmCompletionHost } from "./
 import type { ModelUsageAttributionContext } from "@goatcitadel/contracts";
 import { readRemoteWorkerModelToolCalls } from "./remote-worker-model-tool-calls.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const cleanup: Array<() => void> = [];
 afterEach(() => {
   vi.unstubAllGlobals();

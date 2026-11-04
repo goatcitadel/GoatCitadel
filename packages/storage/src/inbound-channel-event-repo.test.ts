@@ -1,6 +1,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { ConflictError, PayloadTooLargeError } from "@goatcitadel/contracts";
+import {
+  CHANNEL_INGRESS_ACCEPTED_REVISION_KEY,
+  ConflictError,
+  PayloadTooLargeError,
+  ValidationError,
+} from "@goatcitadel/contracts";
+import { IntegrationConnectionRepository } from "./integration-connection-repo.js";
 import { createDatabase } from "./sqlite.js";
 import { InboundChannelEventRepository } from "./inbound-channel-event-repo.js";
 
@@ -78,6 +84,50 @@ describe("InboundChannelEventRepository", () => {
       );
     } finally {
       close();
+    }
+  });
+
+  it("checks a Telegram poll revision before inserting or deduping in SQLite", () => {
+    const db = createDatabase({ dbPath: ":memory:" });
+    try {
+      const connections = new IntegrationConnectionRepository(db);
+      const repo = new InboundChannelEventRepository(db, connections);
+      const first = connections.create({ catalogId: "channel.telegram", key: "telegram", kind: "channel", label: "First" });
+      const input = (id: string, revision: string) => ({
+        eventId: id,
+        connectionId: first.connectionId,
+        channelKey: "telegram",
+        transport: "provider_webhook",
+        dispatchKind: "command" as const,
+        idempotencyKey: id,
+        laneKey: "telegram:fixture:private",
+        payload: { text: id, [CHANNEL_INGRESS_ACCEPTED_REVISION_KEY]: revision },
+      });
+      const stale = (error: unknown) =>
+        error instanceof ConflictError && error.details?.reason === "INTEGRATION_CONNECTION_REVISION_CONFLICT";
+      assert.equal(repo.acceptMany([input("already-admitted", first.revision)], undefined, first.revision)[0]?.outcome, "accepted");
+      const current = connections.update(first.connectionId, { expectedRevision: first.revision, label: "Current" });
+
+      assert.throws(() => repo.acceptMany([input("not-yet-admitted", first.revision)], undefined, first.revision), stale);
+      assert.throws(() => repo.acceptMany([input("already-admitted", first.revision)], undefined, first.revision), stale);
+      assert.equal(repo.get("not-yet-admitted"), undefined);
+      const [replay] = repo.acceptMany([input("already-admitted", current.revision)], undefined, current.revision);
+      assert.equal(replay?.outcome, "duplicate");
+      assert.equal(replay.event.payload[CHANNEL_INGRESS_ACCEPTED_REVISION_KEY], first.revision);
+      assert.equal(repo.acceptMany([input("not-yet-admitted", current.revision)], undefined, current.revision)[0]?.outcome, "accepted");
+
+      assert.throws(() => repo.acceptMany([
+        input("batch-one", current.revision),
+        input("batch-two", current.revision),
+      ], undefined, current.revision), ValidationError);
+      assert.throws(() => new InboundChannelEventRepository(db)
+        .acceptMany([input("missing-owner", current.revision)], undefined, current.revision), /requires the connection repository/);
+      assert.equal(repo.get("missing-owner"), undefined);
+      connections.delete(first.connectionId, current.revision);
+      assert.throws(() => repo.acceptMany([input("deleted", current.revision)], undefined, current.revision), stale);
+      assert.equal(repo.get("deleted"), undefined);
+    } finally {
+      db.close();
     }
   });
 

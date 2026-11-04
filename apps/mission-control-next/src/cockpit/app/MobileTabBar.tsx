@@ -46,7 +46,7 @@ export function MobileTabBar({
   onOpenPalette,
   streamState = "closed",
 }: {
-  onOpenPalette: () => void;
+  onOpenPalette: (returnFocus: HTMLButtonElement | null) => void;
   streamState?: EventStreamConnectionState;
 }) {
   // The status strip and the Work count read only on phones, where the sidebar is not rendered.
@@ -215,7 +215,7 @@ export function MobileTabBar({
             type="button"
             onClick={() => {
               setMoreOpen(false);
-              onOpenPalette();
+              onOpenPalette(moreButton.current);
             }}
             className="flex min-h-11 items-center gap-3 rounded-md px-3 text-left text-fg hover:bg-sunken"
           >

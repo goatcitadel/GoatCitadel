@@ -213,7 +213,7 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     expect(await reviewReason(["tool_group_off"])).toBe("This tool's group is switched off in Capabilities › Tools.");
     // A plugin's hold is lifted by uninstalling the plugin, never by the Tools switch (F9).
     expect(await reviewReason(["tool_group_off", "plugin_tool_group_hold"])).toBe(
-      "A plugin keeps this tool's group off. Uninstalling every plugin that keeps it off, in Capabilities › Plugins, turns the group back on.",
+      "A plugin keeps this tool's group off. Uninstall every plugin that keeps it off in Capabilities › Plugins to release the holds. If the group stays off, you can switch it on in Capabilities › Tools.",
     );
     // While the holds can't be read, nothing the operator switches or uninstalls lifts it, so the reason says why.
     expect(await reviewReason(["tool_group_off", "plugin_tool_group_holds_unavailable"])).toBe(
@@ -454,6 +454,7 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
     });
     expect(suggestions[0]?.candidateId).toMatch(/^candidate-/);
     expect(suggestions[0]?.summary).toContain("GoatCitadel can stage");
+    expect(suggestions[0]?.summary).toContain("No callable, disabled, importable, or configurable capability matched");
     expect(suggestions[0]?.summary).not.toContain("Code Mode can draft");
     expect(suggestions[0]?.validationExpectation).toContain("governed capability build");
     expect(suggestions[0]?.reason).toContain("A new reusable capability is justified");
@@ -744,6 +745,44 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
         ...run,
       }));
 
+    it.each([
+      ["README", "Build a tool to read this attachment"],
+      [".env", "Build a tool to read this attachment"],
+      ["report.", "Build a tool to read this attachment"],
+      [".report.PDF", "Build a tool to read .pdf files"],
+    ])("names the unreadable attachment without inventing a suffix for %s", async (fileName, expected) => {
+      const suggestions = await scoutCapabilityUpgradeSuggestions({
+        content: "hello there",
+        assistantText: "Here you go.",
+        sessionId: "session-1",
+        trace: createTrace(),
+        unreadableAttachments: [{ fileName, mimeType: "application/octet-stream" }],
+        deps: emptyDeps(),
+      });
+      expect(suggestions.map((item) => item.title)).toEqual([expected]);
+      expect(suggestions[0]).toMatchObject({ kind: "code_mode_build", requiresUserApproval: true });
+    });
+
+    it.each([
+      ["C:\\input.archive\\README", "Build a tool to read this file"],
+      ["/input.archive/README", "Build a tool to read this file"],
+      ["/input.archive/data.CSV", "Build a tool to read .csv files"],
+    ])("reads the binary file suffix only from the basename of %s", async (filePath, expected) => {
+      const suggestions = await scoutCapabilityUpgradeSuggestions({
+        content: "hello there",
+        assistantText: "Here you go.",
+        sessionId: "session-1",
+        trace: {
+          ...createTrace(),
+          toolRuns: withRuns([
+            { toolName: "fs.read", status: "executed", args: { path: filePath }, result: { binary: true } },
+          ]),
+        },
+        deps: emptyDeps(),
+      });
+      expect(suggestions.map((item) => item.title)).toEqual([expected]);
+    });
+
     it("matches the reviewed Saturday session", async () => {
       const titles: string[][] = [];
       for (const turn of SATURDAY_SESSION_TURNS) {
@@ -823,6 +862,11 @@ describe("scoutCapabilityUpgradeSuggestions", () => {
       });
       expect(boom).not.toHaveBeenCalled();
       expect(suggestions.map((item) => item.kind)).toEqual(["code_mode_build"]);
+      expect(suggestions[0]).toMatchObject({
+        summary: "GoatCitadel can draft a reusable skill for review from this conversation.",
+        reason: "This suggestion comes from a file or attachment the turn could not read.",
+        requiresUserApproval: true,
+      });
     });
 
     it("no Code Mode suggestion when the turn already ran code_mode.request", async () => {

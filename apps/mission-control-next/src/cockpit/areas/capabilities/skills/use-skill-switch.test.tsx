@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { Activity, Fragment, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider, useQuery } from "@tanstack/react-query";
 import {
@@ -10,6 +10,11 @@ import {
   type CapabilitySkillState,
   type CapabilitySkillsResponse,
 } from "@goatcitadel/contracts";
+import {
+  getGatewayAccessRevision,
+  notifyGatewayAccessChanged,
+  setGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { skillListQuery } from "../../../data/capability-skills-query";
@@ -27,9 +32,8 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (original) =>
   ...(await original<object>()),
   ...approvals,
 }));
-vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
-  useUiPreferences: () => ({ activeWorkspaceId: "ws-1" }),
-}));
+const preferences = vi.hoisted(() => ({ activeWorkspaceId: "ws-1" }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 
 const KEY = skillListQuery("ws-1").queryKey;
 type ShownSkill = "writer" | "planner" | "notes";
@@ -112,7 +116,7 @@ let shown: Partial<Record<ShownSkill, SkillSwitch>>;
 
 /** One view of a skill, reading its row live from the cached list like the Skills tab. */
 function Probe({ skillId }: { skillId: ShownSkill }) {
-  const list = useQuery(skillListQuery("ws-1")).data!;
+  const list = useQuery(skillListQuery(preferences.activeWorkspaceId)).data!;
   shown[skillId] = useSkillSwitch(list.items.find((entry) => entry.skillId === skillId)!);
   return null;
 }
@@ -127,13 +131,16 @@ async function settle() {
   });
 }
 
-async function render(skillIds: readonly ShownSkill[] = ["writer", "planner", "notes"]) {
+async function render(skillIds: readonly ShownSkill[] = ["writer", "planner", "notes"], activity?: "hidden" | "visible") {
+  const probes = skillIds.map((skillId) => <Probe key={skillId} skillId={skillId} />);
   await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
-        {skillIds.map((skillId) => (
-          <Probe key={skillId} skillId={skillId} />
-        ))}
+        {activity ? (
+          <Activity mode={activity}>
+            <Fragment key={getGatewayAccessRevision()}>{probes}</Fragment>
+          </Activity>
+        ) : probes}
       </QueryClientProvider>,
     ),
   );
@@ -158,15 +165,20 @@ async function expectNoMoreChecks() {
   expect([listReads(), approvals.fetchApproval.mock.calls.length]).toEqual(reads);
 }
 
-/** A fresh page: no switches remembered, a new cache holding the list route's answer. */
-function freshPage() {
+/** The shell remounts on access change, with a fresh query cache and the same loaded modules. */
+function remount() {
   act(() => root.unmount());
   client.clear();
-  __resetSkillSwitchesForTests();
   client = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity, gcTime: Infinity } } });
   client.setQueryData(KEY, server);
   root = createRoot(container);
   shown = {};
+}
+
+/** A fresh page also reloads the switch module. */
+function freshPage() {
+  remount();
+  __resetSkillSwitchesForTests();
 }
 
 /** Switches Planner on and leaves it waiting on approval-1. */
@@ -180,6 +192,8 @@ async function waitOnPlanner() {
 beforeEach(() => {
   // Only timeouts are faked: the switch's checks are timeouts, and so is the list's change notice, which `settle` runs.
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  preferences.activeWorkspaceId = "ws-1";
+  setGatewayCallerScope("skill-test-caller-a");
   skills.fetchCapabilitySkills.mockReset();
   skills.setCapabilitySkillState.mockReset();
   approvals.fetchApproval.mockReset();
@@ -200,10 +214,106 @@ afterEach(() => {
   container.remove();
   client.clear();
   __resetSkillSwitchesForTests();
+  setGatewayCallerScope("");
   vi.useRealTimers();
 });
 
 describe("useSkillSwitch", () => {
+  it.each([
+    ["access epoch", () => notifyGatewayAccessChanged(false)],
+    ["caller", () => setGatewayCallerScope("skill-test-caller-b")],
+  ] as const)("drops the old timer and wait after a change of %s", async (_label, changeScope) => {
+    await render();
+    await waitOnPlanner();
+    const oldCheck = sw("planner").checkApproval;
+
+    act(changeScope);
+    remount();
+    await render();
+    await act(async () => oldCheck());
+    await beat(5_000);
+
+    expect(approvals.fetchApproval).not.toHaveBeenCalled();
+    expect(sw("planner")).toMatchObject({ checked: false, pending: false, waiting: false });
+  });
+
+  it("cannot settle a new caller's wait with an old approval read for the same id", async () => {
+    const oldRead = deferred<ApprovalRequest>();
+    const newRead = deferred<ApprovalRequest>();
+    approvals.fetchApproval.mockReturnValueOnce(oldRead.promise).mockReturnValueOnce(newRead.promise);
+    await render();
+    await waitOnPlanner();
+    await beat(5_000);
+    expect(approvals.fetchApproval).toHaveBeenCalledOnce();
+    const signal = approvals.fetchApproval.mock.calls[0]?.[1]?.signal as AbortSignal;
+
+    act(() => setGatewayCallerScope("skill-test-caller-b"));
+    remount();
+    await render();
+    await waitOnPlanner();
+    await beat(5_000);
+    await act(async () => oldRead.resolve(approval("approved")));
+    await settle();
+
+    expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-1", pending: false });
+    expect(signal.aborted).toBe(true);
+    expect(skills.setCapabilitySkillState).toHaveBeenCalledTimes(2);
+    await act(async () => sw("planner").checkApproval());
+    expect(approvals.fetchApproval).toHaveBeenCalledTimes(2);
+    await act(async () => newRead.resolve(approval("rejected")));
+    await settle();
+    expect(sw("planner")).toMatchObject({ waiting: false, failure: { message: expect.stringContaining("declined") } });
+  });
+
+  it("ignores a stale save completion after the original caller returns", async () => {
+    const oldSave = deferred<CapabilitySkillActionOutcome>();
+    const newSave = deferred<CapabilitySkillActionOutcome>();
+    skills.setCapabilitySkillState.mockReturnValueOnce(oldSave.promise).mockReturnValueOnce(newSave.promise);
+    await render();
+    await act(async () => sw("planner").setOn(true));
+    expect(skills.setCapabilitySkillState).toHaveBeenCalledOnce();
+
+    act(() => {
+      setGatewayCallerScope("skill-test-caller-b");
+      setGatewayCallerScope("skill-test-caller-a");
+    });
+    remount();
+    await render();
+    await act(async () => sw("planner").setOn(true));
+    await act(async () => oldSave.resolve(WAITING));
+    await settle();
+
+    expect(sw("planner")).toMatchObject({ waiting: false, pending: true });
+    expect(skills.setCapabilitySkillState).toHaveBeenCalledTimes(2);
+    await act(async () => newSave.resolve(WAITING));
+    await settle();
+    expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-1" });
+  });
+
+  it("keeps following the installed skill across workspace changes for one caller", async () => {
+    await render();
+    await waitOnPlanner();
+    preferences.activeWorkspaceId = "ws-2";
+    client.setQueryData(skillListQuery("ws-2").queryKey, { ...server, workspaceId: "ws-2" });
+    await render();
+    await beat(5_000);
+
+    expect(approvals.fetchApproval).toHaveBeenCalledOnce();
+    expect(sw("planner")).toMatchObject({ waiting: true, waitingApprovalId: "approval-1" });
+  });
+
+  it("accepts a new switch after the same caller's hidden view returns", async () => {
+    await render(["planner"], "visible");
+    await waitOnPlanner();
+    await render(["planner"], "hidden");
+    act(() => notifyGatewayAccessChanged(false));
+    await render(["planner"], "visible");
+
+    expect(sw("planner")).toMatchObject({ waiting: false, pending: false });
+    await waitOnPlanner();
+    expect(skills.setCapabilitySkillState).toHaveBeenCalledTimes(2);
+  });
+
   it("doesn't show the new state before the change applies", async () => {
     const saving = deferred<CapabilitySkillActionOutcome>();
     skills.setCapabilitySkillState.mockReturnValueOnce(saving.promise);

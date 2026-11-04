@@ -32,14 +32,24 @@ describe("A2APushNotificationService stale push approvals", () => {
     } as A2ABridgeTaskEvent;
   }
 
-  /**
-   * Defers event 5 behind approval A, then deletes the config and sets it again with the same
-   * URL, so approval B opens for event 1 of the re-created config.
-   */
-  async function createRecreatedPush() {
+  /** Defers event 5 behind approval A on the original config. */
+  async function createPush(afterConfigRead?: () => Promise<void>) {
     storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     const sync = storage;
     const asyncStorage = createSqliteAsyncStorage(sync);
+    const pushConfigs = asyncStorage.a2aTaskPushConfigs;
+    const observedPushConfigs = new Proxy(pushConfigs, {
+      get(target, property, receiver) {
+        if (property === "find" && afterConfigRead) {
+          return async (...args: Parameters<typeof target.find>) => {
+            const config = await target.find(...args);
+            await afterConfigRead();
+            return config;
+          };
+        }
+        return Reflect.get(target, property, receiver);
+      },
+    });
     sync.a2aTaskBindings.createOrGet(
       { a2aTaskId: TASK_ID, contextId: "ctx-stale", peerId: PEER.peerId, idempotencyKey: "stale-1" },
       "2026-06-01T00:00:00.000Z",
@@ -61,7 +71,11 @@ describe("A2APushNotificationService stale push approvals", () => {
     const pushDeliveryFetch = vi.fn(async () => new Response(JSON.stringify({ ok: true }), { status: 202 }));
     const service = new A2APushNotificationService({
       config: { toolPolicy: { sandbox: { networkAllowlist: ["peer.example"] } } } as unknown as GatewayRuntimeConfig,
-      storage: asyncStorage,
+      storage: new Proxy(asyncStorage, {
+        get(target, property, receiver) {
+          return property === "a2aTaskPushConfigs" ? observedPushConfigs : Reflect.get(target, property, receiver);
+        },
+      }),
       tasks: { appendTaskActivity: vi.fn() } as never,
       mutationIdempotencyStore: asyncStorage.mutationIdempotency,
       pushDeliveryFetch: pushDeliveryFetch as never,
@@ -77,15 +91,23 @@ describe("A2APushNotificationService stale push approvals", () => {
       );
 
     await setConfig("2026-06-01T00:00:01.000Z");
-    await service.deleteTaskPushNotificationConfig(PEER, { taskId: TASK_ID }, "2026-06-01T00:00:02.000Z");
-    events = [event(1)];
-    await setConfig("2026-06-01T00:00:03.000Z");
+    async function recreate() {
+      await service.deleteTaskPushNotificationConfig(PEER, { taskId: TASK_ID }, "2026-06-01T00:00:02.000Z");
+      events = [event(1)];
+      await setConfig("2026-06-01T00:00:03.000Z");
+    }
 
     const requestOf = (approvalId: string) => {
       const input = approvals.get(approvalId);
       return { input: input!, request: (input!.payload as { request: PushRequest & { urlHash: string } }).request };
     };
-    return { sync, asyncStorage, service, createApproval, pushDeliveryFetch, requestOf };
+    return { sync, asyncStorage, service, createApproval, pushDeliveryFetch, requestOf, recreate };
+  }
+
+  async function createRecreatedPush() {
+    const harness = await createPush();
+    await harness.recreate();
+    return harness;
   }
 
   function approve(harness: Awaited<ReturnType<typeof createRecreatedPush>>, approvalId: string) {
@@ -148,6 +170,55 @@ describe("A2APushNotificationService stale push approvals", () => {
       lastDeliveryStatus: "delivered",
       lastEventSequence: 1,
     });
+  });
+
+  it("does not advance a replacement config after reading the original for a refusal", async () => {
+    let holdNextRead = false;
+    let notifyRead!: () => void;
+    let releaseRead!: () => void;
+    const read = new Promise<void>((resolve) => {
+      notifyRead = resolve;
+    });
+    const release = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const harness = await createPush(async () => {
+      if (!holdNextRead) return;
+      holdNextRead = false;
+      notifyRead();
+      await release;
+    });
+    const { configCreatedAt, taskId, peerId, eventSequence } = harness.requestOf("approval-A").request;
+    expect(configCreatedAt).toBe("2026-06-01T00:00:01.000Z");
+    holdNextRead = true;
+    const refusal = harness.service.recordRefusedPushApproval(
+      { approvalId: "approval-A", taskId, peerId, eventSequence, disposition: "rejected", configCreatedAt },
+      "2026-06-01T00:00:04.000Z",
+    );
+    try {
+      await Promise.race([
+        read,
+        refusal.then(() => {
+          throw new Error("The refusal settled before the original config was read.");
+        }),
+      ]);
+      await harness.recreate();
+      expect(harness.sync.a2aTaskPushConfigs.get(TASK_ID, PEER.peerId)).toMatchObject({
+        createdAt: "2026-06-01T00:00:03.000Z",
+        lastDeliveryStatus: "deferred_pending_approval",
+        lastEventSequence: 0,
+      });
+    } finally {
+      releaseRead();
+      await refusal;
+    }
+
+    expect(harness.sync.a2aTaskPushConfigs.get(TASK_ID, PEER.peerId)).toMatchObject({
+      createdAt: "2026-06-01T00:00:03.000Z",
+      lastDeliveryStatus: "deferred_pending_approval",
+      lastEventSequence: 0,
+    });
+    expect(harness.pushDeliveryFetch).not.toHaveBeenCalled();
   });
 
   it("a refusal from an approval opened before configCreatedAt was recorded keeps today's behavior", async () => {

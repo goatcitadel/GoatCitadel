@@ -1,4 +1,6 @@
+import type { QueryClient, QueryKey } from "@tanstack/react-query";
 import type {
+  CapabilityPluginDetail,
   CapabilityPluginDetailPiece,
   CapabilityPluginInspection,
   CapabilityPluginPieceCheck,
@@ -9,7 +11,7 @@ import type {
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { approvalWords } from "../skills/skill-install-view";
-import type { PluginInstallState, PluginSkillStepKind } from "./plugin-install-store";
+import type { PluginInstallEntry, PluginInstallState, PluginSkillStepKind } from "./plugin-install-store";
 
 // Wording for the install panel. Every check, piece state and step comes from the Gateway; nothing here decides whether
 // a plugin can be installed or what comes next, it only says what the Gateway's answer means.
@@ -163,4 +165,52 @@ export function progressLine(flow: PluginProgressView, name: string): string {
   const piece = firstUnfinishedPiece(state.detail.pieces);
   if (!piece || piece.kind !== "skill") return piece?.state === "installing" || !piece ? `Installing ${name}…` : "";
   return skillLine(flow, piece);
+}
+
+/**
+ * What a step changes, which no event refreshes (skill steps send none): the plugins, their detail, and the Skills
+ * tab's lists. A finished install changes the connectors and tool groups too; its plan's events refresh those, and so
+ * does this.
+ */
+const STEP_KEYS: readonly QueryKey[] = [
+  ["plugins", "capability-plugins"],
+  ["plugins", "capability-plugin-detail"],
+  ["skills", "capability-skills"],
+  ["skills", "capability-skill-detail"],
+  ["skills", "capability-skill-discover"],
+  ["skills", "capability-skill-installs"],
+];
+const DONE_KEYS: readonly QueryKey[] = [
+  ["mcp", "capability-connectors"],
+  ["tools", "capability-tools"],
+];
+
+/** Where a key's install is read (the workspace it was checked or installed in) and what it refreshes. */
+export interface PluginInstallContext {
+  readonly client: QueryClient;
+  readonly workspaceId: string;
+}
+
+/** The parts of an entry that outlast a step: the source and the attempt keys. */
+export function keep(entry: PluginInstallEntry): PluginInstallEntry {
+  return { state: entry.state, source: entry.source, checkKey: entry.checkKey, installKey: entry.installKey };
+}
+
+export const isFollowing = (entry: PluginInstallEntry | undefined) =>
+  entry?.state.phase === "following" || entry?.asking === true;
+
+/** The pieces' states in one line, to tell whether a read moved anything. */
+export const stateLine = (detail: CapabilityPluginDetail | undefined) =>
+  detail ? `${detail.state}:${detail.pieces.map((piece) => piece.state).join(",")}` : "";
+
+export function pluginSkillOperation(workspaceId: string, snapshotId: string, operationKind: PluginSkillStepKind) {
+  return { workspaceId, snapshotId, operationKind };
+}
+
+export function pluginWaitingStep(step: string | undefined): PluginSkillStepKind | undefined {
+  return step === "waiting_install" ? "install_inactive" : step === "waiting_switch_on" ? "activate" : undefined;
+}
+
+export function refreshPluginInstallQueries(client: QueryClient | undefined, done: boolean) {
+  for (const queryKey of done ? [...STEP_KEYS, ...DONE_KEYS] : STEP_KEYS) void client?.invalidateQueries({ queryKey });
 }

@@ -5,9 +5,11 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type {
   CapabilitySkillActionOutcome,
   CapabilitySkillInstall,
+  CapabilitySkillInstallsResponse,
   CapabilitySkillInstallStep,
   CapabilitySkillOperationRequest,
 } from "@goatcitadel/contracts";
+import { notifyGatewayAccessChanged, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -90,6 +92,14 @@ async function render(installKey = CHECK_ID) {
   await settle();
 }
 
+/** The access gate remounts the shell without reloading its modules. */
+function remount() {
+  act(() => root.unmount());
+  client.clear();
+  client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  root = createRoot(container);
+}
+
 async function checkPack() {
   await act(async () => shown.check(PACK));
   await settle();
@@ -125,6 +135,7 @@ const reads = () => api.fetchCapabilitySkillInstalls.mock.calls.length;
 
 beforeEach(() => {
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
+  setGatewayCallerScope("install-test-caller-a");
   preferences.activeWorkspaceId = "ws-1";
   calls = [];
   server = checked();
@@ -148,10 +159,67 @@ afterEach(() => {
   container.remove();
   client.clear();
   __resetSkillInstallsForTests();
+  setGatewayCallerScope("");
   vi.useRealTimers();
 });
 
 describe("useSkillInstall", () => {
+  it("stops the old install timer when Gateway access changes", async () => {
+    answerSteps({ install_inactive: "waiting", activate: "waiting" });
+    await render();
+    await checkPack();
+    await confirm();
+    expect(shown.state).toMatchObject({ phase: "following", install: { step: "waiting_install" } });
+    const readsBeforeChange = reads();
+
+    act(() => notifyGatewayAccessChanged(false));
+    remount();
+    await render();
+    await beat(30_000);
+
+    expect(reads()).toBe(readsBeforeChange);
+    expect(shown.state).toEqual({ phase: "idle" });
+    expect(api.requestCapabilitySkillOperation).toHaveBeenCalledOnce();
+  });
+
+  it("does not activate from an old caller's installed-off response", async () => {
+    answerSteps({ install_inactive: "approved", activate: "approved" });
+    await render();
+    await checkPack();
+    await confirm();
+    expect(shown.state).toMatchObject({ phase: "following", install: { step: "installing" } });
+
+    let resolveRead!: (answer: CapabilitySkillInstallsResponse) => void;
+    const oldRead = new Promise<CapabilitySkillInstallsResponse>((resolve) => {
+      resolveRead = resolve;
+    });
+    api.fetchCapabilitySkillInstalls.mockReturnValueOnce(oldRead);
+    await beat(1_000);
+    expect(reads()).toBe(2);
+    const signal = api.fetchCapabilitySkillInstalls.mock.lastCall?.[1]?.signal as AbortSignal;
+
+    act(() => setGatewayCallerScope("install-test-caller-b"));
+    remount();
+    await render();
+    await act(async () =>
+      resolveRead({
+        workspaceId: "ws-1",
+        installs: [checked({ step: "installed_off" })],
+        operatorApprovalSkip: true,
+        generatedAt: "",
+      }),
+    );
+    await settle();
+
+    expect(api.requestCapabilitySkillOperation).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "ws-1",
+      snapshotId: CHECK_ID,
+      operationKind: "install_inactive",
+    });
+    expect(signal.aborted).toBe(true);
+    expect(shown.state).toEqual({ phase: "idle" });
+  });
+
   it("checks a reset panel in the workspace active now, not the one its last check was made in", async () => {
     const draft = "draft:git";
     const git = { kind: "git", sourceRef: "https://github.com/acme/skill" } as const;

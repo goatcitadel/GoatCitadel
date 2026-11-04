@@ -180,7 +180,7 @@ function isWardGatedDispatch(attribution: ModelUsageAttributionContext): boolean
  * a ward on the requested provider still binds a turn it rerouted locally.
  */
 export function createModelChatWardDispatchGuard(deps: RouteLocalWardDependencies): LlmDispatchWardGuard {
-  return async ({ attribution, route, providerBaseUrl }) => {
+  return async ({ attribution, route, providerBaseUrl, proxyOrigin }) => {
     if (!isWardGatedDispatch(attribution)) return;
     const wardStorage = buildModelChatWardStorage(deps.storage);
     if (!wardStorage) return;
@@ -195,7 +195,7 @@ export function createModelChatWardDispatchGuard(deps: RouteLocalWardDependencie
     }
     if (
       ward.effect === "route_local" &&
-      !isRouteLocalProvider({ providerId: route.providerId, baseUrl: providerBaseUrl ?? "" })
+      (!isLoopbackUrl(providerBaseUrl) || (proxyOrigin !== undefined && !isLoopbackUrl(proxyOrigin)))
     ) {
       throw rejectWardDispatch("citadel_ward_route_local_unavailable", ward.citadelId, ROUTE_LOCAL_UNAVAILABLE_MESSAGE);
     }

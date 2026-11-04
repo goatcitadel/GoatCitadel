@@ -33,6 +33,11 @@ function buildService(options: { modelCatalogCachePath?: string } = {}): LlmServ
   });
 }
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 describe("LlmService model catalog cache", () => {
   const tempDirs: string[] = [];
 

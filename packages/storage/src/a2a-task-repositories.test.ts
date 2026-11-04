@@ -288,6 +288,53 @@ describe("A2ATaskPushConfigRepository", () => {
     }
   });
 
+  it("records only an advancing refusal for the matching push config generation", () => {
+    const { db, pushConfigs } = createRepositories();
+    try {
+      const taskId = "a2a-task-1";
+      const peerId = "peer-1";
+      const current = pushConfigs.upsert(
+        { taskId, peerId, url: "https://peer.example/push" },
+        "2026-07-11T11:01:00.000Z",
+      );
+      const refusal = { configCreatedAt: current.createdAt, eventSequence: 5, error: "refused" };
+
+      assert.equal(
+        pushConfigs.recordRefusedApprovalIfCurrent(taskId, peerId, {
+          ...refusal,
+          configCreatedAt: "2026-07-11T11:00:00.000Z",
+        }),
+        false,
+      );
+      assert.deepEqual(pushConfigs.get(taskId, peerId), current);
+
+      assert.equal(pushConfigs.recordRefusedApprovalIfCurrent(taskId, peerId, refusal), true);
+      const recorded = pushConfigs.get(taskId, peerId);
+      assert.equal(recorded.attemptCount, 1);
+      assert.equal(recorded.lastDeliveryStatus, "blocked");
+      assert.equal(recorded.lastEventSequence, 5);
+      assert.equal(recorded.lastDeliveryError, "refused");
+
+      assert.equal(pushConfigs.recordRefusedApprovalIfCurrent(taskId, peerId, refusal), false);
+      assert.equal(pushConfigs.recordRefusedApprovalIfCurrent(taskId, peerId, { ...refusal, eventSequence: 4 }), false);
+      assert.deepEqual(pushConfigs.get(taskId, peerId), recorded);
+
+      assert.equal(
+        pushConfigs.recordRefusedApprovalIfCurrent(taskId, peerId, {
+          eventSequence: 6,
+          error: "legacy refusal",
+        }),
+        true,
+      );
+      const legacy = pushConfigs.get(taskId, peerId);
+      assert.equal(legacy.attemptCount, 2);
+      assert.equal(legacy.lastEventSequence, 6);
+      assert.equal(legacy.lastDeliveryError, "legacy refusal");
+    } finally {
+      db.close();
+    }
+  });
+
   it("sanitizes malformed persisted events, delivery state, counters, and credentials", () => {
     const { db, pushConfigs } = createRepositories();
     try {

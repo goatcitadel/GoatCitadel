@@ -342,10 +342,14 @@ describe("ui preferences", () => {
     expect(hook.result.theme).toBe("dark");
 
     // An explicit choice wins over the host and stops listening; choosing system again resumes it.
-    act(() => hook.result.setTheme("light"));
+    act(() => {
+      hook.result.setTheme("light");
+    });
     expect(hook.result).toMatchObject({ theme: "light", themePreference: "light" });
     expect(listeners.size).toBe(0);
-    act(() => hook.result.setTheme("system"));
+    act(() => {
+      hook.result.setTheme("system");
+    });
     expect(hook.result).toMatchObject({ theme: "dark", themePreference: "system" });
     expect(storage.getItem("goatcitadel.ui.theme.v1")).toBe("system");
     act(() => {

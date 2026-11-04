@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { CapabilityPluginListItem, CapabilityPluginListResponse } from "@goatcitadel/contracts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -7,6 +7,7 @@ import { useCockpitRoute } from "../../../app/use-cockpit-route";
 import { pluginInspectionQuery } from "../../../data/capability-plugins-query";
 import { reopenSettingsApproval } from "../../settings/SettingsApprovalDialog";
 import { PluginInstallPanel } from "./PluginInstallPanel";
+import { pluginInstallCustody } from "./plugin-install-flow";
 import {
   PLUGINS_HREF,
   pluginIdFromSearch,
@@ -67,7 +68,11 @@ export function installPanelHolds(
  * (`?item=plugin-install:<id>`), or a plugin whose install isn't finished (`?item=plugin:<id>`, when this app session
  * follows it or the list says so). Any other plugin's address belongs to the plugin's own panel.
  */
-function usePanelTarget(search: string, list: CapabilityPluginListResponse | undefined): PanelTarget | undefined {
+function usePanelTarget(
+  search: string,
+  list: CapabilityPluginListResponse | undefined,
+  custody: number,
+): PanelTarget | undefined {
   const form = pluginSourceFromSearch(search);
   const inspectionId = pluginInspectionIdFromSearch(search);
   const pluginId = pluginIdFromSearch(search);
@@ -75,8 +80,9 @@ function usePanelTarget(search: string, list: CapabilityPluginListResponse | und
   const pluginEntry = usePluginInstallEntry(pluginId ? pluginInstallKey(pluginId) : undefined);
   const inspectionRead = useQuery({
     ...pluginInspectionQuery(inspectionId ?? ""),
-    enabled: inspectionId !== undefined && !inspectionEntry,
+    enabled: () => custody === pluginInstallCustody() && inspectionId !== undefined && !inspectionEntry,
   });
+  if (custody !== pluginInstallCustody()) return undefined;
   // A folder form opens only where a folder may be added, whatever the address says: never before the list says so.
   if (form === "folder" && list?.folderSourcesAllowed !== true) return undefined;
   if (form) return { key: draftPluginInstallKey(form), title: FORM_TITLES[form], form };
@@ -105,7 +111,7 @@ export interface PluginInstallPanelOpener {
 }
 
 /** Opens the install panel in the inspector, and moves the address with the panel as its flow moves. */
-function usePanelShow() {
+function usePanelShow(custody: number) {
   const { open: openInspector, content } = useInspector();
   const { navigate } = useCockpitRoute();
   // The panel this page last asked the inspector for, and with which inspector.
@@ -113,16 +119,18 @@ function usePanelShow() {
 
   const move = useCallback(
     (from: string, to: string) => {
+      if (custody !== pluginInstallCustody()) return;
       const pluginId = pluginIdOfInstallKey(to);
       // A check's own address replaces the one it moves from, so going back doesn't land on a finished step.
       const replace = !isDraftPluginInstallKey(from);
       navigate(pluginId ? pluginItemHref(pluginId) : pluginInstallItemHref(to), replace ? { replace } : undefined);
     },
-    [navigate],
+    [navigate, custody],
   );
 
   const show = useCallback(
     (key: string, title: string, panel: Omit<PanelTarget, "key" | "title"> = {}) => {
+      if (custody !== pluginInstallCustody()) return;
       asked.current = { key, inspectorOpen: openInspector };
       openInspector({
         source: pluginInstallSource(key),
@@ -130,13 +138,13 @@ function usePanelShow() {
         body: <PluginInstallPanel installKey={key} {...panel} onMove={(to) => move(key, to)} />,
       });
     },
-    [openInspector, move],
+    [openInspector, move, custody],
   );
   return { show, asked, openInspector, content };
 }
 
 /** Opens the panel the address names, once per inspector, and clears the address when that panel is closed. */
-function useAddressPanel(target: PanelTarget | undefined, panels: ReturnType<typeof usePanelShow>) {
+function useAddressPanel(target: PanelTarget | undefined, panels: ReturnType<typeof usePanelShow>, custody: number) {
   const { navigate } = useCockpitRoute();
   const { show, asked, openInspector, content } = panels;
   const openKey = pluginInstallKeyFromSource(content?.source);
@@ -148,6 +156,7 @@ function useAddressPanel(target: PanelTarget | undefined, panels: ReturnType<typ
   const targetWorkspaceId = target?.pluginWorkspaceId;
 
   useEffect(() => {
+    if (custody !== pluginInstallCustody()) return;
     if (openKey) {
       shown.current = openKey;
       return;
@@ -171,7 +180,7 @@ function useAddressPanel(target: PanelTarget | undefined, panels: ReturnType<typ
       ...(targetForm ? { form: targetForm } : {}),
       ...(targetWorkspaceId ? { pluginWorkspaceId: targetWorkspaceId } : {}),
     });
-  }, [openKey, content, targetKey, targetTitle, targetForm, targetWorkspaceId, show, asked, openInspector, navigate]);
+  }, [openKey, content, targetKey, targetTitle, targetForm, targetWorkspaceId, show, asked, openInspector, navigate, custody]);
 }
 
 /**
@@ -185,11 +194,13 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
   const { search, navigate } = useCockpitRoute();
   const client = useQueryClient();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
-  const panels = usePanelShow();
-  useAddressPanel(usePanelTarget(search, list), panels);
+  const [custody] = useState(pluginInstallCustody);
+  const panels = usePanelShow(custody);
+  useAddressPanel(usePanelTarget(search, list, custody), panels, custody);
 
   return {
     install: (item) => {
+      if (custody !== pluginInstallCustody()) return;
       const key = draftPluginInstallKey(`built_in:${item.pluginId}`);
       const before = readPluginInstall(key);
       // A second press while the first check runs shows that check rather than making another; one after a check whose
@@ -201,6 +212,7 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
       panels.show(key, item.name);
     },
     resume: (item) => {
+      if (custody !== pluginInstallCustody()) return;
       // A waiting approval this page already follows opens at once.
       const followed = readPluginInstall(pluginInstallKey(item.pluginId))?.state;
       if (followed?.phase === "following" && followed.waitingApprovalId) {
@@ -209,6 +221,7 @@ export function usePluginInstallPanel(list: CapabilityPluginListResponse | undef
       navigate(pluginItemHref(item.pluginId));
     },
     openSource: (kind) => {
+      if (custody !== pluginInstallCustody()) return;
       resetPluginInstall(draftPluginInstallKey(kind));
       navigate(pluginSourceItemHref(kind));
     },

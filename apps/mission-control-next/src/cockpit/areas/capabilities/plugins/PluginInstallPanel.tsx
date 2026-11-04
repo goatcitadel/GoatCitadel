@@ -15,6 +15,7 @@ import { PluginInstallProgress } from "./PluginInstallProgress";
 import { PluginPieceList } from "./PluginPieceList";
 import { PluginSourceForm } from "./PluginSourceForm";
 import { PluginUninstall } from "./PluginUninstall";
+import { pluginInstallCustody } from "./plugin-install-flow";
 import { signingSecretProblem } from "./plugin-install-view";
 import {
   isDraftPluginInstallKey,
@@ -152,14 +153,16 @@ function useHookSecrets(flow: PluginInstall) {
  * Gateway's; the panel only words them.
  */
 export function PluginInstallPanel({ installKey, form, pluginWorkspaceId, onMove }: PluginInstallPanelProps) {
-  const { flow, refused, inspectionKey, inspectionRead, detailRead } = usePanelFlow(installKey, pluginWorkspaceId);
+  const [custody] = useState(pluginInstallCustody);
+  const { flow, refused, inspectionKey, inspectionRead, detailRead } = usePanelFlow(installKey, pluginWorkspaceId, custody);
 
   useEffect(() => {
-    if (!flow.movedTo) return;
+    if (custody !== pluginInstallCustody() || !flow.movedTo) return;
     const target = takePluginInstallMove(installKey);
     if (target) onMove(target);
-  }, [flow.movedTo, installKey, onMove]);
+  }, [flow.movedTo, installKey, onMove, custody]);
 
+  if (custody !== pluginInstallCustody()) return null;
   const { state } = flow;
   const shown = shownOf(state);
   if (form && !shown && !refused) {
@@ -183,7 +186,7 @@ export function PluginInstallPanel({ installKey, form, pluginWorkspaceId, onMove
 }
 
 /** The panel's flow, with the Gateway reads that seed it: the check an address names, or the plugin's detail. */
-function usePanelFlow(installKey: string, pluginWorkspaceId: string | undefined) {
+function usePanelFlow(installKey: string, pluginWorkspaceId: string | undefined, custody: number) {
   const { activeWorkspaceId } = useUiPreferences();
   const entry = usePluginInstallEntry(installKey);
   const pluginId = pluginIdOfInstallKey(installKey);
@@ -192,7 +195,7 @@ function usePanelFlow(installKey: string, pluginWorkspaceId: string | undefined)
   // Read only for a key nothing here follows yet (an address after a reload), and for a refused manifest's source.
   const inspectionRead = useQuery({
     ...pluginInspectionQuery(installKey),
-    enabled: inspectionKey && (!entry || refused),
+    enabled: () => custody === pluginInstallCustody() && inspectionKey && (!entry || refused),
   });
   // An install this session saw finish or stop is read again whenever its panel opens: a skill may have been switched
   // off since, and then the Gateway reads it as not finished.
@@ -200,7 +203,7 @@ function usePanelFlow(installKey: string, pluginWorkspaceId: string | undefined)
   const shownDetail = entry && "detail" in entry.state ? entry.state.detail : undefined;
   const detailRead = useQuery({
     ...pluginDetailQuery(pluginWorkspaceId ?? shownDetail?.workspaceId ?? activeWorkspaceId, pluginId ?? ""),
-    enabled: pluginId !== undefined && (!entry || ended),
+    enabled: () => custody === pluginInstallCustody() && pluginId !== undefined && (!entry || ended),
   });
   const flow = usePluginInstall(installKey, {
     inspection: inspectionRead.data,

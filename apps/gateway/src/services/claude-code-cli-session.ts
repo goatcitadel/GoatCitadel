@@ -143,21 +143,33 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
     if (verdict === "fault") faultParked("line");
   };
 
+  const checkStdoutLine = (line: string): boolean => {
+    // A final CR is framing, including while waiting for the LF in the next chunk.
+    const bytes = Buffer.byteLength(line, "utf8") - (line.endsWith("\r") ? 1 : 0);
+    if (bytes <= CLAUDE_CLI_MAX_LINE_BYTES) return true;
+    stdoutBuffer = "";
+    terminate(new ClaudeCliError("claude_cli_failed", "The Claude Code CLI emitted an oversized output line"));
+    return false;
+  };
+  const deliverStdoutLine = (rawLine: string) => {
+    if (settled || !checkStdoutLine(rawLine)) return;
+    const line = rawLine.endsWith("\r") ? rawLine.slice(0, -1) : rawLine;
+    if (line.trim()) deliver(line);
+  };
+
   child.stdout?.setEncoding("utf8");
   child.stdout?.on("data", (chunk: string) => {
+    if (settled) return;
     timers?.touch();
     stdoutBuffer += chunk;
     let newline = stdoutBuffer.indexOf("\n");
-    while (newline >= 0) {
-      const line = stdoutBuffer.slice(0, newline).replace(/\r$/, "");
+    while (newline >= 0 && !settled) {
+      const line = stdoutBuffer.slice(0, newline);
       stdoutBuffer = stdoutBuffer.slice(newline + 1);
-      if (line.trim()) deliver(line);
+      deliverStdoutLine(line);
       newline = stdoutBuffer.indexOf("\n");
     }
-    if (Buffer.byteLength(stdoutBuffer, "utf8") > CLAUDE_CLI_MAX_LINE_BYTES) {
-      stdoutBuffer = "";
-      terminate(new ClaudeCliError("claude_cli_failed", "The Claude Code CLI emitted an oversized output line"));
-    }
+    if (!settled) checkStdoutLine(stdoutBuffer);
   });
   child.stderr?.setEncoding("utf8");
   child.stderr?.on("data", (chunk: string) => {
@@ -173,9 +185,9 @@ export function startClaudeCliSession(input: RunClaudeCliInput): ClaudeCliSessio
   child.on("close", (code: number | null) => {
     closed = true;
     markClosed();
-    const tail = stdoutBuffer.replace(/\r$/, "");
+    const tail = stdoutBuffer;
     stdoutBuffer = "";
-    if (tail.trim()) deliver(tail);
+    deliverStdoutLine(tail);
     const exit = { exitCode: code, stderrTail };
     markExited(exit);
     push({ kind: "done", exit });

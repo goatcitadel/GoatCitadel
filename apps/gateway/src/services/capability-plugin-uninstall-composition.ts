@@ -32,7 +32,7 @@ const PENDING_MAX_PAGES = 25;
 /** What the uninstall shares with the install, and what only it needs: the tombstone, the skills and the clock. */
 export interface PluginUninstallShared extends Pick<
   PluginInstallShared,
-  "readPlugin" | "updatePlugin" | "readInstalledManifest" | "readSnapshotText" | "deleteHookSecret"
+  "readPlugin" | "updatePlugin" | "readInstalledManifest" | "readSnapshotText" | "deleteHookSecret" | "withPluginRecordsLock"
 > {
   listPlugins(): Promise<readonly StoredPlugin[]>;
   removePlugin(pluginId: string, remember: (current: StoredPlugin | undefined) => RemovedPlugin): Promise<void>;
@@ -63,6 +63,7 @@ export function pluginUninstallSources(
   },
 ): PluginUninstallSources {
   return {
+    withPluginRecordsLock: (work) => shared.withPluginRecordsLock(work),
     readPlugin: (pluginId) => shared.readPlugin(pluginId),
     listPlugins: () => shared.listPlugins(),
     updatePlugin: (pluginId, change) => shared.updatePlugin(pluginId, change),

@@ -39,7 +39,7 @@ describe("communications approval execution through the real Gateway tool path",
     }
   });
 
-  async function startGatewayWithGmail() {
+  async function startGatewayWithGmail(scopedPostgresUrl?: string) {
     const root = createIsolatedConfigRoot();
     process.env.NODE_ENV = "test";
     process.env.GOATCITADEL_DATABASE_DRIVER = "sqlite";
@@ -60,7 +60,20 @@ describe("communications approval execution through the real Gateway tool path",
       return realFetch(input, init);
     });
 
-    gateway = new GatewayService(await loadGatewayConfig(root));
+    const config = await loadGatewayConfig(root);
+    if (scopedPostgresUrl) {
+      const url = new URL(scopedPostgresUrl);
+      if (url.hostname !== "127.0.0.1" || !/^-csearch_path=mail_fence_(fresh|upgrade)_[a-f0-9]{32}$/u.test(url.searchParams.get("options") ?? "")) {
+        throw new Error("Mail approval PostgreSQL proof requires a disposable scoped loopback database.");
+      }
+      const database = config.assistant.database;
+      database.driver = "postgres";
+      database.postgres.mode = "managed";
+      database.postgres.asyncGatewayEnabled = true;
+      database.postgres.connectionString = scopedPostgresUrl;
+      database.postgres.database = url.pathname.slice(1);
+    }
+    gateway = new GatewayService(config);
     await gateway.initCritical();
     const connection = await gateway.routeServices.integrations.createIntegrationConnection({
       catalogId: "automation.gmail",
@@ -73,13 +86,81 @@ describe("communications approval execution through the real Gateway tool path",
     vi.spyOn(gateway.googleWorkspaceOAuth, "resolveAccessToken").mockResolvedValue("ws2-test-gmail-token");
     const live = gateway;
     const dashboard = new CommunicationsDashboardService({
-      createApproval: (input) => live.createApproval(input),
+      createApproval: (input, onCreated) => live.createApproval(input, onCreated),
       listIntegrationConnections: (kind, limit) =>
         live.routeServices.integrations.listIntegrationConnections(kind, limit),
       mailDrafts: live.storage.mailDrafts,
     });
     return { live, connection, dashboard, gmailCalls };
   }
+
+  it("cannot persist a late original approval after a later mail-draft fence wins", async () => {
+    const postgres = process.env.GOATCITADEL_TEST_MAIL_APPROVAL_POSTGRES_URL;
+    const { live, connection, gmailCalls } = await startGatewayWithGmail(postgres);
+    expect(live.storage.gatewaySql.dialect).toBe(postgres ? "postgres" : "sqlite");
+    const outbound = vi.fn(async () => { throw new Error("Network is forbidden in the stale mail fence case."); });
+    vi.stubGlobal("fetch", outbound);
+    let oldSenderReachedCreate!: () => void;
+    const atCreate = new Promise<void>((resolve) => { oldSenderReachedCreate = resolve; });
+    let resumeOldSender!: () => void;
+    const resume = new Promise<void>((resolve) => { resumeOldSender = resolve; });
+    const oldNow = new Date("2026-06-05T12:00:00.000Z");
+    const newerNow = new Date(oldNow.getTime() + 11 * 60 * 1000);
+    const approvals = live.routeServices.approvals;
+    const createCanonical = (...args: Parameters<typeof approvals.createApproval>) => approvals.createApproval(...args);
+    const findMailSendApprovals = (draftId: string) =>
+      live.storage.approvals.listByKindAndPayloadString("communications.mail.send", "draftId", draftId);
+    const recovery = { findMailSendApprovals, recordAudit: vi.fn(async (_event: Record<string, unknown>) => {}) };
+    // Separate request owners model processes with independent in-flight maps. The real approval
+    // owner and repos remain unchanged, and the stall occurs before its transaction begins.
+    const senderA = new CommunicationsDashboardService({
+      now: () => oldNow,
+      mailDrafts: live.storage.mailDrafts,
+      createApproval: async (...args: Parameters<typeof approvals.createApproval>) => {
+        oldSenderReachedCreate();
+        await resume;
+        return createCanonical(...args);
+      },
+    });
+    const senderB = new CommunicationsDashboardService({
+      now: () => newerNow,
+      mailDrafts: live.storage.mailDrafts,
+      createApproval: createCanonical,
+    });
+    const draft = await senderA.createDraft({
+      workspaceId: "default", accountId: connection.connectionId,
+      to: ["review@example.test"], subject: "Synthetic delayed approval", bodyText: "Never resolve this approval.",
+    });
+    const first = senderA.sendDraft(draft.draftId);
+    // A broken or early-returning setup must not hang the proof.
+    void first.catch(() => undefined);
+    try {
+      await Promise.race([atCreate, first.then(() => { throw new Error("Sender A did not reach the create barrier."); })]);
+      const originalFence = await live.storage.mailDrafts.get(draft.draftId);
+      expect(originalFence.status).toBe("approval_required");
+      expect(originalFence.approvalId).toBeUndefined();
+      expect(await findMailSendApprovals(draft.draftId)).toHaveLength(0);
+
+      expect((await senderB.releaseInterruptedDraft(draft.draftId, recovery)).outcome).toBe("released");
+      const current = await senderB.sendDraft(draft.draftId);
+      expect(current.status).toBe("approval_required");
+      expect(current.approvalId).toEqual(expect.any(String));
+      expect((await findMailSendApprovals(draft.draftId)).map((item) => item.approvalId)).toEqual([current.approvalId]);
+
+      resumeOldSender();
+      await first;
+      expect(await live.storage.mailDrafts.get(draft.draftId)).toEqual(current);
+      expect((await findMailSendApprovals(draft.draftId)).map((item) => ({
+        approvalId: item.approvalId, status: item.status,
+      }))).toEqual([{ approvalId: current.approvalId, status: "pending" }]);
+      expect(recovery.recordAudit).toHaveBeenCalledOnce();
+      expect(outbound).not.toHaveBeenCalled();
+      expect(gmailCalls).toHaveLength(0);
+    } finally {
+      resumeOldSender();
+      await first.catch(() => undefined);
+    }
+  });
 
   it("sends an approved mail draft exactly once without minting a second approval", async () => {
     const { live, connection, dashboard, gmailCalls } = await startGatewayWithGmail();

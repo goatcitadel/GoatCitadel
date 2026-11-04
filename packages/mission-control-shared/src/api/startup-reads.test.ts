@@ -65,6 +65,53 @@ it.each([404, 405])(
     ]);
   },
 );
+it.each([404, 405, 200])("settles independent direct fallbacks after one reader aborts (%s)", async (status) => {
+  const fallbackRequired = { status: 409, bodyText: "", headers: {}, directReadRequired: true };
+  const controller = new AbortController();
+  const abortReason = new DOMException("The settings reader left", "AbortError");
+  let finishPeer!: (response: Response) => void;
+  const fetch = vi.fn<(url: string, init: RequestInit) => Promise<Response>>().mockImplementation((url, request) => {
+    switch (new URL(url).pathname) {
+      case "/api/v1/startup-reads":
+        return Promise.resolve(
+          status === 200
+            ? json({ items: [fallbackRequired, fallbackRequired] })
+            : json({ error: "missing route" }, status),
+        );
+      case "/api/v1/settings":
+        return new Promise((_resolve, reject) => {
+          request.signal!.addEventListener("abort", () => reject(request.signal!.reason), { once: true });
+        });
+      case "/api/v1/agents":
+        return new Promise((resolve) => {
+          finishPeer = resolve;
+        });
+      default:
+        return Promise.reject(new Error("Unexpected fixture route"));
+    }
+  });
+  vi.stubGlobal("fetch", fetch);
+  beginStartupReadWindow(scope);
+  const cancelled = fetchStartupRead(scope.installation + "/api/v1/settings", init(controller.signal), scope, () => true);
+  const kept = fetchStartupRead(scope.installation + "/api/v1/agents", init(), scope, () => true);
+  const outcomes = Promise.allSettled([cancelled, kept]);
+  await vi.waitFor(() => expect(finishPeer).toBeTypeOf("function"));
+  controller.abort(abortReason);
+  // Let abort and Promise.all rejection microtasks run while the peer transport remains pending.
+  await new Promise<void>((resolve) => setTimeout(resolve, 0));
+  finishPeer(json({ owner: "agents" }));
+
+  const [cancelledResult, keptResult] = await outcomes;
+  expect(cancelledResult).toEqual({ status: "rejected", reason: abortReason });
+  expect(keptResult.status).toBe("fulfilled");
+  if (keptResult.status !== "fulfilled") throw keptResult.reason;
+  expect(await keptResult.value.json()).toEqual({ owner: "agents" });
+  expect(fetch.mock.calls.map(([url]) => new URL(url).pathname)).toEqual([
+    "/api/v1/startup-reads",
+    "/api/v1/settings",
+    "/api/v1/agents",
+  ]);
+});
 it("aborts a stalled batch request once every read waiting on it is cancelled", async () => {
   const fetch = vi.fn(
     (_url: string, requestInit?: RequestInit) =>

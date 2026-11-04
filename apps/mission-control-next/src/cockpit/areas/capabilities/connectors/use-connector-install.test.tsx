@@ -10,6 +10,11 @@ import type {
   McpReviewedOAuthStartResponse,
   McpServerRecord,
 } from "@goatcitadel/contracts";
+import {
+  getGatewayCallerScope,
+  notifyGatewayAccessChanged,
+  setGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -177,6 +182,7 @@ let client: QueryClient;
 let latest: ReturnType<typeof useConnectorInstall>;
 /** The calls that change or read something, in the order the flow made them. */
 let calls: string[];
+let previousCallerScope: string;
 
 function Probe({ item }: { item: CapabilityConnectorItem }) {
   latest = useConnectorInstall(item);
@@ -220,6 +226,7 @@ async function startInstall(item = TEMPLATE) {
 }
 
 beforeEach(() => {
+  previousCallerScope = getGatewayCallerScope();
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
@@ -285,6 +292,7 @@ afterEach(() => {
   act(() => root.unmount());
   container.remove();
   client.clear();
+  setGatewayCallerScope(previousCallerScope);
   __resetConnectorInstallForTests();
   __resetMcpOAuthFlowsForTests();
   __resetMcpOAuthReturnForTests();
@@ -1187,6 +1195,68 @@ describe("useConnectorInstall", () => {
       phase: "stopped",
       message: "Stopped. Linear is switched on but may not be connected. Reload to check.",
       changed: [],
+    });
+  });
+
+  describe("Gateway caller custody", () => {
+    it("retires an unmounted caller's install poll before it can start a follow-on step", async () => {
+      vi.useFakeTimers();
+      setGatewayCallerScope("connector-caller-a");
+      install.installCapabilityConnector.mockResolvedValueOnce(
+        receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+      );
+      plans.fetchChangePlan.mockResolvedValue(plan());
+      servers.fetchMcpServer.mockResolvedValue(server({ authType: "none" }));
+      await startInstall({ ...TEMPLATE, auth: "none" });
+      expect(latest.state).toMatchObject({ phase: "waiting_inbox", planId: "plan-1" });
+      expect(vi.getTimerCount()).toBe(1);
+      act(() => root.unmount());
+      root = createRoot(container);
+
+      act(() => setGatewayCallerScope("connector-caller-b"));
+      await act(async () => vi.advanceTimersByTimeAsync(5_000));
+      await flush();
+      await render({ ...TEMPLATE, auth: "none" });
+
+      expect.soft(plans.fetchChangePlan).not.toHaveBeenCalled();
+      expect.soft(wrappers.commitMcpServerUpdate).not.toHaveBeenCalled();
+      expect.soft(wrappers.commitMcpConnection).not.toHaveBeenCalled();
+      expect(latest.state).toEqual({ phase: "idle" });
+    });
+
+    it("does not reject a withdrawn install's approval after the access changes during its read", async () => {
+      setGatewayCallerScope("connector-caller");
+      install.installCapabilityConnector.mockResolvedValueOnce(
+        receipt({ status: "awaiting_approval", requiredAction: APPROVAL }),
+      );
+      plans.fetchChangePlan.mockResolvedValueOnce(
+        plan({ status: "awaiting_approval", requiredAction: APPROVAL, revision: 4, evidenceRefs: [] }),
+      );
+      plans.cancelChangePlan.mockResolvedValueOnce(plan({ status: "cancelled", revision: 5, evidenceRefs: [] }));
+      const approval = {
+        approvalId: "approval-1",
+        kind: "change_plan_effect",
+        status: "pending",
+        payload: { planId: "plan-1" },
+      };
+      let resolveApprovalRead!: (value: typeof approval) => void;
+      approvals.fetchApproval.mockReturnValueOnce(
+        new Promise<typeof approval>((resolve) => {
+          resolveApprovalRead = resolve;
+        }),
+      );
+      await startInstall();
+      await act(async () => latest.cancel());
+      await flush();
+      expect(plans.cancelChangePlan).toHaveBeenCalledOnce();
+      expect(approvals.fetchApproval).toHaveBeenCalledWith("approval-1", { workspaceId: "default" });
+      expect(approvals.resolveApproval).not.toHaveBeenCalled();
+
+      act(() => notifyGatewayAccessChanged(false));
+      await act(async () => resolveApprovalRead(approval));
+      await flush();
+
+      expect(approvals.resolveApproval).not.toHaveBeenCalled();
     });
   });
 

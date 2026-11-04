@@ -16,9 +16,17 @@ import type {
   PluginActionOutcome,
 } from "@goatcitadel/contracts";
 import { buildApp } from "./app.js";
+import { CapabilityPluginInspectionService } from "./services/capability-plugin-inspection-service.js";
 import { CapabilityPluginStore } from "./services/capability-plugin-store.js";
 import { GatewayService } from "./services/gateway-service.js";
 import { MCP_SERVER_TEMPLATES } from "./services/mcp-server-templates.js";
+import { SkillHubLifecycleFilesystem } from "./services/skill-hub-lifecycle-filesystem.js";
+import { materializeApprovedSkillHubIntent } from "./services/skill-hub-lifecycle-service.js";
+import { SkillHubOperatorService } from "./services/skill-hub-operator-service.js";
+import {
+  PowerShellSkillHubWindowsSecurityProtocol,
+  SkillHubWindowsSecurityError,
+} from "./services/skill-hub-windows-security.js";
 
 /**
  * Installing a plugin over the real Gateway: its route, the real Change Plan control plane and the real owners of every
@@ -72,6 +80,12 @@ const NOTES_KIT = {
   version: "1.0.0",
   pieces: [{ kind: "skill", id: "notes", path: "skills/notes" }],
 };
+const ACTIVATION_FIXTURES = {
+  "already pending": "pending-notes-kit",
+  "created after removal": "late-notes-kit",
+  "created after reinstall": "reinstalled-notes-kit",
+  "effect first": "first-effect-notes-kit",
+} as const;
 
 const ENV: Record<string, string> = {
   GATEWAY_HOST: "127.0.0.1",
@@ -98,6 +112,7 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
   let root = "";
   let app: FastifyInstance | undefined;
   let gateway: GatewayService | undefined;
+  let windowsSecurityProtocol: PowerShellSkillHubWindowsSecurityProtocol | undefined;
   let sequence = 0;
 
   beforeAll(async () => {
@@ -113,6 +128,22 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     writePlugin(path.join(root, "plugins", "meeting-tools"), MEETING_TOOLS, {
       "prompt-packs/checks.md": PROMPT_PACK_MD,
     });
+    for (const pluginId of Object.values(ACTIVATION_FIXTURES)) {
+      writePlugin(path.join(root, "plugins", pluginId), { ...NOTES_KIT, pluginId, name: pluginId }, {
+        "skills/notes/SKILL.md": fs
+          .readFileSync(path.join(REFERENCE_PLUGIN, "skills", "meeting-notes", "SKILL.md"), "utf8")
+          .replace("name: meeting-notes", `name: ${pluginId}-notes`),
+      });
+    }
+    if (process.platform === "win32") {
+      // As in the lifecycle suite, keep one native ACL/reparse worker through the fixture's bursts of checks.
+      const worker = new PowerShellSkillHubWindowsSecurityProtocol({ idleShutdownMs: Number.POSITIVE_INFINITY });
+      windowsSecurityProtocol = worker;
+      const request = PowerShellSkillHubWindowsSecurityProtocol.prototype.request;
+      vi.spyOn(PowerShellSkillHubWindowsSecurityProtocol.prototype, "request").mockImplementation(
+        (...args) => request.call(worker, ...args),
+      );
+    }
     for (const [key, value] of Object.entries({ ...ENV, GOATCITADEL_ROOT_DIR: root })) {
       originalEnv.set(key, process.env[key]);
       process.env[key] = value;
@@ -135,7 +166,11 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
 
   afterAll(async () => {
     vi.restoreAllMocks();
-    await app?.close();
+    try {
+      await app?.close();
+    } finally {
+      windowsSecurityProtocol?.dispose();
+    }
     for (const [key, value] of originalEnv) {
       if (value === undefined) delete process.env[key];
       else process.env[key] = value;
@@ -168,6 +203,33 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     });
     expect(created.statusCode, created.body).toBe(201);
     return created.json<CapabilityPluginInspection>();
+  }
+
+  async function inspectActivationFixture(pluginId: string): Promise<CapabilityPluginInspection> {
+    const original = CapabilityPluginInspectionService.prototype.inspect;
+    let failure: string | undefined;
+    const diagnose = vi.spyOn(CapabilityPluginInspectionService.prototype, "inspect").mockImplementationOnce(
+      async function (this: CapabilityPluginInspectionService, input) {
+        try {
+          return await original.call(this, input);
+        } catch (error) {
+          failure = error instanceof SkillHubWindowsSecurityError
+            ? `SkillHubWindowsSecurityError/${error.code}`
+            : "other inspection error";
+          throw error;
+        }
+      },
+    );
+    try {
+      const response = await inject("POST", INSPECTIONS_URL, {
+        workspaceId: WORKSPACE_ID,
+        source: { kind: "built_in", pluginId },
+      });
+      expect(response.statusCode, failure ?? response.body).toBe(201);
+      return response.json<CapabilityPluginInspection>();
+    } finally {
+      diagnose.mockRestore();
+    }
   }
 
   it("installs the inspected bytes even when the source changed after inspection", async () => {
@@ -413,6 +475,212 @@ describe("installing a plugin over the real Gateway", { timeout: 300_000 }, () =
     expect(tools.find((group) => group.groupId === "browser")).toMatchObject({
       state: "off",
       heldOffBy: [{ pluginId: "meeting-tools", name: "Meeting tools" }],
+    });
+  });
+
+  describe("plugin activation revocation", () => {
+    const uninstall = (pluginId: string) => inject("POST", "/api/v1/capabilities/plugins/uninstall", {
+      workspaceId: WORKSPACE_ID,
+      pluginId,
+    });
+
+    async function installFixture(pluginId: string) {
+      const checked = await inspectActivationFixture(pluginId);
+      const snapshotId = checked.pieces[0]?.skillSnapshotId;
+      expect(snapshotId).toEqual(expect.any(String));
+      const installed = await inject("POST", INSTALL_URL, {
+        workspaceId: WORKSPACE_ID,
+        inspectionId: checked.inspectionId,
+      });
+      expect(installed.statusCode, installed.body).toBe(202);
+      const result = installed.json<PluginActionOutcome>();
+      expect(result.outcome, result.summary).toBe("applied");
+      return { snapshotId: snapshotId!, planId: result.planId };
+    }
+
+    async function installInactiveFixture(pluginId: string) {
+      const installed = await installFixture(pluginId);
+      const inactive = await inject("POST", SKILL_STEPS_URL, {
+        workspaceId: WORKSPACE_ID,
+        snapshotId: installed.snapshotId,
+        operationKind: "install_inactive",
+      });
+      expect(inactive.statusCode, inactive.body).toBe(202);
+      const detailUrl = `/api/v1/capabilities/plugins/detail?pluginId=${pluginId}&workspaceId=${WORKSPACE_ID}`;
+      await vi.waitFor(async () => {
+        const detail = await inject("GET", detailUrl);
+        expect(detail.json<CapabilityPluginDetail>().pieces[0]?.state).toBe("installed_off");
+      }, STEP_WAIT);
+      return installed;
+    }
+
+    it.each(["already pending", "created after removal", "created after reinstall"] as const)(
+      "keeps the skill off when the delayed operation is %s",
+      async (timing) => {
+        const pluginId = ACTIVATION_FIXTURES[timing];
+        const skillName = `${pluginId}-notes`;
+        // An already installed candidate intentionally blocks reinstallation. Reinstall the checked-only plugin,
+        // then resolve its earlier install_inactive approval against the identical snapshot under the new plan.
+        const reinstall = timing === "created after reinstall";
+        const operationKind = reinstall ? "install_inactive" : "activate";
+        const { snapshotId, planId } = await (reinstall ? installFixture(pluginId) : installInactiveFixture(pluginId));
+        const store = new CapabilityPluginStore(gateway!.storage.systemSettings);
+        let releaseCreate!: () => void;
+        let releaseReturn!: () => void;
+        const allowCreate = new Promise<void>((resolve) => { releaseCreate = resolve; });
+        const allowReturn = new Promise<void>((resolve) => { releaseReturn = resolve; });
+        let capturedPass: string | undefined;
+        let replacementPlanId: string | undefined;
+        let approvalId: string | undefined;
+        let requestFinished = false;
+        const create = SkillHubOperatorService.prototype.createApproval;
+        const barrier = vi.spyOn(SkillHubOperatorService.prototype, "createApproval").mockImplementation(
+          async function (this: SkillHubOperatorService, input, options) {
+            if (input.snapshotId !== snapshotId || input.operationKind !== operationKind) {
+              return await create.call(this, input, options);
+            }
+            capturedPass = options?.pluginPass?.installPlanId;
+            await allowCreate;
+            const result = await create.call(this, input, options);
+            approvalId = result.approval.approvalId;
+            await allowReturn;
+            return result;
+          },
+        );
+        const activation = inject("POST", SKILL_STEPS_URL, {
+          workspaceId: WORKSPACE_ID,
+          snapshotId,
+          operationKind,
+        }).finally(() => { requestFinished = true; });
+        void activation.catch(() => undefined);
+        const waitForApproval = () => vi.waitFor(() => expect(Boolean(approvalId) || requestFinished).toBe(true), STEP_WAIT);
+        const resolve = (decision: "approve" | "reject") =>
+          inject("POST", `/api/v1/approvals/${approvalId}/resolve`, { decision });
+
+        try {
+          await vi.waitFor(() => expect(Boolean(capturedPass) || requestFinished).toBe(true), STEP_WAIT);
+          expect(capturedPass).toBe(planId);
+          if (timing === "already pending") {
+            releaseCreate();
+            await waitForApproval();
+            expect(approvalId).toEqual(expect.any(String));
+            expect((await gateway!.storage.approvals.get(approvalId!)).status).toBe("pending");
+          }
+
+          const removal = await uninstall(pluginId);
+          expect(removal.statusCode, removal.body).toBe(202);
+          if (timing === "already pending") {
+            expect(removal.json<PluginActionOutcome>()).toMatchObject({ outcome: "waiting", approvalId });
+            await expect(store.get(pluginId)).resolves.toMatchObject({ state: "uninstalling" });
+            const rejected = await resolve("reject");
+            expect(rejected.statusCode, rejected.body).toBe(200);
+            releaseReturn();
+            await activation;
+            const finished = await uninstall(pluginId);
+            expect(finished.statusCode, finished.body).toBe(202);
+            expect(finished.json<PluginActionOutcome>().outcome).toBe("applied");
+          } else {
+            expect(removal.json<PluginActionOutcome>().outcome).toBe("applied");
+            await expect(store.get(pluginId)).resolves.toBeUndefined();
+            if (reinstall) {
+              const replacement = await installFixture(pluginId);
+              expect(replacement.snapshotId).toBe(snapshotId);
+              expect(replacement.planId).not.toBe(planId);
+              replacementPlanId = replacement.planId;
+            }
+            releaseCreate();
+            await waitForApproval();
+            // Exercise the effect fence itself by resolving the persisted approval before the request's second read.
+            expect(approvalId).toEqual(expect.any(String));
+            expect(await gateway!.storage.approvals.get(approvalId!)).toMatchObject({
+              status: "pending",
+              preview: { pluginInstallPlanId: planId },
+            });
+            const approved = await resolve("approve");
+            expect(approved.statusCode, approved.body).toBe(200);
+            await vi.waitFor(async () => {
+              const effects = await gateway!.storage.approvalEffects.listByApproval(approvalId!);
+              expect(effects.find((effect) => effect.effectKind === "skill_hub_lifecycle_apply")?.status)
+                .toMatch(/^(completed|skipped|failed)$/u);
+            }, STEP_WAIT);
+            const intent = materializeApprovedSkillHubIntent(await gateway!.storage.approvals.get(approvalId!));
+            await expect(gateway!.storage.skillHubOperations.findSettlementByOperationId(intent.operationId))
+              .resolves.toMatchObject({
+                disposition: "blocked",
+                result: { code: "plugin_install_authority_changed", boundaryCrossed: false },
+              });
+            if (reinstall) {
+              expect(intent.targetVersionId).toEqual(expect.any(String));
+              await expect(gateway!.storage.candidateSkillVersions.find(intent.targetVersionId!)).resolves.toBeUndefined();
+            }
+          }
+          if (replacementPlanId) {
+            await expect(store.get(pluginId)).resolves.toMatchObject({ installPlanId: replacementPlanId });
+          } else {
+            await expect(store.get(pluginId)).resolves.toBeUndefined();
+          }
+          expect(await store.listRemoved()).toContainEqual(expect.objectContaining({ pluginId }));
+          const lifecycle = await gateway!.storage.skillLifecycle.find(`extra:${skillName}`);
+          expect(lifecycle?.lifecycleState).not.toBe("approved");
+        } finally {
+          releaseCreate();
+          releaseReturn();
+          await Promise.allSettled([activation]);
+          barrier.mockRestore();
+        }
+      },
+    );
+
+    it("lets an effect holding the fence finish before overlapping uninstall revokes it", async () => {
+      const pluginId = ACTIVATION_FIXTURES["effect first"];
+      const skillName = `${pluginId}-notes`;
+      const { snapshotId } = await installInactiveFixture(pluginId);
+      const target = path.join(root, "skills", "extra", skillName);
+      let releaseProjection!: () => void;
+      const allowProjection = new Promise<void>((resolve) => { releaseProjection = resolve; });
+      let projectionReached = false;
+      let uninstallFinished = false;
+      const rename = SkillHubLifecycleFilesystem.prototype.renameDirectory;
+      const renameBarrier = vi.spyOn(SkillHubLifecycleFilesystem.prototype, "renameDirectory").mockImplementation(
+        async function (this: SkillHubLifecycleFilesystem, ...args) {
+          if (args[2] === target) {
+            projectionReached = true;
+            await allowProjection;
+          }
+          return await rename.call(this, ...args);
+        },
+      );
+      const activation = inject("POST", SKILL_STEPS_URL, { workspaceId: WORKSPACE_ID, snapshotId, operationKind: "activate" });
+      void activation.catch(() => undefined);
+      let removal: Promise<PluginActionOutcome> | undefined;
+      try {
+        await vi.waitFor(() => expect(projectionReached).toBe(true), STEP_WAIT);
+        // Enter the same composed owner while SQLite holds the projection transaction. The HTTP idempotency
+        // layer would queue before reaching this owner, obscuring the overlap being tested here.
+        removal = app!.services.capabilityPlugins!.uninstall({
+          workspaceId: WORKSPACE_ID,
+          pluginId,
+          actorId: "operator",
+          idempotencyKey: `plugin-install-${++sequence}`,
+        }).finally(() => { uninstallFinished = true; });
+        void removal.catch(() => undefined);
+        expect(uninstallFinished).toBe(false);
+        expect(fs.existsSync(target)).toBe(false);
+        releaseProjection();
+        const activated = await activation;
+        expect(activated.statusCode, activated.body).toBe(202);
+        const removed = await removal;
+        expect(removed.outcome, removed.summary).toBe("applied");
+        const store = new CapabilityPluginStore(gateway!.storage.systemSettings);
+        await expect(store.get(pluginId)).resolves.toBeUndefined();
+        await expect(gateway!.storage.skillLifecycle.find(`extra:${skillName}`)).resolves.toMatchObject({
+          lifecycleState: "revoked",
+        });
+      } finally {
+        releaseProjection();
+        await Promise.allSettled([activation, ...(removal ? [removal] : [])]);
+        renameBarrier.mockRestore();
+      }
     });
   });
 

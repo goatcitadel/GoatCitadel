@@ -6,7 +6,11 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { LibraryMemoryWorkspace } from "./LibraryMemoryWorkspace";
 
-const api = vi.hoisted(() => ({ load: vi.fn() }));
+const api = vi.hoisted(() => ({ load: vi.fn(), fetchMemoryItems: vi.fn() }));
+vi.mock("@goatcitadel/mission-control-shared/api/memory", async (original) => ({
+  ...(await original<typeof import("@goatcitadel/mission-control-shared/api/memory")>()),
+  fetchMemoryItems: api.fetchMemoryItems,
+}));
 vi.mock("./library-resources", async (original) => ({
   ...(await original<typeof import("./library-resources")>()),
   loadLibraryResources: api.load,
@@ -82,6 +86,39 @@ it("leads an empty memory directory with one empty state and no filters, bulk ac
   await act(async () => button("Show all statuses")!.click());
   await vi.waitFor(() => expect(api.load).toHaveBeenLastCalledWith(expect.objectContaining({ status: "all" })));
   expect(button("Apply memory filter")).toBeDefined();
+});
+
+it.each([undefined, "next"])("discloses withheld records on an otherwise empty first page (%s)", async (nextCursor) => {
+  const { loadLibraryResources } = await vi.importActual<typeof import("./library-resources")>("./library-resources");
+  api.load.mockImplementation(loadLibraryResources);
+  const withheld = {
+    itemId: "withheld",
+    title: "Withheld record title",
+    content: "Withheld record content",
+    namespace: "facts",
+    workspaceId: "one",
+    metadata: { workspaceId: "another" },
+    status: "active",
+    lifecycleState: "active",
+  };
+  api.fetchMemoryItems.mockResolvedValueOnce({ items: [withheld], total: nextCursor ? 2 : 1, nextCursor });
+  api.fetchMemoryItems.mockResolvedValueOnce({
+    items: [{ ...withheld, itemId: "visible", title: "Visible next page memory", metadata: {} }],
+    total: 2,
+  });
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("Some inconsistent scope records were withheld."));
+  expect(container.textContent).not.toContain("No active memories");
+  expect(container.textContent).not.toContain("Withheld record title");
+  expect(container.textContent).not.toContain("Withheld record content");
+  const next = button("Next memory page");
+  if (nextCursor) {
+    expect(next?.disabled).toBe(false);
+    await act(async () => next?.click());
+    await vi.waitFor(() => expect(container.textContent).toContain("Visible next page memory"));
+  } else {
+    expect(next).toBeUndefined();
+  }
 });
 
 it("filters status and namespace on the server and opens an item in a closable sheet (LB-12)", async () => {

@@ -176,6 +176,36 @@ describe("WebSearchCredentialService", () => {
     await expect(credentials.checkFirecrawl()).resolves.toMatchObject({ status: "reachable", httpStatus: 500 });
   });
 
+  it("keeps the existing Firecrawl key when neither probe confirms its replacement", async () => {
+    const secretStore = memoryStore({ [FIRECRAWL_ACCOUNT]: "fixture-prior-key" });
+    const { credentials } = service({
+      secretStore,
+      fetchImpl: firecrawlServer({ "/v2/team/credit-usage": 500, "/v2/team/queue-status": 500 }),
+    });
+
+    await expect(credentials.store("search.firecrawl", "fixture-new-key")).rejects.toThrow(
+      "the key could not be confirmed",
+    );
+    expect(secretStore.setSecret).not.toHaveBeenCalled();
+    expect(secretStore.values.get(FIRECRAWL_ACCOUNT)).toBe("fixture-prior-key");
+  });
+
+  it("replaces a self-hosted Firecrawl key when the queue probe accepts it", async () => {
+    const secretStore = memoryStore({ [FIRECRAWL_ACCOUNT]: "fixture-prior-key" });
+    const { credentials } = service({
+      secretStore,
+      fetchImpl: firecrawlServer({ "/v2/team/credit-usage": 500, "/v2/team/queue-status": 200 }),
+      getNetworkAllowlist: () => [],
+      getFirecrawlConfig: () => firecrawlConfig({ baseUrl: "http://127.0.0.1:3002" }),
+    });
+
+    await expect(credentials.store("search.firecrawl", "fixture-new-key")).resolves.toMatchObject({
+      activeSource: "keychain",
+      keychainConfigured: true,
+    });
+    expect(secretStore.values.get(FIRECRAWL_ACCOUNT)).toBe("fixture-new-key");
+  });
+
   it("runs Brave changes under the shared Chat owner fence and live probe", async () => {
     const withOfficialTargetChange = vi.fn((_targetId: string, work: () => Promise<unknown>) => work());
     const probeOfficial = vi.fn(async () => ({ ok: false, status: "unavailable", httpStatus: 401 }));

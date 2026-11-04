@@ -68,6 +68,11 @@ async function main() {
     runPnpm(["--dir", repoRoot, "build"]);
   }
 
+  const workspaceLockfilePath = path.join(repoRoot, "pnpm-lock.yaml");
+  const workspaceLockfileBytes = readRequiredRegularFile(workspaceLockfilePath, "Canonical workspace lockfile");
+  const gatewayManifestPath = path.join(repoRoot, "apps", "gateway", "package.json");
+  const gatewayManifestBytes = readRequiredRegularFile(gatewayManifestPath, "Source Gateway manifest");
+
   removeDirectory(bundleRoot);
   fs.mkdirSync(appRoot, { recursive: true });
 
@@ -90,7 +95,13 @@ async function main() {
       "@goatcitadel/gateway",
       "deploy",
       "--prod",
-      "--legacy",
+      // pnpm 10's legacy hoisted deploy disables lockfile reads. Use its frozen
+      // shared-lock deployment without changing the workspace install settings.
+      "--config.force-legacy-deploy=false",
+      "--config.inject-workspace-packages=true",
+      "--config.shared-workspace-lockfile=true",
+      "--config.lockfile=true",
+      `--config.lockfile-dir=${repoRoot}`,
       "--config.node-linker=hoisted",
       "--config.package-import-method=copy",
       gatewayDeployDir,
@@ -101,11 +112,25 @@ async function main() {
       retryDelayMs: 2500,
     },
   );
+  // pnpm can otherwise fall back to legacy when the shared lock disappears.
+  readRequiredRegularFile(path.join(gatewayDeployDir, "pnpm-lock.yaml"), "Frozen Gateway deployment lockfile");
+  if (!workspaceLockfileBytes.equals(readRequiredRegularFile(workspaceLockfilePath, "Canonical workspace lockfile"))) {
+    throw new Error("Canonical workspace lockfile changed during Gateway deployment.");
+  }
+  if (!gatewayManifestBytes.equals(readRequiredRegularFile(gatewayManifestPath, "Source Gateway manifest"))) {
+    throw new Error("Source Gateway manifest changed during deployment.");
+  }
   pruneGatewayDeploy(gatewayDeployDir);
   const materializedGatewayFiles = materializeHardLinkedFiles(gatewayDeployDir);
   if (materializedGatewayFiles > 0) {
     console.log(`Materialized ${materializedGatewayFiles} hard-linked gateway deployment files.`);
   }
+
+  // pnpm's temporary manifest names absolute file URLs into the source
+  // workspace. Restore only the captured source bytes after removing links.
+  const deployedManifestPath = path.join(gatewayDeployDir, "package.json");
+  readRequiredRegularFile(deployedManifestPath, "Deployed Gateway manifest");
+  fs.writeFileSync(deployedManifestPath, gatewayManifestBytes);
 
   copyFile(path.join(repoRoot, "bin", "goatcitadel.mjs"), path.join(appRoot, "bin", "goatcitadel.mjs"));
   copyFile(path.join(repoRoot, "package.json"), path.join(appRoot, "package.json"));
@@ -121,7 +146,7 @@ async function main() {
     path.join(repoRoot, "scripts", "lib", "managed-runtime-lifecycle.mjs"),
     path.join(appRoot, "scripts", "lib", "managed-runtime-lifecycle.mjs"),
   );
-  copyIfExists(path.join(repoRoot, "pnpm-lock.yaml"), path.join(appRoot, "pnpm-lock.yaml"));
+  fs.writeFileSync(path.join(appRoot, "pnpm-lock.yaml"), workspaceLockfileBytes);
   copyFile(
     path.join(repoRoot, "scripts", "lib", "installed-runtime-settings.mjs"),
     path.join(appRoot, "scripts", "lib", "installed-runtime-settings.mjs"),
@@ -216,6 +241,14 @@ function printUsage() {
   console.log(
     "Usage: node scripts/packaging/build-bundle.mjs --target <windows-x64|windows-arm64|macos-arm64|linux-x64> [--out-dir <dir>] [--version <semver>] [--node-version <vX.Y.Z>] [--node-sha256 <hex>] [--skip-build] [--skip-desktop]",
   );
+}
+
+function readRequiredRegularFile(file, label) {
+  const stats = fs.lstatSync(file, { throwIfNoEntry: false });
+  if (!stats?.isFile() || stats.size === 0) {
+    throw new Error(`${label} is missing, empty, or not a regular file.`);
+  }
+  return fs.readFileSync(file);
 }
 
 function runPnpm(pnpmArgs, options = {}) {
@@ -714,6 +747,15 @@ function pruneGatewayDeploy(targetDir) {
     }
   }
   removeDirectory(path.join(targetDir, "node_modules", ".pnpm", "node_modules", "@goatcitadel", "gateway"));
+  // pnpm records local store and checkout paths in deployment-only metadata.
+  for (const relativePath of ["node_modules/.modules.yaml", "node_modules/.pnpm/lock.yaml"]) {
+    const metadataPath = path.join(targetDir, relativePath);
+    if (!fs.lstatSync(metadataPath, { throwIfNoEntry: false })) {
+      continue;
+    }
+    assertAnchoredPayloadFile(targetDir, metadataPath, relativePath);
+    fs.unlinkSync(metadataPath);
+  }
   pruneReleaseResidue(targetDir, removeDirectory);
 }
 

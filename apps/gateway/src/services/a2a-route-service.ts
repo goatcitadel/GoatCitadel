@@ -200,7 +200,7 @@ export class A2ARouteService {
       pushDeliveryFetch: deps.pushDeliveryFetch,
       createApproval: deps.createApproval,
       buildTaskFromBinding: async (binding, checkedAt) => await this.buildTaskFromBinding(binding, checkedAt),
-      buildEventsForTask: async (task, since, checkedAt) => await this.buildEventsForTask(task, since, checkedAt),
+      buildEventsForTask: async (task, since, checkedAt) => this.buildEventsForTask(task, since, checkedAt),
     });
   }
 
@@ -310,7 +310,7 @@ export class A2ARouteService {
           const task = await this.sendMessage(peer, request.value.params ?? {}, checkedAt, true, "a2a_jsonrpc");
           return jsonRpcResult(request.value.id, {
             task,
-            events: await this.buildEventsForTask(task, 0, checkedAt),
+            events: this.buildEventsForTask(task, 0, checkedAt),
           });
         }
         case "GetTask":
@@ -323,10 +323,9 @@ export class A2ARouteService {
           });
         case "SubscribeToTask": {
           const task = await this.getA2ATask(peer, request.value.params ?? {}, checkedAt);
-          const since = readNumber(request.value.params?.lastEventSequence) ?? 0;
           return jsonRpcResult(request.value.id, {
             task,
-            events: await this.buildEventsForTask(task, since, checkedAt),
+            events: this.buildEventsForTask(task, request.value.params?.lastEventSequence, checkedAt),
           });
         }
         case "SetTaskPushNotificationConfig":
@@ -429,10 +428,9 @@ export class A2ARouteService {
     this.assertInboundBinding("HTTP_JSON");
     this.assertPeerTransportScope(peer, "HTTP_JSON");
     const task = await this.getA2ATask(peer, params, checkedAt);
-    const since = readNumber(params.lastEventSequence) ?? 0;
     return {
       task,
-      events: await this.buildEventsForTask(task, since, checkedAt),
+      events: this.buildEventsForTask(task, params.lastEventSequence, checkedAt),
     };
   }
 
@@ -456,7 +454,7 @@ export class A2ARouteService {
     const task = await this.sendMessage(peer, params, checkedAt, true, "a2a_grpc");
     return {
       task,
-      events: await this.buildEventsForTask(task, 0, checkedAt),
+      events: this.buildEventsForTask(task, 0, checkedAt),
     };
   }
 
@@ -488,10 +486,9 @@ export class A2ARouteService {
     this.assertInboundBinding("GRPC");
     this.assertPeerTransportScope(peer, "GRPC");
     const task = await this.getA2ATask(peer, params, checkedAt);
-    const since = readNumber(params.lastEventSequence) ?? 0;
     return {
       task,
-      events: await this.buildEventsForTask(task, since, checkedAt),
+      events: this.buildEventsForTask(task, params.lastEventSequence, checkedAt),
     };
   }
 
@@ -1817,14 +1814,27 @@ export class A2ARouteService {
     return projectA2ATaskForExternal(task);
   }
 
-  private async buildEventsForTask(
-    task: A2ABridgeTask,
-    since: number,
-    checkedAt: string,
-  ): Promise<A2ABridgeTaskEvent[]> {
+  private buildEventsForTask(task: A2ABridgeTask, cursor: unknown, checkedAt: string): A2ABridgeTaskEvent[] {
+    const since = cursor === undefined ? 0 : readNumber(cursor);
+    const firstMessage = task.messages[0];
+    const eventCount = 1 + (firstMessage ? 1 : 0) + task.artifacts.length;
+    if (
+      typeof since !== "number" ||
+      !Number.isSafeInteger(since) ||
+      since < 0 ||
+      since > Number.MAX_SAFE_INTEGER - eventCount
+    ) {
+      throw Object.assign(
+        new A2AJsonRpcServiceError(
+          -32602,
+          "lastEventSequence must be a nonnegative safe integer with room for the task snapshot.",
+        ),
+        { statusCode: 400, reason: "a2a_invalid_event_cursor" },
+      );
+    }
     const events: A2ABridgeTaskEvent[] = [
       {
-        sequence: Math.max(1, since + 1),
+        sequence: since + 1,
         taskId: task.id,
         contextId: task.contextId,
         kind: "task.status",
@@ -1832,7 +1842,6 @@ export class A2ARouteService {
         status: task.status,
       },
     ];
-    const firstMessage = task.messages[0];
     if (firstMessage) {
       events.push({
         sequence: events[events.length - 1]!.sequence + 1,
@@ -1853,13 +1862,7 @@ export class A2ARouteService {
         artifact,
       });
     }
-    const binding = await this.deps.storage.a2aTaskBindings.find(task.id);
-    if (binding && events.length > 0) {
-      await this.deps.storage.a2aTaskBindings.update(task.id, {
-        lastEventSequence: events[events.length - 1]!.sequence,
-      });
-    }
-    return events.filter((event) => event.sequence > since).map(projectA2ATaskEventForExternal);
+    return events.map(projectA2ATaskEventForExternal);
   }
 
   private async readArtifacts(taskId: string): Promise<A2ABridgeArtifact[]> {

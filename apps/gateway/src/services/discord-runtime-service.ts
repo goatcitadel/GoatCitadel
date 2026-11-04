@@ -1472,6 +1472,9 @@ function resolveDiscordGuildRule(
   if (defaultGuildId && defaultGuildId === guildId) {
     const defaultChannelId = readConfigString(config, "defaultChannelId");
     const allowlistedSenderIds = resolveDefaultChannelUsers(config);
+    if (config.inboundAccessMode === "allowlist" && allowlistedSenderIds.length === 0) {
+      return undefined;
+    }
     return {
       requireMention: true,
       ...(allowlistedSenderIds.length > 0 ? { users: allowlistedSenderIds } : {}),
@@ -1485,7 +1488,7 @@ function resolveDiscordGuildRule(
  * Who the default channel answers: the connection's allowlisted senders, on a connection that lets only allowlisted
  * senders in, read (trimmed, lowercased, de-duplicated) the way the inbound allowlist reads them. The owner mark plays
  * no part here: it only decides whether the maker skips pairing in direct messages, so clearing it never reopens the
- * channel. A connection with no allowlist, or not in allowlist mode, keeps the open default rule.
+ * channel. An explicit allowlist with no senders denies the default rule.
  */
 function resolveDefaultChannelUsers(config: Record<string, unknown>): string[] {
   if (config.inboundAccessMode !== "allowlist") {

@@ -235,7 +235,7 @@ export class WebSearchCredentialService {
   private async assertSecretAccepted(targetId: WebSearchCredentialTargetId, secret: string): Promise<void> {
     if (targetId === "search.firecrawl") {
       const check = await this.checkFirecrawl(secret);
-      if (check.status === "ok" || check.status === "reachable") return;
+      if (check.status === "ok") return;
       throw new ExternalServiceError(
         check.status === "unauthorized"
           ? "Firecrawl rejected this API key."

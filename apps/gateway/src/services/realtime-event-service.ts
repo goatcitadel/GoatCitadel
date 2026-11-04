@@ -160,7 +160,7 @@ export class RealtimeEventService implements RealtimePublisher {
     );
   }
 
-  public async getRealtimeEventSequenceBounds(): Promise<{ oldestSequence?: number; newestSequence?: number }> {
+  public async getRealtimeEventSequenceBounds(): Promise<{ oldestSequence?: number; newestSequence?: number; lastPrunedSequence?: number }> {
     return await this.deps.storage.realtimeEvents.getSequenceBounds();
   }
 

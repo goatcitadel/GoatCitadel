@@ -203,14 +203,10 @@ function switchedOffClosing(runs: readonly ChatToolRunRecord[]): string {
   return others.length < runs.length ? `${closing} ${PLUGIN_HOLDS_UNREADABLE_ALSO}` : closing;
 }
 
-/** The closing for groups the operator can lift: by their Tools switch, by uninstalling the holding plugin, or both. */
+/** The closing for groups the operator can restore by releasing holds and switching on any remaining off groups. */
 function liftableClosing(runs: readonly ChatToolRunRecord[]): string {
-  const held = runs.filter((run) => pluginHoldingGroup(run.error, run.result) !== undefined).length;
-  if (held === runs.length) {
-    return "The operator can uninstall every plugin that keeps a group off in Capabilities › Plugins, which turns that group back on. Once the group is on, ask again and I'll retry.";
-  }
-  if (held > 0) {
-    return "The operator can switch tool groups back on in Capabilities › Tools, and uninstall every plugin that keeps a group off in Capabilities › Plugins, which turns that group back on. Once the group is on, ask again and I'll retry.";
+  if (runs.some((run) => pluginHoldingGroup(run.error, run.result) !== undefined)) {
+    return "The operator can uninstall every plugin that keeps a group off in Capabilities › Plugins to release the holds, then switch on any groups still off in Capabilities › Tools. Once the group is on, ask again and I'll retry.";
   }
   return "The operator can switch tool groups back on in Capabilities › Tools. Once the group is on, ask again and I'll retry.";
 }
@@ -247,10 +243,10 @@ export function buildGovernanceBlockGuidance(input: {
     // A plugin's hold is lifted only by uninstalling that plugin, never by the Tools switch.
     const plugin = pluginHoldingGroup(input.error, input.result);
     if (plugin === UNNAMED_PLUGIN) {
-      return `${tool} is switched off: a plugin keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Uninstalling every plugin that keeps the group off, in Capabilities › Plugins, turns it back on, and only the operator can do that; tell them which tool you needed.`;
+      return `${tool} is switched off: a plugin keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator can uninstall every plugin that keeps the group off in Capabilities › Plugins to release the holds. If the group stays off, they can switch it on in Capabilities › Tools. Tell them which tool you needed.`;
     }
     if (plugin) {
-      return `${tool} is switched off: the plugin ${plugin} keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} Uninstalling ${plugin}, and any other plugin that keeps the group off, in Capabilities › Plugins turns it back on, and only the operator can do that; tell them which tool you needed.`;
+      return `${tool} is switched off: the plugin ${plugin} keeps its tool group off. ${OPERATOR_BOUNDARY_NEXT_STEP} The operator can uninstall ${plugin} and any other plugin that keeps the group off in Capabilities › Plugins to release the holds. If the group stays off, they can switch it on in Capabilities › Tools. Tell them which tool you needed.`;
     }
     return `${tool} is switched off: the operator turned off its tool group in Capabilities › Tools. ${OPERATOR_BOUNDARY_NEXT_STEP} Only the operator can switch that group back on; tell them which tool you needed.`;
   }

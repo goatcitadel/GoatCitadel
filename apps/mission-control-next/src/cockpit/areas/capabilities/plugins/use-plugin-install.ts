@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type {
   ApprovalRequest,
@@ -8,6 +8,10 @@ import type {
   PluginSource,
 } from "@goatcitadel/contracts";
 import {
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
   inspectCapabilityPlugin,
   installCapabilityPlugin,
 } from "@goatcitadel/mission-control-shared/api/capability-plugins";
@@ -16,17 +20,19 @@ import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-p
 import { pendingSkillStep } from "./plugin-install-view";
 import { manifestRefusalLines, pluginRefusalOf, refusalMessage, wasAnswered } from "./plugin-check-copy";
 import {
-  __resetPluginInstallFlowForTests,
   adoptPluginDetail,
   bump,
   continueInstall,
   followPlan,
   forgetFlow,
+  generationOf,
   installContext,
   installStopped,
   keep,
+  pluginInstallCustody,
   readNow,
   refreshInstall,
+  retirePluginInstallFlow,
   setInstallContext,
   type PluginInstallContext,
 } from "./plugin-install-flow";
@@ -114,9 +120,16 @@ export function startPluginInspection(key: string, source: PluginSource, context
 }
 
 async function runInspection(key: string, source: PluginSource, checkKey: string, context: PluginInstallContext) {
+  const started = pluginInstallCustody();
+  const generation = generationOf(key);
   const stillChecking = () => {
     const entry = readPluginInstall(key);
-    return entry?.state.phase === "checking" && entry.checkKey === checkKey;
+    return (
+      started === pluginInstallCustody() &&
+      generation === generationOf(key) &&
+      entry?.state.phase === "checking" &&
+      entry.checkKey === checkKey
+    );
   };
   let inspection: CapabilityPluginInspection;
   try {
@@ -170,12 +183,17 @@ export async function confirmPluginInstall(key: string, hookSecrets: Readonly<Re
   const context = installContext(key);
   if (entry?.state.phase !== "ready" || entry.asking || !entry.state.inspection.installable || !context) return false;
   const { inspection } = entry.state;
+  const started = pluginInstallCustody();
   bump(key);
+  const generation = generationOf(key);
+  const currentRequest = () => started === pluginInstallCustody() && generation === generationOf(key);
   setPluginInstall(key, { ...entry, asking: true, chain: true, lost: false, notice: undefined });
   const installKey = await attemptKeyFor(key, entry, hookSecrets);
+  if (!currentRequest()) return false;
   const asking = readPluginInstall(key);
   if (asking) setPluginInstall(key, { ...asking, installKey });
   const secrets = Object.keys(hookSecrets).length > 0 ? { hookSecrets: { ...hookSecrets } } : {};
+  if (!currentRequest()) return false;
   let outcome: PluginActionOutcome;
   try {
     outcome = await installCapabilityPlugin(
@@ -183,10 +201,16 @@ export async function confirmPluginInstall(key: string, hookSecrets: Readonly<Re
       { attemptKey: installKey },
     );
   } catch (error) {
+    if (!currentRequest()) return false;
     if (wasAnswered(error)) lostSecrets.delete(key);
-    else lostSecrets.set(key, await digestOf(hookSecrets));
+    else {
+      const digest = await digestOf(hookSecrets);
+      if (!currentRequest()) return false;
+      lostSecrets.set(key, digest);
+    }
     return installRefused(key, error);
   }
+  if (!currentRequest()) return false;
   lostSecrets.delete(key);
   refreshInstall(key);
   receiveOutcome(key, outcome);
@@ -198,6 +222,9 @@ export async function confirmPluginInstall(key: string, hookSecrets: Readonly<Re
  * here and never in the store, so a retry can tell whether it sends the same secrets.
  */
 const lostSecrets = new Map<string, string>();
+const clearLostSecrets = () => lostSecrets.clear();
+subscribeGatewayAccessChange(clearLostSecrets);
+subscribeGatewayCallerScope(clearLostSecrets);
 
 async function digestOf(secrets: Readonly<Record<string, string>>): Promise<string> {
   const text = JSON.stringify(Object.entries(secrets).sort(([left], [right]) => left.localeCompare(right)));
@@ -353,21 +380,23 @@ export function usePluginInstall(
 ): PluginInstall {
   const client = useQueryClient();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
-  const entry = usePluginInstallEntry(key);
+  const [custody] = useState(pluginInstallCustody);
+  const observed = usePluginInstallEntry(key);
+  const entry = custody === pluginInstallCustody() ? observed : undefined;
   const inspection = seed?.inspection;
   const detail = seed?.detail;
   const reread = seed?.reread === true;
 
   useEffect(() => {
-    if (inspection && inspection.inspectionId === key) {
+    if (custody === pluginInstallCustody() && inspection && inspection.inspectionId === key) {
       adoptPluginInspection(key, inspection, { client, workspaceId: inspection.workspaceId });
     }
-  }, [key, inspection, client]);
+  }, [key, inspection, client, custody]);
   useEffect(() => {
-    if (detail && pluginInstallKey(detail.pluginId) === key) {
+    if (custody === pluginInstallCustody() && detail && pluginInstallKey(detail.pluginId) === key) {
       adoptPluginDetail(key, detail, { client, workspaceId: detail.workspaceId }, reread);
     }
-  }, [key, detail, client, reread]);
+  }, [key, detail, client, reread, custody]);
 
   return {
     state: entry?.state ?? IDLE,
@@ -381,10 +410,25 @@ export function usePluginInstall(
     workspaceId: installContext(key)?.workspaceId ?? workspaceId,
     waitingStep: waitingStepOf(entry),
     ...(entry?.asked ? { asked: entry.asked } : {}),
-    inspect: (source) => startPluginInspection(key, source, installContext(key) ?? { client, workspaceId }),
-    confirm: (hookSecrets) => confirmPluginInstall(key, hookSecrets),
+    inspect: (source) => {
+      if (custody === pluginInstallCustody()) {
+        startPluginInspection(key, source, installContext(key) ?? { client, workspaceId });
+      }
+    },
+    confirm: (hookSecrets) =>
+      custody === pluginInstallCustody() ? confirmPluginInstall(key, hookSecrets) : Promise.resolve(false),
     checkNow: (status) => {
-      if (status === "approved") stepApproved(key, waitingStepOf(readPluginInstall(key)));
+      if (custody !== pluginInstallCustody()) return;
+      if (status === "approved") {
+        const current = readPluginInstall(key);
+        if (
+          entry?.state.phase === "following" &&
+          current?.state.phase === "following" &&
+          entry.state.waitingApprovalId === current.state.waitingApprovalId
+        ) {
+          stepApproved(key, waitingStepOf(current));
+        }
+      }
       readNow(key);
     },
   };
@@ -392,5 +436,5 @@ export function usePluginInstall(
 
 export function __resetPluginInstallsForTests() {
   lostSecrets.clear();
-  __resetPluginInstallFlowForTests();
+  retirePluginInstallFlow();
 }

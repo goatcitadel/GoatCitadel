@@ -607,6 +607,24 @@ describe("installing a plugin through one Change Plan", () => {
       });
     });
 
+    it("rechecks a kept connector after waiting for the plugin records lock", async () => {
+      const h = harness({ servers: [savedIssues], views: keptView("issues") });
+      const plan = await planFor(h);
+      // Another plugin's uninstall wins the shared records fence after this plan's initial binding.
+      Object.assign(h.sources, {
+        withPluginRecordsLock: async <T>(work: () => Promise<T>): Promise<T> => {
+          h.state.servers = [];
+          return work();
+        },
+      });
+
+      const settled = await h.confirm(plan);
+
+      expect(settled.status).not.toBe("completed");
+      expect(await h.store.get(PLUGIN_ID)).toBeUndefined();
+      expect(h.sources.createConnector).not.toHaveBeenCalled();
+    });
+
     it("stops the install when a group it would keep off was switched back on since the check (F3)", async () => {
       const h = harness({ views: keptView("no-browser"), operatorOff: ["browser"] });
       const plan = await planFor(h);

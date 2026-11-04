@@ -33,7 +33,9 @@ import { CapabilitySkillsService, type CapabilitySkillsSource } from "./capabili
 import type {
   CreateSkillHubOperatorApprovalInput,
   CreateSkillHubOperatorApprovalResponse,
+  SkillHubOperatorListInput,
   SkillHubOperatorListResponse,
+  SkillHubOperatorPluginPass,
 } from "./skill-hub-operator-service.js";
 import type { SkillHubReviewResult, SkillHubSourceReviewInput } from "./skill-hub-review-service.js";
 import type { InstalledSkillSource, SkillSourceCatalog, SkillSourceReadOptions } from "./skill-import-service.js";
@@ -103,11 +105,11 @@ export interface CapabilitySkillsOwners {
    */
   skillHub: {
     reviewSkillHubSource(input: SkillHubSourceReviewInput): Promise<SkillHubReviewResult>;
-    listSkillHub(input: { workspaceId: string; limit?: number }): Promise<SkillHubOperatorListResponse>;
+    listSkillHub(input: SkillHubOperatorListInput): Promise<SkillHubOperatorListResponse>;
     /** `options.pluginPass` is given only for a plugin's skill whose record the install steps have checked. */
     createSkillHubApproval(
       input: CreateSkillHubOperatorApprovalInput,
-      options?: { pluginPass: { pluginId: string } },
+      options?: { pluginPass: SkillHubOperatorPluginPass },
     ): Promise<CreateSkillHubOperatorApprovalResponse>;
   };
   /**

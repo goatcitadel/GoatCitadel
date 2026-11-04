@@ -2,6 +2,7 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { Dialog } from "../ui/Dialog";
 import { InspectorPanel, InspectorProvider, useInspector } from "./inspector";
@@ -144,6 +145,36 @@ describe("inspector", () => {
     expect(container.textContent).toContain("Current model");
     act(() => api.closeIfOpen("chat"));
     expect(container.querySelector('[aria-label="Inspector: Conversation"]')).toBeNull();
+  });
+
+  it("retires inspector content and callbacks on access change while preserving its children", () => {
+    act(() =>
+      root.render(
+        <InspectorProvider>
+          <Probe />
+          <input aria-label="Draft" defaultValue="Keep this draft" />
+          <InspectorPanel />
+        </InspectorProvider>,
+      ),
+    );
+    const draft = container.querySelector<HTMLInputElement>('input[aria-label="Draft"]')!;
+    draft.value = "My ongoing draft";
+    const old = api;
+    act(() => old.open({ source: "skills", title: "Old skills", body: <p>Old caller evidence</p> }));
+    expect(container.textContent).toContain("Old caller evidence");
+
+    act(() => {
+      notifyGatewayAccessChanged(false);
+      old.open({ source: "skills", title: "Late result", body: <p>Old result</p> });
+    });
+    expect(container.querySelector('[data-inspector-body="true"]')).toBeNull();
+    expect(container.querySelector('input[aria-label="Draft"]')).toBe(draft);
+    expect(draft.value).toBe("My ongoing draft");
+
+    act(() => api.register("skills", { source: "skills", title: "Current skills", body: <p>Current evidence</p> }));
+    act(() => document.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true, bubbles: true })));
+    act(() => old.closeIfOpen("skills"));
+    expect(container.textContent).toContain("Current evidence");
   });
 
   it("uses an accessible bottom sheet for the phone inspector", async () => {

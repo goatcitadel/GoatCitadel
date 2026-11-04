@@ -37,7 +37,36 @@ public sealed class RuntimeStatusService
     public async Task<JsonDocument> StopAsync(CancellationToken cancellationToken = default)
     {
         var output = await _launcherService.RunAsync(new[] { "stop", "--json" }, cancellationToken);
-        return JsonDocument.Parse(output);
+        JsonDocument result;
+        try { result = JsonDocument.Parse(output); }
+        catch (JsonException error) { throw new InvalidOperationException("Launcher returned invalid stop status.", error); }
+        try
+        {
+            var root = result.RootElement;
+            var refused = root.TryGetProperty("notStopped", out var entries) && entries.ValueKind == JsonValueKind.Array
+                ? entries.EnumerateArray().Take(8).Select(entry =>
+                    entry.TryGetProperty("label", out var label) && label.ValueKind == JsonValueKind.String
+                    && entry.TryGetProperty("reason", out var reason) && reason.ValueKind == JsonValueKind.String
+                        ? $"{label.GetString()} ({reason.GetString()})" : "unrecognized stop refusal").ToArray()
+                : new[] { "stop result missing ownership diagnostics" };
+            if (refused.Length > 0
+                || !root.TryGetProperty("action", out var action) || action.GetString() != "stop"
+                || !root.TryGetProperty("status", out var status) || status.GetString() != "stopped"
+                || !root.TryGetProperty("readiness", out var ready)
+                || !ready.TryGetProperty("gateway", out var gateway) || gateway.ValueKind != JsonValueKind.False
+                || !ready.TryGetProperty("ui", out var ui) || ui.ValueKind != JsonValueKind.False)
+            {
+                throw new InvalidOperationException(refused.Length > 0
+                    ? "Runtime could not be stopped: " + string.Join(", ", refused) + "."
+                    : "Runtime could not be stopped. Check runtime status and logs.");
+            }
+            return result;
+        }
+        catch
+        {
+            result.Dispose();
+            throw;
+        }
     }
 
     public static DesktopRuntimeStatus ParseStatus(string json)

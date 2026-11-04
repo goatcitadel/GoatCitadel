@@ -28,6 +28,13 @@ export interface ChatAttachmentHost {
 
 export const MAX_CHAT_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
+/** The attachment metadata or on-disk bytes exceed the caller's bounded read. */
+export class AttachmentReadLimitError extends Error {
+  constructor(attachmentId: string) {
+    super(`Attachment ${attachmentId} exceeds the server read limit.`);
+  }
+}
+
 /** An attachment's bytes: base64 (the JSON route), a Buffer (Gateway callers) or a request body streamed to disk. */
 export type ChatAttachmentBytes =
   | { bytesBase64: string }
@@ -195,7 +202,10 @@ export async function getChatAttachment(deps: ChatAttachmentHost, attachmentId: 
 }
 
 export async function readChatAttachmentContent(
-  deps: Pick<ChatAttachmentHost, "config" | "storage">,
+  deps: {
+    config: Pick<GatewayRuntimeConfig, "rootDir" | "assistant" | "toolPolicy">;
+    storage: Pick<Storage, "chatAttachments">;
+  },
   attachmentId: string,
   options: {
     maxBytes?: number;
@@ -219,7 +229,7 @@ export async function readChatAttachmentContent(
       throw new Error("Attachment read maxBytes must be a non-negative safe integer.");
     }
     if (record.sizeBytes > maxBytes) {
-      throw new Error(`Attachment ${attachmentId} exceeds the server read limit.`);
+      throw new AttachmentReadLimitError(attachmentId);
     }
   }
   const fullPath = path.resolve(deps.config.rootDir, deps.config.assistant.workspaceDir, record.storageRelPath);
@@ -269,7 +279,7 @@ async function readFileBounded(fullPath: string, maxBytes: number, attachmentId:
   try {
     const stat = await handle.stat();
     if (stat.size > maxBytes) {
-      throw new Error(`Attachment ${attachmentId} exceeds the server read limit.`);
+      throw new AttachmentReadLimitError(attachmentId);
     }
     const buffer = Buffer.alloc(maxBytes + 1);
     let offset = 0;
@@ -281,7 +291,7 @@ async function readFileBounded(fullPath: string, maxBytes: number, attachmentId:
       offset += bytesRead;
     }
     if (offset > maxBytes) {
-      throw new Error(`Attachment ${attachmentId} exceeds the server read limit.`);
+      throw new AttachmentReadLimitError(attachmentId);
     }
     return buffer.subarray(0, offset);
   } finally {

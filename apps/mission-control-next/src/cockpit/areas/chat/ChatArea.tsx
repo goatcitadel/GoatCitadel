@@ -83,6 +83,7 @@ export function ChatArea({
         hidePageHeader
         renderWhileLoading
         secondaryEvidenceEnabled={inspectorSource === "chat"}
+        restorePinnedGoal={false}
         routeSearch={search}
         onNavigateSurface={conversationNavigation.request}
         onOpenApprovals={(approvalId) =>

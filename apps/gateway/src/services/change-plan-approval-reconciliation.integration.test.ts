@@ -81,7 +81,7 @@ async function fixture() {
   const capability = new CapabilitySystemService({ rootDir: root, storage: asyncStorage,
     runtimeConfig: { candidateRoot: "candidates", codeModeArtifactRoot: "code", tempRoot: "temp",
       codeModeSandbox: { mode: "best_effort_host", required: true, bestEffortHostEnabled: false } },
-    listLoadedSkills: () => [], listToolCatalog: () => [], readSkillStates: async () => new Map(),
+    listLoadedSkills: () => [], listToolCatalog: () => [], listSwitchedOffToolNames: () => new Set(), readSkillStates: async () => new Map(),
     readFeatureFlags: async () => ({ codeModeV1Enabled: false }), invokeTool: unavailable,
     createApproval: unavailable, resolveApproval: unavailable, publishRealtime: async () => {}, readPolicySnapshot: async () => ({}),
   });

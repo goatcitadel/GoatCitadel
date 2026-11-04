@@ -2,6 +2,8 @@ import { assertFanoutInvocationAuthority, assertFanoutFeatureDispatchCurrent, as
 import {
   canonicalJsonString,
   isDurableRunTerminal,
+  readDurableChatTurnExecutionPayloadAuthority,
+  type DurableRunRecord,
   type AutonomousActivationGrantRecord,
   type ChatFanoutInvocationRecord,
   type ChatProjectRecord,
@@ -21,7 +23,7 @@ import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { ChatTurnToolUseClosedError } from "./chat-turn-control.js";
 import { CHAT_DURABLE_FANOUT_WORKFLOW_TEMPLATE } from "./chat-fanout-admission-reference.js";
 import { assertFanoutInitialSelection } from "./chat-fanout-admission-authority.js";
-import { hasDurableFanoutWaitingEvidence } from "./chat-fanout-wait-evidence.js";
+import { readFanoutCompletionTrace, hasDurableFanoutWaitingEvidence } from "./chat-fanout-wait-evidence.js";
 import { mapDelegationStatus, projectDelegationResult, projectCanonicalResult } from "./chat-fanout-result-projection.js";
 
 /** Immutable workflow discriminator for the Chat-native durable fan-out bridge. */
@@ -79,6 +81,112 @@ export interface ChatDurableFanoutServiceHost {
 
 
 
+/** Canonical fanout ledger operations shared by admission, recovery and Stop.
+ * This owner never dispatches children or manufactures cancellation authority.
+ */
+export class ChatFanoutLedger {
+  public constructor(private readonly storage: Pick<Storage, "chatFanoutInvocations" | "chatDelegationRuns" | "chatDelegationSteps" |
+    "durableChildWatchers" | "durableRuns" | "chatTurnTraces" | "chatToolRuns">) {}
+
+  public isAvailable(): boolean { return typeof this.storage.chatFanoutInvocations?.listWaitingParentCandidateIds === "function"; }
+  public async readInvocation(id: string) { return await this.storage.chatFanoutInvocations.get(id); }
+  public async findInvocation(parentRunId: string, toolRunId: string) {
+    return await this.storage.chatFanoutInvocations.findByParentAndTool(parentRunId, toolRunId);
+  }
+  public async transitionInvocation(id: string, patch: Parameters<Storage["chatFanoutInvocations"]["patch"]>[1]) {
+    return await this.storage.chatFanoutInvocations.patch(id, patch);
+  }
+  public async createInvocation(input: Parameters<Storage["chatFanoutInvocations"]["createOrGetWithOutcome"]>[0]) {
+    return await this.storage.chatFanoutInvocations.createOrGetWithOutcome(input);
+  }
+  public async listActiveInvocations() { return await this.storage.chatFanoutInvocations.listActive(); }
+  public async readSteps(delegationRunId: string) { return await this.storage.chatDelegationSteps.listByRun(delegationRunId); }
+  public async readRun(runId: string) { return await this.storage.durableRuns.getRun(runId); }
+  public async readTrace(turnId: string) { return await this.storage.chatTurnTraces.get(turnId); }
+
+  public async cancelParentPage(
+    afterInvocationId: string | undefined,
+    cancelChild: (runId: string) => Promise<unknown>,
+    shouldStop: () => boolean,
+    onError: (error: unknown, invocationId: string) => void,
+  ): Promise<string | undefined> {
+    const candidates = await this.storage.chatFanoutInvocations.listWaitingParentCandidateIds(100, afterInvocationId);
+    for (const invocationId of candidates) {
+      if (shouldStop()) break;
+      try {
+        const invocation = await this.readInvocation(invocationId);
+        const parent = await this.readRun(invocation.parentRunId);
+        if (shouldStop() || parent.status !== "cancelled") continue;
+        await this.cancelParent(parent, async (childRunId) => {
+          if (shouldStop()) throw new Error("Durable worker stopped before child cancellation.");
+          return await cancelChild(childRunId);
+        });
+      } catch (error) { onError(error, invocationId); }
+    }
+    return candidates.length === 100 ? candidates.at(-1) : undefined;
+  }
+
+  /** Propagate committed Stop through independently validated exact links.
+   * Failed requests retain active aggregate truth for retry; effects stay intact.
+   */
+  public async cancelParent(parent: DurableRunRecord, cancelChild: (runId: string) => Promise<unknown>): Promise<void> {
+    if (parent.status !== "cancelled") return;
+    const authority = readDurableChatTurnExecutionPayloadAuthority({
+      workflowKey: parent.workflowKey, durableRunId: parent.runId, payload: parent.payload,
+    });
+    if (!authority || (!authority.featureReferenceSha256 && !authority.capabilityProfileId)) return;
+    const trace = await readFanoutCompletionTrace({ storage: this.storage }, authority.turnId);
+    const tools = trace.toolRuns;
+    const failures: unknown[] = [];
+    for (const tool of tools) {
+      if (tool.toolName !== "agent.fanout" || tool.status !== "executed" || tool.result?.status !== "waiting") continue;
+      try {
+        const invocation = await this.findInvocation(parent.runId, tool.toolRunId);
+        if (!invocation || ["completed", "partial", "failed", "cancelled", "blocked"].includes(invocation.status)) continue;
+        if (!await hasDurableFanoutWaitingEvidence(this.storage, parent, trace, [tool], {
+          cancelledParent: true, invocationId: invocation.invocationId,
+        })) throw new Error("Cancelled fanout has mismatched canonical parent/child evidence.");
+        const steps = await this.readSteps(invocation.delegationRunId!);
+        // Validate every child before requesting any cancellation. Watchers alone
+        // cannot authorize cancellation of a different run or turn.
+        const children: DurableRunRecord[] = [];
+        for (const step of steps) {
+          if (!step.durableRunId) continue; // Validator permits only unlaunched terminal steps.
+          const child = await this.readRun(step.durableRunId);
+          const childTrace = await this.readTrace(step.childTurnId!);
+          const request = child.payload.request as Record<string, unknown> | undefined;
+          if (child.runId !== step.durableRunId || child.workflowKey !== "chat.turn.execute" ||
+              child.payload.workspaceId !== invocation.workspaceId || child.payload.sessionId !== step.childSessionId ||
+              child.payload.turnId !== step.childTurnId || childTrace.sessionId !== step.childSessionId ||
+              childTrace.turnId !== step.childTurnId || childTrace.durable?.runId !== child.runId ||
+              request?.parentDelegationStepId !== step.stepId || request.policyRunId !== invocation.delegationRunId) {
+            throw new Error("Cancelled fanout child has mismatched canonical execution linkage.");
+          }
+          children.push(child);
+        }
+        const requests = await Promise.allSettled(children.map(async (child) => {
+          if (isDurableRunTerminal(child.status)) return;
+          try { await cancelChild(child.runId); }
+          catch (error) {
+            // A concurrent terminal transition is authoritative, including a
+            // completed child whose effect must not be reclassified as undone.
+            if (!isDurableRunTerminal((await this.readRun(child.runId)).status)) throw error;
+          }
+          if (!isDurableRunTerminal((await this.readRun(child.runId)).status)) {
+            throw new Error("Fanout child cancellation has not committed.");
+          }
+        }));
+        const unresolved = requests.filter((request) => request.status === "rejected");
+        if (unresolved.length) throw new AggregateError(unresolved.map((request) => request.reason), "Fanout child cancellation deferred.");
+        // Only bounded terminal child truth/cancellation commits settle the
+        // aggregate. Failed attempts leave it discoverable for restart recovery.
+        await this.transitionInvocation(invocation.invocationId, { status: "cancelled", terminalReason: "parent_cancelled" });
+      } catch (error) { failures.push(error); }
+    }
+    if (failures.length) throw new AggregateError(failures, "Fanout cancellation could not reach every exact child.");
+  }
+}
+
 /**
  * Durably connects the server-authored parent tool run to the existing
  * delegation aggregate. It deliberately has no independent child runner:
@@ -87,7 +195,10 @@ export interface ChatDurableFanoutServiceHost {
  */
 export class ChatDurableFanoutService {
   private waitingParentCursor: string | undefined;
-  public constructor(private readonly host: ChatDurableFanoutServiceHost) {}
+  private readonly ledger: ChatFanoutLedger;
+  public constructor(private readonly host: ChatDurableFanoutServiceHost) {
+    this.ledger = new ChatFanoutLedger(host.storage);
+  }
 
   /** Retry lost settlement/wake handoffs independently of watcher delivery ACKs. */
   public async reconcileWaitingParents(): Promise<void> {
@@ -99,14 +210,19 @@ export class ChatDurableFanoutService {
       try {
         const candidate = await storage.chatFanoutInvocations.get(candidateId);
         const parent = await storage.durableRuns.getRun(candidate.parentRunId);
+        if (parent.status === "cancelled") {
+          await this.ledger.cancelParent(parent, async (childRunId) =>
+            await this.cancelChild(childRunId, "parent_cancelled"));
+          continue;
+        }
         const wait = parent.metadata?.waitForEvent as { eventKey?: string; correlationId?: string } | undefined;
         if (parent.status !== "waiting" || wait?.eventKey !== CHAT_DURABLE_FANOUT_RESOLVED_WAKE_EVENT ||
             wait.correlationId !== candidate.invocationId || typeof parent.payload.turnId !== "string") continue;
         await this.host.assertParentToolUseOpen(parent.runId, candidate.sessionId);
         if (candidate.parentAdmission) await this.assertParentAdmissionCurrent(candidate,
           await this.resolveActiveProject(candidate.sessionId, candidate.workspaceId));
-        const trace = await storage.chatTurnTraces.get(parent.payload.turnId);
-        const tools = await storage.chatToolRuns.listByTurn(trace.turnId);
+        const trace = await readFanoutCompletionTrace(this.host, parent.payload.turnId);
+        const tools = trace.toolRuns;
         if (!await hasDurableFanoutWaitingEvidence(storage, parent, trace, tools)) {
           throw new Error("Waiting fanout has mismatched canonical parent/child evidence.");
         }
@@ -141,7 +257,7 @@ export class ChatDurableFanoutService {
 
   /** Read committed aggregate/child evidence for a resumed parent's existing tool run. */
   public async readToolResult(parentRunId: string, toolRunId: string): Promise<Record<string, unknown> | undefined> {
-    const invocation = await this.host.storage.chatFanoutInvocations.findByParentAndTool(parentRunId, toolRunId);
+    const invocation = await this.ledger.findInvocation(parentRunId, toolRunId);
     return invocation ? await this.projectResult(invocation) : undefined;
   }
 
@@ -165,7 +281,7 @@ export class ChatDurableFanoutService {
       throw new Error(`Automatic fan-out accepts 1..${SUBAGENT_FANOUT_MAX_SUBTASKS} child tasks.`);
     }
 
-    const existing = await this.host.storage.chatFanoutInvocations.findByParentAndTool(parentRunId, toolRunId);
+    const existing = await this.ledger.findInvocation(parentRunId, toolRunId);
     const invocation = existing ?? (await this.createInvocation(input, parentRunId, toolRunId));
     this.assertInvocationMatchesPrepared(invocation, input.prepared, input.subtasks);
 
@@ -179,11 +295,11 @@ export class ChatDurableFanoutService {
       activeInvocation =
         reserved.status === "dispatching"
           ? reserved
-          : await this.host.storage.chatFanoutInvocations.patch(reserved.invocationId, { status: "dispatching" });
+          : await this.ledger.transitionInvocation(reserved.invocationId, { status: "dispatching" });
       const callbacks: ChatDelegationProgressCallbacks = {
         onStatus: async (event) => {
           if (!activeInvocation.delegationRunId) {
-            activeInvocation = await this.host.storage.chatFanoutInvocations.patch(activeInvocation.invocationId, {
+            activeInvocation = await this.ledger.transitionInvocation(activeInvocation.invocationId, {
               delegationRunId: event.runId,
               status: "dispatching",
             });
@@ -230,12 +346,12 @@ export class ChatDurableFanoutService {
         options,
       );
       if (activeInvocation.delegationRunId !== delegated.runId) {
-        activeInvocation = await this.host.storage.chatFanoutInvocations.patch(activeInvocation.invocationId, {
+        activeInvocation = await this.ledger.transitionInvocation(activeInvocation.invocationId, {
           delegationRunId: delegated.runId,
         });
       }
       const status = mapDelegationStatus(delegated);
-      activeInvocation = await this.host.storage.chatFanoutInvocations.patch(activeInvocation.invocationId, { status });
+      activeInvocation = await this.ledger.transitionInvocation(activeInvocation.invocationId, { status });
       return projectDelegationResult(activeInvocation, delegated);
     } catch (error) {
       const message = formatError(error);
@@ -246,7 +362,7 @@ export class ChatDurableFanoutService {
         cancelled ? "parent_cancelled" : "authority_lost",
       );
       const status = cancelled ? "cancelled" : authorityLost ? "blocked" : "failed";
-      activeInvocation = await this.host.storage.chatFanoutInvocations.patch(activeInvocation.invocationId, {
+      activeInvocation = await this.ledger.transitionInvocation(activeInvocation.invocationId, {
         status,
         terminalReason: appendCancellationTruth(message, cancellation),
       });
@@ -256,10 +372,10 @@ export class ChatDurableFanoutService {
 
   /** Narrow aggregate stop control used by the Chat task rail; it never retries children. */
   public async cancel(invocationId: string, reason = "operator_stop"): Promise<ChatFanoutInvocationRecord> {
-    const invocation = await this.host.storage.chatFanoutInvocations.get(invocationId);
+    const invocation = await this.ledger.readInvocation(invocationId);
     if (isTerminal(invocation.status)) return invocation;
     const cancellation = await this.requestChildCancellation(invocation, reason);
-    const terminal = await this.host.storage.chatFanoutInvocations.patch(invocationId, {
+    const terminal = await this.ledger.transitionInvocation(invocationId, {
       status: "cancelled",
       terminalReason: appendCancellationTruth(`Fan-out stop requested: ${reason}.`, cancellation),
     });
@@ -277,7 +393,7 @@ export class ChatDurableFanoutService {
 
   /** Revocation is an authority loss, so every nonterminal aggregate using it is stopped durably. */
   public async cancelForGrant(grantId: string, reason = "grant_revoked"): Promise<ChatFanoutInvocationRecord[]> {
-    const active = (await this.host.storage.chatFanoutInvocations.listActive()).filter(
+    const active = (await this.ledger.listActiveInvocations()).filter(
       (invocation) => invocation.grantId === grantId,
     );
     return await Promise.all(active.map(async (invocation) => await this.cancel(invocation.invocationId, reason)));
@@ -314,7 +430,7 @@ export class ChatDurableFanoutService {
     ) {
       return { reconciled: false, parentWoken: false };
     }
-    const invocation = (await this.host.storage.chatFanoutInvocations.listActive()).find(
+    const invocation = (await this.ledger.listActiveInvocations()).find(
       (candidate) => candidate.delegationRunId === step.runId,
     );
     if (!invocation) {
@@ -333,12 +449,12 @@ export class ChatDurableFanoutService {
       return { reconciled: false, parentWoken: false };
     }
 
-    const steps = await this.host.storage.chatDelegationSteps.listByRun(step.runId);
+    const steps = await this.ledger.readSteps(step.runId);
     const invocationStatus = terminalFanoutStatus(steps.map((candidate) => candidate.status));
     if (!invocationStatus) {
       return { reconciled: true, parentWoken: false };
     }
-    const terminal = await this.host.storage.chatFanoutInvocations.patch(invocation.invocationId, {
+    const terminal = await this.ledger.transitionInvocation(invocation.invocationId, {
       status: invocationStatus,
     });
     if (!this.host.wakeDurableChatRun) {
@@ -385,7 +501,7 @@ export class ChatDurableFanoutService {
       throw new FanoutAuthorityError("The matched automatic fan-out grant no longer exists.");
     }
     const now = new Date().toISOString();
-    const created = await this.host.storage.chatFanoutInvocations.createOrGetWithOutcome({
+    const created = await this.ledger.createInvocation({
       invocationId: buildInvocationId(parentRunId, toolRunId),
       parentRunId,
       toolRunId,
@@ -417,7 +533,6 @@ export class ChatDurableFanoutService {
 
   private async ensureReserved(invocation: ChatFanoutInvocationRecord): Promise<ChatFanoutInvocationRecord> {
     if (invocation.status !== "reserving") return invocation;
-    const invocations = this.host.storage.chatFanoutInvocations;
     try {
       await this.host.capabilitySystem.reserveAutonomousActivationGrantUse({
         ...buildGrantEvaluationInput({
@@ -429,10 +544,10 @@ export class ChatDurableFanoutService {
         requiredActivations: invocation.reservedActivations,
         reservationId: invocation.invocationId,
       });
-      return await invocations.patch(invocation.invocationId, { status: "reserved" });
+      return await this.ledger.transitionInvocation(invocation.invocationId, { status: "reserved" });
     } catch (error) {
       const reason = `Automatic fan-out reservation was rejected before child dispatch: ${formatError(error)}`;
-      await invocations.patch(invocation.invocationId, {
+      await this.ledger.transitionInvocation(invocation.invocationId, {
         status: "blocked",
         terminalReason: reason,
       });
@@ -483,17 +598,22 @@ export class ChatDurableFanoutService {
     }
   }
 
+  private async cancelChild(runId: string, reason: string): Promise<unknown> {
+    if (!this.host.cancelDurableChatRun) throw new Error("Durable child cancellation owner is unavailable.");
+    return await this.host.cancelDurableChatRun(runId, `fanout:${reason}`);
+  }
+
   private async requestChildCancellation(
     invocation: ChatFanoutInvocationRecord,
     reason: string,
   ): Promise<{ requested: number; unresolved: number }> {
     if (!invocation.delegationRunId || !this.host.cancelDurableChatRun) return { requested: 0, unresolved: 0 };
-    const steps = await this.host.storage.chatDelegationSteps.listByRun(invocation.delegationRunId);
+    const steps = await this.ledger.readSteps(invocation.delegationRunId);
     const active = steps.filter(
       (step) => (step.status === "pending" || step.status === "running") && Boolean(step.durableRunId?.trim()),
     );
     const outcomes = await Promise.allSettled(
-      active.map(async (step) => await this.host.cancelDurableChatRun!(step.durableRunId!, `fanout:${reason}`)),
+      active.map(async (step) => await this.cancelChild(step.durableRunId!, reason)),
     );
     return {
       requested: active.length,
@@ -503,7 +623,7 @@ export class ChatDurableFanoutService {
 
   private async projectResult(invocation: ChatFanoutInvocationRecord): Promise<Record<string, unknown>> {
     const steps = invocation.delegationRunId
-      ? await this.host.storage.chatDelegationSteps.listByRun(invocation.delegationRunId)
+      ? await this.ledger.readSteps(invocation.delegationRunId)
       : [];
     return projectCanonicalResult(invocation, steps);
   }

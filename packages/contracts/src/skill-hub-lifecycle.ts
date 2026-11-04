@@ -147,6 +147,8 @@ export type SkillHubOperationIntentTemplate = Omit<SkillHubOperationIntentRecord
 export interface SkillHubOperationIntentPreview {
   schemaVersion: typeof SKILL_HUB_OPERATION_INTENT_PREVIEW_SCHEMA;
   intent: SkillHubOperationIntentTemplate;
+  /** Server-owned install generation for a plugin mutation, bound by the intent's operation fingerprint. */
+  pluginInstallPlanId?: string;
 }
 
 /** One immutable terminal result. Retryable attempts remain in approval_effects. */

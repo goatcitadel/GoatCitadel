@@ -722,6 +722,8 @@ importers:
         specifier: 19.2.5
         version: 19.2.5(react@19.2.5)
 
+  vendor/webgpu-types-stub: {}
+
 packages:
 
   '@antfu/install-pkg@1.1.0':

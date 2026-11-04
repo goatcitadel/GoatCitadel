@@ -160,6 +160,96 @@ describe("events stream route", () => {
     expect(text.includes('"oldestCursor":100')).toBe(true);
   });
 
+  for (const cursor of [9, 10, 11]) {
+    it(`checks an empty retained stream against actual deletion floor for cursor ${cursor}`, async () => {
+      app = Fastify();
+      const closeRealtimeStreamLease = vi.fn();
+      decorateRealtimeEvents(app, {
+        listRealtimeEvents: () => [], listRealtimeEventsAfterSequence: () => [],
+        getRealtimeEventSequenceBounds: () => ({ lastPrunedSequence: 10 }),
+        subscribeRealtime: () => () => undefined,
+        openRealtimeStreamLease: () => ({ leaseId: "empty", clientId: "empty", gatewayNodeId: "node" }),
+        touchRealtimeStreamLease: () => undefined, closeRealtimeStreamLease,
+      });
+      await app.register(eventsRoutes);
+      const address = await app.listen({ host: "127.0.0.1", port: 0 });
+      const response = await fetch(`${address}/api/v1/events/stream?afterCursor=${cursor}`);
+      const text = await readSseUntil(response, (buffer) => buffer.includes("event: replay-gap") || buffer.includes("event: stream-ready"));
+      if (cursor < 10) {
+        expect(text).toContain("event: replay-gap");
+        expect(text).toContain('"lastPrunedCursor":10');
+        expect(text).not.toContain("event: stream-ready");
+        expect(closeRealtimeStreamLease).toHaveBeenCalledWith({ leaseId: "empty", closeReason: "replay_gap" });
+      } else {
+        expect(text).toContain("event: stream-ready");
+        expect(text).not.toContain("event: replay-gap");
+      }
+    });
+  }
+
+  it("does not interpret unused allocation integers inside replay as lost events", async () => {
+    app = Fastify();
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => [{ eventId: "third", sequence: 3, eventType: "heartbeat", source: "tests", timestamp: "2026-11-02T00:00:00.000Z", payload: {} }],
+      getRealtimeEventSequenceBounds: () => ({ oldestSequence: 1, newestSequence: 3 }),
+      subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({ leaseId: "gap-control", clientId: "client", gatewayNodeId: "node" }),
+      touchRealtimeStreamLease: () => undefined, closeRealtimeStreamLease: () => undefined,
+    });
+    await app.register(eventsRoutes);
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?afterCursor=1`);
+    const text = await readSseUntil(response, (buffer) => buffer.includes("event: stream-ready"));
+    expect(text).toContain("id: 3");
+    expect(text).not.toContain("event: replay-gap");
+  });
+
+  it("signals a replay gap when pruning advances retention during the replay read", async () => {
+    app = Fastify();
+    let boundsRead = 0;
+    const bounds = vi.fn(() => ({ oldestSequence: ++boundsRead === 1 ? 1 : 3, newestSequence: 3 }));
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => [{ eventId: "third", sequence: 3, eventType: "heartbeat", source: "tests", timestamp: "2026-11-02T00:00:00.000Z", payload: {} }],
+      getRealtimeEventSequenceBounds: bounds,
+      subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({ leaseId: "concurrent-prune", clientId: "client", gatewayNodeId: "node" }),
+      touchRealtimeStreamLease: () => undefined, closeRealtimeStreamLease: () => undefined,
+    });
+    await app.register(eventsRoutes);
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?afterCursor=1`);
+    const text = await readSseUntil(response, (buffer) => buffer.includes("event: replay-gap") || buffer.includes("event: stream-ready"));
+    expect(text).toContain("event: replay-gap");
+    expect(text).toContain('"oldestCursor":3');
+    expect(text).not.toContain("id: 3");
+    expect(text).not.toContain("event: stream-ready");
+    expect(bounds).toHaveBeenCalledTimes(2);
+  });
+
+  it("replays a new append to an initially empty stream without confusing its oldest row with deletion", async () => {
+    app = Fastify();
+    let reads = 0;
+    decorateRealtimeEvents(app, {
+      listRealtimeEvents: () => [],
+      listRealtimeEventsAfterSequence: () => [{ eventId: "second", sequence: 2, eventType: "heartbeat", source: "tests", timestamp: "2026-11-02T00:00:00.000Z", payload: {} }],
+      getRealtimeEventSequenceBounds: () => ++reads === 1
+        ? { lastPrunedSequence: 1 }
+        : { oldestSequence: 2, newestSequence: 2, lastPrunedSequence: 1 },
+      subscribeRealtime: () => () => undefined,
+      openRealtimeStreamLease: () => ({ leaseId: "append-control", clientId: "client", gatewayNodeId: "node" }),
+      touchRealtimeStreamLease: () => undefined, closeRealtimeStreamLease: () => undefined,
+    });
+    await app.register(eventsRoutes);
+    const address = await app.listen({ host: "127.0.0.1", port: 0 });
+    const response = await fetch(`${address}/api/v1/events/stream?afterCursor=1`);
+    const text = await readSseUntil(response, (buffer) => buffer.includes("event: stream-ready") || buffer.includes("event: replay-gap"));
+    expect(text).toContain("id: 2");
+    expect(text).toContain("event: stream-ready");
+    expect(text).not.toContain("event: replay-gap");
+  });
+
   it("signals replay gaps when retained replay is truncated before the newest sequence", async () => {
     app = Fastify();
     await app.register(cors, { origin: true });

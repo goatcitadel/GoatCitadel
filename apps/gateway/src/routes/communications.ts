@@ -83,7 +83,7 @@ type CommunicationsVerificationFixture = z.infer<typeof communicationsVerificati
 
 export const communicationsRoutes: FastifyPluginAsync = async (fastify) => {
   const service = createCommunicationsDashboardService({
-    createApproval: (input) => fastify.services.approvals.createApproval(input),
+    createApproval: (input, onCreated) => fastify.services.approvals.createApproval(input, onCreated),
     listIntegrationConnections: (kind, limit) => fastify.services.integrations.listIntegrationConnections(kind, limit),
     // The Communications page reads are the operator's own, so they keep working while Email and calendar is off.
     commsGmailRead: async (input) => {

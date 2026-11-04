@@ -32,6 +32,8 @@ export interface ResourcePage {
   items: LibraryResource[];
   coverage: string;
   nextCursor?: string;
+  /** Memory records withheld because their workspace evidence was inconsistent. */
+  withheldCount?: number;
   /** Files only: the listed folder's direct subfolders. */
   folders?: string[];
   /** Files and artifacts: a larger window would return more records. */
@@ -132,6 +134,7 @@ export async function loadLibraryResources(input: ResourceQuery): Promise<Resour
     return {
       items: items.map((item) => ({ kind, item })),
       nextCursor: response.nextCursor,
+      ...(withheld ? { withheldCount: withheld } : {}),
       coverage: `Workspace and global memory. ${withheld ? "Some inconsistent scope records were withheld." : `${plural(response.total, "matching record")} when this list was read.`} ${response.nextCursor ? "More pages are available." : "End of this list."}`,
     };
   }

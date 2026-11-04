@@ -42,8 +42,9 @@ function HeldOffNote({ holders }: { holders: Holders }) {
         </Fragment>
       ))}
       {holders.length === 1
-        ? ". Uninstalling it turns the group back on."
-        : ". Uninstalling all of them turns the group back on."}
+        ? ". Uninstalling it releases the hold."
+        : ". Uninstalling all of them releases the holds."}
+      {" If the group stays off, you can switch it on here."}
     </p>
   );
 }

@@ -17,7 +17,7 @@ type Input = {
 
 /** Reads the selected session run tree, ignoring obsolete async completions. */
 export function useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRunTree, refreshKey }: Input) {
-  const resolveAgenticRunTree = useCallback(async (): Promise<AgenticRunTreeResponse | null> => {
+  const resolveAgenticRunTree = useCallback(async (canReadTree?: () => boolean): Promise<AgenticRunTreeResponse | null> => {
     if (!selection.selectedSessionId) {
       return null;
     }
@@ -28,12 +28,12 @@ export function useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRu
       limit: 1,
     });
     const runId = response.items[0]?.runId;
-    return runId ? fetchAgenticRunTree(runId, { workspaceId }) : null;
+    return runId && canReadTree?.() !== false ? fetchAgenticRunTree(runId, { workspaceId }) : null;
   }, [selection.selectedSessionId, workspaceId]);
 
   useEffect(() => {
     let cancelled = false;
-    void resolveAgenticRunTree()
+    void resolveAgenticRunTree(() => !cancelled)
       .then((tree) => {
         if (!cancelled) {
           setAgenticRunTree(tree);

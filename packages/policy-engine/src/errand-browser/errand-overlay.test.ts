@@ -182,6 +182,83 @@ describe("errand overlay", () => {
     expect((await browser.overlay.snapshot()).notice).toBe(ERRAND_OVERLAY_COPY.useChat);
   }, 60_000);
 
+  it("refuses overlay approval when the page covers the step disclosure but leaves Approve visible", async () => {
+    const { browser, events } = await openErrand();
+    await browser.overlay.render(approvalState("covered-disclosure"));
+    const approve = await approveRectWhenVisible(browser);
+    const page = browser.page();
+    const session = await page.context().newCDPSession(page);
+
+    const disclosure = await (async () => {
+      try {
+        const { root } = await session.send("DOM.getDocument", { depth: -1, pierce: true });
+        const findClass = (node: typeof root, name: string): number | undefined => {
+          if (
+            node.attributes?.some(
+              (value, index, attrs) => index % 2 === 0 && value === "class" && attrs[index + 1] === name,
+            )
+          ) {
+            return node.nodeId;
+          }
+          for (const child of [...(node.children ?? []), ...(node.shadowRoots ?? [])]) {
+            const found = findClass(child, name);
+            if (found !== undefined) return found;
+          }
+          return undefined;
+        };
+        return await Promise.all(
+          ["title", "body"].map(async (name) => {
+            const nodeId = findClass(root, name);
+            expect(nodeId, `the isolated overlay has a ${name} element`).toBeDefined();
+            const { model } = await session.send("DOM.getBoxModel", { nodeId: nodeId! });
+            const [x, y] = model.border;
+            return { x: x!, y: y!, width: model.width, height: model.height };
+          }),
+        );
+      } finally {
+        await session.detach();
+      }
+    })();
+    const left = Math.floor(Math.min(...disclosure.map(({ x }) => x))) - 1;
+    const top = Math.floor(Math.min(...disclosure.map(({ y }) => y))) - 1;
+    const right = Math.ceil(Math.max(...disclosure.map(({ x, width }) => x + width))) + 1;
+    const bottom = Math.ceil(Math.max(...disclosure.map(({ y, height }) => y + height))) + 1;
+    expect(bottom, "the cover must stop above the Approve button").toBeLessThan(approve.y);
+
+    await page.evaluate(
+      ({ left, top, right, bottom }) => {
+        const cover = document.createElement("div");
+        cover.style.cssText = `position:fixed;left:${left}px;top:${top}px;width:${right - left}px;height:${bottom - top}px;background:rgb(239,0,219);pointer-events:none;z-index:2147483647`;
+        document.documentElement.appendChild(cover);
+      },
+      { left, top, right, bottom },
+    );
+    await sleep(DWELL_WAIT_MS);
+    const snapshot = await browser.overlay.snapshot();
+    expect(snapshot.controls.approve?.visible, "Chrome must still report Approve as visible").toBe(true);
+
+    const { data, info } = await sharp(await browser.captureForPeople())
+      .ensureAlpha()
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    for (const rect of disclosure) {
+      const { x, y } = center(rect);
+      const offset = (Math.floor(y) * info.width + Math.floor(x)) * info.channels;
+      expect([...data.subarray(offset, offset + 4)], "page pixels hide the original title and body").toEqual([
+        239, 0, 219, 255,
+      ]);
+    }
+
+    const point = center(approve);
+    await page.mouse.click(point.x, point.y);
+    expect(
+      await waitFor(
+        async () => ({ events: [...events], notice: (await browser.overlay.snapshot()).notice }),
+        ({ events, notice }) => events.length > 0 || notice === ERRAND_OVERLAY_COPY.useChat,
+      ),
+    ).toEqual({ events: [], notice: ERRAND_OVERLAY_COPY.useChat });
+  }, 60_000);
+
   it("real click approves", async () => {
     const { browser, events } = await openErrand();
     await browser.overlay.render(approvalState("r7"));

@@ -16,8 +16,10 @@ type ApprovalsRoutePort = Pick<
 export class ApprovalsRouteService {
   public constructor(private readonly approvals: ApprovalsRoutePort) {}
 
-  public async createApproval(input: Parameters<ApprovalsRoutePort["createApproval"]>[0]) {
-    return this.approvals.createApproval(input);
+  public async createApproval(
+    ...args: [input: Parameters<ApprovalsRoutePort["createApproval"]>[0], onCreated?: Parameters<ApprovalsRoutePort["createApproval"]>[1]]
+  ) {
+    return this.approvals.createApproval(...args);
   }
 
   public listApprovals(

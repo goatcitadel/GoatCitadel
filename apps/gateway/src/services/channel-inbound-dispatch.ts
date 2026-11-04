@@ -205,6 +205,8 @@ export type IntegrationWebhookRouteLike = {
 export type InboundWebhookDispatchOptions = {
   /** Exact Gateway connection generation whose verified policy admitted this event. */
   acceptedConnectionRevision?: string;
+  /** Internal Telegram poll guard, carried to storage but never stored in the provider envelope. */
+  telegramPollRevision?: string;
   channel: string;
   connectionId: string;
   idempotencyKey: string;

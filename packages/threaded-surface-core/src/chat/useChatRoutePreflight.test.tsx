@@ -171,14 +171,14 @@ describe("useChatRoutePreflight", () => {
     expect(latest?.resultHash).toBeTruthy();
   });
 
-  it("uses an explicit queue-time request snapshot instead of current prefs", async () => {
+  it.each([true, false])("uses the queued full web access value %s instead of current prefs", async (fullWebAccess) => {
     let latest: ReturnType<typeof useChatRoutePreflight> | null = null;
     function Harness() {
       latest = useChatRoutePreflight({
         sessionId: "session-1",
         prefs: { ...CHAT_PREFS, providerId: "anthropic", model: "claude-current", thinkingLevel: "deep" },
         surfaceMode: "chat",
-        fullWebAccess: false,
+        fullWebAccess: !fullWebAccess,
         displayAction: "send",
         enabled: false,
       });
@@ -203,7 +203,7 @@ describe("useChatRoutePreflight", () => {
           thinkingLevel: "standard",
           speedMode: "fast",
           subagentPolicy: "off",
-          fullWebAccess: true,
+          fullWebAccess,
         },
       });
     });
@@ -227,7 +227,7 @@ describe("useChatRoutePreflight", () => {
           speedMode: "fast",
           subagentPolicy: "off",
         },
-        fullWebAccess: true,
+        fullWebAccess,
       },
       { originSurface: "chat" },
     );

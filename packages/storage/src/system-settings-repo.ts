@@ -1,6 +1,14 @@
 import type { DatabaseClient } from "./db.js";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import { safeJsonParse } from "./safe-json.js";
+import type { IntegrationConnectionRepository } from "./integration-connection-repo.js";
+
+export const CHANNEL_STREAM_CURSOR_SETTING_PREFIX = "channel_stream_cursor_v1";
+
+export interface TelegramPollCursorWriteGuard {
+  connectionId: string;
+  expectedRevision: string;
+}
 
 interface SystemSettingRow {
   setting_key: string;
@@ -20,7 +28,10 @@ export class SystemSettingsRepository {
   private readonly insertIfAbsentStmt;
   private readonly getForUpdateStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly integrationConnections?: Pick<IntegrationConnectionRepository, "withExpectedRevision">,
+  ) {
     this.getStmt = db.prepare("SELECT * FROM system_settings WHERE setting_key = ?");
     this.insertIfAbsentStmt = db.prepare(`
       INSERT INTO system_settings (setting_key, value_json, updated_at)
@@ -51,7 +62,25 @@ export class SystemSettingsRepository {
     };
   }
 
-  public set<T>(key: string, value: T, now = new Date().toISOString()): SystemSettingRecord<T> {
+  public set<T>(
+    key: string,
+    value: T,
+    now = new Date().toISOString(),
+    telegramPoll?: TelegramPollCursorWriteGuard,
+  ): SystemSettingRecord<T> {
+    if (telegramPoll === undefined) return this.writeSetting(key, value, now);
+
+    const { connectionId, expectedRevision } = telegramPoll;
+    if (key !== `${CHANNEL_STREAM_CURSOR_SETTING_PREFIX}:telegram:${connectionId}`) {
+      throw new ValidationError({ message: "A Telegram poll revision must guard its own cursor setting." });
+    }
+    if (!this.integrationConnections) throw new Error("Telegram cursor writes require the connection repository.");
+    return this.integrationConnections.withExpectedRevision(connectionId, expectedRevision, () =>
+      this.writeSetting(key, value, now),
+    );
+  }
+
+  private writeSetting<T>(key: string, value: T, now: string): SystemSettingRecord<T> {
     this.upsertStmt.run({
       key,
       valueJson: JSON.stringify(value),

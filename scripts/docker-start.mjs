@@ -73,18 +73,40 @@ async function shutdown(exitCode) {
     return;
   }
   shuttingDown = true;
-  for (const child of children) {
-    if (!child.killed) {
-      child.kill("SIGTERM");
+  const isLive = (child) => child.pid !== undefined && child.exitCode === null && child.signalCode === null;
+  let signalFailed = false;
+  const onError = (error) => { signalFailed = true; console.error("[docker-start] child signal failed", error); };
+  // Observe actual exits before signalling. An error or `killed` is not termination.
+  const exited = Promise.all([...children].map((child) => !isLive(child) ? Promise.resolve() : new Promise((resolve) => {
+    child.once("exit", resolve);
+    child.on("error", onError);
+  })));
+  const signalLive = (signal) => {
+    for (const child of children) {
+      if (!isLive(child)) continue;
+      try { if (!child.kill(signal)) signalFailed = true; }
+      catch (error) { onError(error); }
     }
+  };
+  const waitForExit = async (budgetMs) => {
+    let deadline;
+    try {
+      return await Promise.race([
+        exited.then(() => true),
+        new Promise((resolve) => { deadline = setTimeout(() => resolve(false), budgetMs); }),
+      ]);
+    } finally { clearTimeout(deadline); }
+  };
+  signalLive("SIGTERM");
+  // Gateway owns a 10 s drain/close window. Keep PID 1 alive through exit delivery.
+  const forced = !await waitForExit(10_500);
+  if (forced) {
+    signalLive("SIGKILL");
+    // Even denied signals must settle the supervisor as an explicit failure.
+    if (!await waitForExit(1000)) console.error("[docker-start] shutdown incomplete: owned children have not exited");
   }
-  await new Promise((resolve) => setTimeout(resolve, 1500));
-  for (const child of children) {
-    if (!child.killed) {
-      child.kill("SIGKILL");
-    }
-  }
-  process.exit(exitCode);
+  for (const child of children) child.removeListener("error", onError);
+  process.exit(forced || signalFailed ? 1 : exitCode);
 }
 
 function launch(label, command, args, options = {}) {

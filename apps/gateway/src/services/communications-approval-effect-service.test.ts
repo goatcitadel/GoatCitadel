@@ -13,6 +13,9 @@ import {
 import {
   CommunicationsApprovalEffectError,
   CommunicationsApprovalEffectService,
+  buildCommunicationsApprovalEffectUpsert,
+  runCommunicationsApprovalEffect,
+  type CommunicationsApprovalEffectSettlement,
 } from "./communications-approval-effect-service.js";
 
 const openStorages: Storage[] = [];
@@ -43,8 +46,10 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
   const connectionReadFailures: unknown[] = [];
   /** Workspace bindings per connection; unbound connections serve every workspace. */
   const connectionWorkspaces: Record<string, string> = {};
+  const connectionCatalogs: Record<string, string> = {};
   /** Errors the next ledger run reads reject with, in order. */
   const ledgerReadFailures: unknown[] = [];
+  const draftSentFailures: unknown[] = [];
   const host: CommsHost = {
     // Stands in for the policy engine's approval bypass: it only executes a presented
     // `approval:<id>` consent and settles that approval's pending action as executed.
@@ -72,6 +77,7 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
         status: "connected",
         config: {},
         ...known,
+        catalogId: connectionCatalogs[connectionId] ?? known.catalogId,
         ...(connectionWorkspaces[connectionId] ? { workspaceId: connectionWorkspaces[connectionId] } : {}),
       } as never;
     },
@@ -91,9 +97,18 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
             ? Promise.reject(approvalReadFailures.shift())
             : storage.approvals.get(approvalId),
       } as AsyncStorage["approvals"],
-      mailDrafts: storage.mailDrafts,
+      mailDrafts: {
+        transition: async (...args: Parameters<AsyncStorage["mailDrafts"]["transition"]>) => {
+          if (args[2].status === "sent" && draftSentFailures.length) throw draftSentFailures.shift();
+          return await storage.mailDrafts.transition(...args);
+        },
+      } as AsyncStorage["mailDrafts"],
       pendingApprovalActions: storage.pendingApprovalActions,
       externalSideEffectRuns: {
+        findByIdempotencyKey: (key: string) =>
+          ledgerReadFailures.length
+            ? Promise.reject(ledgerReadFailures.shift())
+            : storage.externalSideEffectRuns.findByIdempotencyKey(key),
         get: (runId: string) =>
           ledgerReadFailures.length
             ? Promise.reject(ledgerReadFailures.shift())
@@ -114,7 +129,9 @@ function createHarness(respond?: (request: ToolInvokeRequest) => Record<string, 
     approvalReadFailures,
     connectionReadFailures,
     connectionWorkspaces,
+    connectionCatalogs,
     ledgerReadFailures,
+    draftSentFailures,
   };
 }
 
@@ -198,6 +215,138 @@ async function expectEffectError(promise: Promise<unknown>, code: Communications
   return error as CommunicationsApprovalEffectError;
 }
 
+describe("completed communications receipt recovery", () => {
+  it.each([
+    { account: "conn-gmail", drift: "revision" }, { account: "conn-gmail", drift: "removed" },
+    { account: "conn-smtp", drift: "revision" }, { account: "conn-smtp", drift: "removed" },
+  ])("recovers $account completed delivery after draft settlement fails and connection $drift", async ({ account, drift }) => {
+    const f = createHarness();
+    const { draftId, approvalId } = await seedApprovedMailSend(f.storage, account);
+    const outage = new Error("draft sent settlement unavailable");
+    f.draftSentFailures.push(outage);
+    await expect(f.service.executeApprovedMailSend({ approvalId })).rejects.toBe(outage);
+    expect(f.invokes).toHaveLength(1);
+    expect((await f.storage.externalSideEffectRuns.listByWorkspace("default"))[0]?.status).toBe("completed");
+    expect((await f.storage.mailDrafts.get(draftId)).status).toBe("approval_required");
+    if (drift === "revision") f.revisions[account] = "rotated-after-delivery";
+    else f.connectionReadFailures.push(new NotFoundError({ entity: "Integration connection", id: account }));
+
+    await expect(f.service.executeApprovedMailSend({ approvalId })).resolves.toMatchObject({ disposition: "sent", replayed: true });
+
+    expect(f.invokes).toHaveLength(1);
+    const draft = await f.storage.mailDrafts.get(draftId);
+    expect(draft.status).toBe("sent");
+    expect(draft.failureReason).toBeUndefined();
+  });
+
+  it.each(["revision", "removed"])("settles a completed calendar receipt after effect completion fails and connection %s", async (drift) => {
+    const f = createHarness();
+    const { approvalId } = await seedApprovedCalendarCreate(f.storage);
+    const approval = await f.storage.approvals.get(approvalId);
+    const effect = await f.storage.approvalEffects.upsert({ ...buildCommunicationsApprovalEffectUpsert(approval, "approve")!,
+      status: "running", claimedBy: "receipt-worker", claimedAt: new Date().toISOString(),
+      leaseExpiresAt: new Date(Date.now() + 60_000).toISOString(), version: 1 });
+    const outage = new Error("effect completion unavailable");
+    let failOnce = true;
+    const deferred = vi.fn(async (_error: unknown) => undefined);
+    const settlement: CommunicationsApprovalEffectSettlement = {
+      workerId: "receipt-worker",
+      approvalEffects: {
+        completeEffect: async (...args: Parameters<AsyncStorage["approvalEffects"]["completeEffect"]>) => {
+          if (failOnce) { failOnce = false; throw outage; }
+          return await f.storage.approvalEffects.completeEffect(...args);
+        },
+        failEffect: (...args) => f.storage.approvalEffects.failEffect(...args),
+      },
+      isEffectStillClaimed: async (id) => (await f.storage.approvalEffects.get(id)).status === "running",
+      deferForRetry: deferred,
+    };
+    const execute = { executeApprovedCommunicationsCalendarCreate: (input: { approvalId: string }) => f.service.executeApprovedCalendarCreate(input) };
+    await runCommunicationsApprovalEffect(effect, execute, settlement);
+    expect(deferred).toHaveBeenCalledWith(outage);
+    expect((await f.storage.approvalEffects.get(effect.effectId)).status).toBe("running");
+    expect((await f.storage.externalSideEffectRuns.listByWorkspace("default"))[0]?.status).toBe("completed");
+    if (drift === "revision") f.revisions["conn-calendar"] = "rotated-after-create";
+    else f.connectionReadFailures.push(new NotFoundError({ entity: "Integration connection", id: "conn-calendar" }));
+
+    await runCommunicationsApprovalEffect(effect, execute, settlement);
+
+    expect(f.invokes).toHaveLength(1);
+    expect(await f.storage.approvalEffects.get(effect.effectId)).toMatchObject({ status: "completed", result: { disposition: "created", replayed: true } });
+  });
+
+  it.each(["workspace", "account", "operation", "payload", "approval key", "pending request", "unknown", "in progress", "route", "actor scope", "unconfirmed completion", "ambiguity"])("never completes or resends when historical %s evidence differs", async (drift) => {
+    const f = createHarness();
+    const { approvalId, draftId } = await seedApprovedMailSend(f.storage);
+    f.draftSentFailures.push(new Error("sent projection unavailable"));
+    await expect(f.service.executeApprovedMailSend({ approvalId })).rejects.toThrow("sent projection unavailable");
+    const receipt = (await f.storage.externalSideEffectRuns.listByWorkspace("default"))[0]!;
+    if (drift === "workspace") f.raw.db.prepare("UPDATE external_side_effect_runs SET workspace_id = 'foreign' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "account") f.raw.db.prepare("UPDATE external_side_effect_runs SET connection_id = 'other-account' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "operation") f.raw.db.prepare("UPDATE external_side_effect_runs SET action_id = 'calendar.create_event' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "route") f.raw.db.prepare("UPDATE external_side_effect_runs SET route_path = 'unrelated-route' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "actor scope") f.raw.db.prepare("UPDATE external_side_effect_runs SET actor_scope = 'unrelated-account' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "unconfirmed completion") f.raw.db.prepare("UPDATE external_side_effect_runs SET response_payload_json = ? WHERE run_id = ?")
+      .run(JSON.stringify({ workflowRunStatus: "unknown" }), receipt.runId);
+    if (drift === "ambiguity") await f.storage.externalSideEffectRuns.createOrGet({ workspaceId: "default", boundary: receipt.boundary,
+      routePath: `${receipt.routePath}:other`, catalogId: receipt.catalogId, connectionId: receipt.connectionId, actionId: receipt.actionId,
+      actorScope: receipt.actorScope, idempotencyKey: receipt.idempotencyKey, payloadHash: receipt.payloadHash });
+    if (drift === "payload") f.raw.db.prepare("UPDATE external_side_effect_runs SET payload_hash = ? WHERE run_id = ?").run("f".repeat(64), receipt.runId);
+    if (drift === "approval key") f.raw.db.prepare("UPDATE external_side_effect_runs SET idempotency_key = 'communications:another-approval' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "unknown") f.raw.db.prepare("UPDATE external_side_effect_runs SET status = 'unknown_external_outcome' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "in progress") f.raw.db.prepare("UPDATE external_side_effect_runs SET status = 'external_call_started' WHERE run_id = ?").run(receipt.runId);
+    if (drift === "pending request") {
+      const pending = await f.storage.pendingApprovalActions.find(approvalId);
+      const request = { ...pending!.request, args: { ...(pending!.request.args as object), subject: "different approved send" } };
+      f.raw.db.prepare("UPDATE pending_approval_actions SET request_json = ? WHERE approval_id = ?").run(JSON.stringify(request), approvalId);
+    }
+    f.revisions["conn-gmail"] = "changed-after-external-boundary";
+
+    await expectEffectError(f.service.executeApprovedMailSend({ approvalId }), "outcome_unknown");
+
+    expect(f.invokes).toHaveLength(1);
+    expect((await f.storage.mailDrafts.get(draftId)).status).toBe("outcome_unknown");
+  });
+
+  it("recovers the original custom-catalog receipt after the account is removed", async () => {
+    const f = createHarness(); f.connectionCatalogs["conn-gmail"] = "custom.gmail";
+    const { approvalId } = await seedApprovedMailSend(f.storage);
+    f.draftSentFailures.push(new Error("sent projection unavailable"));
+    await expect(f.service.executeApprovedMailSend({ approvalId })).rejects.toThrow("sent projection unavailable");
+    expect((await f.storage.externalSideEffectRuns.listByWorkspace("default"))[0]?.catalogId).toBe("custom.gmail");
+    f.connectionReadFailures.push(new NotFoundError({ entity: "Integration connection", id: "conn-gmail" }));
+    await expect(f.service.executeApprovedMailSend({ approvalId })).resolves.toMatchObject({ disposition: "sent", replayed: true });
+    expect(f.invokes).toHaveLength(1);
+  });
+
+  it("binds a fresh receipt to the approval workspace and recognizes it after connection drift", async () => {
+    const f = createHarness(); const { approvalId } = await seedApprovedMailSend(f.storage);
+    f.raw.db.prepare("UPDATE approvals SET linkage_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify({ ...approvedLinkage("communications.mail.send", "conn-gmail"), workspaceId: "workspace-ops" }), approvalId);
+    await f.service.executeApprovedMailSend({ approvalId });
+    expect((await f.storage.externalSideEffectRuns.listByWorkspace("workspace-ops"))[0]?.status).toBe("completed");
+    expect(await f.storage.externalSideEffectRuns.listByWorkspace("default")).toEqual([]);
+    f.revisions["conn-gmail"] = "changed-after-delivery";
+    await expect(f.service.executeApprovedMailSend({ approvalId })).resolves.toMatchObject({ disposition: "sent", replayed: true });
+    expect(f.invokes).toHaveLength(1);
+  });
+  it("does not replay or resend a historical default-workspace receipt for a nondefault approval", async () => {
+    const f = createHarness(); const { approvalId, draftId } = await seedApprovedMailSend(f.storage);
+    f.raw.db.prepare("UPDATE approvals SET linkage_json = ? WHERE approval_id = ?")
+      .run(JSON.stringify({ ...approvedLinkage("communications.mail.send", "conn-gmail"), workspaceId: "workspace-ops" }), approvalId);
+    f.draftSentFailures.push(new Error("sent projection unavailable"));
+    await expect(f.service.executeApprovedMailSend({ approvalId })).rejects.toThrow("sent projection unavailable");
+    // Reproduce the historical comms writer's missing workspace binding even
+    // after the new writer starts recording the actual approved workspace.
+    f.raw.db.prepare("UPDATE external_side_effect_runs SET workspace_id = 'default' WHERE idempotency_key = ?")
+      .run(`communications:${approvalId}`);
+
+    await expectEffectError(f.service.executeApprovedMailSend({ approvalId }), "outcome_unknown");
+
+    expect(f.invokes).toHaveLength(1);
+    expect((await f.storage.mailDrafts.get(draftId)).status).toBe("outcome_unknown");
+  });
+});
 describe("CommunicationsApprovalEffectService mail send", () => {
   it("sends an approved draft once with the approval's consent and marks the draft sent", async () => {
     const { storage, invokes, service } = createHarness();
@@ -417,6 +566,23 @@ describe("CommunicationsApprovalEffectService mail send", () => {
     expect(await storage.mailDrafts.get(draftId)).toMatchObject({ status: "failed", failureReason: error.message });
   });
 
+  it("keeps a proven pre-boundary failure with a retained marker behind the settled pending-action guard", async () => {
+    const f = createHarness(() => ({ status: "failed", deliveryStatus: "blocked", error: "Gmail token missing" }));
+    const { approvalId, draftId } = await seedApprovedMailSend(f.storage);
+    await expectEffectError(f.service.executeApprovedMailSend({ approvalId }), "delivery_failed");
+    const receipt = (await f.storage.externalSideEffectRuns.listByWorkspace("default"))[0]!;
+    expect(receipt.status).toBe("failed_before_boundary");
+    // The real preapproved comms path conservatively marks before invocation;
+    // its explicit non-dispatch proof settles status without deleting that marker.
+    expect(receipt.externalCallStartedAt).toEqual(expect.any(String));
+    expect((await f.storage.pendingApprovalActions.find(approvalId))?.resolutionStatus).toBe("executed");
+    expect((await f.storage.mailDrafts.get(draftId)).status).toBe("failed");
+
+    await expectEffectError(f.service.executeApprovedMailSend({ approvalId }), "approval_not_approved");
+
+    expect(f.invokes).toHaveLength(1);
+    expect((await f.storage.mailDrafts.get(draftId)).status).toBe("failed");
+  });
   it("fails closed without invoking when the approval's pending action is already settled", async () => {
     const { storage, invokes, service } = createHarness();
     const { approvalId } = await seedApprovedMailSend(storage);

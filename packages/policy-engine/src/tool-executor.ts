@@ -1120,8 +1120,13 @@ function assertGitOperand(value: string, field: string): string {
   return value;
 }
 
+export function readGitAddPaths(value: unknown): string[] {
+  if (!Array.isArray(value)) return [];
+  return value.map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry));
+}
+
 async function gitAdd(args: Record<string, unknown>, config: ToolPolicyConfig) {
-  const paths = stringArray(args.paths).map((p) => assertGitOperand(p, "paths"));
+  const paths = readGitAddPaths(args.paths).map((p) => assertGitOperand(p, "paths"));
   // SEC: Always run jail check on every path, including ".". Never allow
   // wildcard staging that bypasses write-jail enforcement.
   const resolvedPaths = paths.length > 0 ? paths : ["."];
@@ -1473,11 +1478,6 @@ async function resolveOptionalCwd(
   }
   await assertReadPathAllowedForRequest(cwd, request, config, storage);
   return path.resolve(cwd);
-}
-
-function stringArray(value: unknown): string[] {
-  if (!Array.isArray(value)) return [];
-  return value.map((entry) => asString(entry)).filter((entry): entry is string => Boolean(entry));
 }
 
 function assertNoShellScriptSyntax(toolName: string, command: string): void {

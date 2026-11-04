@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest, ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
 import type { Storage } from "@goatcitadel/storage";
 import { ApprovalExplainerService } from "./approval-explainer-service.js";
@@ -33,6 +33,10 @@ const approval: ApprovalRequest = {
   createdAt: "2026-05-15T12:00:00.000Z",
   explanationStatus: "not_requested",
 };
+
+beforeEach(() => {
+  delete process.env.GOATCITADEL_DISABLE_SECRET_STORE;
+});
 
 afterEach(() => {
   spawnSyncMock.mockReset();

@@ -593,6 +593,45 @@ describe("useChatOutboundExecution", () => {
     });
   });
 
+  it.each([
+    { action: "send", streamEnabled: false },
+    { action: "retry", streamEnabled: false },
+    { action: "edit", streamEnabled: false },
+    { action: "send", streamEnabled: true },
+    { action: "retry", streamEnabled: true },
+    { action: "edit", streamEnabled: true },
+  ] as const)("preserves queued limited web access for $action (stream: $streamEnabled)", async ({ action, streamEnabled }) => {
+    const dispatch = streamEnabled
+      ? { send: streamAgentChatMessageMock, retry: streamRetryChatTurnMock, edit: streamEditChatTurnMock }[action]
+      : { send: sendAgentChatMessageMock, retry: retryChatTurnMock, edit: editChatTurnMock }[action];
+    if (streamEnabled) {
+      dispatch.mockImplementation(async (...args: unknown[]) => {
+        const onChunk = args[action === "send" ? 2 : 3];
+        if (typeof onChunk !== "function") throw new Error("Expected a stream consumer");
+        const identity = { sessionId: "session-1", turnId: "turn-2", messageId: "assistant-2" };
+        onChunk({ ...identity, type: "message_start", eventId: "evt-0", branchKind: "append" });
+        onChunk({ ...identity, type: "message_done", eventId: "evt-1", content: "Done" });
+      });
+    }
+    const requestPrefs = captureOutboundRequestPrefsSnapshot({ prefs: null, fullWebAccess: false });
+    await act(async () => {
+      create(<Harness streamEnabled={streamEnabled} fullWebAccess={true} />);
+    });
+    await act(async () => {
+      await latest!.execute({
+        id: "queue-limited-web",
+        action,
+        ...(action === "send" ? {} : { targetTurnId: "turn-1" }),
+        content: "Check the fixture",
+        attachments: [],
+        requestPrefs,
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+    });
+    expect(dispatch).toHaveBeenCalledTimes(1);
+    expect(dispatch.mock.calls[0]?.[action === "send" ? 1 : 2]).toMatchObject({ fullWebAccess: false });
+  });
+
   it("carries an explicit model-council opt-in through non-stream send, retry, and edit requests", async () => {
     await act(async () => {
       create(<Harness />);
@@ -990,6 +1029,147 @@ describe("useChatOutboundExecution", () => {
       await Promise.resolve();
     });
     expect(latest?.getSnapshot()).toMatchObject({ sending: false, activeStream: null });
+  });
+
+  it.each([undefined, "First thought. "])("reattaches thinking deltas once across a transport retry with saved prefix %s", async (savedThinking) => {
+    vi.useFakeTimers();
+    const runningThread = makeThread();
+    runningThread.turns[0]!.trace.status = "running";
+    runningThread.turns[0]!.thinking = savedThinking;
+    const firstTail = createDeferred<void>();
+    const secondTail = createDeferred<void>();
+    let onReplayChunk: ((chunk: any) => void) | undefined;
+    resumeChatTurnStreamMock.mockImplementationOnce((_sessionId, _turnId, onChunk) => {
+      onReplayChunk = onChunk;
+      return firstTail.promise;
+    }).mockImplementationOnce((_sessionId, _turnId, onChunk) => {
+      onReplayChunk = onChunk;
+      return secondTail.promise;
+    });
+    await act(async () => { create(<Harness streamEnabled initialThread={runningThread} />); });
+    const thinking = (sequence: number, delta: string) => ({ type: "thinking_delta", eventId: "thinking-" + sequence, sequence, sessionId: "session-1", turnId: "turn-1", delta });
+    await act(async () => {
+      onReplayChunk?.({ type: "message_start", eventId: "start", sequence: 1, sessionId: "session-1", turnId: "turn-1", messageId: "assistant-1", branchKind: "append" });
+      onReplayChunk?.(thinking(2, "First thought. "));
+    });
+    expect(latest!.getSnapshot().thread?.turns[0]?.thinking).toBe("First thought. ");
+    await act(async () => { firstTail.reject(new Error("transport disconnected")); await Promise.resolve(); });
+    expect(resumeChatTurnStreamMock).toHaveBeenLastCalledWith("session-1", "turn-1", expect.any(Function), expect.objectContaining({ sinceEventId: "thinking-2" }));
+    await act(async () => {
+      onReplayChunk?.(thinking(2, "First thought. "));
+      onReplayChunk?.({ ...thinking(99, "Wrong session"), sessionId: "session-2" });
+      onReplayChunk?.({ ...thinking(99, "Wrong turn"), turnId: "turn-2" });
+      onReplayChunk?.(thinking(3, "Second thought."));
+      onReplayChunk?.({ type: "delta", eventId: "text-4", sequence: 4, sessionId: "session-1", turnId: "turn-1", messageId: "assistant-1", delta: "Visible answer" });
+      await vi.advanceTimersByTimeAsync(260);
+    });
+    expect(latest!.getSnapshot().thread?.turns[0]?.thinking).toBe("First thought. Second thought.");
+    expect(getChatStreamingPreview("session-1")).toMatchObject({ text: "Visible answer" });
+    expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
+    await act(async () => { secondTail.resolve(); await Promise.resolve(); });
+  });
+
+  it("reattaches a locally started running turn after switching conversations", async () => {
+    const postTail = createDeferred<void>();
+    const postStarted = createDeferred<void>();
+    const replayTail = createDeferred<void>();
+    const start = {
+      type: "message_start",
+      eventId: "start-live-turn",
+      sequence: 1,
+      sessionId: "session-1",
+      turnId: "turn-live",
+      messageId: "assistant-live",
+      parentTurnId: "turn-1",
+      branchKind: "append",
+    };
+    const thinking = (sequence: number, delta: string) => ({
+      type: "thinking_delta",
+      eventId: "live-thinking-" + sequence,
+      sequence,
+      sessionId: start.sessionId,
+      turnId: start.turnId,
+      delta,
+    });
+    streamAgentChatMessageMock.mockImplementationOnce((_sessionId, _payload, onChunk) => {
+      onChunk(start);
+      onChunk(thinking(2, "Before leaving. "));
+      postStarted.resolve();
+      return postTail.promise;
+    });
+    resumeChatTurnStreamMock.mockImplementationOnce((_sessionId, _turnId, onChunk) => {
+      onChunk(start);
+      onChunk(thinking(2, "Before leaving. "));
+      onChunk(thinking(3, "While away."));
+      return replayTail.promise;
+    });
+
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness streamEnabled />);
+    });
+    let outbound!: Promise<void>;
+    await act(async () => {
+      outbound = latest!.execute({
+        id: "queue-live",
+        action: "send",
+        content: "Keep working",
+        attachments: [],
+        createdAt: "2026-05-03T12:45:00.000Z",
+      });
+      await postStarted.promise;
+    });
+
+    const local = latest!.getSnapshot();
+    expect(local.activeStream?.turnId).toBe(start.turnId);
+    expect(local.thread?.turns.at(-1)?.thinking).toBe("Before leaving. ");
+    expect(resumeChatTurnStreamMock).not.toHaveBeenCalled();
+    const persisted = structuredClone(local.thread!);
+    const liveTurn = persisted.turns.at(-1)!;
+    expect(liveTurn.turnId).toBe(start.turnId);
+    expect(liveTurn.trace.status).toBe("running");
+    delete liveTurn.thinking;
+
+    await act(async () => {
+      renderer.update(<Harness streamEnabled selectedSessionId="session-2" />);
+    });
+    await act(async () => {
+      // Match the selection controller's transport detach while the durable turn keeps running.
+      local.activeStream!.controller.abort();
+      latest!.setActiveStream(null);
+      postTail.reject(new DOMException("Conversation switched", "AbortError"));
+      await outbound;
+    });
+    expect(latest!.getSnapshot()).toMatchObject({ activeStream: null, sending: false });
+    expect(resumeChatTurnStreamMock).not.toHaveBeenCalled();
+
+    await act(async () => {
+      renderer.update(<Harness streamEnabled />);
+    });
+    const { mutationVersion, thread } = latest!.getSnapshot();
+    expect(thread?.turns.at(-1)?.thinking).toBe("Before leaving. ");
+    expect(resumeChatTurnStreamMock).not.toHaveBeenCalled();
+    await act(async () => {
+      expect(latest!.applyFetchedThread(persisted, mutationVersion - 1)).toBe(false);
+    });
+    expect(resumeChatTurnStreamMock).not.toHaveBeenCalled();
+    await act(async () => {
+      expect(latest!.applyFetchedThread(persisted, mutationVersion)).toBe(true);
+    });
+    try {
+      expect(resumeChatTurnStreamMock).toHaveBeenCalledExactlyOnceWith(
+        start.sessionId,
+        start.turnId,
+        expect.any(Function),
+        expect.objectContaining({ originSurface: "chat", sinceEventId: undefined }),
+      );
+      expect(latest!.getSnapshot().thread?.turns.at(-1)?.thinking).toBe("Before leaving. While away.");
+      expect(streamAgentChatMessageMock).toHaveBeenCalledTimes(1);
+    } finally {
+      await act(async () => {
+        replayTail.resolve();
+      });
+    }
   });
 
   it("releases a Send whose stream was dropped when the surface is hidden and shown again", async () => {

@@ -265,10 +265,8 @@ export class MeshService {
   }
 
   private async buildReadinessChecks(statusSnapshot: MeshStatus): Promise<MeshReadinessCheck[]> {
-    const [nodes, leases, owners, events, offsets] = await Promise.all([
+    const [nodes, events, offsets] = await Promise.all([
       this.listNodes(20),
-      this.listLeases(20),
-      this.listSessionOwners(20),
       this.listReplicationEvents(20),
       this.listReplicationOffsets(20),
     ]);
@@ -302,21 +300,21 @@ export class MeshService {
       this.buildTransportPostureCheck(),
       {
         key: "lease_lifecycle",
-        status: leases.length > 0 ? "pass" : "warn",
+        status: "warn",
         message:
-          leases.length > 0
-            ? "Lease records exist in mesh storage, so acquire/renew/release has been exercised."
-            : "No lease has been recorded yet; lease lifecycle is unproven until a lease is acquired.",
-        evidence: { activeLeases: leases.length },
+          statusSnapshot.activeLeases > 0
+            ? "Active leases are recorded. Renewal and release remain unverified."
+            : "No active leases are recorded. Lease lifecycle remains unverified.",
+        evidence: { activeLeases: statusSnapshot.activeLeases },
       },
       {
         key: "session_owner_failover",
-        status: owners.length > 0 ? "pass" : "warn",
+        status: "warn",
         message:
-          owners.length > 0
-            ? "Session owner records exist in mesh storage, so claim/failover has been exercised."
-            : "No session owner has been claimed yet; session-owner failover is unproven.",
-        evidence: { ownedSessions: owners.length },
+          statusSnapshot.ownedSessions > 0
+            ? "Session owners are recorded. Failover remains unverified."
+            : "No session owners are recorded. Failover remains unverified.",
+        evidence: { ownedSessions: statusSnapshot.ownedSessions },
       },
       {
         key: "replication_offsets",

@@ -496,6 +496,7 @@ function normalizeDispatchPlan(value, defaultReplyText) {
         return {
           type: "provider_error",
           delayMs,
+          faultClockMarker: normalizeFaultClockMarker(entry.faultClockMarker, `dispatchPlan[${index}].faultClockMarker`),
           code: normalizeBoundedText(entry.code ?? "server_error", `dispatchPlan[${index}].code`),
           message: normalizeBoundedText(
             entry.message ?? "Synthetic provider failure.",
@@ -711,6 +712,14 @@ function normalizeBoundedText(value, label) {
 function normalizeOptionalBoundedText(value, label) {
   if (value === undefined) return undefined;
   return normalizeBoundedText(value, label);
+}
+
+function normalizeFaultClockMarker(value, label) {
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || !/^[A-Za-z0-9_-]{1,128}$/u.test(value)) {
+    throw new TypeError(`${label} must be a header-safe fixture marker of at most 128 characters`);
+  }
+  return value;
 }
 
 function normalizeToolName(value, label) {
@@ -932,7 +941,11 @@ function buildChatToolCall(behavior) {
 }
 
 function writeStreamingProviderError(response, model, behavior, requestPath) {
-  response.writeHead(200, { "cache-control": "no-cache", "content-type": "text/event-stream" });
+  const headers = { "cache-control": "no-cache", "content-type": "text/event-stream" };
+  if (behavior.faultClockMarker !== undefined) {
+    headers["x-goatcitadel-verification-fault-clock"] = behavior.faultClockMarker;
+  }
+  response.writeHead(200, headers);
   if (requestPath === "/v1/responses") {
     response.write(
       `data: ${JSON.stringify({

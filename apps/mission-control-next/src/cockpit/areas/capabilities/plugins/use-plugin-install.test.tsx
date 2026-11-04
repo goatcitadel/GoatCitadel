@@ -8,6 +8,11 @@ import type {
   CapabilityPluginInstallRequest,
   CapabilitySkillOperationRequest,
 } from "@goatcitadel/contracts";
+import {
+  getGatewayCallerScope,
+  notifyGatewayAccessChanged,
+  setGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   AGENDA,
@@ -16,6 +21,7 @@ import {
   NOTES,
   PLUGIN_ID,
   PLUGIN_KEY,
+  WATCH,
   approvePlugin,
   fakeGateway,
   httpError,
@@ -359,6 +365,100 @@ describe("usePluginInstall", () => {
       "Meeting notes wasn't installed: the step didn't go through. Continue to ask again.",
     );
     expect(shown[PLUGIN_KEY]!.notice).not.toContain("declined");
+  });
+
+  it.each(["access", "caller"] as const)("retires a pending skill approval poll when %s changes", async (kind) => {
+    gateway.skip = false;
+    const caller = getGatewayCallerScope();
+    setGatewayCallerScope("plugin-fixture-operator-a");
+    try {
+      await render();
+      await inspect();
+      await confirm();
+      approvePlugin(gateway);
+      await act(async () => shown[INSPECTION_ID]!.checkNow());
+      await settle();
+      expect(shown[PLUGIN_KEY]!.state).toMatchObject({ waitingApprovalId: "approval-notes-install" });
+      expect(gateway.steps).toEqual(["snap-notes install_inactive"]);
+      const reads = api.fetchCapabilityPluginDetail.mock.calls.length;
+
+      await act(async () => {
+        if (kind === "access") notifyGatewayAccessChanged();
+        else setGatewayCallerScope("plugin-fixture-operator-b");
+      });
+      gateway.pieces.notes = "installed_off";
+      delete gateway.pending.notes;
+      await beat(5_000);
+
+      // The old chain can't use a new-custody detail read to request the next step.
+      expect(gateway.steps).toEqual(["snap-notes install_inactive"]);
+      expect(api.fetchCapabilityPluginDetail).toHaveBeenCalledTimes(reads);
+
+      await render([]);
+      await render([PLUGIN_KEY], readDetail(gateway));
+      expect(shown[PLUGIN_KEY]!.state).toMatchObject({ phase: "following" });
+      expect(shown[PLUGIN_KEY]!.chain).toBe(false);
+      await confirm(PLUGIN_KEY);
+      expect(gateway.steps).toEqual(["snap-notes install_inactive", "snap-notes activate"]);
+    } finally {
+      await act(async () => setGatewayCallerScope(caller));
+    }
+  });
+
+  it("drops an already-started detail result across access retirement and same-key adoption", async () => {
+    gateway.skip = false;
+    await render();
+    await inspect();
+    await confirm();
+    approvePlugin(gateway);
+    await act(async () => shown[INSPECTION_ID]!.checkNow());
+    await settle();
+    expect(shown[PLUGIN_KEY]!.state).toMatchObject({ waitingApprovalId: "approval-notes-install" });
+
+    let finishRead!: (detail: CapabilityPluginDetail) => void;
+    api.fetchCapabilityPluginDetail.mockImplementationOnce(
+      () =>
+        new Promise<CapabilityPluginDetail>((resolve) => {
+          finishRead = resolve;
+        }),
+    );
+    await act(async () => shown[PLUGIN_KEY]!.checkNow("approved"));
+    expect(finishRead).toBeTypeOf("function");
+
+    await act(async () => notifyGatewayAccessChanged());
+    const fresh = { ...readDetail(gateway), name: "Current plugin detail" };
+    await render([]);
+    await render([PLUGIN_KEY], fresh);
+    gateway.pieces.notes = "installed_off";
+    delete gateway.pending.notes;
+    await act(async () => finishRead(readDetail(gateway)));
+    await settle();
+
+    expect(gateway.steps).toEqual(["snap-notes install_inactive"]);
+    expect(shown[PLUGIN_KEY]!.state).toMatchObject({
+      phase: "following",
+      detail: { name: "Current plugin detail" },
+      waitingApprovalId: "approval-notes-install",
+    });
+    expect(shown[PLUGIN_KEY]!.chain).toBe(false);
+  });
+
+  it("does not send a queued install confirmation after access retires before dispatch", async () => {
+    gateway = fakeGateway(inspectionOf([NOTES, WATCH]));
+    await render();
+    await inspect();
+    expect(shown[INSPECTION_ID]!.state.phase).toBe("ready");
+
+    let receipt!: Promise<boolean>;
+    await act(async () => {
+      receipt = shown[INSPECTION_ID]!.confirm({ watch: "fixture-only-signing-value" });
+      // The async attempt-key owner has yielded, so the request has not started.
+      expect(api.installCapabilityPlugin).not.toHaveBeenCalled();
+      notifyGatewayAccessChanged();
+      await receipt;
+    });
+    expect(api.installCapabilityPlugin).not.toHaveBeenCalled();
+    await expect(receipt).resolves.toBe(false);
   });
 
   it("sends a check or an install again with the same key only when its answer never came", async () => {

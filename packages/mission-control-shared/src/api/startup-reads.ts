@@ -81,6 +81,13 @@ function validResult(value: unknown): value is StartupReadResponse {
     (row.directReadRequired === undefined || row.directReadRequired === true)
   );
 }
+async function settleDirectRead(row: PendingRead): Promise<void> {
+  try {
+    row.resolve(await fetch(row.url, row.init));
+  } catch (error) {
+    row.reject(error);
+  }
+}
 async function dispatch(queue: ReadQueue): Promise<void> {
   queues = queues.filter((candidate) => candidate !== queue);
   const rows = queue.rows.filter((row) => !row.settled && row.current());
@@ -125,7 +132,7 @@ async function dispatch(queue: ReadQueue): Promise<void> {
         if (response.status === 404 || response.status === 405) {
           await Promise.all(
             group.map(async (row) => {
-              if (row.current() && !row.settled) row.resolve(await fetch(row.url, row.init));
+              if (row.current() && !row.settled) await settleDirectRead(row);
               else row.reject(new DOMException("Gateway scope changed", "AbortError"));
             }),
           );
@@ -148,7 +155,7 @@ async function dispatch(queue: ReadQueue): Promise<void> {
               return;
             }
             const result = items[index]!;
-            if (result.directReadRequired) row.resolve(await fetch(row.url, row.init));
+            if (result.directReadRequired) await settleDirectRead(row);
             else
               row.resolve(
                 new Response([204, 205, 304].includes(result.status) ? null : result.bodyText, {

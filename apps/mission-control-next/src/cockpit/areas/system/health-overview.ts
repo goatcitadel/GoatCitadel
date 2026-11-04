@@ -141,9 +141,9 @@ export function healthOverviewState(checks: readonly HealthCheck[]) {
   const kind = problems.length ? "problems" : unknown.length || !checks.length ? "incomplete" : "clear";
   const lead = problems.length
     ? `${problems.length} ${problems.length === 1 ? "check needs" : "checks need"} attention`
-    : checks.length
+    : checks.some((check) => check.status.tone !== "neutral")
       ? "All reachable checks report no problems"
-      : "No checks have reported yet";
+      : "No health checks could be confirmed";
   return {
     kind,
     problems,

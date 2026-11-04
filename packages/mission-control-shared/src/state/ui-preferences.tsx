@@ -23,15 +23,15 @@ interface UiPreferencesValue {
   /** Committed scope revision also publishes batched away/back changes to consumers. */
   scopeGeneration?: number;
   mode: UiExperienceMode;
-  setMode: (mode: UiExperienceMode) => void;
+  setMode: (mode: UiExperienceMode) => boolean;
   density: UiDensity;
-  setDensity: (density: UiDensity) => void;
+  setDensity: (density: UiDensity) => boolean;
   effectsMode: UiEffectsMode;
   setEffectsMode: (mode: UiEffectsMode) => void;
   navMode: ShellNavMode;
   setNavMode: (mode: ShellNavMode) => void;
   showTechnicalDetails: boolean;
-  setShowTechnicalDetails: (enabled: boolean) => void;
+  setShowTechnicalDetails: (enabled: boolean) => boolean;
   detailPanelPinned: boolean;
   setDetailPanelPinned: (enabled: boolean) => void;
   statusCenterExpanded: boolean;
@@ -45,12 +45,12 @@ interface UiPreferencesValue {
   theme: UiResolvedTheme;
   /** The saved choice, including `system`. */
   themePreference: UiTheme;
-  setTheme: (theme: UiTheme) => void;
+  setTheme: (theme: UiTheme) => boolean;
   notifications: UiNotificationPreferences;
-  setNotificationToastsEnabled: (enabled: boolean) => void;
-  setNotificationSoundMode: (mode: OperatorAttentionSoundMode) => void;
-  setNotificationDesktopEnabled: (enabled: boolean) => void;
-  setNotificationOnlyWhenUnfocused: (enabled: boolean) => void;
+  setNotificationToastsEnabled: (enabled: boolean) => boolean;
+  setNotificationSoundMode: (mode: OperatorAttentionSoundMode) => boolean;
+  setNotificationDesktopEnabled: (enabled: boolean) => boolean;
+  setNotificationOnlyWhenUnfocused: (enabled: boolean) => boolean;
 }
 
 const MODE_KEY = "goatcitadel.ui.mode.v1";
@@ -70,15 +70,15 @@ const NOTIFICATION_ONLY_UNFOCUSED_KEY = "goatcitadel.notifications.only_unfocuse
 
 const UiPreferencesContext = createContext<UiPreferencesValue>({
   mode: "simple",
-  setMode: () => {},
+  setMode: () => false,
   density: "default",
-  setDensity: () => {},
+  setDensity: () => false,
   effectsMode: "auto",
   setEffectsMode: () => {},
   navMode: "compact",
   setNavMode: () => {},
   showTechnicalDetails: false,
-  setShowTechnicalDetails: () => {},
+  setShowTechnicalDetails: () => false,
   detailPanelPinned: false,
   setDetailPanelPinned: () => {},
   statusCenterExpanded: false,
@@ -90,17 +90,17 @@ const UiPreferencesContext = createContext<UiPreferencesValue>({
   setActiveScope: () => {},
   theme: "dark",
   themePreference: "system",
-  setTheme: () => {},
+  setTheme: () => false,
   notifications: {
     toastsEnabled: true,
     soundMode: "off",
     desktopEnabled: false,
     onlyWhenUnfocused: false,
   },
-  setNotificationToastsEnabled: () => {},
-  setNotificationSoundMode: () => {},
-  setNotificationDesktopEnabled: () => {},
-  setNotificationOnlyWhenUnfocused: () => {},
+  setNotificationToastsEnabled: () => false,
+  setNotificationSoundMode: () => false,
+  setNotificationDesktopEnabled: () => false,
+  setNotificationOnlyWhenUnfocused: () => false,
 });
 
 export function UiPreferencesProvider(props: { children: ReactNode }) {
@@ -169,15 +169,16 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       mode,
       setMode: (nextMode) => {
         setModeState(nextMode);
-        writeStorage(MODE_KEY, nextMode);
+        const modeSaved = writeStorage(MODE_KEY, nextMode);
         const nextShowDetails = nextMode === "advanced";
         setShowTechnicalDetailsState(nextShowDetails);
-        writeStorage(DETAILS_KEY, String(nextShowDetails));
+        const detailsSaved = writeStorage(DETAILS_KEY, String(nextShowDetails));
+        return modeSaved && detailsSaved;
       },
       density,
       setDensity: (nextDensity) => {
         setDensityState(nextDensity);
-        writeStorage(DENSITY_KEY, nextDensity);
+        return writeStorage(DENSITY_KEY, nextDensity);
       },
       effectsMode,
       setEffectsMode: (nextEffectsMode) => {
@@ -192,7 +193,7 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       showTechnicalDetails,
       setShowTechnicalDetails: (enabled) => {
         setShowTechnicalDetailsState(enabled);
-        writeStorage(DETAILS_KEY, String(enabled));
+        return writeStorage(DETAILS_KEY, String(enabled));
       },
       detailPanelPinned,
       setDetailPanelPinned: (enabled) => {
@@ -213,24 +214,24 @@ export function UiPreferencesProvider(props: { children: ReactNode }) {
       themePreference,
       setTheme: (nextTheme) => {
         setThemeState(nextTheme);
-        writeStorage(THEME_KEY, nextTheme);
+        return writeStorage(THEME_KEY, nextTheme);
       },
       notifications,
       setNotificationToastsEnabled: (enabled) => {
         setNotificationsState((current) => ({ ...current, toastsEnabled: enabled }));
-        writeStorage(NOTIFICATION_TOASTS_KEY, String(enabled));
+        return writeStorage(NOTIFICATION_TOASTS_KEY, String(enabled));
       },
       setNotificationSoundMode: (nextSoundMode) => {
         setNotificationsState((current) => ({ ...current, soundMode: nextSoundMode }));
-        writeStorage(NOTIFICATION_SOUND_MODE_KEY, nextSoundMode);
+        return writeStorage(NOTIFICATION_SOUND_MODE_KEY, nextSoundMode);
       },
       setNotificationDesktopEnabled: (enabled) => {
         setNotificationsState((current) => ({ ...current, desktopEnabled: enabled }));
-        writeStorage(NOTIFICATION_DESKTOP_KEY, String(enabled));
+        return writeStorage(NOTIFICATION_DESKTOP_KEY, String(enabled));
       },
       setNotificationOnlyWhenUnfocused: (enabled) => {
         setNotificationsState((current) => ({ ...current, onlyWhenUnfocused: enabled }));
-        writeStorage(NOTIFICATION_ONLY_UNFOCUSED_KEY, String(enabled));
+        return writeStorage(NOTIFICATION_ONLY_UNFOCUSED_KEY, String(enabled));
       },
     }),
     [
@@ -330,14 +331,15 @@ function readStatusCenterExpandedFromStorage(): boolean {
   return readStorage(STATUS_CENTER_EXPANDED_KEY) === "true";
 }
 
-function writeStorage(key: string, value: string): void {
+function writeStorage(key: string, value: string): boolean {
   if (typeof window === "undefined") {
-    return;
+    return false;
   }
   try {
     window.localStorage.setItem(key, value);
+    return true;
   } catch {
-    // Fallback: localStorage may be disabled or quota-exceeded; drop the write rather than crash.
+    return false;
   }
 }
 

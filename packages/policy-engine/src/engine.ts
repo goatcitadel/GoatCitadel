@@ -124,6 +124,7 @@ import { classifyArgumentRisk } from "./sandbox/argument-risk-gate.js";
 import { HttpMutationOutcomeUnknownError } from "./sandbox/http-request-policy.js";
 import {
   executeTool,
+  readGitAddPaths,
   resolveFixedOutboundHostsForTool,
   ToolBeforeProcessSpawnError,
   type ToolExecutorRuntimeHooks,
@@ -3243,8 +3244,13 @@ function extractPathCandidates(args?: Record<string, unknown>): string[] {
 }
 
 function extractGrantPathCandidates(request: Pick<ToolAccessEvaluateRequest, "toolName" | "args">): string[] {
-  const candidates = extractPathCandidates(request.args);
   const args = request.args;
+  // A scoped staging grant requires explicit operands. Generic aliases cannot
+  // authorize the executor's whole-directory fallback.
+  if (request.toolName === "git.add") {
+    return readGitAddPaths(args?.paths);
+  }
+  const candidates = extractPathCandidates(args);
   if (readDocsIngestSourceTypeIfValid(request) === "file" && typeof args?.source === "string" && args.source.trim()) {
     candidates.push(args.source.trim());
   }

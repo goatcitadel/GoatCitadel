@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
 import { NotFoundError } from "@goatcitadel/contracts";
+import { CITADEL_WARD_A2A_PUSH_APPROVAL_KIND } from "../services/citadel-ward-approval.js";
 import { approvalsRoutes, resolveApprovalActorId } from "./approvals.js";
 
 const APPROVAL_ID = "3d20b7eb-efdd-42ab-a6c6-1c8cbb291c1d";
@@ -600,6 +601,49 @@ describe("approvals routes", () => {
         }),
       }),
     );
+  });
+
+  it.each([
+    ["none", 403],
+    ["token", 201],
+    ["basic", 201],
+    ["loopback", 201],
+  ] as const)("reserves Ward push approval creation for operator ingress (%s)", async (source, expectedStatus) => {
+    vi.stubEnv("GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN", "remote-create-token");
+    vi.stubEnv("GOATCITADEL_REMOTE_APPROVAL_CREATE_TOKEN_ENV", "");
+    const createApproval = vi.fn(async () => ({
+      approvalId: APPROVAL_ID,
+      kind: CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+      status: "pending",
+      riskLevel: "caution",
+      payload: {},
+      preview: {},
+      createdAt: "2026-07-09T00:00:00.000Z",
+    }));
+    const built = buildApp({ createApproval });
+    app = built.app;
+    installCompanionIdentity(app);
+    await app.register(approvalsRoutes);
+
+    const response = await app.inject({
+      method: "POST",
+      url: "/api/v1/approvals",
+      headers: {
+        "idempotency-key": "reserved-kind-ingress-" + source,
+        "x-auth-source": source,
+        ...(source === "none" ? { "x-goatcitadel-approval-create-token": "remote-create-token" } : {}),
+      },
+      payload: {
+        kind: CITADEL_WARD_A2A_PUSH_APPROVAL_KIND,
+        riskLevel: "caution",
+        payload: {},
+        preview: {},
+        ...(source === "none" ? { sourceConnectorId: "fixture-connector", sourceTraceId: "fixture-trace" } : {}),
+      },
+    });
+
+    expect(response.statusCode).toBe(expectedStatus);
+    expect(createApproval).toHaveBeenCalledTimes(expectedStatus === 201 ? 1 : 0);
   });
 
   it("rejects remote approval creation with a bad scoped token", async () => {

@@ -8,6 +8,7 @@ import type {
 import { NotFoundError } from "@goatcitadel/contracts";
 import type { AsyncGatewaySqlRepository } from "./async-storage.js";
 import type { DbBindParams, DbRunResult, DbStatement } from "./db.js";
+import { MODEL_COMPARISON_CLAIM_SCHEMA_SQL } from "./model-comparison-claim-schema.js";
 
 type MaybeAsyncStatement = {
   run(...params: DbBindParams[]): DbRunResult | Promise<DbRunResult>;
@@ -117,6 +118,7 @@ export class ModelComparisonRunRepository {
     // Read and write in one immediate transaction so an omitted field keeps the
     // value committed at write time, not one a concurrent writer replaced.
     await this.db.runImmediateTransaction(async () => {
+      await this.lockClaimSlot(comparisonId);
       const row = toRunRow(await this.db.prepare(GET_RUN_SQL).get(comparisonId));
       if (!row) {
         throw new NotFoundError({ entity: "Model comparison", id: comparisonId });
@@ -128,6 +130,7 @@ export class ModelComparisonRunRepository {
         completedAt: update.completedAt === undefined ? row.completed_at : update.completedAt,
         error: update.error === undefined ? row.error : update.error,
       });
+      await this.db.prepare(SET_CLAIM_SQL).run({ comparisonId, claimId: null });
     });
     return await this.get(comparisonId);
   }
@@ -139,52 +142,78 @@ export class ModelComparisonRunRepository {
    */
   public async claimRun(
     comparisonId: string,
-    claim: { expectedStatus: ModelComparisonStatus; expectedUpdatedAt: string; updatedAt: string },
+    claim: { expectedStatus: ModelComparisonStatus; expectedUpdatedAt: string; updatedAt: string; claimId: string },
   ): Promise<ModelComparisonRun | undefined> {
     await this.ensureSchema();
-    const result = await this.db.prepare(CLAIM_RUN_SQL).run({
-      comparisonId,
-      expectedStatus: claim.expectedStatus,
-      expectedUpdatedAt: claim.expectedUpdatedAt,
-      updatedAt: claim.updatedAt,
+    if (!claim.claimId?.trim()) return undefined;
+    return await this.db.runImmediateTransaction(async () => {
+      await this.lockClaimSlot(comparisonId);
+      const result = await this.db.prepare(CLAIM_RUN_SQL).run({
+        comparisonId,
+        expectedStatus: claim.expectedStatus,
+        expectedUpdatedAt: claim.expectedUpdatedAt,
+        updatedAt: claim.updatedAt,
+      });
+      if (changedRows(result) !== 1) {
+        await this.removeOrphanedClaim(comparisonId);
+        return undefined;
+      }
+      await this.db.prepare(SET_CLAIM_SQL).run({ comparisonId, claimId: claim.claimId });
+      return await this.get(comparisonId);
     });
-    return changedRows(result) === 1 ? await this.get(comparisonId) : undefined;
   }
 
-  /** Extends the execution lease; false once the run is no longer `running`. */
-  public async renewRunLease(comparisonId: string, updatedAt: string): Promise<boolean> {
+  /** Extends only the current execution claim, including after another process takes over. */
+  public async renewRunLease(comparisonId: string, updatedAt: string, claimId: string): Promise<boolean> {
     await this.ensureSchema();
-    const result = await this.db.prepare(RENEW_RUN_LEASE_SQL).run({ comparisonId, updatedAt });
-    return changedRows(result) === 1;
+    return await this.db.runImmediateTransaction(async () => {
+      if (!await this.lockOwnedClaim(comparisonId, claimId)) return false;
+      const result = await this.db.prepare(RENEW_RUN_LEASE_SQL).run({ comparisonId, updatedAt });
+      return changedRows(result) === 1;
+    });
   }
 
   /** Terminal write that applies only while the run is still `running`. */
   public async finishRun(
     comparisonId: string,
     update: { status: ModelComparisonStatus; updatedAt: string; completedAt: string | null; error: string | null },
+    authority: { kind: "execution"; claimId: string } | { kind: "operator_cancel" },
   ): Promise<ModelComparisonRun | undefined> {
     await this.ensureSchema();
-    const result = await this.db.prepare(FINISH_RUN_SQL).run({
-      comparisonId,
-      status: update.status,
-      updatedAt: update.updatedAt,
-      completedAt: update.completedAt,
-      error: update.error,
+    if (authority?.kind === "operator_cancel") {
+      if (update.status !== "cancelled" || update.completedAt === null) return undefined;
+      return await this.cancelRun(comparisonId, { updatedAt: update.updatedAt, completedAt: update.completedAt });
+    }
+    if (authority?.kind !== "execution") return undefined;
+    return await this.db.runImmediateTransaction(async () => {
+      if (!await this.lockOwnedClaim(comparisonId, authority.claimId)) return undefined;
+      return await this.finishLocked(comparisonId, update);
     });
-    return changedRows(result) === 1 ? await this.get(comparisonId) : undefined;
+  }
+
+  /** Explicit operator cancellation is independent of any executor's claim. */
+  public async cancelRun(
+    comparisonId: string,
+    update: { updatedAt: string; completedAt: string },
+  ): Promise<ModelComparisonRun | undefined> {
+    await this.ensureSchema();
+    return await this.db.runImmediateTransaction(async () => {
+      await this.lockClaimSlot(comparisonId);
+      return await this.finishLocked(comparisonId, { ...update, status: "cancelled", error: null });
+    });
   }
 
   public async upsertResult(
     comparisonId: string,
     result: ModelComparisonPromptResult,
     updatedAt: string,
-  ): Promise<ModelComparisonRun> {
+    claimId: string,
+  ): Promise<ModelComparisonRun | undefined> {
     await this.ensureSchema();
-    await this.db.runImmediateTransaction(async () => {
+    return await this.db.runImmediateTransaction(async () => {
+      if (!await this.lockOwnedClaim(comparisonId, claimId)) return undefined;
       const row = toRunRow(await this.db.prepare(GET_RUN_SQL).get(comparisonId));
-      if (!row) {
-        throw new NotFoundError({ entity: "Model comparison", id: comparisonId });
-      }
+      if (!row || row.status !== "running") return undefined;
       const results = safeJsonParse<ModelComparisonPromptResult[]>(row.results_json, []);
       const index = results.findIndex((item) => item.resultId === result.resultId);
       const next = index >= 0 ? results.map((item, i) => (i === index ? result : item)) : [...results, result];
@@ -193,13 +222,49 @@ export class ModelComparisonRunRepository {
         resultsJson: JSON.stringify(next),
         updatedAt,
       });
+      return await this.get(comparisonId);
     });
+  }
+
+  // All claim changes and execution writes lock the token row before the run.
+  // A row-level CAS rechecks the token after a PostgreSQL lock wait; a SELECT
+  // followed by a status-only UPDATE could accept a pre-wait token snapshot.
+  private async lockOwnedClaim(comparisonId: string, claimId: string): Promise<boolean> {
+    if (!claimId?.trim()) return false;
+    return changedRows(await this.db.prepare(LOCK_OWNED_CLAIM_SQL).run({ comparisonId, claimId })) === 1;
+  }
+
+  private async lockClaimSlot(comparisonId: string): Promise<void> {
+    // SELECT prevents creating slots for unknown/deleted comparisons. The no-op
+    // conflict update locks existing slots, even when they have no active token.
+    await this.db.prepare(LOCK_CLAIM_SLOT_SQL).run({ comparisonId });
+  }
+
+  private async removeOrphanedClaim(comparisonId: string): Promise<void> {
+    // A claim-slot INSERT may have waited behind concurrent pack deletion.
+    // Its SELECT snapshot can predate that commit, but its run CAS cannot.
+    await this.db.prepare(`
+      DELETE FROM model_comparison_execution_claims WHERE comparison_id = @comparisonId
+        AND NOT EXISTS (SELECT 1 FROM model_comparison_runs WHERE comparison_id = @comparisonId)
+    `).run({ comparisonId });
+  }
+
+  private async finishLocked(
+    comparisonId: string,
+    update: { status: ModelComparisonStatus; updatedAt: string; completedAt: string | null; error: string | null },
+  ): Promise<ModelComparisonRun | undefined> {
+    const result = await this.db.prepare(FINISH_RUN_SQL).run({ comparisonId, ...update });
+    if (changedRows(result) !== 1) {
+      await this.removeOrphanedClaim(comparisonId);
+      return undefined;
+    }
+    await this.db.prepare(SET_CLAIM_SQL).run({ comparisonId, claimId: null });
     return await this.get(comparisonId);
   }
 
   private ensureSchema(): Promise<void> {
     this.schemaReady ??= Promise.resolve(
-      this.db.exec(`
+      this.db.exec(`${MODEL_COMPARISON_CLAIM_SCHEMA_SQL}
       CREATE TABLE IF NOT EXISTS model_comparison_runs (
         comparison_id TEXT PRIMARY KEY,
         pack_id TEXT NOT NULL,
@@ -322,6 +387,18 @@ const FINISH_RUN_SQL = `
 const UPDATE_RUN_RESULTS_SQL = `
   UPDATE model_comparison_runs SET results_json = @resultsJson, updated_at = @updatedAt
   WHERE comparison_id = @comparisonId
+`;
+const LOCK_CLAIM_SLOT_SQL = `
+  INSERT INTO model_comparison_execution_claims (comparison_id, claim_id)
+  SELECT comparison_id, NULL FROM model_comparison_runs WHERE comparison_id = @comparisonId
+  ON CONFLICT (comparison_id) DO UPDATE SET comparison_id = excluded.comparison_id
+`;
+const LOCK_OWNED_CLAIM_SQL = `
+  UPDATE model_comparison_execution_claims SET claim_id = claim_id
+  WHERE comparison_id = @comparisonId AND claim_id = @claimId
+`;
+const SET_CLAIM_SQL = `
+  UPDATE model_comparison_execution_claims SET claim_id = @claimId WHERE comparison_id = @comparisonId
 `;
 
 function mapJudgmentRow(row: ModelComparisonJudgmentRow): ModelComparisonJudgment {

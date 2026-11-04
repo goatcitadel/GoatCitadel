@@ -110,9 +110,9 @@ export function LocalAiSettings() {
           </p>
           {!control.hasRegisteredEndpoint ? (
             <p className="text-sm text-fg-secondary">
-              Local AI is not set up yet.{" "}
+              No Local AI job endpoint is registered.{" "}
               {control.hasDetectedRuntime ? (
-                "A runtime was found, but Chat has not been tested with it."
+                "A local runtime was found."
               ) : (
                 <>
                   Set up llama.cpp for Chat in{" "}

@@ -27,9 +27,10 @@ export async function hasDurableFanoutWaitingEvidence(
   run: DurableRunRecord,
   trace: ChatTurnTraceRecord,
   tools: ChatToolRunRecord[],
-  options: { requireSettled?: boolean } = {},
+  options: { requireSettled?: boolean; cancelledParent?: boolean; invocationId?: string } = {},
 ): Promise<boolean> {
-  if (trace.status !== "waiting_for_tool" || trace.durable?.runId !== run.runId) return false;
+  if (trace.status !== (options.cancelledParent ? "cancelled" : "waiting_for_tool") ||
+      (options.cancelledParent && run.status !== "cancelled") || trace.durable?.runId !== run.runId) return false;
   const tool = [...tools]
     .reverse()
     .find(
@@ -38,7 +39,8 @@ export async function hasDurableFanoutWaitingEvidence(
         item.status === "executed" &&
         item.turnId === trace.turnId &&
         item.sessionId === trace.sessionId &&
-        item.result?.status === "waiting",
+        item.result?.status === "waiting" &&
+        (!options.invocationId || item.result?.fanoutInvocationId === options.invocationId),
     );
   if (!tool || !storage.chatFanoutInvocations) return false;
   const invocation = await storage.chatFanoutInvocations.findByParentAndTool(run.runId, tool.toolRunId);

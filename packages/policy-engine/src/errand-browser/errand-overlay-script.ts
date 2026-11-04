@@ -283,8 +283,8 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
   document.addEventListener("DOMContentLoaded", ensureAttached);
 
   // ---- Visibility: IntersectionObserver v2 -----------------------------------------------------------------------
-  // `isVisible` is true only when the browser itself confirms nothing is painted over the button and no ancestor
-  // fades, filters or transforms it, so a page cannot cover the card (even with pointer-events: none) to steer a click.
+  // Sample the decision controls and the disclosure separately. A page can cover the title or body with
+  // pointer-events: none while leaving the real buttons visible and clickable.
   const visible = new Map<Element, boolean>();
   const visibleSince = new Map<Element, number>();
   const visibility = new IntersectionObserver(
@@ -301,6 +301,8 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
     },
     { trackVisibility: true, delay: c.visibilityDelayMs } as IntersectionObserverInit,
   );
+  visibility.observe(cardTitle);
+  visibility.observe(cardBody);
   visibility.observe(approve);
   visibility.observe(deny);
 
@@ -313,20 +315,20 @@ function errandOverlayMain(c: ErrandOverlayConstants): void {
       handler(event);
     });
   };
-  // A decision needs a real pointer click (detail > 0; keyboard activation reports 0) on a button the browser has
-  // seen continuously unobscured, on a card that has been up long enough to read. Anything else points to Chat.
+  // A decision needs a real pointer click and a full dwell interval with the button and its disclosure visible.
+  // The card age also resets the dwell when a new request replaces the previous one in the same elements.
   const decide = (type: "approve" | "deny") => (event: MouseEvent) => {
     const button = type === "approve" ? approve : deny;
     if (state.mode !== "approval" || !state.requestId) {
       return;
     }
     const now = performance.now();
-    const since = visibleSince.get(button);
     const settled =
-      visible.get(button) === true &&
-      since !== undefined &&
-      now - since >= c.decisionDwellMs &&
-      now - cardShownAt >= c.decisionDwellMs;
+      now - cardShownAt >= c.decisionDwellMs &&
+      [button, cardTitle, cardBody].every((element) => {
+        const since = visibleSince.get(element);
+        return since !== undefined && now - since >= c.decisionDwellMs;
+      });
     if (event.detail === 0 || !settled) {
       cardNotice.textContent = c.copy.useChat;
       cardNotice.hidden = false;

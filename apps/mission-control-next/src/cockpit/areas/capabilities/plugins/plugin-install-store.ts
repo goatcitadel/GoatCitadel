@@ -184,7 +184,7 @@ export function usePluginInstallEntry(key: string | undefined): PluginInstallEnt
   );
 }
 
-export function __resetPluginInstallStoreForTests() {
+export function clearPluginInstalls() {
   for (const key of [...timers.keys(), ...controllers.keys()]) stopFollowing(key);
   entries.clear();
   publish();

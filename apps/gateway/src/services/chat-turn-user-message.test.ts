@@ -10,6 +10,54 @@ import {
 } from "./chat-turn-user-message.js";
 
 describe("chat-turn-user-message", () => {
+  it.each([false, true])("keeps documents alongside direct images with Code Mode eligibility %s", async (codeModeEligible) => {
+    const attachments = [
+      createAttachment({ attachmentId: "screenshot", fileName: "screen.png", mimeType: "image/png" }),
+      createAttachment({ attachmentId: "notes", fileName: "notes.txt", extractPreview: "Distinctive comparison notes" }),
+      createAttachment({ attachmentId: "pdf", fileName: "reference.pdf", mimeType: "application/pdf", extractPreview: "" }),
+    ];
+    const content = await buildUserMessageContent(createDeps(attachments), createMessage({ content: "Compare these", attachments }), true, codeModeEligible);
+    expect(Array.isArray(content)).toBe(true);
+    const parts = content as Array<Record<string, unknown>>;
+    expect(parts.filter((part) => part.type === "image_url")).toHaveLength(1);
+    const text = parts.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    expect(text).toContain("Compare these");
+    expect(text).toContain("Distinctive comparison notes");
+    expect(text).toContain("reference.pdf");
+    expect(text).toContain("attachmentId: pdf");
+    expect(text.includes("docs.extract_text")).toBe(codeModeEligible);
+  });
+
+  it("discloses images omitted beside a successfully loaded image", async () => {
+    const attachments = ["small", "large", "missing", "fourth", "beyond-limit"].map((attachmentId) =>
+      createAttachment({ attachmentId, fileName: `${attachmentId}.png`, mimeType: "image/png" }));
+    const deps = createDeps(attachments);
+    deps.readChatAttachmentContent = vi.fn(async (id) => {
+      if (id === "missing") throw new Error("unavailable");
+      return { bytes: id === "large" ? Buffer.alloc(5 * 1024 * 1024 + 1) : Buffer.from("png") };
+    });
+    const content = await buildUserMessageContent(deps, createMessage({ content: "Compare", attachments }), true, false);
+    const parts = content as Array<Record<string, unknown>>;
+    expect(parts.filter((part) => part.type === "image_url")).toHaveLength(2);
+    const text = parts.filter((part) => part.type === "text").map((part) => part.text).join("\n");
+    for (const id of ["large", "missing", "beyond-limit"]) {
+      expect(text).toContain(`${id}.png`);
+      expect(text).toContain(`attachmentId: ${id}`);
+    }
+    expect(text.match(/sent directly to a vision-capable model/g)).toHaveLength(2);
+    expect(deps.readChatAttachmentContent).not.toHaveBeenCalledWith("beyond-limit");
+  });
+
+  it("does not claim an unreadable sole image was sent to vision", async () => {
+    const attachment = createAttachment({ attachmentId: "missing", fileName: "missing.png", mimeType: "image/png" });
+    const deps = createDeps([attachment]);
+    deps.readChatAttachmentContent = vi.fn(async () => { throw new Error("unavailable"); });
+    const content = await buildUserMessageContent(deps, createMessage({ attachments: [attachment] }), true, false);
+    expect(typeof content).toBe("string");
+    expect(content).toContain("attachmentId: missing");
+    expect(content).not.toContain("sent directly to a vision-capable model");
+  });
+
   it("combines base content with text parts without duplicating the first text part", () => {
     expect(buildUserMessagePrompt(createMessage({ content: "Base only" }))).toBe("Base only");
     expect(

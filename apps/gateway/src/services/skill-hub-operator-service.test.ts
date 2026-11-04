@@ -381,7 +381,7 @@ describe("SkillHubOperatorService", () => {
       blockers: [],
     });
     const created = await passing.service.createApproval(request("snapshot-v2", "stage_update_candidate"), {
-      pluginPass: { pluginId: "meeting-tools" },
+      pluginPass: { pluginId: "meeting-tools", installPlanId: "plan-meeting-tools" },
     });
     expect(created.reused).toBe(false);
     expect(passing.createApproval).toHaveBeenCalledTimes(1);
@@ -413,7 +413,7 @@ describe("SkillHubOperatorService", () => {
             operationKind: "install_inactive",
             actorId: "operator-1",
           },
-          { pluginPass: { pluginId: "meeting-tools" } },
+          { pluginPass: { pluginId: "meeting-tools", installPlanId: "plan-meeting-tools" } },
         ),
       ).rejects.toThrow(/BUNDLED_SKILL_NAME_TAKEN/u);
       expect(harness.createApproval).not.toHaveBeenCalled();
@@ -454,7 +454,7 @@ describe("SkillHubOperatorService", () => {
       sourceFingerprint: installed.contentTreeSha256,
       title: "receiving-code-review",
     });
-    const pass = { pluginPass: { pluginId: "meeting-tools" } };
+    const pass = { pluginPass: { pluginId: "meeting-tools", installPlanId: "plan-meeting-tools" } };
     const request = (operationKind: SkillHubOperationIntentTemplate["operationKind"]) => ({
       workspaceId: "workspace-1",
       snapshotId: "snapshot-v1",
@@ -478,7 +478,7 @@ describe("SkillHubOperatorService", () => {
     const liveItem = (await live.service.list({ workspaceId: "workspace-1" })).items[0]!;
     expect(liveItem.actions.revoke).toEqual({ allowed: true, blockers: [] });
     expect(liveItem.actions.activate.blockers).not.toContain("BUNDLED_SKILL_NAME_TAKEN");
-    await live.service.createApproval(request("revoke"), pass);
+    await live.service.createApproval(request("revoke"), { pluginPass: { pluginId: "meeting-tools" } });
     expect(live.createApproval).toHaveBeenCalledTimes(1);
   });
 

@@ -13,7 +13,7 @@ import { RiskBadge } from "../../ui/RiskBadge";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { SettingsApprovalOwnerAction } from "./SettingsApprovalOwnerAction";
-import { canReviewConnectionPlan, connectionPlanCompleted } from "./provider-connection-state";
+import { canReviewConnectionPlan, connectionPlanCompleted, useProviderConnectionCustody } from "./provider-connection-state";
 import { useProviderConnectionEditor } from "./use-provider-connection-editor";
 import {
   AWS_SIGV4_CREDENTIAL_HELP,
@@ -37,6 +37,7 @@ export function ProviderConnectionSettings({
   credentialActions?: ReactNode;
 }) {
   const titleId = useId();
+  const custody = useProviderConnectionCustody();
   const catalog = useProviderModelCatalog("system");
   const id = providerId ?? catalog.config?.activeProviderId ?? catalog.providers[0]?.providerId;
   const provider = catalog.providers.find((item) => item.providerId === id);
@@ -74,8 +75,9 @@ export function ProviderConnectionSettings({
       ) : null}
       {provider && catalog.config ? (
         <ProviderConnectionEditor
-          key={provider.providerId}
+          key={JSON.stringify([provider.providerId, custody])}
           provider={provider}
+          custody={custody}
           registeredEnvVar={
             catalog.config.providerConfigs?.find((item) => item.providerId === provider.providerId)?.apiKeyEnv
           }
@@ -95,6 +97,7 @@ export function ProviderConnectionSettings({
 
 function ProviderConnectionEditor({
   provider,
+  custody,
   registeredEnvVar,
   revision,
   available,
@@ -102,13 +105,14 @@ function ProviderConnectionEditor({
   credentialActions,
 }: {
   provider: ProviderModelCatalogOption;
+  custody: number;
   registeredEnvVar?: string;
   revision: number;
   available: boolean;
   reload: () => Promise<unknown>;
   credentialActions?: ReactNode;
 }) {
-  const editor = useProviderConnectionEditor(provider, revision, reload, available);
+  const editor = useProviderConnectionEditor(provider, revision, reload, available, custody);
   const draftReasonId = useId();
   const envReasonId = useId();
   const endpointCheck = useBlurValidation((value) => urlFieldError(value, { required: true }));

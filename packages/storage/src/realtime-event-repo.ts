@@ -27,8 +27,11 @@ export class RealtimeEventRepository {
   private readonly boundsStmt;
   private readonly listStmt;
   private readonly countStmt;
-  private readonly pruneOverflowStmt;
-  private readonly pruneOlderThanStmt;
+  private readonly lockSequenceStmt;
+  private readonly overflowBoundaryStmt;
+  private readonly ageBoundaryStmt;
+  private readonly pruneThroughStmt;
+  private readonly recordRetentionFloorStmt;
   private appendCount = 0;
 
   public constructor(private readonly db: DatabaseClient) {
@@ -77,7 +80,9 @@ export class RealtimeEventRepository {
     this.boundsStmt = db.prepare(`
       SELECT
         MIN(sequence) AS oldest_sequence,
-        MAX(sequence) AS newest_sequence
+        MAX(sequence) AS newest_sequence,
+        (SELECT last_sequence FROM realtime_event_sequence_state
+          WHERE stream_name = 'events:retention-floor') AS last_pruned_sequence
       FROM realtime_events
     `);
 
@@ -96,18 +101,30 @@ export class RealtimeEventRepository {
       SELECT COUNT(*) AS count
       FROM realtime_events
     `);
-    this.pruneOverflowStmt = db.prepare(`
-      DELETE FROM realtime_events
-      WHERE event_id IN (
-        SELECT event_id
-        FROM realtime_events
-        ORDER BY created_at ASC, event_id ASC
-        LIMIT @overflowRows
-      )
+    this.lockSequenceStmt = db.prepare(`
+      UPDATE realtime_event_sequence_state SET last_sequence = last_sequence
+      WHERE stream_name = 'events'
     `);
-    this.pruneOlderThanStmt = db.prepare(`
-      DELETE FROM realtime_events
-      WHERE created_at < @cutoff
+    this.overflowBoundaryStmt = db.prepare(`
+      SELECT MAX(sequence) AS through_sequence FROM (
+        SELECT sequence
+        FROM realtime_events
+        ORDER BY sequence ASC
+        LIMIT @overflowRows
+      ) AS prefix
+    `);
+    this.ageBoundaryStmt = db.prepare(`
+      SELECT MAX(sequence) AS through_sequence FROM realtime_events WHERE created_at < @cutoff
+    `);
+    this.pruneThroughStmt = db.prepare(`
+      DELETE FROM realtime_events WHERE sequence <= @throughSequence
+    `);
+    this.recordRetentionFloorStmt = db.prepare(`
+      INSERT INTO realtime_event_sequence_state (stream_name, last_sequence)
+      VALUES ('events:retention-floor', @throughSequence)
+      ON CONFLICT(stream_name) DO UPDATE SET last_sequence = CASE
+        WHEN realtime_event_sequence_state.last_sequence < excluded.last_sequence THEN excluded.last_sequence
+        ELSE realtime_event_sequence_state.last_sequence END
     `);
   }
 
@@ -226,44 +243,59 @@ export class RealtimeEventRepository {
     return rows.map(mapRealtimeEventRow);
   }
 
-  public getSequenceBounds(): { oldestSequence?: number; newestSequence?: number } {
+  public getSequenceBounds(): { oldestSequence?: number; newestSequence?: number; lastPrunedSequence?: number } {
     const row = this.boundsStmt.get() as
       | {
           oldest_sequence?: number | null;
           newest_sequence?: number | null;
+          last_pruned_sequence?: number | null;
         }
       | undefined;
     return {
       oldestSequence: typeof row?.oldest_sequence === "number" ? row.oldest_sequence : undefined,
       newestSequence: typeof row?.newest_sequence === "number" ? row.newest_sequence : undefined,
+      ...(typeof row?.last_pruned_sequence === "number" && row.last_pruned_sequence > 0
+        ? { lastPrunedSequence: row.last_pruned_sequence } : {}),
     };
   }
 
   public pruneOlderThan(cutoffIso: string): number {
-    const before = this.db.prepare("SELECT COUNT(*) AS count FROM realtime_events WHERE created_at < ?").get(cutoffIso);
-    const countRow = toCountRow(before);
-    const count = Number(countRow?.count ?? 0);
-    if (count <= 0) {
-      return 0;
-    }
-    this.pruneOlderThanStmt.run({ cutoff: cutoffIso });
-    return count;
+    return this.db.transaction("immediate", () => {
+      this.lockRetention();
+      const boundary = this.ageBoundaryStmt.get({ cutoff: cutoffIso }) as { through_sequence?: number | null } | undefined;
+      return this.pruneThrough(boundary?.through_sequence);
+    });
   }
 
   public pruneToMaxRows(maxRows: number): number {
     const normalizedMaxRows = Math.max(1, Math.floor(maxRows));
     return this.db.transaction("immediate", () => {
+      this.lockRetention();
       const countRow = toCountRow(this.countStmt.get());
       const totalRows = Number(countRow?.count ?? 0);
       if (totalRows <= normalizedMaxRows) {
         return 0;
       }
       const overflowRows = totalRows - normalizedMaxRows;
-      this.pruneOverflowStmt.run({
-        overflowRows,
-      });
-      return overflowRows;
+      const boundary = this.overflowBoundaryStmt.get({ overflowRows }) as { through_sequence?: number | null } | undefined;
+      return this.pruneThrough(boundary?.through_sequence);
     });
+  }
+
+  private lockRetention(): void {
+    // Appends take this same canonical row lock before allocating/inserting.
+    // Serialize pruners and appenders on PostgreSQL as well as SQLite, then
+    // acquire the floor row second. No allocated integer is evidence of loss.
+    if (this.lockSequenceStmt.run().changes !== 1) throw new Error("Realtime sequence state is unavailable.");
+  }
+
+  private pruneThrough(throughSequence: number | null | undefined): number {
+    if (typeof throughSequence !== "number" || throughSequence < 1) return 0;
+    const deleted = this.pruneThroughStmt.run({ throughSequence }).changes;
+    // The boundary names an existing event; the allocator lock keeps it stable
+    // until deletion and this durable marker commit (or roll back) together.
+    if (deleted > 0) this.recordRetentionFloorStmt.run({ throughSequence });
+    return deleted;
   }
 }
 

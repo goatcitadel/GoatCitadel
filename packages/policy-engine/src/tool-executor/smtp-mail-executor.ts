@@ -170,7 +170,8 @@ function buildSmtpMessage(config: Record<string, unknown>, args: Record<string, 
     throw new Error("smtp.send requires args.to");
   }
   const subject = requireString(args.subject, "subject");
-  const text = requireString(args.bodyText, "bodyText");
+  const text = args.bodyText;
+  if (typeof text !== "string" || !text.trim()) throw new Error("bodyText is required");
   const cc = readStringList(args.cc);
   const bcc = readStringList(args.bcc);
   return {

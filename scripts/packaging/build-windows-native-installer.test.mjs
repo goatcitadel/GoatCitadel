@@ -19,24 +19,46 @@ function renderSample() {
   });
 }
 
-test("uninstaller payload deletes are guarded by the install marker", () => {
+function uninstallRunSection(iss) {
+  const section = iss.match(/^\[UninstallRun\]\r?\n([\s\S]*?)^\[UninstallDelete\]/mu)?.[1];
+  assert.ok(section, "Expected the generated uninstall run section");
+  return section;
+}
+
+test("uninstaller payload deletes are guarded by the install marker at uninstall time", () => {
   const iss = renderSample();
-
-  // The destructive long-path PowerShell delete must only run when our marker is present.
-  // (Rendered ISS uses single backslashes: \\?\{app}\app .)
-  assert.match(iss, /Remove-Item -LiteralPath '\\\\\?\\\{app\}\\app'[\s\S]*?Check: GoatCitadelInstallMarkerExists/);
-
-  // The marker-guard helpers and code-driven payload removal must be present.
   assert.match(iss, /function GoatCitadelInstallMarkerExists\(\): Boolean;/);
-  assert.match(iss, /procedure RemoveGoatCitadelPayload\(\);/);
-  assert.match(iss, /if not GoatCitadelInstallMarkerExists\(\) then/);
   assert.match(iss, /WriteGoatCitadelInstallMarker\(\);/);
 
-  const uninstallRun = iss.match(/\[UninstallRun\][\s\S]*?\[UninstallDelete\]/)?.[0] ?? "";
-  assert.match(uninstallRun, /RunOnceId: "goatcitadel-remove-identity"/);
-  assert.match(uninstallRun, /RunOnceId: "goatcitadel-remove-payload"/);
-  assert.match(uninstallRun, /catch \{\{\}; try \{\{[\s\S]*?catch \{\{\};[\s\S]*?exit 0/);
-  assert.doesNotMatch(uninstallRun, /catch \{\{\}\}/);
+  const removePayload = iss.match(/procedure RemoveGoatCitadelPayload\(\);[\s\S]*?\nend;/)?.[0] ?? "";
+  assert.match(removePayload, /^procedure RemoveGoatCitadelPayload\(\);\nvar\n[\s\S]*?\nbegin\n  if not GoatCitadelInstallMarkerExists\(\) then\n  begin\n    Exit;\n  end;\n  AppPayloadPath :=/u);
+  assert.match(removePayload, /DelTree\(AppPayloadPath, True, True, True\);\n  DelTree\(BinPayloadPath, True, True, True\);/u);
+  assert.match(removePayload, /RunUninstallOrFail\([\s\S]*?PowerShellLiteral\('\\\\\?\\' \+ AppPayloadPath\)[\s\S]*?PowerShellLiteral\('\\\\\?\\' \+ BinPayloadPath\)/u);
+  assert.match(removePayload, /if DirExists\(AppPayloadPath\) or DirExists\(BinPayloadPath\) then\n  begin\n    RaiseException\('The previous GoatCitadel payload is still in use/u);
+
+  const uninstallRun = uninstallRunSection(iss);
+  assert.match(uninstallRun, /Get-AppxPackage \{#MyIdentityPackageName\} \| Remove-AppxPackage[\s\S]*?RunOnceId: "goatcitadel-remove-identity"/u);
+  assert.match(iss, /\[UninstallDelete\]\nType: dirifempty; Name: "\{app\}\\app"\nType: dirifempty; Name: "\{app\}\\bin"\nType: dirifempty; Name: "\{app\}"/u);
+  assert.doesNotMatch(uninstallRun, /Remove-Item|\[System\.IO\.Directory\]::Delete|\{app\}/u);
+});
+
+test("latest uninstall record supersedes legacy payload removal even without an install marker", () => {
+  const id = "goatcitadel-remove-payload";
+  const entries = uninstallRunSection(renderSample()).split(/\r?\n/u);
+  const generated = entries.filter((line) => line.endsWith('RunOnceId: "' + id + '"'));
+  assert.equal(generated.length, 1, "Removing the entry alone leaves the old uninstall log record");
+
+  // Inno records eligible entries at setup and uses the latest same-ID record on uninstall.
+  // The retained record below is a label only. No uninstall command is evaluated.
+  const legacy = { id, action: "legacy recursive payload removal" };
+  const current = generated
+    .filter((line) => !/;\s*(?:Check|Components|Tasks|Languages|MinVersion|OnlyBelowVersion)\s*:/iu.test(line))
+    .map((action) => ({ id, action }));
+  const effective = [legacy, ...current].findLast((entry) => entry.id === id);
+  assert.equal(
+    effective?.action,
+    'Filename: "{cmd}"; Parameters: "/d /c exit /b 0"; Flags: waituntilterminated runhidden; RunOnceId: "' + id + '"',
+  );
 });
 
 test("unconditional app/bin filesandordirs deletes are removed", () => {
@@ -312,4 +334,87 @@ test("installer never passes paths to PowerShell as trailing -Command arguments"
   // (an apostrophe in the profile name, e.g. O'Brien, would break out of the literal).
   assert.doesNotMatch(iss, /''\{app\}/);
   assert.doesNotMatch(iss, /''\\\?\\{app\}/);
+});
+
+
+function renderedPowerShellLiteral(value) {
+  const helper = renderSample().match(/function PowerShellLiteral\(Value: String\): String;[\s\S]*?\nend;/)?.[0];
+  assert.ok(helper?.includes("Escaped := Value;"));
+  assert.ok(helper?.includes("Result := '''' + Escaped + '''';"));
+  const decodePascalLiteral = (literal) => {
+    if (literal.startsWith("'")) return literal.slice(1, -1).replaceAll("''", "'");
+    assert.match(literal, /^(?:#\d+)+$/u);
+    return String.fromCharCode(...Array.from(literal.matchAll(/#(\d+)/gu), (match) => Number(match[1])));
+  };
+  const replacements = helper.match(/^\s*StringChangeEx\(Escaped, .+\);$/gmu) ?? [];
+  assert.ok(replacements.length > 0);
+  for (const line of replacements) {
+    const change = /StringChangeEx\(Escaped, ([^,]+), ([^,]+), True\);$/u.exec(line);
+    assert.ok(change, "Expected a literal-to-literal Pascal replacement");
+    value = value.replaceAll(decodePascalLiteral(change[1]), () => decodePascalLiteral(change[2]));
+  }
+  return "'" + value + "'";
+}
+
+function quotePathFixtures() {
+  return [
+    { label: "spaces and trailing separator", quote: "" },
+    { label: "ASCII apostrophe", quote: "'" },
+    { label: "U+2018", quote: "\u2018" },
+    { label: "U+2019", quote: "\u2019" },
+    { label: "U+201A", quote: "\u201a" },
+    { label: "U+201B", quote: "\u201b" },
+    { label: "mixed adjacent quotes", quote: "'\u2019" },
+  ].map(({ label, quote }) => ({ label, value: "C:\\Review Folder\\O" + quote + "Brien\\GoatCitadel\\" }));
+}
+
+test("installer doubles PowerShell single-quote delimiters in rendered path literals", () => {
+  const cases = quotePathFixtures();
+  assert.deepEqual(
+    cases.map(({ label, value }) => [label, renderedPowerShellLiteral(value)]),
+    cases.map(({ label, value }) => [label, "'" + value.replace(/['\u2018-\u201b]/gu, "$&$&") + "'"]),
+  );
+});
+
+test("Windows PowerShell parser preserves paths escaped by the rendered helper", {
+  skip: process.platform !== "win32" && "Windows PowerShell 5.1 required",
+}, () => {
+  const cases = quotePathFixtures().map(({ label, value }) => ({
+    label, value, input: "$fixturePath = " + renderedPowerShellLiteral(value),
+  }));
+  // The child evaluates only this fixed parser harness. Generated assignments stay inert.
+  const parser = String.raw`
+$ErrorActionPreference = 'Stop'
+if ($PSVersionTable.PSEdition -ne 'Desktop' -or $PSVersionTable.PSVersion.Major -ne 5 -or $PSVersionTable.PSVersion.Minor -ne 1) {
+  throw 'Windows PowerShell 5.1 required.'
+}
+$fixtureBytes = [Convert]::FromBase64String([Console]::In.ReadToEnd())
+$fixtures = ConvertFrom-Json -InputObject ([Text.Encoding]::UTF8.GetString($fixtureBytes))
+$results = foreach ($fixture in $fixtures) {
+  $tokens = $null
+  $errors = $null
+  $tree = [System.Management.Automation.Language.Parser]::ParseInput($fixture.input, [ref]$tokens, [ref]$errors)
+  $strings = @($tree.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.StringConstantExpressionAst]
+  }, $true))
+  [pscustomobject]@{
+    label = $fixture.label
+    exact = ($errors.Count -eq 0 -and $tree.EndBlock.Statements.Count -eq 1 -and
+      $tree.EndBlock.Statements[0] -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+      $strings.Count -eq 1 -and [string]::Equals($strings[0].Value, $fixture.value, [StringComparison]::Ordinal))
+  }
+}
+ConvertTo-Json -InputObject @($results) -Compress
+`;
+  const powershell = path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+  const result = spawnSync(powershell, [
+    "-NoProfile", "-NonInteractive", "-EncodedCommand", Buffer.from(parser, "utf16le").toString("base64"),
+  ], {
+    input: Buffer.from(JSON.stringify(cases), "utf8").toString("base64"),
+    encoding: "utf8", timeout: 10_000, windowsHide: true,
+  });
+  assert.ifError(result.error);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(JSON.parse(result.stdout), cases.map(({ label }) => ({ label, exact: true })));
 });

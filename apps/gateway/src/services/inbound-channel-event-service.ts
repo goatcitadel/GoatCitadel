@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import { resolveSessionRoute } from "@goatcitadel/gateway-core";
 import {
   redactSecretText,
@@ -25,6 +25,12 @@ import {
 import type { BotLoopGuardDecision } from "./channel-bot-loop-guard.js";
 import type { SharedHostLifecycleAdmissionPort } from "./shared-host-lifecycle-service.js";
 import { withChannelProgressHeartbeat } from "./channel-progress-heartbeat.js";
+import {
+  buildDeterministicIdentity,
+  sha256,
+  stableInboundId,
+  type InboundChannelDeterministicIdentity,
+} from "./inbound-channel-event-identity.js";
 import {
   buildStoredPayload,
   normalizeRequiredString,
@@ -61,20 +67,7 @@ const MAX_DIAGNOSTIC_TEXT = 1_000;
 const COMMAND_RESULT_WAIT_TIMEOUT_MS = 14 * 60_000;
 const COMMAND_RESULT_POLL_INTERVAL_MS = 25;
 
-export interface InboundChannelDeterministicIdentity {
-  inboundEventId: string;
-  userMessageId: string;
-  turnId: string;
-  assistantMessageId: string;
-  durableRunId: string;
-  deliveryIdempotencyKey: string;
-  onDurableRunLaunched?: (runId: string) => void | Promise<void>;
-  onDeliveryEnqueued?: (evidence: {
-    deliveryId?: string;
-    providerMessageId?: string;
-    idempotencyKey?: string;
-  }) => void | Promise<void>;
-}
+export type { InboundChannelDeterministicIdentity };
 
 export interface InboundChannelCommandExecutionInput {
   eventType: string;
@@ -272,7 +265,11 @@ export class InboundChannelEventService {
         },
       };
     });
-    const results = await this.commitAcceptances(prepared.map((item) => item.acceptance));
+    const pollRevision = inputs.find((input) => input.telegramPollRevision !== undefined)?.telegramPollRevision;
+    const results = await this.commitAcceptances(
+      prepared.map((item) => item.acceptance),
+      pollRevision,
+    );
     return results.map((result, index) => ({
       accepted: true,
       durableAccepted: true,
@@ -326,8 +323,9 @@ export class InboundChannelEventService {
 
   private async commitAcceptances(
     acceptances: readonly InboundChannelEventAcceptInput[],
+    pollRevision?: string,
   ): Promise<InboundChannelEventAcceptResult[]> {
-    const results = await this.deps.storage.inboundChannelEvents.acceptMany(acceptances);
+    const results = await this.deps.storage.inboundChannelEvents.acceptMany(acceptances, undefined, pollRevision);
     if (results.some((result) => !isTerminal(result.event.status))) {
       await this.requestDrain();
     }
@@ -1055,25 +1053,6 @@ export class InboundChannelEventService {
   ): void {
     this.deps.recordDevDiagnostic?.({ level, category: "channels", event, message, context });
   }
-}
-
-function buildDeterministicIdentity(eventId: string, messageId: string): InboundChannelDeterministicIdentity {
-  return {
-    inboundEventId: eventId,
-    userMessageId: messageId,
-    turnId: stableInboundId("turn", eventId),
-    assistantMessageId: stableInboundId("assistant", eventId),
-    durableRunId: stableInboundId("run", eventId),
-    deliveryIdempotencyKey: stableInboundId("delivery", eventId),
-  };
-}
-
-function stableInboundId(kind: string, ...parts: string[]): string {
-  return `inbound-${kind}-${createHash("sha256").update(parts.join("\0")).digest("hex").slice(0, 32)}`;
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function retryDelayMs(attemptCount: number): number {

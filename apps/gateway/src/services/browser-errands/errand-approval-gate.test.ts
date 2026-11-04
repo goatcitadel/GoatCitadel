@@ -157,7 +157,7 @@ function createFakeBrowser(url = "https://shop.example/checkout") {
   const state = { url, target: target() as ErrandTargetInfo | null, focused: null as ErrandTargetInfo | null };
   const browser = {
     currentUrl: vi.fn(() => state.url),
-    describeTargetBeneathOverlay: vi.fn(async () => state.target),
+    describeTargetBeneathOverlay: vi.fn(async (_x: number, _y: number) => state.target),
     describeFocusedBeneathOverlay: vi.fn(async () => state.focused),
     captureForPeople: vi.fn(async () => BEFORE_PNG),
     overlay: {
@@ -788,5 +788,146 @@ describe("errand approval gate", () => {
     // Only once per approval.
     await hooks.afterApprovedAction(AFTER_PNG);
     expect(attachments.upload).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("browser errand drag approval binding", () => {
+  function dragSetup() {
+    const h = setup();
+    const endpoints = {
+      source: target({
+        x: 10,
+        y: 20,
+        tagName: "DIV",
+        role: "listitem",
+        text: "Report",
+        backendNodeId: 101,
+        rect: { x: 0, y: 10, width: 20, height: 20 },
+      }),
+    };
+    h.fake.state.target = target({ text: "Delete", backendNodeId: 202 });
+    h.fake.browser.describeTargetBeneathOverlay.mockImplementation(async (x, y) =>
+      x === 10 && y === 20 ? endpoints.source : h.fake.state.target,
+    );
+    const input = {
+      ...approvalInput({ category: "delete", title: 'Drag "Report" onto "Delete"', target: h.fake.state.target }),
+      dragSource: endpoints.source,
+    };
+    return { ...h, endpoints, input };
+  }
+
+  it("approves an unchanged source and destination and records both targets", async () => {
+    const h = dragSetup();
+    const answer = h.gate.request(h.input);
+    try {
+      const id = await h.waitForPending();
+      await resolveApproval(h.host, id, { decision: "approve", resolvedBy: "operator" });
+      await expect(answer).resolves.toBe("approved");
+      expect(h.fake.browser.describeTargetBeneathOverlay).toHaveBeenCalledWith(10, 20);
+      expect(h.fake.browser.describeTargetBeneathOverlay).toHaveBeenCalledWith(100, 200);
+      expect(h.db.approvals.get(id).payload).toMatchObject({
+        targetText: "Delete",
+        dragSourceText: "Report",
+        dragSourceRect: h.input.dragSource.rect,
+      });
+    } finally {
+      h.controller.abort();
+      await answer;
+    }
+  });
+
+  it.each(["source", "destination"] as const)("re-asks when the approved drag %s changes", async (changed) => {
+    const h = dragSetup();
+    const answer = h.gate.request(h.input);
+    try {
+      const first = await h.waitForPending();
+      if (changed === "source") h.endpoints.source = { ...h.endpoints.source, text: "Other report", backendNodeId: 303 };
+      else h.fake.state.target = target({ text: "Publish", backendNodeId: 404 });
+      await resolveApproval(h.host, first, { decision: "approve", resolvedBy: "operator" });
+
+      let second = "";
+      await vi.waitFor(
+        async () => {
+          const pending = await h.host.storage.approvals.listPendingBySession(h.SESSION_ID);
+          const next = pending.find((approval) => approval.approvalId !== first);
+          expect(next).toBeDefined();
+          second = next!.approvalId;
+        },
+        { timeout: 5_000, interval: 20 },
+      );
+      const record = h.db.approvals.get(second);
+      expect(record.preview.title).toBe(ERRAND_PAGE_CHANGED_TITLE);
+      expect(record.payload).toMatchObject({
+        targetText: changed === "destination" ? "Publish" : "Delete",
+        dragSourceText: changed === "source" ? "Other report" : "Report",
+      });
+      await resolveApproval(h.host, second, { decision: "reject", resolvedBy: "operator" });
+      await expect(answer).resolves.toBe("denied");
+      expect(h.db.approvalEvents.listByApprovalId(first)).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            eventType: "superseded",
+            payload: expect.objectContaining({ actedOn: false, reasked: true }),
+          }),
+        ]),
+      );
+    } finally {
+      h.controller.abort();
+      await answer;
+    }
+  });
+
+  it.each(["deny", "cancel"] as const)("preserves %s while both drag targets are bound", async (decision) => {
+    const h = dragSetup();
+    const answer = h.gate.request(h.input);
+    try {
+      const id = await h.waitForPending();
+      if (decision === "cancel") h.controller.abort();
+      else await resolveApproval(h.host, id, { decision: "reject", resolvedBy: "operator" });
+      await expect(answer).resolves.toBe(decision === "cancel" ? "stopped" : "denied");
+      expect(
+        h.db.approvalEvents.listByApprovalId(id).some((event) => event.eventType === "errand_after_screenshot"),
+      ).toBe(false);
+    } finally {
+      h.controller.abort();
+      await answer;
+    }
+  });
+
+  it("bounds re-asks when only the drag source keeps changing", async () => {
+    const h = dragSetup();
+    const answer = h.gate.request(h.input);
+    const decided = new Set<string>();
+    let settled: string | undefined;
+    const observed = answer.then((value) => {
+      settled = value;
+      return value;
+    });
+    try {
+      for (let round = 0; round <= ERRAND_MAX_PAGE_CHANGED_REASKS; round += 1) {
+        let id = "";
+        const deadline = Date.now() + 5_000;
+        while (!id) {
+          if (settled !== undefined) {
+            throw new Error("The drag settled before its changed source was approved again: " + settled);
+          }
+          const pending = await h.host.storage.approvals.listPendingBySession(h.SESSION_ID);
+          id = pending.find((approval) => !decided.has(approval.approvalId))?.approvalId ?? "";
+          if (!id) {
+            if (Date.now() >= deadline) throw new Error("No replacement drag approval was created.");
+            await new Promise((resolve) => setTimeout(resolve, 10));
+          }
+        }
+        decided.add(id);
+        h.endpoints.source = { ...h.endpoints.source, text: "Report " + round };
+        await resolveApproval(h.host, id, { decision: "approve", resolvedBy: "operator" });
+      }
+      await expect(observed).resolves.toBe("denied");
+      expect(h.gate.lastReason).toBe(ERRAND_PAGE_KEPT_CHANGING_REASON);
+      expect(decided.size).toBe(ERRAND_MAX_PAGE_CHANGED_REASKS + 1);
+    } finally {
+      h.controller.abort();
+      await observed;
+    }
   });
 });

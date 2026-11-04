@@ -7,7 +7,7 @@ import type {
   ChatWorkspaceSnapshotRequest,
   RunTemplateInvocation,
 } from "@goatcitadel/contracts";
-import { cancelChatTurn } from "@goatcitadel/mission-control-shared/api/client";
+import { cancelChatTurn, fetchChatAttachment } from "@goatcitadel/mission-control-shared/api/client";
 import { isChatTurnActiveStatus } from "@goatcitadel/contracts";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { useCallback, useEffect, useRef, useState, type Dispatch, type RefObject, type SetStateAction } from "react";
@@ -152,6 +152,12 @@ export function useChatSurfaceOrchestration(input: {
   const [stoppingStreamToken, setStoppingStreamToken] = useState<string | null>(null);
   const latestInputRef = useRef(input);
   latestInputRef.current = input;
+  const editHydrationAttemptRef = useRef(0);
+  const setEditingTurnIdAndCancelHydration = useCallback<Dispatch<SetStateAction<string | null>>>((value) => {
+    editHydrationAttemptRef.current += 1;
+    setEditingTurnId(value);
+  }, []);
+  useEffect(() => () => { editHydrationAttemptRef.current += 1; }, [input.selectedSessionId]);
 
   // The controller intentionally supplies this as a render-current callback.
   // Keep the callback in a ref so the public queue setter remains stable for
@@ -181,6 +187,7 @@ export function useChatSurfaceOrchestration(input: {
     if (!draftContent) {
       return;
     }
+    editHydrationAttemptRef.current += 1;
     const content =
       action === "send" ? resolveOutboundContentWithContext(draftContent, input.outboundContext) : draftContent;
     const modelCouncil = input.consumeModelCouncilArming?.();
@@ -312,14 +319,43 @@ export function useChatSurfaceOrchestration(input: {
   }, [input]);
 
   const handleBeginEditTurn = useCallback(
-    (turnId: string) => {
+    async (turnId: string) => {
+      const attempt = ++editHydrationAttemptRef.current;
       const turn = input.thread?.turns.find((item) => item.turnId === turnId);
-      if (!turn) {
+      if (!turn || !input.selectedSessionId) {
         return;
       }
-      setEditingTurnId(turnId);
-      input.setDraft(turn.userMessage.content);
-      input.composerRef.current?.focus();
+      const isCurrent = () =>
+        attempt === editHydrationAttemptRef.current &&
+        latestInputRef.current.selectedSessionId === input.selectedSessionId &&
+        latestInputRef.current.draft === input.draft &&
+        latestInputRef.current.pendingAttachments === input.pendingAttachments;
+      try {
+        // Transcript files are summaries; hydrate their existing records so the
+        // composer shows the exact original set and removal stays deliberate.
+        const sourceAttachments = turn.userMessage.attachments ?? [];
+        const attachments = sourceAttachments.length > 0
+          ? await Promise.all(sourceAttachments.map(async ({ attachmentId }) => {
+              const attachment = await fetchChatAttachment(attachmentId);
+              if (attachment.attachmentId !== attachmentId) {
+                throw new Error("The saved file did not match the requested attachment.");
+              }
+              return attachment;
+            }))
+          : [];
+        if (!isCurrent()) return;
+        setEditingTurnId(turnId);
+        input.setDraft(turn.userMessage.content);
+        input.setPendingAttachments(attachments);
+        input.setError(null);
+        input.composerRef.current?.focus();
+      } catch (error) {
+        if (isCurrent()) {
+          input.setError(
+            "Could not load the files for this edit. " + (error instanceof Error ? error.message : String(error)),
+          );
+        }
+      }
     },
     [input],
   );
@@ -388,7 +424,7 @@ export function useChatSurfaceOrchestration(input: {
     queuedOutbound,
     setQueuedOutbound,
     editingTurnId,
-    setEditingTurnId,
+    setEditingTurnId: setEditingTurnIdAndCancelHydration,
     handleSend,
     handleRetryTurn,
     handleStopActiveTurn,

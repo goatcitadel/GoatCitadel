@@ -186,7 +186,7 @@ describe("buildGovernanceBlockGuidance", () => {
     expect(guidance).not.toMatch(RETRY_INVITATION);
   });
 
-  it("names the plugin that keeps a group off and points to uninstalling it, not to the Tools switch", () => {
+  it("names the plugin that keeps a group off and the two steps that may be needed to restore access", () => {
     const guidance = buildGovernanceBlockGuidance({
       toolName: "git.status",
       status: "blocked",
@@ -195,10 +195,10 @@ describe("buildGovernanceBlockGuidance", () => {
 
     expect(guidance).toContain("git.status is switched off: the plugin Meeting tools keeps its tool group off.");
     expect(guidance).toContain(
-      "Uninstalling Meeting tools, and any other plugin that keeps the group off, in Capabilities › Plugins turns it back on, and only the operator can do that",
+      "The operator can uninstall Meeting tools and any other plugin that keeps the group off in Capabilities › Plugins to release the holds.",
     );
     expect(guidance).toMatch(/not a pending approval/i);
-    expect(guidance).not.toContain("Capabilities › Tools");
+    expect(guidance).toContain("If the group stays off, they can switch it on in Capabilities › Tools.");
     expect(guidance).not.toContain("the operator turned off");
     expect(guidance).not.toContain("tools.deny");
     expect(guidance).not.toMatch(RETRY_INVITATION);
@@ -213,9 +213,9 @@ describe("buildGovernanceBlockGuidance", () => {
 
     expect(guidance).toContain("git.status is switched off: a plugin keeps its tool group off.");
     expect(guidance).toContain(
-      "Uninstalling every plugin that keeps the group off, in Capabilities › Plugins, turns it back on, and only the operator can do that",
+      "The operator can uninstall every plugin that keeps the group off in Capabilities › Plugins to release the holds.",
     );
-    expect(guidance).not.toContain("Capabilities › Tools");
+    expect(guidance).toContain("If the group stays off, they can switch it on in Capabilities › Tools.");
     expect(guidance).not.toContain("the operator turned off");
 
     const text = buildPolicyBlockedRecoveryText([
@@ -223,9 +223,9 @@ describe("buildGovernanceBlockGuidance", () => {
     ]);
     expect(text).toContain("a plugin keeps its tool group off");
     expect(text).toContain(
-      "uninstall every plugin that keeps a group off in Capabilities › Plugins, which turns that group back on",
+      "uninstall every plugin that keeps a group off in Capabilities › Plugins to release the holds",
     );
-    expect(text).not.toContain("Capabilities › Tools");
+    expect(text).toContain("then switch on any groups still off in Capabilities › Tools");
   });
 
   it("tells the model a switched-off group is the operator's switch, not tools.deny", () => {
@@ -263,7 +263,7 @@ describe("buildGovernanceBlockGuidance", () => {
     }
   });
 
-  it("says uninstalling the plugin turns a group it holds back on, from the runner's own re-check (F9, Q11)", () => {
+  it("explains how to release a hold reported by the runner's own policy re-check (F9, Q11)", () => {
     // The runner's re-check writes its own error and keeps only the engine's reason codes, which say it is a hold.
     const result = {
       policyRevalidation: { status: "blocked", reasonCodes: ["tool_group_off", "plugin_tool_group_hold"] },
@@ -277,17 +277,17 @@ describe("buildGovernanceBlockGuidance", () => {
 
     expect(guidance).toContain("fs.write is switched off: a plugin keeps its tool group off.");
     expect(guidance).toContain(
-      "Uninstalling every plugin that keeps the group off, in Capabilities › Plugins, turns it back on, and only the operator can do that",
+      "The operator can uninstall every plugin that keeps the group off in Capabilities › Plugins to release the holds.",
     );
-    expect(guidance).not.toContain("Capabilities › Tools");
+    expect(guidance).toContain("If the group stays off, they can switch it on in Capabilities › Tools.");
 
     const text = buildPolicyBlockedRecoveryText([
       toolRun({ toolName: "fs.write", error: "Current deny-wins policy blocks fs.write.", result }),
     ]);
     expect(text).toContain(
-      "uninstall every plugin that keeps a group off in Capabilities › Plugins, which turns that group back on",
+      "uninstall every plugin that keeps a group off in Capabilities › Plugins to release the holds",
     );
-    expect(text).not.toContain("Capabilities › Tools");
+    expect(text).toContain("then switch on any groups still off in Capabilities › Tools");
   });
 
   it("says GoatCitadel keeps the tool off while it can't read which groups plugins keep off, from the engine's reason and the re-check", () => {
@@ -490,7 +490,7 @@ describe("buildPolicyBlockedRecoveryText", () => {
     expect(text).not.toMatch(/narrower|specific URL/i);
   });
 
-  it("says uninstalling the plugin turns the group back on when every block is a group a plugin keeps off", () => {
+  it("explains how to release holds when plugins account for every block", () => {
     const text = buildPolicyBlockedRecoveryText([
       toolRun({
         toolName: "git.status",
@@ -500,9 +500,9 @@ describe("buildPolicyBlockedRecoveryText", () => {
 
     expect(text).toContain("the plugin Meeting tools keeps its tool group off");
     expect(text).toContain(
-      "uninstall every plugin that keeps a group off in Capabilities › Plugins, which turns that group back on",
+      "uninstall every plugin that keeps a group off in Capabilities › Plugins to release the holds",
     );
-    expect(text).not.toContain("Capabilities › Tools");
+    expect(text).toContain("then switch on any groups still off in Capabilities › Tools");
     expect(text).not.toContain("Settings > Tools");
   });
 
@@ -520,11 +520,10 @@ describe("buildPolicyBlockedRecoveryText", () => {
     ]);
 
     expect(text).toContain(
-      "Uninstalling Meeting tools, and any other plugin that keeps the group off, in Capabilities › Plugins turns it back on",
+      "The operator can uninstall Meeting tools and any other plugin that keeps the group off in Capabilities › Plugins to release the holds.",
     );
     expect(text).toContain("the operator turned off its tool group in Capabilities › Tools");
-    expect(text).toContain("switch tool groups back on in Capabilities › Tools");
-    expect(text).toContain("which turns that group back on");
+    expect(text).toContain("then switch on any groups still off in Capabilities › Tools");
     expect(text).toContain("Capabilities › Plugins");
     expect(text).not.toContain("Settings > Tools");
   });

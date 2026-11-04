@@ -91,7 +91,7 @@ export interface ChatContextDockPanelsProps {
     proposals: DocumentPatchProposalRecord[];
     includedRefs: ChatRoutedContextRef[];
     onRefresh: () => Promise<void>;
-    onToggleInclude: (ref: ChatRoutedContextRef) => void;
+    onToggleInclude: (ref: ChatRoutedContextRef, allowAddition?: boolean) => void;
     onSaveNote: (note: NoteRecord, body: string) => Promise<NoteRecord>;
     onSaveArtifact: (artifact: ChatGeneratedArtifactRecord, content: string) => Promise<ChatGeneratedArtifactRecord>;
     onCreateProposal: (input: {
@@ -170,7 +170,7 @@ export interface ChatContextDockPanelsProps {
   tagsValue: string;
   onTagsValueChange: (value: string) => void;
   onRenameSession: () => Promise<void>;
-  onSaveOrganization: () => Promise<void>;
+  onSaveOrganization: () => Promise<boolean>;
   onTogglePinSession: () => Promise<void>;
   onToggleArchiveSession: () => Promise<void>;
   onDeleteSession: () => void;

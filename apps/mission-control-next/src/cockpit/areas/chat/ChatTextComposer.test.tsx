@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act, createRef, type ReactNode } from "react";
+import { act, createRef, useState, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WHATSAPP_REPLY_WINDOW_CLOSED } from "@goatcitadel/contracts";
@@ -11,6 +11,13 @@ import {
   type ComposerProps,
 } from "./ChatTextComposer";
 import { withoutFileInput } from "./channel-file-input";
+const sourcesCode = vi.hoisted(() => ({ starts: 0, held: undefined as Promise<void> | undefined }));
+vi.mock(import("../../../features/threaded-surface/ThreadedExternalSourceStrip"), async (importOriginal) => {
+  sourcesCode.starts++;
+  await sourcesCode.held;
+  return importOriginal();
+});
+
 // Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
@@ -693,7 +700,72 @@ it("submits a running turn only through the shared queue admission and preserves
   expect(queue.disabled).toBe(true);
 });
 
-it("keeps read-only sources behind a toolbar chip until the operator opens them", async () => {
+const sourceControls = (onLoadCandidates: () => void): NonNullable<ComposerProps["externalSourceControls"]> => ({
+  attachments: [],
+  candidates: [],
+  candidatesSupported: true,
+  selectedAttachmentIds: [],
+  loading: false,
+  error: null,
+  canMutate: true,
+  busyAttachmentId: null,
+  onLoadCandidates,
+  onToggleSelect: vi.fn(),
+  onClearSelection: vi.fn(),
+  onAttach: vi.fn(),
+  onReload: vi.fn(),
+  onDetach: vi.fn(),
+  onRequestKnowledgeSnapshot: vi.fn(),
+});
+
+it("loads Sources on first open without transferring held attach intent to another session", async () => {
+  expect(sourcesCode.starts).toBe(0);
+  let releaseCode!: () => void;
+  sourcesCode.held = new Promise<void>((resolve) => {
+    releaseCode = resolve;
+  });
+  try {
+    const oldRead = vi.fn();
+    const newRead = vi.fn();
+    const oldProps = composerProps({ externalSourceControls: sourceControls(oldRead) });
+    const newProps = composerProps({ selectedSessionId: "session-2", externalSourceControls: sourceControls(newRead) });
+    await act(async () => root.render(<ChatTextComposer props={oldProps} />));
+    const openSources = async () => {
+      const panel = await openPlusPanel();
+      const action = buttonIn(panel, "Sources: none")!;
+      await act(async () => {
+        action.focus();
+        action.click();
+      });
+    };
+    expect(sourcesCode.starts).toBe(0);
+    await openSources();
+    await vi.waitFor(() => expect(sourcesCode.starts).toBe(1));
+    expect(oldRead).not.toHaveBeenCalled();
+    await act(async () => root.render(<ChatTextComposer props={newProps} />));
+    await act(async () => releaseCode());
+    expect(oldRead).not.toHaveBeenCalled();
+    expect(newRead).not.toHaveBeenCalled();
+    expect(container.querySelector('[role="dialog"][aria-modal="true"]')).toBeNull();
+
+    await openSources();
+    await vi.waitFor(() => expect(newRead).toHaveBeenCalledOnce());
+    const picker = container.querySelector<HTMLElement>('[role="dialog"][aria-modal="true"]')!;
+    const close = buttonIn(picker, "Close")!;
+    expect(document.activeElement).toBe(close);
+    await act(async () => close.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
+    expect(container.querySelector('[role="dialog"][aria-modal="true"]')).toBeNull();
+    expect(newRead).toHaveBeenCalledOnce();
+    expect(document.activeElement).toBe(newProps.composerRef.current);
+    expect(sourcesCode.starts).toBe(1);
+  } finally {
+    releaseCode();
+    sourcesCode.held = undefined;
+  }
+});
+
+it.each(["desktop", "phone"])("keeps a warm Sources disclosure on %s", async (device) => {
+  media.phone = device === "phone";
   const attachment = {
     attachmentId: "att-1",
     sourceId: "src",
@@ -719,12 +791,27 @@ it("keeps read-only sources behind a toolbar chip until the operator opens them"
     onReload: vi.fn(),
   } as unknown as NonNullable<ComposerProps["externalSourceControls"]>;
   await act(async () => root.render(<ChatTextComposer props={composerProps({ externalSourceControls: controls })} />));
+  if (media.phone) {
+    await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Options"]')!.click());
+  }
   const chip = [...container.querySelectorAll("button")].find((button) => button.textContent === "Sources: 1")!;
-  const panel = container.querySelector('section[aria-label="Read-only external source attachments"]')!;
+  const readPanel = () => container.querySelector('section[aria-label="Read-only external source attachments"]');
   expect(chip.getAttribute("aria-expanded")).toBe("false");
+  expect(document.getElementById(chip.getAttribute("aria-controls")!)?.hidden).toBe(true);
+  expect(readPanel()).toBeNull();
+  await act(async () => {
+    chip.focus();
+    chip.click();
+  });
+  await vi.waitFor(() => expect(readPanel()).not.toBeNull());
+  expect(chip.getAttribute("aria-expanded")).toBe("true");
+  const panel = readPanel()!;
+  expect(panel.closest("[hidden]")).toBeNull();
+  await act(async () => chip.click());
+  expect(readPanel()).toBe(panel);
   expect(panel.closest("[hidden]")).not.toBeNull();
   await act(async () => chip.click());
-  expect(chip.getAttribute("aria-expanded")).toBe("true");
+  expect(readPanel()).toBe(panel);
   expect(panel.closest("[hidden]")).toBeNull();
   // The draft starts at two lines and still grows.
   expect(container.querySelector("textarea")?.getAttribute("rows")).toBe("2");
@@ -1106,4 +1193,157 @@ describe("channel conversation composer", () => {
     expect(sendButton().disabled).toBe(true);
     expect(cockpitSendBlockReason(props)).toBe(message);
   });
+});
+
+it("requires current Sources reload consent and preserves the composer when canceled", async () => {
+  vi.resetModules();
+  const load = vi.fn(async () => {
+    throw new TypeError("Failed to fetch dynamically imported module: private-fixture");
+  });
+  vi.doMock("../../../features/threaded-surface/ThreadedExternalSourceStrip", load);
+  const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
+  try {
+    const { ChatTextComposer: RecoveryComposer } = await import("./ChatTextComposer");
+    const { beginApprovalOperation, releaseApprovalOperationCheck } =
+      await import("@goatcitadel/mission-control-shared/state/scoped-operation-attempts");
+    const controls = sourceControls(vi.fn());
+    const props = composerProps({ draft: "Keep this unsent draft", externalSourceControls: controls });
+    await act(async () => root.render(<RecoveryComposer props={props} />));
+    const action = buttonIn(await openPlusPanel(), "Sources: none")!;
+    await act(async () => {
+      action.focus();
+      action.click();
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("Sources could not load."));
+    expect(load).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("private-fixture");
+    const recovery = buttonIn(container, "Reload app");
+    expect(recovery).toBeDefined();
+    const dialog = () => document.querySelector<HTMLElement>('[role="dialog"][aria-labelledby]');
+    const review = async () => {
+      recovery!.focus();
+      await act(async () => recovery!.click());
+      await vi.waitFor(() => expect(dialog()?.textContent).toContain("Reload app?"));
+      expect(reload).not.toHaveBeenCalled();
+      return dialog()!;
+    };
+    const first = await review();
+    const cancel = buttonIn(first, "Cancel")!;
+    expect(document.activeElement).toBe(cancel);
+    await act(async () => cancel.click());
+    await vi.waitFor(() => expect(document.activeElement).toBe(recovery));
+    expect(props.composerRef.current?.value).toBe("Keep this unsent draft");
+    expect(reload).not.toHaveBeenCalled();
+
+    const confirm = buttonIn(await review(), "Reload app")!;
+    const scope = JSON.stringify(["chat-context", "session-1"]);
+    const presentation = JSON.stringify(["fixture", "fixture", scope]);
+    const key = JSON.stringify(["library-operation", presentation]);
+    const pending = beginApprovalOperation(key, "fixture-revision")!;
+    try {
+      await act(async () => confirm.click());
+      expect(reload).not.toHaveBeenCalled();
+    } finally {
+      releaseApprovalOperationCheck(key, pending);
+    }
+    await act(async () => {
+      confirm.click();
+      confirm.click();
+    });
+    expect(reload).toHaveBeenCalledOnce();
+    expect(load).toHaveBeenCalledOnce();
+    expect(props.onSend).not.toHaveBeenCalled();
+    expect(controls.onLoadCandidates).not.toHaveBeenCalled();
+  } finally {
+    reload.mockRestore();
+    vi.doUnmock("../../../features/threaded-surface/ThreadedExternalSourceStrip");
+  }
+});
+
+it.each([
+  { device: "desktop", outside: false },
+  { device: "desktop", outside: true },
+  { device: "phone", outside: false },
+])("preserves a cold Sources palette handoff only while focus remains owned ($device, outside=$outside)", async ({ device, outside }) => {
+  media.phone = device === "phone";
+  const modulePath = "../../../features/threaded-surface/ThreadedExternalSourceStrip";
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const load = vi.fn(async () => {
+    await held;
+    return vi.importActual<typeof import("../../../features/threaded-surface/ThreadedExternalSourceStrip")>(modulePath);
+  });
+  vi.resetModules();
+  vi.doMock(modulePath, load);
+  try {
+    const { ChatTextComposer: ColdComposer } = await import("./ChatTextComposer");
+    const read = vi.fn();
+    const props = composerProps({
+      externalSourceControls: sourceControls(read),
+      commandSuggestions: [
+        {
+          key: "sources",
+          command: "Attach a source",
+          description: "Choose a read-only source",
+          applyValue: "",
+          action: { type: "launch_external_source" },
+        },
+      ],
+    });
+    function Harness() {
+      const [open, setOpen] = useState(true);
+      return (
+        <>
+          <button type="button">Outside composer</button>
+          <ColdComposer
+            props={{
+              ...props,
+              composerPalette: {
+                enabled: true,
+                globalOpen: open,
+                query: "",
+                failures: [],
+                onOpen: () => setOpen(true),
+                onClose: () => setOpen(false),
+                onQueryChange: vi.fn(),
+                onIndexChange: vi.fn(),
+                onSelect: vi.fn(),
+                loading: false,
+              },
+            }}
+          />
+        </>
+      );
+    }
+    await act(async () => root.render(<Harness />));
+    const palette = container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+    await act(async () => {
+      palette.focus();
+      palette.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    });
+    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
+    expect(read).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(props.composerRef.current);
+    const other = buttonIn(container, "Outside composer")!;
+    if (outside) await act(async () => other.focus());
+    await act(async () => {
+      release();
+      await vi.dynamicImportSettled();
+    });
+    const picker = () => container.querySelector('[role="dialog"][aria-modal="true"]');
+    if (outside) {
+      expect(read).not.toHaveBeenCalled();
+      expect(picker()).toBeNull();
+      expect(document.activeElement).toBe(other);
+    } else {
+      await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+      expect(picker()?.contains(document.activeElement)).toBe(true);
+      if (device === "phone") expect(picker()?.closest('[aria-label="Message options"]')).toBeTruthy();
+    }
+  } finally {
+    release();
+    vi.doUnmock(modulePath);
+  }
 });

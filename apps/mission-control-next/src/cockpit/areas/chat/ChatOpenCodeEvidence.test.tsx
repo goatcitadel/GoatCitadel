@@ -32,7 +32,7 @@ describe("ChatOpenCodeEvidence", () => {
     expect(html).toContain("1 reported file · 1 step");
     expect(html).toContain("Permission rejected");
     expect(html).toContain("Diff preview is partial");
-    expect(html).toContain("Some output was omitted");
+    expect(html).toContain("Some output was omitted. Open run details for the saved output.");
     expect(html).toContain("Open run details");
     expect(html).toContain("&lt;script&gt;unsafe&lt;/script&gt;");
     expect(html).not.toContain("<script>");

@@ -83,13 +83,22 @@ export async function buildAttachmentPromptContext(
   }
 
   const attachments = (await deps.storage.chatAttachments.listByIds(attachmentIds)).slice(0, 6);
+  return formatAttachmentPromptContext(attachments, supportsVision, codeModeRequestEligible);
+}
+
+function formatAttachmentPromptContext(
+  attachments: ChatAttachmentRecord[],
+  sentToVision: boolean | ReadonlySet<string>,
+  codeModeRequestEligible: boolean,
+): string | undefined {
   if (attachments.length === 0) {
     return undefined;
   }
 
   const lines = attachments.map((attachment) => {
     const descriptor = `- ${attachment.fileName} (${attachment.mimeType}, ${attachment.sizeBytes} bytes)`;
-    if (supportsVision && isImageMimeType(attachment.mimeType)) {
+    if ((sentToVision === true || (typeof sentToVision !== "boolean" && sentToVision.has(attachment.attachmentId))) &&
+        isImageMimeType(attachment.mimeType)) {
       return `${descriptor}\n  Preview: sent directly to a vision-capable model.`;
     }
     if (!attachment.extractPreview?.trim()) {
@@ -125,14 +134,17 @@ export async function buildAttachmentMessageParts(
   }
 
   const attachments = (await deps.storage.chatAttachments.listByIds(attachmentIds)).slice(0, 4);
-  const parts: Array<Record<string, unknown>> = [
-    {
-      type: "text",
-      text: prompt,
-    },
-  ];
+  const { parts } = await readImageMessageParts(deps, attachments);
+  return parts.length > 0 ? [{ type: "text", text: prompt }, ...parts] : undefined;
+}
 
-  for (const attachment of attachments) {
+async function readImageMessageParts(
+  deps: ChatTurnUserMessageDependencies,
+  attachments: ChatAttachmentRecord[],
+): Promise<{ parts: Array<Record<string, unknown>>; sentIds: Set<string> }> {
+  const parts: Array<Record<string, unknown>> = [];
+  const sentIds = new Set<string>();
+  for (const attachment of attachments.slice(0, 4)) {
     if (!isImageMimeType(attachment.mimeType)) {
       continue;
     }
@@ -148,12 +160,13 @@ export async function buildAttachmentMessageParts(
           url: dataUrl,
         },
       });
+      sentIds.add(attachment.attachmentId);
     } catch {
       // keep chat flowing even if one image cannot be loaded
     }
   }
 
-  return parts.length > 1 ? parts : undefined;
+  return { parts, sentIds };
 }
 
 export async function buildUserMessageContent(
@@ -164,15 +177,10 @@ export async function buildUserMessageContent(
 ): Promise<string | Array<Record<string, unknown>>> {
   const prompt = buildUserMessagePrompt(message);
   const attachments = await resolveMessageAttachments(deps, message);
-  const contentParts = await buildAttachmentMessageParts(deps, attachments, prompt, supportsVision);
-  if (contentParts) {
-    return contentParts;
-  }
-  const attachmentContext = await buildAttachmentPromptContext(
-    deps,
-    attachments,
-    supportsVision,
-    codeModeRequestEligible,
-  );
-  return attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
+  const images = supportsVision ? await readImageMessageParts(deps, attachments) : { parts: [], sentIds: new Set<string>() };
+  // Every attachment retains its bounded context, even when one image loads.
+  // Only successfully included image parts may claim direct vision delivery.
+  const attachmentContext = formatAttachmentPromptContext(attachments, images.sentIds, codeModeRequestEligible);
+  const text = attachmentContext ? `${prompt}\n\n${attachmentContext}` : prompt;
+  return images.parts.length > 0 ? [{ type: "text", text }, ...images.parts] : text;
 }

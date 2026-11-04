@@ -1,4 +1,4 @@
-import type { CapabilitySkillInstall, CapabilitySkillInstallAsks } from "@goatcitadel/contracts";
+import type { CapabilitySkillInstall, CapabilitySkillInstallAsks, CapabilitySkillSource } from "@goatcitadel/contracts";
 import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { toolLabel } from "../tools/tool-labels";
 import { joinLabels } from "./discover-view";
@@ -151,4 +151,18 @@ export function approvalWords(step: "waiting_install" | "waiting_switch_on", nam
         summary: `Installs ${name} switched off. It can't be used until you switch it on.`,
       }
     : { title: `Approve switching on ${name}?`, summary: `Lets the AI use ${name} in new chats.` };
+}
+
+export function sameSource(left: CapabilitySkillSource | undefined, right: CapabilitySkillSource): boolean {
+  if (!left || left.kind !== right.kind) return false;
+  return left.kind === "pack"
+    ? left.packId === (right as typeof left).packId
+    : left.sourceRef === (right as typeof left).sourceRef;
+}
+
+/** The source to check again for an install: a pack by its id, a Git source by its address. */
+export function checkSourceOf(install: CapabilitySkillInstall): CapabilitySkillSource {
+  return install.source.kind === "pack"
+    ? { kind: "pack", packId: install.source.packId }
+    : { kind: "git", sourceRef: install.source.sourceRef };
 }

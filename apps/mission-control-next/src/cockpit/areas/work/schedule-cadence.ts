@@ -150,16 +150,36 @@ function zoneOffsetMinutes(instant: number, zone: string): number {
   return Math.round((asUtc - Math.floor(instant / 1000) * 1000) / 60_000);
 }
 
-/** The instant a wall-clock time on a calendar day in `zone` happens. */
-function zonedInstant(year: number, month: number, day: number, hour: number, minute: number, zone: string): number {
-  const guess = Date.UTC(year, month - 1, day, hour, minute);
-  const first = guess - zoneOffsetMinutes(guess, zone) * 60_000;
-  return guess - zoneOffsetMinutes(first, zone) * 60_000;
+/** The earliest future occurrence of a wall time, including either side of a fall-back transition. */
+function nextZonedInstant(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number,
+  zone: string,
+  after: number,
+): number | undefined {
+  const wallTime = Date.UTC(year, month - 1, day, hour, minute);
+  const dayMs = 24 * 60 * 60_000;
+  // Offsets surrounding the wall time can differ. Round-trip each candidate to exclude skipped times.
+  const offsets = new Set([
+    zoneOffsetMinutes(wallTime - dayMs, zone),
+    zoneOffsetMinutes(wallTime, zone),
+    zoneOffsetMinutes(wallTime + dayMs, zone),
+  ]);
+  let earliest: number | undefined;
+  for (const offset of offsets) {
+    const instant = wallTime - offset * 60_000;
+    if (instant <= after || (earliest !== undefined && instant >= earliest)) continue;
+    if (zoneOffsetMinutes(instant, zone) === offset) earliest = instant;
+  }
+  return earliest;
 }
 
 /**
- * The next time a guided daily or weekday schedule runs, as the Gateway evaluates it: `time` on the wall clock in
- * `zone`. Returns null for other cadences, which the field does not preview.
+ * Preview the next matching wall time for a guided daily or weekday schedule in `zone`.
+ * The editor has no prior run history. Returns null for cadences it does not preview.
  */
 export function nextGuidedRun(
   cadence: ScheduleCadence,
@@ -186,15 +206,16 @@ export function nextGuidedRun(
     const calendar = new Date(Date.UTC(today.year, today.month - 1, today.day + offset));
     const weekday = calendar.getUTCDay();
     if (cadence === "weekdays" && (weekday === 0 || weekday === 6)) continue;
-    const instant = zonedInstant(
+    const instant = nextZonedInstant(
       calendar.getUTCFullYear(),
       calendar.getUTCMonth() + 1,
       calendar.getUTCDate(),
       hour,
       minute,
       zone,
+      now.getTime(),
     );
-    if (instant > now.getTime()) return new Date(instant);
+    if (instant !== undefined) return new Date(instant);
   }
   return null;
 }

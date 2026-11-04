@@ -101,6 +101,38 @@ function plugin(pluginId: string, overrides: Partial<StoredPlugin> = {}): Stored
 }
 
 describe("CapabilityPluginStore", () => {
+  it("locks the canonical row before shared connector work, including an empty store", async () => {
+    const rows = new SettingRows();
+    const store = new CapabilityPluginStore(rows, () => new Date(NOW));
+    let transactionOpen = false;
+    const transaction = async <T>(work: () => T | Promise<T>): Promise<Awaited<T>> => {
+      transactionOpen = true;
+      try {
+        return await work();
+      } finally {
+        transactionOpen = false;
+      }
+    };
+
+    await store.withLock(transaction, async () => {
+      expect(transactionOpen).toBe(true);
+      expect(rows.writes).toBe(1);
+      expect(await store.list()).toEqual([]);
+      await store.update("one", () => plugin("one"));
+    });
+
+    expect(transactionOpen).toBe(false);
+    expect((await store.list()).map((item) => item.pluginId)).toEqual(["one"]);
+    let ran = false;
+    rows.beforeNextCompare = () => {
+      rows.record = { ...rows.record!, updatedAt: "competing-writer" };
+    };
+    await expect(store.withLock(transaction, async () => {
+      ran = true;
+    })).rejects.toMatchObject({ code: "WRITE_CONFLICT" });
+    expect(ran).toBe(false);
+  });
+
   it("reads a record saved before Phase 5", async () => {
     const rows = new SettingRows();
     // A row as Phase 4 wrote it: no format, no kept translation, no piece warnings.

@@ -32,6 +32,8 @@ import {
   type InboundChannelEventStatus,
 } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
+import { assertLinkageCompatible } from "./inbound-channel-event-linkage.js";
+import type { IntegrationConnectionRepository } from "./integration-connection-repo.js";
 
 interface InboundChannelEventRow {
   sequence: number | string;
@@ -110,7 +112,10 @@ export class InboundChannelEventRepository {
   private readonly listExpiredStmt;
   private readonly recoverExpiredStmt;
 
-  public constructor(private readonly db: DatabaseClient) {
+  public constructor(
+    private readonly db: DatabaseClient,
+    private readonly integrationConnections?: Pick<IntegrationConnectionRepository, "withExpectedRevision">,
+  ) {
     this.databaseNowStmt = db.prepare(
       db.dialect === "postgres"
         ? `SELECT to_char(clock_timestamp() AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"') AS now_iso`
@@ -421,10 +426,19 @@ ${laneFilter}      ORDER BY candidate.sequence ASC
   public acceptMany(
     inputs: readonly InboundChannelEventAcceptInput[],
     acceptedAt?: string,
+    telegramPollRevision?: string,
   ): InboundChannelEventAcceptResult[] {
     const now = normalizeTimestamp(acceptedAt ?? this.readDatabaseNow(), "acceptedAt");
     const normalized = inputs.map((input) => normalizeAcceptance(input, now));
-    return this.db.transaction("immediate", () => normalized.map((item) => this.acceptNormalized(item, now)));
+    const write = () => normalized.map((item) => this.acceptNormalized(item, now));
+    if (telegramPollRevision === undefined) return this.db.transaction("immediate", write);
+
+    const [item] = normalized;
+    if (normalized.length !== 1 || item?.channelKey !== "telegram" || item.transport !== "provider_webhook") {
+      throw new ValidationError({ message: "A Telegram poll revision must guard exactly one provider event." });
+    }
+    if (!this.integrationConnections) throw new Error("Telegram poll admission requires the connection repository.");
+    return this.integrationConnections.withExpectedRevision(item.connectionId, telegramPollRevision, write);
   }
 
   /** Due events in sequence order; with `laneKeyPrefix`, only those whose lane starts with it. */
@@ -981,30 +995,6 @@ function linkageParams(linkage: InboundChannelEventLinkage): Record<string, stri
     commandOperationKey: linkage.commandOperationKey ?? null,
     commandResultText: linkage.commandResultText ?? null,
   };
-}
-
-function assertLinkageCompatible(current: InboundChannelEventRecord, linkage: InboundChannelEventLinkage): void {
-  for (const key of [
-    "sessionKey",
-    "sessionId",
-    "messageId",
-    "turnId",
-    "assistantMessageId",
-    "durableRunId",
-    "deliveryId",
-    "providerMessageId",
-    "messageContentHash",
-    "deliveryPayloadHash",
-    "commandOperationKey",
-    "commandResultText",
-  ] as const) {
-    if (current[key] && linkage[key] && current[key] !== linkage[key]) {
-      throw new ConflictError({
-        message: `Inbound channel event ${current.eventId} is already linked to a different ${key}.`,
-        details: { eventId: current.eventId, field: key },
-      });
-    }
-  }
 }
 
 function normalizeCommandResultText(value: string | undefined): string | undefined {

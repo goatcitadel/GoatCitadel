@@ -1,5 +1,5 @@
 import type { DocumentPatchProposalRecord, DocumentPatchProposalState } from "@goatcitadel/contracts";
-import { NotFoundError, ValidationError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError, ValidationError } from "@goatcitadel/contracts";
 import type { DatabaseClient } from "./db.js";
 
 interface ProposalRow {
@@ -98,6 +98,16 @@ export class DocumentPatchProposalRepository {
     return Array.isArray(rows) ? rows.filter(isProposalRow).map(mapRow) : [];
   }
 
+  /** Caller holds the surrounding owner transaction through target and settlement. */
+  public lockPending(proposalId: string, workspaceId: string): DocumentPatchProposalRecord | undefined {
+    const id = requireText(proposalId, "proposalId");
+    const locked = this.db.prepare(`
+      UPDATE document_patch_proposals SET state = state
+      WHERE proposal_id = @proposalId AND workspace_id = @workspaceId AND state = 'pending'
+    `).run({ proposalId: id, workspaceId: requireText(workspaceId, "workspaceId") });
+    return locked.changes === 1 ? this.get(id) : undefined;
+  }
+
   public settle(
     proposalId: string,
     state: Exclude<DocumentPatchProposalState, "pending">,
@@ -135,7 +145,10 @@ export class DocumentPatchProposalRepository {
         updatedAt: input.updatedAt,
         resolvedBy: requireText(input.resolvedBy, "resolvedBy"),
       });
-    if (result.changes !== 1) return this.get(proposalId);
+    if (result.changes !== 1) {
+      this.get(proposalId);
+      throw new ConflictError({ message: "Document proposal changed before settlement." });
+    }
     return this.get(proposalId);
   }
 }

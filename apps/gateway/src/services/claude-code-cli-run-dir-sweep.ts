@@ -1,19 +1,13 @@
-import { lstat, readdir } from "node:fs/promises";
+import { constants } from "node:fs";
+import { lstat, open, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { logger } from "@goatcitadel/gateway-core";
 import { CLAUDE_CLI_RESULTS_DIR } from "./claude-code-cli-mcp-stub.js";
 import { CLAUDE_CLI_WARM_PARK_DEADLINE_MS } from "./claude-code-cli-warm-registry.js";
 
 /**
- * Age past which an unowned `run-*` dir counts as left behind by a hard-killed Gateway.
- *
- * A live run dir shows activity at least once per step-and-park cycle: mkdtemp and the bridge
- * files touch the run dir itself, and every warm resume stages results into `results/`. Between
- * two such touches a step streams for at most its overall timeout (300 s by default; the longest
- * Chat mode budget is also 300 s) and then parks for at most `CLAUDE_CLI_WARM_PARK_DEADLINE_MS`
- * (600 s), about 15 minutes in all. Two hours is eight times that, so a second Gateway sharing
- * the same temp dir never loses a live run, while a crash's leftovers clear at the next Gateway's
- * first cold CLI step.
+ * Minimum inactivity before a dead owner's run directory is eligible. Age alone is
+ * never ownership proof: long calls and forward wall-clock changes can age a live run.
  */
 export const CLAUDE_CLI_STALE_RUN_DIR_AGE_MS = 2 * 60 * 60 * 1000;
 
@@ -21,14 +15,28 @@ export const CLAUDE_CLI_STALE_RUN_DIR_AGE_MS = 2 * 60 * 60 * 1000;
 export const CLAUDE_CLI_STALE_RUN_DIR_PARK_MARGIN = CLAUDE_CLI_STALE_RUN_DIR_AGE_MS / CLAUDE_CLI_WARM_PARK_DEADLINE_MS;
 
 const RUN_DIR_PREFIX = "run-";
+export const CLAUDE_CLI_OWNER_FILE = ".owner.json";
+const OWNER_MAX_BYTES = 512;
+
+export type ClaudeCliOwnerProbe = (pid: number) => "alive" | "dead" | "unknown";
+
+/** Registered before prompt/bridge files; retained while the Gateway owns a warm parked run. */
+export async function registerClaudeCliRunDirOwner(runDir: string, pid = process.pid): Promise<void> {
+  if (!isOwnerPid(pid)) throw new Error("Invalid Claude CLI run directory owner pid");
+  await writeFile(path.join(runDir, CLAUDE_CLI_OWNER_FILE), JSON.stringify({ version: 1, pid }), {
+    flag: "wx",
+    mode: 0o600,
+  });
+}
 
 const log = logger.child("claude-code-cli-run-dir-sweep");
 
-/** The filesystem reads the sweep needs; both must report links as links (never follow them). */
+/** Filesystem reads must not treat links as directories or valid owner records. */
 export interface ClaudeCliRunDirSweepFs {
   listEntries(dir: string): Promise<Array<{ name: string; isDirectory: boolean }>>;
   /** `undefined` when the path is missing; `isDirectory` is false for a symlink or junction. */
   statNoFollow(target: string): Promise<{ isDirectory: boolean; mtimeMs: number } | undefined>;
+  readOwnerPid(runDir: string): Promise<number | undefined>;
 }
 
 export interface ClaudeCliRunDirSweepInput {
@@ -38,6 +46,7 @@ export interface ClaudeCliRunDirSweepInput {
   now?: () => number;
   fs?: ClaudeCliRunDirSweepFs;
   maxAgeMs?: number;
+  probeOwner?: ClaudeCliOwnerProbe;
 }
 
 export interface ClaudeCliRunDirSweepResult {
@@ -60,12 +69,14 @@ export const hostClaudeCliRunDirSweepFs: ClaudeCliRunDirSweepFs = {
       throw error;
     }
   },
+  readOwnerPid: readRunDirOwnerPid,
 };
 
 /**
- * Removes `run-*` dirs directly under `scratchRoot` whose last activity is older than `maxAgeMs`.
- * Links, files, and every other name are left alone, and a missing root is a no-op. Logs counts
- * only; an entry that cannot be read is kept. Never throws.
+ * Removes old `run-*` directories only when their declared Gateway owner is definitely
+ * dead. Missing/invalid/unreadable markers, PID reuse, and unknown liveness are kept.
+ * Unmarked legacy directories require explicit offline cleanup; never migrate or delete
+ * them automatically. Only the exact declared PID is probed; no process enumeration.
  */
 export async function sweepStaleClaudeCliRunDirs(
   input: ClaudeCliRunDirSweepInput,
@@ -87,7 +98,8 @@ export async function sweepStaleClaudeCliRunDirs(
     if (!entry.isDirectory || !isRunDirName(entry.name)) continue;
     const runDir = path.join(input.scratchRoot, entry.name);
     const lastActivity = await readLastActivity(fs, runDir);
-    if (lastActivity === undefined || now - lastActivity < maxAgeMs) {
+    if (lastActivity === undefined || now - lastActivity < maxAgeMs ||
+        !(await hasDeadOwner(fs, runDir, input.probeOwner ?? probeRunDirOwner))) {
       kept += 1;
       continue;
     }
@@ -96,6 +108,56 @@ export async function sweepStaleClaudeCliRunDirs(
   }
   if (removed > 0) log.info("Claude Code CLI stale run dirs swept", { removed, kept });
   return { removed, kept };
+}
+
+function isOwnerPid(value: unknown): value is number {
+  return typeof value === "number" && Number.isInteger(value) && value > 0 && value <= 0x7fffffff;
+}
+
+/** Signal zero checks existence only. EPERM and every error except ESRCH remain ambiguous. */
+function probeRunDirOwner(pid: number): ReturnType<ClaudeCliOwnerProbe> {
+  try {
+    process.kill(pid, 0);
+    return "alive";
+  } catch (error) {
+    return errorCode(error) === "ESRCH" ? "dead" : "unknown";
+  }
+}
+
+async function hasDeadOwner(fs: ClaudeCliRunDirSweepFs, runDir: string, probe: ClaudeCliOwnerProbe): Promise<boolean> {
+  try {
+    const pid = await fs.readOwnerPid(runDir);
+    return isOwnerPid(pid) && probe(pid) === "dead";
+  } catch {
+    return false;
+  }
+}
+
+/** Bounded ordinary-file read; failed ownership reads never authorize cleanup. */
+async function readRunDirOwnerPid(runDir: string): Promise<number | undefined> {
+  const filename = path.join(runDir, CLAUDE_CLI_OWNER_FILE);
+  const expected = await lstat(filename);
+  if (!expected.isFile() || expected.isSymbolicLink() || expected.nlink !== 1 || expected.size > OWNER_MAX_BYTES) return undefined;
+  const handle = await open(filename, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
+  try {
+    const held = await handle.stat();
+    if (!held.isFile() || held.nlink !== 1 || held.size > OWNER_MAX_BYTES ||
+        held.dev !== expected.dev || held.ino !== expected.ino) return undefined;
+    const bytes = Buffer.alloc(OWNER_MAX_BYTES + 1);
+    let length = 0;
+    while (length < bytes.length) {
+      const read = await handle.read(bytes, length, bytes.length - length, length);
+      if (!read.bytesRead) break;
+      length += read.bytesRead;
+    }
+    if (length > OWNER_MAX_BYTES) return undefined;
+    const owner: unknown = JSON.parse(bytes.subarray(0, length).toString("utf8"));
+    if (!owner || typeof owner !== "object" || Array.isArray(owner)) return undefined;
+    const record = owner as Record<string, unknown>;
+    return record.version === 1 && isOwnerPid(record.pid) ? record.pid : undefined;
+  } finally {
+    await handle.close();
+  }
 }
 
 function isRunDirName(name: string): boolean {

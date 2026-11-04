@@ -23,6 +23,7 @@ const CONTENT_W = PAGE_W - MARGIN_X * 2;
 const CONTENT_TOP = 72;
 const CONTENT_BOTTOM = 720;
 const COVER_BAND_H = 300;
+const COVER_TITLE_MAX_LINES = 3;
 const BODY_SIZE = 11;
 const BODY_LEADING = 1.45;
 const HEADING_SIZE = 17;
@@ -94,13 +95,16 @@ export function createDocumentPdf(input: DocumentPdfInput): DocumentPdfResult {
       : undefined;
   const summary = input.body?.trim() || promoted?.body.trim() || "";
 
-  drawCover(flow, input, summary);
+  const coverTitleShortened = drawCover(flow, input, summary);
   for (const bullet of promoted?.bullets ?? []) drawBullet(flow, bullet);
   if (promoted && promoted.bullets.length > 0) flow.y += 18;
   for (const section of sections) drawSection(flow, section);
   const shortenedCells = table ? drawTable(flow, table) : 0;
   const warnings = [
     ...missingGlyphWarnings(input, table),
+    ...(coverTitleShortened
+      ? ["The PDF cover title was shortened to fit in three lines. The full title is in the PDF metadata."]
+      : []),
     ...(shortenedCells > 0
       ? [`${shortenedCells} table cell(s) were too long to fit on one page and were shortened with an ellipsis.`]
       : []),
@@ -205,7 +209,7 @@ class ReportFlow {
   }
 }
 
-function drawCover(flow: ReportFlow, input: DocumentPdfInput, summary: string): void {
+function drawCover(flow: ReportFlow, input: DocumentPdfInput, summary: string): boolean {
   const { page, theme } = flow;
   flow.layouts.add("report-cover");
   page.rect(0, 0, PAGE_W, COVER_BAND_H, theme.band);
@@ -216,9 +220,9 @@ function drawCover(flow: ReportFlow, input: DocumentPdfInput, summary: string): 
     size: 10,
     color: theme.onBandMuted,
   });
-  const titleSize = fitSize(input.title, "bold", CONTENT_W, 38, 24, 3);
-  const titleLines = wrapWinAnsi(toWinAnsiBytes(input.title), "bold", titleSize, CONTENT_W).slice(0, 3);
-  titleLines.forEach((line, index) => {
+  const titleSize = fitSize(input.title, "bold", CONTENT_W, 38, 24, COVER_TITLE_MAX_LINES);
+  const titleLines = wrapWinAnsi(toWinAnsiBytes(input.title), "bold", titleSize, CONTENT_W);
+  titleLines.slice(0, COVER_TITLE_MAX_LINES).forEach((line, index) => {
     page.text(MARGIN_X, 150 + titleSize + index * titleSize * 1.12, line, {
       font: "bold",
       size: titleSize,
@@ -229,6 +233,7 @@ function drawCover(flow: ReportFlow, input: DocumentPdfInput, summary: string): 
   page.text(MARGIN_X, COVER_BAND_H + 28, date, { font: "regular", size: 10, color: theme.muted });
   flow.y = COVER_BAND_H + 52;
   if (summary) drawCallout(flow, summary);
+  return titleLines.length > COVER_TITLE_MAX_LINES;
 }
 
 /** YYYY-MM-DD for the calendar day in `timeZone` (host zone when absent or unknown), not the UTC day. */

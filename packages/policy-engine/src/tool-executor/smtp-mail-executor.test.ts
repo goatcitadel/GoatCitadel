@@ -115,6 +115,34 @@ describe("smtpSend", () => {
     );
   });
 
+  it("sends the exact nonblank body text without changing subject or recipient normalization", async () => {
+    const runtime = fakeRuntime();
+    const bodyText = "  First line\nSecond line\n";
+
+    await smtpSend(
+      SMTP_CONFIG,
+      { ...SEND_ARGS, to: [" alice@example.com "], subject: " Quarterly update ", bodyText },
+      ["smtp.example.com"],
+      undefined,
+      runtime,
+    );
+
+    expect(runtime.sendMail).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ to: ["alice@example.com"], subject: "Quarterly update", text: bodyText }),
+    );
+  });
+
+  it.each(["", " \r\n\t"])("rejects blank body text before creating a transport", async (bodyText) => {
+    const runtime = fakeRuntime();
+
+    await expect(
+      smtpSend(SMTP_CONFIG, { ...SEND_ARGS, bodyText }, ["smtp.example.com"], undefined, runtime),
+    ).rejects.toThrow("bodyText is required");
+    expect(runtime.createTransport).not.toHaveBeenCalled();
+    expect(runtime.markMutationRequestStarted).not.toHaveBeenCalled();
+    expect(runtime.sendMail).not.toHaveBeenCalled();
+  });
+
   it("throws a partial-delivery error carrying the messageId when any recipient is refused", async () => {
     const runtime = fakeRuntime({
       sendMail: vi.fn(async () => ({

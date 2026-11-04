@@ -19,6 +19,11 @@ vi.mock("./gateway-route-service-composition.js", () => ({
 import type { ApprovalRequest, OrchestrationPlan, OrchestrationRun } from "@goatcitadel/contracts";
 import { EvolutionControlPlaneAdapterRegistry } from "./evolution-control-plane-adapter.js";
 import { GatewayService } from "./gateway-service.js";
+
+// Gateway captures this flag when the module is loaded. This suite uses a
+// mocked scheduler and needs the enabled branch even in isolated verification.
+vi.hoisted(() => vi.stubEnv("GOATCITADEL_DISABLE_MAINTENANCE_SCHEDULER", undefined));
+vi.unstubAllEnvs();
 import { MEMORY_CONSOLIDATION_WEEKLY_JOB_ID } from "./gateway/cron-job-ids.js";
 import * as routeComposition from "./gateway-route-service-composition.js";
 import { SharedHostLifecycleService } from "./shared-host-lifecycle-service.js";

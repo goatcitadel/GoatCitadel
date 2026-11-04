@@ -306,7 +306,7 @@ describe("buildBaseAgentSystemPrompt", () => {
     expect(tail).not.toContain("tool policy file");
   });
 
-  it("says uninstalling the plugin turns a group it holds off back on, never the Tools switch (F9, Q11)", () => {
+  it("explains how the operator releases a plugin hold and restores access if the group stays off (F9, Q11)", () => {
     const tail = buildBaseAgentSystemPrompt(
       input({
         toolset: {
@@ -319,9 +319,8 @@ describe("buildBaseAgentSystemPrompt", () => {
       }),
     ).volatileTail;
     expect(tail).toContain(
-      "To allow file writes, the operator uninstalls every plugin that keeps the Files tools off in Capabilities › Plugins, which turns them back on.",
+      "To allow file writes, the operator uninstalls every plugin that keeps the Files tools off in Capabilities › Plugins to release the holds. If the group stays off, the operator can switch it on in Capabilities › Tools.",
     );
-    expect(tail).not.toContain("switches the Files tools back on");
     // The Plugins tab can uninstall now, so Chat names where (Q11). Two plugins may hold a group, so it says every one.
     expect(tail).toContain("Capabilities › Plugins");
     expect(tail).toContain(

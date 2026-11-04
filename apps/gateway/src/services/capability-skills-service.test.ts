@@ -585,8 +585,51 @@ describe("CapabilitySkillsService.installs", () => {
     expect(await read("check-blocked")).toEqual([["check-blocked", "blocked"]]);
     expect(await read("check-installed")).toEqual([["check-installed", "installed_off"]]);
     expect(await read("check-elsewhere")).toEqual([]);
-    expect(reads.listSkillHub).toHaveBeenCalledWith({ workspaceId: WORKSPACE_ID, limit: 100 });
+    expect(reads.listSkillHub).toHaveBeenCalledWith({ workspaceId: WORKSPACE_ID, snapshotIds: ["check-done"] });
   });
+
+  it("reads an older install by its snapshot without expanding the newest installs list", async () => {
+    const older = hubItem({
+      snapshotId: "check-older",
+      approvals: { install_inactive: hubApproval("install_inactive", "pending") },
+    });
+    const newer = Array.from({ length: 100 }, (_, index) => hubItem({ snapshotId: `check-newer-${index}` }));
+    const listSkillHub = vi.fn(async (input: {
+      workspaceId: string;
+      limit?: number;
+      snapshotIds?: readonly string[];
+    }) => ({
+      items: input.workspaceId !== WORKSPACE_ID
+        ? []
+        : input.snapshotIds
+          ? [...newer, older].filter((item) => input.snapshotIds!.includes(item.snapshotId))
+          : [...newer, older].slice(0, input.limit),
+    }));
+    const service = new CapabilitySkillsService(sources({ listSkillHub }));
+
+    expect((await service.installs(WORKSPACE_ID)).installs).toEqual([]);
+    expect(listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: WORKSPACE_ID, limit: 100 });
+
+    const exact = await service.installs(WORKSPACE_ID, older.snapshotId);
+    expect(exact.installs).toEqual([
+      expect.objectContaining({ snapshotId: older.snapshotId, step: "waiting_install" }),
+    ]);
+    expect(listSkillHub).toHaveBeenLastCalledWith({ workspaceId: WORKSPACE_ID, snapshotIds: [older.snapshotId] });
+
+    expect((await service.installs("workspace-b", older.snapshotId)).installs).toEqual([]);
+    expect((await service.installs(WORKSPACE_ID, "check-absent")).installs).toEqual([]);
+  });
+
+  it.each([" ", " check-done", "check-done ", "check-ｄｏｎｅ"])(
+    "keeps the no-match result for noncanonical snapshot ID %j",
+    async (snapshotId) => {
+      const listSkillHub = vi.fn(async () => ({ items: [hubItem({ snapshotId: "check-done" })] }));
+      const service = new CapabilitySkillsService(sources({ listSkillHub }));
+
+      expect((await service.installs(WORKSPACE_ID, snapshotId)).installs).toEqual([]);
+      expect(listSkillHub).toHaveBeenCalledExactlyOnceWith({ workspaceId: WORKSPACE_ID, limit: 100 });
+    },
+  );
 
   it("answers a plain 503 when the checks can't be read, and logs why", async () => {
     const reportFailure = vi.fn();

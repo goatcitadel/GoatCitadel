@@ -9,6 +9,11 @@ import { Storage } from "@goatcitadel/storage";
 import { LlmService } from "./llm-service.js";
 import type { SecretStoreService } from "./secret-store-service.js";
 
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
+
 const OAUTH_ACCOUNT = "provider:openai-codex:oauth";
 const WORKSPACE_ID = "workspace-codex-refresh-test";
 const TOKEN_EXPIRED_BODY = JSON.stringify({

@@ -39,6 +39,7 @@ function buildHarness(options: {
         available: supported && config.bestEffortHostEnabled,
       }) as CodeModeSandboxMetadata,
     listToolCatalog: () => [],
+    listSwitchedOffToolNames: () => new Set(),
     listLoadedSkills: () => [],
     readSkillStates: async () => new Map(),
     invokeTool: vi.fn(),

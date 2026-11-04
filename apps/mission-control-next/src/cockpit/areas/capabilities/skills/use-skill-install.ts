@@ -1,6 +1,12 @@
-import { useEffect } from "react";
+import { checkSourceOf, sameSource } from "./skill-install-view";
+export { checkSourceOf } from "./skill-install-view";
+import { useEffect, useState } from "react";
 import { useQueryClient, type QueryClient, type QueryKey } from "@tanstack/react-query";
 import type { CapabilitySkillInstall, CapabilitySkillInstallStep, CapabilitySkillSource } from "@goatcitadel/contracts";
+import {
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import {
   fetchCapabilitySkillInstalls,
   requestCapabilitySkillOperation,
@@ -9,10 +15,10 @@ import {
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { describeCheckFailure } from "./skill-check-copy";
+import { describeCheckFailure, refusalMessage } from "./skill-check-copy";
 import {
-  __resetSkillInstallStoreForTests,
   cancelSkillInstallTick,
+  clearSkillInstallStore,
   installSignal,
   readSkillInstall,
   scheduleSkillInstallTick,
@@ -83,6 +89,27 @@ const generations = new Map<string, number>();
 /** Reads at the current step, which set how often the next one comes, and the step they were at. */
 const beats = new Map<string, { step: CapabilitySkillInstallStep; count: number }>();
 const misses = new Map<string, number>();
+const handedOver = new Set<string>();
+let custody = 0;
+
+export function useSkillInstallScope(): number {
+  const [scope] = useState(() => custody);
+  return scope;
+}
+
+export function isSkillInstallScopeCurrent(scope: number): boolean {
+  return scope === custody;
+}
+
+export function markSkillInstallHandedOver(key: string): boolean {
+  if (handedOver.has(key)) return false;
+  handedOver.add(key);
+  return true;
+}
+
+export function __resetSkillInstallPanelsForTests() {
+  handedOver.clear();
+}
 
 const bump = (key: string) => generations.set(key, (generations.get(key) ?? 0) + 1);
 
@@ -212,6 +239,7 @@ async function readInstall(key: string, force = false) {
     return;
   }
   const generation = generations.get(key) ?? 0;
+  const scope = custody;
   reading.add(key);
   let install: CapabilitySkillInstall | undefined;
   let failed = false;
@@ -224,6 +252,7 @@ async function readInstall(key: string, force = false) {
   } catch {
     failed = true;
   }
+  if (scope !== custody) return;
   reading.delete(key);
   const stale = (generations.get(key) ?? 0) !== generation;
   if (readAgain.delete(key) || stale) return void readInstall(key, force);
@@ -234,21 +263,13 @@ async function readInstall(key: string, force = false) {
 
 setSkillInstallTicker((key) => readInstall(key));
 
-/** The route's own plain line for a refusal, or a plain summary. */
-function refusalMessage(error: unknown): string {
-  if (isApiRequestError(error) && typeof error.body === "object" && error.body !== null) {
-    const message = (error.body as { error?: unknown }).error;
-    if (typeof message === "string" && message.trim()) return message.trim();
-  }
-  return describeApiError(error).summary;
-}
-
 /** Asks for one install step of the check `key` and follows it. `chain` goes on to switch it on once installed. */
 async function request(key: string, kind: SkillInstallStepKind, chain: boolean) {
   const entry = readSkillInstall(key);
   const context = contexts.get(key);
   const install = installOf(entry?.state);
   if (!entry || !context || !install || entry.asking) return;
+  const scope = custody;
   bump(key);
   cancelSkillInstallTick(key);
   // A new request is read at the first pace, however long the step it comes back to waited before.
@@ -266,6 +287,7 @@ async function request(key: string, kind: SkillInstallStepKind, chain: boolean) 
   try {
     await requestCapabilitySkillOperation({ workspaceId: context.workspaceId, snapshotId: key, operationKind: kind });
   } catch (error) {
+    if (scope !== custody) return;
     sending.delete(key);
     refreshInstalls(key);
     const current = readSkillInstall(key);
@@ -280,6 +302,7 @@ async function request(key: string, kind: SkillInstallStepKind, chain: boolean) 
     if (isApiRequestError(error) && error.status === 409) void readInstall(key, true);
     return;
   }
+  if (scope !== custody) return;
   sending.delete(key);
   // Whatever the answer, the request may have made an approval or moved a step: Discover and the installs say so.
   refreshInstalls(key);
@@ -288,20 +311,6 @@ async function request(key: string, kind: SkillInstallStepKind, chain: boolean) 
   // Approved or waiting: the install is read at once and says which.
   bump(key);
   void readInstall(key);
-}
-
-function sameSource(left: CapabilitySkillSource | undefined, right: CapabilitySkillSource): boolean {
-  if (!left || left.kind !== right.kind) return false;
-  return left.kind === "pack"
-    ? left.packId === (right as typeof left).packId
-    : left.sourceRef === (right as typeof left).sourceRef;
-}
-
-/** The source to check again for an install: a pack by its id, a Git source by its address. */
-export function checkSourceOf(install: CapabilitySkillInstall): CapabilitySkillSource {
-  return install.source.kind === "pack"
-    ? { kind: "pack", packId: install.source.packId }
-    : { kind: "git", sourceRef: install.source.sourceRef };
 }
 
 /**
@@ -331,9 +340,10 @@ async function runCheck(
   context: SkillInstallContext,
   before: SkillInstallEntry | undefined,
 ) {
+  const scope = custody;
   const stillChecking = () => {
     const entry = readSkillInstall(key);
-    return entry?.state.phase === "checking" && entry.idempotencyKey === idempotencyKey;
+    return scope === custody && entry?.state.phase === "checking" && entry.idempotencyKey === idempotencyKey;
   };
   let install: CapabilitySkillInstall;
   try {
@@ -366,7 +376,7 @@ async function runCheck(
  * Takes on a check's install as the Gateway reads it, when nothing here follows it yet (after a reload, say). With
  * `replace`, a newer read replaces what the panel held.
  */
-export function adoptSkillInstall(
+function adoptSkillInstall(
   key: string,
   install: CapabilitySkillInstall,
   context: SkillInstallContext,
@@ -437,12 +447,15 @@ const IDLE: SkillInstallState = { phase: "idle" };
  */
 export function useSkillInstall(key: string, seed?: CapabilitySkillInstall | null): SkillInstall {
   const client = useQueryClient();
+  const scope = useSkillInstallScope();
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
-  const entry = useSkillInstallEntry(key);
+  const stored = useSkillInstallEntry(key);
+  const entry = isSkillInstallScopeCurrent(scope) ? stored : undefined;
 
   useEffect(() => {
-    if (seed && seed.snapshotId === key) adoptSkillInstall(key, seed, { client, workspaceId });
-  }, [key, seed, client, workspaceId]);
+    if (isSkillInstallScopeCurrent(scope) && seed?.snapshotId === key)
+      adoptSkillInstall(key, seed, { client, workspaceId });
+  }, [key, seed, client, workspaceId, scope]);
 
   const state = entry?.state ?? IDLE;
   const install = installOf(state);
@@ -457,8 +470,12 @@ export function useSkillInstall(key: string, seed?: CapabilitySkillInstall | nul
     source: entry?.source ?? (install ? checkSourceOf(install) : undefined),
     movedTo: entry?.movedTo,
     workspaceId: contexts.get(key)?.workspaceId ?? workspaceId,
-    check: (source) => startSkillInstallCheck(key, source, contexts.get(key) ?? { client, workspaceId }),
+    check: (source) => {
+      if (isSkillInstallScopeCurrent(scope))
+        startSkillInstallCheck(key, source, contexts.get(key) ?? { client, workspaceId });
+    },
     confirm: () => {
+      if (!isSkillInstallScopeCurrent(scope)) return;
       const current = readSkillInstall(key);
       const shown = installOf(current?.state);
       if (!current || !shown || shown.snapshotId !== key) return;
@@ -467,13 +484,15 @@ export function useSkillInstall(key: string, seed?: CapabilitySkillInstall | nul
         void request(key, "activate", false);
     },
     checkNow: () => {
+      if (!isSkillInstallScopeCurrent(scope)) return;
       beats.delete(key);
       void readInstall(key);
     },
   };
 }
 
-export function __resetSkillInstallsForTests() {
+function retireSkillInstalls() {
+  custody += 1;
   contexts.clear();
   reading.clear();
   readAgain.clear();
@@ -481,5 +500,11 @@ export function __resetSkillInstallsForTests() {
   generations.clear();
   beats.clear();
   misses.clear();
-  __resetSkillInstallStoreForTests();
+  handedOver.clear();
+  clearSkillInstallStore();
 }
+
+subscribeGatewayAccessChange(retireSkillInstalls);
+subscribeGatewayCallerScope(retireSkillInstalls);
+
+export const __resetSkillInstallsForTests = retireSkillInstalls;

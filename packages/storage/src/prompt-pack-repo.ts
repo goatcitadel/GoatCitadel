@@ -238,6 +238,19 @@ export class PromptPackRepository {
   public deletePackCascade(packId: string): { deletedRuns: number } {
     return this.db.transaction("immediate", () => {
       let deletedRuns = 0;
+      if (this.hasTable("model_comparison_runs") && this.hasTable("model_comparison_execution_claims")) {
+        // Share execution's claim -> run lock order, including legacy runs
+        // without a claim slot. Different comparisons use a stable lock order.
+        this.db.prepare(`
+          INSERT INTO model_comparison_execution_claims (comparison_id, claim_id)
+          SELECT comparison_id, NULL FROM model_comparison_runs WHERE pack_id = ? ORDER BY comparison_id
+          ON CONFLICT (comparison_id) DO UPDATE SET comparison_id = excluded.comparison_id
+        `).run(packId);
+        this.db.prepare(`
+          DELETE FROM model_comparison_execution_claims
+          WHERE comparison_id IN (SELECT comparison_id FROM model_comparison_runs WHERE pack_id = ?)
+        `).run(packId);
+      }
       for (const table of PACK_CASCADE_TABLES) {
         if (LAZY_PACK_TABLES.has(table) && !this.hasTable(table)) continue;
         const { changes } = this.db.prepare(`DELETE FROM ${table} WHERE pack_id = ?`).run(packId);

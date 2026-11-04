@@ -188,10 +188,19 @@ export class IntegrationConnectionRepository {
     return mapRow(row);
   }
 
-  private checkRevision(current: IntegrationConnection, expectedRevision: string | undefined): void {
+  /** Orders a local storage write against canonical connection create, update and delete. */
+  public withExpectedRevision<T>(connectionId: string, expectedRevision: string, write: () => T): T {
+    return this.withLock(connectionId, () => {
+      const row = toIntegrationConnectionRow(this.getStmt.get(connectionId));
+      this.checkRevision(row ? mapRow(row) : undefined, expectedRevision ?? "");
+      return write();
+    });
+  }
+
+  private checkRevision(current: IntegrationConnection | undefined, expectedRevision: string | undefined): void {
     if (expectedRevision === undefined) return;
     if (!/^[a-f0-9]{64}$/.test(expectedRevision ?? "")) throw new ValidationError({ message: "Review the integration connection before changing it." });
-    if (current.revision !== expectedRevision) throw new ConflictError({ code: "WRITE_CONFLICT", message: "The integration connection changed. Review its current settings before retrying.", details: { reason: "INTEGRATION_CONNECTION_REVISION_CONFLICT" } });
+    if (current?.revision !== expectedRevision) throw new ConflictError({ code: "WRITE_CONFLICT", message: "The integration connection changed. Review its current settings before retrying.", details: { reason: "INTEGRATION_CONNECTION_REVISION_CONFLICT" } });
   }
 
   private withLock<T>(connectionId: string, action: () => T): T {

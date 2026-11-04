@@ -98,6 +98,15 @@ it.each([401, 403])("uses the full real loader without repeatedly fetching denie
   expect(container.textContent).toContain("unverified");
 });
 
+it("reports no confirmed checks when every current owner is unavailable", async () => {
+  Object.values(api).forEach((request) => request.mockRejectedValue(new TypeError("Failed to fetch")));
+  await render();
+  await tick(10);
+  expect(container.textContent).toContain("No health checks could be confirmed · 8 unverified");
+  expect(container.textContent).not.toContain("All reachable checks report no problems");
+  expect(container.textContent).toContain("6 health sources are unavailable");
+});
+
 it("shows stale prior observations after actual API transport rejection and clears them on recovery", async () => {
   await render();
   await tick(10);

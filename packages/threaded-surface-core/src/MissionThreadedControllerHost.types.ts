@@ -205,6 +205,8 @@ export interface MissionThreadedControllerHostProps {
   renderWhileLoading?: boolean;
   /** Secondary session evidence is admitted by the native inspector owner. */
   secondaryEvidenceEnabled?: boolean;
+  /** Restore the pinned-goal presentation when the selected session changes. Defaults to true. */
+  restorePinnedGoal?: boolean;
   /**
    * Seeds modeOverride from an explicit URL mode (e.g. ?mode=chat) so it behaves
    * like the operator manually clicking the mode override control (QA finding N3):

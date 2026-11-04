@@ -10,7 +10,7 @@ import type {
   PostCommitChildStageOutcome,
   PostCommitChildStageSettlementOutcome,
 } from "./session-mutation-admission-repo.js";
-import type { SystemSettingRecord } from "./system-settings-repo.js";
+import type { SystemSettingRecord, TelegramPollCursorWriteGuard } from "./system-settings-repo.js";
 
 export type AsyncStorageMethod<Method> = Method extends (...args: infer Args) => infer Result
   ? (...args: Args) => Promise<Awaited<Result>>
@@ -44,7 +44,7 @@ type AsyncSystemSettingsRepository = Omit<
   "get" | "set" | "compareAndSet"
 > & {
   get<T = unknown>(key: string): Promise<SystemSettingRecord<T> | undefined>;
-  set<T>(key: string, value: T, now?: string): Promise<SystemSettingRecord<T>>;
+  set<T>(key: string, value: T, now?: string, telegramPoll?: TelegramPollCursorWriteGuard): Promise<SystemSettingRecord<T>>;
   compareAndSet<T>(
     key: string,
     expected: SystemSettingRecord<unknown> | undefined,

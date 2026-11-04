@@ -1,3 +1,4 @@
+mod launcher_process;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -199,10 +200,10 @@ async fn read_runtime_status(
 
 #[tauri::command]
 async fn stop_runtime(state: State<'_, DesktopState>) -> Result<Value, String> {
-    stop_approval_watcher(&state)?;
     let output = run_launcher_async(["stop", "--json"]).await?;
-    serde_json::from_str(&output)
-        .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))
+    let result = parse_stop_result(&output)?;
+    stop_approval_watcher(&state)?;
+    Ok(result)
 }
 
 #[tauri::command]
@@ -277,32 +278,36 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
             }
             "restart" => {
                 let handle = app.clone();
+                let _ = app.emit("desktop://runtime-stopping", ());
                 thread::spawn(move || {
-                    if let Some(state) = handle.try_state::<DesktopState>() {
-                        let _ = stop_approval_watcher(&state);
+                    if let Err(error) = stop_runtime_for_tray(&handle) {
+                        let _ = handle.emit("desktop://runtime-stop-failed", json!({ "message": error }));
+                        return;
                     }
-                    let _ = run_launcher(["stop", "--json"]);
-                    if let Ok(output) = run_launcher(["launch", "--no-open", "--json", "--wait"]) {
-                        if let Ok(result) = serde_json::from_str::<DesktopLaunchResult>(&output) {
+                    match run_launcher(["launch", "--no-open", "--json", "--wait"])
+                        .and_then(|output| serde_json::from_str::<DesktopLaunchResult>(&output)
+                            .map_err(|error| format!("Launcher returned invalid runtime status: {error}"))) {
+                        Ok(result) => {
                             if let Some(state) = handle.try_state::<DesktopState>() {
                                 if let Ok(mut last_runtime) = state.last_runtime.lock() {
                                     *last_runtime = Some(result.clone());
                                 }
                                 let _ = start_approval_watcher(handle.clone(), state, result);
                             }
+                            let _ = handle.emit("desktop://runtime-restarted", ());
+                        }
+                        Err(error) => {
+                            let _ = handle.emit("desktop://runtime-stop-failed", json!({ "message": format!("Runtime could not restart: {error}") }));
                         }
                     }
-                    let _ = handle.emit("desktop://runtime-restarted", ());
                 });
             }
             "stop" => {
                 let handle = app.clone();
-                thread::spawn(move || {
-                    if let Some(state) = handle.try_state::<DesktopState>() {
-                        let _ = stop_approval_watcher(&state);
-                    }
-                    let _ = run_launcher(["stop", "--json"]);
-                    let _ = handle.emit("desktop://runtime-stopped", ());
+                let _ = app.emit("desktop://runtime-stopping", ());
+                thread::spawn(move || match stop_runtime_for_tray(&handle) {
+                    Ok(result) => { let _ = handle.emit("desktop://runtime-stopped", result); }
+                    Err(error) => { let _ = handle.emit("desktop://runtime-stop-failed", json!({ "message": error })); }
                 });
             }
             "logs" => {
@@ -328,6 +333,40 @@ fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
     Ok(())
 }
 
+// Exit code zero is not proof of stop: the launcher intentionally refuses
+// unowned/external endpoints while returning their fresh state and diagnostics.
+fn parse_stop_result(output: &str) -> Result<Value, String> {
+    let result: Value = serde_json::from_str(output)
+        .map_err(|error| format!("Launcher returned invalid stop status: {error}"))?;
+    let refusals = result.get("notStopped").and_then(Value::as_array);
+    if result.get("action").and_then(Value::as_str) != Some("stop")
+        || result.get("status").and_then(Value::as_str) != Some("stopped")
+        || result.pointer("/readiness/gateway").and_then(Value::as_bool) != Some(false)
+        || result.pointer("/readiness/ui").and_then(Value::as_bool) != Some(false)
+        || !matches!(refusals, Some(items) if items.is_empty()) {
+        let reason = refusals.map(|items| items.iter().take(8).map(|item| {
+            let label = item.get("label").and_then(Value::as_str).unwrap_or("endpoint");
+            let reason = item.get("reason").and_then(Value::as_str).unwrap_or("stop refused");
+            format!("{label} ({reason})")
+        }).collect::<Vec<_>>().join(", ")).filter(|reason| !reason.is_empty())
+            .unwrap_or_else(|| "check runtime status and logs".to_string());
+        return Err(format!("Runtime could not be stopped: {reason}."));
+    }
+    Ok(result)
+}
+
+fn stop_runtime_for_tray(app: &AppHandle) -> Result<Value, String> {
+    let result = parse_stop_result(&run_launcher(["stop", "--json"])?)?;
+    if let Some(state) = app.try_state::<DesktopState>() {
+        stop_approval_watcher(&state)?;
+        if let Ok(stopped) = serde_json::from_value::<DesktopLaunchResult>(result.clone()) {
+            let mut last_runtime = state.last_runtime.lock()
+                .map_err(|_| "Desktop runtime state is unavailable.".to_string())?;
+            *last_runtime = Some(stopped);
+        }
+    }
+    Ok(result)
+}
 fn read_last_runtime(app: &AppHandle) -> Option<DesktopLaunchResult> {
     let state = app.try_state::<DesktopState>()?;
     let last_runtime = state.last_runtime.lock().ok()?.clone();
@@ -659,10 +698,16 @@ fn run_launcher<const N: usize>(args: [&str; N]) -> Result<String, String> {
         command.env("GOATCITADEL_APP_DIR", app_dir);
     }
     command.env("GOATCITADEL_DESKTOP_HOST", "1");
+    #[cfg(target_os = "windows")] {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW for native launcher commands.
+    }
 
-    let output = command
-        .output()
-        .map_err(|error| format!("Failed to run GoatCitadel launcher: {error}"))?;
+    let output = if args.first() == Some(&"status") {
+        launcher_process::output(&mut command, Duration::from_secs(8))
+    } else {
+        command.output()
+    }.map_err(|error| format!("Failed to run GoatCitadel launcher: {error}"))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
         let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
@@ -1013,6 +1058,16 @@ mod tests {
     use super::*;
     use std::fs;
 
+    #[test]
+    fn stop_results_require_stopped_readiness_and_no_refusals() {
+        let refused = r#"{"action":"stop","status":"ready","readiness":{"gateway":true,"ui":true},"notStopped":[{"label":"gateway","reason":"external_override"}]}"#;
+        assert!(parse_stop_result(refused).expect_err("refused stop").contains("external_override"));
+        let partial = r#"{"action":"stop","status":"degraded","readiness":{"gateway":true,"ui":false},"notStopped":[]}"#;
+        assert!(parse_stop_result(partial).is_err());
+        let stopped = r#"{"action":"stop","status":"stopped","readiness":{"gateway":false,"ui":false},"notStopped":[]}"#;
+        assert!(parse_stop_result(stopped).is_ok());
+        assert!(parse_stop_result(r#"{"status":"stopped"}"#).is_err());
+    }
     #[test]
     fn validates_browser_targets_to_loopback_hosts() {
         assert!(validate_browser_target("http://127.0.0.1:5174/?tab=dashboard").is_ok());

@@ -17,7 +17,12 @@ import type {
 } from "./llm-provider-adapter.js";
 import { claudeCodeHarnessExecutableNames, listExecutableCandidates } from "./agentic-harness-availability.js";
 import { ClaudeCliWarmRegistry } from "./claude-code-cli-warm-registry.js";
-import { sweepStaleClaudeCliRunDirs, type ClaudeCliRunDirSweepFs } from "./claude-code-cli-run-dir-sweep.js";
+import {
+  registerClaudeCliRunDirOwner,
+  sweepStaleClaudeCliRunDirs,
+  type ClaudeCliOwnerProbe,
+  type ClaudeCliRunDirSweepFs,
+} from "./claude-code-cli-run-dir-sweep.js";
 import {
   ClaudeCliError,
   buildClaudeCliArgs,
@@ -83,7 +88,7 @@ export interface ClaudeCodeCliRuntimeOptions {
   /** Tool-bridge overrides; by default the stub is found next to this module and run by this Node binary. */
   toolBridge?: { stubPath?: () => string | undefined; nodePath?: string };
   /** Clock and filesystem for the one-time sweep of run dirs a hard-killed Gateway left behind. */
-  runDirSweep?: { now?: () => number; fs?: ClaudeCliRunDirSweepFs };
+  runDirSweep?: { now?: () => number; fs?: ClaudeCliRunDirSweepFs; probeOwner?: ClaudeCliOwnerProbe };
 }
 
 /** Where one bridged step runs the MCP stub from; `stubPath` is undefined when the stub cannot be found. */
@@ -601,7 +606,14 @@ function logRunDirSweepFailure(error: unknown): void {
 
 async function mkdtempSafe(root: string): Promise<string> {
   await mkdir(root, { recursive: true });
-  return await mkdtemp(path.join(root, "run-"));
+  const runDir = await mkdtemp(path.join(root, "run-"));
+  try {
+    await registerClaudeCliRunDirOwner(runDir);
+    return runDir;
+  } catch (error) {
+    await removeRunDir(runDir);
+    throw error;
+  }
 }
 
 function positiveOr(value: number | undefined, fallback: number): number {

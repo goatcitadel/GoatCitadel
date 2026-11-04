@@ -83,6 +83,40 @@ it("retains a successful owner receipt inside the actual portal after query inva
   await click("Upload file");
   expect(uploadFile).toHaveBeenCalledTimes(1);
 });
+it.each([
+  ["./proof.txt", "proof.txt"],
+  ["notes\\proof.txt", "notes/proof.txt"],
+  ["notes//./old/../proof.txt", "notes/proof.txt"],
+])("accepts the owner receipt for %s as %s", async (requested, reported) => {
+  vi.mocked(uploadFile).mockResolvedValue({ relativePath: reported, fullPath: "private", bytes: 5 });
+  await setup(requested);
+  await click("Upload file");
+
+  expect(uploadFile).toHaveBeenCalledExactlyOnceWith(requested, "proof", { expectAbsent: true });
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.textContent).toContain("GoatCitadel accepted " + reported + " (5 B)");
+  expect(dialog.textContent).not.toContain("upload is not confirmed");
+  await click("Close dialog");
+  expect(container.querySelector("textarea")?.value).toBe("");
+});
+
+it.each([
+  ["./proof.txt", "other.txt"],
+  ["./proof.txt", "Proof.txt"],
+  ["notes\\old/../proof.txt", "notes/proof.txt"],
+])("keeps %s uncertain when the receipt reports %s without a proven match", async (requested, reported) => {
+  vi.mocked(uploadFile).mockResolvedValue({ relativePath: reported, fullPath: "private", bytes: 5 });
+  await setup(requested);
+  await click("Upload file");
+
+  expect(uploadFile).toHaveBeenCalledExactlyOnceWith(requested, "proof", { expectAbsent: true });
+  const dialog = document.querySelector('[role="dialog"]')!;
+  expect(dialog.querySelector('[role="alert"]')?.textContent).toContain("upload is not confirmed");
+  expect(dialog.textContent).not.toContain("GoatCitadel accepted");
+  await click("Close dialog");
+  expect(container.querySelector("textarea")?.value).toBe("proof");
+});
+
 it("keeps uncertainty accessible and retains the draft on a failed write", async () => {
   vi.mocked(uploadFile).mockRejectedValue(new Error("Connection lost"));
   await setup();

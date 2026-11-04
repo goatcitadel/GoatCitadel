@@ -67,8 +67,8 @@ export interface BaseAgentPromptToolset {
    */
   switchedOffToolNames?: readonly string[];
   /**
-   * The switched-off tools whose group only a plugin's hold keeps off, not the operator's switch: uninstalling that
-   * plugin, never the Tools switch, turns them back on. These are also in switchedOffToolNames.
+   * Switched-off tools whose groups have plugin holds. Releasing the holds may still leave a group switched off
+   * by the operator. These are also in switchedOffToolNames.
    */
   pluginHeldToolNames?: readonly string[];
   /**
@@ -209,15 +209,14 @@ function switchedOffGroupLabel(toolName: string): string {
 }
 
 /**
- * What turns a switched-off tool's group back on: the operator's Tools switch, or, for a group a plugin holds off,
- * uninstalling every plugin that holds it in Capabilities › Plugins, as the Tools switch can't lift a plugin's hold. While GoatCitadel can't read which groups
- * plugins hold off, nothing lifts it in this turn.
+ * A held group first needs every hold released. The operator's switch still controls groups after release.
+ * While GoatCitadel can't read which groups plugins hold off, nothing lifts it in this turn.
  */
 function switchedOffRemedy(toolName: string, held: ReadonlySet<string>, unreadable: ReadonlySet<string>): string {
   if (unreadable.has(toolName)) return PLUGIN_HOLDS_UNREADABLE_REMEDY;
   const label = switchedOffGroupLabel(toolName);
   return held.has(toolName)
-    ? `the operator uninstalls every plugin that keeps the ${label} tools off in Capabilities › Plugins, which turns them back on.`
+    ? `the operator uninstalls every plugin that keeps the ${label} tools off in Capabilities › Plugins to release the holds. If the group stays off, the operator can switch it on in Capabilities › Tools.`
     : `the operator switches the ${label} tools back on in Capabilities › Tools.`;
 }
 

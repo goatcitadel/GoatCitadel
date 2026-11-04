@@ -95,7 +95,7 @@ type Input = {
       artifactCount: number;
     } | null>
   >;
-  submission: Pick<ReturnType<typeof useChatSubmissionComposition>, "providerRouting">;
+  submission: Pick<ReturnType<typeof useChatSubmissionComposition>, "providerRouting" | "orchestration">;
   onOpenApprovals: NonNullable<MissionThreadedControllerHostProps["onOpenApprovals"]>;
   pendingAttachments: ChatAttachmentRecord[];
   pendingAttachmentModes: Record<string, PendingAttachmentDocumentMode>;
@@ -297,7 +297,7 @@ export function useChatGovernedActionComposition({
   });
   const paletteActions = useChatComposerPaletteActions({
     workspaceId,
-    explicitContextEnabled: session.explicitContextEnabled,
+    explicitContextEnabled: session.explicitContextEnabled && !submission.orchestration.editingTurnId,
     includeDocumentContext: session.documentContext.includeDocumentContext,
     ensureSession: session.sessionControls.ensureSession,
     setPendingAttachments,

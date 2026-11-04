@@ -860,7 +860,7 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     expect(blocked?.failureGuidance).not.toContain("tools.deny");
   });
 
-  it("tells the model a group a plugin holds off is lifted by uninstalling the plugin, never the Tools switch (F9)", async () => {
+  it("tells the model how to release a plugin hold and restore access if the group stays off (F9)", async () => {
     // The call-time probe reports the engine's second code for a hold; the runner keeps the codes, not the sentence.
     const createChatCompletion = vi
       .fn()
@@ -892,10 +892,10 @@ describe("ChatTurnAgentRunner frozen capability profiles", () => {
     });
     expect(blocked?.failureGuidance).toContain("browser.search is switched off: a plugin keeps its tool group off.");
     expect(blocked?.failureGuidance).toContain(
-      "Uninstalling every plugin that keeps the group off, in Capabilities › Plugins, turns it back on",
+      "The operator can uninstall every plugin that keeps the group off in Capabilities › Plugins to release the holds.",
     );
     expect(blocked?.failureGuidance).toContain("Capabilities › Plugins");
-    expect(blocked?.failureGuidance).not.toContain("Capabilities › Tools");
+    expect(blocked?.failureGuidance).toContain("If the group stays off, they can switch it on in Capabilities › Tools.");
   });
 
   it("never drops a frozen approval requirement when current policy becomes broader", async () => {

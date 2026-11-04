@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 276,
+      "expectedCount": 278,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 276,
+      "expectedLastVersion": 278,
       "migrations": [
         {
           "version": 1,
@@ -1940,15 +1940,29 @@
           "groupName": "canonical",
           "definitionSha256": "ea07a038321d174e9f75bd8d048efcda72e460dd9228805060aabed06c0b985e",
           "implementationSha256": "fc5b42183cf168012890110d8173c36cc37b1123968bafb2aeadbcb20edad677"
+        },
+        {
+          "version": 277,
+          "name": "model_comparison_execution_claims",
+          "groupName": "canonical",
+          "definitionSha256": "33655145b52dd7b1cc7f34671a190b0a31bdae0c5a1fc9c53b46990e74b7711f",
+          "implementationSha256": "96b9daba32a817f35cb776fe98bc050e0cb485d65975a348ee388976367ee038"
+        },
+        {
+          "version": 278,
+          "name": "chat_artifact_render_receipts",
+          "groupName": "canonical",
+          "definitionSha256": "16815d21075df15586c87bfc99ca857847fb525266481ee6dece12f1c0f6f3fe",
+          "implementationSha256": "c91b59ee9c010e48dcc5dc54b49ed532a6531ee78c43b0b973e4eb24e612bb82"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 225,
+      "expectedCount": 228,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 225,
+      "expectedLastVersion": 228,
       "migrations": [
         {
           "version": 1,
@@ -3308,6 +3322,24 @@
           "name": "mobile_push_approval_already_resolved_classification",
           "definitionSha256": "f1f6c5bb547013c509932bf5c8adff278863f69e7be9ee9b0c9cfb906a7446f9",
           "runtimeIntegritySha256": "b1979cede74743f05a3db7f43b5757d75ed0e1890bcb9455312096c1ab2808f9"
+        },
+        {
+          "version": 226,
+          "name": "model_comparison_execution_claims",
+          "definitionSha256": "caeb54d8c4a0dec0501295dbe6ff80c34bfa3e23cabbf14edb5ec33984796939",
+          "runtimeIntegritySha256": "57b9918c696e86a6718db926fb4a05c48d0af3867691d56783ea6532db8005a1"
+        },
+        {
+          "version": 227,
+          "name": "chat_artifact_render_receipts",
+          "definitionSha256": "64d70ac93c8f66d4e92e30566cb92040951c6ada87d8a43b289d3ab4d499ca8a",
+          "runtimeIntegritySha256": "4879d43e86211964076a920213605aa9b32029d431a6f89ca83bf8a6fd701217"
+        },
+        {
+          "version": 228,
+          "name": "approval_execution_linkage_json_compatibility",
+          "definitionSha256": "87386ec8de79ec05ff8ae81772ee892f28c41967996a81872209b6f7c769c13c",
+          "runtimeIntegritySha256": "490cbe67cb9d9d250888f2048d6324061fdbde9c1f1aa8565bdbb80431bca934"
         }
       ]
     }

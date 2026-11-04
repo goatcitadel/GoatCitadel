@@ -934,7 +934,21 @@ export class MemoryLifecycleService {
     // Atomic supersession with explicit correction provenance: the successor
     // insert and the predecessor's superseded_by linkage commit together.
     const next = await this.runStructuredMemoryTransaction(async () => {
-      const inserted = await this.insertMemoryLearning(
+      const nextId = randomUUID();
+      const now = new Date().toISOString();
+      const linked = await this.deps.admin.gatewaySql
+        .prepare(
+          `
+      UPDATE memory_learnings
+      SET status = 'superseded', superseded_by_id = @nextId, updated_at = @updatedAt
+      WHERE learning_id = @learningId AND status IN ('proposed', 'trusted')
+    `,
+        )
+        .run({ learningId, nextId, updatedAt: now });
+      if (linked.changes !== 1) {
+        throw new ConflictError({ message: "Memory learning is no longer active for supersession." });
+      }
+      return await this.insertMemoryLearning(
         {
           ...input,
           workspaceId: input.workspaceId ?? previous.workspaceId,
@@ -942,19 +956,10 @@ export class MemoryLifecycleService {
         },
         actorId,
         input.authority === "agent_proposed" ? "proposed" : "trusted",
+        { learningId: nextId, publication: "deferred", schema: "ready" },
       );
-      const now = new Date().toISOString();
-      await this.deps.admin.gatewaySql
-        .prepare(
-          `
-      UPDATE memory_learnings
-      SET status = 'superseded', superseded_by_id = @nextId, updated_at = @updatedAt
-      WHERE learning_id = @learningId
-    `,
-        )
-        .run({ learningId, nextId: inserted.learningId, updatedAt: now });
-      return inserted;
     });
+    await this.publishMemoryLearningCreated(next);
     await this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_learning_superseded",
       learningId,
@@ -3336,38 +3341,41 @@ export class MemoryLifecycleService {
     if (candidate.status !== "proposed") {
       throw new ValidationError({ message: "Only proposed trace memory candidates can be promoted." });
     }
-    const key =
-      readRecordString(candidate.metadata ?? {}, "key") ?? `trace.${candidate.candidateType}.${candidate.candidateId}`;
     // Atomic promotion: the trusted learning and the candidate's promoted
     // linkage commit together, so a crash can never leave a candidate that
     // reads as promoted without its learning (or vice versa).
     const learning = await this.runStructuredMemoryTransaction(async () => {
-      const created = await this.createMemoryLearning(
+      const learningId = randomUUID();
+      const claimed = await this.deps.admin.gatewaySql
+        .prepare(`
+          UPDATE memory_trace_candidates
+          SET status = 'promoted', promoted_learning_id = @learningId, updated_at = @updatedAt
+          WHERE candidate_id = @candidateId AND status = 'proposed'
+        `)
+        .run({ candidateId, learningId, updatedAt: new Date().toISOString() });
+      if (claimed.changes !== 1) {
+        throw new ConflictError({ message: "Trace memory candidate changed before promotion." });
+      }
+      // The CAS holds this row until commit on both supported backends. Use
+      // its current scoped content, never the snapshot read before admission.
+      const current = await this.requireTraceMemoryCandidate(candidateId);
+      const key = readRecordString(current.metadata ?? {}, "key") ?? `trace.${current.candidateType}.${current.candidateId}`;
+      return await this.insertMemoryLearning(
         {
-          workspaceId: candidate.workspaceId,
+          workspaceId: current.workspaceId,
           key,
-          type: mapTraceCandidateToLearningType(candidate.candidateType),
-          insight: candidate.proposedInsight,
-          confidence: candidate.confidence,
-          sourceRefs: candidate.sourceRefs,
+          type: mapTraceCandidateToLearningType(current.candidateType),
+          insight: current.proposedInsight,
+          confidence: current.confidence,
+          sourceRefs: current.sourceRefs,
           authority: "operator",
         },
         actorId,
+        "trusted",
+        { learningId, publication: "deferred" },
       );
-      const now = new Date().toISOString();
-      await this.deps.admin.gatewaySql
-        .prepare(
-          `
-      UPDATE memory_trace_candidates
-      SET status = 'promoted',
-          promoted_learning_id = @learningId,
-          updated_at = @updatedAt
-      WHERE candidate_id = @candidateId
-    `,
-        )
-        .run({ candidateId, learningId: created.learningId, updatedAt: now });
-      return created;
     });
+    await this.publishMemoryLearningCreated(learning);
     await this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_trace_candidate_promoted",
       candidateId,
@@ -3388,13 +3396,16 @@ export class MemoryLifecycleService {
     }
     if (candidate.status === "proposed") {
       const updatedAt = new Date().toISOString();
-      await this.deps.admin.gatewaySql
+      const rejected = await this.deps.admin.gatewaySql
         .prepare(
           `UPDATE memory_trace_candidates
            SET status = 'rejected', actor_id = @actorId, updated_at = @updatedAt
            WHERE candidate_id = @candidateId AND status = 'proposed'`,
         )
         .run({ candidateId, actorId, updatedAt });
+      if (rejected.changes !== 1) {
+        throw new ConflictError({ message: "Trace memory candidate changed before rejection." });
+      }
       await this.deps.admin.publishRealtime("system", "memory", {
         type: "memory_trace_candidate_rejected",
         candidateId,
@@ -3849,13 +3860,15 @@ export class MemoryLifecycleService {
     input: MemoryLearningInput,
     actorId: string,
     status: MemoryLearningStatus,
+    options: { learningId?: string; publication?: "immediate" | "deferred"; schema?: "ready" } = {},
   ): Promise<MemoryLearningRecord> {
     await this.deps.admin.requireFeatureEnabled("memoryLifecycleAdminV1Enabled");
-    await this.ensureLearningSchema();
+    // Supersession has already prepared the schema outside its row transaction.
+    if (options.schema !== "ready") await this.ensureLearningSchema();
     const now = new Date().toISOString();
     const authority = normalizeAuthority(input.authority ?? (status === "proposed" ? "agent_proposed" : "operator"));
     const learning: MemoryLearningRecord = {
-      learningId: randomUUID(),
+      learningId: options.learningId ?? randomUUID(),
       workspaceId: normalizeStructuredWorkspaceId(input.workspaceId),
       key: requireTrimmedText(input.key, "key"),
       type: normalizeLearningType(input.type),
@@ -3899,13 +3912,17 @@ export class MemoryLifecycleService {
         createdAt: learning.createdAt,
         updatedAt: learning.updatedAt,
       });
+    if (options.publication !== "deferred") await this.publishMemoryLearningCreated(learning);
+    return learning;
+  }
+
+  private async publishMemoryLearningCreated(learning: MemoryLearningRecord): Promise<void> {
     await this.deps.admin.publishRealtime("system", "memory", {
       type: "memory_learning_created",
       learningId: learning.learningId,
       status: learning.status,
       workspaceId: learning.workspaceId,
     });
-    return learning;
   }
 
   private normalizeLearningFileRefs(

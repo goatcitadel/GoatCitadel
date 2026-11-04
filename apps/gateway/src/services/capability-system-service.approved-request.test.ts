@@ -103,6 +103,59 @@ describe("CapabilitySystemService.runApprovedCodeModeRequest", { timeout: RUN_TI
     expect(fx.createApproval).not.toHaveBeenCalled();
   });
 
+  it.each(["pending approval", "queued approval", "stale claim"] as const)("SEC-CODE-001 refuses a legacy %s when the live feature is off", async (state) => {
+    const fx = createFixture();
+    const run = await fx.service.createCodeModeRun({ language: "javascript", source: "return { ran: true };", saveCandidateOnSuccess: false });
+    const approvalId = run.approvalId!;
+    expect(fx.storage.approvals.get(approvalId).status).toBe("pending");
+    if (state === "pending approval") fx.featureFlags.codeModeV1Enabled = false;
+    fx.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
+    if (state === "stale claim") {
+      const claimed = await fx.asyncStorage.codeModeRuns.claimForExecution({ runId: run.runId, approvalId, sandbox: run.sandbox!, startedAt: new Date(Date.now() - 10 * 60_000).toISOString() });
+      expect(claimed?.executionRecovery.phase).toBe("claimed");
+    }
+    fx.featureFlags.codeModeV1Enabled = false;
+    const result = await fx.service.executeApprovedCodeModeRun(approvalId);
+    expect(fx.spawnCodeModeChild).not.toHaveBeenCalled();
+    expect(fx.invokeTool).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ result: { status: "failed", error: expect.stringMatching(/Code Mode.*(?:off|disabled)/i) } });
+    expect(await fx.asyncStorage.codeModeRuns.get(run.runId)).toMatchObject({ status: "failed" });
+    expect(fx.storage.pendingApprovalActions.find(approvalId)?.resolutionStatus).toBe("failed");
+  });
+
+  it("SEC-CODE-001 rechecks the live feature immediately before child request dispatch", async () => {
+    const fx = createFixture();
+    let childSend: { mock: { calls: unknown[][] } } | undefined;
+    fx.spawnCodeModeChild.mockImplementation(((...args: Parameters<typeof spawn>) => {
+      const child = spawn(...args);
+      childSend = vi.spyOn(child, "send");
+      fx.featureFlags.codeModeV1Enabled = false;
+      return child;
+    }) as typeof spawn);
+    const run = await fx.service.createCodeModeRun({ language: "javascript", source: "return { ran: true };", saveCandidateOnSuccess: false });
+    const approvalId = run.approvalId!;
+    fx.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
+    const result = await fx.service.executeApprovedCodeModeRun(approvalId);
+    expect(fx.spawnCodeModeChild).toHaveBeenCalledOnce();
+    expect(childSend?.mock.calls.filter(([message]) => (message as { method?: string }).method === "run.execute")).toHaveLength(0);
+    expect(result).toBeUndefined();
+    expect(await fx.asyncStorage.codeModeRuns.get(run.runId)).toMatchObject({ status: "approval_pending", executionRecovery: { phase: "not_started", disposition: "retryable" } });
+    expect(fx.storage.pendingApprovalActions.find(approvalId)?.resolutionStatus).toBe("pending");
+  });
+
+  it("SEC-CODE-001 preserves a terminal legacy result while the live feature is off", async () => {
+    const fx = createFixture();
+    const run = await fx.service.createCodeModeRun({ language: "javascript", source: "return { ran: true };", saveCandidateOnSuccess: false });
+    const approvalId = run.approvalId!;
+    fx.storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator-1" });
+    const completed = await fx.service.executeApprovedCodeModeRun(approvalId);
+    expect(completed).toMatchObject({ result: { status: "completed" } });
+    const dispatchCount = fx.spawnCodeModeChild.mock.calls.length;
+    fx.featureFlags.codeModeV1Enabled = false;
+    expect(await fx.service.executeApprovedCodeModeRun(approvalId)).toMatchObject({ result: { status: "completed" } });
+    expect(fx.spawnCodeModeChild).toHaveBeenCalledTimes(dispatchCount);
+  });
+
   it("projects approvalSource on every read path but never stores it", async () => {
     const fx = createFixture();
     const request = fx.approvedRequest("return { ok: true };");
@@ -846,6 +899,7 @@ function createFixture() {
     );
     return { outcome: "executed", policyReason: "executed", auditEventId: `audit-${fixtureId}`, result };
   });
+  const featureFlags = { codeModeV1Enabled: true };
   const createApproval = vi.fn(async (input: ApprovalCreateInput) => storage.approvals.create(input));
   const spawnCodeModeChild = vi.fn(((...args: Parameters<typeof spawn>) => spawn(...args)) as typeof spawn);
   const service = new CapabilitySystemService({
@@ -860,8 +914,9 @@ function createFixture() {
       codeModeAiderAdapter: { enabled: false },
     },
     storage: asyncStorage,
-    readFeatureFlags: async () => ({ codeModeV1Enabled: true }),
+    readFeatureFlags: async () => featureFlags,
     listToolCatalog: () => [docsExtractTextTool(), ...CODE_MODE_FILE_HELPER_TOOLS],
+    listSwitchedOffToolNames: () => new Set(),
     listLoadedSkills: () => [],
     readSkillStates: async () => new Map(),
     invokeTool,
@@ -949,6 +1004,7 @@ function createFixture() {
     storage,
     asyncStorage,
     service,
+    featureFlags,
     readiness,
     invokeTool,
     createApproval,

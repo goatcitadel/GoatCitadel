@@ -37,7 +37,7 @@ export interface ExternalSourceWindowsSecurityPort {
 
 export interface ExternalSourceWindowsSecurityProtocol {
   request(
-    operation: "acl" | "attributes",
+    operation: "acl" | "attributes" | "private-parent",
     absolutePath: string,
     kind: ExternalSourceWindowsAclKind,
     signal: AbortSignal,
@@ -83,8 +83,17 @@ export class NodeExternalSourceWindowsSecurity implements ExternalSourceWindowsS
     return { ownerSid };
   }
 
+  public async verifyPrivateParent(absolutePath: string, signal: AbortSignal): Promise<ExternalSourceWindowsAclResult> {
+    assertRequest(absolutePath, signal);
+    const ownerSid = await this.safeRequest("private-parent", absolutePath, "directory", signal);
+    if (!OWNER_SID.test(ownerSid)) {
+      throw new ExternalSourceWindowsSecurityError("invalid_response");
+    }
+    return { ownerSid };
+  }
+
   private async safeRequest(
-    operation: "acl" | "attributes",
+    operation: "acl" | "attributes" | "private-parent",
     absolutePath: string,
     kind: ExternalSourceWindowsAclKind,
     signal: AbortSignal,
@@ -101,6 +110,13 @@ export class NodeExternalSourceWindowsSecurity implements ExternalSourceWindowsS
   }
 }
 
+export function createWindowsScratchSecurity(): NodeExternalSourceWindowsSecurity {
+  return new NodeExternalSourceWindowsSecurity(new PowerShellWindowsSecurityProtocol({
+    SystemRoot: process.env.SystemRoot,
+    windir: process.env.windir,
+  }));
+}
+
 interface PendingRequest {
   resolve(value: string): void;
   reject(error: ExternalSourceWindowsSecurityError): void;
@@ -110,6 +126,8 @@ interface PendingRequest {
 }
 
 class PowerShellWindowsSecurityProtocol implements ExternalSourceWindowsSecurityProtocol {
+  public constructor(private readonly environment: NodeJS.ProcessEnv = process.env) {}
+
   private child: ChildProcessWithoutNullStreams | undefined;
   private nextRequestId = 0;
   private readonly pending = new Map<string, PendingRequest>();
@@ -118,7 +136,7 @@ class PowerShellWindowsSecurityProtocol implements ExternalSourceWindowsSecurity
   private idleTimer: ReturnType<typeof setTimeout> | undefined;
 
   public async request(
-    operation: "acl" | "attributes",
+    operation: "acl" | "attributes" | "private-parent",
     absolutePath: string,
     kind: ExternalSourceWindowsAclKind,
     signal: AbortSignal,
@@ -159,10 +177,10 @@ class PowerShellWindowsSecurityProtocol implements ExternalSourceWindowsSecurity
     this.stdoutBuffer = "";
     this.stderrBytes = 0;
     const child = spawn(
-      windowsPowerShellExecutable(),
+      windowsPowerShellExecutable(this.environment),
       ["-NoLogo", "-NoProfile", "-NonInteractive", "-EncodedCommand", WINDOWS_SECURITY_SCRIPT_ENCODED],
       {
-        env: { ...process.env, POWERSHELL_TELEMETRY_OPTOUT: "1" },
+        env: { ...this.environment, POWERSHELL_TELEMETRY_OPTOUT: "1" },
         shell: false,
         stdio: ["pipe", "pipe", "pipe"],
         windowsHide: true,
@@ -286,8 +304,8 @@ function assertRequest(absolutePath: string, signal: AbortSignal): void {
   }
 }
 
-function windowsPowerShellExecutable(): string {
-  const systemRoot = process.env.SystemRoot ?? process.env.windir;
+function windowsPowerShellExecutable(env: NodeJS.ProcessEnv): string {
+  const systemRoot = env.SystemRoot ?? env.windir;
   if (!systemRoot || !path.win32.isAbsolute(systemRoot) || systemRoot.startsWith("\\\\")) {
     throw new ExternalSourceWindowsSecurityError("command_failed");
   }
@@ -316,6 +334,52 @@ while (($Line = [Console]::In.ReadLine()) -ne $null) {
     $Operation = $Parts[1]
     $Kind = $Parts[2]
     $Path = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($Parts[3]))
+    if ($Operation -eq 'private-parent') {
+      if ($Path -notmatch '^[A-Za-z]:\\' -or ([IO.Path]::GetFullPath($Path) -ne $Path)) { throw 'nonlocal parent rejected' }
+      $Drive = [IO.DriveInfo]::new([IO.Path]::GetPathRoot($Path))
+      if ($Drive.DriveType -ne [IO.DriveType]::Fixed -or $Drive.DriveFormat -ne 'NTFS') { throw 'unsafe parent volume' }
+      $Owner = [Security.Principal.WindowsIdentity]::GetCurrent().User
+      if ($null -eq $Owner) { throw 'owner SID unavailable' }
+      # Windows Modules Installer can own the root of the system volume.
+      $Trusted = @(
+        $Owner.Value,
+        'S-1-5-18',
+        'S-1-5-32-544',
+        'S-1-5-80-956008885-3418522649-1831038044-1853292631-2271478464'
+      )
+      $Replace = [Security.AccessControl.FileSystemRights]::Delete -bor
+        [Security.AccessControl.FileSystemRights]::DeleteSubdirectoriesAndFiles -bor
+        [Security.AccessControl.FileSystemRights]::ChangePermissions -bor
+        [Security.AccessControl.FileSystemRights]::TakeOwnership -bor
+        [Security.AccessControl.FileSystemRights]::WriteAttributes -bor
+        [Security.AccessControl.FileSystemRights]::WriteExtendedAttributes
+      $ParentWrite = [Security.AccessControl.FileSystemRights]::CreateFiles -bor
+        [Security.AccessControl.FileSystemRights]::CreateDirectories
+      $Directory = [IO.DirectoryInfo]::new($Path)
+      $Mask = $Replace -bor $ParentWrite
+      while ($null -ne $Directory) {
+        $Directory.Refresh()
+        if (-not $Directory.Exists -or (($Directory.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+          throw 'invalid parent chain'
+        }
+        $ParentAcl = $Directory.GetAccessControl()
+        if ($Trusted -notcontains $ParentAcl.GetOwner([Security.Principal.SecurityIdentifier]).Value) {
+          throw 'untrusted parent owner'
+        }
+        foreach ($Rule in @($ParentAcl.GetAccessRules($true, $true, [Security.Principal.SecurityIdentifier]))) {
+          if (
+            ($Rule.PropagationFlags -band [Security.AccessControl.PropagationFlags]::InheritOnly) -eq 0 -and
+            $Rule.AccessControlType -eq [Security.AccessControl.AccessControlType]::Allow -and
+            ($Trusted -notcontains $Rule.IdentityReference.Value) -and
+            ($Rule.FileSystemRights -band $Mask) -ne 0
+          ) { throw 'unsafe parent allow rule' }
+        }
+        $Mask = $Replace
+        $Directory = $Directory.Parent
+      }
+      Write-ProtocolResponse $RequestId 'OK' $Owner.Value
+      continue
+    }
     $Attributes = [IO.File]::GetAttributes($Path)
 
     if ($Operation -eq 'attributes') {

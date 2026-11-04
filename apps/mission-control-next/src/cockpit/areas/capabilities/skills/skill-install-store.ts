@@ -138,7 +138,7 @@ export function useSkillInstallEntry(key: string | undefined): SkillInstallEntry
   );
 }
 
-export function __resetSkillInstallStoreForTests() {
+export function clearSkillInstallStore() {
   for (const key of [...timers.keys(), ...controllers.keys()]) stopFollowing(key);
   entries.clear();
   publish();

@@ -17,8 +17,20 @@ import type { LlmConfigFile } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
 import { ClaudeCodeCliReadiness } from "./claude-code-cli-readiness.js";
-import { hostClaudeCliRunDirSweepFs } from "./claude-code-cli-run-dir-sweep.js";
+import { CLAUDE_CLI_OWNER_FILE, hostClaudeCliRunDirSweepFs } from "./claude-code-cli-run-dir-sweep.js";
 import { LlmService } from "./llm-service.js";
+
+const ownerRegistration = vi.hoisted(() => ({ failure: undefined as Error | undefined }));
+vi.mock("./claude-code-cli-run-dir-sweep.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./claude-code-cli-run-dir-sweep.js")>();
+  return {
+    ...actual,
+    registerClaudeCliRunDirOwner: async (...args: Parameters<typeof actual.registerClaudeCliRunDirOwner>) => {
+      if (ownerRegistration.failure) throw ownerRegistration.failure;
+      return await actual.registerClaudeCliRunDirOwner(...args);
+    },
+  };
+});
 
 interface SpawnRecord {
   command: string;
@@ -26,6 +38,7 @@ interface SpawnRecord {
   options: SpawnOptions;
   stdin: () => string;
   systemPromptAtSpawn?: string;
+  ownerAtSpawn?: unknown;
 }
 
 type Script = (child: { stdout: PassThrough; stderr: PassThrough; exit: (code: number | null) => void }) => void;
@@ -64,12 +77,14 @@ function createHarness(scripts: Script[], options: { loggedIn?: boolean } = {}) 
     Object.assign(emitter, { stdout, stderr, stdin, pid: 9000 + spawns.length, exitCode: null });
     const fileIndex = args.indexOf("--system-prompt-file");
     const systemFile = fileIndex >= 0 ? args[fileIndex + 1] : undefined;
+    const ownerFile = path.join(String(spawnOptions.cwd), CLAUDE_CLI_OWNER_FILE);
     spawns.push({
       command,
       args,
       options: spawnOptions,
       stdin: () => Buffer.concat(chunks).toString("utf8"),
       systemPromptAtSpawn: systemFile ? readFileSync(systemFile, "utf8") : undefined,
+      ownerAtSpawn: existsSync(ownerFile) ? JSON.parse(readFileSync(ownerFile, "utf8")) : undefined,
     });
     const script = scripts[spawns.length - 1] ?? helloScript;
     let exited = false;
@@ -123,6 +138,7 @@ describe("claude-code-cli provider through LlmService", () => {
   let scratchRoot: string;
 
   beforeEach(() => {
+    ownerRegistration.failure = undefined;
     scratchRoot = mkdtempSync(path.join(os.tmpdir(), "gc-claude-cli-test-"));
   });
 
@@ -188,6 +204,16 @@ describe("claude-code-cli provider through LlmService", () => {
       message: { role: "user", content: [{ type: "text", text: "say hello 🐐" }] },
     });
     // The per-run scratch dir (cwd + system prompt file) is removed afterwards.
+    expect(harness.spawns[0]?.ownerAtSpawn).toEqual({ version: 1, pid: process.pid });
+    expect(readdirSync(scratchRoot)).toEqual([]);
+  });
+
+  it("cleans a newly allocated run and never invokes the model when owner registration fails", async () => {
+    const harness = createHarness([]);
+    const service = createService(harness);
+    ownerRegistration.failure = new Error("owner registration unavailable");
+    await expect(service.chatCompletions({ messages: [{ role: "user", content: "say hello" }] })).rejects.toThrow("owner registration unavailable");
+    expect(harness.spawn).not.toHaveBeenCalled();
     expect(readdirSync(scratchRoot)).toEqual([]);
   });
 
@@ -195,6 +221,7 @@ describe("claude-code-cli provider through LlmService", () => {
     const leftBehind = path.join(scratchRoot, "run-left-behind");
     mkdirSync(leftBehind);
     writeFileSync(path.join(leftBehind, "tools.json"), "{}");
+    writeFileSync(path.join(leftBehind, CLAUDE_CLI_OWNER_FILE), JSON.stringify({ version: 1, pid: process.pid }));
     const threeHoursAgo = new Date(Date.now() - 3 * 60 * 60 * 1000);
     utimesSync(leftBehind, threeHoursAgo, threeHoursAgo);
     let listings = 0;
@@ -212,12 +239,14 @@ describe("claude-code-cli provider through LlmService", () => {
           resolveInvocation: () => ({ command: "C:\\Users\\op\\.local\\bin\\claude.exe", prefixArgs: [] }),
           scratchRoot,
           runDirSweep: {
+            probeOwner: () => "dead",
             fs: {
               listEntries: async (dir) => {
                 listings += 1;
                 return await hostClaudeCliRunDirSweepFs.listEntries(dir);
               },
               statNoFollow: (target) => hostClaudeCliRunDirSweepFs.statNoFollow(target),
+              readOwnerPid: (target) => hostClaudeCliRunDirSweepFs.readOwnerPid(target),
             },
           },
         },

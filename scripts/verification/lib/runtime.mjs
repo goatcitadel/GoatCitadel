@@ -533,7 +533,13 @@ async function ensureVerificationUiBuild(context, packageName, uiEnv, options = 
     `$ pnpm --dir <repoRoot> --filter ${packageName} build`,
     "",
   ];
-  const result = await runPnpmSyncWithEnv(["--dir", repoRoot, "--filter", packageName, "build"], uiEnv, options.omitEnv);
+  // Vite's production mode still emits React development code when NODE_ENV is
+  // inherited as development. Pin the build only; keep fixture runtime modes.
+  const result = await runPnpmSyncWithEnv(
+    ["--dir", repoRoot, "--filter", packageName, "build"],
+    { ...uiEnv, NODE_ENV: "production" },
+    options.omitEnv,
+  );
   logLines.push(
     result.stdout ?? "",
     result.stderr ?? "",

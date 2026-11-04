@@ -240,21 +240,22 @@ export class A2APushNotificationService {
     ) {
       return;
     }
-    await pushConfigs.recordDelivery(
+    const recorded = await pushConfigs.recordRefusedApprovalIfCurrent(
       input.taskId,
       input.peerId,
       {
-        status: "blocked",
-        attemptCount: config.attemptCount + 1,
+        configCreatedAt: input.configCreatedAt,
+        eventSequence: input.eventSequence,
         error:
           input.disposition === "failed"
             ? `Citadel Ward approval ${input.approvalId} for a2a.outbound.push was approved, but the approved push could not be delivered (${input.reason ?? "no reason recorded"}), so delivery is blocked.`
             : `Citadel Ward approval ${input.approvalId} for a2a.outbound.push was ${input.disposition}, so delivery is blocked.`,
-        lastEventSequence: input.eventSequence,
       },
       checkedAt,
     );
-    await this.resumePendingEvents(input.peerId, input.taskId, checkedAt);
+    if (recorded) {
+      await this.resumePendingEvents(input.peerId, input.taskId, checkedAt);
+    }
   }
 
   private async resumePendingEvents(

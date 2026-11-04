@@ -61,7 +61,7 @@ function makeDeps(replies: ChatCompletionResponse[], overrides: Partial<ErrandLo
     captureForModel: vi.fn(async () => PNG),
     captureForPeople: vi.fn(async () => PEOPLE_PNG),
     currentUrl: vi.fn(() => "https://shop.example/cart"),
-    describeTarget: vi.fn(async (): Promise<ErrandTargetInfo | null> => target()),
+    describeTarget: vi.fn(async (_x: number, _y: number): Promise<ErrandTargetInfo | null> => target()),
     describeFocused: vi.fn(
       async (): Promise<ErrandTargetInfo | null> => target({ tagName: "INPUT", role: "textbox", text: "" }),
     ),
@@ -513,5 +513,99 @@ describe("runErrandLoop", () => {
     const outcome = await runErrandLoop(deps, { goal: "buy" });
     expect(ran).toHaveLength(0);
     expect(outcome.status).toBe("stopped");
+  });
+});
+
+describe("browser errand drag destinations", () => {
+  const sourcePoint = { x: 10, y: 20 };
+  const destinationPoint = { x: 100, y: 200 };
+  const drag = () =>
+    toolReply("computer", {
+      actions: [{ type: "drag", path: [sourcePoint, destinationPoint] }],
+      about_to: "Move the card",
+    });
+
+  it.each([
+    ["Delete", "delete"],
+    ["Publish", "send"],
+    ["Buy Now", "spend"],
+    ["Save changes", "settings"],
+  ] as const)("does not drop a neutral source onto %s without approval", async (text, category) => {
+    const { deps, browser, ran } = makeDeps([drag(), textReply("done")], {
+      requestApproval: vi.fn(async () => "denied" as const),
+    });
+    browser.describeTarget.mockImplementation(async (x, y) =>
+      x === destinationPoint.x && y === destinationPoint.y
+        ? target({ ...destinationPoint, text })
+        : target({ ...sourcePoint, tagName: "DIV", role: "listitem", text: "Report" }),
+    );
+
+    const outcome = await runErrandLoop(deps, { goal: "Move the card" });
+
+    expect(ran).toHaveLength(0);
+    expect(outcome.status).toBe("declined");
+    expect(deps.requestApproval).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.requestApproval).mock.calls[0]![0].category).toBe(category);
+    expect(vi.mocked(deps.requestApproval).mock.calls[0]![0]).toMatchObject({
+      target: { ...destinationPoint, text },
+      dragSource: { ...sourcePoint, text: "Report" },
+    });
+  });
+
+  it.each(["unreadable", "opaque"] as const)("does not drop onto an %s destination without approval", async (kind) => {
+    const { deps, browser, ran } = makeDeps([drag(), textReply("done")], {
+      requestApproval: vi.fn(async () => "denied" as const),
+    });
+    browser.describeTarget.mockImplementation(async (x, y) => {
+      if (x !== destinationPoint.x || y !== destinationPoint.y) {
+        return target({ ...sourcePoint, tagName: "DIV", role: "listitem", text: "Report" });
+      }
+      return kind === "unreadable" ? null : target({ ...destinationPoint, isOpaque: true });
+    });
+
+    const outcome = await runErrandLoop(deps, { goal: "Move the card" });
+
+    expect(ran).toHaveLength(0);
+    expect(outcome.status).toBe("declined");
+    expect(deps.requestApproval).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(deps.requestApproval).mock.calls[0]![0]).toMatchObject({
+      target: destinationPoint,
+      dragSource: sourcePoint,
+    });
+  });
+
+  it("hands a password-like drop destination to the operator without dispatch", async () => {
+    const { deps, browser, ran } = makeDeps([drag(), textReply("done")]);
+    browser.describeTarget.mockImplementation(async (x, y) =>
+      x === destinationPoint.x && y === destinationPoint.y
+        ? target({ ...destinationPoint, tagName: "INPUT", role: "textbox", isPasswordLike: true })
+        : target({ ...sourcePoint, tagName: "DIV", role: "listitem", text: "Report" }),
+    );
+
+    await runErrandLoop(deps, { goal: "Move the card" });
+
+    expect(ran).toHaveLength(0);
+    expect(deps.waitForHandBack).toHaveBeenCalledWith("sign_in");
+    expect(deps.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it("continues to permit a neutral source to neutral destination drag", async () => {
+    const { deps, browser, ran } = makeDeps([drag(), textReply("done")]);
+    browser.describeTarget.mockImplementation(async (x, y) =>
+      target({
+        x,
+        y,
+        tagName: "DIV",
+        role: "listitem",
+        text: x === destinationPoint.x && y === destinationPoint.y ? "Draft column" : "Report",
+      }),
+    );
+
+    const outcome = await runErrandLoop(deps, { goal: "Move the card" });
+
+    expect(outcome.status).toBe("done");
+    expect(ran).toHaveLength(1);
+    expect(deps.requestApproval).not.toHaveBeenCalled();
+    expect(deps.waitForHandBack).not.toHaveBeenCalled();
   });
 });

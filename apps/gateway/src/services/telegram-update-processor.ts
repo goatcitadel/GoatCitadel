@@ -1,7 +1,8 @@
-import type {
-  ChatChannelConversation,
-  IntegrationConnection,
-  PersonalityCatalogResponse,
+import {
+  ConflictError,
+  type ChatChannelConversation,
+  type IntegrationConnection,
+  type PersonalityCatalogResponse,
 } from "@goatcitadel/contracts";
 import { readTelegramReceiveMode } from "@goatcitadel/gateway-core";
 import { buildChannelConversation } from "./channel-conversation.js";
@@ -54,9 +55,14 @@ export async function dispatchTelegramUpdate(
     parsed: TelegramDispatchPayload;
     payload: unknown;
     rawBody: Buffer;
+    telegramPollRevision?: string;
   },
 ): Promise<unknown> {
-  const { connection, parsed, payload, rawBody } = input;
+  const { connection, parsed, payload, rawBody, telegramPollRevision } = input;
+  const ingressRevision = {
+    acceptedConnectionRevision: connection.revision,
+    ...(telegramPollRevision === undefined ? {} : { telegramPollRevision }),
+  };
   const connectionId = connection.connectionId;
   const target = parsed.room ?? parsed.peer;
   const conversation = resolveTelegramConversation(parsed.actorId, parsed.metadata);
@@ -106,7 +112,7 @@ export async function dispatchTelegramUpdate(
       bindingTarget: target,
       conversation,
       inboundAccessConfig: connection.config,
-      acceptedConnectionRevision: connection.revision,
+      ...ingressRevision,
       message: {
         // The callback query id is an ephemeral provider reply handle.
         // Use the secret-free durable admission identity for settlement.
@@ -183,7 +189,7 @@ export async function dispatchTelegramUpdate(
       bindingTarget: commandEligible,
       conversation,
       inboundAccessConfig: connection.config,
-      acceptedConnectionRevision: connection.revision,
+      ...ingressRevision,
       message: {
         eventId: parsed.eventId,
         account: parsed.account,
@@ -221,7 +227,7 @@ export async function dispatchTelegramUpdate(
     bindingTarget: target,
     conversation,
     inboundAccessConfig: connection.config,
-    acceptedConnectionRevision: connection.revision,
+    ...ingressRevision,
     message: {
       eventId: parsed.eventId,
       account: parsed.account,
@@ -261,6 +267,17 @@ export async function dispatchTelegramUpdate(
   return dispatchInboundWebhookMessage(deps.webhooks, dispatchOptions);
 }
 
+export class TelegramPollRevisionChangedError extends Error {
+  constructor() {
+    super("Telegram connection changed during polling.");
+  }
+}
+
+export function isTelegramPollRevisionConflict(error: unknown): boolean {
+  return error instanceof ConflictError &&
+    error.code === "WRITE_CONFLICT" && error.details?.reason === "INTEGRATION_CONNECTION_REVISION_CONFLICT";
+}
+
 /**
  * Polling entry: re-reads the connection, normalizes, dispatches. Undefined when the connection is not live or
  * Telegram's update is ignored (a bot's own message, an unsupported update kind, an empty message).
@@ -269,8 +286,14 @@ export async function runTelegramUpdate(
   deps: TelegramUpdateDeps,
   connectionId: string,
   update: unknown,
+  expectedConnectionRevision: string,
 ): Promise<unknown> {
+  const voiceInboundEnabled = await readVoiceInboundEnabled(deps);
   const connection = await deps.webhooks.getIntegrationConnection(connectionId);
+  // A different revision may have a different bot key or inbound policy while the old poll is still settling.
+  if (connection.revision !== expectedConnectionRevision) {
+    throw new TelegramPollRevisionChangedError();
+  }
   // Same kill switch as the webhook handler: a disabled or disconnected connection must not ingest anything.
   if (connection.enabled === false || (connection.status !== undefined && connection.status !== "connected")) {
     return undefined;
@@ -283,17 +306,25 @@ export async function runTelegramUpdate(
   const normalized = normalizeTelegramWebhookPayload({
     connectionId,
     payload: update,
-    voiceInboundEnabled: await readVoiceInboundEnabled(deps),
+    voiceInboundEnabled,
   });
   if (normalized.kind === "ignore") {
     return undefined;
   }
-  return dispatchTelegramUpdate(deps, {
-    connection: { ...connection, connectionId },
-    parsed: normalized,
-    payload: update,
-    rawBody: Buffer.alloc(0),
-  });
+  try {
+    return await dispatchTelegramUpdate(deps, {
+      connection: { ...connection, connectionId },
+      parsed: normalized,
+      payload: update,
+      rawBody: Buffer.alloc(0),
+      telegramPollRevision: expectedConnectionRevision,
+    });
+  } catch (error) {
+    if (isTelegramPollRevisionConflict(error)) {
+      throw new TelegramPollRevisionChangedError();
+    }
+    throw error;
+  }
 }
 
 /**

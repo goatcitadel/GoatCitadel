@@ -50,6 +50,45 @@ describe("fast lane command selection", () => {
 });
 
 describe("fast lane manifest merge", () => {
+  it("retains explicit partial scope without claiming whole-lane performance", () => {
+    withTempDir((tempDir) => {
+      const outDir = path.join(tempDir, "merged");
+      const selected = "fast.test.gateway.shard1";
+      const candidate = { revision: "a".repeat(40), sourceDigest: "b".repeat(64) };
+      writePart(tempDir, "part-a", [selected], "2026-07-25T10:00:00.000Z", {
+        metadata: { commandSelection: selected, candidate, candidateFinal: candidate, candidateUnchanged: true,
+          fastLanePerf: { status: "passed", artifact: "stale-parent-perf.json" } },
+      });
+      const result = runMerge([tempDir, `--out=${outDir}`, "--allow-partial=true"]);
+      assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "manifest.json"), "utf8"));
+      assert.equal(manifest.status, "passed");
+      assert.equal(manifest.metadata.commandSelection, selected);
+      assert.deepEqual(manifest.metadata.missingCommandIds, allCommandIds.filter((id) => id !== selected));
+      assert.equal(manifest.metadata.fastLanePerf, undefined);
+      assert.equal(fs.existsSync(path.join(outDir, "perf", "fast-lane-timing.json")), false);
+      assert.deepEqual(manifest.metadata.candidate, candidate);
+    });
+  });
+
+  it("drops inherited partial markers only when the merged union is complete", () => {
+    withTempDir((tempDir) => {
+      const outDir = path.join(tempDir, "merged");
+      const selected = "fast.test.gateway.shard1";
+      const rest = allCommandIds.filter((id) => id !== selected);
+      writePart(tempDir, "part-a", [selected], "2026-07-25T10:00:00.000Z", {
+        metadata: { commandSelection: selected, missingCommandIds: rest },
+      });
+      writePart(tempDir, "part-b", rest, "2026-07-25T10:00:30.000Z");
+      const result = runMerge([tempDir, `--out=${outDir}`]);
+      assert.equal(result.status, 0, `${result.stderr}\n${result.stdout}`);
+      const manifest = JSON.parse(fs.readFileSync(path.join(outDir, "manifest.json"), "utf8"));
+      assert.equal(manifest.metadata.commandSelection, undefined);
+      assert.equal(manifest.metadata.missingCommandIds, undefined);
+      assert.equal(manifest.metadata.fastLanePerf.status, "passed");
+    });
+  });
+
   it("recomposes partial manifests into one run", () => {
     withTempDir((tempDir) => {
       const outDir = path.join(tempDir, "merged");

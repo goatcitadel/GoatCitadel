@@ -875,14 +875,18 @@ describe("Postgres migration ledger compatibility", () => {
     // v217/v218 add Vault per-Chamber keys (3 tables, 3 secret columns, 38 columns, 5 indexes);
     // v220 only widens two change_plans CHECKs; v221 adds chat_turn_traces.reasoning_text; v222 is data-only;
     // v223 only widens the change_plans kind CHECK; v224 is data-only; v225 only replaces the
-    // mobile_push_deliveries last_classification CHECK.
+    // mobile_push_deliveries last_classification CHECK; v226 adds the two-column comparison claim table.
+    // v227 adds twelve renderer receipt columns; its two foreign keys cascade cleanup.
     // Keep independent drift tripwires for the complete current shape.
-    assert.equal(manifest.tables.length, 372);
+    assert.equal(manifest.tables.length, 374);
     assert.equal(
       manifest.tables.reduce((count, table) => count + table.columns.length, 0),
-      5_139,
+      5_153,
     );
     assert.equal(manifest.indexes.length, 775);
+    assert.deepEqual(manifest.tables.find((table) => table.name === "model_comparison_execution_claims")?.columns.map((column) => column.name), ["comparison_id", "claim_id"]);
+    assert.deepEqual(manifest.tables.find((table) => table.name === "chat_artifact_render_receipts")?.columns.map((column) => column.name),
+      ["artifact_id", "artifact_version", "session_id", "workspace_id", "content_hash", "renderer_version", "viewport", "width", "height", "attachment_id", "attachment_sha256", "created_at"]);
     assert.deepEqual(
       manifest.tables
         .find((table) => table.name === "approval_execution_linkages")
@@ -1089,7 +1093,7 @@ describe("Postgres migration ledger compatibility", () => {
 
   it("covers every canonical IF NOT EXISTS table and index and fails closed on catalog issues", () => {
     const manifest = buildPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
-    assert.equal(manifest.tables.length, 372);
+    assert.equal(manifest.tables.length, 374);
     assert.equal(manifest.indexes.length, 792);
     assert.equal(
       manifest.tables.every((table) => table.columns.length > 0),

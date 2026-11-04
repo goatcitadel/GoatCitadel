@@ -101,7 +101,7 @@ export function markedByInstall(server: McpServerRecord, record: StoredPlugin): 
   return server.pluginOwner?.pluginId === record.pluginId && server.pluginOwner.installPlanId === record.installPlanId;
 }
 
-async function readConnectorScope(
+export async function readConnectorScope(
   readers: UninstallScopeReaders,
   record: StoredPlugin,
   labels: ReadonlyMap<string, PluginPieceLabel>,

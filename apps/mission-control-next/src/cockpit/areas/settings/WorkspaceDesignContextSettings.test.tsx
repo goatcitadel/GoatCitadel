@@ -26,13 +26,13 @@ afterEach(async () => {
   vi.resetAllMocks();
 });
 
-function guidanceDoc(docType: "product" | "design", content: string) {
+function guidanceDoc(docType: "product" | "design", content: string, workspaceId = "ws-1") {
   return {
     docType,
     scope: "workspace",
-    workspaceId: "ws-1",
+    workspaceId,
     fileName: docType === "design" ? "DESIGN.md" : "PRODUCT.md",
-    absolutePath: `/runtime/workspaces/ws-1/${docType === "design" ? "DESIGN.md" : "PRODUCT.md"}`,
+    absolutePath: `/runtime/workspaces/${workspaceId}/${docType === "design" ? "DESIGN.md" : "PRODUCT.md"}`,
     exists: content.length > 0,
     content,
   };
@@ -76,8 +76,26 @@ async function mount() {
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
-  await act(async () => root!.render(<WorkspaceDesignContextSettings workspaceId="ws-1" />));
+  await renderWorkspace("ws-1");
   await vi.waitFor(() => expect(textarea("DESIGN.md").value).toBe("# Design\n"));
+}
+
+async function renderWorkspace(workspaceId: string) {
+  await act(async () =>
+    root!.render(<WorkspaceDesignContextSettings key={`design-context:${workspaceId}`} workspaceId={workspaceId} />),
+  );
+}
+
+function deferDesignSave() {
+  const saved = guidanceDoc("design", "# Draft A\n");
+  let resolve!: (record: typeof saved) => void;
+  const pending = new Promise<typeof saved>((settle) => {
+    resolve = settle;
+  });
+  api.updateWorkspaceGuidance.mockReturnValueOnce(pending);
+  return async () => {
+    await act(async () => resolve(saved));
+  };
 }
 
 function textarea(label: string): HTMLTextAreaElement {
@@ -112,6 +130,72 @@ describe("WorkspaceDesignContextSettings", () => {
       "# Design\n\n```brand\nname: Acme\n```\n",
     );
     await vi.waitFor(() => expect(container!.textContent).toContain("Saved DESIGN.md"));
+  });
+
+  it("preserves and can save newer edits after a pending DESIGN.md save succeeds", async () => {
+    await mount();
+    const finishSave = deferDesignSave();
+    try {
+      await act(async () => type(textarea("DESIGN.md"), "# Draft A"));
+      await act(async () => button("Save DESIGN.md").click());
+      expect(api.updateWorkspaceGuidance).toHaveBeenCalledExactlyOnceWith("ws-1", "design", "# Draft A");
+      expect(button("Save DESIGN.md").disabled).toBe(true);
+      expect(textarea("DESIGN.md").disabled).toBe(false);
+
+      await act(async () => type(textarea("DESIGN.md"), "# Draft B"));
+      expect(textarea("DESIGN.md").value).toBe("# Draft B");
+    } finally {
+      await finishSave();
+    }
+
+    expect(textarea("DESIGN.md").value).toBe("# Draft B");
+    expect(container!.textContent).toContain("Your newer edits are unsaved.");
+    expect(button("Save DESIGN.md").disabled).toBe(false);
+    await act(async () => button("Save DESIGN.md").click());
+    expect(api.updateWorkspaceGuidance).toHaveBeenNthCalledWith(2, "ws-1", "design", "# Draft B");
+  });
+
+  it("adopts normalized DESIGN.md from an untouched save while PRODUCT.md remains editable", async () => {
+    await mount();
+    const finishSave = deferDesignSave();
+    try {
+      await act(async () => type(textarea("DESIGN.md"), "# Draft A"));
+      await act(async () => button("Save DESIGN.md").click());
+      expect(api.updateWorkspaceGuidance).toHaveBeenCalledExactlyOnceWith("ws-1", "design", "# Draft A");
+      await act(async () => type(textarea("PRODUCT.md"), "# Product draft"));
+    } finally {
+      await finishSave();
+    }
+
+    expect(textarea("DESIGN.md").value).toBe("# Draft A\n");
+    expect(container!.textContent).toContain("Saved DESIGN.md");
+    expect(textarea("PRODUCT.md").value).toBe("# Product draft");
+  });
+
+  it("keeps a late save response in the workspace that submitted it", async () => {
+    await mount();
+    const finishSave = deferDesignSave();
+    try {
+      await act(async () => type(textarea("DESIGN.md"), "# Draft A"));
+      await act(async () => button("Save DESIGN.md").click());
+      expect(api.updateWorkspaceGuidance).toHaveBeenCalledExactlyOnceWith("ws-1", "design", "# Draft A");
+
+      api.fetchWorkspaceGuidance.mockResolvedValue({
+        workspaceId: "ws-2",
+        global: [],
+        workspace: [guidanceDoc("design", "# Other workspace\n", "ws-2")],
+      });
+      api.fetchChatGeneratedArtifacts.mockResolvedValue({ items: [] });
+      await renderWorkspace("ws-2");
+      await vi.waitFor(() => expect(textarea("DESIGN.md").value).toBe("# Other workspace\n"));
+      await act(async () => type(textarea("DESIGN.md"), "# Other workspace draft"));
+    } finally {
+      await finishSave();
+    }
+
+    expect(textarea("DESIGN.md").value).toBe("# Other workspace draft");
+    expect(container!.textContent).not.toContain("Saved DESIGN.md");
+    expect(button("Save DESIGN.md").disabled).toBe(false);
   });
 
   it("loads a generated artifact into the DESIGN.md editor with its hash recorded, saving only on Save", async () => {

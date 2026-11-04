@@ -62,6 +62,7 @@ describe("CapabilitySystemService loop 29 approval queue behavior", () => {
       } as never,
       readFeatureFlags: async () => ({ codeModeV1Enabled: true }),
       listToolCatalog: () => [],
+      listSwitchedOffToolNames: () => new Set(),
       listLoadedSkills: () => [],
       readSkillStates: async () => new Map(),
       invokeTool: vi.fn(),

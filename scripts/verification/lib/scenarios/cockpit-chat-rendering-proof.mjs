@@ -332,7 +332,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
             "Partial run evidence must expand automatically",
           );
           await runCard.getByText(delegation.objective, { exact: true }).waitFor();
-          await runCard.getByText("Partially complete", { exact: true }).waitFor();
+          await runCard.getByText("Supervised work · Partial", { exact: true }).waitFor();
           await runCard.getByRole("button", { name: "Inspect run", exact: true }).click();
           await page.getByRole("tab", { name: "Run", exact: true }).click();
           const runPanel = page.getByRole("tabpanel", { name: "Run", exact: true });
@@ -516,7 +516,7 @@ export async function runCockpitChatRenderingProof({ context, browser, stack, ci
         }
         async function closeInspector() {
           await page
-            .getByRole("button", { name: variant === "mobile" ? "Close sheet" : "Close inspector", exact: true })
+            .getByRole("button", { name: "Close inspector", exact: true })
             .click();
         }
         async function poll(predicate, label, limit = 80) {

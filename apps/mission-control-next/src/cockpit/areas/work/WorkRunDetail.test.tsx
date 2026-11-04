@@ -140,9 +140,14 @@ it("keeps the signed evidence receipt reachable while technical details are hidd
   await vi.waitFor(() => expect(container.textContent).toContain("Receipt for run-a"));
   expect(container.textContent).not.toContain("Lineage evidence");
 });
-it.each(["workspace-a", "workspace-other"])(
-  "renders recorded errors only for the selected workspace (%s)",
-  async (workspaceId) => {
+it.each([
+  { name: "selected", workspaceId: "workspace-a", metadata: {}, heading: "Recorded run errors" },
+  { name: "other", workspaceId: "workspace-other", metadata: {}, heading: "Run outside this workspace" },
+  { name: "missing", workspaceId: undefined, metadata: {}, heading: "Run workspace unknown" },
+  { name: "conflicting", workspaceId: "workspace-a", metadata: { workspaceId: "workspace-other" }, heading: "Run workspace unknown" },
+])(
+  "renders the recorded workspace state and gates errors ($name)",
+  async ({ workspaceId, metadata, heading }) => {
     document.body.appendChild(container);
     root = createRoot(container);
     api.fetch.mockResolvedValue({
@@ -152,6 +157,7 @@ it.each(["workspace-a", "workspace-other"])(
         status: "failed",
         updatedAt: "2026-10-05T00:00:00Z",
         payload: { workspaceId },
+        metadata,
       },
       durable: { checkpoints: { state: "available", items: [] }, timeline: { state: "available", items: [] } },
       toolCalls: { state: "available", items: [] },
@@ -169,12 +175,8 @@ it.each(["workspace-a", "workspace-other"])(
         </QueryClientProvider>,
       ),
     );
-    await vi.waitFor(() =>
-      expect(container.textContent).toContain(
-        workspaceId === "workspace-a" ? "Recorded run errors" : "Run outside this workspace",
-      ),
-    );
-    expect(container.textContent?.includes("Owner-reported tool failure")).toBe(workspaceId === "workspace-a");
+    await vi.waitFor(() => expect(container.textContent).toContain(heading));
+    expect(container.textContent?.includes("Owner-reported tool failure")).toBe(heading === "Recorded run errors");
     expect(container.querySelector('[aria-label="Recorded run errors"] a')).toBeNull();
   },
 );

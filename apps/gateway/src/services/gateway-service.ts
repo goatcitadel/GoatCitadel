@@ -1625,6 +1625,7 @@ export class GatewayService {
       storage: this.storage,
       readFeatureFlags: async () => await this.readFeatureFlags(),
       listToolCatalog: () => this.listToolCatalog(),
+      listSwitchedOffToolNames: () => this.policyEngine.listSwitchedOffToolNames(),
       listMeshCapabilityCatalogEntries: () => this.meshCapabilityPublicationService.listCatalogEntries(),
       listLoadedSkills: () => this.skillsService.list(),
       readSkillStates: () => this.skillStateService.readSkillStates(),
@@ -3237,6 +3238,8 @@ export class GatewayService {
         },
         connectorDelivery: {
           storage: this.storage,
+          onConnectorDeliveryCompleted: (run, payload, state) =>
+            this.browserErrandService.onConnectorDeliveryCompleted(run.runId, payload, state),
           requireConnectorRecord: async (connectorId) => await this.requireConnectorRecord(connectorId),
           commsSend: async (input, options) => await this.commsSend(input, options),
           commsReply: async (input, options) => await this.commsReply(input, options),

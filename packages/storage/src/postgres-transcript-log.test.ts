@@ -205,6 +205,9 @@ class InMemoryTranscriptDb implements DatabaseClient {
   public forceInsertNoop = false;
 
   public prepare(sql: string): DbStatement {
+    if (sql.includes("pg_advisory_xact_lock")) {
+      return { run: () => ({ changes: 0 }), get: () => undefined, all: () => [] };
+    }
     if (sql.includes("COALESCE(MAX(event_sequence), 0) + 1")) {
       return {
         run: () => ({ changes: 0 }),

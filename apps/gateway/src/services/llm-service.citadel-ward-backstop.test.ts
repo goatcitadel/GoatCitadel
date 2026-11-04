@@ -1,9 +1,16 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { LlmConfigFile } from "@goatcitadel/contracts";
-import { createModelChatWardDispatchGuard, routeWardActionsFor } from "./chat-route-local-ward.js";
+import { ProxyAgent } from "undici";
+import { createFakeModelUsageAccounting } from "../test/claude-code-cli-fake-spawn.js";
+import { createModelChatWardDispatchGuard, readCitadelWardDispatchReason, routeWardActionsFor } from "./chat-route-local-ward.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 import { LlmService } from "./llm-service.js";
 import { createNoopSecretStore } from "../test/llm-fixtures.js";
+
+// Keep provider fixtures explicit; real transport tests use the pinned implementation.
+vi.mock("./llm-provider-fetch.js", () => ({
+  fetchLlmProvider: (url: string, init: RequestInit) => globalThis.fetch(url, init),
+}));
 
 const config: LlmConfigFile = {
   activeProviderId: "moonshot",
@@ -167,5 +174,114 @@ describe("LlmService Citadel Ward dispatch backstop", () => {
       ),
     ).rejects.toBeInstanceOf(LlmDispatchGuardRejectedError);
     expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("LlmService Citadel Ward effective proxy boundary", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  const loopbackModelUrl = "http://127.0.0.1:11434/v1";
+  const externalProxyUrl = "http://ward-proxy.invalid:3128";
+  const localProxyUrl = "http://127.0.0.1:3128";
+  const request = {
+    providerId: "ollama",
+    model: "llama3.2",
+    messages: [{ role: "user" as const, content: "synthetic Ward dispatch marker" }],
+  };
+
+  function createProxiedService(proxyUrl: string, ward: boolean, bypassHosts?: string[]) {
+    const accounting = createFakeModelUsageAccounting();
+    const service = new LlmService(
+      {
+        activeProviderId: "ollama",
+        activeModel: "llama3.2",
+        providers: [
+          {
+            providerId: "ollama",
+            label: "Local fixture",
+            baseUrl: loopbackModelUrl,
+            apiStyle: "openai-chat-completions",
+            defaultModel: "llama3.2",
+            apiKeyEnv: "WARD_TEST_PROVIDER_KEY",
+            request: { proxy: { url: proxyUrl, ...(bypassHosts ? { bypassHosts } : {}) } },
+          },
+        ],
+      },
+      { WARD_TEST_PROVIDER_KEY: "synthetic-ward-test-value" },
+      {
+        secretStore: createNoopSecretStore(),
+        networkAllowlist: ["127.0.0.1", "ward-proxy.invalid"],
+        modelUsageAccounting: accounting.service,
+      },
+    );
+    const storage = routeLocalWardStorage();
+    if (!ward) storage.citadels.listWards.mockResolvedValue([]);
+    service.setDispatchWardGuard(createModelChatWardDispatchGuard({ storage: storage as never }));
+    return { service, accounting };
+  }
+
+  async function dispatch(service: LlmService, kind: "completion" | "stream") {
+    if (kind === "completion") {
+      await service.chatCompletions(request, durableTurnAttribution);
+      return;
+    }
+    for await (const _chunk of service.chatCompletionsStream(request, {
+      ...durableTurnAttribution,
+      callKind: "chat_tool_loop",
+    })) {
+      // Drain the fake provider's complete response.
+    }
+  }
+
+  it.each(["completion", "stream"] as const)(
+    "blocks a %s through an active off-machine proxy before any usage intent or transport",
+    async (kind) => {
+      const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+        kind === "completion"
+          ? completionResponse()
+          : new Response('data: {"model":"llama3.2","choices":[{"index":0,"delta":{"content":"fixture"},"finish_reason":"stop"}]}\n\ndata: [DONE]\n\n', {
+              headers: { "content-type": "text/event-stream" },
+            }),
+      );
+      const { service, accounting } = createProxiedService(externalProxyUrl, true);
+
+      const error = await dispatch(service, kind).then(() => undefined, (cause: unknown) => cause);
+
+      expect({
+        refused: error instanceof LlmDispatchGuardRejectedError,
+        reason: readCitadelWardDispatchReason(error),
+        fetches: fetchSpy.mock.calls.length,
+        usageIntents: accounting.prepareDispatch.mock.calls.length,
+      }).toEqual({
+        refused: true,
+        reason: "citadel_ward_route_local_unavailable",
+        fetches: 0,
+        usageIntents: 0,
+      });
+      await expect(service.admitsDispatchWard(durableTurnAttribution, "ollama")).resolves.toBe(false);
+    },
+  );
+
+  it.each([
+    { name: "allows the configured proxy without a matching Ward", proxy: externalProxyUrl, ward: false, bypass: undefined, proxied: true },
+    { name: "keeps explicit proxy bypass direct under route_local", proxy: externalProxyUrl, ward: true, bypass: ["127.0.0.1"], proxied: false },
+    { name: "trusts a loopback proxy under route_local", proxy: localProxyUrl, ward: true, bypass: undefined, proxied: true },
+  ])("$name", async ({ proxy, ward, bypass, proxied }) => {
+    const fetchSpy = vi.spyOn(globalThis, "fetch").mockImplementation(async () => completionResponse());
+    const { service, accounting } = createProxiedService(proxy, ward, bypass);
+
+    await dispatch(service, "completion");
+
+    expect(fetchSpy).toHaveBeenCalledExactlyOnceWith(
+      loopbackModelUrl + "/chat/completions",
+      expect.objectContaining({ method: "POST" }),
+    );
+    const options = fetchSpy.mock.calls[0]?.[1] as (RequestInit & { dispatcher?: unknown }) | undefined;
+    expect(options?.dispatcher).toBeDefined();
+    expect(options?.dispatcher instanceof ProxyAgent).toBe(proxied);
+    expect(accounting.prepareDispatch).toHaveBeenCalledOnce();
+    await expect(service.admitsDispatchWard(durableTurnAttribution, "ollama")).resolves.toBe(true);
   });
 });

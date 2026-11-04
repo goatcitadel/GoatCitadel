@@ -2,12 +2,17 @@ import assert from "node:assert/strict";
 import os from "node:os";
 import path from "node:path";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
-import { afterEach, describe, it } from "vitest";
+import { afterEach, beforeEach, vi, describe, it } from "vitest";
 import { deleteProviderApiKeyWithFallback, persistProviderApiKeyWithFallback } from "./provider-secret-persistence.js";
 
 const TEMP_ROOTS: string[] = [];
 
+beforeEach(() => {
+  vi.stubEnv("GOATCITADEL_LOCAL_ENV_FILE", undefined);
+});
+
 afterEach(async () => {
+  vi.unstubAllEnvs();
   while (TEMP_ROOTS.length > 0) {
     const next = TEMP_ROOTS.pop();
     if (next) {

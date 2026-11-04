@@ -15,6 +15,7 @@ import {
 } from "react";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
 import { Dialog } from "../ui/Dialog";
@@ -37,8 +38,9 @@ const INSPECTOR_SURFACE = '[data-inspector-mode], [data-inspector-body="true"]';
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const installation = getGatewayApiBaseUrl();
+  const accessRevision = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, () => 0);
   const history = useSyncExternalStore(subscribeCockpitHistory, readCockpitHistory, () => "server");
-  const identity = JSON.stringify([installation, activeCitadelId, activeWorkspaceId, history]);
+  const identity = JSON.stringify([installation, accessRevision, activeCitadelId, activeWorkspaceId, history]);
   const lifetime = useRef({ identity, alive: true });
   if (lifetime.current.identity !== identity) {
     lifetime.current.alive = false;
@@ -50,8 +52,9 @@ export function InspectorProvider({ children }: { children: ReactNode }) {
       token.alive &&
       lifetime.current === token &&
       getGatewayApiBaseUrl() === installation &&
+      getGatewayAccessRevision() === accessRevision &&
       readCockpitHistory() === history,
-    [token, installation, history],
+    [token, installation, accessRevision, history],
   );
   useEffect(() => {
     token.alive = true;

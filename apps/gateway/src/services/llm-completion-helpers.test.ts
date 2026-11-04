@@ -23,6 +23,7 @@ import {
 } from "./llm-completion-helpers.js";
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
 import { ClaudeCliError } from "./claude-code-cli-process.js";
+import { claudeCliUserMessage } from "./claude-code-cli-output.js";
 import { StreamIdleTimeoutError } from "./stream-idle-watchdog.js";
 import { LlmDispatchGuardRejectedError } from "./llm-dispatch-guard.js";
 
@@ -246,6 +247,18 @@ describe("llm-completion-helpers", () => {
     expect(classifyProviderFailure(insufficientQuota)).toBe("rate_limited");
     expect(shouldAttemptCrossProviderFallback(insufficientQuota)).toBe(true);
     expect(isProviderQuotaExhaustedError(new Error("request failed (429 Too Many Requests)"))).toBe(false);
+  });
+
+  it("preserves typed Claude subscription exhaustion through provider failure classification", () => {
+    const error = new ClaudeCliError("claude_cli_usage_limited", claudeCliUserMessage("claude_cli_usage_limited"));
+    expect(isProviderQuotaExhaustedError(error)).toBe(true);
+    expect(classifyProviderFailure(error)).toBe("rate_limited");
+    expect(shouldRetryTransientProviderError(error)).toBe(false);
+    expect(shouldAttemptCrossProviderFallback(error)).toBe(true);
+    // A quota-specific adapter code must not broaden ordinary billing denials.
+    expect(isProviderQuotaExhaustedError(new Error("Your subscription payment was declined"))).toBe(false);
+    expect(shouldAttemptCrossProviderFallback(new Error("Your subscription payment was declined"))).toBe(false);
+    expect(shouldAttemptCrossProviderFallback(new Error("request failed (401 Unauthorized)"))).toBe(false);
   });
 
   it("carries the exact completion deadline and output boundary on terminal errors", () => {

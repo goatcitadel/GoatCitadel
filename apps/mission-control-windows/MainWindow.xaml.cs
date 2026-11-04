@@ -27,6 +27,10 @@ public sealed partial class MainWindow : Window
     private readonly NotificationService _notificationService;
     private readonly TrayService _trayService = new();
     private readonly DeferredRouteDeliveryQueue _deferredRoutes = new();
+    private readonly DesktopRuntimeLifecycle _runtimeLifecycle = new();
+    private long _runtimeStatusSequence;
+    private long _runtimeStatusGeneration = -1;
+    private bool _runtimeStatusInFlight;
 
     private AppWindow? _appWindow;
     private DesktopRuntimeStatus? _lastRuntime;
@@ -58,7 +62,6 @@ public sealed partial class MainWindow : Window
         ConfigureTrayFallbackSafe();
         _notificationService.Initialize();
         Closed += (_, _) => CleanupForExit();
-        _webViewInitializationTask = InitializeWebViewAsync();
         _ = LaunchRuntimeAsync();
         InitializeUpdates();
     }
@@ -165,7 +168,7 @@ public sealed partial class MainWindow : Window
         }
     }
 
-    private async Task InitializeWebViewAsync()
+    private async Task InitializeWebViewAsync(DesktopRuntimeObservation observation)
     {
         try
         {
@@ -182,6 +185,7 @@ public sealed partial class MainWindow : Window
             var environment = await Microsoft.Web.WebView2.Core.CoreWebView2Environment.CreateWithOptionsAsync(
                 null, userDataFolder, null);
             await MissionWebView.EnsureCoreWebView2Async(environment, null);
+            if (_cleanedUp) return;
             _startupDiagnostics?.RecordPhase("webview-initialized", browserVersion: environment.BrowserVersionString);
             MissionWebView.CoreWebView2.WebMessageReceived += MissionWebView_WebMessageReceived;
             MissionWebView.CoreWebView2.NavigationStarting += (_, args) =>
@@ -220,19 +224,19 @@ public sealed partial class MainWindow : Window
         }
         catch (InvalidOperationException error)
         {
-            RenderWebViewRecovery(error);
+            RenderWebViewRecovery(error, observation);
         }
         catch (COMException error)
         {
-            RenderWebViewRecovery(error);
+            RenderWebViewRecovery(error, observation);
         }
         catch (IOException error)
         {
-            RenderWebViewRecovery(error);
+            RenderWebViewRecovery(error, observation);
         }
         catch (UnauthorizedAccessException error)
         {
-            RenderWebViewRecovery(error);
+            RenderWebViewRecovery(error, observation);
         }
     }
 
@@ -307,17 +311,21 @@ public sealed partial class MainWindow : Window
 
     private async Task LaunchRuntimeAsync()
     {
+        if (_cleanedUp) return;
+        var observation = _runtimeLifecycle.BeginTransition();
+        _webViewInitializationTask ??= InitializeWebViewAsync(observation);
         _deferredRoutes.MarkUnavailable();
         StopRuntimeStatusPolling();
         StopEventStream();
         RenderStarting();
         try
         {
-            var result = await _runtimeStatusService.LaunchAsync();
+            var result = await _runtimeStatusService.LaunchAsync(observation.Token);
+            if (!_runtimeLifecycle.IsCurrent(observation)) return;
             _lastRuntime = result;
             if (result.IsReady)
             {
-                await ShowReadyRuntimeAsync(result);
+                await ShowReadyRuntimeAsync(result, observation);
             }
             else
             {
@@ -329,31 +337,33 @@ public sealed partial class MainWindow : Window
         }
         catch (InvalidOperationException error)
         {
-            RenderRuntimeRecovery(error);
+            RenderRuntimeRecovery(error, observation);
         }
         catch (Win32Exception error)
         {
-            RenderRuntimeRecovery(error);
+            RenderRuntimeRecovery(error, observation);
         }
         catch (IOException error)
         {
-            RenderRuntimeRecovery(error);
+            RenderRuntimeRecovery(error, observation);
         }
         catch (UnauthorizedAccessException error)
         {
-            RenderRuntimeRecovery(error);
+            RenderRuntimeRecovery(error, observation);
         }
-        catch (TaskCanceledException error)
+        catch (OperationCanceledException error)
         {
-            RenderRuntimeRecovery(error);
+            RenderRuntimeRecovery(error, observation);
         }
     }
 
-    private async Task ShowReadyRuntimeAsync(DesktopRuntimeStatus result)
+    private async Task ShowReadyRuntimeAsync(DesktopRuntimeStatus result, DesktopRuntimeObservation observation)
     {
+        if (!_runtimeLifecycle.IsCurrent(observation)) return;
         _lastRuntime = result;
         RenderRuntime(result);
-        await EnsureWebViewReadyAsync();
+        await EnsureWebViewReadyAsync(observation);
+        if (!_runtimeLifecycle.IsCurrent(observation)) return;
         if (!_webViewReady)
         {
             _deferredRoutes.MarkUnavailable();
@@ -376,6 +386,16 @@ public sealed partial class MainWindow : Window
 
     private async Task RefreshRuntimeStatusAsync(bool notify, bool syncShell)
     {
+        if (_cleanedUp) return;
+        if (!_runtimeLifecycle.TryCaptureStatus(out var observation))
+        {
+            if (notify) ShowToast("Runtime stop is in progress.");
+            return;
+        }
+        if (_runtimeStatusInFlight && _runtimeStatusGeneration == observation.Generation) return;
+        var request = ++_runtimeStatusSequence;
+        _runtimeStatusGeneration = observation.Generation;
+        _runtimeStatusInFlight = true;
         if (syncShell)
         {
             // Do not dispatch through the last successful status while the fresh
@@ -385,7 +405,8 @@ public sealed partial class MainWindow : Window
 
         try
         {
-            var result = await _runtimeStatusService.ReadStatusAsync();
+            var result = await _runtimeStatusService.ReadStatusAsync(observation.Token);
+            if (!_runtimeLifecycle.IsCurrent(observation) || request != _runtimeStatusSequence) return;
             _lastRuntime = result;
             var message = $"Runtime {result.Status}: gateway {(result.Readiness.Gateway ? "ready" : "not ready")}, UI {(result.Readiness.Ui ? "ready" : "not ready")}.";
             if (notify)
@@ -409,7 +430,7 @@ public sealed partial class MainWindow : Window
                 }
                 else
                 {
-                    await ShowReadyRuntimeAsync(result);
+                    await ShowReadyRuntimeAsync(result, observation);
                 }
             }
             else
@@ -421,63 +442,70 @@ public sealed partial class MainWindow : Window
         }
         catch (InvalidOperationException error)
         {
-            RenderRuntimeStatusFailure(error, notify, syncShell);
+            RenderRuntimeStatusFailure(error, notify, syncShell, observation);
         }
         catch (Win32Exception error)
         {
-            RenderRuntimeStatusFailure(error, notify, syncShell);
+            RenderRuntimeStatusFailure(error, notify, syncShell, observation);
         }
         catch (IOException error)
         {
-            RenderRuntimeStatusFailure(error, notify, syncShell);
+            RenderRuntimeStatusFailure(error, notify, syncShell, observation);
         }
         catch (UnauthorizedAccessException error)
         {
-            RenderRuntimeStatusFailure(error, notify, syncShell);
+            RenderRuntimeStatusFailure(error, notify, syncShell, observation);
         }
-        catch (TaskCanceledException error)
+        catch (OperationCanceledException error)
         {
-            RenderRuntimeStatusFailure(error, notify, syncShell);
+            RenderRuntimeStatusFailure(error, notify, syncShell, observation);
+        }
+        finally
+        {
+            if (request == _runtimeStatusSequence) _runtimeStatusInFlight = false;
         }
     }
 
     private async Task RestartRuntimeAsync()
     {
-        await StopRuntimeAsync();
+        if (!await StopRuntimeAsync()) return;
         ShowToast("Runtime stopped. Restarting...");
         await LaunchRuntimeAsync();
     }
 
-    private async Task StopRuntimeAsync()
+    private async Task<bool> StopRuntimeAsync()
     {
+        if (_cleanedUp) return false;
+        var observation = _runtimeLifecycle.BeginStop();
         _deferredRoutes.MarkUnavailable();
+        StopRuntimeStatusPolling();
         StopEventStream();
         try
         {
-            await _runtimeStatusService.StopAsync();
+            using var result = await _runtimeStatusService.StopAsync(observation.Token);
+            if (!_runtimeLifecycle.IsCurrent(observation)) return false;
+            var stopped = RuntimeStatusService.ParseStatus(result.RootElement.GetRawText());
+            if (!_runtimeLifecycle.TryCompleteStop(observation)) return false;
+            _lastRuntime = stopped;
+            RenderStopped();
+            return true;
         }
-        catch (InvalidOperationException error)
+        catch (Exception error) when (error is InvalidOperationException or Win32Exception or IOException
+            or UnauthorizedAccessException or OperationCanceledException)
         {
-            ShowToast(error.Message);
+            if (_runtimeLifecycle.TryCompleteStop(observation))
+            {
+                ShowToast(error.Message);
+                // A refused or partial stop is still a live runtime that needs observation.
+                StartRuntimeStatusPolling();
+                await RefreshRuntimeStatusAsync(notify: false, syncShell: true);
+            }
+            return false;
         }
-        catch (Win32Exception error)
+        finally
         {
-            ShowToast(error.Message);
+            _runtimeLifecycle.TryCompleteStop(observation);
         }
-        catch (IOException error)
-        {
-            ShowToast(error.Message);
-        }
-        catch (UnauthorizedAccessException error)
-        {
-            ShowToast(error.Message);
-        }
-        catch (TaskCanceledException error)
-        {
-            ShowToast(error.Message);
-        }
-
-        RenderStopped();
     }
 
     private void StartEventStream(DesktopRuntimeStatus result)
@@ -495,10 +523,11 @@ public sealed partial class MainWindow : Window
         _eventStreamKey = null;
     }
 
-    private async Task EnsureWebViewReadyAsync()
+    private async Task EnsureWebViewReadyAsync(DesktopRuntimeObservation observation)
     {
-        _webViewInitializationTask ??= InitializeWebViewAsync();
+        _webViewInitializationTask ??= InitializeWebViewAsync(observation);
         await _webViewInitializationTask;
+        if (!_webViewReady) _webViewInitializationTask = null;
     }
 
     private bool NavigateToRuntimeTarget(DesktopRuntimeStatus result)
@@ -673,6 +702,7 @@ public sealed partial class MainWindow : Window
         }
 
         _cleanedUp = true;
+        _runtimeLifecycle.Dispose();
         StopEventStream();
         StopRuntimeStatusPolling();
         _notificationService.Dispose();
@@ -711,24 +741,29 @@ public sealed partial class MainWindow : Window
         ShowToast($"Tray controls are unavailable: {error.Message}");
     }
 
-    private void RenderWebViewRecovery(Exception error)
+    private void RenderWebViewRecovery(Exception error, DesktopRuntimeObservation observation)
     {
         _startupDiagnostics?.RecordPhase("webview-failed", error);
-        _deferredRoutes.MarkUnavailable();
         _webViewReady = false;
         _webViewInitializationTask = null;
+        // The initializer catches internally, so it must fence its own UI write
+        // before the outer ShowReady continuation has a chance to recheck.
+        if (!_runtimeLifecycle.IsCurrent(observation)) return;
+        _deferredRoutes.MarkUnavailable();
         RenderRecovery($"WebView2 initialization failed: {error.Message}");
     }
 
-    private void RenderRuntimeRecovery(Exception error)
+    private void RenderRuntimeRecovery(Exception error, DesktopRuntimeObservation observation)
     {
+        if (!_runtimeLifecycle.IsCurrent(observation)) return;
         _startupDiagnostics?.RecordPhase("runtime-failed", error);
         _deferredRoutes.MarkUnavailable();
         RenderRecovery(error.Message);
     }
 
-    private void RenderRuntimeStatusFailure(Exception error, bool notify, bool syncShell)
+    private void RenderRuntimeStatusFailure(Exception error, bool notify, bool syncShell, DesktopRuntimeObservation observation)
     {
+        if (!_runtimeLifecycle.IsCurrent(observation)) return;
         if (notify)
         {
             ShowToast(error.Message);

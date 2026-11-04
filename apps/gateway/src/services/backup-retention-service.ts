@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { createHash, randomUUID } from "node:crypto";
 import { execFileSync } from "node:child_process";
+import { DatabaseSync } from "node:sqlite";
 import type {
   BackupCreateResponse,
   BackupManifestContractCoverageRecord,
@@ -21,8 +22,17 @@ import type { GatewayRuntimeConfig } from "../config.js";
 import { discoverNativePostgresTool } from "../native-postgres-discovery.js";
 import { AUTO_NATIVE_BIN_DIR, resolveGatewayPostgresConnectionString } from "../postgres-runtime-config.js";
 import { resolveBackupDirectory, resolveBackupPathWithinDirectory } from "./backup-paths.js";
+import {
+  postgresBackupAncillaryEnvironment,
+  postgresBackupEnvironment,
+  preparePostgresBackupConnection,
+  runBundledPostgresDump,
+  runNativePostgresDump,
+} from "./postgres-backup-connection.js";
 
 const RETENTION_SETTINGS_KEY = "retention_policy";
+const SQLITE_RESTORE_RECOVERY_DIRECTORY = ".goatcitadel-sqlite-restore";
+const SQLITE_RESTORE_FAMILY_SUFFIXES = ["-wal", "-shm", "-journal", ""] as const;
 const CONFIG_GENERATION_TEMP_FILE_PATTERN = /^\..+-[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}\.tmp$/iu;
 const CONFIG_SYNC_TEMP_FILE_PATTERN = /\.tmp-\d+-[a-z0-9]+-[a-z0-9]+$/iu;
 
@@ -87,9 +97,29 @@ export async function restoreBackupOffline(input: {
       );
     }
 
+    // This namespace can hold the only recoverable old database family; reject every archive member before any copy.
+    if (manifest.files.some((file) =>
+      file.path.replaceAll("\\", "/").split("/")[0]?.toLowerCase() === SQLITE_RESTORE_RECOVERY_DIRECTORY,
+    )) {
+      throw new Error("Backup manifest conflicts with the reserved SQLite restore recovery namespace.");
+    }
+    const sqlitePaths = manifest.files.filter((file) =>
+      isWindowsEquivalentBackupPath(file.path, "data/index.db") ||
+      (manifest.contractCoverage?.minimumSet.databasePaths ?? []).some((databasePath) =>
+        isWindowsEquivalentBackupPath(file.path, databasePath),
+      ),
+    ).map((file) => file.path);
+    for (const databasePath of sqlitePaths) {
+      const stagedDatabasePath = path.resolve(payloadDir, databasePath);
+      ensurePathWithinRoot(stagedDatabasePath, payloadDir);
+      // Only the private source copy is checkpointed. Legacy archives can hold committed pages in their WAL.
+      normalizeSqliteRestoreSource(stagedDatabasePath);
+    }
     let filesRestored = 0;
     for (const file of manifest.files) {
-      if (isEphemeralSqliteSidecar(file.path)) {
+      if (isEphemeralSqliteSidecar(file.path) || sqlitePaths.some((databasePath) =>
+        SQLITE_RESTORE_FAMILY_SUFFIXES.some((suffix) => isWindowsEquivalentBackupPath(file.path, databasePath + suffix)),
+      )) {
         continue;
       }
       const source = path.resolve(payloadDir, file.path);
@@ -102,6 +132,10 @@ export async function restoreBackupOffline(input: {
       filesRestored += 1;
     }
 
+    // Ordinary payload copies keep their existing semantics; publish SQLite families only after they succeed.
+    await publishSqliteRestoreFamilies(payloadDir, runtimeRoot, sqlitePaths);
+    filesRestored += sqlitePaths.length;
+
     return {
       restored: true,
       backupId: manifest.backupId,
@@ -112,6 +146,109 @@ export async function restoreBackupOffline(input: {
   }
 }
 
+/** Normalize a private archive copy, never the old destination main/journal set. */
+function normalizeSqliteRestoreSource(databasePath: string): void {
+  const db = new DatabaseSync(databasePath);
+  try {
+    const checkpoint = db.prepare("PRAGMA wal_checkpoint(TRUNCATE)").get();
+    if (checkpoint?.busy !== 0 || db.prepare("PRAGMA journal_mode = DELETE").get()?.journal_mode !== "delete") {
+      throw new Error("Backup SQLite state could not be normalized to a standalone database.");
+    }
+  } finally {
+    db.close();
+  }
+  validateStandaloneSqliteRestore(databasePath);
+}
+
+function validateStandaloneSqliteRestore(databasePath: string): void {
+  const db = new DatabaseSync(databasePath, { readOnly: true });
+  try {
+    if (
+      db.prepare("PRAGMA journal_mode").get()?.journal_mode !== "delete" ||
+      db.prepare("PRAGMA integrity_check").get()?.integrity_check !== "ok" ||
+      db.prepare("PRAGMA foreign_key_check").get() !== undefined
+    ) {
+      throw new Error("Restored SQLite database failed standalone integrity validation.");
+    }
+  } finally {
+    db.close();
+  }
+}
+
+/**
+ * Operators must still stop the runtime. The private directory excludes competing SQLite publication and retains the complete
+ * old database families until publication validates; it is deliberately retained if rollback cannot finish.
+ */
+async function publishSqliteRestoreFamilies(payloadDir: string, runtimeRoot: string, sqlitePaths: readonly string[]): Promise<void> {
+  if (sqlitePaths.length === 0) return;
+  const recoveryRoot = path.join(runtimeRoot, SQLITE_RESTORE_RECOVERY_DIRECTORY);
+  ensurePathWithinRoot(recoveryRoot, runtimeRoot);
+
+  await fs.mkdir(runtimeRoot, { recursive: true });
+  // No recursive mkdir: an interrupted restore or another restore owner must fail closed, never be overwritten.
+  await fs.mkdir(recoveryRoot, { mode: 0o700 });
+  const moved: Array<{ target: string; retained: string }> = [];
+  const published: string[] = [];
+  try {
+    const prior: Array<{ target: string; retained: string }> = [];
+    for (const relativePath of sqlitePaths) {
+      for (const suffix of SQLITE_RESTORE_FAMILY_SUFFIXES) {
+        const target = path.resolve(runtimeRoot, relativePath + suffix);
+        const retained = path.resolve(recoveryRoot, relativePath + suffix);
+        ensurePathWithinRoot(target, runtimeRoot);
+        ensurePathWithinRoot(retained, recoveryRoot);
+        const stats = await fs.lstat(target).catch((error: unknown) => {
+          if (error instanceof Error && "code" in error && error.code === "ENOENT") return undefined;
+          throw error;
+        });
+        if (!stats) continue;
+        if (!stats.isFile()) throw new Error("SQLite restore destination family must contain only regular files.");
+        prior.push({ target, retained });
+      }
+    }
+    for (const item of prior) {
+      await fs.mkdir(path.dirname(item.retained), { recursive: true });
+      await fs.rename(item.target, item.retained);
+      moved.push(item);
+    }
+    for (const relativePath of sqlitePaths) {
+      const target = path.resolve(runtimeRoot, relativePath);
+      await fs.mkdir(path.dirname(target), { recursive: true });
+      // Record before copying: a failed copy can leave a partial file which rollback must remove.
+      published.push(target);
+      await fs.copyFile(path.resolve(payloadDir, relativePath), target, fsSync.constants.COPYFILE_EXCL);
+      validateStandaloneSqliteRestore(target);
+    }
+  } catch (cause) {
+    const rollbackErrors: unknown[] = [];
+    for (const target of published.reverse()) {
+      await fs.rm(target, { force: true }).catch((error: unknown) => { rollbackErrors.push(error); });
+    }
+    // Do not split more of the retained family after rollback fails; leave the remainder together for recovery.
+    if (rollbackErrors.length === 0) {
+      for (const item of moved.reverse()) {
+        try {
+          await fs.rename(item.retained, item.target);
+        } catch (error) {
+          rollbackErrors.push(error);
+          break;
+        }
+      }
+    }
+    if (rollbackErrors.length > 0) {
+      throw new AggregateError([cause, ...rollbackErrors], `SQLite restore rollback needs operator recovery: ${recoveryRoot}`, { cause });
+    }
+    await fs.rm(recoveryRoot, { recursive: true, force: true });
+    throw cause;
+  }
+  try {
+    await fs.rm(recoveryRoot, { recursive: true, force: true });
+  } catch (cause) {
+    throw Object.assign(new Error(`SQLite restore completed but retained recovery files need cleanup: ${recoveryRoot}`, { cause }), {
+      mutationCommitted: true,
+    });
+  }
+}
 export async function verifyBackupAtRuntime(
   _config: GatewayRuntimeConfig,
   input: { filePath: string },
@@ -223,8 +360,11 @@ export class BackupRetentionService {
       await fs.rm(tempDir, { recursive: true, force: true });
       await fs.mkdir(payloadDir, { recursive: true });
 
-      if (this.config.assistant.database.driver === "postgres") {
-        await this.exportPostgresDump(payloadDir);
+      const { driver, postgres } = this.config.assistant.database;
+      const configuredNames = [postgres?.connectionStringEnv, postgres?.passwordEnv];
+      const ancillaryEnv = postgresBackupAncillaryEnvironment(configuredNames);
+      if (driver === "postgres") {
+        await this.exportPostgresDump(payloadDir, postgres.mode, configuredNames, ancillaryEnv);
         for (const includePath of this.buildBackupIncludePaths()) {
           const source = path.resolve(this.config.rootDir, includePath);
           const target = path.join(payloadDir, includePath);
@@ -244,7 +384,7 @@ export class BackupRetentionService {
         backupId,
         createdAt: now.toISOString(),
         appVersion: readAppVersion(),
-        gitRef: readGitRef(this.config.rootDir),
+        gitRef: readGitRef(this.config.rootDir, ancillaryEnv),
         rootDir: this.config.rootDir,
         files,
         contractCoverage: buildBackupManifestContractCoverage(files),
@@ -400,33 +540,29 @@ export class BackupRetentionService {
     await createSqliteSnapshot.call(this.storage, targetDatabasePath);
   }
 
-  private async exportPostgresDump(payloadDir: string): Promise<void> {
+  private async exportPostgresDump(
+    payloadDir: string,
+    mode: GatewayRuntimeConfig["assistant"]["database"]["postgres"]["mode"],
+    configuredNames: readonly (string | undefined)[],
+    ancillaryEnv: NodeJS.ProcessEnv,
+  ): Promise<void> {
     const connectionString = resolveGatewayPostgresConnectionString(this.config);
     if (!connectionString) {
       throw new Error("Postgres backup requested but no connection string could be resolved.");
     }
+    const connection = preparePostgresBackupConnection(connectionString);
+    const env = postgresBackupEnvironment(connection, configuredNames);
     const databaseDir = path.join(payloadDir, "database");
     await fs.mkdir(databaseDir, { recursive: true });
     const dumpPath = path.join(databaseDir, "postgres.dump");
-    if (this.config.assistant.database.postgres.mode === "bundled") {
-      const bundledDump = tryDumpViaBundledDocker(this.config, connectionString);
+    if (mode === "bundled") {
+      const bundledDump = tryDumpViaBundledDocker(this.config, connection, env, ancillaryEnv);
       if (bundledDump) {
         await fs.writeFile(dumpPath, bundledDump);
         return;
       }
     }
-    const pgDumpCommand = resolvePgDumpCommand(this.config);
-    try {
-      execFileSync(pgDumpCommand, ["--format=custom", "--file", dumpPath, connectionString], {
-        encoding: "utf8",
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-    } catch (error) {
-      // execFileSync echoes the full argv (including the credentialed
-      // connection string) in its message, and that message reaches the UI.
-      // eslint-disable-next-line preserve-caught-error -- The raw cause carries the credentialed argv; only the redacted detail may surface.
-      throw new Error(`pg_dump failed: ${redactPgDumpFailure(error, connectionString)}`);
-    }
+    await runNativePostgresDump(resolvePgDumpCommand(this.config, ancillaryEnv), dumpPath, connection, env);
   }
 }
 
@@ -793,11 +929,13 @@ function readAppVersion(): string {
   }
 }
 
-function readGitRef(rootDir: string): string | undefined {
+function readGitRef(rootDir: string, env: NodeJS.ProcessEnv): string | undefined {
   try {
     const value = execFileSync("git", ["-C", rootDir, "rev-parse", "HEAD"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+      env,
     }).trim();
     return value || undefined;
   } catch {
@@ -863,7 +1001,7 @@ function isContractConfigPath(filePath: string): boolean {
   return filePath.startsWith("config/") && filePath.endsWith(".json");
 }
 
-function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
+function resolvePgDumpCommand(config: GatewayRuntimeConfig, env: NodeJS.ProcessEnv): string {
   const explicitPath = process.env.GOATCITADEL_PG_DUMP_PATH?.trim();
   if (explicitPath) {
     return explicitPath;
@@ -882,7 +1020,7 @@ function resolvePgDumpCommand(config: GatewayRuntimeConfig): string {
     }
   }
 
-  const resolvedOnPath = resolveCommandOnPath(process.platform === "win32" ? "pg_dump.exe" : "pg_dump");
+  const resolvedOnPath = resolveCommandOnPath(process.platform === "win32" ? "pg_dump.exe" : "pg_dump", env);
   if (resolvedOnPath) {
     return resolvedOnPath;
   }
@@ -913,12 +1051,14 @@ function redactPgDumpFailure(error: unknown, connectionString: string): string {
     .replace(/(postgres(?:ql)?:\/\/)[^@\s/]*@/gi, "$1[redacted]@");
 }
 
-function resolveCommandOnPath(command: string): string | undefined {
+function resolveCommandOnPath(command: string, env: NodeJS.ProcessEnv): string | undefined {
   try {
     const locator = process.platform === "win32" ? "where.exe" : "which";
     const output = execFileSync(locator, [command], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+      env,
     }).trim();
     const first = output
       .split(/\r?\n/)
@@ -931,46 +1071,37 @@ function resolveCommandOnPath(command: string): string | undefined {
 }
 
 function isEphemeralSqliteSidecar(filePath: string): boolean {
-  return /(\.db|\.sqlite)(-shm|-wal)$/i.test(filePath);
+  return /\.(?:db|sqlite|sqlite3)(?:-shm|-wal|-journal)$/iu.test(filePath);
 }
 
-function tryDumpViaBundledDocker(config: GatewayRuntimeConfig, connectionString: string): Buffer | undefined {
-  if (!canUseDockerCli()) {
+function tryDumpViaBundledDocker(
+  config: GatewayRuntimeConfig,
+  connection: ReturnType<typeof preparePostgresBackupConnection>,
+  env: NodeJS.ProcessEnv,
+  ancillaryEnv: NodeJS.ProcessEnv,
+): Buffer | undefined {
+  if (!canUseDockerCli(ancillaryEnv)) {
     return undefined;
   }
   const containerName = buildBundledDockerContainerName(config.rootDir);
-  if (!isDockerContainerRunning(containerName)) {
+  if (!isDockerContainerRunning(containerName, ancillaryEnv)) {
     return undefined;
   }
   try {
-    return execFileSync(
-      "docker",
-      [
-        "exec",
-        containerName,
-        "pg_dump",
-        "--format=custom",
-        "--dbname",
-        normalizeBundledDockerConnectionString(connectionString),
-      ],
-      {
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    return runBundledPostgresDump(containerName, connection, env);
   } catch {
+    // Retain the existing native fallback without forwarding child diagnostics.
     return undefined;
   }
 }
 
-function normalizeBundledDockerConnectionString(connectionString: string): string {
-  return connectionString.replace(/@127\.0\.0\.1:\d+\//, "@127.0.0.1:5432/");
-}
-
-function canUseDockerCli(): boolean {
+function canUseDockerCli(env: NodeJS.ProcessEnv): boolean {
   try {
     execFileSync("docker", ["info"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+      env,
     });
     return true;
   } catch {
@@ -978,11 +1109,13 @@ function canUseDockerCli(): boolean {
   }
 }
 
-function isDockerContainerRunning(containerName: string): boolean {
+function isDockerContainerRunning(containerName: string, env: NodeJS.ProcessEnv): boolean {
   try {
     const output = execFileSync("docker", ["ps", "--filter", `name=^/${containerName}$`, "--format", "{{.Names}}"], {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
+      windowsHide: true,
+      env,
     }).trim();
     return output === containerName;
   } catch {

@@ -9,9 +9,16 @@ import type {
   ChatUserInputPromptAnswerResponse,
   ChatUserInputPromptResponse,
   ContextManifestDetail,
+  DurableRunRecord,
   RealtimeEvent,
 } from "@goatcitadel/contracts";
-import { canonicalJsonString, ConflictError, ValidationError } from "@goatcitadel/contracts";
+import {
+  canonicalJsonString,
+  ConflictError,
+  isChatTurnActiveStatus,
+  NotFoundError,
+  ValidationError,
+} from "@goatcitadel/contracts";
 import type {
   DurableChatRuntimeConfigurationReceipt,
   DurableChatUserInputAdmissionIdentity,
@@ -20,6 +27,7 @@ import type {
   AsyncStorage as Storage,
 } from "@goatcitadel/storage";
 import { buildChatThreadResponse, resolveNewestLeafTurnId } from "./chat-thread-utils.js";
+import { hydrateChatTurnTraces } from "./chat-turn-trace-hydration.js";
 import type { ChatTurnSessionState } from "./chat-turn-prep-service.js";
 import type { DurableRunService } from "./durable-run-service.js";
 import { parseDurableChatTurnPayload } from "./durable-execution-service.js";
@@ -119,7 +127,7 @@ export async function getChatThread(
   const state = await runtime.loadChatTurnSessionState(sessionId, {
     includeDecisionTrace: options.includeDecisionTrace === true,
   });
-  return await buildChatThreadFromState(runtime, sessionId, state);
+  return await buildChatThreadFromState(runtime, sessionId, state, options);
 }
 
 export async function selectChatBranchTurn(
@@ -216,8 +224,7 @@ export async function answerChatUserInputPrompt(
       message: `Chat turn ${turnId} cannot be resumed because it is not linked to a durable run.`,
     });
   }
-  const durableRun = await runtime.durableRunService.getDurableRun(durableRunId);
-  const durablePayload = parseDurableChatTurnPayload(durableRun);
+  const { run: durableRun, payload: durablePayload } = await readDurableChatRun(runtime, durableRunId);
   if (!durablePayload) {
     throw new ConflictError({
       message: `Durable run ${durableRunId} is missing a valid chat turn payload.`,
@@ -543,10 +550,107 @@ async function releaseSecureConfigurationReservation(
   });
 }
 
+async function readDurableChatRun(runtime: ChatMessageRouteRuntimeHost, runId: string) {
+  const run = await runtime.durableRunService.getDurableRun(runId);
+  return { run, payload: parseDurableChatTurnPayload(run) };
+}
+
+async function readCanonicalChatMessage(runtime: ChatMessageRouteRuntimeHost, messageId: string) {
+  const message = await runtime.storage.chatMessages.get(messageId);
+  if (message && message.messageId !== messageId) {
+    throw new ConflictError({ message: "Canonical Chat message identity mismatch." });
+  }
+  return message;
+}
+
+function matchesActiveAppendRun(trace: ChatTurnTraceRecord, run: DurableRunRecord): boolean {
+  const committedWait =
+    (trace.status === "waiting_for_tool" ||
+      trace.status === "waiting_for_approval" ||
+      trace.status === "waiting_for_user_input") &&
+    trace.durable?.status === "waiting" &&
+    trace.durable.checkpointKind === "run_waiting";
+  switch (run.status) {
+    case "queued":
+      // Initial admission can persist a running trace before the worker claims
+      // the queued run. A waking run can still carry its last parked trace.
+      return trace.status === "queued" || trace.status === "running" || committedWait;
+    case "running":
+      return Boolean(run.leaseOwnerId && Date.parse(run.leaseExpiresAt ?? "") > Date.now());
+    case "waiting":
+      // The waiting finalizer commits the marker and clears the execution lease.
+      return committedWait;
+    default:
+      return false;
+  }
+}
+
+/** Show an admitted append while the committed leaf still points to its parent. */
+async function projectExactLiveAppend(
+  runtime: ChatMessageRouteRuntimeHost,
+  sessionId: string,
+  state: ChatTurnSessionState,
+  heartbeatTurnIds: ReadonlySet<string>,
+  includeDecisionTrace: boolean,
+): Promise<{ trace: ChatTurnTraceRecord; userMessage: ChatMessageRecord } | undefined> {
+  const parentTurnId = state.activeLeafTurnId;
+  if (!parentTurnId) return undefined;
+  const candidates = state.traces.filter(
+    (trace) =>
+      trace.sessionId === sessionId &&
+      trace.turnId !== parentTurnId &&
+      trace.parentTurnId === parentTurnId &&
+      trace.branchKind === "append" &&
+      trace.sourceTurnId === undefined &&
+      isChatTurnActiveStatus(trace.status) &&
+      trace.durable?.runId &&
+      !heartbeatTurnIds.has(trace.turnId),
+  );
+  const [trace] = candidates;
+  const runId = trace?.durable?.runId;
+  if (candidates.length !== 1 || !trace || !runId) return undefined;
+  const { run, payload } = await readDurableChatRun(runtime, runId);
+  if (
+    run.runId !== runId || !matchesActiveAppendRun(trace, run) || !payload ||
+    payload.sessionId !== sessionId || payload.turnId !== trace.turnId ||
+    payload.userMessageId !== trace.userMessageId ||
+    payload.assistantMessageId !== trace.assistantMessageId ||
+    payload.branchKind !== "append" || payload.parentTurnId !== parentTurnId ||
+    payload.sourceTurnId !== undefined || payload.threadEventType !== "chat_thread_turn_appended" ||
+    payload.requestActor.actorKind === "system"
+  ) return undefined;
+  const session = await runtime.storage.chatSessionMeta.get(sessionId);
+  if (session?.sessionId !== sessionId || session.workspaceId !== payload.workspaceId) return undefined;
+  const admissions = runtime.storage.sessionMutationAdmissions;
+  const admission = await admissions.get(payload.admissionId);
+  if (
+    !admission || admission.status !== "active" || admission.admissionKind !== "turn_write" ||
+    admission.operation !== "chat_turn" || admission.admissionId !== payload.admissionId ||
+    admission.workspaceId !== payload.workspaceId || admission.sessionId !== sessionId ||
+    admission.sessionIncarnationId !== payload.sessionIncarnationId || admission.turnId !== trace.turnId ||
+    admission.aggregateRevision !== payload.admissionAggregateRevision ||
+    admission.controllerGeneration !== payload.admissionControllerGeneration ||
+    admission.materialSha256 !== payload.admissionMaterialSha256 ||
+    admission.actorKind !== payload.requestActor.actorKind || admission.actorId !== payload.requestActor.actorId
+  ) return undefined;
+  const binding = await admissions.findDurableRunBinding({
+    admissionId: admission.admissionId, sessionIncarnationId: admission.sessionIncarnationId,
+    workspaceId: admission.workspaceId, sessionId, turnId: trace.turnId,
+  });
+  if (!binding || binding.durableRunId !== runId) return undefined;
+  const userMessage = await readCanonicalChatMessage(runtime, trace.userMessageId);
+  if (userMessage?.sessionId !== sessionId || userMessage.role !== "user") return undefined;
+  const projectedUser = projectChatMessageForPublic(userMessage);
+  if (!projectedUser) return undefined;
+  const [hydratedTrace] = await hydrateChatTurnTraces(runtime, [trace], { includeDecisionTrace });
+  return hydratedTrace ? { trace: hydratedTrace, userMessage: projectedUser } : undefined;
+}
+
 async function buildChatThreadFromState(
   runtime: ChatMessageRouteRuntimeHost,
   sessionId: string,
   state: ChatTurnSessionState,
+  liveAppendOptions?: Pick<ChatThreadLoadOptions, "includeDecisionTrace">,
 ): Promise<ChatThreadResponse> {
   const heartbeatTurnIds = new Set(
     (
@@ -557,9 +661,19 @@ async function buildChatThreadFromState(
       )
     ).filter((turnId): turnId is string => Boolean(turnId)),
   );
+  const liveAppend = liveAppendOptions
+    ? await projectExactLiveAppend(runtime, sessionId, state, heartbeatTurnIds, liveAppendOptions.includeDecisionTrace === true)
+        .catch((error: unknown) => {
+          if (error instanceof NotFoundError || error instanceof ConflictError) return undefined;
+          throw error;
+        })
+    : undefined;
+  const liveTurnId = liveAppend?.trace.turnId;
   const renderableTraces = state.traces.filter(
-    (trace) => state.messagesById.has(trace.userMessageId) && !heartbeatTurnIds.has(trace.turnId),
+    (trace) =>
+      trace.turnId !== liveTurnId && state.messagesById.has(trace.userMessageId) && !heartbeatTurnIds.has(trace.turnId),
   );
+  if (liveAppend) renderableTraces.push(liveAppend.trace);
   const heartbeatNotices = (
     await Promise.all(
       state.traces
@@ -588,7 +702,7 @@ async function buildChatThreadFromState(
       );
       return {
         trace: projectChatTurnTraceForPublic(trace),
-        userMessage: state.messagesById.get(trace.userMessageId),
+        userMessage: trace.turnId === liveTurnId ? liveAppend?.userMessage : state.messagesById.get(trace.userMessageId),
         assistantMessage: await projectAssistantWorkspaceFileDownloads(assistantMessage, trace, workspaceFileRootDir),
         generatedArtifacts: (generatedArtifactsByTurnId.get(trace.turnId) ?? []).map(
           chatGeneratedArtifactService.buildGeneratedArtifactReference,
@@ -598,7 +712,7 @@ async function buildChatThreadFromState(
   );
   return buildChatThreadResponse({
     sessionId,
-    activeLeafTurnId: state.activeLeafTurnId,
+    activeLeafTurnId: liveTurnId ?? state.activeLeafTurnId,
     systemNotices,
     turns,
   });
@@ -677,7 +791,7 @@ async function projectChatTimerNotice(
     ) {
       return undefined;
     }
-    const message = await runtime.storage.chatMessages.get(timer.noticeMessageId);
+    const message = await readCanonicalChatMessage(runtime, timer.noticeMessageId);
     if (
       !message ||
       message.sessionId !== sessionId ||
@@ -708,8 +822,8 @@ async function hasExactSystemHeartbeatRunIdentity(
   try {
     const runId = trace.durable?.runId?.trim();
     if (!runId) return false;
-    const run = await runtime.durableRunService.getDurableRun(runId);
-    const payload = parseDurableChatTurnPayload(run) as
+    const { run, payload: parsed } = await readDurableChatRun(runtime, runId);
+    const payload = parsed as
       | (NonNullable<ReturnType<typeof parseDurableChatTurnPayload>> & {
           heartbeatOccurrenceId?: unknown;
         })
@@ -760,11 +874,10 @@ async function projectExactSystemHeartbeatNotice(
       return undefined;
     }
 
-    const run = await runtime.durableRunService.getDurableRun(runId);
+    const { run, payload } = await readDurableChatRun(runtime, runId);
     if (run.runId !== runId || run.workflowKey !== "chat.turn.execute" || run.status !== "completed") {
       return undefined;
     }
-    const payload = parseDurableChatTurnPayload(run);
     const heartbeatPayload = payload as
       | (NonNullable<typeof payload> & {
           heartbeatOccurrenceId: string;
@@ -781,7 +894,7 @@ async function projectExactSystemHeartbeatNotice(
       heartbeatPayload.assistantMessageId !== assistantMessageId ||
       heartbeatPayload.requestActor.actorKind !== "system" ||
       heartbeatPayload.requestActor.actorId !== "system-heartbeat" ||
-      (await runtime.storage.chatMessages.get(heartbeatPayload.userMessageId))
+      (await readCanonicalChatMessage(runtime, heartbeatPayload.userMessageId))
     ) {
       return undefined;
     }
@@ -900,7 +1013,7 @@ async function projectExactSystemHeartbeatNotice(
     }
     verifyCheckpointAnchoredChatTurnRuntimeAuthority(run.metadata, checkpoint.state);
 
-    const message = await runtime.storage.chatMessages.get(assistantMessageId);
+    const message = await readCanonicalChatMessage(runtime, assistantMessageId);
     if (
       !message ||
       message.messageId !== assistantMessageId ||

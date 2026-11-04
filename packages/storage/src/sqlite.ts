@@ -1,4 +1,6 @@
+import { CHAT_ARTIFACT_RENDER_RECEIPTS_SQLITE_SQL } from "./chat-artifact-render-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
+import { MODEL_COMPARISON_CLAIM_SCHEMA_SQL } from "./model-comparison-claim-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
 import { createChannelGuidedSetupSchema } from "./channel-guided-setup-schema.js";
 import { createMailDraftSchema } from "./mail-draft-schema.js";
@@ -7547,6 +7549,16 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         version: 276,
         name: "mobile_push_approval_already_resolved_classification",
         up: upgradeMobilePushDeliveryClassificationsSqlite,
+      },
+      {
+        version: 277,
+        name: "model_comparison_execution_claims",
+        up: (db) => db.exec(MODEL_COMPARISON_CLAIM_SCHEMA_SQL),
+      },
+      {
+        version: 278,
+        name: "chat_artifact_render_receipts",
+        up: (db) => db.exec(CHAT_ARTIFACT_RENDER_RECEIPTS_SQLITE_SQL),
       },
     ],
   },

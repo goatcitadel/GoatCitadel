@@ -25,7 +25,7 @@ import {
   type ShippedSkillDirs,
 } from "./capability-skills-projection.js";
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
-import type { SkillHubOperatorItem } from "./skill-hub-operator-service.js";
+import type { SkillHubOperatorItem, SkillHubOperatorListInput } from "./skill-hub-operator-service.js";
 
 /** One reader per place the Skills tab is built from, each through its existing owner. None writes anything. */
 export interface CapabilitySkillsSources {
@@ -52,8 +52,8 @@ export interface CapabilitySkillsSources {
   deploymentProfile(): DeploymentProfile;
   /** The operator's "skip approvals" setting (`settingsApprovalSkipEnabled`). */
   readApprovalSkipSetting(): Promise<boolean>;
-  /** Skill Hub's operator list: the workspace's newest checks, each with its approvals, settlements and guards. */
-  listSkillHub(input: { workspaceId: string; limit: number }): Promise<{ items: readonly SkillHubOperatorItem[] }>;
+  /** Skill Hub's workspace checks, newest or by exact IDs, with their approvals, settlements and guards. */
+  listSkillHub(input: SkillHubOperatorListInput): Promise<{ items: readonly SkillHubOperatorItem[] }>;
   /** One Skill Hub check by its id, in any workspace: what source it read. */
   findSkillHubSnapshot(snapshotId: string): Promise<{ sourceType: string; sourceRef: string } | undefined>;
   /**
@@ -170,14 +170,19 @@ export class CapabilitySkillsService {
   /**
    * The workspace's installs still on their way in, or stopped on the way, newest first, from the newest checks Skill
    * Hub lists: an install left between its two steps is found again after a reload. With a `snapshotId`, just that one
-   * check at whatever step it is on, done, passed and blocked included (none when the list doesn't hold it), so an
+   * check at whatever step it is on, done, passed and blocked included (none when the workspace doesn't hold it), so an
    * install flow can tell a finished install from a declined one (Ruling R55). A check whose source can't be named
    * without a server path (one only the old Skill Hub routes can make) is left out. Without the checks there is nothing
    * to show, so a failure is a plain 503 rather than an empty list.
    */
   public async installs(workspaceId: string, snapshotId?: string): Promise<CapabilitySkillInstallsResponse> {
+    // Keep the previous lookup for noncanonical IDs so old clients still receive an empty result for an unmatched ID.
+    const query =
+      snapshotId && snapshotId.length <= 256 && snapshotId === snapshotId.normalize("NFKC").trim()
+        ? { workspaceId, snapshotIds: [snapshotId] }
+        : { workspaceId, limit: SKILL_HUB_LIST_LIMIT };
     const [hub, operatorApprovalSkip] = await Promise.all([
-      this.attempt("skill_hub", () => this.sources.listSkillHub({ workspaceId, limit: SKILL_HUB_LIST_LIMIT })),
+      this.attempt("skill_hub", () => this.sources.listSkillHub(query)),
       this.readOperatorApprovalSkip(),
     ]);
     if (!hub.ok) throw new ServiceUnavailableError(UNREADABLE_INSTALLS);

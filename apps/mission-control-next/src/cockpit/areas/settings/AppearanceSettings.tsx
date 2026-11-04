@@ -14,22 +14,6 @@ import { THEME_OPTIONS } from "../../app/theme-options";
 /** How long the inline "saved" confirmation stays after an instant-apply change. */
 const SAVED_CONFIRMATION_MS = 4000;
 
-const STORAGE_PROBE_KEY = "goatcitadel.ui.storage-probe";
-
-/**
- * The preference owner keeps a change in memory even when the browser refuses to store it (private mode, blocked
- * site data, a full quota), so the page checks that storage accepts a write before it claims a change was saved.
- */
-export function browserCanSavePreferences(): boolean {
-  try {
-    window.localStorage.setItem(STORAGE_PROBE_KEY, "1");
-    window.localStorage.removeItem(STORAGE_PROBE_KEY);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /**
  * ST-16: this page applies each change immediately (no drafts or Save button), so it says so up front and
  * confirms the last change inline. The confirmation is plain text, not a live region; the changed control
@@ -37,18 +21,15 @@ export function browserCanSavePreferences(): boolean {
  */
 function useSavedConfirmation() {
   const [saved, setSaved] = useState<string | null>(null);
-  const [persistent, setPersistent] = useState(browserCanSavePreferences);
   useEffect(() => {
     if (!saved) return undefined;
     const timer = window.setTimeout(() => setSaved(null), SAVED_CONFIRMATION_MS);
     return () => window.clearTimeout(timer);
   }, [saved]);
-  const confirm = (label: string) => {
-    const stored = browserCanSavePreferences();
-    setPersistent(stored);
-    setSaved(stored ? `${label} saved.` : `${label} applied for this visit.`);
+  const confirm = (label: string, stored: boolean, failure: string) => {
+    setSaved(stored ? `${label} saved.` : failure);
   };
-  return { saved, persistent, confirm };
+  return { saved, confirm };
 }
 
 export function AppearanceSettings() {
@@ -62,17 +43,7 @@ export function AppearanceSettings() {
     <>
       <section aria-label="Appearance and attention" className="mt-4 grid gap-4 sm:grid-cols-2">
         <p className="text-xs text-fg-muted sm:col-span-2" data-settings-save-model="automatic">
-          {savedConfirmation.persistent ? (
-            <>
-              <span className="font-semibold text-fg-secondary">Saved automatically</span> · These preferences apply
-              right away and are saved in this browser.
-            </>
-          ) : (
-            <>
-              <span className="font-semibold text-fg-secondary">Not saved in this browser</span> · These preferences
-              apply right away, but this browser is not storing settings, so they reset when the page reloads.
-            </>
-          )}
+          These preferences apply right away. This browser tries to save each change automatically.
           {savedConfirmation.saved ? <span className="text-fg-secondary"> {savedConfirmation.saved}</span> : null}
         </p>
         <div className="space-y-3">
@@ -85,8 +56,11 @@ export function AppearanceSettings() {
                 {...fieldProps}
                 value={prefs.mode}
                 onChange={(event) => {
-                  prefs.setMode(event.target.value as "simple" | "advanced");
-                  confirm("Settings presentation");
+                  confirm(
+                    "Settings presentation",
+                    prefs.setMode(event.target.value as "simple" | "advanced"),
+                    "Couldn't save all settings presentation changes in this browser.",
+                  );
                 }}
                 className={`mt-1 ${cockpitInputClass}`}
               >
@@ -101,8 +75,11 @@ export function AppearanceSettings() {
                 {...fieldProps}
                 value={prefs.themePreference}
                 onChange={(event) => {
-                  prefs.setTheme(event.target.value as UiTheme);
-                  confirm("Color theme");
+                  confirm(
+                    "Color theme",
+                    prefs.setTheme(event.target.value as UiTheme),
+                    "Couldn't save color theme in this browser.",
+                  );
                 }}
                 className={`mt-1 ${cockpitInputClass}`}
               >
@@ -120,8 +97,11 @@ export function AppearanceSettings() {
                 {...fieldProps}
                 value={prefs.density === "compact" ? "compact" : "comfortable"}
                 onChange={(event) => {
-                  prefs.setDensity(event.target.value as "comfortable" | "compact");
-                  confirm("Density");
+                  confirm(
+                    "Density",
+                    prefs.setDensity(event.target.value as "comfortable" | "compact"),
+                    "Couldn't save density in this browser.",
+                  );
                 }}
                 className={`mt-1 ${cockpitInputClass}`}
               >
@@ -135,8 +115,11 @@ export function AppearanceSettings() {
               type="checkbox"
               checked={prefs.showTechnicalDetails}
               onChange={(event) => {
-                prefs.setShowTechnicalDetails(event.target.checked);
-                confirm("Technical details");
+                confirm(
+                  "Technical details",
+                  prefs.setShowTechnicalDetails(event.target.checked),
+                  "Couldn't save technical details in this browser.",
+                );
               }}
             />{" "}
             Show technical details
@@ -149,8 +132,11 @@ export function AppearanceSettings() {
               type="checkbox"
               checked={prefs.notifications.toastsEnabled}
               onChange={(event) => {
-                prefs.setNotificationToastsEnabled(event.target.checked);
-                confirm("Attention notices");
+                confirm(
+                  "Attention notices",
+                  prefs.setNotificationToastsEnabled(event.target.checked),
+                  "Couldn't save attention notices in this browser.",
+                );
               }}
             />{" "}
             Show attention notices
@@ -161,8 +147,11 @@ export function AppearanceSettings() {
                 {...fieldProps}
                 value={prefs.notifications.soundMode}
                 onChange={(event) => {
-                  prefs.setNotificationSoundMode(event.target.value as "off" | "subtle" | "normal");
-                  confirm("Sound");
+                  confirm(
+                    "Sound",
+                    prefs.setNotificationSoundMode(event.target.value as "off" | "subtle" | "normal"),
+                    "Couldn't save sound in this browser.",
+                  );
                 }}
                 className={`mt-1 ${cockpitInputClass}`}
               >
@@ -177,8 +166,11 @@ export function AppearanceSettings() {
               type="checkbox"
               checked={prefs.notifications.desktopEnabled}
               onChange={(event) => {
-                prefs.setNotificationDesktopEnabled(event.target.checked);
-                confirm("System notifications");
+                confirm(
+                  "System notifications",
+                  prefs.setNotificationDesktopEnabled(event.target.checked),
+                  "Couldn't save system notifications in this browser.",
+                );
               }}
             />{" "}
             Use system notifications when allowed
@@ -188,8 +180,11 @@ export function AppearanceSettings() {
               type="checkbox"
               checked={prefs.notifications.onlyWhenUnfocused}
               onChange={(event) => {
-                prefs.setNotificationOnlyWhenUnfocused(event.target.checked);
-                confirm("Unfocused-only notifications");
+                confirm(
+                  "Unfocused-only notifications",
+                  prefs.setNotificationOnlyWhenUnfocused(event.target.checked),
+                  "Couldn't save unfocused-only notifications in this browser.",
+                );
               }}
             />{" "}
             Only notify when Mission Control is unfocused

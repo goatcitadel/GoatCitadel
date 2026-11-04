@@ -1,3 +1,5 @@
+import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import { isApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import type { SkillHubBlockerCode } from "@goatcitadel/contracts";
 
 // What GoatCitadel's checks found, in plain words. The codes themselves come from the Gateway as it stored them, and
@@ -78,4 +80,13 @@ const CHECK_FAILURE_COPY: Readonly<Record<string, string>> = {
  */
 export function describeCheckFailure(code: string | undefined, fallback: string): string {
   return code !== undefined && Object.hasOwn(CHECK_FAILURE_COPY, code) ? CHECK_FAILURE_COPY[code]! : fallback;
+}
+
+/** The route's own plain line for a refusal, or a plain summary. */
+export function refusalMessage(error: unknown): string {
+  if (isApiRequestError(error) && typeof error.body === "object" && error.body !== null) {
+    const message = (error.body as { error?: unknown }).error;
+    if (typeof message === "string" && message.trim()) return message.trim();
+  }
+  return describeApiError(error).summary;
 }

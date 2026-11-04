@@ -10,10 +10,16 @@ import { SkillGitImport } from "./SkillGitImport";
 import { SkillInstallAbout } from "./SkillInstallAbout";
 import { SkillInstallProgress } from "./SkillInstallProgress";
 import { isDraftInstallKey, useSkillInstallEntry } from "./skill-install-store";
-import { installOf, takeSkillInstallMove, useSkillInstall } from "./use-skill-install";
+import {
+  installOf,
+  isSkillInstallScopeCurrent,
+  markSkillInstallHandedOver,
+  takeSkillInstallMove,
+  useSkillInstall,
+  useSkillInstallScope,
+} from "./use-skill-install";
 
-/** Installs whose panel already handed over to the installed skill's panel, so it happens once. */
-const handedOver = new Set<string>();
+export { __resetSkillInstallPanelsForTests } from "./use-skill-install";
 
 export interface SkillInstallPanelProps {
   /** A check's id, or the panel's own key while its check hasn't answered (from Discover, or a Git address). */
@@ -50,29 +56,32 @@ function ReadingInstall({ query }: { query: UseQueryResult<CapabilitySkillInstal
  */
 export function SkillInstallPanel({ installKey, gitImport = false, onMove, onDone }: SkillInstallPanelProps) {
   const { activeWorkspaceId: workspaceId } = useUiPreferences();
+  const scope = useSkillInstallScope();
+  const current = isSkillInstallScopeCurrent(scope);
   const checkKey = !isDraftInstallKey(installKey);
   const entry = useSkillInstallEntry(installKey);
   // Read only for a check nothing here follows yet, such as one an address names after a reload.
-  const seed = useQuery({ ...skillInstallQuery(workspaceId, installKey), enabled: checkKey && !entry });
+  const seed = useQuery({ ...skillInstallQuery(workspaceId, installKey), enabled: current && checkKey && !entry });
   const flow = useSkillInstall(installKey, seed.data);
   // Whether the operator's skip applies, for "What happens next"; unknown when it can't be read.
-  const skip = useQuery(skillInstallsQuery(workspaceId)).data?.operatorApprovalSkip;
+  const skip = useQuery({ ...skillInstallsQuery(workspaceId), enabled: current }).data?.operatorApprovalSkip;
   const { state } = flow;
   const install = installOf(state);
   const name = install?.name ?? "this skill";
 
   useEffect(() => {
-    if (!flow.movedTo) return;
+    if (!isSkillInstallScopeCurrent(scope) || !flow.movedTo) return;
     const target = takeSkillInstallMove(installKey);
     if (target) onMove(target, checkKey);
-  }, [flow.movedTo, installKey, checkKey, onMove]);
+  }, [scope, flow.movedTo, installKey, checkKey, onMove]);
 
   const doneSkillId = state.phase === "done" ? state.skillId : "";
   useEffect(() => {
-    if (!doneSkillId || handedOver.has(installKey)) return;
-    handedOver.add(installKey);
+    if (!isSkillInstallScopeCurrent(scope) || !doneSkillId || !markSkillInstallHandedOver(installKey)) return;
     onDone(doneSkillId, name);
-  }, [doneSkillId, installKey, name, onDone]);
+  }, [scope, doneSkillId, installKey, name, onDone]);
+
+  if (!current) return null;
 
   if (gitImport && !install) {
     return (
@@ -96,8 +105,4 @@ export function SkillInstallPanel({ installKey, gitImport = false, onMove, onDon
       ) : null}
     </div>
   );
-}
-
-export function __resetSkillInstallPanelsForTests() {
-  handedOver.clear();
 }

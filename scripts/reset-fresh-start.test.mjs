@@ -58,7 +58,7 @@ function fixture(t) {
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        "function Get-NetTCPConnection { @() }; $resetOptions = @{}; if ($env:RESET_KEEP_CREDENTIALS -eq 'true') { $resetOptions.KeepCredentials = $true }; foreach ($name in @($env:RESET_TEST_ARGS | ConvertFrom-Json)) { $resetOptions[$name.TrimStart('-')] = $true }; & $env:RESET_TEST_SCRIPT -IncludeWorkspaceOutputs -ClearBrowserState @resetOptions",
+        "function Get-NetTCPConnection { @() }; $resetOptions = @{}; if ($env:RESET_KEEP_CREDENTIALS -eq 'true') { $resetOptions.KeepCredentials = $true }; $resetTestArgs = $env:RESET_TEST_ARGS | ConvertFrom-Json; foreach ($name in $resetTestArgs) { $resetOptions[$name.TrimStart('-')] = $true }; & $env:RESET_TEST_SCRIPT -IncludeWorkspaceOutputs -ClearBrowserState @resetOptions",
       ],
       {
         encoding: "utf8",

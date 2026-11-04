@@ -131,11 +131,17 @@ export function useChatOutboundExecution(
   const { selectedSessionId, selectedSession, prefs, fullWebAccess, selectedProviderId, selectedModel } = sessionConfig;
   const { streamEnabled, visualStreamMode = "smooth", activeStreamRef } = streamConfig;
   const outboundMountedRef = useRef(true);
+  const locallyHandledTurnKeysRef = useRef(new Set<string>());
   const outboundSelectionRef = useRef({ sessionId: selectedSessionId, workspaceId: input.workspaceId, revision: 0 });
   if (
     outboundSelectionRef.current.sessionId !== selectedSessionId ||
     outboundSelectionRef.current.workspaceId !== input.workspaceId
   ) {
+    // A local stream already owns reconciliation while this selection is current.
+    // On return, the Gateway thread can identify a running turn for retained replay.
+    if (outboundSelectionRef.current.sessionId !== null || outboundSelectionRef.current.workspaceId !== input.workspaceId) {
+      locallyHandledTurnKeysRef.current.clear();
+    }
     outboundSelectionRef.current = {
       sessionId: selectedSessionId,
       workspaceId: input.workspaceId,
@@ -149,6 +155,7 @@ export function useChatOutboundExecution(
   };
   const pendingOutboundCodeRef = useRef<PendingOutboundCode | null>(null);
   const renderedOutboundSelection = outboundSelectionRef.current;
+  const retainedThreadRevisionRef = useRef(renderedOutboundSelection.revision);
   const renderedCallerRevision = getGatewayCallerScopeRevision();
   const renderedAccessRevision = getGatewayAccessRevision();
   const renderedGatewayBase = getGatewayApiBaseUrl();
@@ -182,7 +189,6 @@ export function useChatOutboundExecution(
   const latestMessagesRef = useRef<ChatMessageRecord[]>(messages);
   const streamReconcileTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const sendingRef = useRef(false);
-  const locallyHandledTurnKeysRef = useRef(new Set<string>());
   const prefsRef = useRef<ChatSessionPrefsRecord | null>(prefs);
   const threadRef = useRef<ChatThreadResponse | null>(thread);
   const [optimisticUserMessage, setOptimisticUserMessage] = useState<OptimisticChatUserMessage | null>(null);
@@ -237,7 +243,9 @@ export function useChatOutboundExecution(
   useChatRetainedStreamReattachment({
     selectedSessionId,
     thread,
-    streamEnabled,
+    // An old local projection can still be present when a selection returns.
+    // Wait for the current selection's accepted Gateway thread before replay.
+    streamEnabled: streamEnabled && retainedThreadRevisionRef.current === renderedOutboundSelection.revision,
     activeStreamRef,
     sendingRef,
     locallyHandledTurnKeysRef,
@@ -246,6 +254,7 @@ export function useChatOutboundExecution(
     clearStreamingPreview,
     loadSessionCoreState,
     pushLocalNotice,
+    commitThreadUpdate,
   });
 
   const {
@@ -393,6 +402,10 @@ export function useChatOutboundExecution(
           turnCount: nextThread.turns.length,
         },
       });
+      const selection = outboundSelectionRef.current;
+      if (selection.sessionId === nextThread.sessionId) {
+        retainedThreadRevisionRef.current = selection.revision;
+      }
       commitThreadUpdate(nextThread);
       return true;
     },

@@ -64,9 +64,9 @@ export interface ConnectorInstallFlow {
   readonly pollMs?: number;
 }
 
-// Flows live for this app session, outside any component, so a panel that unmounts or a list that refreshes (the
-// template row becoming a saved-server row) never loses one (R68). Nothing here is stored in the browser. Each flow has
-// a record that rows read and a run (below) that its steps keep.
+// Flows live outside components for the current Gateway caller and access revision. An unmounted panel or a
+// refreshed list (the template row becoming a saved-server row) keeps its flow (R68). Nothing here is stored in the
+// browser. Each flow has a record that rows read and a run (below) that its steps keep.
 const flows = new Map<number, ConnectorInstallFlow>();
 // "template:<templateId>" and "server:<serverId>" both lead to a flow, so either row finds it.
 const index = new Map<string, number>();
@@ -108,7 +108,13 @@ function syncPlanPoll(id: number, everyMs: number | undefined) {
     globalThis.clearInterval(current.timer);
     polls.delete(id);
   }
-  if (everyMs) polls.set(id, { everyMs, timer: globalThis.setInterval(() => void readPlanOf?.(id), everyMs) });
+  if (everyMs) {
+    const timer = globalThis.setInterval(() => {
+      if (polls.get(id) === poll) void readPlanOf?.(id);
+    }, everyMs);
+    const poll = { everyMs, timer };
+    polls.set(id, poll);
+  }
 }
 
 // One tab follows each install plan: a Web Lock named for the plan, held while this tab's flow follows it and let go
@@ -120,13 +126,14 @@ const planLocks = new Map<string, () => void>();
  * Holds `planId` for this tab. False when another tab holds it; true once held, or when the browser has no Web Locks
  * (the flow then goes on in this tab, as it always did).
  */
-export function holdInstallPlan(planId: string): Promise<boolean> {
+export function holdInstallPlan(planId: string, isLive: () => boolean): Promise<boolean> {
+  if (!isLive()) return Promise.resolve(false);
   const locks = globalThis.navigator?.locks;
   if (!locks || planLocks.has(planId)) return Promise.resolve(true);
   return new Promise((resolve) => {
     locks
       .request(`goatcitadel:connector-install:${planId}`, { ifAvailable: true }, (lock) => {
-        if (!lock) {
+        if (!lock || !isLive()) {
           resolve(false);
           return undefined;
         }
@@ -135,7 +142,7 @@ export function holdInstallPlan(planId: string): Promise<boolean> {
           planLocks.set(planId, release);
         });
       })
-      .catch(() => resolve(true));
+      .catch(() => resolve(isLive()));
   });
 }
 
@@ -336,13 +343,12 @@ export function technicalText(error: unknown) {
   return described.technical ?? described.summary;
 }
 
-export function __resetConnectorInstallFlowsForTests() {
+export function clearConnectorInstallFlows() {
   for (const run of runs.values()) run.signIn?.stop();
   for (const id of [...polls.keys()]) syncPlanPoll(id, undefined);
   for (const planId of [...planLocks.keys()]) releaseInstallPlan(planId);
   runs.clear();
   flows.clear();
   index.clear();
-  nextId = 1;
   publish();
 }

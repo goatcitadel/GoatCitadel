@@ -75,6 +75,33 @@ afterEach(() => {
   container.remove();
 });
 
+it("links recovered external evidence to the conversation it was attached to", async () => {
+  vi.mocked(fetchJourneyTimeline).mockResolvedValue({
+    items: [
+      {
+        eventId: "recovered-copy",
+        action: "snapshot_created",
+        occurredAt: "2026-10-05T00:00:00Z",
+        sessionId: "attached/session",
+        summary: { importId: "external-import", itemId: "external-item", knowledgeDocumentId: "copy", chunkCount: 1 },
+      },
+    ],
+  } as never);
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <LibraryKnowledgeEvidence workspaceId="one" />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).toContain("Copy created"));
+  const link = [...container.querySelectorAll("a")].find(
+    (node) => new URL(node.href).searchParams.get("sessionId") === "attached/session",
+  );
+  expect(link?.pathname).toBe("/chat");
+  expect(link?.textContent).toBe("Open attached conversation");
+});
+
 it("renders transcript citations as role and message text and keeps the raw JSON behind technical details", async () => {
   await act(async () =>
     root.render(

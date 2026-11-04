@@ -578,8 +578,8 @@ export class Storage {
     this.realtimeEvents = new RealtimeEventRepository(this.db);
     this.cronJobs = new CronJobRepository(this.db, { quarantine: this.stateValidationQuarantine });
     this.cronRuns = new CronRunRepository(this.db);
-    this.inboundChannelEvents = new InboundChannelEventRepository(this.db);
     this.integrationConnections = new IntegrationConnectionRepository(this.db);
+    this.inboundChannelEvents = new InboundChannelEventRepository(this.db, this.integrationConnections);
     this.externalConnectorReviewStates = new ExternalConnectorReviewStateRepository(this.db);
     this.channelSetupDrafts = new ChannelSetupDraftRepository(this.db);
     this.channelSetupEvidence = new ChannelSetupEvidenceRepository(this.db);
@@ -671,7 +671,7 @@ export class Storage {
     this.chatDelegationSteps = new ChatDelegationStepRepository(this.db);
     this.chatFanoutInvocations = new ChatFanoutInvocationRepository(this.db);
     this.chatThreadKnowledgeAttachments = new ChatThreadKnowledgeAttachmentRepository(this.db);
-    this.systemSettings = new SystemSettingsRepository(this.db);
+    this.systemSettings = new SystemSettingsRepository(this.db, this.integrationConnections);
     this.researchRuns = new ResearchRunRepository(this.db);
     this.researchSources = new ResearchSourceRepository(this.db);
     this.promptPacks = new PromptPackRepository(this.db);

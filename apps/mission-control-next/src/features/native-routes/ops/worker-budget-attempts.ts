@@ -1,5 +1,9 @@
 import { useCallback, useSyncExternalStore } from "react";
 import type { RemoteWorkerBudgetGrantInput } from "@goatcitadel/contracts";
+import {
+  getGatewayCallerScope,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 export type WorkerBudgetAttempt = {
   request: RemoteWorkerBudgetGrantInput;
   submitted: { requests: string; cost: string; minutes: string };
@@ -14,7 +18,10 @@ const subscribe = (listener: () => void) => {
     listeners.delete(listener);
   };
 };
-export function useWorkerBudgetAttempt(key: string) {
+export function useWorkerBudgetAttempt(workerKey: string) {
+  const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScope, () => "");
+  // The server-authored caller scope also identifies its Gateway installation.
+  const key = JSON.stringify([caller, workerKey]);
   const value = useSyncExternalStore(
     subscribe,
     () => attempts.get(key) ?? null,

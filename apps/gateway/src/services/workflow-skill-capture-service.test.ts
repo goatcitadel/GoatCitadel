@@ -275,6 +275,7 @@ describe("workflow skill capture", () => {
       },
       listLoadedSkills: () => [],
       listToolCatalog: () => [],
+      listSwitchedOffToolNames: () => new Set(),
       readSkillStates: async () => new Map(),
       readFeatureFlags: async () => ({ codeModeV1Enabled: false }),
       invokeTool: unavailable,

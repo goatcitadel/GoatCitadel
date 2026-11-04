@@ -234,6 +234,7 @@ export interface CapabilitySystemServiceOptions {
     Pick<FeatureFlagsConfig, "codeModeV1Enabled" | "codeModeHostSandboxEnabled"> & Record<string, boolean | undefined>
   >;
   listToolCatalog: () => ToolCatalogEntry[];
+  listSwitchedOffToolNames: () => ReadonlySet<string>;
   /**
    * HX-408: server-built mesh publication projection. Entries arrive with
    * their explicit status/callable truth already resolved against the durable
@@ -3436,6 +3437,9 @@ export class CapabilitySystemService {
     let claimGeneration: number | undefined;
 
     try {
+      // Feature admission is shared by legacy approvals and Chat requests;
+      // backend-specific sandbox checks below also support configured Docker.
+      await this.requireCodeModeEnabled("executing");
       assertApprovedSandboxPostureStillCurrent(existing.sandbox, sandbox);
       if (existing.approvalId && existing.approvalId !== approvalId) {
         throw new ConflictError({
@@ -3525,6 +3529,7 @@ export class CapabilitySystemService {
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
       const beforeExecutionDispatch = async () => {
         throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
+        await this.requireCodeModeEnabled("executing");
         const boundaryCrossedAt = new Date().toISOString();
         const boundaryRun = await storage.codeModeRuns.markExecutionBoundaryCrossed({
           runId,
@@ -4521,17 +4526,23 @@ export class CapabilitySystemService {
     const optionalInputEnabled =
       builtInTools.some((tool) => tool.toolName === "user_input.request") &&
       (await this.options.readFeatureFlags()).chatAsyncClarificationV1Enabled === true;
+    const switchedOffToolNames = this.options.listSwitchedOffToolNames();
     for (const tool of builtInTools) {
+      const groupOff = switchedOffToolNames.has(tool.toolName);
+      const clarificationOff = tool.toolName === "user_input.request" && !optionalInputEnabled;
+      const reviewWarning = groupOff
+        ? "This tool group is switched off."
+        : clarificationOff
+          ? "Optional clarification is experimental and disabled on this Gateway."
+          : undefined;
       entries.push({
         capabilityId: `tool:${tool.toolName}`,
         kind: "tool",
         category: "built_in",
         title: tool.toolName,
         summary: tool.description,
-        callable: tool.toolName !== "user_input.request" || optionalInputEnabled,
-        ...(tool.toolName === "user_input.request" && !optionalInputEnabled
-          ? { reviewWarning: "Optional clarification is experimental and disabled on this Gateway." }
-          : {}),
+        callable: !groupOff && !clarificationOff,
+        ...(reviewWarning ? { reviewWarning } : {}),
         toolName: tool.toolName,
         wrapperVisibility: {
           readOnly: Boolean(tool.readOnly),
@@ -5584,10 +5595,10 @@ export class CapabilitySystemService {
     });
   }
 
-  private async requireCodeModeEnabled(): Promise<void> {
+  private async requireCodeModeEnabled(operation: "creating" | "executing" = "creating"): Promise<void> {
     if (!(await this.options.readFeatureFlags()).codeModeV1Enabled) {
       throw new ConflictError({
-        message: "Code Mode v1 is disabled. Enable codeModeV1Enabled before creating runs.",
+        message: `Code Mode v1 is disabled. Enable codeModeV1Enabled before ${operation} runs.`,
       });
     }
   }

@@ -31,6 +31,7 @@ type Input = {
   capabilityProfileInspection: ReturnType<typeof useChatCapabilityProfileInspection>;
   activeGeneratedArtifact: ChatGeneratedArtifactRecord | null;
   documents: ReturnType<typeof useChatDocuments>["documents"];
+  editingTurnId: string | null;
   currentRoutePreflight: import("@goatcitadel/contracts").RoutingPreflightResult | null;
   proactiveSuggestionCount: number;
   chatSessionRailPresentation: ReturnType<typeof useChatSessionRailPresentation>;
@@ -163,6 +164,7 @@ export function createChatContextDockProps({
   capabilityProfileInspection,
   activeGeneratedArtifact,
   documents,
+  editingTurnId,
   currentRoutePreflight,
   proactiveSuggestionCount,
   chatSessionRailPresentation,
@@ -284,8 +286,9 @@ export function createChatContextDockProps({
           documents: documents
             ? {
                 ...documents,
+                contextInclusionEnabled: documents.contextInclusionEnabled && !editingTurnId,
                 onToggleInclude: (ref) => {
-                  if (!blockHistoricalMutation()) documents.onToggleInclude(ref);
+                  if (!blockHistoricalMutation()) documents.onToggleInclude(ref, !editingTurnId);
                 },
               }
             : undefined,
@@ -397,7 +400,7 @@ export function createChatContextDockProps({
             if (!blockHistoricalMutation()) await handleRenameSession();
           },
           onSaveOrganization: async () => {
-            if (!blockHistoricalMutation()) await handleSaveOrganization();
+            return blockHistoricalMutation() ? false : handleSaveOrganization();
           },
           onTogglePinSession: async () => {
             if (!blockHistoricalMutation()) await handleTogglePinSession();

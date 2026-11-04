@@ -34,21 +34,30 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     }
 
     const requestedSequenceCursor = parseSequenceCursor(parsed.data.cursor);
-    const bounds = await fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
-    if (
-      requestedSequenceCursor !== undefined &&
-      bounds.oldestSequence !== undefined &&
-      requestedSequenceCursor < bounds.oldestSequence
-    ) {
+    const readSequenceBounds = () => fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
+    const bounds = await readSequenceBounds();
+    const sendRetentionGap = (observed: typeof bounds) => {
       return reply.code(409).send({
         error: "replay_gap",
         requestedCursor: String(requestedSequenceCursor),
-        oldestCursor: String(bounds.oldestSequence),
-        newestCursor: bounds.newestSequence !== undefined ? String(bounds.newestSequence) : undefined,
+        oldestCursor: observed.oldestSequence !== undefined ? String(observed.oldestSequence) : undefined,
+        newestCursor: observed.newestSequence !== undefined ? String(observed.newestSequence) : undefined,
+        lastPrunedCursor: observed.lastPrunedSequence !== undefined ? String(observed.lastPrunedSequence) : undefined,
       });
-    }
+    };
+    const isBackwardCursorBehindRetention = (observed: typeof bounds) => {
+      // A REST cursor requests older rows. Preserve the retained oldest-row
+      // boundary and use the deletion marker when no rows remain.
+      const floor = observed.oldestSequence ?? observed.lastPrunedSequence;
+      return requestedSequenceCursor !== undefined && floor !== undefined && requestedSequenceCursor < floor;
+    };
+    if (isBackwardCursorBehindRetention(bounds)) return sendRetentionGap(bounds);
 
     const items = await fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.limit, parsed.data.cursor);
+    if (requestedSequenceCursor !== undefined) {
+      const refreshedBounds = await readSequenceBounds();
+      if (isBackwardCursorBehindRetention(refreshedBounds)) return sendRetentionGap(refreshedBounds);
+    }
     const last = items[items.length - 1];
     const nextCursor = items.length === parsed.data.limit && last ? String(last.sequence) : undefined;
     return reply.send({ items, nextCursor });
@@ -259,25 +268,26 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
     raw.on("close", () => cleanup("client_disconnect"));
     request.raw.on("aborted", () => cleanup("client_aborted"));
 
-    let bounds: Awaited<ReturnType<typeof fastify.services.realtimeEvents.getRealtimeEventSequenceBounds>>;
+    const readSequenceBounds = () => fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
+    let bounds: Awaited<ReturnType<typeof readSequenceBounds>>;
     try {
-      bounds = await fastify.services.realtimeEvents.getRealtimeEventSequenceBounds();
+      bounds = await readSequenceBounds();
     } catch (error) {
       cleanup("stream_replay_error");
       throw error;
     }
-    if (
-      requestedCursor !== undefined &&
-      bounds.oldestSequence !== undefined &&
-      requestedCursor < bounds.oldestSequence
-    ) {
+    const sendRetentionGap = async (observed: typeof bounds) => {
       await sendNamedEvent("replay-gap", {
         error: "replay_gap",
         requestedCursor,
-        oldestCursor: bounds.oldestSequence,
-        newestCursor: bounds.newestSequence,
+        oldestCursor: observed.oldestSequence,
+        newestCursor: observed.newestSequence,
+        lastPrunedCursor: observed.lastPrunedSequence,
       });
       cleanup("replay_gap");
+    };
+    if (requestedCursor !== undefined && isCursorBehindRetention(requestedCursor, bounds)) {
+      await sendRetentionGap(bounds);
       return;
     }
 
@@ -287,6 +297,15 @@ export const eventsRoutes: FastifyPluginAsync = async (fastify) => {
         requestedCursor !== undefined
           ? await fastify.services.realtimeEvents.listRealtimeEventsAfterSequence(requestedCursor, STREAM_REPLAY_LIMIT)
           : (await fastify.services.realtimeEvents.listRealtimeEvents(parsed.data.replay)).reverse();
+      if (requestedCursor !== undefined) {
+        // Pruning can advance after the first bounds read but before replay.
+        // Validate the cursor again before emitting a possibly incomplete window.
+        const refreshedBounds = await readSequenceBounds();
+        if (isCursorBehindRetention(requestedCursor, refreshedBounds)) {
+          await sendRetentionGap(refreshedBounds);
+          return;
+        }
+      }
     } catch (error) {
       cleanup("stream_replay_error");
       throw error;
@@ -425,6 +444,16 @@ function parseSequenceCursor(cursor?: string): number | undefined {
   }
   const value = Number.parseInt(trimmed, 10);
   return Number.isFinite(value) && value > 0 ? value : undefined;
+}
+
+function isCursorBehindRetention(
+  cursor: number,
+  bounds: { oldestSequence?: number; lastPrunedSequence?: number },
+): boolean {
+  // Prefer actual deletions. Allocator gaps are legitimate idempotency races;
+  // legacy stores with no marker retain their conservative oldest-row check.
+  const floor = bounds.lastPrunedSequence ?? bounds.oldestSequence;
+  return floor !== undefined && cursor < floor;
 }
 
 function readLastEventId(value: string | string[] | undefined): string | undefined {

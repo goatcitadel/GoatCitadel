@@ -7,8 +7,9 @@ const RULE_LABELS = {
   approve_risky: "Ask for risky work",
   bypass: "Skip normal prompts",
 };
-export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, recordHref }) {
+export function assertApprovedDecisionReceipt({ approvalId, workspaceId, decision, rendered, recordHref }) {
   assert.ok(approvalId, "The expected canonical approval identity is required.");
+  assert.ok(workspaceId, "The expected workspace identity is required.");
   assert.equal(decision.approval?.approvalId, approvalId);
   assert.equal(decision.approval?.status, "approved");
   const followOnMessages = [
@@ -19,7 +20,7 @@ export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, 
     "Follow-on execution needs separate verification.",
   ];
   assert.ok(
-    followOnMessages.some((message) => rendered === `Decision recorded: approved. ${message}`),
+    followOnMessages.some((message) => rendered === `Decision recorded: Approved. ${message}`),
     "The native settlement must retain the approved decision and separate follow-on outcome.",
   );
   // ApprovalSettlement and its compatibility adapter emit root-relative owner links.
@@ -27,7 +28,7 @@ export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, 
   assert.equal(typeof recordHref, "string");
   assert.match(
     recordHref,
-    /^\/ops\/approvals(?:[?#]|$)/,
+    /^\/inbox\?/,
     "The settlement link must be a relative canonical owner destination.",
   );
   assert.ok(
@@ -35,7 +36,11 @@ export function assertApprovedDecisionReceipt({ approvalId, decision, rendered, 
     "The settlement link must not contain ambiguous URL characters.",
   );
   const owner = new URL(recordHref, "http://verification.invalid");
-  assert.equal(owner.pathname, "/ops/approvals");
+  assert.equal(owner.pathname, "/inbox");
+  assert.deepEqual(owner.searchParams.getAll("workspaceId"), [workspaceId]);
+  assert.deepEqual(owner.searchParams.getAll("view"), ["history"]);
+  assert.deepEqual(owner.searchParams.getAll("shell"), ["cockpit"]);
+  assert.equal(owner.searchParams.has("shellScope"), false);
   assert.deepEqual(
     owner.searchParams.getAll("approvalId"),
     [approvalId],
@@ -542,10 +547,11 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           assert.equal(decision.approval?.approvalId, approvalId);
           assert.equal(decision.approval?.status, "approved");
           const settlement = inspector.getByRole("region", { name: "Decision and follow-on work", exact: true });
-          const decisionStatus = settlement.getByRole("status").filter({ hasText: /^Decision recorded: approved\./ });
+          const decisionStatus = settlement.getByRole("status").filter({ hasText: /^Decision recorded: Approved\./ });
           await decisionStatus.waitFor();
           assertApprovedDecisionReceipt({
             approvalId,
+            workspaceId: "default",
             decision,
             rendered: await decisionStatus.innerText(),
             recordHref: await settlement

@@ -5,6 +5,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import type { ApprovalRequest, OperatorInboxItem } from "@goatcitadel/contracts";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { UiPreferencesProvider, useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { InboxApprovalDetail } from "./InboxApprovalDetail";
 
 const api = vi.hoisted(() => ({
@@ -459,6 +460,64 @@ describe("Inbox approval detail states (IN-05, IN-07, IN-16)", () => {
     // The consequence of approving stays visible; only hashes and byte counts move to technical details.
     expect(preview.textContent).toContain("Approval permits this exact request to persist a memory document");
     expect(preview.querySelector(".break-all")).toBeNull();
+  });
+
+  it("keeps an exact memory title and body visible while the recorded digest stays in technical details", async () => {
+    const digest = "a".repeat(64);
+    const title = "Hash rotation";
+    const content = "Rotate the access keys each quarter.";
+    api.fetchApproval.mockResolvedValue({
+      ...approval,
+      linkage: { workspaceId: "default", toolName: "memory.write" },
+      preview: {
+        toolName: "memory.write",
+        target: "Memory namespace: demo.goatcitadel",
+        title,
+        content,
+        contentSummary: `Exact original content: 36 UTF-8 bytes; SHA-256 ${digest}. Redaction does not change approved executable arguments.`,
+      },
+    });
+    let setDetails!: ReturnType<typeof useUiPreferences>["setShowTechnicalDetails"];
+    function CaptureDetailsToggle() {
+      setDetails = useUiPreferences().setShowTechnicalDetails;
+      return null;
+    }
+    await act(async () =>
+      root.render(
+        <UiPreferencesProvider>
+          <CaptureDetailsToggle />
+          <QueryClientProvider client={client}>
+            <InboxApprovalDetail
+              item={{ ...item, title: "Linked approval", summary: "Review the current approval" }}
+              workspaceId="default"
+            />
+          </QueryClientProvider>
+        </UiPreferencesProvider>,
+      ),
+    );
+    const preview = () => container.querySelector('[aria-label="Action preview"]')!;
+    try {
+      await act(async () => {
+        setDetails(false);
+      });
+      await settleUntil(() => Boolean(preview()));
+      expect(preview().textContent).toContain(content);
+      expect(preview().textContent).not.toContain(digest);
+      expect(preview().textContent).toContain(title);
+
+      await act(async () => {
+        setDetails(true);
+      });
+      const recorded = [...preview().querySelectorAll("details")].find(
+        (details) => details.querySelector("summary")?.textContent === "Recorded request details",
+      );
+      expect(recorded?.textContent).toContain(digest);
+      expect(recorded?.textContent).not.toContain(title);
+    } finally {
+      await act(async () => {
+        setDetails(false);
+      });
+    }
   });
 
   it("says specialist evidence is loading before raising an alert, and alerts only when the read fails", async () => {

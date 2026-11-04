@@ -699,6 +699,50 @@ describe("external-side-effect-runner-service", () => {
     );
   });
 
+  it.each([
+    ["trimmed provider identity", " 4242 ", "4242"],
+    ["overlong identity", "m".repeat(129), undefined],
+    ["bearer-shaped identity", `grat_${"a".repeat(43)}`, undefined],
+    ["URL carrying credentials", "https://provider.example/message?token=private-token", undefined],
+    ["whitespace identity", "private unstructured credential", undefined],
+  ])("retains only a bounded safe connector receipt identity: %s", async (_label, providerMessageId, expected) => {
+    const sideEffectRunStore = createSideEffectRunStore();
+    const mutationStore = {
+      claim: vi.fn(() => ({
+        outcome: "claimed" as const,
+        claimKind: "new" as const,
+        record: {
+          method: "POST", routePath: "external", idempotencyKey: "connector-receipt-key", actorScope: "conn-1",
+          payloadHash: "hash", status: "pending" as const,
+          createdAt: "2026-05-31T00:00:00.000Z", updatedAt: "2026-05-31T00:00:00.000Z",
+        },
+      })),
+      markCompleted: vi.fn(),
+      markFailed: vi.fn(),
+    };
+
+    const result = await runIdempotentExternalSideEffect({
+      mutationStore, sideEffectRunStore, boundary: "durable_connector_delivery", connectionId: "conn-1",
+      actionId: "channel.send", idempotencyKey: "connector-receipt-key", checkedAt: "2026-05-31T00:00:00.000Z",
+      payload: { target: "chat-1" }, label: "Connector receipt",
+      execute: async (claim) => {
+        await claim.markExternalCallStarted();
+        return {
+          capabilityId: "comms.send", dispatchKind: "integration_channel_send",
+          result: { providerMessageId, privateProviderBody: "do-not-store-private-body", token: "do-not-store-token" },
+        };
+      },
+    });
+
+    expect(result.status).toBe("executed");
+    const [, receipt] = sideEffectRunStore.markCompleted.mock.calls[0]!;
+    expect(receipt.responsePayload.providerMessageId).toBe(expected);
+    expect(receipt.externalReferenceId).toBe(expected ? `providerMessageId:${expected}` : undefined);
+    expect(JSON.stringify(receipt)).not.toContain("do-not-store-private-body");
+    expect(JSON.stringify(receipt)).not.toContain("do-not-store-token");
+    if (!expected) expect(JSON.stringify(receipt)).not.toContain(providerMessageId);
+  });
+
   it("marks durable side-effect runs started, completed, or unknown after the boundary", async () => {
     const sideEffectRunStore = createSideEffectRunStore();
     const mutationStore = {

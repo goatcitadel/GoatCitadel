@@ -11,6 +11,8 @@ import {
 } from "@goatcitadel/contracts";
 import { ModelUsageDispatchPersistenceError, ModelUsageDispatchUncertainError } from "@goatcitadel/gateway-core";
 import { ChatTurnCancelledError } from "./chat-turn-helpers.js";
+import { ClaudeCliError } from "./claude-code-cli-process.js";
+import { claudeCliUserMessage } from "./claude-code-cli-output.js";
 import { CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT } from "./llm-completion-helpers.js";
 import { createChatCompletion, createChatCompletionStream, type LlmCompletionHost } from "./llm-completion-service.js";
 import {
@@ -2035,6 +2037,47 @@ describe("createChatCompletionStream idle watchdog", () => {
 });
 
 describe("admitted Chat provider fallback", () => {
+  it.each(["stream", "completion"] as const)("uses an admitted backup once for Claude quota exhaustion in %s", async (kind) => {
+    const calls: string[] = [];
+    const quota = new ClaudeCliError("claude_cli_usage_limited", claudeCliUserMessage("claude_cli_usage_limited"));
+    const host = kind === "stream"
+      ? createHost(async function* (request) {
+          calls.push(request.providerId!);
+          if (request.providerId === "primary") throw quota;
+          yield { model: "backup-model", choices: [{ delta: { content: "recovered" } }] };
+        })
+      : createCompletionHost({ completion: async (request) => {
+          calls.push(request.providerId!);
+          if (request.providerId === "primary") throw quota;
+          return { model: "backup-model", choices: [{ message: { role: "assistant", content: "recovered" } }] };
+        } });
+    const f = authorizeTestRequest(host);
+    if (kind === "stream") {
+      expect((await collectStream(createChatCompletionStream(host, f.request))).error).toBeUndefined();
+    } else {
+      await expect(createChatCompletion(host, f.request)).resolves.toBeDefined();
+    }
+    expect(calls).toEqual(["primary", "backup"]);
+    expect(f.revalidate).toHaveBeenCalledTimes(1);
+    expect(f.guard).toHaveBeenCalledTimes(1);
+  });
+
+  it.each(["stream", "completion"] as const)("keeps fallback off for Claude quota exhaustion in %s", async (kind) => {
+    const calls: string[] = [];
+    const quota = new ClaudeCliError("claude_cli_usage_limited", claudeCliUserMessage("claude_cli_usage_limited"));
+    const host = kind === "stream"
+      ? createHost(async function* (request) { calls.push(request.providerId!); yield await Promise.reject(quota); })
+      : createCompletionHost({ completion: async (request) => { calls.push(request.providerId!); throw quota; } });
+    const request = markChatProviderFallbackRequired({ ...createRequest(), providerId: "primary", model: "primary-model" });
+    if (kind === "stream") {
+      expect((await collectStream(createChatCompletionStream(host, request))).error).toBeDefined();
+    } else {
+      await expect(createChatCompletion(host, request)).rejects.toThrow();
+    }
+    expect(calls).toEqual(["primary"]);
+    expect(host.resolveFallbackTargets).not.toHaveBeenCalled();
+  });
+
   it("never applies omitted-provider compatibility to an unbound Chat request", async () => {
     const host = createCompletionHost({
       completion: async () => {

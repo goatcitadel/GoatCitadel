@@ -96,6 +96,26 @@ afterEach(() => {
 });
 
 describe("cockpit saved board detail", () => {
+  it("describes loaded widget values accurately during a refresh", async () => {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <SystemDashboards />
+        </QueryClientProvider>,
+      ),
+    );
+    await vi.waitFor(() => expect(container.textContent).toContain("local-host"));
+    api.fetchHealthSummary.mockImplementationOnce(() => new Promise(() => {}));
+    const refresh = [...container.querySelectorAll("button")].find(
+      (node) => node.textContent === "Refresh Runtime truth",
+    )!;
+    await act(async () => refresh.click());
+    await vi.waitFor(() => expect(refresh.disabled).toBe(true));
+    expect(api.fetchHealthSummary).toHaveBeenCalledTimes(2);
+    expect(container.textContent).toContain("local-host");
+    expect(container.textContent).toContain("Widgets show the latest values they loaded.");
+  });
+
   it("retains a visible canonical save receipt after the editor closes and owner query refreshes", async () => {
     const original = { ...board, requestSha256: "a".repeat(64) };
     const saved = { ...original, revision: original.revision + 1 };

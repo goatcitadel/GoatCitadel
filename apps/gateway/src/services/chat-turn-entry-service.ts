@@ -1544,6 +1544,7 @@ export async function retryChatTurn(
       localOperatorOverrideId: overrides.localOperatorOverrideId,
       policyRunId: overrides.policyRunId,
       policyTaskId: overrides.policyTaskId,
+      fullWebAccess: overrides.fullWebAccess,
       contextRefs: overrides.contextRefs,
     };
     const routeDescriptor = await resolveChatRouteDescriptor(host as ChatTurnPreflightHost, sessionId, {
@@ -1677,6 +1678,7 @@ export async function* retryChatTurnStream(
         localOperatorOverrideId: overrides.localOperatorOverrideId,
         policyRunId: overrides.policyRunId,
         policyTaskId: overrides.policyTaskId,
+        fullWebAccess: overrides.fullWebAccess,
         contextRefs: overrides.contextRefs,
       };
       const turnIdentity = createEntryTurnIdentity();

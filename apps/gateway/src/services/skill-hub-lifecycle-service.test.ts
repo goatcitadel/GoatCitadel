@@ -19,6 +19,7 @@ import {
   type SkillHubSnapshotCreateInput,
 } from "@goatcitadel/storage";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
+import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { NodeSkillHubArtifactFilesystem, SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
 import {
   NodeSkillHubWindowsSecurity,
@@ -30,6 +31,7 @@ import {
   SkillHubLifecycleService,
   type SkillHubLifecycleServiceOptions,
 } from "./skill-hub-lifecycle-service.js";
+import { skillHubOperationFingerprint } from "./skill-hub-operation-identity.js";
 
 interface Harness {
   rootDir: string;
@@ -97,6 +99,49 @@ afterEach(async () => {
 });
 
 describe("SkillHubLifecycleService", () => {
+  it("blocks legacy plugin approvals that lack install generation before projecting the candidate", async () => {
+    const harness = await createHarness({
+      sourceProvider: "goatcitadel_plugin",
+      sourceType: "local_path",
+      sourceRef: `plugin:demo-plugin/demo@content:${"a".repeat(64)}`,
+      canonicalSourceKey: "plugin:demo-plugin/demo",
+    });
+    await new CapabilityPluginStore(harness.asyncStorage.systemSettings).update("demo-plugin", () => ({
+      pluginId: "demo-plugin",
+      name: "Demo plugin",
+      description: "Test plugin",
+      version: "1.0.0",
+      trust: "built_in",
+      sourceKind: "built_in",
+      sourceDisplay: "Built in",
+      pin: { kind: "content", treeSha256: harness.treeSha256 },
+      manifestSha256: "b".repeat(64),
+      snapshotTreeSha256: harness.treeSha256,
+      workspaceId: "workspace-1",
+      installPlanId: "active-install",
+      state: "installed",
+      installedAt: "2026-07-14T00:00:00.000Z",
+      pieces: [{ pieceId: "demo", kind: "skill", owned: true, skillSnapshotId: "snapshot-1" }],
+    }));
+    const legacy = template(harness, "install_inactive", "legacy", {
+      expectedCandidateAbsent: true,
+      expectedRuntimeAbsent: true,
+    });
+    const fingerprint = skillHubOperationFingerprint(legacy);
+    const result = await approveAndApply(harness, {
+      ...legacy,
+      operationId: `skill-hub-op-${fingerprint.slice(0, 32)}-1`,
+      idempotencyKey: `skill-hub:lifecycle:${fingerprint}:1`,
+    });
+
+    expect(result.settlement).toMatchObject({
+      disposition: "blocked",
+      result: { code: "plugin_install_authority_missing", boundaryCrossed: false },
+    });
+    expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
+    await expect(fs.stat(path.join(harness.rootDir, "data", "capability-candidates"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
   it("installs inactive, activates exact CAS bytes, revokes, and replays exactly", async () => {
     const harness = await createHarness();
     const installed = await approveAndApply(
@@ -726,7 +771,7 @@ describe("SkillHubLifecycleService", () => {
   });
 });
 
-async function createHarness(): Promise<Harness> {
+async function createHarness(snapshotOverrides?: Partial<SkillHubSnapshotCreateInput>): Promise<Harness> {
   const rootDir = await fs.mkdtemp(path.join(os.tmpdir(), "gc-skill-hub-lifecycle-"));
   // Register cleanup before asynchronous setup: a timeout must not transfer an
   // untracked database or late setup result into the next test's ownership.
@@ -755,7 +800,7 @@ async function createHarness(): Promise<Harness> {
     sourceDir,
     expectedTreeSha256: observed.treeSha256,
   });
-  const snapshot = storage.skillHubSnapshots.create(snapshotInput(observed.treeSha256));
+  const snapshot = storage.skillHubSnapshots.create(snapshotInput(observed.treeSha256, snapshotOverrides));
   storage.skillHubArtifacts.create({
     artifactId: "artifact-1",
     workspaceId: snapshot.workspaceId,

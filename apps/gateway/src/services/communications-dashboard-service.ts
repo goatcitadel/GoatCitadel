@@ -18,6 +18,7 @@ import type {
   ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
+import type { ApprovalCreateCommitHook } from "./approval-lifecycle-service.js";
 import {
   COMMUNICATIONS_IDEMPOTENCY_PREFIX,
   computeCommunicationsPayloadHash,
@@ -65,7 +66,7 @@ export interface CommunicationsDashboardQuery {
 
 export interface CommunicationsDashboardServiceDependencies {
   now?: () => Date;
-  createApproval?: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
+  createApproval?: (input: ApprovalCreateInput, onCreated?: ApprovalCreateCommitHook) => Promise<ApprovalRequest>;
   listIntegrationConnections?: (
     kind?: IntegrationKind,
     limit?: number,
@@ -83,6 +84,10 @@ export interface CommunicationsMailDraftRecovery {
   /** Appends a bounded audit record for a release or relink; never carries message content. */
   recordAudit(event: Record<string, unknown>): Promise<void>;
 }
+
+type LinkMailDraftApproval = (approvalId: string) => Promise<void>;
+
+class StaleMailSendFenceError extends Error {}
 
 const DEFAULT_WORKSPACE_ID = "default";
 const MAIL_SEND_EXECUTION_COPY = "Approving sends this exact message once through the connected account.";
@@ -203,30 +208,48 @@ export class CommunicationsDashboardService {
       // recorded outcome instead of requesting a second high-risk approval for the same draft.
       return existing;
     }
-    // Fence first: claim the draft before the approval exists, so a crash between approval
-    // creation and settlement can never let a replay request a second approval.
-    const claimed = await store.transition(draftId, ["draft"], { status: "approval_required", updatedAt: now });
+    // Claim the draft before running approval hooks. The approval transaction must still
+    // link against this exact fence because another owner can recover a stalled claim.
+    const claimed = await store.transition(draftId, ["draft"], {
+      status: "approval_required",
+      updatedAt: nextMailDraftFenceTime(existing.updatedAt, now),
+      expectedUnlinkedUpdatedAt: existing.updatedAt,
+    });
     if (!claimed) {
       return (await store.find(draftId)) ?? existing;
     }
-    let approvalId: string;
+    let linked: MailDraftRecord | undefined;
+    const linkDraft: LinkMailDraftApproval = async (approvalId) => {
+      const current = await store.transition(draftId, ["approval_required"], {
+        status: "approval_required",
+        approvalId,
+        updatedAt: this.nowIso(),
+        expectedUnlinkedUpdatedAt: claimed.updatedAt,
+      });
+      if (!current) {
+        throw new StaleMailSendFenceError("The mail draft changed before its approval could be linked.");
+      }
+      linked = current;
+    };
     try {
-      approvalId = await this.createSendApproval(claimed);
+      await this.createSendApproval(claimed, linkDraft);
+      if (!linked) {
+        throw new Error("The mail approval creator did not link the draft within its transaction.");
+      }
     } catch (error) {
-      // The approval may have persisted before the failure. Never request another one for this draft.
+      if (error instanceof StaleMailSendFenceError) {
+        return (await store.find(draftId)) ?? existing;
+      }
+      // If creation committed before a response failure, the linked row refuses this update.
       await store.transition(draftId, ["approval_required"], {
         status: "failed",
         failureReason: describeSendApprovalFailure(error),
         updatedAt: this.nowIso(),
+        expectedUnlinkedUpdatedAt: claimed.updatedAt,
       });
       throw error;
     }
-    const settled = await store.transition(draftId, ["approval_required"], {
-      status: "approval_required",
-      approvalId,
-      updatedAt: this.nowIso(),
-    });
-    return settled ?? (await store.find(draftId)) ?? { ...claimed, approvalId };
+    return linked;
   }
 
   /**
@@ -248,7 +271,8 @@ export class CommunicationsDashboardService {
       return { outcome: "not_interrupted", draft };
     }
     // A send still in flight in this process, or one fenced within the grace period, may yet record its approval.
-    const elapsedMs = this.nowDate().getTime() - Date.parse(draft.updatedAt);
+    const now = this.nowDate();
+    const elapsedMs = now.getTime() - Date.parse(draft.updatedAt);
     const waitMs = this.sending.has(draftId)
       ? INTERRUPTED_SEND_RELEASE_GRACE_MS
       : INTERRUPTED_SEND_RELEASE_GRACE_MS - elapsedMs;
@@ -265,7 +289,8 @@ export class CommunicationsDashboardService {
       const relinked = await store.transition(draftId, ["approval_required"], {
         status: "approval_required",
         approvalId: approval.approvalId,
-        updatedAt: this.nowIso(),
+        updatedAt: now.toISOString(),
+        expectedUnlinkedUpdatedAt: draft.updatedAt,
       });
       if (!relinked) {
         return { outcome: "not_interrupted", draft: (await store.find(draftId)) ?? draft };
@@ -276,7 +301,8 @@ export class CommunicationsDashboardService {
     const released = await store.transition(draftId, ["approval_required"], {
       status: "draft",
       clearFailureReason: true,
-      updatedAt: this.nowIso(),
+      updatedAt: nextMailDraftFenceTime(draft.updatedAt, now.toISOString()),
+      expectedUnlinkedUpdatedAt: draft.updatedAt,
     });
     if (!released) {
       return { outcome: "not_interrupted", draft: (await store.find(draftId)) ?? draft };
@@ -285,7 +311,7 @@ export class CommunicationsDashboardService {
     return { outcome: "released", draft: released };
   }
 
-  private async createSendApproval(existing: MailDraftRecord): Promise<string> {
+  private async createSendApproval(existing: MailDraftRecord, linkDraft: LinkMailDraftApproval): Promise<void> {
     const connectionRevision = await this.findConnectionRevision(existing.accountId);
     const hashed: MailSendApprovalInput = {
       draftId: existing.draftId,
@@ -297,7 +323,7 @@ export class CommunicationsDashboardService {
       bodyText: existing.bodyText,
       ...(connectionRevision === undefined ? {} : { connectionRevision }),
     };
-    return this.requestApproval(existing.approvalId ?? `approval_required:${existing.draftId}`, {
+    const input: ApprovalCreateInput = {
       kind: "communications.mail.send",
       riskLevel: "danger",
       payload: {
@@ -321,7 +347,8 @@ export class CommunicationsDashboardService {
         connectorId: existing.accountId,
         workspaceId: normalizeWorkspaceId(existing.workspaceId),
       },
-    });
+    };
+    await this.requestApproval(`approval_required:${existing.draftId}`, input, linkDraft);
   }
 
   public async createCalendarEventPlaceholder(input: CreateCalendarEventInput): Promise<CalendarEventRecord> {
@@ -392,8 +419,12 @@ export class CommunicationsDashboardService {
     return connections.find((connection) => connection.connectionId === accountId)?.revision || undefined;
   }
 
-  private requestApproval(fallbackApprovalId: string, input: ApprovalCreateInput): Promise<string> {
-    return createCommunicationsApproval(this.deps.createApproval, fallbackApprovalId, input);
+  private requestApproval(
+    fallbackApprovalId: string,
+    input: ApprovalCreateInput,
+    linkDraft?: LinkMailDraftApproval,
+  ): Promise<string> {
+    return createCommunicationsApproval(this.deps.createApproval, fallbackApprovalId, input, linkDraft);
   }
 
   private requireDraftStore(): CommunicationsMailDraftStore {
@@ -817,12 +848,26 @@ async function createCommunicationsApproval(
   createApproval: CommunicationsDashboardServiceDependencies["createApproval"],
   fallbackApprovalId: string,
   input: ApprovalCreateInput,
+  linkDraft?: LinkMailDraftApproval,
 ): Promise<string> {
   if (!createApproval) {
+    await linkDraft?.(fallbackApprovalId);
     return fallbackApprovalId;
   }
-  const approval = await createApproval(input);
+  const approval = linkDraft
+    ? await createApproval(input, async (created) => {
+        // A lost draft fence aborts the canonical approval creation transaction.
+        await linkDraft(created.approvalId);
+        return undefined;
+      })
+    : await createApproval(input);
   return approval.approvalId;
+}
+
+/** Make the next unlinked fence distinct even if the host clock repeats or moves backwards. */
+function nextMailDraftFenceTime(previous: string, now: string): string {
+  const previousMs = Date.parse(previous);
+  return previousMs >= Date.parse(now) ? new Date(previousMs + 1).toISOString() : now;
 }
 
 /** Readable, bounded failure reason; nothing was sent and the draft never requests another approval. */

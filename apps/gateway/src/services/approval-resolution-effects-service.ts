@@ -202,6 +202,13 @@ const APPROVAL_WAIT_MATERIALIZE_RETRY_MS = 1_000;
 const APPROVAL_EXPIRY_SWEEP_INTERVAL_MS = 1_000;
 const APPROVAL_EFFECT_RESPONSE_SETTLE_MS = 500;
 const APPROVAL_MATERIALIZED_POST_COMMIT_METADATA_KEY = "approvalMaterializedPostCommit";
+/** Preserve an unavailable Chat read across transaction rollback before scheduling its wake again. */
+class LinkedChatTurnParkReadUnavailableError extends Error {
+  constructor(cause: unknown) {
+    super("Chat turn state is unavailable before its durable approval wait.", { cause });
+    this.name = "LinkedChatTurnParkReadUnavailableError";
+  }
+}
 export const MESH_CAPABILITY_ACTIVATION_EFFECT_KIND = "mesh_capability_activation_apply" as const;
 export const MESH_CAPABILITY_ACTIVATION_EFFECT_TARGET_KIND = "mesh_capability_activation" as const;
 
@@ -2831,7 +2838,7 @@ export class ApprovalEffectsService {
       if (
         wakeResult.outcome === "skipped_not_waiting" &&
         wakeResult.run?.status === "running" &&
-        (await this.isLinkedChatTurnStillRunning(effect.targetId, runId))
+        (await this.isLinkedChatTurnAwaitingDurablePark(effect.targetId, runId))
       ) {
         await this.deferClaimedEffectForRetry(
           effect,
@@ -2883,6 +2890,18 @@ export class ApprovalEffectsService {
         recoveredResult: recovered,
         explicitNonWakeResult: explicitNonWake,
       };
+    }).catch(async (error: unknown) => {
+      if (!(error instanceof LinkedChatTurnParkReadUnavailableError)) throw error;
+      // The claimed transaction has rolled back. A failed PostgreSQL read can
+      // abort that transaction, so retain the retry only after leaving it.
+      await this.deferClaimedEffectForRetry(
+        effect,
+        this.workerId,
+        error,
+        { deliveryState: "retry_scheduled", reason: "chat_turn_state_unavailable", runId },
+        APPROVAL_EFFECT_CHILD_WAIT_RETRY_MS,
+      );
+      return undefined;
     });
     if (!wake) return;
     const { result, recoveredResult, explicitNonWakeResult } = wake;
@@ -2908,21 +2927,26 @@ export class ApprovalEffectsService {
     return markLinkedChatTurnResumed(this.ctx.storage, turnId, runId);
   }
 
+  /** The trace can expose its approval before the linked durable run commits its wait. */
+  private async isLinkedChatTurnAwaitingDurablePark(turnId: string, runId: string): Promise<boolean> {
+    try {
+      const trace = await this.ctx.storage.chatTurnTraces.get(turnId);
+      return (
+        trace.turnId === turnId &&
+        trace.durable?.runId === runId &&
+        (trace.status === "running" || trace.status === "waiting_for_approval")
+      );
+    } catch (error) {
+      if (error instanceof NotFoundError) return false;
+      throw new LinkedChatTurnParkReadUnavailableError(error);
+    }
+  }
+
   /**
    * Effect priority cannot establish a cross-worker happens-before edge. Keep a
    * previously claimed wake parked until the approved action effect and its
    * model-consumable tool evidence have both committed.
    */
-  /** Whether the linked Chat turn is still executing the run this wake targets, i.e. it has not parked yet. */
-  private async isLinkedChatTurnStillRunning(turnId: string, runId: string): Promise<boolean> {
-    try {
-      const trace = await this.ctx.storage.chatTurnTraces.get(turnId);
-      return trace.status === "running" && trace.durable?.runId === runId;
-    } catch {
-      return false;
-    }
-  }
-
   private async deferLinkedChatTurnWakeUntilApprovedActionSettles(effect: ApprovalEffectRecord): Promise<boolean> {
     const approvalEffects = (this.ctx.storage as Partial<Pick<Storage, "approvalEffects">>).approvalEffects;
     if (!approvalEffects || typeof approvalEffects.listByApproval !== "function") {

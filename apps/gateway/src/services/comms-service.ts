@@ -691,6 +691,7 @@ async function runLedgeredCommsInvoke(
     // A pre-approved invoke marks its boundary before dispatch; a returned pre-boundary
     // proof keeps that run failed_before_boundary instead of an unknown outcome.
     isExternalCallProvenNotDispatched: spec.preApproval ? isCommsResultProvenNotDispatched : undefined,
+    workspaceId: spec.preApproval?.workspaceId ?? spec.request.workspaceId,
     boundary: spec.boundary,
     catalogId: connection?.catalogId ?? spec.fallbackCatalogId,
     connectionId: spec.connectionId,
@@ -730,7 +731,7 @@ interface LedgeredMailSendProvider {
   /** Ledger boundary key; also used as the invoke's realtime type. */
   boundary: string;
   fallbackCatalogId: string;
-  toolName: string;
+  toolName: "gmail.send" | "smtp.send";
   label: string;
 }
 
@@ -750,6 +751,31 @@ const SMTP_SEND_PROVIDER: LedgeredMailSendProvider = {
   label: "SMTP send (comms)",
 };
 
+/** Pure shared identity for fresh dispatch and observational receipt recovery. */
+export interface CommsMutationIdentity {
+  boundary: string;
+  fallbackCatalogId: string;
+  actionId: string;
+  payload: Record<string, unknown>;
+  args: Record<string, unknown>;
+}
+
+export function buildCommsMailMutationIdentity(input: GmailSendInput, toolName: "gmail.send" | "smtp.send"): CommsMutationIdentity {
+  const mail = toolName === "gmail.send" ? GMAIL_SEND_PROVIDER : SMTP_SEND_PROVIDER;
+  const message = { connectionId: input.connectionId, to: input.to, cc: input.cc, bcc: input.bcc,
+    subject: input.subject, bodyText: input.bodyText, bodyHtml: input.bodyHtml };
+  return { boundary: mail.boundary, fallbackCatalogId: mail.fallbackCatalogId, actionId: mail.toolName,
+    payload: { provider: mail.provider, ...message },
+    args: Object.fromEntries(Object.entries(message).filter(([, value]) => value !== undefined)) };
+}
+
+export function buildCommsCalendarMutationIdentity(input: CalendarCreateEventInput): CommsMutationIdentity {
+  const eventFields = { connectionId: input.connectionId, calendarId: input.calendarId, title: input.title,
+    description: input.description, startIso: input.startIso, endIso: input.endIso, attendees: input.attendees,
+    location: input.location, timeZone: input.timeZone };
+  return { boundary: COMMS_CALENDAR_CREATE_BOUNDARY, fallbackCatalogId: "automation.google-calendar", actionId: "calendar.create_event",
+    payload: eventFields, args: Object.fromEntries(Object.entries(eventFields).filter(([, value]) => value !== undefined)) };
+}
 function runLedgeredMailSend(
   host: CommsHost,
   input: GmailSendInput,
@@ -757,26 +783,18 @@ function runLedgeredMailSend(
   preApproval?: CommsPreApproval,
   own?: OwnDeliveryOption,
 ): Promise<CommsInvokeResult> {
-  const message = {
-    connectionId: input.connectionId,
-    to: input.to,
-    cc: input.cc,
-    bcc: input.bcc,
-    subject: input.subject,
-    bodyText: input.bodyText,
-    bodyHtml: input.bodyHtml,
-  };
+  const identity = buildCommsMailMutationIdentity(input, mail.toolName);
   return runLedgeredCommsInvoke(host, {
-    boundary: mail.boundary,
-    fallbackCatalogId: mail.fallbackCatalogId,
+    boundary: identity.boundary,
+    fallbackCatalogId: identity.fallbackCatalogId,
     connectionId: input.connectionId,
     actionId: mail.toolName,
     idempotencyKey: input.idempotencyKey,
-    payload: { provider: mail.provider, ...message },
+    payload: identity.payload,
     label: mail.label,
     request: {
       toolName: mail.toolName,
-      args: message,
+      args: identity.args,
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,
@@ -838,30 +856,20 @@ export async function commsCalendarCreate(
   preApproval?: CommsPreApproval,
   options?: OwnDeliveryOption,
 ): Promise<CommsInvokeResult> {
-  const eventFields = {
-    connectionId: input.connectionId,
-    calendarId: input.calendarId,
-    title: input.title,
-    description: input.description,
-    startIso: input.startIso,
-    endIso: input.endIso,
-    attendees: input.attendees,
-    location: input.location,
-    timeZone: input.timeZone,
-  };
+  const identity = buildCommsCalendarMutationIdentity(input);
   return runLedgeredCommsInvoke(host, {
-    boundary: COMMS_CALENDAR_CREATE_BOUNDARY,
-    fallbackCatalogId: "automation.google-calendar",
+    boundary: identity.boundary,
+    fallbackCatalogId: identity.fallbackCatalogId,
     connectionId: input.connectionId,
     actionId: "calendar.create_event",
     // A keyless create gets a fresh per-call key: it is still ledgered, but two identical
     // creates stay distinct (an operator may have deleted the first event upstream).
     idempotencyKey: input.idempotencyKey ?? `calendar:${randomUUID()}`,
-    payload: eventFields,
+    payload: identity.payload,
     label: "Calendar create event (comms)",
     request: {
       toolName: "calendar.create_event",
-      args: eventFields,
+      args: identity.args,
       sessionId: input.sessionId ?? COMMS_SESSION,
       agentId: input.agentId ?? KNOWLEDGE_AGENT,
       taskId: input.taskId,

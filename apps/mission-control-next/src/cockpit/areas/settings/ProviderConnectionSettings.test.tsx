@@ -14,6 +14,8 @@ import { __resetProviderConnectionAttemptsForTests, readProviderConnectionAttemp
 import { ProviderConnectionSettings } from "./ProviderConnectionSettings";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { freshReadsActive } from "@goatcitadel/mission-control-shared/api/fresh-reads";
+import { getGatewayCallerScope, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { clearGatewayAuthState, persistGatewayAuthState } from "@goatcitadel/mission-control-shared/api/client-core";
 
 const api = vi.hoisted(() => ({
   createChangePlan: vi.fn(),
@@ -193,7 +195,112 @@ afterEach(() => {
   __resetProviderConnectionAttemptsForTests();
 });
 
+function deferredPromise<T>() {
+  let resolve!: (value: T | PromiseLike<T>) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((onResolve, onReject) => {
+    resolve = onResolve;
+    reject = onReject;
+  });
+  return { promise, resolve, reject };
+}
+
 describe("cockpit provider connection editing", () => {
+  it.each(["access", "caller"] as const)("retires a prepared review when Gateway %s changes", async (boundary) => {
+    const previousCaller = getGatewayCallerScope();
+    try {
+      setGatewayCallerScope("provider-fixture-a");
+      if (boundary === "access") persistGatewayAuthState({ mode: "none" });
+      await render();
+      await editEndpoint();
+      await click("Review endpoint change");
+      expect(container.textContent).toContain("Awaiting exact review");
+      const retained = readProviderConnectionAttempt("provider-a");
+      const oldReview = dialog;
+
+      await act(async () => root.render(null));
+      await render();
+      expect(readProviderConnectionAttempt("provider-a")).toBe(retained);
+      expect(container.textContent).toContain("Awaiting exact review");
+
+      await act(async () => {
+        if (boundary === "access") {
+          clearGatewayAuthState();
+          persistGatewayAuthState({ mode: "none" });
+        } else {
+          setGatewayCallerScope("provider-fixture-b");
+        }
+      });
+      expect(dialog.plan).toBeNull();
+      expect(container.textContent).not.toContain("Awaiting exact review");
+      expect(button("Review current step")).toBeUndefined();
+      api.fetchChangePlan.mockClear();
+      await act(async () => oldReview.onConfirm(oldReview.plan!));
+      expect(api.fetchChangePlan).not.toHaveBeenCalled();
+      expect(api.confirmChangePlan).not.toHaveBeenCalled();
+
+      await editEndpoint("https://replacement.example.test/v1");
+      await click("Review endpoint change");
+      expect(api.createChangePlan).toHaveBeenCalledTimes(2);
+      expect(dialog.contextNote).toContain("https://replacement.example.test/v1");
+    } finally {
+      await act(async () => {
+        if (boundary === "access") clearGatewayAuthState();
+        setGatewayCallerScope(previousCaller);
+      });
+    }
+  });
+
+  it("keeps a new caller's pending attempt when the previous caller's confirmation rejects", async () => {
+    const previousCaller = getGatewayCallerScope();
+    const oldConfirmation = deferredPromise<ChangePlanRecord>();
+    const newConfig = deferredPromise<ReturnType<typeof config>>();
+    let oldAction: ReturnType<ChatChangePlanActionDialogProps["onConfirm"]> | undefined;
+    try {
+      setGatewayCallerScope("provider-fixture-a");
+      await render();
+      await editEndpoint();
+      await click("Review endpoint change");
+      api.confirmChangePlan.mockReturnValueOnce(oldConfirmation.promise);
+      await act(async () => { oldAction = dialog.onConfirm(dialog.plan!); });
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+      expect(readProviderConnectionAttempt("provider-a")?.busy).toBe(true);
+
+      await act(async () => root.render(null));
+      await render();
+      expect(readProviderConnectionAttempt("provider-a")?.busy).toBe(true);
+      await act(async () => {
+        setGatewayCallerScope("provider-fixture-b");
+      });
+      api.fetchLlmConfig.mockReturnValueOnce(newConfig.promise);
+      await editEndpoint("https://replacement.example.test/v1");
+      await click("Review endpoint change");
+      const replacement = readProviderConnectionAttempt("provider-a");
+      expect(replacement?.request.profile?.baseUrl).toBe("https://replacement.example.test/v1");
+      expect(replacement?.busy).toBe(true);
+
+      await act(async () => {
+        oldConfirmation.reject(new Error("previous confirmation lost its response"));
+        await oldAction;
+      });
+      expect(readProviderConnectionAttempt("provider-a")).toBe(replacement);
+      expect(container.textContent).not.toContain("The change outcome is uncertain");
+      expect(button("Review endpoint change").disabled).toBe(true);
+
+      await act(async () => newConfig.resolve(config()));
+      expect(dialog.contextNote).toContain("https://replacement.example.test/v1");
+      expect(readProviderConnectionAttempt("provider-a")?.busy).toBe(false);
+      expect(api.confirmChangePlan).toHaveBeenCalledOnce();
+    } finally {
+      await act(async () => {
+        oldConfirmation.resolve(currentPlan);
+        newConfig.resolve(config());
+        await oldAction;
+        setGatewayCallerScope(previousCaller);
+      });
+    }
+  });
+
   it("creates a secret-free endpoint plan and verifies the saved owner after exact confirmation", async () => {
     await render();
     await editEndpoint();

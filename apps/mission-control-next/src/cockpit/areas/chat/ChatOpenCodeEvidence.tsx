@@ -86,7 +86,7 @@ export function ChatOpenCodeEvidence({
               </ol>
             </details>
           ) : null}
-          {report.truncated ? <p>Some output was omitted. Open run details for the full record.</p> : null}
+          {report.truncated ? <p>Some output was omitted. Open run details for the saved output.</p> : null}
           <button type="button" onClick={onOpenRunDetails} className="font-medium text-accent hover:underline">
             Open run details
           </button>

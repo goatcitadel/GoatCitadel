@@ -97,6 +97,46 @@ describe("workspace explorer host-path projection", () => {
     expect(projector.flush()).toBe("");
   });
 
+  it.each([
+    { prefix: "/srv/private/", piece: "a/", after: ", then continue." },
+    { prefix: "Z:\\private\\", piece: "a\\", after: "|then continue." },
+    { prefix: "\\\\fileserver\\private\\", piece: "a\\", after: "\" then continue." },
+    { prefix: "file:///srv/private/", piece: "a/", after: "\" then continue." },
+  ])("does not disclose an oversized outside path continuation before its delimiter", ({ prefix, piece, after }) => {
+    const roots = ["/srv/workspace"];
+    const projector = createWorkspaceExplorerTextStreamProjector(roots);
+    const first = "Reading " + prefix + piece.repeat(260);
+    const last = "synthetic-private-basename.txt" + after;
+    const expected = "Reading [outside-workspace-path]" + after;
+    expect(projectWorkspaceExplorerPathValue(first + last, roots)).toBe(expected);
+    expect(projector.push(first) + projector.push(last) + projector.flush()).toBe(expected);
+  });
+
+  it("holds back all of an oversized in-scope path, including a later traversal suffix", () => {
+    const root = "/srv/My Project";
+    const projector = createWorkspaceExplorerTextStreamProjector([root]);
+    const longRelativePath = "a/".repeat(260);
+    expect(projector.push("Read /srv/My")).toBe("Read ");
+    expect(projector.push(" Project/" + longRelativePath)).toBe("[workspace-path-too-long]");
+    expect(projector.push("../".repeat(261) + "synthetic-private-basename.txt")).toBe("");
+    expect(projector.push(" now.") + projector.flush()).toBe(" now.");
+  });
+
+  it("resumes at the first real delimiter even after many over-cap continuation fragments", () => {
+    const projector = createWorkspaceExplorerTextStreamProjector(["/srv/workspace"]);
+    expect(projector.push("/srv/private/" + "a/".repeat(260))).toBe("[outside-workspace-path]");
+    const continuation = "b/".repeat(WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT);
+    for (let i = 0; i < 100; i += 1) expect(projector.push(continuation)).toBe("");
+    expect(projector.push("private.txt,/srv/workspace/ok.md ") + projector.flush()).toBe(",ok.md ");
+  });
+
+  it("retains a short path at the end of a long plain token without retaining the prefix", () => {
+    const projector = createWorkspaceExplorerTextStreamProjector(["/srv/workspace"]);
+    const prose = "x".repeat(WORKSPACE_EXPLORER_STREAM_HOLD_BACK_LIMIT + 1);
+    expect(projector.push(prose + "(/srv/pri")).toBe(prose + "(");
+    expect(projector.push("vate/basename.txt) ") + projector.flush()).toBe("[outside-workspace-path]) ");
+  });
+
   it("contains punctuation-separated POSIX host paths", () => {
     expect(
       projectWorkspaceExplorerPathValue(

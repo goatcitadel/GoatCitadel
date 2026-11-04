@@ -20,6 +20,8 @@ export interface ErrandApprovalInput {
   title: string;
   body: string;
   target: ErrandTargetInfo;
+  /** A drag's source; the primary target is its drop destination, and both stay bound to the approval. */
+  dragSource?: ErrandTargetInfo;
   /** A keyboard action: it lands on whatever has focus, so `target` is the focused element, not a point. */
   targetsFocus?: boolean;
   pageUrl: string;
@@ -179,7 +181,16 @@ function actionPoint(action: ComputerAction): { x: number; y: number } | null {
   }
 }
 
-function approvalTitle(action: ComputerAction, subject: ErrandTargetInfo | null): string {
+function approvalTitle(
+  action: ComputerAction,
+  subject: ErrandTargetInfo | null,
+  dragSource?: ErrandTargetInfo | null,
+): string {
+  if (action.type === "drag") {
+    const source = dragSource?.text ? '"' + dragSource.text + '"' : "the page";
+    const destination = subject?.text ? '"' + subject.text + '"' : "the page";
+    return `Drag ${source} onto ${destination}`;
+  }
   if (action.type === "keypress") {
     const keys = action.keys.join("+");
     return subject?.formSubmitText ? `Press ${keys} on "${subject.formSubmitText}"` : `Press ${keys}`;
@@ -187,7 +198,7 @@ function approvalTitle(action: ComputerAction, subject: ErrandTargetInfo | null)
   if (action.type === "type") {
     return "Type into the page";
   }
-  const verb = action.type === "double_click" ? "Double-click" : action.type === "drag" ? "Drag" : "Click";
+  const verb = action.type === "double_click" ? "Double-click" : "Click";
   return subject?.text ? `${verb} "${subject.text}"` : `${verb} on the page`;
 }
 
@@ -470,20 +481,35 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
         return "halt";
       }
       const point = actionPoint(action);
+      const destinationPoint = action.type === "drag" ? action.path.at(-1) ?? null : point;
       const isKeyboard = action.type === "type" || action.type === "keypress";
       const modelDeclared = carriesDeclaredRisk(action) ? declared : undefined;
       const inspect = async () => {
-        const target = point ? await browser.describeTarget(point.x, point.y) : null;
+        const points = action.type === "drag" ? [point, destinationPoint] : [point];
+        const targets = await Promise.all(
+          points.map((location) => (location ? browser.describeTarget(location.x, location.y) : null)),
+        );
+        const target = targets.at(-1) ?? null;
+        const dragSource = action.type === "drag" ? targets[0] ?? null : undefined;
         // Re-read right before each keyboard action: an earlier click may have moved focus.
         const focused = isKeyboard ? await browser.describeFocused() : null;
-        const verdict = classifyErrandAction({
-          action,
-          target,
-          focused,
-          pageUrl: browser.currentUrl(),
-          ...(modelDeclared ? { modelDeclared } : {}),
-        });
-        return { target, focused, verdict };
+        const pageUrl = browser.currentUrl();
+        // Both ends matter. A sensitive end always hands over; either end can require approval.
+        // When both need approval, describe the drop's effect while still binding its source.
+        const verdicts = [...targets].reverse().map((candidate) =>
+          classifyErrandAction({
+            action,
+            target: candidate,
+            focused,
+            pageUrl,
+            ...(modelDeclared ? { modelDeclared } : {}),
+          }),
+        );
+        const verdict =
+          verdicts.find((value) => value.kind === "handover") ??
+          verdicts.find((value) => value.kind === "ask") ??
+          { kind: "go" as const };
+        return { target, focused, dragSource, verdict };
       };
       const handOver = async (): Promise<"halt"> => {
         const answer = await paused(() => deps.waitForHandBack("sign_in"));
@@ -494,7 +520,7 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
         }
         return "halt";
       };
-      const { target, focused, verdict } = await inspect();
+      const { target, focused, dragSource, verdict } = await inspect();
 
       if (verdict.kind === "handover") {
         return await handOver();
@@ -505,9 +531,12 @@ export async function runErrandLoop(deps: ErrandLoopDeps, input: { goal: string 
         const answer = await paused(async () =>
           deps.requestApproval({
             category: verdict.category,
-            title: approvalTitle(action, subject),
+            title: approvalTitle(action, subject, dragSource),
             body: `${aboutTo || verdict.reason} on ${hostOf(pageUrl)}`,
-            target: subject ?? unknownTarget(point?.x ?? 0, point?.y ?? 0),
+            target: subject ?? unknownTarget(destinationPoint?.x ?? 0, destinationPoint?.y ?? 0),
+            ...(action.type === "drag"
+              ? { dragSource: dragSource ?? unknownTarget(point?.x ?? 0, point?.y ?? 0) }
+              : {}),
             ...(isKeyboard ? { targetsFocus: true } : {}),
             pageUrl,
             peopleScreenshotPng: await browser.captureForPeople(),

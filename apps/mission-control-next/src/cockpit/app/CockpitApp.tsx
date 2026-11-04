@@ -73,6 +73,7 @@ function GatedCockpit() {
           <Activity mode={ready ? "visible" : "hidden"}>
             <AreaErrorBoundary key={callerScope} label="Mission Control" resetKey="cockpit">
               <CockpitShell
+                accessRevision={accessRevision}
                 streamState={streamState}
                 gatewayReachability={gatewayReachability}
                 onVisibleSessionChange={setVisibleSessionId}
