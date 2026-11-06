@@ -217,7 +217,8 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
         await page.route("**/api/v1/local-ai/serve", loseResponse);
         await panel.getByRole("button", { name: "Request serve approval", exact: true }).click();
         await dialog.getByRole("button", { name: "Record approval request", exact: true }).click();
-        await panel.getByText(/^Request outcome is unconfirmed\./).waitFor();
+        const uncertain = panel.getByRole("alert").filter({ hasText: /^Request outcome is unconfirmed\./ });
+        await uncertain.first().waitFor();
         assert.equal(writes.length, 2);
         assertLocalAiIntentAgreement({ kind: "serve", selected, request: writes[1].body, receipt: serveReceipt,
           owner: await api("/api/v1/local-ai/readiness"), replay: await api(`/api/v1/approvals/${serveReceipt.approvalId}/replay`) });
@@ -225,7 +226,7 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
         await selectCockpitSettingsPage(page, { label: "General", href: "/settings/general" });
         await selectCockpitSettingsPage(page, { label: "Models", href: "/settings/models" });
         await page.getByRole("tab", { name: "Local AI", exact: true }).click();
-        await panel.getByText(/^Request outcome is unconfirmed\./).waitFor();
+        await uncertain.first().waitFor();
         await panel.getByText("Advisory approval requests (no execution)", { exact: true }).click();
         assert.equal(await panel.getByRole("button", { name: "Request serve approval", exact: true }).isDisabled(), true);
         assert.equal(writes.length, 2); assert.deepEqual(unrelatedWrites, []);

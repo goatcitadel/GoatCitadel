@@ -228,7 +228,9 @@ export async function runCockpitWorkspacesProof({ context, browser, stack, citad
         await panel.getByRole("textbox", { name: "Workspace description", exact: true }).fill(updatedDescription);
         const savedResponse = page.waitForResponse((response) => response.request().method() === "PATCH"
           && new URL(response.url()).pathname === `/api/v1/workspaces/${encodeURIComponent(created.workspaceId)}`);
-        await panel.getByRole("button", { name: "Save workspace metadata", exact: true }).click();
+        const saveMetadata = panel.getByRole("button", { name: "Save workspace metadata", exact: true });
+        await saveMetadata.focus();
+        await saveMetadata.press("Enter");
         const savedReply = await savedResponse;
         assert.equal(savedReply.status(), 200);
         await panel.getByText(`Workspace ${updatedName} updated.`, { exact: true }).waitFor();

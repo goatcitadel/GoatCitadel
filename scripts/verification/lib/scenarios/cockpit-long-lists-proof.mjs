@@ -8,7 +8,7 @@ import {
   retireLongListFixture,
 } from "./cockpit-long-list-fixture.mjs";
 import { assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
-import { assertCitadelPresenceHeartbeat } from "./cockpit-citadel-directory-proof.mjs";
+import { assertNativeShellPresence } from "./cockpit-native-presence-proof.mjs";
 import { recordCockpitObserverRequest, assertCockpitObserverRequests } from "./cockpit-observer-requests.mjs";
 import { closeConversationList, openConversationList } from "./cockpit-conversation-list.mjs";
 
@@ -85,6 +85,8 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             browserContext,
             outcome,
             stage = "open scoped Inbox";
+          let documentEpoch = 0;
+          let navigating = false;
           try {
             const theme = variant === "mobile" ? "light" : "dark";
             browserContext = await browser.newContext({ viewport, colorScheme: theme });
@@ -110,10 +112,17 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
               }
               const entry = { method: request.method(), pathname, body: request.postDataJSON() };
               if (pathname === "/api/v1/notifications/presence") {
+                const epoch = documentEpoch;
+                const startedDuringNavigation = navigating;
                 entry.completed = request
                   .response()
                   .then(async (response) => {
-                    assert.ok(response);
+                    if (!response && (epoch !== documentEpoch || startedDuringNavigation) &&
+                        request.failure()?.errorText === "net::ERR_ABORTED") {
+                      entry.abortedByNavigation = true;
+                      return;
+                    }
+                    assert.ok(response, `Missing presence receipt: ${request.failure()?.errorText ?? "no response"}`);
                     entry.status = response.status();
                     entry.receipt = await response.json();
                   })
@@ -170,7 +179,7 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             await page.waitForFunction(() => document.activeElement?.matches('[data-inbox-item][data-selected="true"] [data-inbox-owner]'));
             const ownerUrl = new URL(await ownerLink.getAttribute("href"), stack.uiUrl);
             assert.equal(ownerUrl.origin, new URL(stack.uiUrl).origin);
-            assert.equal(ownerUrl.pathname, `/inbox/approvals/${encodeURIComponent(selectedApproval.source.approvalId)}`);
+            assert.equal(ownerUrl.pathname, "/inbox");
             assert.equal(ownerUrl.searchParams.get("approvalId"), selectedApproval.source.approvalId);
             assert.equal(ownerUrl.searchParams.get("workspaceId"), workspaceId);
             assert.equal(ownerUrl.searchParams.get("sessionId"), sessionId);
@@ -316,13 +325,24 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             const presenceIdentity = await page.evaluate(() => ({
               workspaceId: window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"),
               clientId: window.sessionStorage.getItem("goatcitadel.notification-client-id"),
-              leaseId: window.sessionStorage.getItem("goatcitadel.notification-lease-id"),
             }));
+            assert.equal(presenceIdentity.workspaceId, workspaceId);
             await Promise.all(presence.map((entry) => entry.completed));
+            const leases = new Map();
+            let acknowledged = 0;
             for (const entry of presence) {
               if (entry.error) throw entry.error;
-              assertCitadelPresenceHeartbeat(entry, presenceIdentity);
+              if (entry.abortedByNavigation) {
+                assert.equal(entry.method, "PUT");
+                assert.equal(entry.body.workspaceId, workspaceId);
+                assert.equal(entry.body.clientId, presenceIdentity.clientId);
+                assert.ok(entry.body.sessionId === undefined || entry.body.sessionId === sessionId);
+                continue;
+              }
+              assertNativeShellPresence(entry, { clientId: presenceIdentity.clientId, sessionsByWorkspace: { [workspaceId]: sessionId } }, leases);
+              acknowledged += 1;
             }
+            assert.ok(acknowledged > 0, "Expected a Gateway-acknowledged presence write.");
             outcome = {
               status: "passed",
               artifacts: emptyArtifacts({ screenshots }),
@@ -373,7 +393,13 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             };
           }
           async function open(href) {
-            await page.goto(buildVerificationUiUrl(stack.uiUrl, href), { waitUntil: "domcontentloaded" });
+            documentEpoch += 1;
+            navigating = true;
+            try {
+              await page.goto(buildVerificationUiUrl(stack.uiUrl, href), { waitUntil: "domcontentloaded" });
+            } finally {
+              navigating = false;
+            }
             await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30000 });
           }
           async function verifyWindow(list, expectedKeys) {
