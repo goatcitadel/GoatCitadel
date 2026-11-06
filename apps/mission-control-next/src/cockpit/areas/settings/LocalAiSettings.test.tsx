@@ -221,81 +221,82 @@ describe("native Local AI settings", () => {
     expect(api.startLocalAiServe).not.toHaveBeenCalled();
   });
 
-  it("inspects every 1000-record job and endpoint page with exact approval links and retained metadata", async () => {
-    const original = window.location.href,
-      state = window.history.state;
-    window.history.replaceState(
-      { retained: "all-local-ai-evidence" },
-      "",
-      "/settings/models?workspaceId=requested&citadelId=fixture&runId=carried-run&sessionId=carried-session&extra=one&extra=two#local-ai",
-    );
-    try {
-      owner.downloads = Array.from({ length: 1000 }, (_, index) => ({
-        ...localAiJob(),
-        jobId: `download-${index}`,
-        approvalId: `download approval ${index} /?#`,
-        artifactPath: `models/download-${index}.gguf`,
-        artifactHash: `hash-${index}`,
-      }));
-      owner.serveJobs = Array.from({ length: 1000 }, (_, index) => ({
-        jobId: `serve-${index}`,
-        modelId: "fixture-model",
-        backend: "llama_cpp",
-        status: "requires_approval",
-        approvalId: `serve approval ${index}`,
-        endpointUrl: `http://localhost:5000/serve-${index}`,
-        processId: 5000 + index,
-        createdAt: localAiJob().createdAt,
-        updatedAt: localAiJob().updatedAt,
-      }));
-      owner.endpoints = Array.from({ length: 1000 }, (_, index) => ({
-        endpointId: `endpoint-${index}`,
-        providerId: `provider-${index}`,
-        label: `Endpoint ${index}`,
-        backend: "llama_cpp",
-        baseUrl: `http://localhost:5000/endpoint-${index}`,
-        model: "fixture-model",
-        smokeStatus: "pending",
-        evidenceRef: `endpoint-evidence-${index}`,
-        createdAt: localAiJob().createdAt,
-        updatedAt: localAiJob().updatedAt,
-      }));
-      await render();
-      await click("Jobs and endpoints");
-      for (const label of ["Downloads", "Serve jobs", "Registered endpoints"]) {
+  it.each(["Downloads", "Serve jobs", "Registered endpoints"])(
+    "pages 1000 %s records and retains their evidence",
+    async (label) => {
+      const original = window.location.href,
+        state = window.history.state;
+      window.history.replaceState(
+        { retained: "all-local-ai-evidence" },
+        "",
+        "/settings/models?workspaceId=requested&citadelId=fixture&runId=carried-run&sessionId=carried-session&extra=one&extra=two#local-ai",
+      );
+      try {
+        owner.downloads = Array.from({ length: 1000 }, (_, index) => ({
+          ...localAiJob(),
+          jobId: `download-${index}`,
+          approvalId: `download approval ${index} /?#`,
+          artifactPath: `models/download-${index}.gguf`,
+          artifactHash: `hash-${index}`,
+        }));
+        owner.serveJobs = Array.from({ length: 1000 }, (_, index) => ({
+          jobId: `serve-${index}`,
+          modelId: "fixture-model",
+          backend: "llama_cpp",
+          status: "requires_approval",
+          approvalId: `serve approval ${index}`,
+          endpointUrl: `http://localhost:5000/serve-${index}`,
+          processId: 5000 + index,
+          createdAt: localAiJob().createdAt,
+          updatedAt: localAiJob().updatedAt,
+        }));
+        owner.endpoints = Array.from({ length: 1000 }, (_, index) => ({
+          endpointId: `endpoint-${index}`,
+          providerId: `provider-${index}`,
+          label: `Endpoint ${index}`,
+          backend: "llama_cpp",
+          baseUrl: `http://localhost:5000/endpoint-${index}`,
+          model: "fixture-model",
+          smokeStatus: "pending",
+          evidenceRef: `endpoint-evidence-${index}`,
+          createdAt: localAiJob().createdAt,
+          updatedAt: localAiJob().updatedAt,
+        }));
+        await render();
+        await click("Jobs and endpoints");
         const panel = container.querySelector(`[aria-label="${label}"]`)!;
         expect(panel.querySelectorAll("li")).toHaveLength(40);
-        for (let page = 0; page < 24; page++) await click(`Next ${label}`);
+        const next = button(`Next ${label}`);
+        for (let page = 0; page < 24; page++) await act(async () => next.click());
         expect(panel.querySelectorAll("li")).toHaveLength(40);
         expect(panel.textContent).toContain("Records 961–1000");
-        expect(button(`Next ${label}`).disabled).toBe(true);
+        expect(next.disabled).toBe(true);
+        if (label === "Downloads") {
+          expect(panel.textContent).toContain("models/download-999.gguf");
+          expect(panel.textContent).toContain("hash-999");
+          const links = [...panel.querySelectorAll<HTMLAnchorElement>("a")];
+          expect(links).toHaveLength(40);
+          const target = new URL(links.at(-1)!.href);
+          expect(target.pathname).toBe("/inbox");
+          expect(target.searchParams.get("approvalId")).toBe("download approval 999 /?#");
+          expect(target.searchParams.getAll("extra")).toEqual(["one", "two"]);
+          expect(target.searchParams.get("runId")).toBe("carried-run");
+          expect(target.searchParams.get("sessionId")).toBe("carried-session");
+          expect(target.hash).toBe("#local-ai");
+        } else if (label === "Serve jobs") {
+          expect(panel.textContent).toContain("5999");
+          expect(panel.textContent).toContain("http://localhost:5000/serve-999");
+        } else {
+          expect(panel.textContent).toContain("provider-999");
+          expect(panel.textContent).toContain("endpoint-evidence-999");
+        }
+        expect(api.fetchLocalAiReadiness).toHaveBeenCalledOnce();
+        expect(api.startLocalAiDownload).not.toHaveBeenCalled();
+        expect(api.startLocalAiServe).not.toHaveBeenCalled();
+        expect(window.history.state.retained).toBe("all-local-ai-evidence");
+      } finally {
+        window.history.replaceState(state, "", original);
       }
-      const downloads = container.querySelector('[aria-label="Downloads"]')!;
-      expect(downloads.textContent).toContain("models/download-999.gguf");
-      expect(downloads.textContent).toContain("hash-999");
-      const links = [...downloads.querySelectorAll<HTMLAnchorElement>("a")];
-      expect(links).toHaveLength(40);
-      const target = new URL(links.at(-1)!.href);
-      expect(target.pathname).toBe("/inbox");
-      expect(target.searchParams.get("approvalId")).toBe("download approval 999 /?#");
-      expect(target.searchParams.getAll("extra")).toEqual(["one", "two"]);
-      expect(target.searchParams.get("runId")).toBe("carried-run");
-      expect(target.searchParams.get("sessionId")).toBe("carried-session");
-      expect(target.hash).toBe("#local-ai");
-      expect(container.querySelector('[aria-label="Serve jobs"]')!.textContent).toContain("5999");
-      expect(container.querySelector('[aria-label="Serve jobs"]')!.textContent).toContain(
-        "http://localhost:5000/serve-999",
-      );
-      expect(container.querySelector('[aria-label="Registered endpoints"]')!.textContent).toContain("provider-999");
-      expect(container.querySelector('[aria-label="Registered endpoints"]')!.textContent).toContain(
-        "endpoint-evidence-999",
-      );
-      expect(api.fetchLocalAiReadiness).toHaveBeenCalledOnce();
-      expect(api.startLocalAiDownload).not.toHaveBeenCalled();
-      expect(api.startLocalAiServe).not.toHaveBeenCalled();
-      expect(window.history.state.retained).toBe("all-local-ai-evidence");
-    } finally {
-      window.history.replaceState(state, "", original);
-    }
-  });
+    },
+  );
 });
