@@ -27,7 +27,8 @@ async function render(collapsed:boolean){await act(async()=>root.render(<><butto
 const indicator=()=>host.querySelector<HTMLElement>('[role="img"][aria-label="Updates connected · Catching up"]')!;
 it('does not request the leaf for the default expanded rail',async()=>{await render(false);expect(load.started).not.toHaveBeenCalled();expect(host.textContent).toContain('Updates connected · Catching up');});
 it.each(['owned','moved','expanded','navigated'])('keeps fallback name, focusability and focus custody when %s',async mode=>{
- const held=gate();load.started.mockImplementationOnce(()=>held.promise);await render(true);expect(load.started).toHaveBeenCalledOnce();
+ const held=gate();load.started.mockImplementationOnce(()=>held.promise);await render(true);
+ await vi.waitFor(() => expect(load.started).toHaveBeenCalledOnce());
  const fallback=indicator();expect(fallback).not.toBeNull();expect(fallback.tabIndex).toBe(0);expect(fallback.className).toContain('inline-flex');
  fallback.focus();if(mode==='moved')host.querySelector<HTMLButtonElement>('#outside')!.focus();
  if(mode==='expanded')await render(false);

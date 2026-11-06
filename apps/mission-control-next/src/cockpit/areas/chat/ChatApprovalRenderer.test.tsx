@@ -247,7 +247,8 @@ it.each([{}, { outsideRootWrite: {} }, { outsideRootWrite: { kind: "outside_root
   async (preview) => {
     record = { ...record, preview: { targets: ["safe-target.txt"], ...preview } };
     await act(async () => renderDirect());
-    await vi.waitFor(() => expect(button("Approve once")).toBeDefined());
+    await act(async () => vi.dynamicImportSettled());
+    expect(button("Approve once")).toBeDefined();
     expect(grantLoads.count).toBe(0);
     expect(button("Deny")).toBeDefined();
     expect(api.resolveApproval).not.toHaveBeenCalled();

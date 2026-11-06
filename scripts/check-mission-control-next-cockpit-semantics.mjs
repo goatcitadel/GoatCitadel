@@ -59,6 +59,7 @@ export const LAYER_OWNERS = new Set([
   "ui/Menu.tsx",
   "ui/MenuRuntime.tsx",
   "ui/Popover.tsx",
+  "ui/PopoverRuntime.tsx",
   "ui/Tooltip.tsx",
   "areas/chat/ChatModelOptionsPopover.tsx",
   "app/CockpitShell.tsx",

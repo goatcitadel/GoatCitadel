@@ -57,5 +57,5 @@ export function DeferredOutsideRootWriteGrantOptions(props: Props) {
       <Button size="sm" onClick={() => { setState(undefined); setAttempt((value) => value + 1); }}>Try folder options again</Button>
     </div>
   );
-  return <p role="status" aria-busy="true">Loading folder options…</p>;
+  return <p aria-busy="true">Loading folder options…</p>;
 }

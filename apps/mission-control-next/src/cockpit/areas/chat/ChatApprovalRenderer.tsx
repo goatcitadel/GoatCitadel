@@ -221,7 +221,7 @@ export function ChatApprovalRenderer({
               </Button>
             </div>
           ) : !code ? (
-            <p role="status" className="min-h-10">
+            <p className="min-h-10">
               {record.status === "pending" ? "Loading approval controls…" : "Loading follow-on work…"}
             </p>
           ) : record.status === "pending" ? (
