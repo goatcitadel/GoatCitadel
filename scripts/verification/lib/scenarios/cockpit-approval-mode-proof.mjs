@@ -721,32 +721,6 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
               .getByRole("link", { name: "Inspect decision and execution record", exact: true })
               .getAttribute("href"),
           });
-          const ready = await requestJson(
-            stack.gatewayUrl,
-            `/api/v1/change-plans/${receipt.planId}?workspaceId=default`,
-          );
-          assertOk(ready, "read approved change before explicit continuation");
-          assert.equal(
-            ready.body.status,
-            "awaiting_approval",
-            "This setting must retain explicit continuation after approval.",
-          );
-          assert.equal(ready.body.requiredAction?.approvalId, approvalId);
-          await panel.getByRole("button", { name: "Refresh approval change", exact: true }).click();
-          const resumedResponse = page.waitForResponse(
-            (response) =>
-              response.request().method() === "POST" &&
-              new URL(response.url()).pathname === `/api/v1/change-plans/${receipt.planId}/responses`,
-          );
-          await continueChange.click();
-          const resumedHttp = await resumedResponse;
-          assert.equal(resumedHttp.status(), 200);
-          const resumeRequest = resumedHttp.request().postDataJSON();
-          assert.equal(resumeRequest.workspaceId, "default");
-          assert.equal(resumeRequest.expectedRevision, ready.body.revision);
-          assert.equal(resumeRequest.actionId, ready.body.requiredAction.actionId);
-          assert.equal(resumeRequest.actionNonce, ready.body.requiredAction.actionNonce);
-          assert.deepEqual(resumeRequest.values, {});
           let completed;
           for (let attempt = 0; attempt < 30; attempt += 1) {
             const result = await requestJson(
@@ -775,10 +749,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           await panel.getByText(`Current: ${RULE_LABELS[draftMode]}`, { exact: true }).waitFor();
           assert.equal(await select.inputValue(), draftMode);
           assert.equal(await panel.getByRole("button", { name: "Save approval rule", exact: true }).isDisabled(), true);
-          assert.deepEqual(mutations, [
-            "PATCH /api/v1/settings",
-            `POST /api/v1/change-plans/${receipt.planId}/responses`,
-          ]);
+          assert.deepEqual(mutations, ["PATCH /api/v1/settings"], "The approved plan must settle without a second browser write.");
           await panel.scrollIntoViewIfNeeded();
           await audit("saved");
           await traffic.assertPageBackground(page, "default");
@@ -804,7 +775,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
               reviewOwnerUnchanged: true,
               canonicalApprovalResolved: true,
               unapprovedContinuationBlocked: true,
-              explicitApprovedContinuation: true,
+              approvedPlanSettled: true,
               scopedInboxDeepLink: true,
               currentOwnerNotification: true,
               notificationWithoutReload: true,

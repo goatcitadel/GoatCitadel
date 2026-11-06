@@ -377,8 +377,10 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30000 });
           }
           async function verifyWindow(list, expectedKeys) {
-            await list.locator("li[aria-setsize]").first().waitFor();
-            const rows = await list.locator("li[aria-setsize]").evaluateAll((items) =>
+            const rowNodes = list.locator("li[aria-setsize]");
+            await rowNodes.first().waitFor();
+            await rowNodes.nth(99).waitFor({ state: "detached" });
+            const rows = await rowNodes.evaluateAll((items) =>
               items.map((item) => ({
                 total: Number(item.getAttribute("aria-setsize")),
                 key: item.querySelector("[data-record-key]")?.getAttribute("data-record-key"),

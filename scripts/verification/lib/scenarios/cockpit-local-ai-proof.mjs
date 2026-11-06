@@ -209,6 +209,8 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
         assert.equal(await job.getByRole("link", { name: "Review required approval", exact: true }).getAttribute("href"), approvalHref);
         await capture("retained-intent"); await jobs.getByRole("button", { name: "Close sheet", exact: true }).click();
         stage = "retain lost-response uncertainty without retry";
+        const advisory = panel.getByText("Advisory approval requests (no execution)", { exact: true });
+        if (await advisory.locator("..").getAttribute("open") === null) await advisory.click();
         let serveReceipt;
         const loseResponse = async (route) => { if (route.request().method() !== "POST") return route.continue();
           const result = await route.fetch(); assert.equal(result.status(), 201); serveReceipt = await result.json(); await route.abort("failed"); };

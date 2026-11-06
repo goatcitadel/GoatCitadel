@@ -295,7 +295,9 @@ export async function runCockpitWorkspacesProof({ context, browser, stack, citad
           const dialog = await review(action, lifecycleOwner);
           const nextResponse = page.waitForResponse((response) => response.request().method() === "POST"
             && new URL(response.url()).pathname === `${ownerPath}/${action}`);
-          await dialog.getByRole("button", { name: `Confirm ${action} workspace`, exact: true }).click();
+          const confirm = dialog.getByRole("button", { name: `Confirm ${action} workspace`, exact: true });
+          await confirm.focus();
+          await confirm.press("Enter");
           const reply = await nextResponse;
           assert.equal(reply.status(), 200);
           await dialog.waitFor({ state: "hidden" });

@@ -168,7 +168,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
           const handle = page.getByRole("separator", { name: "Resize inspector", exact: true });
           await handle.focus(); await page.keyboard.press("Home"); assert.equal(await handle.getAttribute("aria-valuenow"), "360");
           await page.keyboard.press("End"); assert.equal(await handle.getAttribute("aria-valuenow"), "480");
-          await page.waitForFunction(() => Math.abs(document.querySelector('[aria-label="Inspector: Conversation"]').getBoundingClientRect().width - 480) <= 1);
+          await page.waitForFunction(() => document.querySelector('aside[data-inspector-mode="docked"]')?.getBoundingClientRect().width === 480);
           const point = await handle.evaluate(element => { const { x, y, width, height } = element.getBoundingClientRect(); return { x, y, width, height }; }); assert.ok(point);
           evidence.pointerStart = point;
           assert.equal(await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.getAttribute("aria-label"), { x: point.x + point.width / 2, y: point.y + 70 }), "Resize inspector");
@@ -177,7 +177,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
           await page.waitForFunction(() => document.querySelector('[aria-label="Resize inspector"]')?.getAttribute("aria-valuenow") === "360");
           assert.equal(await handle.getAttribute("aria-valuenow"), "360");
         }
-        if (variant === "desktop") await page.waitForFunction(() => Math.abs(document.querySelector('[aria-label="Inspector: Conversation"]').getBoundingClientRect().width - 360) <= 1);
+        if (variant === "desktop") await page.waitForFunction(() => document.querySelector('aside[data-inspector-mode="docked"]')?.getBoundingClientRect().width === 360);
         if (variant === "tablet") {
           const modal = page.getByRole("dialog", {name:"Conversation",exact:true}); await modal.waitFor();
           assert.equal(await page.getByRole("separator", {name:"Resize inspector",exact:true}).count(), 0);
@@ -186,7 +186,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         // Read all geometry in one layout observation after the actual resize.
         evidence.geometry = await page.evaluate(({ variant, viewportWidth, mainBefore }) => ({ variant, viewportWidth, mainBefore,
           railWidth: variant === "mobile" ? 0 : document.querySelector('[aria-label="Cockpit sidebar"]').getBoundingClientRect().width,
-          inspectorWidth: document.querySelector('[aria-label="Inspector: Conversation"]').getBoundingClientRect().width,
+          inspectorWidth: document.querySelector(variant === "desktop" ? 'aside[data-inspector-mode="docked"]' : '[aria-label="Inspector: Conversation"]').getBoundingClientRect().width,
           mainDuring: document.querySelector("#main-content").getBoundingClientRect().width,
           overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth }), { variant, viewportWidth: viewport.width, mainBefore });
         assertShellGeometry(evidence.geometry);
