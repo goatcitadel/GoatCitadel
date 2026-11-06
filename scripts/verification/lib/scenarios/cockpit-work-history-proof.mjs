@@ -132,7 +132,9 @@ export async function runCockpitWorkHistoryProof({ context, browser, stack, cita
             runs.map((run) => `/work/runs/${encodeURIComponent(run.runId)}?shell=cockpit`);
           if (JSON.stringify(await links()) !== JSON.stringify(expectedLinks(first.body.items)))
             throw new Error("History UI differs from first owner page.");
-          await page.getByRole("button", { name: "Load older runs", exact: true }).click();
+          const loadOlder = page.getByRole("button", { name: "Load older runs", exact: true });
+          await loadOlder.focus();
+          await loadOlder.press("Enter");
           await page.getByText("101 saved runs loaded.", { exact: false }).waitFor();
           const wanted = expectedLinks(expected),
             visited = new Map();

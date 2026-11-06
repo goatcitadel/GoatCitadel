@@ -186,8 +186,8 @@ const STEPS = [
     click("Activity"),
     click("Refresh background tasks"),
     clickPattern("Continue background task"),
-    api("durable-watcher-detached"),
     text("Continuing in background"),
+    api("durable-watcher-detached"),
     clickPattern("Bring background task"),
     text("Foreground updates"),
     api("durable-run-read"),
@@ -639,6 +639,7 @@ const STEPS = [
     text("Usability browser board"),
     click("Archive"),
     click("Archive board"),
+    control("Restore"),
     select("Saved board", "Usability browser board · archived"),
     click("Board details"),
     click("Restore"),
@@ -675,6 +676,19 @@ const STEPS = [
     click("Close session and revoke grants"),
     text("Browser session closed"),
   ]),
+  step("ops-work", "route.ops-kanban.task-board-lifecycle", "ops-kanban", [
+    checkPattern("Select Watch runtime approvals and costs"),
+    click("Unblock"),
+    text("1 selected task updated."),
+    checkPattern("Select Review task board and agent board cohesion"),
+    click("Retry"),
+    text("1 selected task updated."),
+    checkPattern("Select Capture prompt-pack quality posture"),
+    click("Close"),
+    text("1 selected task updated."),
+    api("kanban-task-lifecycle-readback"),
+  ]),
+  // Keep the reviewed cancellation's network evidence in the bounded bundle log.
   step("ops-work", "route.ops-schedules.schedule-create-list-cancel-and-run", "ops-schedules", [
     click("New schedule"),
     fill("Name", "Usability browser schedule"),
@@ -698,19 +712,6 @@ const STEPS = [
     text("cancelled"),
     api("schedule-cancellation-readback"),
   ]),
-  step("ops-work", "route.ops-kanban.task-board-lifecycle", "ops-kanban", [
-    checkPattern("Select Watch runtime approvals and costs"),
-    click("Unblock"),
-    text("1 selected task updated."),
-    checkPattern("Select Review task board and agent board cohesion"),
-    click("Retry"),
-    text("1 selected task updated."),
-    checkPattern("Select Capture prompt-pack quality posture"),
-    click("Close"),
-    text("1 selected task updated."),
-    api("kanban-task-lifecycle-readback"),
-  ]),
-
   step("ops-governance-reliability", "route.ops-improvement.improvement-review", "ops-improvement", [
     clickPattern("Refresh Ops runtime data"),
     text("Improvement reports"),
@@ -1029,6 +1030,7 @@ const STEPS = [
     clickPattern("Verification sandbox channel"),
     clickPattern("Validate the draft"),
     click("Run live test"),
+    click("Run reviewed live test"),
     text("Connection test · Passed"),
     // The post-test refresh re-opens the guided wizard, so finalize through the
     // guided confirm step, which only enables after the passing live test.
@@ -1045,12 +1047,10 @@ const STEPS = [
       },
     }),
     api("channel-plan-bound"),
-    click("Provide details"),
-    confirm("Validate details"),
     confirm("Apply exact change"),
-    text("Review approval"),
+    control("Open required approval"),
     api("channel-plan-approve"),
-    confirm("Open or resume approval"),
+    confirm("Continue after approval"),
     api("channel-plan-finalize-settle"),
     text("ntfy was live-tested and finalized as Verification sandbox channel."),
   ]),
@@ -1081,6 +1081,7 @@ const STEPS = [
       click("Create tool grant"),
       fill("Tool pattern", "mcp.*"),
       select("Decision", "Deny"),
+      select("Grant type", "Persistent"),
       click("Create grant"),
       confirm("Create grant", {
         captureJsonResponse: {
@@ -1123,6 +1124,7 @@ const STEPS = [
     click("Create tool grant"),
     fill("Tool pattern", "session.status"),
     select("Decision", "Deny"),
+    select("Grant type", "Persistent"),
     click("Create grant"),
     confirm("Create grant", {
       captureJsonResponse: {

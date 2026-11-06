@@ -740,9 +740,8 @@ test("notification archive readback binds canonical IDs, lifecycleState, and the
 test("prompt-pack compare proof classifies exact execution, memory-distiller, and score-judge dispatches", () => {
   const prior = { model: "verification-stub-chat", outcome: "success", status: 200 };
   const executionSignatures = [
-    // Profile-free Chat: base + memory-context system messages + exact user prompt.
-    { prompt: "Reply with exactly: PROMPT_PACK_AUTHORED_OK", messageCount: 3 },
-    { prompt: "Compare the deterministic fixture response and report the final result.", messageCount: 3 },
+    { prompt: "Reply with exactly: PROMPT_PACK_AUTHORED_OK", messageCount: 4 },
+    { prompt: "Compare the deterministic fixture response and report the final result.", messageCount: 4 },
   ];
   const executions = ["verification-stub-chat", "verification-stub-chat-alt"].flatMap((model) =>
     executionSignatures.map((signature) => ({
@@ -750,7 +749,7 @@ test("prompt-pack compare proof classifies exact execution, memory-distiller, an
       stream: true,
       messageCount: signature.messageCount,
       promptMetadata: {
-        roles: ["system", "system", "user"],
+        roles: ["system", "system", "system", "user"],
         userContentSha256: createHash("sha256").update(signature.prompt, "utf8").digest("hex"),
       },
       outcome: "success",
@@ -783,7 +782,7 @@ test("prompt-pack compare proof classifies exact execution, memory-distiller, an
       validatePromptPackBenchmarkDispatchRecords(
         benchmarkRecords.map((record, index) =>
           index === 0
-            ? { ...record, promptMetadata: { ...record.promptMetadata, roles: ["system", "assistant", "user"] } }
+            ? { ...record, promptMetadata: { ...record.promptMetadata, roles: ["system", "system", "assistant", "user"] } }
             : record,
         ),
         0,
@@ -1863,6 +1862,7 @@ test("schedule absence acknowledges only a completed exact deletion and its inde
   const missing = {
     type: "error",
     text: "Failed to load resource: the server responded with a status of 404 (Not Found)",
+    location: { path: "/api/v1/cron/jobs/manual-usability-browser-schedule-fixture" },
   };
   const action = {
     kind: "canonical-api-probe",
@@ -1891,6 +1891,10 @@ test("schedule absence acknowledges only a completed exact deletion and its inde
     },
     { snapshot: { ...snapshot, networkRecords: [records[0], { ...records[1], sequence: 0 }] }, steps: [step] },
     { snapshot: { ...snapshot, consoleMessages: [missing, missing] }, steps: [step] },
+    {
+      snapshot: { ...snapshot, consoleMessages: [{ ...missing, location: { path: "/api/v1/cron/jobs/other" } }] },
+      steps: [step],
+    },
   ]) {
     const result = filterExpectedBrowserConsoleMessages(input.snapshot, input.steps);
     assert.equal(result.acknowledgedScheduleAbsenceCount, 0);

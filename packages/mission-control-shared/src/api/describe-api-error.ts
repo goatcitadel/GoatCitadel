@@ -11,6 +11,20 @@ export const GATEWAY_UNREACHABLE_SUMMARY =
   "Can't reach the GoatCitadel gateway. Check that it's running, then try again.";
 const DEFAULT_FALLBACK = "Something went wrong. Try again.";
 
+export function describeEvidenceReceiptError(error: unknown): string {
+  if (isApiRequestError(error) && error.status === 503) {
+    const message = readBodyMessage(error.body);
+    // These public Gateway messages distinguish missing signing custody from other 503s.
+    if (
+      message?.startsWith("OS keychain is unavailable, so the Evidence Receipt signing key") ||
+      message?.startsWith("Evidence Receipt signing has no key store on this host yet")
+    ) {
+      return "This host cannot build a signed receipt because its OS keychain is unavailable. Existing receipts can still be verified offline.";
+    }
+  }
+  return describeApiError(error).summary;
+}
+
 /** Keep request paths, stack traces, and transport details out of operator copy. */
 export function describeApiError(error: unknown, fallback = DEFAULT_FALLBACK): ApiErrorDescription {
   if (isApiRequestError(error)) {

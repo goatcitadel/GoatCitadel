@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useReducer, useRef, useState, useSyncExternalStore } from "react";
 import type { DurableBackgroundTaskControlAction, DurableBackgroundTaskRailResponse } from "@goatcitadel/contracts";
 import {
   controlDurableBackgroundTask,
@@ -122,6 +122,7 @@ export function useDurableBackgroundTaskRail(input: {
   const currentSnapshot = useRef(snapshot);
   currentSnapshot.current = snapshot;
   const mounted = useRef(true);
+  const [, renewView] = useReducer((revision: number) => revision + 1, 0);
   const view = useRef({ scopeKey, token: {} });
   if (view.current.scopeKey !== scopeKey) view.current = { scopeKey, token: {} };
   const renderedView = view.current.token;
@@ -139,11 +140,15 @@ export function useDurableBackgroundTaskRail(input: {
   );
 
   useEffect(() => {
+    // Effect replay invalidates the first render's token just like a navigation.
+    if (!mounted.current) renewView();
     mounted.current = true;
     const invalidate = () => {
       view.current = { ...view.current, token: {} };
       requestSequence.current += 1;
       setSnapshot(null);
+      // An already-empty snapshot cannot schedule a render by itself.
+      renewView();
     };
     if (typeof window !== "undefined")
       for (const event of SHELL_NAVIGATION_EVENTS) window.addEventListener(event, invalidate);
