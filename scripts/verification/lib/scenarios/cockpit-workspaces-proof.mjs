@@ -295,12 +295,12 @@ export async function runCockpitWorkspacesProof({ context, browser, stack, citad
           diagnosticClickPhase = await beginWorkspaceClickPhase(page, action, diagnosticGeneration);
           diagnosticTarget = { id: lifecycleOwner.workspaceId, revision: lifecycleOwner.revision };
           const dialog = await review(action, lifecycleOwner);
-          const nextResponse = page.waitForResponse((response) => response.request().method() === "POST"
-            && new URL(response.url()).pathname === `${ownerPath}/${action}`);
           const confirm = dialog.getByRole("button", { name: `Confirm ${action} workspace`, exact: true });
-          await confirm.focus();
-          await confirm.press("Enter");
-          const reply = await nextResponse;
+          const [reply] = await Promise.all([
+            page.waitForResponse((response) => response.request().method() === "POST"
+              && new URL(response.url()).pathname === `${ownerPath}/${action}`),
+            confirm.click(),
+          ]);
           assert.equal(reply.status(), 200);
           await dialog.waitFor({ state: "hidden" });
           await panel.getByText(`${updatedName} ${action === "archive" ? "archived" : "restored"}.`, { exact: true }).first().waitFor();

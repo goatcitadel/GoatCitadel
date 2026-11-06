@@ -147,9 +147,10 @@ export async function runCockpitWorkHistoryProof({ context, browser, stack, cita
           page.on("response", (response) => observeHistory(response.request(), response.status()));
           page.on("requestfailed", (request) => observeHistory(request, "failed"));
           const wasEnabled = await loadOlder.isEnabled();
-          await loadOlder.focus();
-          await loadOlder.press("Enter");
           try {
+            // A live refresh may disable this button after the first page renders.
+            // Use an actionable click; the row traversal below still exercises the keyboard.
+            await loadOlder.click();
             await page.getByText("101 saved runs loaded.", { exact: false }).waitFor();
           } catch (cause) {
             throw new Error(
