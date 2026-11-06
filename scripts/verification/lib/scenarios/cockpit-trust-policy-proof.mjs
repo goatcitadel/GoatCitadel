@@ -1,6 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 
+export async function assertTrustProofOwnerLink(dialog, capability) {
+  const destination = ({ "capabilities.catalog": ["Open Library / Candidates and mesh", "/library?shell=cockpit"],
+    "skills.lifecycle": ["Open Capabilities / Skills", "/capabilities/skills?shell=cockpit"] })[capability.source];
+  assert.ok(destination, "Unknown Trust record owner source");
+  const [label, href] = destination;
+  const ownerLink = dialog.getByRole("link", { name: label, exact: true });
+  assert.equal(await ownerLink.count(), 1, "Expected one exact selected-record owner link");
+  assert.equal(await ownerLink.getAttribute("href"), href, "Trust owner link left its exact native destination");
+}
+
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 export function selectTrustProofCapability(snapshot) {
@@ -89,12 +99,7 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           if (capability.reviewWarning) assert.ok(detail.includes(capability.reviewWarning));
           for (const required of capability.requires ?? []) assert.ok(detail.includes(`Requires ${required}`));
           // The owner link opens the native Library page that manages this capability (never the classic view).
-          const ownerLink = dialog.getByRole("link", { name: /^Open Library \/ (?:Capabilities|Skills)$/u });
-          assert.match(
-            (await ownerLink.getAttribute("href")) ?? "",
-            /^\/library(?:\?|$)/u,
-            "Trust owner link left the cockpit Library.",
-          );
+          await assertTrustProofOwnerLink(dialog, capability);
           await page.addScriptTag({ path: axeSourcePath });
           const screenshotDir = path.join(context.artifactRoot, "screenshots");
           await mkdir(screenshotDir, { recursive: true });

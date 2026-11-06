@@ -570,6 +570,11 @@ describe("ChatTranscript", () => {
       'details[aria-label="Tool activity for this turn"]',
     )!;
     const summary = disclosure.querySelector("summary")!;
+    expect(disclosure.open).toBe(true);
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await vi.waitFor(() =>
+      expect(disclosure.querySelector('[data-tool-run-id="first"]')).not.toBeNull(),
+    );
     const row = disclosure.querySelector('[data-tool-run-id="first"]');
     disclosure.open = true;
     summary.focus();
@@ -608,6 +613,14 @@ describe("ChatTranscript", () => {
     const activity = container.querySelector('details[aria-label="Tool activity for this turn"]')!;
     expect(activity.textContent).toContain("1 failed");
     expect(activity.textContent).toContain("1 approval needed");
+    expect((activity as HTMLDetailsElement).open).toBe(true);
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await vi.waitFor(() => {
+      for (const id of ["failed", "approval", "uncertain"]) {
+        expect(activity.querySelector(`[data-tool-run-id="${id}"]`)).not.toBeNull();
+      }
+    });
+    expect(activity.querySelectorAll("li")).toHaveLength(3);
     expect(activity.textContent).toContain("1 needs review");
     expect(activity.textContent).toContain("Automatic replay is suppressed");
     expect(activity.textContent).toContain("Inspect before retrying");

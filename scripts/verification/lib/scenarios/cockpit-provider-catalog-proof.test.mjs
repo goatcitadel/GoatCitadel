@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { assertProviderCatalogProof, requireFreshProviderCatalog, selectProviderCatalogRead } from "./cockpit-provider-catalog-proof.mjs";
+import { assertProviderCatalogProof, requireFreshProviderCatalog, selectProviderCatalogRead, revealProviderConfiguration } from "./cockpit-provider-catalog-proof.mjs";
 
 function proof() {
   const before = { revision: 4, activeProviderId: "stub", activeModel: "test-model",
@@ -10,6 +10,23 @@ function proof() {
 }
 
 describe("provider catalog browser proof assertions", () => {
+  it("opens collapsed advanced controls and keeps already-open controls open", async () => {
+    for (const initial of ["false", "true"]) {
+      let expanded = initial, clicks = 0, mountedReads = 0;
+      const disclosure = { waitFor: async () => {}, getAttribute: async () => expanded,
+        click: async () => { clicks += 1; expanded = expanded === "false" ? "true" : "false"; } };
+      const controls = { waitFor: async () => { mountedReads += 1; assert.equal(expanded, "true"); } };
+      await revealProviderConfiguration(disclosure, controls);
+      assert.equal(clicks, initial === "false" ? 1 : 0);
+      assert.equal(mountedReads, 1);
+      assert.equal(expanded, "true");
+    }
+  });
+  it("rejects missing disclosure semantics or a click that leaves advanced controls closed", async () => {
+    await assert.rejects(revealProviderConfiguration({ waitFor: async () => {}, getAttribute: async () => null }, {}), /disclosure state/);
+    await assert.rejects(revealProviderConfiguration({ waitFor: async () => {}, getAttribute: async () => "false", click: async () => {} },
+      { waitFor: async () => {} }), /did not open/);
+  });
   it("binds a newly started read before a coalescible pending read", () => {
     const pending = {}, fresh = {};
     assert.equal(selectProviderCatalogRead([pending], [fresh]), fresh);

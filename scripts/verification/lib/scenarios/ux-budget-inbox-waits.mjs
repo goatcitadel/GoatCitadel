@@ -1,7 +1,34 @@
 import { CHAT_VIEWPORTS, measureLayout } from "./ux-budget-measurements.mjs";
 import { evaluateHorizontalOverflow } from "../ux-budgets.mjs";
 import { mkdir } from "node:fs/promises";
-import { inboxOwnerHref } from "./classic-owner-navigation.mjs";
+import assert from "node:assert/strict";
+
+export function assertNativeInboxOwner(item, href, workspaceId) {
+  assert.equal(item.source.workspaceId, workspaceId, "Inbox owner projection crossed the selected workspace.");
+  assert.ok(typeof href === "string" && href.startsWith("/") && !href.startsWith("//"), "Inbox owner link must remain local.");
+  const destination = new URL(href, "http://verification.invalid");
+  assert.equal(destination.origin, "http://verification.invalid", "Inbox owner link must not change origin.");
+  assert.equal(destination.searchParams.get("workspaceId"), workspaceId, "Inbox owner link lost its workspace.");
+  assert.equal(destination.searchParams.get("shell"), "cockpit", "Inbox owner link must open the native owner.");
+  if (item.kind === "user_input") {
+    assert.equal(destination.pathname, "/inbox");
+    assert.equal(destination.searchParams.get("item"), item.id, "Inbox question link selected another item.");
+  } else {
+    assert.equal(item.kind, "completed_background_run");
+    assert.equal(destination.pathname, `/work/runs/${encodeURIComponent(item.source.runId)}`);
+  }
+  for (const key of ["sessionId", "turnId", "runId", "taskId"]) {
+    if (item.source[key] !== undefined) assert.equal(destination.searchParams.get(key), item.source[key], `Inbox owner link lost ${key}.`);
+  }
+  return destination;
+}
+
+export function assertCompletedBackgroundOwner(trace, runId, workspaceId) {
+  assert.equal(trace?.runId, runId, "Run trace belongs to another requested run.");
+  assert.equal(trace?.run?.runId, runId, "Run trace substituted its canonical owner.");
+  assert.equal(trace?.run?.payload?.workspaceId, workspaceId, "Run trace crossed the selected workspace.");
+  assert.equal(trace?.run?.status, "completed", "Background owner is no longer completed.");
+}
 
 export async function runUxBudgetInboxWaits(environment) {
   const { context, browser, stack, fixture, seedInboxQuestion, seedCompletedBackgroundUpdate, deps } = environment;
@@ -47,10 +74,11 @@ export async function runUxBudgetInboxWaits(environment) {
           const page = await browserContext.newPage();
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const row = page
-            .locator("li[data-inbox-item]")
-            .filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
-          await row.getByRole("button", { name: "Details" }).click();
+          const row = page.locator(`li[data-inbox-row=${JSON.stringify(item.id)}]`);
+          await row.waitFor();
+          assert.equal(await row.count(), 1, "Inbox question must select exactly its canonical row.");
+          assertNativeInboxOwner(item, await row.getByRole("link", { name: "Open in Inbox", exact: true }).getAttribute("href"), fixture.workspaceId);
+          await row.getByRole("button", { name: "Details", exact: true }).click();
           const review = page.getByRole("region", { name: "Current Chat question" });
           await review.getByText("Which path should the verification run take from here?").waitFor();
           await page.waitForFunction(() => {
@@ -139,9 +167,10 @@ export async function runUxBudgetInboxWaits(environment) {
           const page = await browserContext.newPage();
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const row = page
-            .locator("li[data-inbox-item]")
-            .filter({ has: page.locator(`a[href="${inboxOwnerHref(item.href)}"]`) });
+          const row = page.locator(`li[data-inbox-row=${JSON.stringify(item.id)}]`);
+          await row.waitFor();
+          assert.equal(await row.count(), 1, "Background update must select exactly its canonical row.");
+          assertNativeInboxOwner(item, await row.getByRole("link", { name: "Open in Work", exact: true }).getAttribute("href"), fixture.workspaceId);
           await row.getByText("Background run completed").waitFor();
           await row.getByRole("button", { name: "Details" }).click();
           const inspector = page.locator('[aria-label="Inspector: Background run completed"]');
@@ -165,17 +194,28 @@ export async function runUxBudgetInboxWaits(environment) {
           if (await page.locator(`li[data-inbox-item] a[href*="${seeded.orphanRunId}"]`).count()) {
             throw new Error("Forged background watcher appeared in the Inbox.");
           }
-          await inspector.getByRole("link", { name: "Open in classic Ops" }).click();
+          assert.equal(await page.locator(`li[data-inbox-row=${JSON.stringify(`completed_background_run:${seeded.orphanWatcherId}`)}]`).count(), 0,
+            "Forged background watcher must not have a canonical Inbox row.");
+          const nativeOwner = inspector.getByRole("link", { name: "Open in Work", exact: true });
+          assertNativeInboxOwner(item, await nativeOwner.getAttribute("href"), fixture.workspaceId);
+          const tracePath = `/api/v1/observe/runs/${encodeURIComponent(seeded.childRunId)}/trace`;
+          const ownerResponse = page.waitForResponse((response) => response.request().method() === "GET" && new URL(response.url()).pathname === tracePath);
+          await nativeOwner.click();
           await page.waitForURL(
             (url) =>
-              url.pathname === "/ops/runtime" &&
+              url.pathname === `/work/runs/${encodeURIComponent(seeded.childRunId)}` &&
               url.searchParams.get("runId") === seeded.childRunId &&
-              url.searchParams.get("shell") === "classic",
+              url.searchParams.get("workspaceId") === fixture.workspaceId &&
+              url.searchParams.get("shell") === "cockpit",
           );
-          await page.getByRole("heading", { name: `Run ${seeded.childRunId}` }).waitFor();
+          const traceResponse = await ownerResponse;
+          assert.equal(traceResponse.status(), 200, "Native Work must read the exact canonical run successfully.");
+          assertCompletedBackgroundOwner(await traceResponse.json(), seeded.childRunId, fixture.workspaceId);
+          await page.getByRole("heading", { name: "Chat turn", exact: true }).waitFor();
           return {
             status: "passed",
-            metrics: { blockingAxe: 0, overflow: overflow.overflow, runId: seeded.childRunId },
+            metrics: { blockingAxe: 0, overflow: overflow.overflow, runId: seeded.childRunId,
+              ownerSurface: "native_work", classicContinuity: "not_exercised" },
             artifacts: emptyArtifacts({ screenshots: [relativeToRun(context, screenshot)] }),
           };
         } finally {

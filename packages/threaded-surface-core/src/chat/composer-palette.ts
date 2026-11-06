@@ -91,6 +91,6 @@ export function detectComposerPaletteTrigger(draft: string): { mode: ComposerPal
 
 export {
   ComposerPaletteSourceRegistry,
-  rankComposerPaletteItems,
   createUrlPaletteItem,
 } from "./composer-palette-search-code.js";
+export { rankComposerPaletteItems } from "./composer-palette-ranking.js";

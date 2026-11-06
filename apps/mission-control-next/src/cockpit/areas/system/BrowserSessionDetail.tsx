@@ -87,7 +87,13 @@ export function BrowserSessionDetail({
       </Callout>
     );
   return (
-    <section className="grid min-w-0 grid-cols-1 gap-3" aria-label={`Browser session ${record.label}`}>
+    <section
+      className="grid min-w-0 grid-cols-1 gap-3"
+      aria-label={`Browser session ${record.label}`}
+      aria-busy={
+        view === "state" ? state.isPending || grants.isPending : view === "events" ? events.isPending : grants.isPending
+      }
+    >
       <div className="flex flex-wrap items-center gap-2">
         <h2 className="text-lg font-semibold wrap-anywhere">{record.label}</h2>
         <StatusBadge
@@ -144,7 +150,7 @@ export function BrowserSessionDetail({
           <p className="text-sm text-fg-secondary">
             Grant changes and policy blocks. Browser state values stay hidden.
           </p>
-          {events.isPending ? <p role="status">Reading events…</p> : null}
+          {events.isPending ? <p>Reading events…</p> : null}
           {events.error ? <Callout tone="error">{describeApiError(events.error).summary}</Callout> : null}
           {events.data && !events.data.length ? (
             <p className="text-sm text-fg-muted">No events are recorded for this session.</p>

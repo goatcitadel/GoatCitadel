@@ -8,6 +8,7 @@ let ChatBlockers: typeof import("./ChatBlockers").ChatBlockers;
 let ChatApprovalRenderer: typeof import("./ChatApprovalRenderer").ChatApprovalRenderer;
 let ApiRequestError: typeof import("@goatcitadel/mission-control-shared/api/http-internal").ApiRequestError;
 const loader = vi.hoisted(() => ({ load: vi.fn<() => Promise<void>>() }));
+const grantLoads = vi.hoisted(() => ({ count: 0 }));
 const identity = vi.hoisted(() => ({
   gateway: "http://gateway-a",
   caller: "caller-a",
@@ -186,6 +187,11 @@ function renderDirect({
 }
 beforeEach(async () => {
   vi.resetModules();
+  grantLoads.count = 0;
+  vi.doMock("./OutsideRootWriteGrantOptions", async (importOriginal) => {
+    grantLoads.count += 1;
+    return importOriginal<typeof import("./OutsideRootWriteGrantOptions")>();
+  });
   navigation.revision = 1;
   navigation.listeners.clear();
   window.history.replaceState({ fixturePosition: 7 }, "", "/chat?sessionId=session-a&shell=cockpit#current");
@@ -214,13 +220,18 @@ beforeEach(async () => {
     turns: [],
   }));
   installBodyMock();
-  ChatBlockers = (await import("./ChatBlockers")).ChatBlockers;
-  ChatApprovalRenderer = (await import("./ChatApprovalRenderer")).ChatApprovalRenderer;
-  ApiRequestError = (await import("@goatcitadel/mission-control-shared/api/http-internal")).ApiRequestError;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
+  const [blockers, renderer, errors] = await Promise.all([
+    import("./ChatBlockers"),
+    import("./ChatApprovalRenderer"),
+    import("@goatcitadel/mission-control-shared/api/http-internal"),
+  ]);
+  ChatBlockers = blockers.ChatBlockers;
+  ChatApprovalRenderer = renderer.ChatApprovalRenderer;
+  ApiRequestError = errors.ApiRequestError;
 });
 afterEach(async () => {
   await act(async () => root.unmount());
@@ -230,6 +241,28 @@ afterEach(async () => {
   host.remove();
   client.clear();
   vi.restoreAllMocks();
+});
+it.each([{}, { outsideRootWrite: {} }, { outsideRootWrite: { kind: "outside_root_write", candidates: [] } }])(
+  "keeps ordinary and malformed grant previews cold while ordinary decisions remain available %j",
+  async (preview) => {
+    record = { ...record, preview: { targets: ["safe-target.txt"], ...preview } };
+    await act(async () => renderDirect());
+    await vi.waitFor(() => expect(button("Approve once")).toBeDefined());
+    expect(grantLoads.count).toBe(0);
+    expect(button("Deny")).toBeDefined();
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  },
+);
+it("loads grant code when current pending candidates are valid", async () => {
+  record = { ...record, preview: { targets: ["C:/Scratch/report/out.txt"], outsideRootWrite: {
+    kind: "outside_root_write", targets: ["C:/Scratch/report/out.txt"],
+    candidates: [{ rootId: "owr_0123456789abcdef", path: "C:/Scratch/report" }],
+    durations: ["15m", "1h", "8h"], defaultDuration: "1h",
+  } } };
+  await act(async () => renderDirect());
+  await vi.waitFor(() => expect(host.textContent).toContain("Or approve and open a folder"));
+  expect(grantLoads.count).toBe(1);
+  expect(button("Deny")).toBeDefined();
 });
 it("does not import approval renderers or read an approval without a pending signal", async () => {
   await act(async () => renderBlockers({ approval: false, question: true }));

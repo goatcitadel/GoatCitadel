@@ -23,7 +23,7 @@ import {
 import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-history";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
-import { OutsideRootWriteGrantOptions } from "./OutsideRootWriteGrantOptions";
+import { DeferredOutsideRootWriteGrantOptions } from "./DeferredOutsideRootWriteGrantOptions";
 
 type RendererCode = typeof import("./ChatApprovalRendererBody");
 type DecisionProps = ComponentProps<RendererCode["ApprovalDecisionBar"]>;
@@ -228,7 +228,7 @@ export function ChatApprovalRenderer({
             <>
               <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
               {decisionProps.sessionId ? (
-                <OutsideRootWriteGrantOptions
+                <DeferredOutsideRootWriteGrantOptions
                   key={`folder-${scope}`}
                   approval={record}
                   workspaceId={decisionProps.workspaceId}

@@ -564,6 +564,72 @@ describe("useChatSpecialistCapabilityActions", () => {
     expect((globalThis.window as any).location.hash).toBe("mcp");
   });
 
+  it.each(["session", "unmount"] as const)(
+    "revokes capability construction when %s changes during the first-use builder import",
+    async (change) => {
+      let release!: () => void;
+      let observed!: () => void;
+      const requested = new Promise<void>((resolve) => {
+        observed = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      vi.doMock("./capability-candidate-builders.js", async () => {
+        observed();
+        await gate;
+        return await vi.importActual<typeof import("./capability-candidate-builders.js")>(
+          "./capability-candidate-builders.js",
+        );
+      });
+      let renderer!: ReturnType<typeof create>;
+      let operation: Promise<void> | undefined;
+      let unmounted = false;
+      try {
+        await act(async () => {
+          renderer = create(<Harness />);
+          await flushEffects();
+        });
+        const suggestion = makeCapabilitySuggestion({
+          kind: "code_mode_build",
+          recommendedAction: "build_code_mode_skill_candidate",
+          title: "Build report helper",
+          summary: "Build a reusable report helper.",
+          reason: "No current capability matches.",
+        });
+        await act(async () => {
+          latestHarness!.result.handleCapabilitySuggestionAction(suggestion);
+        });
+        await act(async () => {
+          operation = latestHarness!.result.confirmCapabilitySuggestionAction();
+          await requested;
+        });
+        expect(createCapabilityProposalMock).not.toHaveBeenCalled();
+        expect(createCodeModeRunMock).not.toHaveBeenCalled();
+        await act(async () => {
+          if (change === "unmount") {
+            renderer.unmount();
+            unmounted = true;
+          } else {
+            renderer.update(<Harness selectedSession={{ ...makeSession(), sessionId: "session-2" }} />);
+          }
+          await flushEffects();
+        });
+        await act(async () => {
+          release();
+          await operation;
+        });
+        expect(createCapabilityProposalMock).not.toHaveBeenCalled();
+        expect(createCodeModeRunMock).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await operation;
+        if (renderer && !unmounted) await act(async () => renderer.unmount());
+        vi.doUnmock("./capability-candidate-builders.js");
+      }
+    },
+  );
+
   it("creates a proposal and Code Mode run for reusable capability build suggestions", async () => {
     await act(async () => {
       create(<Harness />);

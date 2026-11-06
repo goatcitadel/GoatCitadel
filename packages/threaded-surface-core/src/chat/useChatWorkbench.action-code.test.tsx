@@ -55,6 +55,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
   fetchChatSessionWorkbenchFileDiff: api.fileDiff,
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat-workbench-operations", () => ({
+  fetchChatSessionWorkbench: api.status,
+  fetchChatSessionWorkbenchTree: api.tree,
+  fetchChatSessionWorkbenchFile: api.file,
+  fetchChatSessionWorkbenchFileDiff: api.fileDiff,
+  fetchChatSessionWorkbenchDiff: api.diff,
+  fetchChatSessionWorkbenchOutput: api.output,
   saveChatSessionWorkbenchFile: api.save,
   previewChatSessionWorkbenchFileOperation: api.preview,
   runChatSessionWorkbenchFileOperation: api.operation,

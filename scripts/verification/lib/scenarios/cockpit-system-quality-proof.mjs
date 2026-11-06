@@ -93,7 +93,15 @@ export async function runCockpitSystemQualityProof({ context, browser, stack, ci
         const packLink = page.getByRole("region", { name: "Prompt packs", exact: true }).getByRole("link", { name: `Review ${imported.pack.name}`, exact: true });
         const link = new URL(await packLink.getAttribute("href"), stack.uiUrl);
         assert.equal(link.searchParams.get("view"), `pack:${imported.pack.packId}`);
-        assert.equal(link.searchParams.get("shell"), "classic");
+        const nativePackTarget=new URL("/library/prompt-packs",page.url());
+        nativePackTarget.search=new URL(page.url()).search;
+        nativePackTarget.hash=new URL(page.url()).hash;
+        nativePackTarget.searchParams.set("shell","cockpit");
+        nativePackTarget.searchParams.delete("shellScope");
+        nativePackTarget.searchParams.set("view",`pack:${imported.pack.packId}`);
+        nativePackTarget.searchParams.set("workspaceId",workspace.workspaceId);
+        nativePackTarget.searchParams.set("citadelId",workspace.citadelId);
+        assert.equal(link.href,nativePackTarget.href,"Quality evidence must retain the exact native prompt-pack owner and scope");
         const packReportResponse = page.waitForResponse((result) => result.request().method() === "GET"
           && new URL(result.url()).pathname === `/api/v1/prompt-packs/${imported.pack.packId}/report`);
         await page.getByRole("button", { name: `Inspect ${imported.pack.name}`, exact: true }).click();

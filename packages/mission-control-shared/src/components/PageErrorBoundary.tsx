@@ -5,7 +5,8 @@ interface PageErrorBoundaryProps {
   children: ReactNode;
   resetKey: string;
   pageLabel: string;
-  onReturnToChat: () => void;
+  onReturnToChat?: () => void;
+  onError?: () => void;
 }
 
 interface PageErrorBoundaryState {
@@ -35,6 +36,7 @@ export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErr
   }
 
   public override componentDidCatch(error: Error, errorInfo: ErrorInfo): void {
+    this.props.onError?.();
     // eslint-disable-next-line no-console -- page boundary failures should remain visible during local debugging.
     console.error("[PageErrorBoundary] page render failed", {
       pageLabel: this.props.pageLabel,
@@ -67,15 +69,21 @@ export class PageErrorBoundary extends Component<PageErrorBoundaryProps, PageErr
         <section className="shell-page-error" role="alert" aria-live="assertive">
           <div className="shell-page-error-card">
             <h3>{this.props.pageLabel} hit a render failure.</h3>
-            <p>Retry this surface or return to Chat while Mission Control recovers.</p>
+            <p>
+              {this.props.onReturnToChat
+                ? "Retry this surface or return to Chat while Mission Control recovers."
+                : "Retry this surface while Mission Control recovers."}
+            </p>
             {hasUnsettledChatContextMutation() ? <p role="status">{CHAT_CONTEXT_RELOAD_NOTE}</p> : null}
             <div className="shell-page-error-actions">
               <button type="button" onClick={this.handleRetry} className="gc-button">
                 Retry page
               </button>
-              <button type="button" className="gc-button secondary" onClick={this.props.onReturnToChat}>
-                Return to Chat
-              </button>
+              {this.props.onReturnToChat ? (
+                <button type="button" className="gc-button secondary" onClick={this.props.onReturnToChat}>
+                  Return to Chat
+                </button>
+              ) : null}
             </div>
           </div>
         </section>

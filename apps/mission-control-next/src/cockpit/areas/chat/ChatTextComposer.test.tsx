@@ -153,9 +153,12 @@ function composerProps(overrides: Partial<ComposerProps> = {}): ComposerProps {
 /** Opens the composer's + panel; it renders in a portal, so it is found on the document. */
 async function openPlusPanel(): Promise<HTMLElement> {
   await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Add and options"]')!.click());
-  const panel = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Add and options"]');
-  expect(panel).not.toBeNull();
-  return panel!;
+  const panel = await vi.waitFor(() => {
+    const panel = document.querySelector<HTMLElement>('[role="dialog"][aria-label="Add and options"]');
+    expect(panel).not.toBeNull();
+    return panel!;
+  });
+  return panel;
 }
 /** Matches a button's text, or a + panel row's label (its first span; the row also shows a shortcut hint). */
 const buttonIn = (scope: ParentNode, label: string) =>

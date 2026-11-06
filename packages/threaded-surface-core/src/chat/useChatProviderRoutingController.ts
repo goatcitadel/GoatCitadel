@@ -8,7 +8,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/client";
 import { buildModelCommandSuggestions, type CommandSuggestionItem } from "../chat-command-suggestions";
-import { nameMatchScore } from "./composer-palette-search-code.js";
+import { nameMatchScore } from "./composer-palette-ranking.js";
 import { dedupeStrings } from "./chat-page-derivations";
 import { isLikelyLocalProviderUrl, resolveProviderModelSelection } from "./chat-page-helpers";
 import type { WorkTrustTone } from "./work-trust";

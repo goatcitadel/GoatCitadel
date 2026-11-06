@@ -1,3 +1,4 @@
+import { POSTGRES_SCHEMA_CONVERGENCE_V229_SQL } from "./schema-convergence-v229.js";
 import { CHAT_ARTIFACT_RENDER_RECEIPTS_POSTGRES_SQL } from "../chat-artifact-render-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
 import { APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL } from "../approval-execution-linkage-postgres-compatibility.js";
@@ -15324,6 +15325,13 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "approval_execution_linkage_json_compatibility",
     sql: APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL,
     integritySha256: "490cbe67cb9d9d250888f2048d6324061fdbde9c1f1aa8565bdbb80431bca934",
+  },
+  {
+    // PG-only convergence to the existing PG204 / SQLite257 context authority.
+    version: 229,
+    name: "chat_routed_context_namespace_convergence",
+    sql: POSTGRES_SCHEMA_CONVERGENCE_V229_SQL,
+    integritySha256: "7d307477ae5f1533c5174020c6bf95d95f7613b9657b56942511be8148ccbadb",
   },
 ];
 

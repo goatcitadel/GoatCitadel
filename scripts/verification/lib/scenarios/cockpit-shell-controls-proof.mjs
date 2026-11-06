@@ -1,10 +1,50 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir } from "node:fs/promises";
+import { retainOwnerReadDiagnostic } from "./cockpit-approval-mode-proof.mjs";
 import { fillNavigationGrantDraft, reviewNavigationDraft, assertNavigationDraftOwner } from "./cockpit-navigation-draft-proof.mjs";
 import { assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
 import { recordCockpitObserverRequest, assertCockpitObserverRequests } from "./cockpit-observer-requests.mjs";
 import { assertNativeShellPresence } from "./cockpit-native-presence-proof.mjs";
+import { selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
+
+export function projectShellGeometryDiagnostic(input) {
+  let gap = Boolean(input?.diagnosticGap);
+  const number = value => { if (!Number.isFinite(value) || Math.abs(value) > 100_000) { gap = true;return null; }return value; };
+  const rect = value => Object.fromEntries(["x", "y", "width", "height"].map(key => { const result = number(value?.[key]);if (["width", "height"].includes(key) && result !== null && result < 0) { gap = true;return [key, null]; }return [key, result]; }));
+  const result = { format: "shell-geometry-diagnostic.v1", stage: input?.stage === "inspector_resize" ? "inspector_resize" : "other" };
+  if (result.stage === "other") gap = true;
+  for (const key of ["outer", "body", "handle", "main", "rail", "container"]) result[key] = rect(input?.[key]);
+  result.styles = Object.fromEntries(["outerWidth", "bodyWidth", "borderLeftWidth", "borderRightWidth", "paddingLeft", "paddingRight"].map(key => [key, number(input?.styles?.[key])]));
+  result.styles.boxSizing = ["border-box", "content-box"].includes(input?.styles?.boxSizing) ? input.styles.boxSizing : "other";
+  if (result.styles.boxSizing === "other") gap = true;
+  for (const key of ["stateWidth", "viewportWidth", "viewportHeight", "dpr", "animationCount"]) result[key] = number(input?.[key]);
+  if (result.animationCount !== null && (!Number.isSafeInteger(result.animationCount) || result.animationCount < 0)) { result.animationCount = null;gap = true; }
+  if (result.dpr !== null && (result.dpr <= 0 || result.dpr > 16)) { result.dpr = null;gap = true; }
+  result.diagnosticGap = gap;return result;
+}
+export async function retainShellGeometryDiagnostic(input, filePath, options) {
+  try { return await retainOwnerReadDiagnostic(projectShellGeometryDiagnostic(input), filePath, options); }
+  catch { return { retained: false, writeFailure: true }; }
+}
+
+export async function captureShellGeometryDiagnostic(page, stage) {
+  try {
+    return await page.evaluate(stage => {
+      const outer = document.querySelector('aside[aria-label="Inspector"]');
+      const body = outer?.querySelector('[data-inspector-body="true"]');
+      const handle = outer?.querySelector('[aria-label="Resize inspector"]');
+      const rect = element => { if (!element) return null;const { x, y, width, height } = element.getBoundingClientRect();return { x, y, width, height }; };
+      const style = outer ? getComputedStyle(outer) : null, bodyStyle = body ? getComputedStyle(body) : null;
+      return { stage, outer: rect(outer), body: rect(body), handle: rect(handle), main: rect(document.getElementById("main-content")),
+        rail: rect(document.querySelector('[aria-label="Cockpit sidebar"]')), container: rect(outer?.parentElement),
+        styles: { outerWidth: parseFloat(style?.width), bodyWidth: parseFloat(bodyStyle?.width), borderLeftWidth: parseFloat(style?.borderLeftWidth),
+          borderRightWidth: parseFloat(style?.borderRightWidth), paddingLeft: parseFloat(bodyStyle?.paddingLeft), paddingRight: parseFloat(bodyStyle?.paddingRight), boxSizing: style?.boxSizing },
+        stateWidth: handle ? Number(handle.getAttribute("aria-valuenow")) : null, viewportWidth: window.innerWidth, viewportHeight: window.innerHeight, dpr: window.devicePixelRatio,
+        animationCount: document.getAnimations().filter(animation => animation.effect?.getTiming().iterations !== Infinity).length };
+    }, stage);
+  } catch { return { stage, diagnosticGap: true }; }
+}
 
 export function assertShellGeometry({ variant, viewportWidth, railWidth, inspectorWidth, mainBefore, mainDuring, overflow }) {
   assert.ok(overflow <= 1, "Shell overflowed its viewport.");
@@ -159,7 +199,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         await picker.getByRole("button", { name: "Close dialog", exact: true }).click(); await picker.waitFor({ state: "hidden" });
         await page.waitForFunction(label => (document.activeElement?.getAttribute("aria-label") ?? "").endsWith(label),
           variant === "mobile" ? "More areas and settings" : ", change Citadel and workspace");
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Safety", exact: true }).click();
+        await selectCockpitSettingsPage(page, { label: "Safety", href: "/settings/safety" });
         await page.getByRole("tab", { name: "Tools", exact: true }).click();
         const { field, value } = await fillNavigationGrantDraft(page), sourceSettingsUrl = page.url();
         await reviewNavigationDraft(page, () => openScope(target.workspaceId), "Cancel");
@@ -177,7 +217,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
         await capture("scope-changed");
         await openScope(source.workspaceId);
         await page.waitForFunction(id => window.localStorage.getItem("goatcitadel.ui.workspace_id.v1") === id, source.workspaceId);
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Safety", exact: true }).click();
+        await selectCockpitSettingsPage(page, { label: "Safety", href: "/settings/safety" });
         await page.getByRole("tab", { name: "Tools", exact: true }).click(); await field.waitFor();
         assertNavigationDraftOwner({ before, after: await read("/api/v1/tools/grants?limit=400"), writes, origin,
           current: await page.evaluate(() => performance.timeOrigin), retained: await field.inputValue(), expected: value });
@@ -204,11 +244,12 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
           originDraftRetained: true, explicitDraftDiscard: true, sameDocument: true, browserMutations: 0, blockingAxe: 0, overflow: 0,
           tabletOverlay: variant === "tablet", boundedKeyboardPointerResize: variant === "desktop", fixtureOnlyEmptySession: true }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
       } catch (error) {
-        const dir = path.join(context.artifactRoot, "diagnostics"); await mkdir(dir, { recursive: true });
-        const file = path.join(dir, `cockpit-shell-controls-${variant}-failure.json`);
-        await writeFile(file, JSON.stringify({ stage, evidence, writes, error: error instanceof Error ? error.stack ?? error.message : String(error) }, null, 2)); diagnostics.push(relativeToRun(context, file));
+        const file = path.join(context.artifactRoot, "diagnostics", `cockpit-shell-controls-${variant}-failure.json`);
+        const snapshot = page && !page.isClosed() ? await captureShellGeometryDiagnostic(page, stage === "rail keyboard and current inspector" ? "inspector_resize" : "other") : { diagnosticGap: true };
+        const retained = await retainShellGeometryDiagnostic(snapshot, file);
+        if (retained.retained) diagnostics.push(relativeToRun(context, file));
         if (page && !page.isClosed()) try { const dir = path.join(context.artifactRoot, "screenshots"); await mkdir(dir, { recursive: true }); const file = path.join(dir, `cockpit-shell-controls-${variant}-failure.png`); await page.screenshot({ path: file, fullPage: false }); screenshots.push(relativeToRun(context, file)); } catch { /* Preserve primary failure. */ }
-        return { status: "failed", error: `${stage}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`, metrics: { failedStage: stage }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
+        return { status: "failed", error: `${stage}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`, metrics: { failedStage: stage, diagnosticWriteFailure: retained.writeFailure }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
       } finally { await browserContext.close(); }
     });
   }

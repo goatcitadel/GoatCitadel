@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir, writeFile } from "node:fs/promises";
 import { runPersonalityEditorJourney } from "./cockpit-personality-editor-proof.mjs";
 
@@ -39,7 +40,7 @@ export async function runCockpitPersonalityProof({ context, browser, stack, cita
       let page;
       const screenshots = [];
       const diagnostics = [];
-      const writes = [];
+      const writes = [], presenceWrites = [];
       try {
         await browserContext.addInitScript((value) => {
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
@@ -49,7 +50,9 @@ export async function runCockpitPersonalityProof({ context, browser, stack, cita
         page = await browserContext.newPage();
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
-          if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")) {
+          const kind = classifyCockpitProofWrite(request.method(), pathname);
+          if (kind === "presence") presenceWrites.push({ method: request.method(), pathname });
+          if (kind === "owner") {
             writes.push({ method: request.method(), pathname, body: request.postDataJSON() });
           }
         });
@@ -131,7 +134,7 @@ export async function runCockpitPersonalityProof({ context, browser, stack, cita
         assert.equal(afterSettings.llm?.activeModel, beforeSettings.llm?.activeModel);
         await panel.scrollIntoViewIfNeeded(); const overflow = await audit("stale-guard");
         const editorEvidence = await runPersonalityEditorJourney({ page, panel, readCatalog, api, audit });
-        return { status: "passed", metrics: { cancelledReviewMutations: 0, browserMutations: writes.length,
+        return { status: "passed", metrics: { notificationPresenceWrites: presenceWrites.length, cancelledReviewMutations: 0, browserMutations: writes.length,
           savedDefaultConfirmed: true, staleMutationPrevented: true, originalDefaultRestored: true,
           ...editorEvidence, modelRouteUnchanged: true, blockingAxe: 0, overflow }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
       } catch (error) {

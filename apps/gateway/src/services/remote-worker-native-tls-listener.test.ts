@@ -618,6 +618,8 @@ describe("remote worker native TLS listener", () => {
         }),
       });
       const database = createDatabase({ dbPath: ":memory:" });
+      const pendingAdmissions = new Set<Promise<unknown>>();
+      let listener: Awaited<ReturnType<typeof startRemoteWorkerNativeTlsListener>> | undefined;
       try {
         const repository = new RemoteWorkerAdmissionRepository(database);
         const evidenceSigner = generateKeyPairSync("ed25519");
@@ -713,11 +715,16 @@ describe("remote worker native TLS listener", () => {
           }),
         });
         expect(handler).toBeTypeOf("function");
-        const listener = await startRemoteWorkerNativeTlsListener(runtimeConfig, async (requestValue) => {
+        listener = await startRemoteWorkerNativeTlsListener(runtimeConfig, async (requestValue) => {
           serverExporters.push(requestValue.transportIdentity.tlsExporterSha256);
-          return await handler(requestValue);
+          const pending = handler(requestValue);
+          pendingAdmissions.add(pending);
+          try {
+            return await pending;
+          } finally {
+            pendingAdmissions.delete(pending);
+          }
         });
-        openHandles.push(listener);
         const requestFixture = Object.freeze({
           bootstrapSecret,
           bootstrapId: bootstrap.bootstrapId,
@@ -883,7 +890,13 @@ describe("remote worker native TLS listener", () => {
           }).resolveCurrent({ registryWorkspaceId: "default", workerId: bootstrap.workerId, workerGeneration: 1 }),
         ).rejects.toThrow("Current protected remote worker admission authority is unavailable.");
       } finally {
-        database.close();
+        try {
+          await listener?.close();
+        } finally {
+          // Listener close can settle before a cancelled handler releases its trust read.
+          await Promise.allSettled(pendingAdmissions);
+          database.close();
+        }
       }
     },
     90_000,

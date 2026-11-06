@@ -1,6 +1,147 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
 import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
+import { verificationErrorDiagnostic, writeJson } from "../shared.mjs";
+const requireCanonicalContract = createRequire(import.meta.url);
+// Keep synchronous transport helpers canonical without loading build output at registry startup.
+const startupReadContract = () => requireCanonicalContract("../../../../packages/contracts/dist/gateway-startup-reads.js");
+
+const parseInboxJson = text => { try { return JSON.parse(text); } catch { throw new Error("Invalid Inbox transport JSON"); } };
+const exactInboxMembership = url => {
+  assert.ok(url.searchParams.getAll("workspaceId").length === 1 && url.searchParams.get("workspaceId") === "default", "Inbox transport has foreign or ambiguous workspace membership");
+  assert.ok([...url.searchParams.keys()].every(key => key === "workspaceId"), "Inbox transport has unexpected query fields");
+};
+/** Select the genuine owner by its original request position, never by response content. */
+export function matchInboxOwnerRead(request) {
+  if (request.method() !== "GET") return null;
+  const url = new URL(request.url());
+  if (url.pathname === "/api/v1/inbox") { exactInboxMembership(url); return { transport: "direct", index: 0, count: 1 }; }
+  if (url.pathname !== "/api/v1/startup-reads") return null;
+  const { isStartupReadRequest, STARTUP_READ_BATCH_LIMIT, STARTUP_READ_BATCH_QUERY_LIMIT } = startupReadContract();
+  assert.ok(Buffer.byteLength(url.pathname + url.search, "utf8") <= STARTUP_READ_BATCH_QUERY_LIMIT + 100, "Startup read query exceeds its contract bound");
+  assert.ok(url.searchParams.getAll("reads").length === 1 && [...url.searchParams.keys()].every(key => key === "reads"), "Invalid startup read query shape");
+  const rows = parseInboxJson(url.searchParams.get("reads"));
+  assert.ok(Array.isArray(rows) && rows.length > 0 && rows.length <= STARTUP_READ_BATCH_LIMIT && rows.every(isStartupReadRequest), "Invalid startup read membership");
+  const matches = [];
+  rows.forEach((row, index) => { const owner = new URL(row.path, "http://startup-read.invalid"); if (owner.pathname === "/api/v1/inbox") { exactInboxMembership(owner); matches.push(index); } });
+  assert.ok(matches.length <= 1, "Duplicate Inbox owner membership");
+  return matches.length ? { transport: "startup_batch", index: matches[0], count: rows.length } : null;
+}
+export async function readInboxOwnerResult(request, response) {
+  const membership = matchInboxOwnerRead(request);
+  if (!membership) return null;
+  assert.equal(response.status(), 200);
+  let body;
+  try { body = await response.json(); } catch { throw new Error("Invalid Inbox transport JSON"); }
+  if (membership.transport === "startup_batch") {
+    const { STARTUP_READ_BATCH_BODY_LIMIT } = startupReadContract();
+    assert.ok(body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).every(key => key === "items") && Array.isArray(body.items) && body.items.length === membership.count, "Startup response does not match original membership");
+    const headers = new Set(["content-type", "cache-control", "etag", "x-goatcitadel-correlation-id"]);
+    assert.ok(body.items.every(row => row && typeof row === "object" && !Array.isArray(row) &&
+      Object.keys(row).every(key => ["status", "bodyText", "headers", "directReadRequired"].includes(key)) &&
+      Number.isInteger(row.status) && row.status >= 200 && row.status <= 599 && typeof row.bodyText === "string" && Buffer.byteLength(row.bodyText, "utf8") <= STARTUP_READ_BATCH_BODY_LIMIT &&
+      row.headers && typeof row.headers === "object" && !Array.isArray(row.headers) && Object.entries(row.headers).every(([key, value]) => headers.has(key) && typeof value === "string" && !/[\r\n]/u.test(value)) &&
+      (row.directReadRequired === undefined || row.directReadRequired === true)), "Invalid startup owner response envelope");
+    const selected = body.items[membership.index];
+    assert.ok(selected.status === 200 && selected.directReadRequired === undefined, "Inbox owner result is not an authentic successful snapshot");
+    body = parseInboxJson(selected.bodyText);
+  }
+  assert.ok(body && typeof body === "object" && body.authority === "derived_projection" && body.workspaceId === "default" && Array.isArray(body.items), "Inbox snapshot authority or workspace is unavailable");
+  return body;
+}
+export function createHeldInboxOwnerRoute({ isHeld, onStart, onReady, gate, isClosed, record = () => {} }) {
+  return async route => {
+    const request = route.request();
+    const membership = matchInboxOwnerRead(request);
+    if (!membership || isHeld()) return route.continue();
+    record({ kind: "route_hit", owner: "inbox", method: "GET", scope: "expected", transport: membership.transport });
+    onStart();
+    let response;
+    try { response = await route.fetch(); await readInboxOwnerResult(request, response); record({ kind: "fetch_result", owner: "inbox", method: "GET", status: response.status(), transport: membership.transport }); }
+    catch (error) { record({ kind: "fetch_failed", owner: "inbox", method: "GET", transport: membership.transport }); throw error; }
+    onReady();
+    await gate;
+    if (!isClosed()) await route.fulfill({ response });
+  };
+}
+
+const boundedCount = value => Number.isSafeInteger(value) && value >= 0 ? Math.min(10_000, value) : null;
+export function createOwnerReadDiagnostic() {
+  const events = [];
+  const counts = Object.fromEntries(["request", "response", "request_failed", "route_hit", "fetch_result", "fetch_failed", "stream_ready", "other"].map(kind => [kind, 0]));
+  let dropped = 0, gap = false, ui = null, device = null;
+  return {
+    record(input) {
+      const kind = Object.hasOwn(counts, input?.kind) ? input.kind : "other";
+      counts[kind] = Math.min(10_000, counts[kind] + 1);
+      if (events.length >= 32) { dropped = Math.min(10_000, dropped + 1); gap = true; return; }
+      events.push({
+        kind,
+        owner: ["inbox", "device_grants", "current_access"].includes(input?.owner) ? input.owner : "other",
+        method: ["GET", "POST", "PUT", "PATCH", "DELETE"].includes(input?.method) ? input.method : "other",
+        transport: ["direct", "startup_batch"].includes(input?.transport) ? input.transport : "other",
+        scope: ["expected", "different", "missing", "not_applicable"].includes(input?.scope) ? input.scope : "missing",
+        status: Number.isSafeInteger(input?.status) && input.status >= 100 && input.status <= 599 ? input.status : null,
+        queryShape: ["workspace_only", "workspace_and_other", "view_all", "other", "not_applicable"].includes(input?.queryShape) ? input.queryShape : "not_applicable",
+        elapsedMs: Number.isSafeInteger(input?.elapsedMs) && input.elapsedMs >= 0 ? Math.min(120_000, input.elapsedMs) : null,
+      });
+    },
+    unavailable() { gap = true; },
+    ui(value) {
+      ui = { selectedScope: ["expected", "different", "missing"].includes(value?.selectedScope) ? value.selectedScope : "missing" };
+      for (const key of ["expectedSectionPresent", "scopeTriggerPresent", "scopeBusy", "loadingVisible", "paginationVisible", "streamReady", "heldReadStarted", "heldSnapshotReady"])
+        ui[key] = typeof value?.[key] === "boolean" ? value[key] : null;
+      for (const key of ["statusCount", "alertCount", "visibleDeviceRows", "pendingResponses"]) ui[key] = boundedCount(value?.[key]);
+    },
+    device(value) {
+      device = {};
+      device.total = boundedCount(value?.total);
+      for (const key of ["subjectIndex", "peerIndex"]) device[key] = value?.[key] === -1 ? -1 : boundedCount(value?.[key]);
+      for (const key of ["subjectIsCurrent", "peerIsCurrent", "currentGrantPresent"]) device[key] = typeof value?.[key] === "boolean" ? value[key] : null;
+    },
+    snapshot() { return { events: events.map(event => ({ ...event })), counts: { ...counts }, dropped, diagnosticGap: gap || ui === null,
+      ui: ui && { ...ui }, device: device && { ...device } }; },
+  };
+}
+
+/** Redact before the existing atomic writer; instrumentation cannot replace
+ * the original failed outcome or silently report a successful capture. */
+export async function retainOwnerReadDiagnostic(snapshot, filePath, { redact = verificationErrorDiagnostic, write = writeJson } = {}) {
+  try {
+    const redacted = await redact(JSON.stringify(snapshot));
+    const suppressed = typeof redacted !== "string" || redacted.startsWith("Verification diagnostic suppressed:");
+    await write(filePath, { format: "owner-read-diagnostic.v1", diagnosticGap: Boolean(snapshot.diagnosticGap) || suppressed,
+      redactionSuppressed: suppressed, redactedEvidence: suppressed ? "Canonical diagnostic redaction unavailable." : redacted });
+    return { retained: true, writeFailure: false };
+  } catch { return { retained: false, writeFailure: true }; }
+}
+
+export function withOwnerDiagnosticResult(result, diagnosticWriteFailure) {
+  return { ...result, metrics: { ...result.metrics, diagnosticWriteFailure } };
+}
+
+export async function captureOwnerReadUi(page, kind, diagnostic, gate = {}) {
+  try {
+    const ui = await page.evaluate(({ kind }) => {
+      const visible = element => Boolean(element && element.getBoundingClientRect().width > 0 && element.getBoundingClientRect().height > 0);
+      const scope = window.localStorage.getItem("goatcitadel.ui.workspace_id.v1");
+      const scopeTrigger = document.querySelector('[aria-label$=", change Citadel and workspace"]');
+      const panel = kind === "device" ? document.getElementById("device-access") : document.querySelector("main");
+      return { selectedScope: scope === "default" ? "expected" : scope ? "different" : "missing",
+        scopeTriggerPresent: visible(scopeTrigger), scopeBusy: scopeTrigger?.getAttribute("aria-busy") === "true",
+        expectedSectionPresent: kind === "device" ? visible(panel) : location.pathname === "/inbox",
+        loadingVisible: [...document.querySelectorAll('[role="status"]')].some(element => visible(element) &&
+          ["Loading device grants…", "Loading Inbox…", "Loading inbox…"].includes(element.textContent?.trim())),
+        statusCount: document.querySelectorAll('[role="status"]').length,
+        alertCount: document.querySelectorAll('[role="alert"]').length,
+        visibleDeviceRows: kind === "device" && panel ? [...panel.querySelectorAll("li")].filter(visible).length : 0,
+        paginationVisible: kind === "device" && panel ? [...panel.querySelectorAll("button")].some(element => visible(element) && element.textContent?.startsWith("Show more devices (")) : false,
+      };
+    }, { kind });
+    diagnostic.ui({ ...ui, ...gate });
+  } catch { diagnostic.unavailable(); }
+}
 
 const RULE_LABELS = {
   approve_all: "Ask every time",
@@ -154,6 +295,18 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
         let releaseHeldInboxRead = () => {};
         const screenshots = [];
         const settingsTraffic = [];
+        const ownerDiagnostic = createOwnerReadDiagnostic(), diagnosticStartedAt = Date.now();
+        const diagnostics = [];
+        let diagnosticWriteFailure = false;
+        let streamReady = false, heldInboxRead = false, heldInboxReady = false;
+        const retainDiagnostic = async () => {
+          if (approvalPage && !approvalPage.isClosed()) await captureOwnerReadUi(approvalPage, "inbox", ownerDiagnostic,
+            { streamReady, heldReadStarted: heldInboxRead, heldSnapshotReady: heldInboxReady });
+          const diagnosticPath = path.join(context.artifactRoot, "diagnostics", `approval-mode-owner-${variant}.json`);
+          const retained = await retainOwnerReadDiagnostic(ownerDiagnostic.snapshot(), diagnosticPath);
+          diagnosticWriteFailure ||= retained.writeFailure;
+          if (retained.retained && !diagnostics.length) diagnostics.push(relativeToRun(context, diagnosticPath));
+        };
         try {
           await browserContext.addInitScript((value) => {
             window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
@@ -294,17 +447,29 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           approvalPage.on("request", (request) => approvalTraffic.record(request));
           const stream = await browserContext.newCDPSession(approvalPage);
           await stream.send("Network.enable");
-          let streamReady = false;
           const signals = [];
           const inboxReads = [];
           const requestStarts = new WeakMap();
           approvalPage.on("request", (request) => {
             requestStarts.set(request, Date.now());
+            try {
+              const membership = matchInboxOwnerRead(request);
+              if (membership) ownerDiagnostic.record({ kind: "request", owner: "inbox", method: request.method(), scope: "expected",
+                transport: membership.transport, queryShape: membership.transport === "direct" ? "workspace_only" : "other", elapsedMs: Date.now() - diagnosticStartedAt });
+            } catch { ownerDiagnostic.unavailable(); }
+          });
+          approvalPage.on("requestfailed", request => {
+            try {
+              const membership = matchInboxOwnerRead(request);
+              if (membership) ownerDiagnostic.record({ kind: "request_failed", owner: "inbox", method: request.method(), transport: membership.transport, elapsedMs: Date.now() - diagnosticStartedAt });
+            } catch { ownerDiagnostic.unavailable(); }
           });
           approvalPage.on("response", async (response) => {
-            if (new URL(response.url()).pathname !== "/api/v1/inbox") return;
             try {
-              const body = await response.json();
+              const membership = matchInboxOwnerRead(response.request());
+              if (!membership) return;
+              ownerDiagnostic.record({ kind: "response", owner: "inbox", method: response.request().method(), status: response.status(), transport: membership.transport, elapsedMs: Date.now() - diagnosticStartedAt });
+              const body = await readInboxOwnerResult(response.request(), response);
               inboxReads.push({
                 status: response.status(),
                 startedAt: requestStarts.get(response.request()),
@@ -316,11 +481,14 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
                   .map((entry) => ({ id: entry.id, title: entry.title, source: entry.source })),
               });
             } catch {
-              /* Diagnostic evidence must not affect the journey. */
+              ownerDiagnostic.unavailable(); // Preserve the journey outcome; never retain a raw transport failure.
             }
           });
           stream.on("Network.eventSourceMessageReceived", ({ eventName, data }) => {
-            if (eventName === "stream-ready") streamReady = true;
+            if (eventName === "stream-ready") {
+              streamReady = true;
+              ownerDiagnostic.record({ kind: "stream_ready", owner: "inbox", elapsedMs: Date.now() - diagnosticStartedAt });
+            }
             if (eventName !== "message") return;
             try {
               const event = JSON.parse(data);
@@ -366,26 +534,21 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           });
           // Hold one authentic owner snapshot captured before the approval. The live
           // notification must dispatch its own read, not share this pending HTTP GET.
-          let heldInboxRead = false,
-            heldInboxReady = false;
           const heldInboxGate = new Promise((resolve) => {
             releaseHeldInboxRead = resolve;
           });
-          await approvalPage.route("**/api/v1/inbox?workspaceId=default", async (route) => {
-            if (heldInboxRead || route.request().method() !== "GET") return route.continue();
-            heldInboxRead = true;
-            const response = await route.fetch();
-            assert.equal(response.status(), 200);
-            heldInboxReady = true;
-            await heldInboxGate;
-            if (!approvalPage.isClosed()) await route.fulfill({ response });
-          });
+          await approvalPage.route(url => ["/api/v1/inbox", "/api/v1/startup-reads"].includes(url.pathname), createHeldInboxOwnerRoute({
+            isHeld: () => heldInboxRead, onStart: () => { heldInboxRead = true; }, onReady: () => { heldInboxReady = true; },
+            gate: heldInboxGate, isClosed: () => approvalPage.isClosed(),
+            record: event => ownerDiagnostic.record({ ...event, elapsedMs: Date.now() - diagnosticStartedAt }),
+          }));
           await approvalPage.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox?shell=cockpit"), {
             waitUntil: "domcontentloaded",
           });
           await approvalPage.waitForSelector('[data-cockpit-ready="true"]');
           for (let attempt = 0; (!streamReady || !heldInboxReady) && attempt < 100; attempt += 1)
             await new Promise((resolve) => setTimeout(resolve, 100));
+          await retainDiagnostic();
           assert.equal(
             streamReady,
             true,
@@ -625,7 +788,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
             [`POST /api/v1/approvals/${approvalId}/resolve`],
           );
           await approvalPage.close();
-          return {
+          return withOwnerDiagnosticResult({
             status: "passed",
             metrics: {
               savedRevision: saved.body.revision,
@@ -652,9 +815,10 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
               blockingAxe: 0,
               overflow,
             },
-            artifacts: emptyArtifacts({ screenshots }),
-          };
+            artifacts: emptyArtifacts({ screenshots, diagnostics }),
+          }, diagnosticWriteFailure);
         } catch (error) {
+          await retainDiagnostic();
           for (const [target, suffix] of [
             [page, "failure"],
             [approvalPage, "approval-failure"],
@@ -670,12 +834,12 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
               /* Keep the first failure when screenshot capture is unavailable. */
             }
           }
-          return {
+          return withOwnerDiagnosticResult({
             status: "failed",
             error: error instanceof Error ? (error.stack ?? error.message) : String(error),
             metrics: { settingsTraffic },
-            artifacts: emptyArtifacts({ screenshots }),
-          };
+            artifacts: emptyArtifacts({ screenshots, diagnostics }),
+          }, diagnosticWriteFailure);
         } finally {
           releaseHeldInboxRead();
           await browserContext.close();

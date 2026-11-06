@@ -1,3 +1,11 @@
+import { useLayoutEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayCallerScopeRevision,
+  getGatewayAccessRevision,
+  subscribeGatewayCallerScope,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
@@ -35,7 +43,53 @@ import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
 import { useHealthDigestStatus } from "./use-health-digest";
 import { HEALTH_TONE_ICON, presentCockpitStream } from "./stream-status";
-import { Tooltip } from "../ui/Tooltip";
+
+type StreamRuntime = typeof import("./CollapsedStreamIndicator");
+let streamRuntimeLoad: Promise<StreamRuntime> | undefined;
+const loadStreamIndicator = () => (streamRuntimeLoad ??= import("./CollapsedStreamIndicator").catch((cause) => {
+  streamRuntimeLoad = undefined;
+  throw cause;
+}));
+
+// A keyed owner keeps navigation and authority changes from inheriting pending focus.
+function DeferredStreamIndicator({ label, children }: { label: string; children: ReactNode }) {
+  const [runtime, setRuntime] = useState<StreamRuntime | null>(null);
+  const host = useRef<HTMLSpanElement>(null);
+  const fallback = useRef<HTMLSpanElement | null>(null);
+  const restore = useRef(false);
+  useLayoutEffect(() => {
+    let current = true;
+    void loadStreamIndicator().then((loaded) => {
+      if (current) setRuntime(loaded);
+    }, () => { /* The labelled fallback remains usable after a code-load failure. */ });
+    return () => { current = false; };
+  }, []);
+  useLayoutEffect(() => {
+    if (runtime && restore.current) {
+      host.current?.querySelector<HTMLElement>('[role="img"]')?.focus({ preventScroll: true });
+      restore.current = false;
+    }
+  }, [runtime]);
+  const Indicator = runtime?.CollapsedStreamIndicator;
+  return (
+    <span ref={host} className="inline-flex rounded-sm">
+      {Indicator ? <Indicator label={label}>{children}</Indicator> : (
+        <span
+          ref={(node) => {
+            if (!node) restore.current = document.activeElement === fallback.current;
+            fallback.current = node;
+          }}
+          tabIndex={0}
+          role="img"
+          aria-label={label}
+          className="inline-flex rounded-sm"
+        >
+          {children}
+        </span>
+      )}
+    </span>
+  );
+}
 
 const AREA_ICONS = {
   chat: MessageSquare,
@@ -59,6 +113,8 @@ export function Sidebar({
   collapsed?: boolean;
   onToggleCollapsed?: () => void;
 }) {
+  const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScopeRevision, getGatewayCallerScopeRevision);
+  const access = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, getGatewayAccessRevision);
   const shellSwitch = useCockpitShellSwitch();
   const { area: current, pathname, search, hash, navigate } = useCockpitRoute();
   const preload = useCockpitPreload();
@@ -189,11 +245,12 @@ export function Sidebar({
       >
         {collapsed ? (
           // The collapsed rail hides the label, so the icon is focusable and names itself in a tooltip.
-          <Tooltip label={stream.label}>
-            <span tabIndex={0} role="img" aria-label={stream.label} className="inline-flex rounded-sm">
-              <StreamIcon aria-hidden="true" className={`size-4 ${streamText}`} />
-            </span>
-          </Tooltip>
+          <DeferredStreamIndicator
+            key={JSON.stringify([getGatewayApiBaseUrl(), caller, access, activeCitadelId, activeWorkspaceId, pathname, search, hash])}
+            label={stream.label}
+          >
+            <StreamIcon aria-hidden="true" className={`size-4 ${streamText}`} />
+          </DeferredStreamIndicator>
         ) : (
           <>
             <StreamIcon aria-hidden="true" className={`size-4 shrink-0 ${streamText}`} />

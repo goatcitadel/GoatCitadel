@@ -8,6 +8,7 @@ import {
 } from "./remote-worker-assignment-execution-protocol-service.js";
 import type { RemoteWorkerNativeHandlerRequest } from "./remote-worker-native-tls-listener.js";
 import { REMOTE_WORKER_PROTOCOL_MAX_BODY_BYTES } from "./remote-worker-protocol.js";
+import { RemoteWorkerAssignmentExecutionProtocolError } from "./remote-worker-assignment-execution-validators.js";
 
 const transportIdentity = Object.freeze({
   source: "native_mtls" as const,
@@ -119,6 +120,26 @@ describe("remote worker assignment execution native handler", () => {
       frames: [],
     } as never);
     await expect(handler(request())).resolves.toStrictEqual(rejected);
+  });
+
+  it("keeps classified, unclassified and malformed internal diagnostics off the identical fixed 403 wire", async () => {
+    const owner = protocol();
+    const handler = createRemoteWorkerAssignmentExecutionNativeRequestHandler({ executionProtocol: owner.port });
+    const fixed = { statusCode: 403, headers: { "content-type": "application/json; charset=utf-8" },
+      body: canonicalJsonString({ error: "REMOTE_WORKER_ASSIGNMENT_EXECUTION_REJECTED" }) };
+    for (const diagnostic of [undefined,
+      { stage: "artifact_admission", reason: "lease_parent_dispatch_mismatch" },
+      { stage: "artifact_admission", reason: "other" },
+      { stage: "synthetic-secret", reason: "synthetic-secret", token: "synthetic-secret" },
+    ]) {
+      owner.execute.mockRejectedValueOnce(Reflect.construct(RemoteWorkerAssignmentExecutionProtocolError,
+        ["fixed internal refusal", diagnostic]));
+      const response = await handler(request(REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission.rawPath));
+      expect(response).toStrictEqual(fixed);
+      expect(response?.body).not.toContain("diagnostic");
+      expect(response?.body).not.toContain("synthetic-secret");
+    }
+    expect(owner.execute).toHaveBeenCalledTimes(4);
   });
 
   it("refuses composition when the execution protocol owner is unavailable", () => {

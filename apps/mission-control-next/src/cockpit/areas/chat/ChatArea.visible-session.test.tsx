@@ -383,6 +383,12 @@ describe("visible Chat session", () => {
 
 it("contains native compact side chat in the positioned conversation host with bound draft/actions", async () => {
   const surface = input("parent");
+  surface.activeSessionSurfaceProps = {
+    selectedSessionId: "parent",
+    sessionTitle: "Parent",
+    notices: [],
+    thread: { sessionId: "parent", turns: [] },
+  } as unknown as MissionThreadedActiveSessionSurfaceProps;
   const onDraftChange = vi.fn();
   const onSend = vi.fn();
   const onClose = vi.fn();
@@ -403,8 +409,20 @@ it("contains native compact side chat in the positioned conversation host with b
     onClose,
   };
   await act(async () => root.render(view(surface)));
+  const conversationHost = container.querySelector('[data-testid="transcript"]')!.parentElement!.parentElement!;
+  expect(conversationHost.classList.contains("relative")).toBe(true);
+  expect(conversationHost.classList.contains("flex-col")).toBe(true);
+  await act(async () => { await vi.dynamicImportSettled(); });
+  await vi.waitFor(() =>
+    expect(container.querySelector('[data-testid="btw-side-chat-panel"]')).not.toBeNull(),
+  );
   const panel = container.querySelector('[data-testid="btw-side-chat-panel"]')!;
-  expect(panel.parentElement?.classList.contains("relative")).toBe(true);
+  // The lazy leaf's static retention wrapper must not become its containing block.
+  expect(panel.parentElement?.parentElement).toBe(conversationHost);
+  expect(panel.parentElement?.classList.contains("relative")).toBe(false);
+  expect(panel.parentElement?.classList.contains("absolute")).toBe(false);
+  expect(panel.parentElement?.classList.contains("fixed")).toBe(false);
+  expect(panel.closest(".relative")).toBe(conversationHost);
   expect(panel.closest('section[aria-label="Chat"]')).not.toBeNull();
   expect(panel.querySelector("textarea")?.value).toBe("Side draft");
   await act(async () => (panel.querySelector('[aria-label="Send side chat message"]') as HTMLButtonElement).click());

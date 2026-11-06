@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 import { canonicalJsonString } from "../../../../packages/contracts/dist/index.js";
 
@@ -70,6 +70,7 @@ import {
 test("verification entrypoints load before contracts build output exists", async () => {
   const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-verification-bootstrap-"));
   const loader = path.join(root, "without-built-contracts.mjs");
+  const requireBlocker = path.join(root, "without-built-contracts.cjs");
   try {
     await fs.writeFile(
       loader,
@@ -83,12 +84,23 @@ test("verification entrypoints load before contracts build output exists", async
       ].join("\n"),
       "utf8",
     );
+    await fs.writeFile(requireBlocker, [
+      "const Module = require('node:module');",
+      "const originalLoad = Module._load;",
+      "Module._load = function (request, parent, isMain) {",
+      "  const resolved = Module._resolveFilename(request, parent, isMain);",
+      "  if (String(resolved).split(String.fromCharCode(92)).join('/').includes('/packages/contracts/dist/'))",
+      "    throw new Error('Contracts build output is unavailable during verification startup.');",
+      "  return originalLoad.apply(this, arguments);",
+      "};",
+    ].join("\n"), "utf8");
     const blocked = new URL("../../../../packages/contracts/dist/index.js", import.meta.url).href;
     assert.throws(
       () =>
         execFileSync(
           process.execPath,
           [
+            "--require", requireBlocker,
             "--experimental-loader",
             pathToFileURL(loader).href,
             "--input-type=module",
@@ -99,10 +111,20 @@ test("verification entrypoints load before contracts build output exists", async
         ),
       (error) => error.status === 1 && error.stderr.includes("Contracts build output is unavailable"),
     );
+    const requireTarget = fileURLToPath(new URL("../../../../packages/contracts/dist/gateway-startup-reads.js", import.meta.url));
+    assert.throws(
+      () => execFileSync(process.execPath, [
+        "--require", requireBlocker,
+        "--input-type=module", "-e",
+        `const {createRequire}=await import('node:module'); createRequire(${JSON.stringify(import.meta.url)})(${JSON.stringify(requireTarget)});`,
+      ], { encoding: "utf8", timeout: 30_000 }),
+      (error) => error.status === 1 && error.stderr.includes("Contracts build output is unavailable"),
+    );
     const entry = new URL("../scenarios.mjs", import.meta.url).href;
     const output = execFileSync(
       process.execPath,
       [
+        "--require", requireBlocker,
         "--experimental-loader",
         pathToFileURL(loader).href,
         "--input-type=module",

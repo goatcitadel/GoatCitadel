@@ -13,6 +13,7 @@ import {
   RemoteWorkerAssignmentExecutionProtocolService,
   type RemoteWorkerAssignmentExecutionProtocolRequest,
   type RemoteWorkerAssignmentExecutionProtocolResponse,
+  type RemoteWorkerAssignmentExecutionStorePort,
   type RemoteWorkerInferenceExchangeOwnerPort,
   type RemoteWorkerSettlementSubmissionOwnerPort,
 } from "./remote-worker-assignment-execution-protocol-service.js";
@@ -104,7 +105,8 @@ export interface RemoteWorkerAssignmentRuntimeCompositionDependencies {
   readonly admissionStore: RemoteWorkerCurrentRuntimeCredentialStorePort &
     RemoteWorkerProtectedAdmissionAuthorityStorePort;
   readonly meshAdmissions: RemoteWorkerAssignmentMeshAuthorityPort & RemoteWorkerAssignmentMeshAdmissionPort;
-  readonly assignments: RemoteWorkerAssignmentProtocolStorePort & RemoteWorkerAssignmentDispatchStorePort;
+  readonly assignments: RemoteWorkerAssignmentProtocolStorePort & RemoteWorkerAssignmentDispatchStorePort &
+    RemoteWorkerAssignmentExecutionStorePort;
   readonly nonceConsumer: RemoteWorkerDurableNonceConsumePort;
   /**
    * Optional routes 11-12 inner owners. Text-inference governance, spending,

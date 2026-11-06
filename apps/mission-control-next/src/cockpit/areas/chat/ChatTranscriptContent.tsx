@@ -29,8 +29,7 @@ import type {
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
 import { ChatCapabilitySuggestionLine } from "./ChatCapabilitySuggestionLine";
-import { ChatCodeModeRequestCard } from "./ChatCodeModeRequestCard";
-import { ChatBrowserErrandCards } from "./ChatBrowserErrandCard";
+import { DeferredCodeModeRequestCard, DeferredBrowserErrandCards } from "./DeferredChatLeaves";
 import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
 import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
@@ -224,12 +223,12 @@ export const Turn = memo(function Turn({
         />
       ) : null}
       {/* Its own row, not inside the reply: the request waits for the operator before any reply text exists. */}
-      <ChatCodeModeRequestCard
+      <DeferredCodeModeRequestCard
         turn={turn}
         workspaceId={actions.workspaceId}
         onRefreshThread={actions.onRefreshThread}
       />
-      <ChatBrowserErrandCards toolRuns={turn.toolRuns} />
+      <DeferredBrowserErrandCards toolRuns={turn.toolRuns} />
       {actions.onCapabilitySuggestionAction && actions.onDismissCapabilitySuggestion ? (
         <ChatCapabilitySuggestionLine
           suggestions={capabilitySuggestions}

@@ -360,6 +360,85 @@ describe("desktop shell bootstrap", () => {
     expect(tauriMocks.invoke).not.toHaveBeenCalled();
   });
 
+
+  for (const terminal of ["stopped", "stop-failed", "restarted"] as const) {
+    it("blocks Retry during pending stop and recovers after " + terminal, async () => {
+      vi.useFakeTimers();
+      const listeners = new Map<string, (event?: { payload?: unknown }) => void>();
+      tauriMocks.listen.mockImplementation((name: string, callback: (event?: { payload?: unknown }) => void) => {
+        listeners.set(name, callback);
+        return Promise.resolve(() => undefined);
+      });
+      let launchCount = 0;
+      let resolveRetry!: (status: RuntimeStatus) => void;
+      let resolveRead!: (status: RuntimeStatus) => void;
+      tauriMocks.invoke.mockImplementation((command: string) => {
+        if (command === "launch_runtime") {
+          launchCount++;
+          if (launchCount === 1) return Promise.resolve(createRuntimeStatus());
+          return new Promise<RuntimeStatus>((resolve) => { resolveRetry = resolve; });
+        }
+        if (command === "read_runtime_status") {
+          return new Promise<RuntimeStatus>((resolve) => { resolveRead = resolve; });
+        }
+        throw new Error("Unexpected native command in pending-stop regression");
+      });
+      await import("./main.js");
+      await flushPromises();
+      expect(launchCount).toBe(1);
+      const stopping = listeners.get("desktop://runtime-stopping");
+      expect(stopping).toBeTypeOf("function");
+      stopping!(); // Native stop remains pending: no terminal event yet.
+      expect(element("status-copy").textContent).toBe("Stopping runtime...");
+      const refresh = listeners.get("desktop://runtime-status-requested");
+      expect(refresh).toBeTypeOf("function");
+      refresh!();
+      await flushPromises();
+      expect(readRuntimeStatusCalls()).toHaveLength(0);
+      element("retry-button").click();
+      await flushPromises();
+      expect(launchCount).toBe(1); // Baseline dispatches a held second launch here.
+      expect(element("mission-control-frame").classList.contains("is-ready")).toBe(false);
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(readRuntimeStatusCalls()).toHaveLength(0);
+      const complete = listeners.get("desktop://runtime-" + terminal);
+      expect(complete).toBeTypeOf("function");
+      if (terminal === "stopped") {
+        complete!({ payload: createRuntimeStatus({ status: "stopped", readiness: { gateway: false, ui: false } }) });
+        expect(element("status-copy").textContent).toBe("Runtime stopped.");
+      } else if (terminal === "stop-failed") {
+        complete!({ payload: { message: "Synthetic stop refusal: external_override" } });
+        await flushPromises();
+        expect(element("desktop-toast").textContent).toContain("external_override");
+        expect(readRuntimeStatusCalls()).toHaveLength(1);
+        resolveRead(createRuntimeStatus({ status: "degraded", readiness: { gateway: true, ui: false } }));
+        await flushPromises();
+        await flushPromises();
+        expect(element("status-copy").textContent).not.toBe("Runtime stopped.");
+      } else {
+        complete!();
+        await flushPromises();
+        expect(readRuntimeStatusCalls()).toHaveLength(1);
+        resolveRead(createRuntimeStatus({ targetUrl: "http://127.0.0.1:5173/fresh-restart" }));
+        await flushPromises();
+        await flushPromises();
+        expect(frameElement().src).toBe("http://127.0.0.1:5173/fresh-restart");
+        expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+        expect(launchCount).toBe(1); // Native restart already owns the launch.
+        return;
+      }
+      // Terminal stop/refusal releases the fence; manual recovery still works.
+      expect(element("recovery-actions").classList.contains("is-hidden")).toBe(false);
+      element("retry-button").click();
+      await flushPromises();
+      expect(launchCount).toBe(2);
+      resolveRetry(createRuntimeStatus({ targetUrl: "http://127.0.0.1:5173/fresh-retry" }));
+      await flushPromises();
+      expect(frameElement().src).toBe("http://127.0.0.1:5173/fresh-retry");
+      expect(element("mission-control-frame").classList.contains("is-ready")).toBe(true);
+    });
+  }
+
   it("retries launch from the shell button", async () => {
     tauriMocks.invoke
       .mockResolvedValueOnce(createRuntimeStatus({ status: "degraded" }))

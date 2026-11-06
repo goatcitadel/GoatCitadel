@@ -491,6 +491,8 @@ function installBrowserGlobals(search = "") {
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     value: {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       body: {
         appendChild: (node: any) => appended.push(node),
       },

@@ -6,7 +6,12 @@ import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { resolveUiTarget } from "../../lib/ui-target.mjs";
-import { inheritedWorktreeOutputLockEnvironment, WORKTREE_OUTPUT_LOCK_LEASE_ENV, WORKTREE_OUTPUT_LOCK_PATH_ENV, WORKTREE_OUTPUT_LOCK_ROOT_ENV } from "../../lib/worktree-output-lock.mjs";
+import {
+  inheritedWorktreeOutputLockEnvironment,
+  WORKTREE_OUTPUT_LOCK_LEASE_ENV,
+  WORKTREE_OUTPUT_LOCK_PATH_ENV,
+  WORKTREE_OUTPUT_LOCK_ROOT_ENV,
+} from "../../lib/worktree-output-lock.mjs";
 import { repoRoot, sanitizeFilePart, spawnVerificationProcess, writeText } from "./shared.mjs";
 
 let gatewayWorkspaceBuildEnsured = false;
@@ -156,7 +161,7 @@ export async function waitForHttp(url, label, timeoutMs = 180000, handle = null)
       await handle.logsFlushed?.catch(() => undefined);
       throw handle.spawnError;
     }
-    if (handle?.child?.exitCode !== null) {
+    if (handle?.child && (handle.child.exitCode !== null || handle.child.signalCode != null)) {
       await handle.logsFlushed?.catch(() => undefined);
       const stdoutPath = handle.stdoutPath ? ` stdout: ${handle.stdoutPath}` : "";
       const stderrPath = handle.stderrPath ? ` stderr: ${handle.stderrPath}` : "";
@@ -266,7 +271,8 @@ export function buildVerificationProcessEnv(baseEnv, extraEnv = {}, omitEnv = []
 export async function buildVerificationBuildEnv(baseEnv, extraEnv = {}, omitEnv = [], outputRoot = repoRoot) {
   const leaseEnv = await inheritedWorktreeOutputLockEnvironment(outputRoot, baseEnv);
   const env = buildVerificationProcessEnv(baseEnv, extraEnv, omitEnv);
-  for (const key of [WORKTREE_OUTPUT_LOCK_LEASE_ENV, WORKTREE_OUTPUT_LOCK_PATH_ENV, WORKTREE_OUTPUT_LOCK_ROOT_ENV]) delete env[key];
+  for (const key of [WORKTREE_OUTPUT_LOCK_LEASE_ENV, WORKTREE_OUTPUT_LOCK_PATH_ENV, WORKTREE_OUTPUT_LOCK_ROOT_ENV])
+    delete env[key];
   return { ...env, ...leaseEnv };
 }
 

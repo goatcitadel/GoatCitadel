@@ -58,7 +58,7 @@ export function ChatComposerPlusMenu({
   };
   const sourceControls = props.externalSourceControls;
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover scopeKey={props.selectedSessionId ?? ""} open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         type="button"
         aria-label="Add and options"

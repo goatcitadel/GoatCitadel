@@ -1,6 +1,15 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
 
+export async function revealProviderConfiguration(disclosure, controls) {
+  await disclosure.waitFor();
+  const expanded = await disclosure.getAttribute("aria-expanded");
+  assert.ok(expanded === "true" || expanded === "false", "Provider configuration must expose its disclosure state.");
+  if (expanded === "false") await disclosure.click();
+  await controls.waitFor();
+  assert.equal(await disclosure.getAttribute("aria-expanded"), "true", "Provider configuration did not open.");
+}
+
 export function assertProviderCatalogProof({ before, after, providerId, modelCatalog, rendered, mutations }) {
   assert.ok(Array.isArray(before?.providers), "Provider proof requires the Gateway provider list.");
   const provider = before.providers.find((item) => item.providerId === providerId);
@@ -87,6 +96,11 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/models?shell=cockpit#providers"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
           await page.waitForFunction((theme) => document.documentElement.dataset.theme === theme, variant === "mobile" ? "light" : "dark");
+          const advanced = page.getByRole("region", { name: "Advanced providers", exact: true });
+          await revealProviderConfiguration(
+            advanced.getByRole("button", { name: "Advanced provider configuration", exact: true }),
+            advanced.locator("#expert-provider-controls"),
+          );
           const panel = page.getByRole("region", { name: "Providers and model catalogs", exact: true });
           const select = panel.getByRole("combobox", { name: "Inspect provider", exact: true });
           await select.waitFor();

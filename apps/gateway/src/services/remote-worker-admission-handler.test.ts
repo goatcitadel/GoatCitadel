@@ -50,7 +50,8 @@ describe("remote worker admission native request handler", () => {
   it("maps the strict native request into the service and returns the credential only in an admitted response", async () => {
     const exchange = vi.fn(async () => admittedResult());
     const handler = createRemoteWorkerAdmissionNativeRequestHandler({ admissionService: { exchange } });
-    const nativeRequest = request();
+    const signal = new AbortController().signal;
+    const nativeRequest = request({ signal });
 
     const response = await handler(nativeRequest);
 
@@ -65,13 +66,16 @@ describe("remote worker admission native request handler", () => {
       secretDisposition: "returned_once",
     });
     expect(String(response.body).split(SECRET)).toHaveLength(2);
-    expect(exchange).toHaveBeenCalledWith({
-      method: "POST",
-      rawPath: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
-      headers: nativeRequest.headers,
-      body: { schemaVersion: "body.v1", value: 1 },
-      transportIdentity: nativeRequest.transportIdentity,
-    });
+    expect(exchange).toHaveBeenCalledWith(
+      {
+        method: "POST",
+        rawPath: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RAW_PATH,
+        headers: nativeRequest.headers,
+        body: { schemaVersion: "body.v1", value: 1 },
+        transportIdentity: nativeRequest.transportIdentity,
+      },
+      signal,
+    );
   });
 
   it("returns an exact replay without any credential secret field", async () => {

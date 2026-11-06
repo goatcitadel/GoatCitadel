@@ -240,3 +240,45 @@ it("shows counts but never browser state values, and hides state keys in events"
   await vi.waitFor(() => expect(container.textContent).toContain("1 browser state value hidden"));
   expect(container.textContent).not.toContain("cookieValue");
 });
+
+it.each(["saved state", "events", "grants"] as const)(
+  "exposes pending %s reads without a live announcement",
+  async (read) => {
+    let release: () => void = () => {
+      throw new Error("Pending read was not installed");
+    };
+    if (read === "saved state") {
+      const value = await fetchBrowserSessionState("s-1");
+      vi.mocked(fetchBrowserSessionState).mockReturnValue(
+        new Promise((resolve) => {
+          release = () => resolve(value);
+        }),
+      );
+    } else if (read === "events") {
+      const value = await fetchBrowserSessionEvents("s-1", 100);
+      vi.mocked(fetchBrowserSessionEvents).mockReturnValue(
+        new Promise((resolve) => {
+          release = () => resolve(value);
+        }),
+      );
+    } else {
+      const value = await fetchBrowserSessionGrants("s-1");
+      vi.mocked(fetchBrowserSessionGrants).mockReturnValue(
+        new Promise((resolve) => {
+          release = () => resolve(value);
+        }),
+      );
+    }
+    await open("/system/browser-sessions?sessionId=s-1");
+    await click(read === "events" ? "Events" : "State");
+    const region = () => container.querySelector('section[aria-label="Browser session Research"]');
+    await vi.waitFor(() => expect(region()?.getAttribute("aria-busy")).toBe("true"));
+    expect(region()?.textContent).toContain(
+      read === "events" ? "Reading events…" : read === "grants" ? "Reading grants…" : "Reading saved browser state…",
+    );
+    expect(region()?.querySelector('[role="status"], [aria-live]')).toBeNull();
+    if (read === "grants") expect(region()?.textContent).not.toContain("No active grant");
+    await act(async () => release());
+    await vi.waitFor(() => expect(region()?.getAttribute("aria-busy")).toBe("false"));
+  },
+);

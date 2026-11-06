@@ -142,11 +142,6 @@ describe("cancellable cached palette search (NV-12)", () => {
 
     await render({ query: "abc" });
     await settle();
-    console.log(
-      "DEBUG2",
-      JSON.stringify(threads()),
-      api.sessions.mock.calls.map((c) => c[0].query),
-    );
     const abcSignal = api.sessions.mock.calls.at(-1)?.[1]?.signal as AbortSignal;
     expect(api.sessions.mock.calls.at(-1)?.[0]).toMatchObject({ query: "abc" });
     expect(threads()?.items[0]?.label).toBe("Match for ab");

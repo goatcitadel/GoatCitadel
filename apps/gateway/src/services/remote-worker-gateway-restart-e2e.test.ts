@@ -23,6 +23,7 @@ import { prepareWorkerMeshChatProbe } from "../../test/fixtures/remote-worker-me
 import { REMOTE_WORKER_RUNTIME_ENV as workerEnv } from "./remote-worker-runtime-config.js";
 import { resolveModelPricingLineage } from "./llm-pricing.js";
 import { hasAutonomousChatPostCommitPending, hasGeneralChatPostCommitPending } from "./chat-durable-run-service.js";
+import { createExecutionDiagnosticCollector } from "../../test/fixtures/remote-worker-execution-diagnostic-gateway.mjs";
 
 const reply = "Recovered worker Gateway restart.";
 const providerId = "openai";
@@ -108,6 +109,13 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
     let meshProbe: Awaited<ReturnType<typeof prepareWorkerMeshChatProbe>> | undefined;
     let stack: Awaited<ReturnType<typeof startVerificationStack>> | undefined;
     let storage: Storage | undefined;
+    const diagnosticRun = historical && !meshCase &&
+      ((approvalCase && mcpCase === "static") || (!approvalCase && !mcpCase));
+    const diagnosticCollector = createExecutionDiagnosticCollector();
+    let diagnosticIdentity: Record<string, string> | undefined;
+    let diagnosticEntryStarted = false;
+    let diagnosticRetention: "not_selected" | "not_attempted" | "retained" | "unavailable" = diagnosticRun ? "not_attempted" : "not_selected";
+    let nativeEndpoint: { host: "127.0.0.1"; port: number } | undefined;
     const streamController = new AbortController();
     let streamOutcome: unknown;
     // The initializer names the first stage so a failure report never reads an unset value (js/useless-assignment-to-local).
@@ -160,6 +168,10 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
       stage = "prepare native listener";
       const tls = await tlsConfig(fixtureRoot);
       const port = await resolveAvailablePort(0);
+      nativeEndpoint = { host: "127.0.0.1", port };
+      await writeFile(join(context.artifactRoot, "native-endpoint.json"), JSON.stringify({
+        nativeEndpoint, selectedAt: new Date().toISOString(), stage,
+      }, null, 2));
       const gatewayEnv = {
         [DETERMINISTIC_LLM_KEY_ENV]: "local-verification-only",
         [workerEnv.enabled]: "true",
@@ -426,7 +438,27 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
       stage = "restart real Gateway process";
       await stopProcess(stack.gateway);
       await stream;
-      stack = await startVerificationStack(context, { ...stackOptions, processLogPrefix: "after" });
+      const diagnosticEntry = new URL("../../test/fixtures/remote-worker-execution-diagnostic-gateway.mjs", import.meta.url);
+      if (diagnosticRun) {
+        diagnosticIdentity = {};
+        for (const [name, url] of [
+          ["fixture", diagnosticEntry],
+          ["validatorsSource", new URL("./remote-worker-assignment-execution-validators.ts", import.meta.url)],
+          ["protocolSource", new URL("./remote-worker-assignment-execution-protocol-service.ts", import.meta.url)],
+          ["validatorsBuild", new URL("../../dist/services/remote-worker-assignment-execution-validators.js", import.meta.url)],
+          ["protocolBuild", new URL("../../dist/services/remote-worker-assignment-execution-protocol-service.js", import.meta.url)],
+        ] as const) {
+          diagnosticIdentity[name] = createHash("sha256").update(await readFile(url)).digest("hex");
+        }
+      }
+      stack = await startVerificationStack(context, { ...stackOptions, processLogPrefix: "after",
+        ...(diagnosticRun ? { builtGatewayEntryFile: fileURLToPath(diagnosticEntry),
+          gatewayEnv: { ...gatewayEnv, GOATCITADEL_VERIFY_EXECUTION_DIAGNOSTICS: "true" } } : {}),
+      });
+      if (diagnosticRun) {
+        diagnosticEntryStarted = true;
+        stack.gateway.child.stdout?.on("data", (chunk: Buffer) => diagnosticCollector.push(chunk));
+      }
       expect(stack.gateway.child.pid).not.toBe(oldPid);
       if (approvalId) {
         stage = "approve retained tool after Gateway restart";
@@ -543,6 +575,8 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
             settlementSha256: meshReceipts[0]!.settlementSha256, requestSha256: meshReceipts[0]!.requestSha256 });
       }
       await writeFile(join(context.artifactRoot, "result.json"), JSON.stringify({ passed: true, stage,
+        executionEntry: diagnosticRun ? "diagnostic-instrumented-stock-main" : "original-selected-entry",
+        executionDiagnosticIdentity: diagnosticIdentity,
         admissionBoundary: "test-only-owner-generated-retained-frozen-profile-compatibility",
         runId: terminal.runId, assignmentId, beforePid: oldPid, afterPid: stack.gateway.child.pid,
         restartAfter, genericChat, mcpCase, meshCase, meshReceipts, artifactCommitDelayMs: mcpCase === "requester" && approvalCase ? 6_000 : 0,
@@ -558,7 +592,31 @@ describe.skipIf(process.platform !== "win32")("native worker across a full Gatew
           : mcpCase === "static" ? "stock-built-gateway-static-loopback-mcp-and-synthetic-native-custody"
           : mcpCase ? "built-gateway-app-with-constructor-resolver-loopback-mcp-and-synthetic-native-custody" : "loopback-provider-and-synthetic-native-custody" }, null, 2));
     } catch (error) {
-      await writeFile(join(context.artifactRoot, "failure.json"), JSON.stringify({ stage,
+      if (diagnosticRun) {
+        // The observer and its artifact writer must never replace the actual
+        // native completion failure. Snapshots below are observations only;
+        // they are not used to infer a missing rejection reason.
+        try {
+          const evidence = diagnosticCollector.finish();
+          const observedRevisions = storage?.durableRuns.listRuns(20)
+            .filter(run => run.workflowKey === "chat.turn.execute").slice(0, 8).map(run => {
+              const assignment = storage!.remoteWorkerAssignments.findTaskBoundChatAssignment({
+                executionWorkspaceId: "default", sessionId: String(run.payload.sessionId),
+                turnId: String(run.payload.turnId), durableRunId: run.runId,
+              });
+              return { parentRevision: run.version, workerLeaseRevision: assignment?.lease?.leaseRevision ?? null };
+            }) ?? [];
+          await writeFile(join(context.artifactRoot, "execution-rejection-diagnostics.json"), JSON.stringify({
+            entry: "diagnostic-instrumented-stock-main",
+            phase: diagnosticEntryStarted ? "second_gateway_execution" : "before_second_gateway_execution",
+            sourceBuildIdentity: diagnosticIdentity ?? null, ...evidence, observedRevisions,
+            snapshotMeaning: "observed_revisions_not_rejection_provenance",
+          }, null, 2));
+          diagnosticRetention = "retained";
+        } catch { diagnosticRetention = "unavailable"; }
+      }
+      await writeFile(join(context.artifactRoot, "failure.json"), JSON.stringify({ stage, nativeEndpoint,
+        executionDiagnosticRetention: diagnosticRetention,
         error: error instanceof Error ? error.message : String(error), streamOutcome,
         runs: storage?.durableRuns.listRuns(20).filter((run) => run.workflowKey === "chat.turn.execute").map((run) => {
           const profile = storage!.chatTurnCapabilityProfiles.findByRun(run.runId);

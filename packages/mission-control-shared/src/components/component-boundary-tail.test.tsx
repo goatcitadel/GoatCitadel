@@ -49,6 +49,24 @@ describe("shared boundary and presentation tail components", () => {
     vi.unstubAllGlobals();
   });
 
+  it("does not promise Chat navigation without its navigation callback", () => {
+    const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const renderer = create(
+      <PageErrorBoundary resetKey="local" pageLabel="Setup review">
+        <ThrowWhen active />
+      </PageErrorBoundary>,
+    );
+    try {
+      const copy = textOf(renderer.toJSON());
+      expect(copy).toContain("Retry this surface while Mission Control recovers.");
+      expect(copy).not.toContain("return to Chat");
+      expect(renderer.root.findAllByType("button").map((button) => button.children.join(""))).toEqual(["Retry page"]);
+    } finally {
+      act(() => renderer.unmount());
+      consoleSpy.mockRestore();
+    }
+  });
+
   it("recovers page render failures through retry and reset-key changes", () => {
     const consoleSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
     const onReturnToChat = vi.fn();

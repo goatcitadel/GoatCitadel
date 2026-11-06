@@ -1,6 +1,6 @@
 import type { ChatAttachmentRecord } from "@goatcitadel/contracts";
-import { useCallback, useRef } from "react";
-import { getGatewayAccessRevision, getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { getGatewayAccessRevision, getGatewayCallerScope, getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { detectImageGenerationIntent } from "../chat-image-intent";
 import { parseBtwCommand, parseQueueCommand, resolveMidTurnDisposition } from "../chat-page-pure-helpers";
@@ -53,7 +53,9 @@ type Input = {
     | "consumeWorkspaceSnapshotRequest"
     | "workspaceSnapshotRequestRef"
   >;
-  selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
+  selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId"> & {
+    selectedSessionRevisionRef?: { readonly current: number };
+  };
   pendingAttachments: ChatAttachmentRecord[];
   setPendingAttachments: React.Dispatch<React.SetStateAction<ChatAttachmentRecord[]>>;
   sessionData: Pick<ReturnType<typeof useChatSessionData>, "prefs">;
@@ -67,7 +69,7 @@ type Input = {
   multimodal: Pick<
     ReturnType<typeof useChatMultimodalControls>,
     "imageBusy" | "imageGenerationAvailable" | "handleGenerateImage"
-  >;
+  > & { imageRouteLabel?: string | null };
   errorState: Pick<ReturnType<typeof useChatErrorState>, "setFailedAutoImageRecovery" | "failedAutoImageRecovery">;
 };
 
@@ -117,6 +119,50 @@ export function useChatComposerSendIntent({
   const { setQueuedOutbound } = orchestration;
   const { setFailedAutoImageRecovery } = errorState;
   const { handleGenerateImage } = multimodal;
+
+  type AutoImageAttempt = { generation: number; base: string; revision: number; selectedId: string | null;
+    prompt: string; destination?: string; selectionSeen: boolean; revoked: boolean; running: boolean };
+  const autoRevision = selection.selectedSessionRevisionRef?.current ?? 0;
+  const autoBase = JSON.stringify([workspaceId, gateway, access, getGatewayCallerScopeRevision(), multimodal.imageRouteLabel]);
+  const autoKey = JSON.stringify([autoBase, selection.selectedSessionId, autoRevision]);
+  const autoOwnerRef = useRef({ key: autoKey, generation: 0 });
+  const autoAttemptRef = useRef<AutoImageAttempt | null>(null);
+  const autoMountedRef = useRef(true);
+  const [, refreshAutoMountGeneration] = useState(0);
+  const autoLatestRef = useRef({ draft, selectedId: selection.selectedSessionId, revisionRef: selection.selectedSessionRevisionRef });
+  autoLatestRef.current = { draft, selectedId: selection.selectedSessionId, revisionRef: selection.selectedSessionRevisionRef };
+  if (autoOwnerRef.current.key !== autoKey) {
+    const generation = autoOwnerRef.current.generation + 1;
+    const attempt = autoAttemptRef.current;
+    if (attempt) {
+      const waitingForOwnSelection = Boolean(attempt.destination && !attempt.selectionSeen &&
+        selection.selectedSessionId === null && autoRevision === attempt.revision);
+      const allowed = !attempt.revoked && attempt.base === autoBase && (waitingForOwnSelection ||
+        (selection.selectedSessionId === (attempt.destination ?? attempt.selectedId) &&
+          autoRevision === attempt.revision + (attempt.destination ? 1 : 0)));
+      if (allowed) {
+        attempt.generation = generation;
+        if (!waitingForOwnSelection && attempt.destination) attempt.selectionSeen = true;
+      } else attempt.revoked = true;
+    }
+    autoOwnerRef.current = { key: autoKey, generation };
+  }
+  const autoGeneration = autoOwnerRef.current.generation;
+  const renderedAutoGenerationRef = useRef(autoGeneration);
+  renderedAutoGenerationRef.current = autoGeneration;
+  const currentAutoAttempt = useCallback((attempt: AutoImageAttempt) => {
+    const revision = autoLatestRef.current.revisionRef?.current ?? autoRevision;
+    return autoMountedRef.current && autoAttemptRef.current === attempt && !attempt.revoked &&
+      attempt.generation === autoOwnerRef.current.generation && attempt.base === JSON.stringify([workspaceId,
+        getGatewayApiBaseUrl(), getGatewayAccessRevision(), getGatewayCallerScopeRevision(), multimodal.imageRouteLabel]) &&
+      (revision === attempt.revision + (attempt.destination ? 1 : 0) ||
+        Boolean(attempt.destination && !attempt.selectionSeen && revision === attempt.revision));
+  }, [autoRevision, multimodal.imageRouteLabel, workspaceId]);
+  useEffect(() => {
+    autoMountedRef.current = true;
+    if (autoOwnerRef.current.generation !== renderedAutoGenerationRef.current) refreshAutoMountGeneration((value) => value + 1);
+    return () => { autoMountedRef.current = false; autoOwnerRef.current.generation += 1; if (autoAttemptRef.current) autoAttemptRef.current.revoked = true; };
+  }, []);
 
   const sendDraftAsChat = useCallback(async () => {
     if (profileDependentAdmissionBlockReason) {
@@ -238,6 +284,10 @@ export function useChatComposerSendIntent({
       !hasArmedPerTurnContext &&
       detectImageGenerationIntent(draft);
     if (shouldAutoGenerateImage) {
+      if (!autoMountedRef.current || autoBase !== JSON.stringify([workspaceId, getGatewayApiBaseUrl(),
+        getGatewayAccessRevision(), getGatewayCallerScopeRevision(), multimodal.imageRouteLabel]) ||
+        autoOwnerRef.current.generation !== autoGeneration ||
+        (selection.selectedSessionRevisionRef?.current ?? autoRevision) !== autoRevision) return;
       if (multimodal.imageBusy) {
         setFailedAutoImageRecovery({ prompt: draft, sessionId: selection.selectedSessionId });
         setUiError("Image generation is already running.", "image_generate");
@@ -248,20 +298,36 @@ export function useChatComposerSendIntent({
         setUiError("This looks like an image request, but no image generation route is available.", "image_generate");
         return;
       }
+      if (autoAttemptRef.current?.running && currentAutoAttempt(autoAttemptRef.current)) return;
+      const attempt: AutoImageAttempt = { generation: autoGeneration, base: autoBase, revision: autoRevision,
+        selectedId: selection.selectedSessionId, prompt: draft, selectionSeen: false, revoked: false, running: true };
+      autoAttemptRef.current = attempt;
       const generated = await handleGenerateImage({
         clearDraftOnSuccess: true,
         trigger: "auto_send",
+        ...(attempt.selectedId === null && selection.selectedSessionRevisionRef ? { onCreatedSession: (created: { workspaceId: string; sessionId: string }) => {
+          if (!attempt.running || !currentAutoAttempt(attempt) || attempt.destination || attempt.selectedId !== null ||
+            !selection.selectedSessionRevisionRef || created.workspaceId !== workspaceId || !created.sessionId.trim() ||
+            autoLatestRef.current.draft !== attempt.prompt) { attempt.revoked = true; return false; }
+          attempt.destination = created.sessionId;
+          return true;
+        } } : {}),
       });
-      if (generated) {
-        setFailedAutoImageRecovery(null);
-        return;
-      }
-      setFailedAutoImageRecovery({ prompt: draft, sessionId: selection.selectedSessionId });
+      attempt.running = false;
+      if (!currentAutoAttempt(attempt)) return;
+      if (generated) { setFailedAutoImageRecovery(null); return; }
+      if (autoLatestRef.current.draft !== attempt.prompt) return;
+      const recoverySessionId = attempt.destination ?? attempt.selectedId;
+      if (autoLatestRef.current.selectedId !== recoverySessionId ||
+        (selection.selectedSessionRevisionRef?.current ?? autoRevision) !== attempt.revision + (attempt.destination ? 1 : 0)) return;
+      setFailedAutoImageRecovery({ prompt: attempt.prompt, sessionId: recoverySessionId });
       return;
     }
 
     await sendDraftAsChat();
   }, [
+    autoGeneration, autoRevision, autoBase, workspaceId, selection.selectedSessionRevisionRef,
+    currentAutoAttempt, multimodal.imageRouteLabel,
     scope,
     access,
     caller,

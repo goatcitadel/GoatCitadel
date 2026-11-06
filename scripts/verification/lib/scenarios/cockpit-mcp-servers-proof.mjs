@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir } from "node:fs/promises";
 
 export function assertMcpEnabledSaved({ before, after, receipt, request, enabled }) {
@@ -36,7 +37,7 @@ export async function runCockpitMcpServersProof({ context, browser, stack, citad
       const read = () => api(route);
       const theme = variant === "mobile" ? "light" : "dark";
       const browserContext = await browser.newContext({ viewport, colorScheme: theme });
-      const screenshots = []; const writes = []; let page;
+      const screenshots = []; const writes = [], presenceWrites = []; let page;
       try {
         await browserContext.addInitScript(value => {
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
@@ -46,7 +47,9 @@ export async function runCockpitMcpServersProof({ context, browser, stack, citad
         page = await browserContext.newPage();
         page.on("request", request => {
           const pathname = new URL(request.url()).pathname;
-          if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/"))
+          const kind = classifyCockpitProofWrite(request.method(), pathname);
+          if (kind === "presence") presenceWrites.push({ method: request.method(), pathname });
+          if (kind === "owner")
             writes.push({ pathname, method: request.method(), body: request.postDataJSON() });
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#mcp-servers"), { waitUntil: "domcontentloaded" });
@@ -107,7 +110,7 @@ export async function runCockpitMcpServersProof({ context, browser, stack, citad
         assert.equal(writes.length, 2, "Stale MCP review sent a mutation.");
         assert.equal((await read()).revision, peer.revision);
         await panel.scrollIntoViewIfNeeded(); const overflow = await audit("stale-guard");
-        return { status: "passed", metrics: { browserMutations: 2, cancelledReviewMutations: 0, staleMutationPrevented: true,
+        return { status: "passed", metrics: { notificationPresenceWrites: presenceWrites.length, browserMutations: 2, cancelledReviewMutations: 0, staleMutationPrevented: true,
           exactRevisionsConfirmed: true, enabledThenDisabled: true, toolsInvoked: 0, blockingAxe: 0, overflow }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page && !page.isClosed()) {

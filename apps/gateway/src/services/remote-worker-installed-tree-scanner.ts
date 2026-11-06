@@ -23,6 +23,8 @@ import {
   type RemoteWorkerWindowsFileHashEvidence,
   hashRemoteWorkerWindowsFile,
   readRemoteWorkerWindowsFile,
+  readRemoteWorkerWindowsTrustFiles,
+  type RemoteWorkerWindowsFileEvidence,
   type RemoteWorkerWindowsDirectoryEvidence,
   type RemoteWorkerWindowsFileObservation,
 } from "./remote-worker-windows-no-follow.js";
@@ -196,38 +198,99 @@ export class RemoteWorkerInstalledTreeScanner implements RemoteWorkerInstalledTr
   }
 }
 
-export async function readRemoteWorkerNoFollowFile(filePath: string, maximumBytes: number): Promise<Buffer> {
+export async function readRemoteWorkerNoFollowFile(
+  filePath: string,
+  maximumBytes: number,
+  signal?: AbortSignal,
+): Promise<Buffer> {
+  signal?.throwIfAborted();
   const maxBytes = boundedPositiveInteger(maximumBytes, MAX_TRUST_FILE_BYTES, "trust file byte limit");
   if (process.platform === "win32") {
-    if (
-      typeof filePath !== "string" ||
-      windowsPath.normalize(filePath) !== filePath ||
-      !windowsPath.isAbsolute(filePath)
-    ) {
-      throw invalid("Remote worker trust file path is invalid.");
-    }
-    const root = windowsPath.dirname(filePath);
-    if (/^[A-Za-z]:\\$/u.test(root)) throw invalid("Remote worker trust file root is unsupported.");
-    const evidence = await readRemoteWorkerWindowsFile(root, windowsPath.basename(filePath), maxBytes);
+    const request = windowsTrustReadRequest(filePath, maxBytes);
+    const evidence = await readRemoteWorkerWindowsFile(request.rootPath, request.relativePath, request.maxBytes, {
+      signal,
+    });
     try {
-      const rootOwnerSid = evidence.ancestorsBefore[0]?.ownerSid;
-      if (rootOwnerSid === undefined) throw invalid("Remote worker trust file ancestry is unavailable.");
-      if (rootOwnerSid !== evidence.operatorSid) throw invalid("Remote worker trust file is not operator-owned.");
-      for (const ancestor of evidence.ancestorsBefore) assertSafeWindowsDirectory(ancestor, rootOwnerSid);
-      assertSafeWindowsRegularFile(evidence.before, rootOwnerSid);
-      assertSameWindowsObservation(evidence.before, evidence.after);
+      signal?.throwIfAborted();
+      assertSafeWindowsTrustEvidence(evidence);
       return Buffer.from(evidence.content);
     } finally {
       evidence.content.fill(0);
     }
   }
-  const opened = await openPosixAbsoluteFile(filePath, maxBytes);
+  const opened = await openPosixAbsoluteFile(filePath, maxBytes, signal);
   try {
+    signal?.throwIfAborted();
     return Buffer.from(opened.content);
   } finally {
     opened.content.fill(0);
     await closeAll(opened.ancestors);
   }
+}
+
+/** Loads fresh trust bytes while retaining per-file no-follow policy and cleanup. */
+export async function readRemoteWorkerNoFollowTrustFiles(
+  requests: readonly { readonly filePath: string; readonly maxBytes: number }[],
+  options: { readonly signal?: AbortSignal } = {},
+): Promise<readonly Buffer[]> {
+  if (requests.length < 1 || requests.length > 4) throw invalid("Remote worker trust file count is invalid.");
+  const assertActive = (): void => {
+    if (options.signal?.aborted) throw invalid("Remote worker trust file read was aborted.");
+  };
+  const buffers: Buffer[] = [];
+  try {
+    assertActive();
+    if (process.platform === "win32") {
+      const evidence = await readRemoteWorkerWindowsTrustFiles(
+        requests.map(({ filePath, maxBytes }) =>
+          windowsTrustReadRequest(
+            filePath,
+            boundedPositiveInteger(maxBytes, MAX_TRUST_FILE_BYTES, "trust file byte limit"),
+          ),
+        ),
+        options,
+      );
+      try {
+        assertActive();
+        for (const item of evidence) assertSafeWindowsTrustEvidence(item);
+        for (const item of evidence) buffers.push(Buffer.from(item.content));
+      } finally {
+        for (const item of evidence) item.content.fill(0);
+      }
+    } else {
+      for (const { filePath, maxBytes } of requests) {
+        assertActive();
+        buffers.push(await readRemoteWorkerNoFollowFile(filePath, maxBytes, options.signal));
+      }
+    }
+    assertActive();
+    return Object.freeze(buffers);
+  } catch (error) {
+    for (const buffer of buffers) buffer.fill(0);
+    throw error;
+  }
+}
+
+function windowsTrustReadRequest(filePath: string, maxBytes: number) {
+  if (
+    typeof filePath !== "string" ||
+    windowsPath.normalize(filePath) !== filePath ||
+    !windowsPath.isAbsolute(filePath)
+  ) {
+    throw invalid("Remote worker trust file path is invalid.");
+  }
+  const rootPath = windowsPath.dirname(filePath);
+  if (/^[A-Za-z]:\\$/u.test(rootPath)) throw invalid("Remote worker trust file root is unsupported.");
+  return { rootPath, relativePath: windowsPath.basename(filePath), maxBytes };
+}
+
+function assertSafeWindowsTrustEvidence(evidence: RemoteWorkerWindowsFileEvidence): void {
+  const rootOwnerSid = evidence.ancestorsBefore[0]?.ownerSid;
+  if (rootOwnerSid === undefined) throw invalid("Remote worker trust file ancestry is unavailable.");
+  if (rootOwnerSid !== evidence.operatorSid) throw invalid("Remote worker trust file is not operator-owned.");
+  for (const ancestor of evidence.ancestorsBefore) assertSafeWindowsDirectory(ancestor, rootOwnerSid);
+  assertSafeWindowsRegularFile(evidence.before, rootOwnerSid);
+  assertSameWindowsObservation(evidence.before, evidence.after);
 }
 
 /** Pure policy seam used by deterministic tests; it does not grant filesystem authority. */
@@ -904,6 +967,7 @@ function canonicalPosixIdentity(value: unknown, label: string): string {
 async function openPosixAbsoluteFile(
   filePath: string,
   maximumBytes: number,
+  signal?: AbortSignal,
 ): Promise<{ readonly content: Buffer; readonly ancestors: readonly PosixDirectoryHandle[] }> {
   if (
     typeof filePath !== "string" ||
@@ -915,10 +979,12 @@ async function openPosixAbsoluteFile(
     throw invalid("Remote worker trust file path is invalid.");
   }
   const parent = posixPath.dirname(filePath);
+  signal?.throwIfAborted();
   const ancestors = await openPosixDirectoryChain(parent);
   const directory = ancestors.at(-1);
   if (directory === undefined) throw invalid("Remote worker trust file parent is unavailable.");
   try {
+    signal?.throwIfAborted();
     const before = snapshotStats(
       await lstat(`${directory.descriptorPath}/${posixPath.basename(filePath)}`, { bigint: true }),
     );
@@ -928,6 +994,7 @@ async function openPosixAbsoluteFile(
       before,
       directory.initialStat.uid,
       maximumBytes,
+      signal,
     );
     return { content: scanned.content, ancestors };
   } catch (error) {
@@ -1082,6 +1149,7 @@ async function readPosixFileAt(
   before: PosixStatSnapshot,
   operatorUid: number,
   maximumBytes: number,
+  signal?: AbortSignal,
 ): Promise<{ readonly content: Buffer; readonly stat: PosixStatSnapshot }> {
   canonicalSegment(name);
   assertSafePosixRegularFile(before, operatorUid);
@@ -1103,6 +1171,7 @@ async function readPosixFileAt(
       let offset = 0;
       try {
         while (offset < sizeBytes) {
+          signal?.throwIfAborted();
           const length = Math.min(buffer.byteLength, sizeBytes - offset);
           const result = await handle.read(buffer, 0, length, offset);
           if (result.bytesRead < 1) throw invalid("Remote worker file changed during scanning.");

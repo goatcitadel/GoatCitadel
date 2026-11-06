@@ -124,6 +124,7 @@ export function useChatComposerInteractionComposition({
     [session.sessionData.thread?.turns],
   );
   const composerInteractions = useChatComposerInteractions({
+    workspaceId, selectedSessionId: selection.selectedSessionId, selectionRevisionRef: selection.selectedSessionRevisionRef,
     draft,
     lastEditableDraft,
     commandSuggestions: submission.palette.effectiveCommandSuggestions,
@@ -174,6 +175,8 @@ export function useChatComposerInteractionComposition({
     [session.sessionData.thread?.turns],
   );
   const multimodal = useChatMultimodalControls({
+    workspaceId, selectionRevisionRef: selection.selectedSessionRevisionRef,
+    selectedSession: session.threadController.selectedSession,
     deferVoiceReadiness,
     providerOptions: submission.providerRouting.providerOptions,
     selectedProviderId: submission.providerRouting.selectedProviderId,

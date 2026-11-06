@@ -73,6 +73,12 @@ function callbacks() {
   };
 }
 
+async function settleDialogBody() {
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+}
+
 describe("ChatChangePlanActionDialog", () => {
   it("preserves the Classic approval callback and exact current plan", async () => {
     const handlers = callbacks();
@@ -88,6 +94,7 @@ describe("ChatChangePlanActionDialog", () => {
     await act(async () => {
       renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} />);
     });
+    await settleDialogBody();
     expect(latestModalProps?.onConfirm).toBeTypeOf("function");
     await act(async () => latestModalProps?.onConfirm?.());
     expect(handlers.onOpenApproval).toHaveBeenCalledExactlyOnceWith(value);
@@ -123,6 +130,7 @@ describe("ChatChangePlanActionDialog", () => {
         />,
       );
     });
+    await settleDialogBody();
     expect(renderApprovalAction).toHaveBeenLastCalledWith(value, true);
     expect(latestModalProps?.onConfirm).toBeUndefined();
     expect(handlers.onOpenApproval).not.toHaveBeenCalled();
@@ -144,6 +152,7 @@ describe("ChatChangePlanActionDialog", () => {
         <ChatChangePlanActionDialog plan={value} {...handlers} waiting contextNote="Waiting for your browser." />,
       );
     });
+    await settleDialogBody();
     expect(latestModalProps?.confirmPending).toBe(true);
     expect(latestModalProps?.dismissDisabled).toBe(false);
     expect(latestModalProps?.description).toContain("Waiting for your browser.");
@@ -171,6 +180,7 @@ describe("ChatChangePlanActionDialog", () => {
         />,
       );
     });
+    await settleDialogBody();
     expect(latestModalProps?.description).toBe("Disable only the owned MCP installation.");
     act(() => renderer.unmount());
   });
@@ -209,6 +219,7 @@ describe("ChatChangePlanActionDialog", () => {
       await act(async () => {
         renderer = create(<ChatChangePlanActionDialog plan={value} {...handlers} />);
       });
+      await settleDialogBody();
       expect(latestModalProps?.confirmDisabled).toBe(!matching);
       await act(async () => latestModalProps?.onConfirm?.());
       if (matching) {
@@ -250,6 +261,7 @@ describe("ChatChangePlanActionDialog", () => {
         />,
       );
     });
+    await settleDialogBody();
     const input = renderer.root.findByType("input");
     expect(input.props.type).toBe("password");
     await act(async () => input.props.onChange({ currentTarget: { value: "direct-secret" } }));
@@ -288,6 +300,7 @@ describe("ChatChangePlanActionDialog", () => {
         />,
       );
     });
+    await settleDialogBody();
     expect(latestModalProps?.confirmDisabled).toBe(true);
     await act(async () => renderer.root.findByType("select").props.onChange({ currentTarget: { value: "safe" } }));
     await act(async () =>
@@ -301,7 +314,7 @@ describe("ChatChangePlanActionDialog", () => {
     });
   });
 
-  it("never renders a path text field for native source registration", () => {
+  it("never renders a path text field for native source registration", async () => {
     const handlers = callbacks();
     let renderer!: ReactTestRenderer;
     act(() => {
@@ -318,6 +331,7 @@ describe("ChatChangePlanActionDialog", () => {
         />,
       );
     });
+    await settleDialogBody();
     expect(renderer.root.findAllByType("input")).toHaveLength(0);
     expect(latestModalProps?.confirmLabel).toBe("Open native picker");
   });

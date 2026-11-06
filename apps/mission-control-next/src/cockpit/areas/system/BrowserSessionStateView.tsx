@@ -34,14 +34,14 @@ export function BrowserSessionStateView({
   const state = projection?.state;
   return (
     <>
-      {pending ? <p role="status">Reading saved browser state…</p> : null}
+      {pending ? <p>Reading saved browser state…</p> : null}
       {error ? <Callout tone="error">{describeApiError(error).summary}</Callout> : null}
       {grantsError ? (
         <Callout tone="error">
           {describeApiError(grantsError).summary} Tool access is unknown until grants can be read.
         </Callout>
       ) : grantsPending ? (
-        <p role="status">Reading grants…</p>
+        <p>Reading grants…</p>
       ) : null}
       {grants && grants.length >= LIST_LIMIT ? (
         <p className="text-sm text-fg-secondary">

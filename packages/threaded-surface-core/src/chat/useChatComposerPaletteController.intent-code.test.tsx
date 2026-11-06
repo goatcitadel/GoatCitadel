@@ -5,6 +5,7 @@ import type { useChatComposerPaletteController as PaletteHook } from "./useChatC
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const scope = vi.hoisted(() => ({ caller: 0, access: 0, gateway: "http://gateway-a", loads: 0 }));
+const registryLoads = vi.hoisted(() => ({ count: 0 }));
 const api = vi.hoisted(() => ({ files: vi.fn(), packs: vi.fn(), tests: vi.fn(), artifacts: vi.fn(), notes: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/access-scope", () => ({
   getGatewayCallerScopeRevision: () => scope.caller,
@@ -60,6 +61,11 @@ beforeEach(async () => {
   vi.useFakeTimers();
   Object.assign(scope, { caller: 0, access: 0, gateway: "http://gateway-a", loads: 0 });
   codeGate = deferred<void>();
+  registryLoads.count = 0;
+  vi.doMock("./composer-palette-search-code.js", async (importOriginal) => {
+    registryLoads.count += 1;
+    return importOriginal<typeof import("./composer-palette-search-code")>();
+  });
   vi.doMock("./composer-palette-source-code.js", async (importOriginal) => {
     scope.loads += 1;
     await codeGate.promise;
@@ -101,10 +107,41 @@ afterEach(async () => {
   });
   await vi.dynamicImportSettled();
   vi.doUnmock("./composer-palette-source-code.js");
+  vi.doUnmock("./composer-palette-search-code.js");
   vi.useRealTimers();
 });
 
 describe("composer palette optional source-code custody", () => {
+  it("keeps inactive ranking and model-name scoring independent of registry code", async () => {
+    await render();
+    await import("./useChatProviderRoutingController");
+    expect(registryLoads.count).toBe(0);
+    // The real routing owner imported above must remain registry-free.
+    expect(registryLoads.count).toBe(0);
+  });
+
+  it("loads the registry only after the exact 140 ms activation debounce", async () => {
+    await render();
+    expect(registryLoads.count).toBe(0);
+    props = { ...props, active: true };
+    await render();
+    await act(async () => { await vi.advanceTimersByTimeAsync(139); });
+    expect(scope.loads).toBe(0);
+    expect(registryLoads.count).toBe(0);
+    await act(async () => { await vi.advanceTimersByTimeAsync(1); });
+    expect(scope.loads).toBe(1);
+    await releaseCode();
+    await act(async () => {
+      await vi.waitFor(() => {
+        expect(registryLoads.count).toBe(1);
+        expect(api.files).toHaveBeenCalledExactlyOnceWith(".", 250, { workspaceId: "workspace-a" });
+      });
+    });
+    expect(registryLoads.count).toBe(1);
+    expect(latest.items.some((item) => item.command === "brief.md")).toBe(true);
+    expect(latest.loading).toBe(false);
+  });
+
   it("keeps inactive readiness immediate without loading source code or reading sources", async () => {
     await render();
     await advance();

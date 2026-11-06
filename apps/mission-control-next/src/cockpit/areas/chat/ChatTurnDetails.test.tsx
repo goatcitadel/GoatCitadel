@@ -70,9 +70,25 @@ function render(turn: ChatThreadTurnRecord) {
   act(() => root.render(<ChatTurnDetails turn={turn} streaming={false} readOnly={false} actions={actions} />));
 }
 
-describe("ChatTurnDetails design advisories", () => {
-  it("lists each advisory under the tool run with its line and an informational label", () => {
-    render(
+async function openToolRows() {
+  const details = container.querySelector<HTMLDetailsElement>('details[aria-label="Tool activity for this turn"]');
+  if (details && !details.open)
+    act(() => {
+      details.open = true;
+      details.dispatchEvent(new Event("toggle"));
+    });
+  await act(async () => {
+    await vi.dynamicImportSettled();
+  });
+}
+async function renderRows(turn: ChatThreadTurnRecord) {
+  render(turn);
+  await openToolRows();
+}
+
+describe("ChatTurnDetails design advisories", async () => {
+  it("lists each advisory under the tool run with its line and an informational label", async () => {
+    await renderRows(
       turnWith([
         toolRun({
           bytesWritten: 120,
@@ -93,8 +109,8 @@ describe("ChatTurnDetails design advisories", () => {
     expect(container.textContent).toContain("line 9");
   });
 
-  it("labels patch-scoped lines as lines of the patch text, not the file", () => {
-    render(
+  it("labels patch-scoped lines as lines of the patch text, not the file", async () => {
+    await renderRows(
       turnWith([
         toolRun({
           designAdvisories: [{ ruleId: "glass-by-default", line: 2, summary: "Backdrop blur.", scope: "patch" }],
@@ -106,24 +122,24 @@ describe("ChatTurnDetails design advisories", () => {
     expect(container.textContent).not.toContain("(line 2)");
   });
 
-  it("keeps a technical tool error reachable under Technical details, with only the summary in the row", () => {
+  it("keeps a technical tool error reachable under Technical details, with only the summary in the row", async () => {
     const failed = {
       ...toolRun({}),
       status: "failed",
       error: "ECONNRESET at Socket.onread (node:net:1137:14)",
     } as unknown as ChatToolRunRecord;
     preferences.showTechnicalDetails = false;
-    render(turnWith([failed]));
+    await renderRows(turnWith([failed]));
     expect(container.textContent).not.toContain("ECONNRESET");
     preferences.showTechnicalDetails = true;
-    render(turnWith([{ ...failed }]));
+    await renderRows(turnWith([{ ...failed }]));
     expect(container.textContent).toContain("Recorded error");
     expect(container.textContent).toContain("ECONNRESET at Socket.onread");
     preferences.showTechnicalDetails = false;
   });
 
-  it("renders no advisory list when the tool result carries none", () => {
-    render(turnWith([toolRun({ bytesWritten: 120 })]));
+  it("renders no advisory list when the tool result carries none", async () => {
+    await renderRows(turnWith([toolRun({ bytesWritten: 120 })]));
 
     expect(container.querySelector('[aria-label="Design advisories"]')).toBeNull();
     expect(container.textContent).not.toContain("Design advisories");
@@ -294,8 +310,8 @@ describe("ChatTurnDetails copy feedback (CH-31)", () => {
   );
 });
 
-describe("ChatTurnDetails tool rows", () => {
-  it("reads a Code Mode request whose code failed as Failed, with its reason", () => {
+describe("ChatTurnDetails tool rows", async () => {
+  it("reads a Code Mode request whose code failed as Failed, with its reason", async () => {
     const failed = {
       ...toolRun({ runId: "r1", status: "failed", error: "Code Mode is off.", durationMs: 0 }),
       toolName: "code_mode.request",
@@ -303,7 +319,7 @@ describe("ChatTurnDetails tool rows", () => {
       // An approved tool call that settled records empty guidance.
       failureGuidance: "",
     } as ChatToolRunRecord;
-    render(turnWith([failed]));
+    await renderRows(turnWith([failed]));
     const summary = container.querySelector('details[aria-label="Tool activity for this turn"] > summary')!;
     expect(summary.textContent).toContain("Tried to use 1 tool");
     expect(summary.textContent).not.toContain("done");
@@ -312,7 +328,7 @@ describe("ChatTurnDetails tool rows", () => {
     expect(row.textContent).toContain("Code Mode is off.");
   });
 
-  it("says why a Code Mode request failed in plain words, with its recorded error under technical details", () => {
+  it("says why a Code Mode request failed in plain words, with its recorded error under technical details", async () => {
     const error =
       "WRAPPER_EXECUTION_FAILED: Wrapper docs.extract_text did not execute: execution error: Path is outside read allowlist: /tmp/a.pdf";
     const failed = {
@@ -321,12 +337,12 @@ describe("ChatTurnDetails tool rows", () => {
       args: { goal: "read a file" },
     } as ChatToolRunRecord;
     const row = () => container.querySelector('[data-tool-run-id="tool-run-1"]')!;
-    render(turnWith([failed]));
+    await renderRows(turnWith([failed]));
     expect(row().textContent).toContain("The code couldn't read a file.");
     expect(row().textContent).not.toContain("WRAPPER_EXECUTION_FAILED");
     preferences.showTechnicalDetails = true;
     try {
-      render(turnWith([{ ...failed }]));
+      await renderRows(turnWith([{ ...failed }]));
       expect(row().textContent).toContain("Recorded error");
       expect(row().textContent).toContain(error);
     } finally {
@@ -334,33 +350,33 @@ describe("ChatTurnDetails tool rows", () => {
     }
   });
 
-  it("keeps the uncertain-effect line off search and page-read rows, under technical details", () => {
+  it("keeps the uncertain-effect line off search and page-read rows, under technical details", async () => {
     const uncertain = (toolName: string) =>
       ({ ...toolRun({}), toolRunId: toolName, toolName, effectOutcomeKind: "uncertain" }) as ChatToolRunRecord;
     const row = (id: string) => container.querySelector(`[data-tool-run-id="${id}"]`)!;
     const turn = () => turnWith([uncertain("browser.search"), uncertain("browser.navigate"), uncertain("shell.exec")]);
 
-    render(turn());
+    await renderRows(turn());
     expect(row("browser.search").textContent).not.toContain("Automatic replay is suppressed.");
     expect(row("browser.navigate").textContent).not.toContain("Automatic replay is suppressed.");
     // A tool that can change things keeps the line on its row.
     expect(row("shell.exec").textContent).toContain("Automatic replay is suppressed.");
     preferences.showTechnicalDetails = true;
     try {
-      render(turn());
+      await renderRows(turn());
       expect(row("browser.search").textContent).toContain("Automatic replay is suppressed.");
     } finally {
       preferences.showTechnicalDetails = false;
     }
   });
 
-  it("names what a call touched, how long it took and the lines it changed", () => {
+  it("names what a call touched, how long it took and the lines it changed", async () => {
     const edit = {
       ...toolRun({ bytesWritten: 1 }),
       toolName: "fs.patch",
       args: { path: "src/hero.css", oldText: "a {}\n", newText: "a { color: red; }\nb {}\n" },
     } as ChatToolRunRecord;
-    render(turnWith([edit]));
+    await renderRows(turnWith([edit]));
     const summary = container.querySelector('details[aria-label="Tool activity for this turn"] > summary')!;
     expect(summary.textContent).toContain("Changed hero.css");
     const row = container.querySelector('[data-tool-run-id="tool-run-1"]')!;
@@ -373,12 +389,12 @@ describe("ChatTurnDetails tool rows", () => {
   });
 });
 
-describe("ChatTurnDetails retried tools", () => {
+describe("ChatTurnDetails retried tools", async () => {
   const attempt = (id: string, status: ChatToolRunRecord["status"], error?: string) =>
     ({ ...toolRun({}), toolRunId: id, toolName: "shell.exec", status, error }) as ChatToolRunRecord;
 
-  it("shows back-to-back tries of a failed tool as one row and keeps the failures listed", () => {
-    render(
+  it("shows back-to-back tries of a failed tool as one row and keeps the failures listed", async () => {
+    await renderRows(
       turnWith([
         attempt("a", "failed", "exit code 1"),
         attempt("b", "failed", "exit code 2"),
@@ -395,7 +411,7 @@ describe("ChatTurnDetails retried tools", () => {
       "b",
     ]);
     // An earlier try keeps its own target and effect note: a failed try may still have had an outside effect.
-    render(
+    await renderRows(
       turnWith([
         { ...attempt("a", "failed", "exit code 1"), args: { command: "pnpm deploy" }, effectOutcomeKind: "uncertain" },
         attempt("b", "executed"),
@@ -404,7 +420,7 @@ describe("ChatTurnDetails retried tools", () => {
     const earlier = container.querySelector('[data-tool-run-id="a"]')!;
     expect(earlier.querySelector('[title="pnpm deploy"]')?.textContent).toBe("pnpm deploy");
     expect(earlier.textContent).toContain("Automatic replay is suppressed.");
-    render(
+    await renderRows(
       turnWith([
         attempt("a", "failed", "exit code 1"),
         attempt("b", "failed", "exit code 2"),
@@ -447,6 +463,7 @@ describe("ChatTurnDetails approval decision (#499)", () => {
         </QueryClientProvider>,
       ),
     );
+    await openToolRows();
   }
   const row = () => container.querySelector('[data-tool-run-id="tool-run-1"]')!;
   afterEach(() => vi.mocked(fetchApproval).mockReset());
@@ -485,16 +502,16 @@ describe("ChatTurnDetails approval decision (#499)", () => {
   });
 });
 
-describe("ChatTurnDetails tool name (#499)", () => {
+describe("ChatTurnDetails tool name (#499)", async () => {
   const documentRun = {
     ...toolRun({ path: "Sandbox_Test_Brief.pdf" }),
     toolName: "documents.create",
   } as ChatToolRunRecord;
 
-  it("names the tool for the operator and keeps the raw tool name in technical details", () => {
+  it("names the tool for the operator and keeps the raw tool name in technical details", async () => {
     preferences.showTechnicalDetails = true;
     try {
-      render(turnWith([documentRun]));
+      await renderRows(turnWith([documentRun]));
       const row = container.querySelector('[data-tool-run-id="tool-run-1"]')!;
       expect(row.firstElementChild?.textContent).toBe("Create document");
       const details = [...row.querySelectorAll("details")].find((node) =>
@@ -506,8 +523,8 @@ describe("ChatTurnDetails tool name (#499)", () => {
     }
   });
 
-  it("does not show the raw tool name on the row when technical details are off", () => {
-    render(turnWith([documentRun]));
+  it("does not show the raw tool name on the row when technical details are off", async () => {
+    await renderRows(turnWith([documentRun]));
     expect(container.textContent).not.toContain("documents.create");
   });
 });

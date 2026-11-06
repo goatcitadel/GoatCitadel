@@ -66,3 +66,19 @@ test("runner arguments bound Windows lifecycle contention and reject unknown fla
   assert.throws(() => parseScriptTestArgs(["--bogus"]), /Unexpected argument/);
   assert.throws(() => parseScriptTestArgs(["--test-concurrency=0"]), /Unexpected argument/);
 });
+test("direct Windows MSVC compiler tests belong to the native suite", () => {
+  const all = listScriptTestFiles(repoRoot);
+  const directCompilerOwners = all.filter((file) => {
+    const source = fs.readFileSync(path.join(repoRoot, file), "utf8");
+    return /import\s*\{[^}]*\bcompileTlsNative\b[^}]*\}\s*from\s*["'][^"']*build-remote-worker-windows-tls[.]mjs["']/u.test(source);
+  });
+  assert.ok(directCompilerOwners.length >= 3, "the known compiler regressions must be discovered");
+  const hygiene = selectScriptTestFiles(all, "hygiene", "win32");
+  const native = selectScriptTestFiles(all, "native-windows", "win32");
+  const portable = selectScriptTestFiles(all, "hygiene", "linux");
+  for (const file of directCompilerOwners) {
+    assert.equal(hygiene.includes(file), false, file + " must not compile in Windows hygiene");
+    assert.equal(native.includes(file), true, file + " must retain actual native coverage");
+    assert.equal(portable.includes(file), true, file + " must retain off-Windows portable coverage");
+  }
+});

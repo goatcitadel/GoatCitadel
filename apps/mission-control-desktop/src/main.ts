@@ -78,6 +78,7 @@ let runtimeStatusPollTimer: number | undefined;
 let runtimeStatusInFlight = false;
 let runtimeStatusRequestSequence = 0;
 let runtimeLifecycleGeneration = 0;
+let runtimeStopPending = false;
 
 retryButton.addEventListener("click", () => {
   void launchRuntime();
@@ -111,6 +112,8 @@ void listen("desktop://runtime-status-requested", () => {
 });
 
 void listen("desktop://runtime-restarted", () => {
+  runtimeStopPending = false;
+  retryButton.disabled = false;
   runtimeLifecycleGeneration += 1;
   showToast("Runtime restarted. Refreshing Mission Control...");
   renderStarting();
@@ -123,6 +126,8 @@ void listen("desktop://runtime-restarted", () => {
 });
 
 void listen("desktop://runtime-stopping", () => {
+  runtimeStopPending = true;
+  retryButton.disabled = true;
   runtimeLifecycleGeneration += 1;
   invalidateInFlightRuntimeStatus();
   stopRuntimeStatusPolling();
@@ -130,6 +135,8 @@ void listen("desktop://runtime-stopping", () => {
 });
 
 void listen<DesktopRuntimeStatus>("desktop://runtime-stopped", (event) => {
+  runtimeStopPending = false;
+  retryButton.disabled = false;
   runtimeLifecycleGeneration += 1;
   invalidateInFlightRuntimeStatus();
   if (event?.payload) lastRuntime = event.payload;
@@ -138,6 +145,8 @@ void listen<DesktopRuntimeStatus>("desktop://runtime-stopped", (event) => {
 });
 
 void listen<{ message: string }>("desktop://runtime-stop-failed", (event) => {
+  runtimeStopPending = false;
+  retryButton.disabled = false;
   runtimeLifecycleGeneration += 1;
   invalidateInFlightRuntimeStatus();
   showToast(event.payload.message);
@@ -148,6 +157,7 @@ void listen<{ message: string }>("desktop://runtime-stop-failed", (event) => {
 void launchRuntime();
 
 async function launchRuntime(): Promise<void> {
+  if (runtimeStopPending) return;
   const generation = ++runtimeLifecycleGeneration;
   invalidateInFlightRuntimeStatus();
   stopRuntimeStatusPolling();
@@ -243,7 +253,7 @@ function invalidateInFlightRuntimeStatus(): void {
 }
 
 async function refreshRuntimeStatus(options: { syncShell?: boolean; notify?: boolean } = {}): Promise<void> {
-  if (runtimeStatusInFlight) {
+  if (runtimeStopPending || runtimeStatusInFlight) {
     return;
   }
   runtimeStatusInFlight = true;
