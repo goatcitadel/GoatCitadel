@@ -151,7 +151,9 @@ describe("useDurableBackgroundTaskRail", () => {
       });
       expect(text(renderer!)).toBe("loading");
 
-      await act(async () => navigation.dispatchEvent(new Event("goatcitadel:classic-location")));
+      await act(async () => {
+        navigation.dispatchEvent(new Event("goatcitadel:classic-location"));
+      });
       expect(mockedFetch).toHaveBeenCalledTimes(2);
       expect(text(renderer!)).toBe("run-a");
 
