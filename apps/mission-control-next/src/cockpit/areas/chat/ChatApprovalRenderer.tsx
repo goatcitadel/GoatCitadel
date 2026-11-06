@@ -24,6 +24,7 @@ import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-h
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { DeferredOutsideRootWriteGrantOptions } from "./DeferredOutsideRootWriteGrantOptions";
+import { importChatApprovalRendererBody } from "./load-chat-approval-renderer";
 
 type RendererCode = typeof import("./ChatApprovalRendererBody");
 type DecisionProps = ComponentProps<RendererCode["ApprovalDecisionBar"]>;
@@ -81,7 +82,7 @@ function ApprovalRecordRecovery({ pending, recovery }: { pending: boolean; recov
 // Shared code only; records, callbacks and decision attempts stay with their existing owners.
 let rendererLoad: Promise<RendererCode> | undefined;
 function loadRendererCode() {
-  rendererLoad ??= import("./ChatApprovalRendererBody").catch((cause) => {
+  rendererLoad ??= importChatApprovalRendererBody().catch((cause) => {
     rendererLoad = undefined;
     throw cause;
   });

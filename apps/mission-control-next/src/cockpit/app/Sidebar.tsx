@@ -43,10 +43,11 @@ import { useCockpitRoute } from "./use-cockpit-route";
 import { useCockpitPreload } from "./use-cockpit-preload";
 import { useHealthDigestStatus } from "./use-health-digest";
 import { HEALTH_TONE_ICON, presentCockpitStream } from "./stream-status";
+import { importCollapsedStreamIndicator } from "./load-collapsed-stream-indicator";
 
 type StreamRuntime = typeof import("./CollapsedStreamIndicator");
 let streamRuntimeLoad: Promise<StreamRuntime> | undefined;
-const loadStreamIndicator = () => (streamRuntimeLoad ??= import("./CollapsedStreamIndicator").catch((cause) => {
+const loadStreamIndicator = () => (streamRuntimeLoad ??= importCollapsedStreamIndicator().catch((cause) => {
   streamRuntimeLoad = undefined;
   throw cause;
 }));

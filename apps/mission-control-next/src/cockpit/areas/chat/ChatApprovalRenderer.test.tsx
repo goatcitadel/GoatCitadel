@@ -52,22 +52,20 @@ let root: Root, host: HTMLDivElement, client: QueryClient, record: ApprovalReque
 const resolved = vi.fn(),
   invalidated = vi.fn(),
   submit = vi.fn();
-// An owner change can start a retry load that outlives its test. Vitest keeps factory exports on a mock node
-// shared across doMock calls, so a load settling after the next test's doMock would be returned to that test's
-// import without running its factory (loader.load). afterEach waits for these loads.
+// An owner change can start a retry that outlives its component. Drain all calls before resetting the mocks.
 const bodyLoads = new Set<Promise<unknown>>();
-function installBodyMock() {
-  vi.doMock("./ChatApprovalRendererBody", () => {
+vi.mock("./load-chat-approval-renderer", () => ({
+  importChatApprovalRendererBody() {
     const load = (async () => {
       await loader.load();
-      return vi.importActual<typeof import("./ChatApprovalRendererBody")>("./ChatApprovalRendererBody");
+      return import("./ChatApprovalRendererBody");
     })();
     const drop = () => bodyLoads.delete(load);
     bodyLoads.add(load);
     void load.then(drop, drop);
     return load;
-  });
-}
+  },
+}));
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (cause: Error) => void;
   const promise = new Promise<T>((success, failure) => {
@@ -219,7 +217,6 @@ beforeEach(async () => {
     canonical: { approvalId: record.approvalId },
     turns: [],
   }));
-  installBodyMock();
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement("div");
   document.body.append(host);
@@ -236,8 +233,6 @@ beforeEach(async () => {
 afterEach(async () => {
   await act(async () => root.unmount());
   await Promise.allSettled([...bodyLoads]);
-  // Let the mocker store the settled exports before the next test's doMock invalidates them.
-  await new Promise((settle) => setTimeout(settle, 0));
   host.remove();
   client.clear();
   vi.restoreAllMocks();
@@ -247,7 +242,10 @@ it.each([{}, { outsideRootWrite: {} }, { outsideRootWrite: { kind: "outside_root
   async (preview) => {
     record = { ...record, preview: { targets: ["safe-target.txt"], ...preview } };
     await act(async () => renderDirect());
-    await act(async () => vi.dynamicImportSettled());
+    await act(async () => {
+      expect(loader.load).toHaveBeenCalledOnce();
+      await Promise.all([...bodyLoads]);
+    });
     expect(button("Approve once")).toBeDefined();
     expect(grantLoads.count).toBe(0);
     expect(button("Deny")).toBeDefined();
