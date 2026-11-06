@@ -100,7 +100,13 @@ export function assertLineageNativeNavigation({ url, uiUrl, child, trace, select
   assert.equal(trace.lifecycle.response.canonical.runId, child.childRunId);
   assert.equal(trace.lifecycle.response.canonical.sessionId, child.scope.sessionId);
   assert.equal(trace.run.payload.workspaceId, workspaceId);
-  assert.equal(chatHref, `/chat?sessionId=${encodeURIComponent(child.scope.sessionId)}&shell=cockpit`);
+  const chat = new URL(chatHref, uiUrl);
+  assert.equal(chat.origin, new URL(uiUrl).origin);
+  assert.equal(chat.pathname, "/chat");
+  assert.equal(chat.hash, "");
+  assert.deepEqual([...chat.searchParams].sort(), [
+    ["runId", child.childRunId], ["sessionId", child.scope.sessionId], ["shell", "cockpit"], ["workspaceId", workspaceId],
+  ]);
 }
 
 async function renderedLinks(locator) {
@@ -230,9 +236,7 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
         const childDisclosure = page.locator("summary", { hasText: /^Run lineage$/u });
         if (await childDisclosure.locator("..").getAttribute("open") === null) await childDisclosure.click();
         await page.getByRole("region", { name: "Delegation lineage", exact: true }).waitFor();
-        const childChatHref = `/chat?sessionId=${encodeURIComponent(firstChild.scope.sessionId)}&shell=cockpit`;
-        const chatLink = page.getByRole("link", { name: "Open this conversation in Chat", exact: true })
-          .and(page.locator(`a[href="${childChatHref}"]`));
+        const chatLink = page.getByRole("link", { name: "Open this conversation in Chat", exact: true });
         await chatLink.waitFor();
         const childTrace = await requestJson(stack.gatewayUrl, `/api/v1/observe/runs/${encodeURIComponent(firstChild.childRunId)}/trace`);
         assertOk(childTrace, "independently read navigated child owner");

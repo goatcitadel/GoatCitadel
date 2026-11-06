@@ -50,7 +50,7 @@ test("lineage navigation proof rejects reloaded documents, changed scope and mis
       run: { payload: { workspaceId: "workspace" } } },
     workspaceId: "workspace", citadelId: "citadel", selection: { workspaceId: "workspace", citadelId: "citadel" },
     documentRequestsBefore: 1, documentRequestsAfter: 1, marker: "same-document", expectedMarker: "same-document",
-    chatHref: "/chat?sessionId=child-session&shell=cockpit",
+    chatHref: "/chat?workspaceId=workspace&runId=child&sessionId=child-session&shell=cockpit",
   };
   assert.doesNotThrow(() => assertLineageNativeNavigation(proof));
   const changes = [
@@ -65,7 +65,9 @@ test("lineage navigation proof rejects reloaded documents, changed scope and mis
     (value) => { value.trace.lifecycle.response.canonical.runId = "other"; },
     (value) => { value.trace.lifecycle.response.canonical.sessionId = "parent-session"; },
     (value) => { value.trace.run.payload.workspaceId = "foreign"; },
-    (value) => { value.chatHref = "/chat?sessionId=parent-session&shell=cockpit"; },
+    (value) => { value.chatHref = value.chatHref.replace("sessionId=child-session", "sessionId=parent-session"); },
+    (value) => { value.chatHref = value.chatHref.replace("workspaceId=workspace", "workspaceId=foreign"); },
+    (value) => { value.chatHref = value.chatHref.replace("runId=child", "runId=parent"); },
   ];
   for (const change of changes) {
     const invalid = structuredClone(proof);
