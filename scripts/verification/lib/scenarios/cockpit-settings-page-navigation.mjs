@@ -17,7 +17,7 @@ export async function selectCockpitSettingsPage(page, { label, href }) {
 
 /** Trigger navigation so callers can resolve any unsaved-changes dialog before waiting for the URL. */
 export async function requestCockpitSettingsPage(page, { label, href }) {
-  assert.equal(({ General: "/settings/general", Safety: "/settings/safety", Citadel: "/settings/citadel" })[label], href);
+  assert.equal(({ General: "/settings/general", Models: "/settings/models", Safety: "/settings/safety", Citadel: "/settings/citadel" })[label], href);
   const nav = page.getByRole("navigation", { name: "Settings pages", exact: true });
   assert.equal(await nav.count(), 1);
   const picker = nav.getByRole("combobox", { name: "Settings pages: choose a section", exact: true });

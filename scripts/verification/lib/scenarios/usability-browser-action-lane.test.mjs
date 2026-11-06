@@ -1666,7 +1666,10 @@ test("Library actions prove uncredentialed Communications and authored Prompt Pa
     { kind: "api", probe: "communications-uncredentialed-fixture" },
   ]);
   assert.deepEqual(communicationsSteps[1].operations.slice(-2), [
-    { kind: "assert-text", value: "approval_required" },
+    {
+      kind: "assert-text",
+      value: "Send approval requested. Nothing has been sent yet. Approving sends this exact message once.",
+    },
     { kind: "api", probe: "communications-approval-no-send" },
   ]);
 

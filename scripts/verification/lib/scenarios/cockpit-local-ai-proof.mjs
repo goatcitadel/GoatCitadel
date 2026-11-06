@@ -1,7 +1,8 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
-import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
+import { selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
 import { retainOwnerReadDiagnostic } from "./cockpit-approval-mode-proof.mjs";
 
 export function projectLocalAiAuditDiagnostic(input) {
@@ -163,7 +164,7 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
         page = await browserContext.newPage();
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
-          if (!["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) || !pathname.startsWith("/api/v1/")) return;
+          if (classifyCockpitProofWrite(request.method(), pathname) !== "owner") return;
           if (["/api/v1/local-ai/downloads", "/api/v1/local-ai/serve"].includes(pathname)) writes.push({ pathname, body: request.postDataJSON() });
           else unrelatedWrites.push(`${request.method()} ${pathname}`);
         });
@@ -202,9 +203,10 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
           owner: await api("/api/v1/local-ai/readiness"), replay: await api(`/api/v1/approvals/${receipt.approvalId}/replay`) });
         await panel.getByRole("button", { name: "Jobs and endpoints", exact: true }).click();
         const jobs = page.getByRole("dialog", { name: "Jobs and endpoints", exact: true });
-        await jobs.getByText(receipt.jobId, { exact: true }).waitFor();
-        const approvalHref = buildClassicOwnerUrl(`/ops/approvals?shell=classic&approvalId=${encodeURIComponent(receipt.approvalId)}`);
-        assert.ok(await jobs.locator(`a[href="${approvalHref}"]`).count());
+        const job = jobs.getByRole("region", { name: "Downloads", exact: true }).getByRole("listitem")
+          .filter({ has: page.locator("code").and(page.getByText(receipt.jobId, { exact: true })) });
+        const approvalHref = `/inbox?approvalId=${encodeURIComponent(receipt.approvalId)}&shell=cockpit#local-ai`;
+        assert.equal(await job.getByRole("link", { name: "Review required approval", exact: true }).getAttribute("href"), approvalHref);
         await capture("retained-intent"); await jobs.getByRole("button", { name: "Close sheet", exact: true }).click();
         stage = "retain lost-response uncertainty without retry";
         let serveReceipt;
@@ -218,10 +220,11 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
         assertLocalAiIntentAgreement({ kind: "serve", selected, request: writes[1].body, receipt: serveReceipt,
           owner: await api("/api/v1/local-ai/readiness"), replay: await api(`/api/v1/approvals/${serveReceipt.approvalId}/replay`) });
         await page.unroute("**/api/v1/local-ai/serve", loseResponse);
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "General", exact: true }).click();
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Models", exact: true }).click();
+        await selectCockpitSettingsPage(page, { label: "General", href: "/settings/general" });
+        await selectCockpitSettingsPage(page, { label: "Models", href: "/settings/models" });
         await page.getByRole("tab", { name: "Local AI", exact: true }).click();
         await panel.getByText(/^Request outcome is unconfirmed\./).waitFor();
+        await panel.getByText("Advisory approval requests (no execution)", { exact: true }).click();
         assert.equal(await panel.getByRole("button", { name: "Request serve approval", exact: true }).isDisabled(), true);
         assert.equal(writes.length, 2); assert.deepEqual(unrelatedWrites, []);
         await capture("unknown-locked");

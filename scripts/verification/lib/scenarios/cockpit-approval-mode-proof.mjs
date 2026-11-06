@@ -681,7 +681,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
             await approvalPage.evaluate(() => document.documentElement.dataset.inboxNavigationProof),
             "same-document",
           );
-          const inspector = approvalPage.getByLabel(`Inspector: ${item.title}`, { exact: true });
+          const inspector = approvalPage.getByLabel("Inspector: Linked approval", { exact: true });
           await inspector.getByRole("button", { name: "Approve once", exact: true }).waitFor();
           // Follow the live toast before its normal six-second display expires.
           // The pending-plan review below must not consume that attention window.

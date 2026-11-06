@@ -3300,6 +3300,21 @@ async function apiProbe(probe, state) {
         child,
         watcherId: requireText(watcher.body?.watcherId, "waiting child watcher"),
       };
+      const rail = await checkedRequest(
+        state.gatewayUrl,
+        durableBackgroundTaskRailRoute(parent.runId, state.fixture.workspaceId, state.sessionId),
+        {},
+        probe,
+      );
+      const task = validateAttachedDurableWatcher(rail.body, {
+        parentRunId: parent.runId,
+        workspaceId: state.fixture.workspaceId,
+        sessionId: state.sessionId,
+        watcherId: state.fixture.durableWatcher.watcherId,
+        childRunId: child.runId,
+      });
+      validateDurableTaskLinks(task, child);
+      if (!task.controls.detach.enabled) throw new Error("waiting watcher was not eligible to detach");
       return {
         status: watcher.status,
         outcome: `attached exact waiting child ${child.runId} to planning parent ${parent.runId}`,

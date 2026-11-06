@@ -446,6 +446,7 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
   ]);
   assert.deepEqual(operations("route.chat.durable-restart-resume"), [
     { kind: "api", probe: "seed-active-background-child" },
+    { kind: "reload" },
     { kind: "click", name: "Activity", exact: true },
     { kind: "click", name: "Refresh background tasks", exact: true },
     { kind: "click-pattern", namePattern: "Continue background task" },

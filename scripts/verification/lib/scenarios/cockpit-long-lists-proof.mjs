@@ -11,7 +11,6 @@ import { assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
 import { assertCitadelPresenceHeartbeat } from "./cockpit-citadel-directory-proof.mjs";
 import { recordCockpitObserverRequest, assertCockpitObserverRequests } from "./cockpit-observer-requests.mjs";
 import { closeConversationList, openConversationList } from "./cockpit-conversation-list.mjs";
-import { inboxOwnerHref } from "./classic-owner-navigation.mjs";
 
 export function assertWindowedRecords({ total, rendered, keys, expectedKeys }) {
   assert.ok(total > 100);
@@ -164,10 +163,18 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             }
             assert.deepEqual(new Set(visited), new Set(decisions.map((item) => item.id)));
             await page.keyboard.press("e");
-            const ownerHref = inboxOwnerHref(decisions.find((item) => item.id === visited.at(-1)).href);
-            await page.waitForFunction((href) => document.activeElement?.getAttribute("href") === href, ownerHref);
-            assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("href")), ownerHref);
             const last = page.locator('[data-inbox-item][data-selected="true"]');
+            const selectedApproval = decisions.find((item) => item.id === visited.at(-1));
+            assert.equal(selectedApproval.kind, "approval");
+            const ownerLink = last.getByRole("link", { name: "Open approval", exact: true });
+            await page.waitForFunction(() => document.activeElement?.matches('[data-inbox-item][data-selected="true"] [data-inbox-owner]'));
+            const ownerUrl = new URL(await ownerLink.getAttribute("href"), stack.uiUrl);
+            assert.equal(ownerUrl.origin, new URL(stack.uiUrl).origin);
+            assert.equal(ownerUrl.pathname, `/inbox/approvals/${encodeURIComponent(selectedApproval.source.approvalId)}`);
+            assert.equal(ownerUrl.searchParams.get("approvalId"), selectedApproval.source.approvalId);
+            assert.equal(ownerUrl.searchParams.get("workspaceId"), workspaceId);
+            assert.equal(ownerUrl.searchParams.get("sessionId"), sessionId);
+            assert.equal(ownerUrl.searchParams.get("shell"), "cockpit");
             await last.getByRole("button", { name: "Show source context", exact: true }).click();
             const contextRegion = last.getByRole("region", { name: "Source conversation context" });
             const canonicalMessages = await api(

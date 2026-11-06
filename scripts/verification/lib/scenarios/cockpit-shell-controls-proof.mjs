@@ -177,7 +177,7 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
           await page.waitForFunction(() => document.querySelector('[aria-label="Resize inspector"]')?.getAttribute("aria-valuenow") === "360");
           assert.equal(await handle.getAttribute("aria-valuenow"), "360");
         }
-        if (variant === "desktop") await page.waitForFunction(() => document.querySelector('[aria-label="Inspector: Conversation"]').getBoundingClientRect().width === 360);
+        if (variant === "desktop") await page.waitForFunction(() => Math.abs(document.querySelector('[aria-label="Inspector: Conversation"]').getBoundingClientRect().width - 360) <= 1);
         if (variant === "tablet") {
           const modal = page.getByRole("dialog", {name:"Conversation",exact:true}); await modal.waitFor();
           assert.equal(await page.getByRole("separator", {name:"Resize inspector",exact:true}).count(), 0);

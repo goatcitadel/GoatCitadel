@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { DETERMINISTIC_LLM_MODEL, startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
-import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
 import { openAdvancedProviderProfiles, selectFixtureProviderSettings } from "./cockpit-provider-connection-proof.mjs";
 
 const providerAt = (config, providerId) =>
@@ -348,7 +347,7 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
           await approvalOwner.waitFor();
           assert.equal(
             await approvalOwner.getAttribute("href"),
-            buildClassicOwnerUrl(`/ops/approvals?approvalId=${encodeURIComponent(approvalId)}&shell=classic`),
+            `/inbox?workspaceId=default&approvalId=${encodeURIComponent(approvalId)}&shell=cockpit#providers`,
           );
           assert.ok((await approvalDialog.innerText()).includes("separate canonical approval"));
           await capture("credential-approval-review");

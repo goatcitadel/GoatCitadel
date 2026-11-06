@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { reviewNavigationDraft } from "./cockpit-navigation-draft-proof.mjs";
+import { requestCockpitSettingsPage, selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
 import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
 
 // Mirrors apps/mission-control-next/src/cockpit/areas/settings/tool-grant-labels.ts (TS + contracts types,
@@ -256,21 +257,14 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             assert.equal(await panel.getByRole("button", { name: "Review new grant", exact: true }).isDisabled(), true);
             assert.equal(writes.length, 3, "Draft navigation retried the unconfirmed grant mutation.");
           };
-          const openGeneral = () =>
-            page
-              .getByRole("navigation", { name: "Settings pages", exact: true })
-              .getByRole("link", { name: "General", exact: true })
-              .click();
+          const openGeneral = () => requestCockpitSettingsPage(page, { label: "General", href: "/settings/general" });
           await reviewNavigationDraft(page, openGeneral, "Cancel");
           await retainedDraft();
           await reviewNavigationDraft(page, openGeneral, "Keep draft and close");
           await page.waitForURL((value) => value.pathname === "/settings/general");
           await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
           assert.equal(writes.length, 3);
-          await page
-            .getByRole("navigation", { name: "Settings pages", exact: true })
-            .getByRole("link", { name: "Safety", exact: true })
-            .click();
+          await selectCockpitSettingsPage(page, { label: "Safety", href: "/settings/safety" });
           await page.getByRole("tab", { name: "Tools", exact: true }).click();
           await page.waitForURL((value) => value.pathname === "/settings/safety" && value.hash === "#approval-mode");
           await panel.getByRole("button", { name: "Review new grant", exact: true }).waitFor();

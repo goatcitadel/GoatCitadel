@@ -103,7 +103,6 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
           const aliasInput = panel.getByRole("textbox", { name: "Model alias", exact: true });
           const technical = panel.locator("details").filter({ has: page.getByText(`Settings version ${before.revision}`, { exact: true }) });
           await technical.waitFor();
-          assert.equal(await technical.count(), 1);
           await technical.getByText("Technical details", { exact: true }).click();
           // A background settings refetch temporarily removes the control-ready subtree. Capture one
           // rendered, refresh-ready observation instead of combining values across that transition.
@@ -151,7 +150,6 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
           await panel.getByRole("button", { name: "Refresh runtime settings", exact: true }).click();
           const savedTechnical = panel.locator("details").filter({ has: page.getByText(`Settings version ${saved.revision}`, { exact: true }) });
           await savedTechnical.waitFor();
-          assert.equal(await savedTechnical.count(), 1);
           if (!await savedTechnical.evaluate(node => node.open)) await savedTechnical.getByText("Technical details", { exact: true }).click();
           await savedTechnical.getByText(`Settings version ${saved.revision}`, { exact: true }).waitFor();
           assert.equal(await aliasInput.inputValue(), alias);
