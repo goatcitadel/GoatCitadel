@@ -6,7 +6,7 @@ import { fillNavigationGrantDraft, reviewNavigationDraft, assertNavigationDraftO
 import { assertProjectReadRequests } from "./cockpit-chat-project-proof.mjs";
 import { recordCockpitObserverRequest, assertCockpitObserverRequests } from "./cockpit-observer-requests.mjs";
 import { assertNativeShellPresence } from "./cockpit-native-presence-proof.mjs";
-import { selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
+import { requestCockpitSettingsPage, selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
 
 export function projectShellGeometryDiagnostic(input) {
   let gap = Boolean(input?.diagnosticGap);
@@ -223,9 +223,9 @@ export async function runCockpitShellControlsProof({ context, browser, stack, ci
           current: await page.evaluate(() => performance.timeOrigin), retained: await field.inputValue(), expected: value });
         assert.deepEqual(await scope(), { citadelId: source.citadelId, workspaceId: source.workspaceId });
         await capture("origin-restored");
-        await reviewNavigationDraft(page, () => page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "General", exact: true }).click(), "Discard changes");
+        await reviewNavigationDraft(page, () => requestCockpitSettingsPage(page, { label: "General", href: "/settings/general" }), "Discard changes");
         await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Safety", exact: true }).click();
+        await selectCockpitSettingsPage(page, { label: "Safety", href: "/settings/safety" });
         await page.getByRole("tab", { name: "Tools", exact: true }).click(); await field.waitFor();
         assert.equal(await field.inputValue(), "", "Discard did not restore the empty tool pattern.");
         assert.equal(await page.getByRole("region", { name: "Tool catalog and grants", exact: true }).getByRole("combobox", { name: "Decision", exact: true }).inputValue(), "allow");

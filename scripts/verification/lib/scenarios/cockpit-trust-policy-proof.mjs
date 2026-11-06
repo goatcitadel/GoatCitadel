@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 
 export async function assertTrustProofOwnerLink(dialog, capability) {
-  const destination = ({ "capabilities.catalog": ["Open Library / Candidates and mesh", "/library?shell=cockpit"],
+  const destination = ({ "capabilities.catalog": ["Open Library / Candidates and mesh", "/library?shell=cockpit#trust-policy"],
     "skills.lifecycle": ["Open Capabilities / Skills", "/capabilities/skills?shell=cockpit"] })[capability.source];
   assert.ok(destination, "Unknown Trust record owner source");
   const [label, href] = destination;
@@ -61,11 +62,9 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           await installMissionControlNextBrowserState(browserContext, "default", citadelId);
           page = await browserContext.newPage();
           page.on("request", (request) => {
-            if (
-              ["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) &&
-              new URL(request.url()).pathname.startsWith("/api/v1/")
-            )
-              writes.push({ method: request.method(), path: new URL(request.url()).pathname });
+            const pathname = new URL(request.url()).pathname;
+            if (classifyCockpitProofWrite(request.method(), pathname) === "owner")
+              writes.push({ method: request.method(), path: pathname });
           });
           const isSnapshot = (response) =>
             response.request().method() === "GET" &&

@@ -184,6 +184,7 @@ export async function runCockpitLocalAiProof({ context, browser, stack, citadelI
         assert.ok((await hardware.innerText()).includes(before.hardware.os.platform));
         await capture("hardware"); await hardware.getByRole("button", { name: "Close sheet", exact: true }).click();
         stage = "review and cancel with no request";
+        await panel.getByText("Advisory approval requests (no execution)", { exact: true }).click();
         await panel.getByRole("button", { name: "Request download approval", exact: true }).click();
         const dialog = page.getByRole("dialog", { name: "Record Local AI approval request?", exact: true });
         await dialog.waitFor(); assert.ok((await dialog.innerText()).includes("does not download a model"));

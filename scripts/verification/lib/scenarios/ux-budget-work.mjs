@@ -119,16 +119,13 @@ export async function runUxBudgetWork(environment) {
           const editor = page.locator('section[aria-label="Task details editor"]');
           await editor.getByRole("textbox", { name: "Description" }).fill(`Updated ${variant} task evidence.`);
           await editor.getByRole("combobox", { name: "Priority" }).selectOption("high");
-          await editor.getByRole("button", { name: "Review details" }).click();
-          const editDialog = page.getByRole("dialog", { name: "Confirm task details" });
-          await editDialog.getByRole("button", { name: "Confirm details" }).waitFor();
           const beforeEdit = await requestJson(
             stack.gatewayUrl,
             `/api/v1/tasks/${encodeURIComponent(taskId)}?workspaceId=${encodeURIComponent(fixture.workspaceId)}`,
           );
           assertOk(beforeEdit, `read ${variant} task before detail edit`);
           if (beforeEdit.body?.revision !== created.body.revision || beforeEdit.body?.priority !== "normal") {
-            throw new Error(`Work task ${variant}: detail review changed the canonical task.`);
+            throw new Error(`Work task ${variant}: the draft changed the canonical task before Save.`);
           }
           const editAxe = await auditPageAccessibility(page);
           const editBlockingAxe = editAxe.violations.filter(
@@ -142,7 +139,7 @@ export async function runUxBudgetWork(environment) {
           }
           const editShot = path.join(screenshotDir, `ux-budgets-cockpit-work-edit-${variant}.png`);
           await page.screenshot({ path: editShot, fullPage: false });
-          await editDialog.getByRole("button", { name: "Confirm details" }).click();
+          await editor.getByRole("button", { name: "Save task details", exact: true }).click();
           await page.getByText("Task details saved", { exact: false }).waitFor();
           const edited = await requestJson(
             stack.gatewayUrl,
@@ -157,11 +154,7 @@ export async function runUxBudgetWork(environment) {
             throw new Error(`Work task ${variant}: detail edit did not update the exact canonical task revision.`);
           }
           await page.getByRole("combobox", { name: "Status" }).selectOption("blocked");
-          await page.getByRole("button", { name: "Review change" }).click();
-          await page
-            .getByRole("dialog", { name: "Change task status" })
-            .getByRole("button", { name: "Confirm status change" })
-            .click();
+          await page.getByRole("button", { name: "Save task status", exact: true }).click();
           await page.getByText("Task moved to Blocked", { exact: false }).waitFor();
           const owner = await requestJson(
             stack.gatewayUrl,
@@ -177,18 +170,13 @@ export async function runUxBudgetWork(environment) {
           if (!selectedAgent?.agentId)
             throw new Error(`Work task ${variant}: no active agent is available for assignment proof.`);
           await page.getByRole("combobox", { name: "Agent" }).selectOption(selectedAgent.agentId);
-          await page.getByRole("button", { name: "Review assignment" }).click();
-          await page
-            .getByRole("dialog", { name: "Confirm task assignment" })
-            .getByRole("button", { name: "Confirm assignment" })
-            .waitFor();
           const beforeAssignment = await requestJson(
             stack.gatewayUrl,
             `/api/v1/tasks/${encodeURIComponent(taskId)}?workspaceId=${encodeURIComponent(fixture.workspaceId)}`,
           );
           assertOk(beforeAssignment, `read ${variant} task before assignment`);
           if (beforeAssignment.body?.revision !== owner.body.revision || beforeAssignment.body?.assignedAgentId) {
-            throw new Error(`Work task ${variant}: assignment review changed the canonical task.`);
+            throw new Error(`Work task ${variant}: the assignment draft changed the canonical task before Save.`);
           }
           const assignmentAxe = await auditPageAccessibility(page);
           const assignmentBlockingAxe = assignmentAxe.violations.filter(
@@ -202,10 +190,7 @@ export async function runUxBudgetWork(environment) {
           }
           const assignmentShot = path.join(screenshotDir, `ux-budgets-cockpit-work-assignment-${variant}.png`);
           await page.screenshot({ path: assignmentShot, fullPage: false });
-          await page
-            .getByRole("dialog", { name: "Confirm task assignment" })
-            .getByRole("button", { name: "Confirm assignment" })
-            .click();
+          await page.getByRole("button", { name: "Save task assignment", exact: true }).click();
           await page.getByText("Task assignment saved", { exact: false }).waitFor();
           const assigned = await requestJson(
             stack.gatewayUrl,

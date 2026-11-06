@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir } from "node:fs/promises";
 
 const editable = (runtime) => ({ enabled: runtime.enabled, autoStart: runtime.autoStart,
@@ -91,8 +92,9 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
           await installMissionControlNextBrowserState(browserContext, "default", citadelId, { showTechnicalDetails: true });
           page = await browserContext.newPage();
           page.on("request", (request) => {
-            if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && new URL(request.url()).pathname.startsWith("/api/v1/"))
-              writes.push({ path: new URL(request.url()).pathname, method: request.method(), body: request.postDataJSON() });
+            const pathname = new URL(request.url()).pathname;
+            if (classifyCockpitProofWrite(request.method(), pathname) === "owner")
+              writes.push({ path: pathname, method: request.method(), body: request.postDataJSON() });
           });
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/advanced?shell=cockpit"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });

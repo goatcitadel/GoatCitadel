@@ -149,18 +149,22 @@ export async function runCockpitLongListsProof({ context, browser, stack, citade
             );
             const realm = await page.evaluate(() => performance.timeOrigin);
             await list.getByRole("button", { name: "Details", exact: true }).first().focus();
-            for (const decision of decisions) {
+            const visited = [];
+            for (let position = 1; position <= decisions.length; position += 1) {
               await page.keyboard.press("j");
-              await page.waitForFunction(
-                (id) =>
+              const selected = await page.waitForFunction(
+                (index) =>
                   document
-                    .querySelector('[data-inbox-item][data-selected="true"] [data-record-key]')
-                    ?.getAttribute("data-record-key") === id,
-                decision.id,
+                    .querySelector(`[data-inbox-row][data-selected="true"][aria-posinset="${index}"]`)
+                    ?.getAttribute("data-inbox-row"),
+                position,
               );
+              visited.push(await selected.jsonValue());
+              await selected.dispose();
             }
+            assert.deepEqual(new Set(visited), new Set(decisions.map((item) => item.id)));
             await page.keyboard.press("e");
-            const ownerHref = inboxOwnerHref(decisions.at(-1).href);
+            const ownerHref = inboxOwnerHref(decisions.find((item) => item.id === visited.at(-1)).href);
             await page.waitForFunction((href) => document.activeElement?.getAttribute("href") === href, ownerHref);
             assert.equal(await page.evaluate(() => document.activeElement?.getAttribute("href")), ownerHref);
             const last = page.locator('[data-inbox-item][data-selected="true"]');

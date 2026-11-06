@@ -227,6 +227,8 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
         assert.equal(await childLink.count(), 1);
         await childLink.click();
         await page.waitForURL(new URL(`/work/runs/${encodeURIComponent(firstChild.childRunId)}?shell=cockpit`, stack.uiUrl).href);
+        const childDisclosure = page.locator("summary", { hasText: /^Run lineage$/u });
+        if (await childDisclosure.locator("..").getAttribute("open") === null) await childDisclosure.click();
         await page.getByRole("region", { name: "Delegation lineage", exact: true }).waitFor();
         const childChatHref = `/chat?sessionId=${encodeURIComponent(firstChild.scope.sessionId)}&shell=cockpit`;
         const chatLink = page.getByRole("link", { name: "Open this conversation in Chat", exact: true })

@@ -6,13 +6,13 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
-import { prepareVerificationRuntime, requestJson, stopVerificationStack } from "../runtime.mjs";
+import { requestJson, stopVerificationStack } from "../runtime.mjs";
 import {
   DETERMINISTIC_LLM_DEFAULT_REPLY,
   DETERMINISTIC_LLM_KEY_ENV,
   startDeterministicLlmStub,
-  writeDeterministicLlmProviderConfig,
 } from "./deterministic-llm-stub.mjs";
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { readBrowserSseDiagnostics } from "./browser-helpers.mjs";
 import {
   captureBrowserActionCheckpoint,
@@ -218,7 +218,7 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
 
   try {
     if (needsSettingsFixture) settingsFixtureServer = await startSettingsBrowserFixtureServer();
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-browser-actions`);
+    runtimeRoot = await prepareUsabilityRuntime(`${context.runId}-browser-actions`, stub.baseUrl);
     if (requestedBundleIds === null || requestedBundleIds.has("library-catalog-memory")) {
       const skillRoot = path.join(runtimeRoot, "skills", "extra", "usability-browser-curator-fixture");
       await fs.mkdir(skillRoot, { recursive: true });
@@ -229,7 +229,6 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
       );
     }
     const codeModeProject = needsChatCodeFixture ? await prepareCodeModeVerificationProject(runtimeRoot) : undefined;
-    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
     if (needsSettingsFixture) {
       // Only the disposable fixture is configured for the managed editor. It
       // must remain disabled, without auto-start, throughout the alias review.

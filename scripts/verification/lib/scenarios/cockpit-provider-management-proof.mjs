@@ -301,6 +301,8 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
           const secretRoute = `/api/v1/secrets/providers/${encodeURIComponent(providerId)}`;
           assert.equal((await api(`${secretRoute}/status`)).hasSecret, true);
           await panel.getByRole("button", { name: "Refresh profiles", exact: true }).click();
+          await panel.getByRole("region", { name: "Provider connection", exact: true })
+            .getByRole("button", { name: "Refresh connection", exact: true }).click();
           stage = "cancel then confirm native credential removal";
           await panel.getByRole("button", { name: "Remove saved API credential", exact: true }).click();
           const remove = page.getByRole("dialog", { name: "Remove saved API credential?", exact: true });

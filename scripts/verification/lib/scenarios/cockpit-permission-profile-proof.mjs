@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { openPermissionProfileChoices } from "./cockpit-permission-context-proof.mjs";
@@ -87,7 +88,7 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
           if (request.method() === "POST" && pathname === "/api/v1/tools/permission-profiles/activate") writes.push(request.postDataJSON());
-          else if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")
+          else if (classifyCockpitProofWrite(request.method(), pathname) === "owner"
             && pathname !== "/api/v1/tools/permission-profiles/selection-review") unrelatedWrites.push(`${request.method()} ${pathname}`);
         });
         stage = "open native permission owner";

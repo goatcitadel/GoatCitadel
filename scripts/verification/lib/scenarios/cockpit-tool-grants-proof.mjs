@@ -201,7 +201,7 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             .click();
           const revoke = page.getByRole("dialog", { name: "Revoke tool grant", exact: true });
           await revoke.waitFor();
-          assert.ok((await revoke.innerText()).includes(receipt.grantId));
+          await inspectRecordedToolGrantIdentity(revoke, receipt, await read("/api/v1/tools/grants?limit=400"));
           const revokeResponse = page.waitForResponse(
             (response) =>
               response.request().method() === "POST" &&

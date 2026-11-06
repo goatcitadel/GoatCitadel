@@ -676,7 +676,7 @@ export async function runCockpitApprovalModeProof({ context, browser, stack, cit
           const linkedLocation = new URL(approvalPage.url());
           assert.equal(linkedLocation.pathname, "/inbox");
           assert.equal(linkedLocation.searchParams.get("workspaceId"), "default");
-          assert.equal(linkedLocation.searchParams.get("item"), item.id);
+          assert.equal(linkedLocation.searchParams.get("approvalId"), approvalId);
           assert.equal(
             await approvalPage.evaluate(() => document.documentElement.dataset.inboxNavigationProof),
             "same-document",

@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
+import { requestCockpitSettingsPage, selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
 
 export function assertNavigationDraftOwner({ before, after, writes, origin, current, retained, expected }) {
   assert.deepEqual(after, before, "Presentation navigation changed the canonical tool-grant owner.");
@@ -92,10 +93,7 @@ export async function proveRetainedSettingsTabDraft({ page, readGrants }) {
   };
   page.on("request", record);
   try {
-    await page
-      .getByRole("navigation", { name: "Settings pages", exact: true })
-      .getByRole("link", { name: "Safety", exact: true })
-      .click();
+    await selectCockpitSettingsPage(page, { label: "Safety", href: "/settings/safety" });
     await page.getByRole("tab", { name: "Tools", exact: true }).click();
     await page.waitForURL((url) => url.pathname === "/settings/safety" && url.hash === "#approval-mode");
     const origin = await page.evaluate(() => performance.timeOrigin);
@@ -106,11 +104,7 @@ export async function proveRetainedSettingsTabDraft({ page, readGrants }) {
     await page.getByRole("tab", { name: "Tools", exact: true }).click();
     await field.waitFor();
     assert.equal(await field.inputValue(), value);
-    const trigger = () =>
-      page
-        .getByRole("navigation", { name: "Settings pages", exact: true })
-        .getByRole("link", { name: "General", exact: true })
-        .click();
+    const trigger = () => requestCockpitSettingsPage(page, { label: "General", href: "/settings/general" });
     await reviewNavigationDraft(page, trigger, "Cancel");
     await reviewNavigationDraft(page, trigger, "Keep draft and close");
     await page.waitForURL((url) => url.pathname === "/settings/general");

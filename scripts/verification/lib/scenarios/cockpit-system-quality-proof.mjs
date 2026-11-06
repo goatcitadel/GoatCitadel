@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -72,12 +73,12 @@ export async function runCockpitSystemQualityProof({ context, browser, stack, ci
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
           window.localStorage.setItem("goatcitadel.ui.theme.v1", theme);
         }, variant === "mobile" ? "light" : "dark");
-        await installMissionControlNextBrowserState(browserContext, workspace.workspaceId, workspace.citadelId);
+        await installMissionControlNextBrowserState(browserContext, workspace.workspaceId, workspace.citadelId, { showTechnicalDetails: true });
         page = await browserContext.newPage();
         const writes = [], ownerReads = [];
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
-          if (pathname.startsWith("/api/") && ["POST", "PATCH", "PUT", "DELETE"].includes(request.method())) writes.push(pathname);
+          if (classifyCockpitProofWrite(request.method(), pathname) === "owner") writes.push(pathname);
           if (pathname === "/api/v1/ops/quality") ownerReads.push(request.url());
         });
         const snapshotResponse = page.waitForResponse((response) => response.request().method() === "GET"

@@ -128,7 +128,9 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         const axe = await auditPageAccessibility(page);
         const blocking = axe.violations.filter((entry) => ["serious", "critical"].includes(entry.impact));
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-        assert.equal(blocking.length, 0, `Blocking policy accessibility: ${blocking.map((entry) => entry.id).join(", ")}`);
+        assert.equal(blocking.length, 0, `Blocking policy accessibility: ${JSON.stringify(
+          blocking.map(({ id, nodes }) => ({ id, targets: nodes.map(({ target }) => target) })),
+        )}`);
         assert.ok(overflow <= 1, `Policy horizontal overflow: ${overflow}px`);
         const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
         const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-library-policy-${variant}.png`);

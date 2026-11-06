@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { seedVisibleChatArtifact } from "./chat-artifact-fixture.mjs";
@@ -108,7 +109,7 @@ export async function runCockpitLibraryResourcesProof({ context, browser, stack,
           const pathname = new URL(request.url()).pathname;
           if (pathname.startsWith("/api/v1/")) {
             if (request.method() === "GET") reads.push(request.url());
-            else if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())) mutations.push(pathname);
+            else if (classifyCockpitProofWrite(request.method(), pathname) === "owner") mutations.push(pathname);
           }
         });
         stage = "open Library";

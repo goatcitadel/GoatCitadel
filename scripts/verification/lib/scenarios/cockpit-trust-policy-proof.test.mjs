@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { it } from "node:test";
 import { selectTrustProofCapability, assertTrustProofOwnerLink } from "./cockpit-trust-policy-proof.mjs";
 
-function ownerDialog({ label = "Open Library / Candidates and mesh", href = "/library?shell=cockpit", count = 1 } = {}) {
+function ownerDialog({ label = "Open Library / Candidates and mesh", href = "/library?shell=cockpit#trust-policy", count = 1 } = {}) {
   return { getByRole(role, options) {
     assert.equal(role, "link");
     const matches = options.name instanceof RegExp ? options.name.test(label) : options.name === label;
@@ -16,7 +16,7 @@ it("accepts the current exact capabilities.catalog Library owner", async () => {
 });
 it("rejects obsolete and wrong-shell capability owner links", async () => {
   for (const options of [{ label: "Open Library / Capabilities" }, { label: "Open Library / Skills" },
-    { label: "Open Library / Capabilities", href: "/library?shell=classic" }, { count: 2 }])
+    { href: "/library?shell=classic#trust-policy" }, { href: "/library?shell=cockpit" }, { count: 2 }])
     await assert.rejects(assertTrustProofOwnerLink(ownerDialog(options), { source: "capabilities.catalog" }));
 });
 it("binds the distinct skills lifecycle source to its own native Capabilities owner", async () => {
