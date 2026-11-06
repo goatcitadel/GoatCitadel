@@ -2,9 +2,10 @@
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import type { DurableRunRecord } from "@goatcitadel/contracts";
+import type { DurableRunHistoryPage, DurableRunRecord } from "@goatcitadel/contracts";
 import { fetchDurableRunHistory } from "@goatcitadel/mission-control-shared/api/durable";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createInvalidationBatcher } from "../../data/invalidation-batcher";
 import { queryKeys } from "../../data/query-keys";
 import { WorkRunHistory } from "./WorkRunHistory";
 
@@ -105,5 +106,47 @@ describe("durable Work history", () => {
     await act(async () => { await client.invalidateQueries({ queryKey: queryKeys.durableRuns() }); });
     await vi.waitFor(() => expect(container.textContent).toContain("Done"));
     expect(fetchDurableRunHistory).toHaveBeenCalledTimes(2);
+  });
+
+  it("completes pagination before refreshing from a burst of realtime task events", async () => {
+    let resolvePage!: (page: DurableRunHistoryPage) => void;
+    const pendingPage = new Promise<DurableRunHistoryPage>((resolve) => {
+      resolvePage = resolve;
+    });
+    const nextPage = { items: [run("older-record")] };
+    const refreshed = { items: [run("changing")], nextCursor: "older-page" };
+    const fetchHistory = vi.mocked(fetchDurableRunHistory);
+    fetchHistory
+      .mockResolvedValueOnce({
+        items: [run("changing", "workspace-a", { status: "running" })],
+        nextCursor: "older-page",
+      })
+      .mockReturnValueOnce(pendingPage)
+      .mockResolvedValueOnce(refreshed)
+      .mockResolvedValueOnce(nextPage);
+    const batcher = createInvalidationBatcher(client);
+    try {
+      await render();
+      await vi.waitFor(() => expect(container.textContent).toContain("Running"));
+      await click("Load older runs");
+      const paginationSignal = fetchHistory.mock.calls[1]?.[1]?.signal;
+      expect(paginationSignal).toBeDefined();
+      await act(async () => {
+        for (let index = 0; index < 2; index += 1) {
+          batcher.invalidate(["tasks"]);
+          batcher.flush();
+        }
+      });
+      expect(paginationSignal?.aborted).toBe(false);
+      expect(fetchHistory).toHaveBeenCalledTimes(2);
+      await act(async () => resolvePage(nextPage));
+      await vi.waitFor(() => {
+        expect(container.textContent).toContain("older-record");
+        expect(container.textContent).toContain("Done");
+      });
+      expect(fetchHistory).toHaveBeenCalledTimes(4);
+    } finally {
+      batcher.dispose();
+    }
   });
 });

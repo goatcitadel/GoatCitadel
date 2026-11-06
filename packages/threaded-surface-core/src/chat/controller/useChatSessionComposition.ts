@@ -194,11 +194,13 @@ export function useChatSessionComposition({
     setActiveChangePlan: changePlanState.setActiveChangePlan,
   });
   useChatModeSynchronization({ currentSessionMode, onResolvedModeChange, selection });
-  const latestTurnStatus = sessionData.thread?.turns.at(-1)?.trace?.status ?? null;
+  const selectedThread = sessionData.thread?.sessionId === selection.selectedSessionId ? sessionData.thread : null;
+  const latestTurnStatus = selectedThread?.turns.at(-1)?.trace?.status ?? null;
   const agenticTree = useChatAgenticTreeRefresh({
     selection,
     workspaceId,
     setAgenticRunTree,
+    threadReady: Boolean(selectedThread),
     refreshKey: `${approvalsCount}:${latestTurnStatus}`,
   });
   const { resolveAgenticRunTree } = agenticTree;

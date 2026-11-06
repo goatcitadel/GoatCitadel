@@ -56,6 +56,7 @@ describe("UX budget lane wiring", () => {
       "mcp-policy-requests",
       "provider-connection",
       "work-artifact",
+      "work-history",
       "library-links",
       "library-policy",
       "work-context",
@@ -150,7 +151,7 @@ describe("UX budget lane wiring", () => {
     assert.deepEqual(calls, ["stop stack", "close stub", "restore package"]);
   });
   it("allows focused reruns without silently accepting an empty or unknown proof", () => {
-    assert.equal(selectCockpitOwnerProofs().length, 57);
+    assert.equal(selectCockpitOwnerProofs().length, 58);
     assert.equal(selectCockpitOwnerProofs(["approval-mode", "approval-mode"]).length, 1);
     assert.throws(() => selectCockpitOwnerProofs([]));
     assert.throws(() => selectCockpitOwnerProofs(["wrong-name"]));
