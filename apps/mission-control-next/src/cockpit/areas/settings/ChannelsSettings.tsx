@@ -48,7 +48,7 @@ export function ChannelsSettings({ workspaceId }: { workspaceId: string }) {
       <header className="space-y-1">
         <p className="text-sm text-fg-secondary">
           Some channels have a quicker setup page of their own.{" "}
-          <NativeOwnerLink href={channelPickerHref()} scope={workspaceId}>
+          <NativeOwnerLink href={channelPickerHref()} scope={workspaceId} className="underline">
             Add a channel
           </NativeOwnerLink>
         </p>
