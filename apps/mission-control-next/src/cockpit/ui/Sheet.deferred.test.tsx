@@ -15,7 +15,12 @@ import { createRoot, type Root } from "react-dom/client";
 import { flushSync } from "react-dom";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 let Sheet: typeof import("./Sheet").Sheet;
-const loader = vi.hoisted(() => ({ load: vi.fn<() => Promise<void>>(), roots: vi.fn(), unmounts: vi.fn() }));
+const loader = vi.hoisted(() => ({
+  load: vi.fn<() => Promise<void>>(),
+  loadRuntime: vi.fn(),
+  roots: vi.fn(),
+  unmounts: vi.fn(),
+}));
 const identity = vi.hoisted(() => ({
   gateway: "http://gateway-a",
   caller: 1,
@@ -98,6 +103,7 @@ async function ready(held: ReturnType<typeof deferred>) {
 beforeEach(async () => {
   vi.resetModules();
   loader.load.mockReset();
+  loader.loadRuntime.mockReset();
   loader.roots.mockReset();
   loader.unmounts.mockReset();
   history.register.mockReset();
@@ -112,6 +118,10 @@ beforeEach(async () => {
   });
   window.history.replaceState({ retained: true }, "", "/chat?sessionId=session-a&shell=cockpit#current");
   vi.spyOn(console, "error").mockImplementation(() => undefined);
+  vi.doMock(import("./SheetDrawerRuntime"), (original) => {
+    loader.loadRuntime();
+    return original();
+  });
   vi.doMock("vaul", async () => {
     await loader.load();
     return {
@@ -192,6 +202,7 @@ afterEach(async () => {
 });
 it("keeps closed public children unmounted and performs zero SDK imports or history entries", async () => {
   await act(async () => render(false));
+  expect(loader.loadRuntime).not.toHaveBeenCalled();
   expect(loader.load).not.toHaveBeenCalled();
   expect(history.register).not.toHaveBeenCalled();
   expect(document.querySelector('[aria-label="Original child"]')).toBeNull();
@@ -211,6 +222,7 @@ it("captures the original trigger and one Back owner before held code, then moun
   trigger.focus();
   await act(async () => render(true, vi.fn(), <Child />));
   await vi.waitFor(() => expect(loader.load).toHaveBeenCalledOnce());
+  expect(loader.loadRuntime).toHaveBeenCalledOnce();
   expect(history.register).toHaveBeenCalledOnce();
   expect(document.body.textContent).toContain("Loading sheet controls");
   expect(child).not.toHaveBeenCalled();
@@ -510,7 +522,10 @@ async function openReload() {
   const trigger = named("Reload app");
   trigger.focus();
   await act(async () => trigger.click());
-  await vi.waitFor(() => expect(review()).toBeDefined());
+  await vi.waitFor(() => {
+    expect(review()).toBeDefined();
+    expect(named("Cancel", review())).toBeDefined();
+  });
   return trigger;
 }
 it("truthfully warns before Reload; Cancel and Escape keep the same outside answer without code Retry", async () => {

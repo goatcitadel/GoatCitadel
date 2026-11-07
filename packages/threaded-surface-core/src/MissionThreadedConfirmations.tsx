@@ -1,5 +1,3 @@
-import type { ComponentProps } from "react";
-import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import {
@@ -7,11 +5,18 @@ import {
   getDeleteSessionConfirmationMessage,
 } from "./chat/chat-page-pure-helpers";
 import { changePlanContextNote } from "./chat/change-plan-controller-helpers";
+import { useChatChangePlanConfirmations } from "./chat/useChatChangePlanConfirmations";
+import { useChatChangePlanOAuth } from "./chat/useChatChangePlanOAuth";
+import { useChatChangePlanOwnerActions } from "./chat/useChatChangePlanOwnerActions";
 import type { ChatChangePlanState } from "./chat/useChatChangePlanState";
 import type { useChatSessionControls } from "./chat/useChatSessionControls";
 
-type DialogProps = ComponentProps<typeof ChatChangePlanActionDialog>;
 type SessionControls = ReturnType<typeof useChatSessionControls>;
+export type ChatConfirmationPlanContext = Pick<
+  Parameters<typeof useChatChangePlanConfirmations>[0],
+  "workspaceId" | "prefsRef" | "setPrefs" | "setUiError" | "pushLocalNotice" | "recordChangePlanResult"
+> & Pick<Parameters<typeof useChatChangePlanOwnerActions>[0], "onOpenApprovals">;
+
 type Input = Pick<
   ChatChangePlanState,
   | "activeChangePlan"
@@ -22,6 +27,8 @@ type Input = Pick<
   | "setActiveChangePlan"
   | "setLinkedDefaultChangePlan"
   | "setChangePlanActionError"
+  | "setChangePlanActionPending"
+  | "setChangePlanOAuthFlow"
 > &
   Pick<
     SessionControls,
@@ -32,6 +39,8 @@ type Input = Pick<
     | "archiveWorkspacePending"
     | "setArchiveWorkspaceConfirmOpen"
   > & {
+    visible: boolean;
+    planContext: ChatConfirmationPlanContext;
     forkConfirm: { turnId: string; turnCount: number; attachmentCount: number; artifactCount: number } | null;
     forkPending: boolean;
     setForkConfirm: (value: null) => void;
@@ -43,20 +52,14 @@ type Input = Pick<
     setCapabilitySuggestionConfirm: (value: null) => void;
     handleConfirmCapabilitySuggestion: () => void | Promise<void>;
     turnCount: number;
-    handleConfirmLinkedModelPlans: (plan: ChangePlanRecord, linked: ChangePlanRecord) => Promise<void>;
-    handleConfirmChangePlan: DialogProps["onConfirm"];
-    handleSubmitChangePlanForm: DialogProps["onSubmitPublicForm"];
-    handleSubmitChangePlanSecret: DialogProps["onSubmitSecureInput"];
-    handleChangePlanOAuth: DialogProps["onContinueOAuth"];
-    handleOpenChangePlanApproval: DialogProps["onOpenApproval"];
-    handleReviewChangePlanArtifacts: DialogProps["onReviewArtifacts"];
-    handleChangePlanNativePath: DialogProps["onOpenNativePathPicker"];
     workspaceMissionSessionCount: number;
     handleConfirmDeleteSession: () => void | Promise<void>;
     handleConfirmArchiveWorkspace: () => void | Promise<void>;
   };
 
 export function MissionThreadedConfirmations({
+  visible,
+  planContext,
   forkConfirm,
   forkPending,
   setForkConfirm,
@@ -76,14 +79,8 @@ export function MissionThreadedConfirmations({
   setActiveChangePlan,
   setLinkedDefaultChangePlan,
   setChangePlanActionError,
-  handleConfirmLinkedModelPlans,
-  handleConfirmChangePlan,
-  handleSubmitChangePlanForm,
-  handleSubmitChangePlanSecret,
-  handleChangePlanOAuth,
-  handleOpenChangePlanApproval,
-  handleReviewChangePlanArtifacts,
-  handleChangePlanNativePath,
+  setChangePlanActionPending,
+  setChangePlanOAuthFlow,
   sessionDeleteConfirm,
   sessionControlPending,
   setSessionDeleteConfirm,
@@ -94,6 +91,31 @@ export function MissionThreadedConfirmations({
   setArchiveWorkspaceConfirmOpen,
   handleConfirmArchiveWorkspace,
 }: Input) {
+  const { handleConfirmLinkedModelPlans, handleConfirmChangePlan } = useChatChangePlanConfirmations({
+    ...planContext,
+    setActiveChangePlan,
+    setLinkedDefaultChangePlan,
+    setChangePlanActionError,
+    setChangePlanActionPending,
+  });
+  const { handleSubmitChangePlanForm, handleSubmitChangePlanSecret, handleOpenChangePlanApproval,
+    handleReviewChangePlanArtifacts } = useChatChangePlanOwnerActions({
+    ...planContext,
+    setActiveChangePlan,
+    setChangePlanActionError,
+    setChangePlanActionPending,
+  });
+  const { handleChangePlanOAuth, handleChangePlanNativePath } = useChatChangePlanOAuth({
+    workspaceId: planContext.workspaceId,
+    activeChangePlan,
+    changePlanOAuthFlow,
+    recordChangePlanResult: planContext.recordChangePlanResult,
+    setChangePlanOAuthFlow,
+    setChangePlanActionError,
+    setChangePlanActionPending,
+  });
+  if (!visible) return null;
+
   return (
     <>
       <ConfirmModal

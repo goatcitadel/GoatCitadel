@@ -1,8 +1,6 @@
 import { useMemo, useState } from "react";
-import {
-  buildUniversalModelPickerOptions,
-  type ProviderModelCatalogOption,
-} from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
+import { buildUniversalModelPickerOptions } from "@goatcitadel/mission-control-shared/hooks/provider-model-picker-options";
+import type { ProviderModelCatalogOption } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";

@@ -1,18 +1,13 @@
-import {
-  describeRetiredChannel,
-  type ChannelRuntimeStatus,
-  type IntegrationConnection,
-  type LlamaCppRuntimeStatus,
-  type NpuRuntimeStatus,
-  type RemoteWorkerRegistryPage,
+import type {
+  ChannelRuntimeStatus,
+  IntegrationConnection,
+  LlamaCppRuntimeStatus,
+  NpuRuntimeStatus,
+  RemoteWorkerRegistryPage,
 } from "@goatcitadel/contracts";
-import {
-  fetchHealthSummary,
-  fetchIntegrationConnections,
-  fetchChannelRuntimeStatus,
-  fetchLlamaCppStatus,
-  fetchNpuStatus,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { fetchHealthSummary } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { getGatewayAccessRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { describeApiError, type ApiErrorDescription } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import type { HealthSummaryResponse } from "@goatcitadel/mission-control-shared/api/types";
 
@@ -27,9 +22,8 @@ export type HealthSource<T> =
       lastKnown?: { value: T; observedAt?: number };
     }
   | { state: "deferred" };
-const CHANNEL_LIMIT = 20;
 
-async function read<T>(work: () => Promise<T>, previous?: HealthSource<T>): Promise<HealthSource<T>> {
+export async function readHealthSource<T>(work: () => Promise<T>, previous?: HealthSource<T>): Promise<HealthSource<T>> {
   // Only the caller's installation/workspace/access-scoped query record can suppress this read.
   if (previous?.state === "unavailable" && previous.retryable === false) return previous;
   try {
@@ -52,6 +46,25 @@ async function read<T>(work: () => Promise<T>, previous?: HealthSource<T>): Prom
   }
 }
 
+export function loadHealthSummarySource(previous?: HealthSource<HealthSummaryResponse>) {
+  return readHealthSource(() => fetchHealthSummary(), previous);
+}
+
+async function withHealthDetailCode(
+  dispatch: (detail: typeof import("./system-health-source-details")) => Promise<SystemHealthSources>,
+  signal?: AbortSignal,
+) {
+  signal?.throwIfAborted();
+  const installation = getGatewayApiBaseUrl();
+  const access = getGatewayAccessRevision();
+  const detail = await import("./system-health-source-details");
+  // Loading code grants no permission to read on behalf of the previous query owner.
+  signal?.throwIfAborted();
+  if (getGatewayApiBaseUrl() !== installation || getGatewayAccessRevision() !== access)
+    throw new DOMException("Health check scope changed", "AbortError");
+  return dispatch(detail);
+}
+
 export interface SystemHealthSources {
   summary: HealthSource<HealthSummaryResponse>;
   llama: HealthSource<LlamaCppRuntimeStatus>;
@@ -62,25 +75,6 @@ export interface SystemHealthSources {
     checked: Array<{ connection: IntegrationConnection; runtime: HealthSource<ChannelRuntimeStatus> }>;
   }>;
   workers: HealthSource<RemoteWorkerRegistryPage>;
-}
-
-function connectionItems(
-  response: HealthSource<{ items: IntegrationConnection[] }>,
-): HealthSource<IntegrationConnection[]> {
-  return mapSource(response, (value) => value.items);
-}
-
-function connectionResponse(
-  previous?: HealthSource<IntegrationConnection[]>,
-): HealthSource<{ items: IntegrationConnection[] }> | undefined {
-  return previous ? mapSource(previous, (value) => ({ items: value })) : undefined;
-}
-
-function mapSource<T, U>(source: HealthSource<T>, map: (value: T) => U): HealthSource<U> {
-  if (source.state === "current") return { ...source, value: map(source.value) };
-  if (source.state === "deferred") return source;
-  const { lastKnown, ...failure } = source;
-  return { ...failure, ...(lastKnown ? { lastKnown: { ...lastKnown, value: map(lastKnown.value) } } : {}) };
 }
 
 export function staleHealthSources(sources: SystemHealthSources) {
@@ -129,28 +123,15 @@ export function retainedHealthObservations(sources: SystemHealthSources): System
  */
 export async function loadSystemHealthDigest(
   previous?: SystemHealthSources,
-  options: { deferOptionalSources?: boolean } = {},
+  options: { deferOptionalSources?: boolean; signal?: AbortSignal } = {},
 ): Promise<SystemHealthSources> {
-  if (options.deferOptionalSources)
-    return {
-      summary: await read(() => fetchHealthSummary(), previous?.summary),
-      llama: { state: "deferred" },
-      npu: { state: "deferred" },
-      connections: { state: "deferred" },
-      channels: { state: "deferred" },
-      workers: { state: "deferred" },
-    };
-  const [summary, llama, npu, connections] = await Promise.all([
-    read(() => fetchHealthSummary(), previous?.summary),
-    read(() => fetchLlamaCppStatus(), previous?.llama),
-    read(() => fetchNpuStatus(), previous?.npu),
-    read(() => fetchIntegrationConnections(), connectionResponse(previous?.connections)),
-  ]);
+  if (!options.deferOptionalSources)
+    return withHealthDetailCode(({ loadDetailedHealthDigest }) => loadDetailedHealthDigest(previous), options.signal);
   return {
-    summary,
-    llama,
-    npu,
-    connections: connectionItems(connections),
+    summary: await loadHealthSummarySource(previous?.summary),
+    llama: { state: "deferred" },
+    npu: { state: "deferred" },
+    connections: { state: "deferred" },
     channels: { state: "deferred" },
     workers: { state: "deferred" },
   };
@@ -160,67 +141,10 @@ export async function loadSystemHealthDigest(
 export async function loadSystemHealthSources(
   workspaceId: string,
   previous?: SystemHealthSources,
+  signal?: AbortSignal,
 ): Promise<SystemHealthSources> {
-  const [summary, llama, npu, connectionsResponse, workers] = await Promise.all([
-    read(() => fetchHealthSummary(), previous?.summary),
-    read(() => fetchLlamaCppStatus(), previous?.llama),
-    read(() => fetchNpuStatus(), previous?.npu),
-    read(() => fetchIntegrationConnections(), connectionResponse(previous?.connections)),
-    read(
-      async () =>
-        (await import("@goatcitadel/mission-control-shared/api/remote-workers")).fetchRemoteWorkerRegistry(
-          workspaceId,
-          { limit: 100 },
-        ),
-      previous?.workers,
-    ),
-  ]);
-  const connections = connectionItems(connectionsResponse);
-  if (connections.state !== "current")
-    return {
-      summary,
-      llama,
-      npu,
-      connections,
-      workers,
-      channels: {
-        state: "unavailable",
-        detail: "Channel connections could not be listed.",
-        ...(connections.state === "unavailable"
-          ? { category: connections.category, retryable: connections.retryable }
-          : {}),
-        ...(previous?.channels.state === "current"
-          ? { lastKnown: { value: previous.channels.value, observedAt: previous.channels.observedAt } }
-          : previous?.channels.state === "unavailable" && previous.channels.lastKnown
-            ? { lastKnown: previous.channels.lastKnown }
-            : {}),
-      },
-    };
-  // A retired channel's connection stays saved as it was left, but it is out of service for good: not checked, not counted.
-  const enabled = connections.value.filter(
-    (connection) => connection.kind === "channel" && connection.enabled && !describeRetiredChannel(connection.key),
+  return withHealthDetailCode(
+    ({ loadDetailedHealthSources }) => loadDetailedHealthSources(workspaceId, previous),
+    signal,
   );
-  const earlierChannels =
-    previous?.channels.state === "current"
-      ? previous.channels.value
-      : previous?.channels.state === "unavailable"
-        ? previous.channels.lastKnown?.value
-        : undefined;
-  const checked = await Promise.all(
-    enabled.slice(0, CHANNEL_LIMIT).map(async (connection) => ({
-      connection,
-      runtime: await read(
-        () => fetchChannelRuntimeStatus(connection.connectionId),
-        earlierChannels?.checked.find((item) => item.connection.connectionId === connection.connectionId)?.runtime,
-      ),
-    })),
-  );
-  return {
-    summary,
-    llama,
-    npu,
-    connections,
-    workers,
-    channels: { state: "current", value: { enabledCount: enabled.length, checked }, observedAt: Date.now() },
-  };
 }

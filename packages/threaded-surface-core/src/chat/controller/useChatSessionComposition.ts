@@ -167,6 +167,8 @@ export function useChatSessionComposition({
   const explicitContextEnabled = sessionData.settings?.chatFeatureAvailability?.explicitContext === true;
   const runVariables = useRunVariablePanel({
     selectedSessionId: selection.selectedSessionId,
+    workspaceId,
+    enabled: typedRunVariablesEnabled,
     setDraft,
     composerRef: coordination.composerRef,
   });

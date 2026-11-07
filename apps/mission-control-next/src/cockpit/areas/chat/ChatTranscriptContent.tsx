@@ -28,22 +28,22 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
-import { ChatCapabilitySuggestionLine } from "./ChatCapabilitySuggestionLine";
-import { DeferredCodeModeRequestCard, DeferredBrowserErrandCards } from "./DeferredChatLeaves";
+import { DeferredChatCapabilitySuggestionLine } from "./DeferredChatCapabilitySuggestionLine";
+import { DeferredCodeModeRequestCard, DeferredBrowserErrandCards, DeferredChatLeaf } from "./DeferredChatLeaves";
 import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
-import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatTurnDetails } from "./ChatTurnDetails";
-import { ChatTurnFailureCard } from "./ChatTurnFailureCard";
-import { ChatTurnThinking } from "./ChatTurnThinking";
-import { TurnReceipt } from "./ChatTurnReceipt";
 import { turnReadsDraft, type TurnActions } from "./use-turn-actions";
 
 const ChatChangePlanCard = lazy(async () => ({
   default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard,
 }));
+const ChatContinueAction = lazy(async () => ({ default: (await import("./ChatContinueAction")).ChatContinueAction }));
+const ChatTurnFailureCard = lazy(async () => ({ default: (await import("./ChatTurnFailureCard")).ChatTurnFailureCard }));
+const ChatTurnThinking = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).ChatTurnThinking }));
+const TurnReceipt = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).TurnReceipt }));
 
 const WorkflowSkillCaptureControl = lazy(() =>
   import("../../../features/native-routes/library/WorkflowSkillCaptureControl").then((module) => ({
@@ -184,11 +184,25 @@ export const Turn = memo(function Turn({
               <StatusBadge status={presentChatTurnStatus(turn.trace.status)} />
             ) : null}
           </div>
-          <ChatTurnThinking
-            thinking={turn.thinking}
-            live={streaming || !isChatTurnTerminalStatus(turn.trace.status)}
-            answerStarted={Boolean(assistantText)}
-          />
+          {turn.thinking?.trim() ? (
+            <DeferredChatLeaf
+              label="Thought process"
+              identity={turn.turnId}
+              fallback={
+                <p role="status" className="mb-2 text-xs text-fg-muted">
+                  {!assistantText && (streaming || !isChatTurnTerminalStatus(turn.trace.status))
+                    ? "Thinking…"
+                    : "Loading thought process…"}
+                </p>
+              }
+            >
+              <ChatTurnThinking
+                thinking={turn.thinking}
+                live={streaming || !isChatTurnTerminalStatus(turn.trace.status)}
+                answerStarted={Boolean(assistantText)}
+              />
+            </DeferredChatLeaf>
+          ) : null}
           {assistantText ? (
             <AssistantMessageRenderer
               role="assistant"
@@ -205,22 +219,42 @@ export const Turn = memo(function Turn({
             </p>
           ) : null}
           {/* Continue sends a message, which a channel conversation would deliver or post to the channel. */}
-          {continueActions && stopped && assistantText && !streaming && resendable ? (
-            <ChatContinueAction turn={turn} isLatest={isLatest} actions={continueActions} />
+          {continueActions && isLatest && stopped && assistantText && !streaming && resendable ? (
+            <DeferredChatLeaf
+              label="Continue"
+              identity={turn.turnId}
+              fallback={<p role="status" className="mt-2 text-xs text-fg-muted">Loading continuation controls…</p>}
+            >
+              <ChatContinueAction turn={turn} isLatest={isLatest} actions={continueActions} />
+            </DeferredChatLeaf>
           ) : null}
-          {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
+          {turn.assistantMessage && !streaming ? (
+            <DeferredChatLeaf
+              label="Message details"
+              identity={turn.turnId}
+              fallback={<p className="mt-2 text-xs text-fg-muted">{presentChatTurnStatus(turn.trace.status).label}</p>}
+            >
+              <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} />
+            </DeferredChatLeaf>
+          ) : null}
         </div>
       ) : !failed && !partial ? (
         <p className="text-xs text-fg-muted">{presentChatTurnStatus(turn.trace.status).label}</p>
       ) : null}
       {failed || partial ? (
-        <ChatTurnFailureCard
-          failed={failed}
-          answered={Boolean(assistantText)}
-          failureClass={turn.trace.failure?.failureClass}
-          hint={recoveryHint(turn, resendable)}
-          onNewConversation={actions.historicalReadOnly ? undefined : onNewConversation}
-        />
+        <DeferredChatLeaf
+          label="Response recovery"
+          identity={turn.turnId}
+          fallback={<p role="status" className="text-sm text-fg-muted">Loading response recovery…</p>}
+        >
+          <ChatTurnFailureCard
+            failed={failed}
+            answered={Boolean(assistantText)}
+            failureClass={turn.trace.failure?.failureClass}
+            hint={recoveryHint(turn, resendable)}
+            onNewConversation={actions.historicalReadOnly ? undefined : onNewConversation}
+          />
+        </DeferredChatLeaf>
       ) : null}
       {/* Its own row, not inside the reply: the request waits for the operator before any reply text exists. */}
       <DeferredCodeModeRequestCard
@@ -230,7 +264,8 @@ export const Turn = memo(function Turn({
       />
       <DeferredBrowserErrandCards toolRuns={turn.toolRuns} />
       {actions.onCapabilitySuggestionAction && actions.onDismissCapabilitySuggestion ? (
-        <ChatCapabilitySuggestionLine
+        <DeferredChatCapabilitySuggestionLine
+          turnId={turn.turnId}
           suggestions={capabilitySuggestions}
           onAction={actions.onCapabilitySuggestionAction}
           onDismiss={actions.onDismissCapabilitySuggestion}

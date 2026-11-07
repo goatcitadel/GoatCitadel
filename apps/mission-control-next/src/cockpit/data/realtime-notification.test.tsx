@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   sound: vi.fn(),
   desktop: vi.fn(),
   dismiss: vi.fn(),
+  loadAttention: vi.fn<() => Promise<void>>(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/client-core")>()),
@@ -39,6 +40,10 @@ vi.mock("@goatcitadel/mission-control-shared/state/operator-attention", () => ({
   playOperatorAttentionSound: mocks.sound,
 }));
 vi.mock("../../app/browser-notification", () => ({ showBrowserNotification: mocks.desktop }));
+vi.mock("./realtime-attention", async (importOriginal) => {
+  await mocks.loadAttention();
+  return importOriginal();
+});
 const item = {
   id: "approval:a",
   kind: "approval",
@@ -98,6 +103,7 @@ async function render(props = {}) {
 async function emit(value = event, replayed = false) {
   await act(async () => {
     onEvent(value, { replayed });
+    await vi.dynamicImportSettled();
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
@@ -117,6 +123,23 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+});
+
+it("keeps replay silent and drops a live attention read if access changes while its code loads", async () => {
+  await render();
+  await emit(event, true);
+  expect(mocks.loadAttention).not.toHaveBeenCalled();
+  let release!: () => void;
+  mocks.loadAttention.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  await act(async () => {
+    onEvent(event, { replayed: false });
+    await vi.waitFor(() => expect(mocks.loadAttention).toHaveBeenCalledOnce());
+    mocks.accessRevision += 1;
+    release();
+    await vi.dynamicImportSettled();
+  });
+  expect(mocks.read).not.toHaveBeenCalled();
+  expect(mocks.warning).not.toHaveBeenCalled();
 });
 afterEach(() => {
   act(() => root.unmount());

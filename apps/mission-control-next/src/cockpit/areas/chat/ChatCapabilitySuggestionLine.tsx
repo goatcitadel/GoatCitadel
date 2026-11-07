@@ -2,26 +2,6 @@ import { useEffect, useRef, useState } from "react";
 import { X } from "lucide-react";
 import type { ChatCapabilityUpgradeSuggestion } from "@goatcitadel/contracts";
 
-const NO_SUGGESTIONS: ChatCapabilityUpgradeSuggestion[] = [];
-
-/**
- * The suggestions a turn offers under its reply: only the selected turn (the latest when none is selected) and never
- * a read-only historical view, because accepting one changes the workspace.
- */
-export function selectTurnCapabilitySuggestions(
-  actions: {
-    capabilitySuggestions?: ChatCapabilityUpgradeSuggestion[];
-    historicalReadOnly?: boolean;
-    selectedTurnId?: string | null;
-  },
-  turnId: string,
-  isLatest: boolean,
-): ChatCapabilityUpgradeSuggestion[] {
-  if (actions.historicalReadOnly) return NO_SUGGESTIONS;
-  const offered = actions.selectedTurnId ? actions.selectedTurnId === turnId : isLatest;
-  return offered ? (actions.capabilitySuggestions ?? NO_SUGGESTIONS) : NO_SUGGESTIONS;
-}
-
 function SuggestionRow({
   suggestion,
   onAction,

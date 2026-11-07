@@ -243,7 +243,7 @@ describe("ChatTranscript in a channel conversation", () => {
     expect(continueButtons()).toHaveLength(0);
     // A mission chat keeps Continue.
     await remount(<ChatTranscript props={props([stoppedTurn("operator")], { canSend: true })} />);
-    expect(continueButtons()).toHaveLength(1);
+    await vi.waitFor(() => expect(continueButtons()).toHaveLength(1));
   });
 
   it("does not point at Retry in the recovery note of a channel message that failed", async () => {
@@ -253,6 +253,7 @@ describe("ChatTranscript in a channel conversation", () => {
     await render(
       <ChatTranscript props={props([failed])} channel={{ ...telegram, lastReadAt: "2026-10-25T10:00:00Z" }} />,
     );
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Response recovery"]')).not.toBeNull());
     const note = container.querySelector('[aria-label="Response recovery"]');
     expect(note?.textContent).toContain("Run details");
     expect(note?.textContent).not.toContain("Use Retry");
@@ -270,7 +271,7 @@ describe("ChatTranscript in a channel conversation", () => {
     const channel = { ...telegram, lastReadAt: "2026-10-25T10:00:00Z" };
 
     await render(<ChatTranscript props={props([retryable])} channel={channel} />);
-    expect(recoveryNote()).toContain("Use Run details under More, below this message.");
+    await vi.waitFor(() => expect(recoveryNote()).toContain("Use Run details under More, below this message."));
     expect(recoveryNote()).not.toContain("Retry");
     await remount(<ChatTranscript props={props([resend])} channel={channel} />);
     expect(recoveryNote()).toContain("Use Run details under More, below this message.");

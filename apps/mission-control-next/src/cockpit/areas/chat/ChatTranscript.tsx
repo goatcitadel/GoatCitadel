@@ -1,6 +1,7 @@
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { Turn, ChatTranscriptEmpty, ChatTranscriptFooter, type TranscriptFooterContext } from "./ChatTranscriptContent";
-import { selectTurnCapabilitySuggestions, turnReadsDraft, useTurnActions } from "./use-turn-actions";
+import { turnReadsDraft, useTurnActions } from "./use-turn-actions";
+import { selectTurnCapabilitySuggestions } from "./turn-capability-suggestions";
 import type { ChannelConversationContext } from "./channel-conversation";
 import { useChannelReading } from "./use-channel-conversation";
 import {

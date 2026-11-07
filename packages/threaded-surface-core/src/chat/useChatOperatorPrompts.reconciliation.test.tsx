@@ -4,7 +4,13 @@ import { useChatOperatorPrompts } from "./useChatOperatorPrompts";
 import type { ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 const api = vi.hoisted(() => ({ fetchChatPendingApprovals: vi.fn(), approveChatTool: vi.fn(), denyChatTool: vi.fn() }));
+const code = vi.hoisted(() => ({
+  load: undefined as (() => Promise<typeof import("./operator-prompt-action-code")>) | undefined,
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
+vi.mock("./load-operator-prompt-action-code", () => ({
+  loadOperatorPromptActionCode: () => code.load?.() ?? import("./operator-prompt-action-code"),
+}));
 vi.mock("@goatcitadel/mission-control-shared/state/dev-diagnostics-store", () => ({ recordClientDiagnostic: vi.fn() }));
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 let renderer: ReactTestRenderer;
@@ -32,7 +38,52 @@ const pending = (sessionId = "session-a", approvalId = "approval-a") => ({
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  code.load = undefined;
   api.fetchChatPendingApprovals.mockResolvedValue(pending());
+});
+it("reads the canonical queue eagerly and declines a replaced prompt while its action code loads", async () => {
+  let release!: (module: typeof import("./operator-prompt-action-code")) => void;
+  const held = new Promise<typeof import("./operator-prompt-action-code")>((resolve) => {
+    release = resolve;
+  });
+  code.load = vi.fn(() => held);
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  expect(owner.pendingApproval?.approvalId).toBe("approval-a");
+  expect(code.load).not.toHaveBeenCalled();
+  let action!: Promise<void>;
+  await act(async () => {
+    action = owner.handleApprovePending();
+  });
+  expect(owner.approvalPending).toBe(true);
+  expect(code.load).toHaveBeenCalledOnce();
+  api.fetchChatPendingApprovals.mockResolvedValue(pending("session-a", "approval-replacement"));
+  await act(async () => owner.refreshThreadAndApprovals());
+  await act(async () => {
+    release(await import("./operator-prompt-action-code"));
+    await action;
+  });
+  expect(api.approveChatTool).not.toHaveBeenCalled();
+  expect(owner.pendingApproval?.approvalId).toBe("approval-replacement");
+  expect(owner.approvalPending).toBe(false);
+});
+
+it("dispatches a current approval with the original owner and refreshes both canonical sessions", async () => {
+  api.fetchChatPendingApprovals.mockResolvedValue(pending("session-child", "approval-child"));
+  api.approveChatTool.mockResolvedValue({ resumed: true });
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  api.fetchChatPendingApprovals.mockResolvedValue({ items: [], remainingCount: 0 });
+  await act(async () => owner.handleApprovePending("session"));
+  expect(api.approveChatTool).toHaveBeenCalledExactlyOnceWith("session-child", "approval-child", {
+    allowScope: "session",
+  });
+  expect(api.fetchChatPendingApprovals.mock.calls.slice(1)).toEqual([["session-child"], ["session-a"]]);
+  expect(reload).toHaveBeenCalledExactlyOnceWith("session-a", { background: true, includeThread: true });
+  expect(owner.pendingApproval).toBeNull();
+  expect(owner.approvalPending).toBe(false);
 });
 afterEach(async () => {
   await act(async () => renderer?.unmount());

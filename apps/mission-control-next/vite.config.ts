@@ -241,6 +241,10 @@ export function readDevResetId(command: string, rootDir: string = repoRoot): str
 // These exact optional SDK leaves stay with their real public menu/popover
 // importers. Actual Rollup imports still retain a future eager consumer.
 const AUTOMATIC_COCKPIT_OVERLAY_SDK_SUFFIXES = [
+  "/node_modules/@radix-ui/react-dialog/dist/index.mjs",
+  "/node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs",
+  "/node_modules/@radix-ui/react-focus-scope/dist/index.mjs",
+  "/node_modules/@radix-ui/react-focus-guards/dist/index.mjs",
   "/node_modules/@radix-ui/react-dropdown-menu/dist/index.mjs",
   "/node_modules/@radix-ui/react-menu/dist/index.mjs",
   "/node_modules/@radix-ui/react-popover/dist/index.mjs",
@@ -254,12 +258,16 @@ const AUTOMATIC_COCKPIT_OVERLAY_SDK_SUFFIXES = [
   "/node_modules/vaul/dist/index.mjs",
 ] as const;
 
+// Dialog scroll/focus helpers belong to the same on-demand overlay graph.
+const AUTOMATIC_COCKPIT_DIALOG_SUPPORT =
+  /\/node_modules\/(?:react-remove-scroll(?:-bar)?|aria-hidden|use-sidecar|use-callback-ref)\/dist\/es2015\/[^/]+\.js$/u;
+
 const COCKPIT_APPROVAL_BODY_OWNER_SUFFIXES = [
   ["/apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRendererBody.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx"],
   [
-    "/packages/mission-control-shared/dist/content/approval-helpers.js",
-    "/packages/mission-control-shared/src/content/approval-helpers.ts",
+    "/packages/mission-control-shared/dist/content/approval-generic-evidence.js",
+    "/packages/mission-control-shared/src/content/approval-generic-evidence.ts",
   ],
   ["/apps/mission-control-next/src/cockpit/ui/evidence-scroll.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalSettlement.tsx"],
@@ -270,7 +278,7 @@ const COCKPIT_APPROVAL_BODY_OWNER_SUFFIXES = [
   ],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/specialist-approval-evidence.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/SpecialistApprovalReview.tsx"],
-  ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummary.tsx"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-guard.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/approval-settlement.ts"],
@@ -303,13 +311,12 @@ const COCKPIT_CHAT_DEMAND_OWNER_SUFFIXES = [
   ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolApprovalLine.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/approval-settlement.ts"],
   ["/apps/mission-control-next/src/cockpit/ui/RecordedErrorDetails.tsx"],
-  ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-vocabulary.ts"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/approval-actor.ts"],
   [
     "/packages/mission-control-shared/dist/components/chat/chat-tool-diff.js",
     "/packages/mission-control-shared/src/components/chat/chat-tool-diff.ts",
   ],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/SpecialistApprovalReview.tsx"],
-  ["/apps/mission-control-next/src/cockpit/areas/inbox/prepare-approve.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolRunSummary.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/chat-tool-run-groups.ts"],
@@ -326,8 +333,8 @@ const COCKPIT_CHAT_DEMAND_OWNER_SUFFIXES = [
 // Library, Work, Settings and Classic also consume these owners; destination costs need measurement.
 const COCKPIT_APPROVAL_RESIDUAL_OWNER_SUFFIXES = [
   [
-    "/packages/mission-control-shared/dist/content/approval-helpers.js",
-    "/packages/mission-control-shared/src/content/approval-helpers.ts",
+    "/packages/mission-control-shared/dist/content/approval-generic-evidence.js",
+    "/packages/mission-control-shared/src/content/approval-generic-evidence.ts",
   ],
   [
     "/packages/mission-control-shared/dist/content/external-source-approval-evidence.js",
@@ -348,7 +355,9 @@ const COCKPIT_APPROVAL_RESIDUAL_OWNER_SUFFIXES = [
   ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-attempts.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-guard.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/use-minute-clock.ts"],
-  ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummary.tsx"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/specialist-approval-key.ts"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/use-approval-review-evidence.ts"],
   ["/apps/mission-control-next/src/cockpit/ui/evidence-scroll.ts"],
   ["/apps/mission-control-next/src/cockpit/ui/TypedConfirmation.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx"],
@@ -365,15 +374,28 @@ export function createCockpitBootChunkSelector() {
   let lazyApprovalResidualModules: Set<string> | undefined;
   return (id: string, graph?: CockpitBootModuleGraph): string | undefined => {
     const normalizedId = id.replaceAll("\\", "/");
+    // A pending generic approval must not preload kind-specific evidence or specialist renderers.
+    const kindSpecificApprovalOwner =
+      /\/packages\/mission-control-shared\/(?:dist|src)\/content\/(?:approval-purpose-evidence|external-source-approval-evidence|communications-approval-evidence|skill-state-approval-evidence|code-mode-request-input)\.[jt]s$/u.test(normalizedId) ||
+      /\/apps\/mission-control-next\/src\/(?:cockpit\/areas\/inbox\/(?:SpecialistApprovalReview\.tsx|specialist-approval-evidence\.ts)|features\/native-routes\/ops\/native-runtime-approval-evidence\.ts)$/u.test(normalizedId);
     // Cache both success and failure before existing automatic placement rules.
     if (graph && coldRuntimeVendors === undefined) coldRuntimeVendors = findColdCockpitRuntimeVendors(graph);
     // Exact optional overlay owners stay automatic even when a discarded umbrella
     // makes the legacy cold-vendor grouping reachable. Real imports still load them.
-    if (AUTOMATIC_COCKPIT_OVERLAY_SDK_SUFFIXES.some((suffix) => normalizedId.endsWith(suffix))) return undefined;
+    if (
+      AUTOMATIC_COCKPIT_OVERLAY_SDK_SUFFIXES.some((suffix) => normalizedId.endsWith(suffix)) ||
+      AUTOMATIC_COCKPIT_DIALOG_SUPPORT.test(normalizedId)
+    )
+      return undefined;
+    // The idle operator projection is eager. Full session-control validation and
+    // its Zod runtime follow their actual imports, even when a barrel reaches them.
+    if (
+      normalizedId.includes("/node_modules/zod/v4/") ||
+      normalizedId.includes("/node_modules/@noble/hashes/") ||
+      /\/packages\/contracts\/(?:dist|src)\/(?:session-control|run-variables|sha256)\.[jt]s$/u.test(normalizedId)
+    )
+      return undefined;
     if (coldRuntimeVendors?.has(id)) return "cockpit-runtime";
-    // Zod's ordinary imports retain validation; avoid forcing its classic and
-    // mini runtime graph into the same manually retained boot owner.
-    if (normalizedId.includes("/node_modules/zod/v4/")) return undefined;
     // A discarded contract barrel can reach modules retained only by lazy destinations.
     // Let Rollup place those modules; actual imports still preserve their validation.
     if (
@@ -504,6 +526,15 @@ export function createCockpitBootChunkSelector() {
           }
         }
       }
+      if (kindSpecificApprovalOwner && !namedBootBindings?.has(id)) return undefined;
+      // Pending approval summaries use the shared workspace labels on first render.
+      // Keep the small shared hook outside the approval chunk used by other destinations.
+      if (
+        lazyApprovalResidualModules &&
+        normalizedId.endsWith("/apps/mission-control-next/src/cockpit/data/use-workspace-name.ts") &&
+        graph.getModuleInfo(id)?.isIncluded === true
+      )
+        return "cockpit-entry";
       if (lazyApprovalResidualModules?.has(id) || lazyChatDemandModules?.has(id) || lazyApprovalBodyModules?.has(id)) {
         return COCKPIT_APPROVAL_SETTLEMENT_OWNER_SUFFIXES.some((suffix) => normalizedId.endsWith(suffix))
           ? "ChatApprovalRendererSettlement"
@@ -557,6 +588,16 @@ export function createCockpitBootChunkSelector() {
       return "vendor-markdown";
     }
     return undefined;
+  };
+}
+
+/** Co-locate the eager application bindings while keeping the runtime dependency direction. */
+export function createCockpitOutputChunkSelector() {
+  const selectOwner = createCockpitBootChunkSelector();
+  return (id: string, graph?: CockpitBootModuleGraph): string | undefined => {
+    const owner = selectOwner(id, graph);
+    if (owner !== "cockpit-foundation") return owner;
+    return id.replaceAll("\\", "/").includes("/packages/contracts/") ? "cockpit-runtime" : "cockpit-entry";
   };
 }
 
@@ -614,7 +655,7 @@ export default defineConfig(({ mode, command }) => {
       rollupOptions: {
         output: {
           onlyExplicitManualChunks: true,
-          manualChunks: createCockpitBootChunkSelector(),
+          manualChunks: createCockpitOutputChunkSelector(),
         },
       },
     },

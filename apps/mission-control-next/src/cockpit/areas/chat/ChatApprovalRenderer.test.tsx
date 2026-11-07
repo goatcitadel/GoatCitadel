@@ -314,7 +314,10 @@ it("preserves signal facts while the canonical GET is held and loads only pendin
   // follow-on outcome lands (#542); counting before that read settled made this test flaky.
   const followOn = deferred<{ approval: ApprovalRequest; effects: never[]; events: never[] }>();
   api.fetchApprovalReplay.mockImplementation(() => followOn.promise);
-  await act(async () => button("Approve once").click());
+  await act(async () => {
+    button("Approve once").click();
+    await vi.dynamicImportSettled();
+  });
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
   expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", { workspaceId: "workspace-a" });
   expect(resolved).toHaveBeenCalledTimes(1);
@@ -481,6 +484,7 @@ async function openReload() {
   await vi.waitFor(() =>
     expect(dialog()?.textContent).toContain("Unsent question answers and unsaved edits may be lost"),
   );
+  await vi.waitFor(() => expect(dialogButton("Cancel")).toBeDefined());
   return trigger;
 }
 it("exposes truthful code-load recovery without automatic reload, another import, decision or raw exception", async () => {
@@ -501,6 +505,7 @@ it.each(["text", "choice", "secure"] as const)(
   async (kind) => {
     const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
     await failedCode({ question: true, choice: kind === "choice", secure: kind === "secure" });
+    await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
     const form = host.querySelector<HTMLFormElement>('form[aria-label="Pending question"]')!;
     const input = form.querySelector<HTMLInputElement>(
       kind === "choice" ? 'input[value="right"]' : kind === "secure" ? 'input[type="password"]' : 'input[type="text"]',
@@ -543,6 +548,7 @@ it.each(["text", "choice", "secure"] as const)(
 it("consumes explicit current-document consent once without submitting inputs, deciding or writing draft storage", async () => {
   const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
   await failedCode({ question: true, choice: true });
+  await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
   const form = host.querySelector('form[aria-label="Pending question"]')!;
   await openReload();
   const confirm = dialogButton("Reload app");

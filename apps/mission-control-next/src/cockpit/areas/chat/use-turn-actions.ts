@@ -38,9 +38,6 @@ export function turnReadsDraft(turn: ChatThreadTurnRecord): boolean {
   return turn.trace.status === "completed" && turn.trace.completion?.status === "complete";
 }
 
-/** The suggestions one turn offers; a turn receives its own list, never the selection itself. */
-export { selectTurnCapabilitySuggestions } from "./ChatCapabilitySuggestionLine";
-
 /** The surface props a turn reads, as one object that changes only when one of its values does. */
 export function useTurnActions(
   props: MissionThreadedActiveSessionSurfaceProps,

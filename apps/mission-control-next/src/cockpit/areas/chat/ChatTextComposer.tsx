@@ -13,7 +13,7 @@ import { committedCommandDraft, composerSendBlock, type ComposerSendBlock } from
 import { isImeEnter } from "./ime";
 import { useProjectSwitchReview } from "../../../features/threaded-surface/useProjectSwitchReview";
 import { useChatSelectionReview } from "./use-chat-owner-navigation";
-import { SessionControlBanner } from "../../../features/threaded-surface/SessionControlBanner";
+import { DeferredSessionControlBanner } from "./DeferredChatLeaves";
 import { useAutoGrowTextarea } from "../../../features/threaded-surface/useAutoGrowTextarea";
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import { ChatLegacyInputNotice } from "./ChatLegacyInputNotice";
@@ -220,7 +220,7 @@ export function ChatTextComposer({
       onDrop={props.onDrop}
       className={`border-t bg-raised p-3 max-sm:px-2 max-sm:py-2 ${props.isDragActive ? "border-accent" : "border-line-subtle"}`}
     >
-      {props.sessionControlBanner ? <SessionControlBanner {...props.sessionControlBanner} /> : null}
+      {props.sessionControlBanner ? <DeferredSessionControlBanner {...props.sessionControlBanner} /> : null}
       <div className="mx-auto max-w-3xl">
         {props.editingTurnId ? (
           <div

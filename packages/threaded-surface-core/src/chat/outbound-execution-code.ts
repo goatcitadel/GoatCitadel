@@ -33,10 +33,11 @@ import type {
 import type { useChatStreamingPreviewState } from "./useChatStreamingPreviewState";
 import type { useChatOperatorPrompts } from "./useChatOperatorPrompts";
 import type { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
-import type {
+import {
   isThreadMutatingStreamChunk,
   updateThreadFromStreamChunk,
 } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
+import { ChatStreamingPreviewBuffer, isReducedMotionPreferred } from "./chat-streaming-preview";
 import type {
   clearChatStreamActivity,
   recordChatStreamChunkActivity,
@@ -49,6 +50,7 @@ import type { shouldExecuteLocalChatCommand } from "./chat-page-pure-helpers";
 
 type PreviewOwner = ReturnType<typeof useChatStreamingPreviewState>;
 type PromptOwner = ReturnType<typeof useChatOperatorPrompts>;
+const previewRuntime = { ChatStreamingPreviewBuffer, isReducedMotionPreferred };
 export interface PreparedOutboundExecution {
   preflightHash: (value: RoutingPreflightResult | null) => string | null;
   executionCorrelationId: string;
@@ -104,8 +106,6 @@ export interface OutboundExecutionCodeOwner {
   onWorkspaceSnapshotFailedRef: MutableRefObject<UseChatOutboundExternalContext["onWorkspaceSnapshotFailed"]>;
   streamEnabled: boolean;
   isBackgroundChatUserInputPrompt: typeof isBackgroundChatUserInputPrompt;
-  isThreadMutatingStreamChunk: typeof isThreadMutatingStreamChunk;
-  updateThreadFromStreamChunk: typeof updateThreadFromStreamChunk;
   clearChatStreamActivity: typeof clearChatStreamActivity;
   recordChatStreamChunkActivity: typeof recordChatStreamChunkActivity;
   recordClientDiagnostic: typeof recordClientDiagnostic;
@@ -156,8 +156,6 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
     onWorkspaceSnapshotFailedRef,
     streamEnabled,
     isBackgroundChatUserInputPrompt,
-    isThreadMutatingStreamChunk,
-    updateThreadFromStreamChunk,
     clearChatStreamActivity,
     recordChatStreamChunkActivity,
     recordClientDiagnostic,
@@ -439,7 +437,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
             liveStream.turnId = chunk.turnId;
             locallyHandledTurnKeysRef.current.add(`${chunk.sessionId}:${chunk.turnId}`);
             setOptimisticUserMessage((current) => (current?.queueItemId === item.id ? null : current));
-            getStreamingPreviewBuffer().start({
+            getStreamingPreviewBuffer(previewRuntime).start({
               sessionId: chunk.sessionId,
               turnId: chunk.turnId,
               messageId: chunk.messageId,
@@ -458,7 +456,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
             terminalStreamStateReceived = true;
           }
           if (chunk.type === "message_done") {
-            const previewBuffer = getStreamingPreviewBuffer();
+            const previewBuffer = getStreamingPreviewBuffer(previewRuntime);
             if (!previewBuffer.matches(chunk.sessionId, chunk.turnId)) {
               previewBuffer.start({
                 sessionId: chunk.sessionId,
@@ -543,7 +541,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
             streamErrorChunkReceived = true;
             const errorMessage = chunk.error?.trim() || STREAMING_REQUEST_FAILED_MESSAGE;
             setError(errorMessage, getOutboundErrorSource(item.action));
-            promoteStreamingPreviewToThread(chunk.sessionId, "error");
+            promoteStreamingPreviewToThread(chunk.sessionId, "error", updateThreadFromStreamChunk);
             recordClientDiagnostic({
               level: "error",
               category: "chat",
@@ -555,7 +553,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
             flushPreviewPathDiagnostic("error", chunk.turnId);
           }
           if (chunk.type === "delta") {
-            getStreamingPreviewBuffer().append({
+            getStreamingPreviewBuffer(previewRuntime).append({
               sessionId: chunk.sessionId,
               turnId: chunk.turnId,
               messageId: chunk.messageId,
@@ -832,7 +830,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
           onWorkspaceSnapshotFailedRef.current?.(item);
         }
         if (session) {
-          promoteStreamingPreviewToThread(session.sessionId, "abort");
+          promoteStreamingPreviewToThread(session.sessionId, "abort", updateThreadFromStreamChunk);
         }
         // Fall back to the queue-item id so rapid abort-during-send summaries
         // from distinct sends never collide on the shared throttle bucket.
@@ -849,7 +847,7 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
         return;
       }
       if (session) {
-        promoteStreamingPreviewToThread(session.sessionId, "error");
+        promoteStreamingPreviewToThread(session.sessionId, "error", updateThreadFromStreamChunk);
         void loadSessionCoreState(session.sessionId, {
           background: true,
           includeThread: true,

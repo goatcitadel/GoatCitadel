@@ -146,6 +146,11 @@ export function useChatOutboundComposition({
 
   const outbound = useChatOutboundExecution({
     workspaceId,
+    operatorPromptCustody: {
+      historicalRevisionRef: session.sessionData.historicalWindowGenerationRef,
+      historicalReadOnly: session.sessionData.contextMutationReadOnly,
+      selectionRevisionRef: selection.selectedSessionRevisionRef,
+    },
     sessionConfig: {
       surfaceMode: submission.outboundSurfaceMode,
       selectedSessionId: selection.selectedSessionId,

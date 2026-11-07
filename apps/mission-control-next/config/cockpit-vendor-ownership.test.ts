@@ -350,7 +350,7 @@ it.each(measuredAutomaticOwners)(
 );
 
 it.each([
-  "C:/repo/packages/contracts/dist/session-control.js",
+  "C:/repo/packages/contracts/dist/session-control-operator-projection.js",
   "C:/repo/packages/contracts/dist/external-sources.js",
   "C:/repo/packages/contracts/dist/ops-board-new.js",
   "C:/repo/packages/mission-control-shared/dist/api/chat.js",
@@ -399,21 +399,23 @@ it.each(remainingOptionalOwners)(
 
 it("avoids pulling lazy validators and SDK leaves through a discarded barrel while retaining mandatory Native owners", () => {
   const discarded = "C:/repo/discarded-barrel.js";
-  const mandatory = [
-    "C:/repo/packages/contracts/dist/session-control.js",
-    "C:/repo/packages/contracts/dist/run-variables.js",
-    "C:/repo/packages/mission-control-shared/dist/api/chat.js",
+  const optional = [
+    ...remainingOptionalOwners,
     "C:/repo/node_modules/@radix-ui/react-dialog/dist/index.mjs",
-    "C:/repo/node_modules/@radix-ui/react-slot/dist/index.mjs",
     "C:/repo/node_modules/@radix-ui/react-focus-scope/dist/index.mjs",
+  ];
+  const mandatory = [
+    "C:/repo/packages/contracts/dist/session-control-operator-projection.js",
+    "C:/repo/packages/mission-control-shared/dist/api/chat.js",
+    "C:/repo/node_modules/@radix-ui/react-slot/dist/index.mjs",
     "C:/repo/node_modules/zod/v3/types.js",
   ];
   const modules = new Map<string, Info>([
     [root, { isIncluded: true, importedIds: [discarded, ...mandatory], ast: program([]) }],
-    [discarded, { isIncluded: false, importedIds: remainingOptionalOwners, ast: program([]) }],
-    [lazyConsumer, { isIncluded: true, importedIds: remainingOptionalOwners, ast: program([]) }],
+    [discarded, { isIncluded: false, importedIds: optional, ast: program([]) }],
+    [lazyConsumer, { isIncluded: true, importedIds: optional, ast: program([]) }],
   ]);
-  for (const id of [...remainingOptionalOwners, ...mandatory]) {
+  for (const id of [...optional, ...mandatory]) {
     modules.set(id, { isIncluded: true, importedIds: [], ast: program([]) });
   }
   const graph: CockpitBootModuleGraph = {
@@ -421,7 +423,7 @@ it("avoids pulling lazy validators and SDK leaves through a discarded barrel whi
     getModuleInfo: (id) => modules.get(id) ?? null,
   };
   const select = createCockpitBootChunkSelector();
-  for (const id of remainingOptionalOwners) expect(select(id, graph), id).toBeUndefined();
+  for (const id of optional) expect(select(id, graph), id).toBeUndefined();
   for (const id of mandatory) {
     expect(usesAutomaticCockpitPlacement(id), id).toBe(false);
     expect(select(id, graph), id).toBe(id.includes("/packages/") ? "cockpit-foundation" : "cockpit-runtime");
@@ -747,6 +749,10 @@ it("leaves globally retained capability operations and query automatic when the 
 
 const approvalChunks = ["ChatApprovalRendererBody", "ChatApprovalRendererSettlement"] as const;
 function expectedApprovalChunk(owner: string) {
+  if (
+    /\/(?:approval-purpose-evidence|external-source-approval-evidence|communications-approval-evidence|skill-state-approval-evidence|code-mode-request-input)\.[jt]s$/u.test(owner) ||
+    /\/(?:SpecialistApprovalReview\.tsx|specialist-approval-evidence\.ts|native-runtime-approval-evidence\.ts)$/u.test(owner)
+  ) return undefined;
   return /\/(?:ApprovalSettlement\.tsx|approval-follow-on\.ts|ApprovalChangePlanOutcome\.tsx|durable-chat-turn-payload\.[jt]s)$/u.test(owner)
     ? approvalChunks[1]
     : approvalChunks[0];
@@ -757,14 +763,14 @@ function approvalBodyOwnerFixture(bootOwner = false) {
     app = "C:/repo/apps/mission-control-next/src/cockpit/";
   const body = app + "areas/chat/ChatApprovalRendererBody.ts",
     decision = app + "areas/inbox/ApprovalDecisionBar.tsx";
-  const helpers = "C:/repo/packages/mission-control-shared/dist/content/approval-helpers.js",
+  const helpers = "C:/repo/packages/mission-control-shared/dist/content/approval-generic-evidence.js",
     scroll = app + "ui/evidence-scroll.ts";
   const settlement = app + "areas/inbox/ApprovalSettlement.tsx",
     attempts = app + "areas/inbox/inbox-approval-attempts.ts";
   const communications = "C:/repo/packages/mission-control-shared/dist/content/communications-approval-evidence.js";
   const specialist = "C:/repo/apps/mission-control-next/src/cockpit/areas/inbox/specialist-approval-evidence.ts";
   const specialistReview = "C:/repo/apps/mission-control-next/src/cockpit/areas/inbox/SpecialistApprovalReview.tsx";
-  const reviewSummary = "C:/repo/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummary.tsx";
+  const reviewSummary = "C:/repo/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx";
   const risk = "C:/repo/apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx";
   const guard = "C:/repo/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-guard.ts";
   const outcome = "C:/repo/apps/mission-control-next/src/cockpit/areas/inbox/approval-settlement.ts";
@@ -840,8 +846,8 @@ function approvalBodyOwnerFixture(bootOwner = false) {
         importedIds: [helpers, scroll, attempts],
         ast: program([
           namedImport(
-            "@goatcitadel/mission-control-shared/content/approval-helpers",
-            "buildApprovalRequestReviewEvidenceModel",
+            "@goatcitadel/mission-control-shared/content/approval-generic-evidence",
+            "buildApprovalReviewEvidenceModel",
           ),
           namedImport("../../ui/evidence-scroll", "handleEvidenceScrollKeyDown"),
           namedImport("./inbox-approval-attempts", "useInboxApprovalAttempt"),
@@ -856,7 +862,7 @@ function approvalBodyOwnerFixture(bootOwner = false) {
         importedIds: [communications],
         ast: program([
           namedImport("./communications-approval-evidence.js", "communicationsMailSendApprovalEvidence"),
-          own("buildApprovalRequestReviewEvidenceModel"),
+          own("buildApprovalReviewEvidenceModel"),
         ]),
       },
     ],
@@ -1165,7 +1171,7 @@ it("retains the known lazy presentation group when an ordinary owner is discarde
   f.modules.get(f.externalEvidence)!.isIncluded = false;
   expect(usesAutomaticCockpitPlacement(f.externalEvidence)).toBe(false);
   const select = createCockpitBootChunkSelector();
-  expect(select(f.externalEvidence, f.graph)).toBe("ChatApprovalRendererBody");
+  expect(select(f.externalEvidence, f.graph)).toBeUndefined();
   for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
 });
 it("keeps nonpositive shared authority automatic without disabling proven optional presentation owners", () => {
@@ -1358,33 +1364,38 @@ it.each(["v4/core/schemas.js", "v4/mini/schemas.js"])(
 );
 
 // Exact source-owned first-use modules; independent of the older sixteen-owner fallback fixture.
+const durableDemandAliases = [
+  "/packages/contracts/dist/durable-chat-turn-payload.js",
+  "/packages/contracts/src/durable-chat-turn-payload.ts",
+] as const;
+const rendererBodyOwner = "/apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRendererBody.ts";
+const toolActivityOwner = "/apps/mission-control-next/src/cockpit/areas/chat/ChatToolActivityBody.tsx";
 const chatDemandOwnerAliases = [
   ["/apps/mission-control-next/src/cockpit/areas/chat/code-mode-request-copy.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolApprovalLine.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/approval-settlement.ts"],
   ["/apps/mission-control-next/src/cockpit/ui/RecordedErrorDetails.tsx"],
-  ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-vocabulary.ts"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/approval-actor.ts"],
   [
     "/packages/mission-control-shared/dist/components/chat/chat-tool-diff.js",
     "/packages/mission-control-shared/src/components/chat/chat-tool-diff.ts",
   ],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/SpecialistApprovalReview.tsx"],
-  ["/apps/mission-control-next/src/cockpit/areas/inbox/prepare-approve.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalDecisionBar.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolRunSummary.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/chat-tool-run-groups.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/chat-tool-run-change-stats.ts"],
-  ["/apps/mission-control-next/src/cockpit/areas/chat/ChatToolActivityBody.tsx"],
-  ["/packages/contracts/dist/durable-chat-turn-payload.js", "/packages/contracts/src/durable-chat-turn-payload.ts"],
+  [toolActivityOwner],
+  durableDemandAliases,
   ["/apps/mission-control-next/src/cockpit/areas/inbox/approval-follow-on.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalChangePlanOutcome.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalSettlement.tsx"],
-  ["/apps/mission-control-next/src/cockpit/areas/chat/ChatApprovalRendererBody.ts"],
+  [rendererBodyOwner],
 ] as const;
 
 // Observed graph447 residual approval closure. Existing eighteen-owner tests remain unchanged.
 const residualApprovalAliases = [
-  ["/packages/mission-control-shared/dist/content/approval-helpers.js", "/packages/mission-control-shared/src/content/approval-helpers.ts"],
+  ["/packages/mission-control-shared/dist/content/approval-generic-evidence.js", "/packages/mission-control-shared/src/content/approval-generic-evidence.ts"],
   ["/packages/mission-control-shared/dist/content/external-source-approval-evidence.js", "/packages/mission-control-shared/src/content/external-source-approval-evidence.ts"],
   ["/packages/mission-control-shared/dist/content/communications-approval-evidence.js", "/packages/mission-control-shared/src/content/communications-approval-evidence.ts"],
   ["/packages/mission-control-shared/dist/content/skill-state-approval-evidence.js", "/packages/mission-control-shared/src/content/skill-state-approval-evidence.ts"],
@@ -1392,7 +1403,9 @@ const residualApprovalAliases = [
   ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-attempts.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/inbox-approval-guard.ts"],
   ["/apps/mission-control-next/src/cockpit/areas/inbox/use-minute-clock.ts"],
-  ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummary.tsx"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalReviewSummaryContent.tsx"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/specialist-approval-key.ts"],
+  ["/apps/mission-control-next/src/cockpit/areas/inbox/use-approval-review-evidence.ts"],
   ["/apps/mission-control-next/src/cockpit/ui/evidence-scroll.ts"],
   ["/apps/mission-control-next/src/cockpit/ui/TypedConfirmation.tsx"],
   ["/apps/mission-control-next/src/cockpit/areas/chat/RiskApprovalAction.tsx"],
@@ -1408,7 +1421,15 @@ function residualApprovalFixture(directory: "src" | "dist" = "dist") {
   f.modules.get(f.owners[8]!)!.importedIds = [...residual];
   return { ...f, residual };
 }
-it.each(["src", "dist"] as const)("joins the exact twelve proven residual approval owners with the existing demand chunk (%s)", directory => {
+it("keeps the shared workspace label hook in Cockpit only for the proved approval closure", () => {
+  const f = residualApprovalFixture();
+  const owner = "C:/repo/apps/mission-control-next/src/cockpit/data/use-workspace-name.ts";
+  f.modules.set(owner, { isIncluded: true, importedIds: [], ast: program([]) });
+  expect(createCockpitBootChunkSelector()(owner, f.graph)).toBe("cockpit-entry");
+  f.modules.delete(f.residual[0]!);
+  expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
+});
+it.each(["src", "dist"] as const)("joins the exact proven residual approval owners with the existing demand chunk (%s)", directory => {
   const f = residualApprovalFixture(directory), select = createCockpitBootChunkSelector();
   const named = new Set<string>(), boot = collectCockpitBootBindings(f.graph, root, named);
   for (const owner of f.residual) {
@@ -1439,8 +1460,9 @@ it.each(residualApprovalAliases.flatMap((_, index) => residualFailures.map(kind 
     for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
   },
 );
-it("does not form the residual group without the proven eighteen-owner demand anchor", () => {
-  const f = residualApprovalFixture(); f.modules.delete(f.owners[12]!);
+it("does not form the residual group without the proven demand anchor", () => {
+  const f = residualApprovalFixture();
+  f.modules.delete("C:/repo" + toolActivityOwner);
   const select = createCockpitBootChunkSelector();
   for (const owner of f.residual) expect(approvalChunks).not.toContain(select(owner, f.graph));
 });
@@ -1456,7 +1478,7 @@ function chatDemandFixture(directory: "src" | "dist" = "dist") {
     declaration: { type: "FunctionDeclaration", id: identifier("demandValue") },
   };
   for (const owner of owners)
-    modules.set(owner, { isIncluded: owner !== owners[17], importedIds: [], ast: program([own]) });
+    modules.set(owner, { isIncluded: !owner.endsWith(rendererBodyOwner), importedIds: [], ast: program([own]) });
   const graph: CockpitBootModuleGraph = {
     getModuleIds: () => modules.keys(),
     getModuleInfo: (id) => modules.get(id) ?? null,
@@ -1464,7 +1486,7 @@ function chatDemandFixture(directory: "src" | "dist" = "dist") {
   return { owners, modules, graph };
 }
 it.each(["src", "dist"] as const)(
-  "coalesces all eighteen proven lazy demand owners using %s package aliases without adding them to static Chat",
+  "coalesces all proven lazy demand owners using %s package aliases without adding them to static Chat",
   (directory) => {
     const f = chatDemandFixture(directory),
       select = createCockpitBootChunkSelector(),
@@ -1530,7 +1552,7 @@ it.each(chatDemandOwnerAliases.flatMap((_, index) => demandMetadataFailures.map(
     for (const candidate of f.owners) expect(approvalChunks).not.toContain(select(candidate, f.graph));
   },
 );
-it.each(chatDemandOwnerAliases.map((_, index) => index).filter((index) => index !== 17))(
+it.each(chatDemandOwnerAliases.flatMap(([owner], index) => owner === rendererBodyOwner ? [] : [index]))(
   "does not accept a discarded real implementation for owner %s",
   (index) => {
     const f = chatDemandFixture();
@@ -1552,22 +1574,23 @@ it.each(chatDemandOwnerAliases.map((_, index) => index))(
     expect(named.has(owner)).toBe(false);
     const select = createCockpitBootChunkSelector();
     for (const candidate of f.owners) {
-      if (index === 13) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
+      if (owner.endsWith(durableDemandAliases[0])) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
       else expect(approvalChunks).not.toContain(select(candidate, f.graph));
     }
   },
 );
 it("keeps reset/bootstrap imports outside the optional demand group", () => {
   const f = chatDemandFixture(),
-    owner = f.owners[12]!;
+    owner = "C:/repo" + toolActivityOwner;
   f.modules.set("C:/repo/src/main.tsx", { isIncluded: true, importedIds: [owner], ast: program([]) });
   const select = createCockpitBootChunkSelector();
   for (const candidate of f.owners) expect(approvalChunks).not.toContain(select(candidate, f.graph));
 });
 it("rejects simultaneous source and dist aliases rather than arbitrarily selecting one", () => {
   const f = chatDemandFixture();
-  for (const index of [5, 13]) {
-    const alias = "C:/repo" + chatDemandOwnerAliases[index]![1];
+  for (const aliases of chatDemandOwnerAliases) {
+    if (aliases.length !== 2) continue;
+    const alias = "C:/repo" + aliases[1];
     f.modules.set(alias, { isIncluded: true, importedIds: [], ast: program([]) });
   }
   const select = createCockpitBootChunkSelector();
@@ -1576,7 +1599,7 @@ it("rejects simultaneous source and dist aliases rather than arbitrarily selecti
 it("retains the older sixteen-owner fallback when a new demand-only owner is missing", () => {
   const f = approvalBodyOwnerFixture();
   const select = createCockpitBootChunkSelector();
-  expect(f.modules.has("C:/repo" + chatDemandOwnerAliases[12]![0])).toBe(false);
+  expect(f.modules.has("C:/repo" + toolActivityOwner)).toBe(false);
   for (const owner of f.owners) expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
   expect(select(f.durableAuthority, f.graph)).toBeUndefined();
 });
@@ -1631,11 +1654,35 @@ it("groups exactly the complete already-cold vendor set, with no bootstrap or op
   const select = createCockpitBootChunkSelector();
   f.scans.mockClear();
   for (const owner of f.owners)
-    expect(select(owner, f.graph)).toBe(optionalOverlayVendorSuffixes.some((suffix) => owner.endsWith(suffix)) ? undefined : "cockpit-runtime");
+    expect(select(owner, f.graph)).toBe(
+      owner.includes("/node_modules/zod/v4/") ||
+        optionalOverlayVendorSuffixes.some((suffix) => owner.endsWith(suffix))
+        ? undefined
+        : "cockpit-runtime",
+    );
   expect(f.scans).toHaveBeenCalledOnce();
   expect(select(f.main, f.graph)).toBeUndefined();
   expect(select(sibling, f.graph)).not.toBe("cockpit-runtime");
 });
+
+it.each([
+  "packages/contracts/dist/session-control.js",
+  "packages/contracts/src/session-control.ts",
+  "packages/contracts/dist/run-variables.js",
+  "packages/contracts/src/run-variables.ts",
+  "packages/contracts/dist/sha256.js",
+  "node_modules/@noble/hashes/esm/sha2.js",
+])(
+  "leaves on-demand validators automatic even when the boot graph reaches %s",
+  (entry) => {
+    const f = coldRuntimeVendorFixture();
+    const owner = `C:/repo/${entry}`;
+    f.modules.set(owner, { isIncluded: true, importedIds: [], ast: program([]) });
+    f.modules.get(root)!.importedIds = [...f.owners, owner];
+    expect(collectCockpitBootBindings(f.graph, root).has(owner)).toBe(true);
+    expect(createCockpitBootChunkSelector()(owner, f.graph)).toBeUndefined();
+  },
+);
 const coldVendorFailures = [
   "missing",
   "duplicate",
@@ -1764,6 +1811,15 @@ it.each(optionalOverlayVendorSuffixes.flatMap((suffix) =>
 );
 
 const optionalDelegationCommands = ["runChatDelegation", "runChatResearch", "streamChatDelegation", "suggestChatDelegation", "triggerChatProactive"] as const;
+it.each(["chat-document-operations", "chat-history-reads", "chat-operator-actions", "chat-session-mutations", "chat-session-evidence", "chat-live-stream"])(
+  "keeps %s at its real import destination instead of its public API facade",
+  (name) => {
+    const packagePath = "C:/repo/packages/mission-control-shared/";
+    expect(usesAutomaticCockpitPlacement(packagePath + "dist/api/" + name + ".js")).toBe(true);
+    expect(usesAutomaticCockpitPlacement(packagePath + "src/api/" + name + ".ts")).toBe(true);
+    expect(usesAutomaticCockpitPlacement(packagePath + "dist/api/" + name + "-other.js")).toBe(false);
+  },
+);
 it.each(["dist/api/chat-optional-actions.js", "src/api/chat-optional-actions.ts"])("places only the exact optional delegation owner %s automatically", relative => {
   const owner = "C:/repo/packages/mission-control-shared/" + relative;
   expect(usesAutomaticCockpitPlacement(owner)).toBe(true);

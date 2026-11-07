@@ -22,11 +22,16 @@ vi.unmock("vaul");
 vi.mock("../data/use-operator-inbox", () => ({ useOperatorInbox: () => ({ data: undefined, isError: false }) }));
 const mocks = vi.hoisted(() => ({
   installation: "http://scope.invalid",
+  loadPicker: vi.fn<() => Promise<void> | undefined>(),
   citadels: vi.fn<typeof import("@goatcitadel/mission-control-shared/api/citadels").listCitadels>(),
   currentCitadel:
     vi.fn<typeof import("@goatcitadel/mission-control-shared/api/citadels").getCitadelStructureSnapshot>(),
   workspaces: vi.fn<typeof import("@goatcitadel/mission-control-shared/api/workspaces").fetchWorkspaces>(),
 }));
+vi.mock("./ScopeSwitcherPicker", async (importOriginal) => {
+  await mocks.loadPicker();
+  return importOriginal();
+});
 vi.mock("@goatcitadel/mission-control-shared/api/client-core", () => ({
   getGatewayApiBaseUrl: () => mocks.installation,
 }));
@@ -154,6 +159,39 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("cockpit scope owner", () => {
+  it("loads the picker on request and never reopens a dismissed loading dialog", async () => {
+    let finishLoading!: () => void;
+    mocks.loadPicker.mockReturnValueOnce(new Promise<void>((resolve) => (finishLoading = resolve)));
+    try {
+      await render();
+      const trigger = document.querySelector<HTMLButtonElement>('[aria-label$=", change Citadel and workspace"]')!;
+      expect(mocks.loadPicker).not.toHaveBeenCalled();
+
+      await act(async () => {
+        trigger.focus();
+        trigger.click();
+      });
+      await vi.waitFor(() => expect(mocks.loadPicker).toHaveBeenCalledOnce());
+      const pending = document.querySelector<HTMLDialogElement>('dialog[role="dialog"][open]')!;
+      expect(pending.textContent).toContain("Loading scope controls");
+      expect(pending.querySelector("select")).toBeNull();
+      await act(async () => pending.querySelector<HTMLButtonElement>('[aria-label="Close dialog"]')!.click());
+      await act(async () => {
+        finishLoading();
+        await import("./ScopeSwitcherPicker");
+      });
+      expect(document.querySelector('[role="dialog"][data-state="open"]')).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+
+      await act(async () => trigger.click());
+      await vi.waitFor(() =>
+        expect(document.querySelector('[role="dialog"][data-state="open"] select')).not.toBeNull(),
+      );
+    } finally {
+      finishLoading();
+    }
+  });
+
   it("shows the current canonical Citadel name before opening its picker, including a Citadel without a Charter", async () => {
     await render();
     await vi.waitFor(() =>

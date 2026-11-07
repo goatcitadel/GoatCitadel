@@ -95,6 +95,7 @@ export interface MissionThreadedDropTargetProps {
 }
 
 export interface MissionThreadedCodeWorkflowPanelProps {
+  workbenchRuntimeStatus?: "loading" | "unavailable";
   workspaceId: string;
   selectedTurn: ChatThreadResponse["turns"][number] | null;
   projectName?: string;

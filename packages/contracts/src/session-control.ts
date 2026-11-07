@@ -1,4 +1,11 @@
 import * as z from "zod/mini";
+import {
+  SESSION_CONTROL_IDENTIFIER_PATTERN,
+  SESSION_CONTROL_TIMESTAMP_PATTERN,
+  isCanonicalSessionControlTimestamp,
+  isOperatorControlEvent,
+  snapshotSessionControlData,
+} from "./session-control-operator-projection.js";
 
 export const SESSION_CONTROL_OPERATIONS = [
   "read",
@@ -89,19 +96,11 @@ const IdentifierSchema = z
   .string()
   .check(z.minLength(1))
   .check(z.maxLength(256))
-  .check(z.regex(/^[A-Za-z0-9._:-]+$/u));
+  .check(z.regex(SESSION_CONTROL_IDENTIFIER_PATTERN));
 const TimestampSchema = z
   .string()
-  .check(z.regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u))
-  .check(
-    z.refine(
-      (value) => {
-        const timestamp = Date.parse(value);
-        return !Number.isNaN(timestamp) && new Date(timestamp).toISOString() === value;
-      },
-      { message: "Timestamp is invalid." },
-    ),
-  );
+  .check(z.regex(SESSION_CONTROL_TIMESTAMP_PATTERN))
+  .check(z.refine(isCanonicalSessionControlTimestamp, { message: "Timestamp is invalid." }));
 const GenerationSchema = z.int().check(z.positive());
 const TokenFingerprintSchema = z.string().check(z.regex(/^[0-9a-f]{8}$/u));
 const SessionControlTokenHashSha256Schema = z.string().check(z.regex(/^[0-9a-f]{64}$/u));
@@ -161,21 +160,6 @@ const ControlProjectionBaseShape = {
   updatedAt: TimestampSchema,
 } as const;
 
-const OPERATOR_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
-  "session_initialized",
-  "request_created",
-  "request_rejected",
-  "request_expired",
-  "request_cancelled",
-  "identity_revoked",
-  "release",
-  "operator_revoke",
-  "emergency_takeover",
-  "auth_revoked",
-  "session_reactivated",
-  "heartbeat_preempted",
-  "mutation_denied",
-]);
 const EXTERNAL_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
   "request_rejected",
   "request_expired",
@@ -186,14 +170,6 @@ const EXTERNAL_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
   "reconnect",
   "mutation_denied",
 ]);
-const OPERATOR_EXTERNAL_RETURN_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
-  "identity_revoked",
-  "release",
-  "operator_revoke",
-  "emergency_takeover",
-  "auth_revoked",
-]);
-
 const OperatorSessionControlRecordSchema = z
   .strictObject({
     ...ControlProjectionBaseShape,
@@ -203,12 +179,7 @@ const OperatorSessionControlRecordSchema = z
   })
   .check(
     z.superRefine((control, context) => {
-      if (
-        !OPERATOR_CURRENT_EVENT_REASONS.has(control.lastEventReasonCode) ||
-        (control.lastEventReasonCode === "session_initialized" && control.generation !== 1) ||
-        (OPERATOR_EXTERNAL_RETURN_EVENT_REASONS.has(control.lastEventReasonCode) && control.generation < 3) ||
-        (control.lastEventReasonCode === "session_reactivated" && control.generation < 2)
-      ) {
+      if (!isOperatorControlEvent(control.lastEventReasonCode, control.generation)) {
         context.addIssue({ code: "custom", message: "Operator control projection is invalid." });
       }
     }),
@@ -662,56 +633,13 @@ function parseSecretSafe<Schema extends z.ZodMiniType>(
   message: string,
 ): DeepReadonly<z.output<Schema>> {
   try {
-    const snapshot = snapshotPlainData(input, { nodes: 0 }, 0);
+    const snapshot = snapshotSessionControlData(input);
     const parsed = schema.safeParse(snapshot);
     if (!parsed.success) throw new TypeError(message);
     return deepFreeze(parsed.data);
   } catch {
     throw new TypeError(message);
   }
-}
-
-function snapshotPlainData(value: unknown, state: { nodes: number }, depth: number): unknown {
-  if (value === null || typeof value !== "object") return value;
-  state.nodes += 1;
-  if (depth > 12 || state.nodes > 10_000) throw new TypeError("Untrusted value exceeds structural bounds.");
-
-  const prototype = Object.getPrototypeOf(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const keys = Reflect.ownKeys(descriptors);
-  if (Array.isArray(value)) {
-    if (prototype !== Array.prototype || value.length > 1_000) {
-      throw new TypeError("Untrusted array is invalid.");
-    }
-    const expectedKeys = value.length + 1;
-    if (keys.length !== expectedKeys || !keys.includes("length")) throw new TypeError("Untrusted array is invalid.");
-    const snapshot: unknown[] = [];
-    for (let index = 0; index < value.length; index += 1) {
-      const descriptor = descriptors[String(index)];
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new TypeError("Untrusted array is invalid.");
-      }
-      snapshot.push(snapshotPlainData(descriptor.value, state, depth + 1));
-    }
-    return snapshot;
-  }
-
-  if (prototype !== Object.prototype || keys.length > 64) throw new TypeError("Untrusted object is invalid.");
-  const snapshot = Object.create(null) as Record<string, unknown>;
-  for (const key of keys) {
-    if (typeof key !== "string") throw new TypeError("Untrusted object is invalid.");
-    const descriptor = descriptors[key];
-    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError("Untrusted object is invalid.");
-    }
-    Object.defineProperty(snapshot, key, {
-      value: snapshotPlainData(descriptor.value, state, depth + 1),
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-  return snapshot;
 }
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): DeepReadonly<T> {

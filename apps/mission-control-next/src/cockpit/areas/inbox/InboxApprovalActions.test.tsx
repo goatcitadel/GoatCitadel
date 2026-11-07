@@ -102,9 +102,18 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+async function openConfirmation(label = "Review danger approval") {
+  await vi.waitFor(() => expect(button(label).disabled).toBe(false));
+  await act(async () => button(label).click());
+  await vi.waitFor(() => expect(document.querySelector('[aria-label="Approval action details"]')).not.toBeNull());
+}
+
 async function approve() {
-  await act(async () => button("Review danger approval").click());
-  await act(async () => button("Approve once").click());
+  await openConfirmation();
+  await act(async () => {
+    button("Approve once").click();
+    await vi.dynamicImportSettled();
+  });
 }
 
 function button(label: string): HTMLButtonElement {
@@ -170,7 +179,7 @@ describe("Inbox approval decisions", () => {
       api.fetchApproval.mockResolvedValue(record);
       api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
       renderActions(record);
-      await act(async () => button("Review danger approval").click());
+      await openConfirmation();
       const dialog = document.querySelector('[role="dialog"]')!;
       expect(dialog.textContent).toContain(
         legacy
@@ -212,11 +221,11 @@ describe("Inbox approval decisions", () => {
       expect(api.resolveApproval).not.toHaveBeenCalled();
     },
   );
-  it("keeps missing or contradictory Knowledge preview unapprovable but deniable", () => {
+  it("keeps missing or contradictory Knowledge preview unapprovable but deniable", async () => {
     const record = knowledgeApproval();
     const buttonLabels = () => [...container.querySelectorAll("button")].map((entry) => entry.textContent);
     renderActions({ ...record, preview: {} });
-    expect(container.textContent).toContain("exact action preview is unavailable");
+    await vi.waitFor(() => expect(container.textContent).toContain("exact action preview is unavailable"));
     expect(buttonLabels()).toEqual(["Deny"]);
     renderActions({ ...record, preview: { ...record.preview, itemId: "foreign" } });
     expect(container.textContent).toContain("exact action preview is unavailable");
@@ -234,7 +243,7 @@ describe("Inbox approval decisions", () => {
     api.fetchApproval.mockResolvedValue(record);
     api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "rejected" }, effects: [] });
     const { onResolved } = renderActions(record);
-    expect(container.textContent).toContain("You can still deny it");
+    await vi.waitFor(() => expect(container.textContent).toContain("You can still deny it"));
     expect(container.textContent).not.toContain("Approve once");
     await act(async () => button("Deny").click());
     expect(api.resolveApproval).toHaveBeenCalledWith("approval-a", "reject");
@@ -259,7 +268,7 @@ describe("Inbox approval decisions", () => {
     api.resolveApproval.mockResolvedValue({ approval: { ...record, status: "approved" }, effects: [] });
     renderActions(record);
     expect(container.textContent).not.toContain("exact action preview is unavailable");
-    expect(container.textContent).toContain("Provider id: google");
+    await vi.waitFor(() => expect(container.textContent).toContain("Provider id: google"));
     expect(container.textContent).toContain("never confirms or applies the change");
     await act(async () => button("Approve once").click());
     expect(api.resolveApproval).toHaveBeenCalledWith("approval-a", "approve");
@@ -281,7 +290,7 @@ describe("Inbox approval decisions", () => {
 
   it("requires danger confirmation, then rereads the same pending owner record before approval", async () => {
     const { onResolved } = renderActions(approval);
-    await act(async () => button("Review danger approval").click());
+    await openConfirmation();
     expect(api.resolveApproval).not.toHaveBeenCalled();
     await act(async () => button("Approve once").click());
     expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", { workspaceId: "default" });
@@ -292,7 +301,7 @@ describe("Inbox approval decisions", () => {
   it("refuses a changed action even after confirmation", async () => {
     api.fetchApproval.mockResolvedValue({ ...approval, preview: { targets: ["other.txt"] } });
     const { onInvalidated } = renderActions(approval);
-    await act(async () => button("Review danger approval").click());
+    await openConfirmation();
     await act(async () => button("Approve once").click());
     expect(api.resolveApproval).not.toHaveBeenCalled();
     expect(onInvalidated).toHaveBeenCalledOnce();
@@ -301,7 +310,7 @@ describe("Inbox approval decisions", () => {
   it("locks both decisions after a mutation response with an uncertain outcome", async () => {
     api.resolveApproval.mockRejectedValue(new Error("Connection lost"));
     renderActions(approval);
-    await act(async () => button("Review danger approval").click());
+    await openConfirmation();
     await act(async () => button("Approve once").click());
     expect(api.resolveApproval).toHaveBeenCalledOnce();
     expect(button("Review danger approval").disabled).toBe(true);
@@ -382,7 +391,7 @@ describe("Inbox approval decisions", () => {
   it("allows another check when the owner read fails before a mutation", async () => {
     api.fetchApproval.mockRejectedValue(new Error("Connection lost"));
     renderActions(approval);
-    await act(async () => button("Review danger approval").click());
+    await openConfirmation();
     await act(async () => button("Approve once").click());
     expect(api.resolveApproval).not.toHaveBeenCalled();
     expect(button("Review danger approval").disabled).toBe(false);
@@ -431,7 +440,7 @@ describe("Inbox approval decisions", () => {
 
   it("does not carry an open danger or deny confirmation to another selected record", async () => {
     renderActions(approval);
-    await act(async () => button("Review danger approval").click());
+    await openConfirmation();
     renderActions({ ...approval, preview: { targets: ["new-target.txt"] } });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
     await act(async () => button("Deny").click());
@@ -526,7 +535,7 @@ describe("Inbox approval decisions", () => {
     api.fetchApproval.mockResolvedValue(nuclear);
     api.resolveApproval.mockResolvedValue({ approval: { ...nuclear, status: "approved" }, effects: [] });
     const { onResolved } = renderActions(nuclear);
-    await act(async () => button("Review nuclear approval").click());
+    await openConfirmation("Review nuclear approval");
     expect(button("Approve once").disabled).toBe(true);
     await typeConfirmation("approve");
     expect(button("Approve once").disabled).toBe(false);
@@ -540,12 +549,12 @@ describe("Inbox approval decisions", () => {
 
   it("closes an open nuclear confirmation when its reviewed evidence changes", async () => {
     renderActions({ ...approval, riskLevel: "nuclear" });
-    await act(async () => button("Review nuclear approval").click());
+    await openConfirmation("Review nuclear approval");
     await typeConfirmation("approve");
     expect(button("Approve once").disabled).toBe(false);
     renderActions({ ...approval, riskLevel: "nuclear", preview: { targets: ["new-target.txt"] } });
     expect(document.querySelector('[role="dialog"]')).toBeNull();
-    await act(async () => button("Review nuclear approval").click());
+    await openConfirmation("Review nuclear approval");
     expect(button("Approve once").disabled).toBe(true);
     expect(api.fetchApproval).not.toHaveBeenCalled();
     expect(api.resolveApproval).not.toHaveBeenCalled();
@@ -606,7 +615,7 @@ it.each(["One sentence", "  First line\nSecond line\n", "password=[REDACTED]"])(
         withheldSummary: "Metadata withheld",
       },
     });
-    await act(async () => button("Review danger approval").click());
+    await openConfirmation();
     const dialog = document.querySelector('[role="dialog"]')!;
     const details = [...dialog.querySelectorAll("details")].find(
       (node) => node.querySelector("summary")?.textContent === "Requested memory content",

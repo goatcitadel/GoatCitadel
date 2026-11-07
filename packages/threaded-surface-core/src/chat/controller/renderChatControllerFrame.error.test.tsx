@@ -25,9 +25,7 @@ function frame(error: string | null) {
     contextActions: { capabilitySuggestionConfirm: null } as never,
     composerInteractions: {} as never,
     changePlanState: { activeChangePlan: null, linkedDefaultChangePlan: null } as never,
-    planConfirmations: {} as never,
-    planActions: {} as never,
-    planOAuth: {} as never,
+    planContext: {} as never,
     sessionControls: { sessionDeleteConfirm: null, archiveWorkspaceConfirmOpen: false } as never,
   } as never);
 }

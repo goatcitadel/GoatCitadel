@@ -10,6 +10,8 @@ const drafts = new Map<string, WorkbenchSessionDraft>();
 const subscribers = new Set<() => void>();
 let version = 0;
 let unloadTarget: Window | undefined;
+export const scopeWorkbenchDraftSession = (callerScope: string, sessionId: string) =>
+  callerScope ? JSON.stringify([callerScope, sessionId]) : sessionId;
 export const workbenchDraftKey = (sessionId: string, path: string) =>
   JSON.stringify([sessionId, path]);
 const beforeUnload = (event: BeforeUnloadEvent) => {

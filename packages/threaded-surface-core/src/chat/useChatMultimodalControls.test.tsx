@@ -311,6 +311,7 @@ describe("useChatMultimodalControls", () => {
       latest!.controls.onMediaControlsOpenChange(true);
       await flushAsyncEffects();
     });
+    await act(async () => { await vi.dynamicImportSettled(); });
     expect(apiMocks.fetchVoiceStatus).toHaveBeenCalledTimes(1);
     expect(apiMocks.fetchVoiceRuntimeStatus).toHaveBeenCalledTimes(1);
     expect(latest!.controls.voiceInputAvailable).toBe(true);
@@ -329,6 +330,7 @@ describe("useChatMultimodalControls", () => {
       renderer = create(<Harness />);
       await flushAsyncEffects();
     });
+    await act(async () => { await vi.dynamicImportSettled(); });
 
     expect(latest!.controls.voiceInputAvailable).toBe(true);
     expect(latest!.controls.voiceOutputAvailable).toBe(true);
@@ -353,6 +355,7 @@ describe("useChatMultimodalControls", () => {
       await flushAsyncEffects();
     });
     expect(speechSynthesis.speak).toHaveBeenCalledTimes(1);
+    await act(async () => renderer.unmount());
   });
 
   it("starts and stops push-to-talk while refreshing voice status", async () => {
@@ -360,10 +363,12 @@ describe("useChatMultimodalControls", () => {
     apiMocks.fetchVoiceStatus
       .mockResolvedValueOnce({ talk: { activeSessionId: null } })
       .mockResolvedValue(activeStatus);
+    let renderer!: ReactTestRenderer;
     await act(async () => {
-      create(<Harness />);
+      renderer = create(<Harness />);
       await flushAsyncEffects();
     });
+    await act(async () => { await vi.dynamicImportSettled(); });
 
     await act(async () => {
       await latest!.controls.handleToggleVoiceTalk();
@@ -383,6 +388,7 @@ describe("useChatMultimodalControls", () => {
       await flushAsyncEffects();
     });
     expect(apiMocks.stopVoiceTalkSession).toHaveBeenCalledWith("talk-1");
+    await act(async () => renderer.unmount());
   });
 
   it("starts, mutes, and stops OpenAI Realtime live voice with an ephemeral key", async () => {

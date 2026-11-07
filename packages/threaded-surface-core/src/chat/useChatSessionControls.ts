@@ -1,22 +1,13 @@
 import type { ChatMode, ChatSessionBindingRecord, ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
-  ApiRequestError,
   type ChatSessionsResponse,
-  archiveChatSession,
   archiveWorkspaceChatSessions,
-  assignChatSessionProject,
   createChatProject,
   createChatSession,
   fetchChatSessionStatus,
   fetchChatSessionBinding,
-  deleteChatSession,
-  importChatProject,
-  pinChatSession,
-  restoreChatSession,
   setChatSessionBinding,
-  unpinChatSession,
-  updateChatSession,
 } from "@goatcitadel/mission-control-shared/api/client";
 import {
   assertChatSessionCreated,
@@ -32,7 +23,12 @@ import { assertContextRecord } from "./context-mutation-evidence";
 import { useManualChatSessionCreation } from "./useManualChatSessionCreation";
 import type { ChatHistoryView, ChatSidebarLoadOptions } from "./useChatSessionData";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
-import { formatSessionLabel } from "./useMissionControlSurfaceState";
+import { loadSessionControlActionCode } from "./load-session-control-action-code";
+import type { CodeProjectSourceInput, SessionActionContext } from "./session-control-action-code";
+import {
+  getGatewayAccessRevision,
+  getGatewayCallerScopeRevision,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 
 /** A conversation left the current list (archived or deleted); the host moves the address and says so. */
 export interface SessionRemovedFromView {
@@ -90,11 +86,9 @@ export interface InitialOutboundSessionCreation {
   sessionId: string;
 }
 
-function isSessionRevisionConflict(error: unknown): error is ApiRequestError {
-  return error instanceof ApiRequestError && error.status === 409;
-}
+type SessionControlAction = Exclude<SessionControlPending, null | "binding">;
 
-export function useChatSessionControls(input: {
+export type ChatSessionControlsInput = {
   historicalRevisionRef?: { readonly current: number };
   historicalReadOnly?: boolean;
 
@@ -130,7 +124,9 @@ export function useChatSessionControls(input: {
   /** The conversation to open once `sessionId` leaves the list (the next one down, if any). */
   nextSessionAfterRemoval?: (sessionId: string) => string | null;
   onSessionRemoved?: (removed: SessionRemovedFromView) => void;
-}) {
+};
+
+export function useChatSessionControls(input: ChatSessionControlsInput) {
   const {
     workspaceId,
     historyView,
@@ -168,6 +164,37 @@ export function useChatSessionControls(input: {
     selectionScopeRef.current = { workspaceId, selectedSessionId, viewIdentity: input.viewIdentity };
   }
   const renderedSelectionScope = selectionScopeRef.current;
+  const actionInstallation = getGatewayApiBaseUrl();
+  const actionAccessRevision = getGatewayAccessRevision();
+  const actionCallerRevision = getGatewayCallerScopeRevision();
+  const actionSelectionRevision = input.selectionRevisionRef?.current;
+  const actionHistoryRevision = input.historicalRevisionRef?.current;
+  const sessionActionView = useMemo(
+    () => ({
+      selection: renderedSelectionScope,
+      historyView,
+      historicalReadOnly: input.historicalReadOnly,
+      installation: actionInstallation,
+      access: actionAccessRevision,
+      caller: actionCallerRevision,
+      selectionRevision: actionSelectionRevision,
+      historyRevision: actionHistoryRevision,
+    }),
+    [
+      renderedSelectionScope,
+      historyView,
+      input.historicalReadOnly,
+      actionInstallation,
+      actionAccessRevision,
+      actionCallerRevision,
+      actionSelectionRevision,
+      actionHistoryRevision,
+    ],
+  );
+  const committedSessionActionView = useRef(sessionActionView);
+  useLayoutEffect(() => {
+    committedSessionActionView.current = sessionActionView;
+  }, [sessionActionView]);
   const mountedRef = useRef(true);
   useEffect(() => {
     mountedRef.current = true;
@@ -353,187 +380,115 @@ export function useChatSessionControls(input: {
     }
   }, [loadSidebar, setError, setHistoryView, setSelectedSessionId, workspaceId]);
 
-  const handleRenameSession = useCallback(async () => {
-    if (!selectedSession) return;
-    setSessionControlPending("rename");
-    try {
-      await updateChatSession(selectedSession.sessionId, {
-        expectedRevision: selectedSession.revision,
-        title: renameTitle.trim() || undefined,
-      });
-      setSessionMetadataConflictDraft?.(null);
-      await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
-    } catch (err) {
-      if (isSessionRevisionConflict(err)) {
-        setSessionMetadataConflictDraft?.({
-          sessionId: selectedSession.sessionId,
-          kind: "rename",
-          renameTitle,
+  const runSessionAction = useCallback(
+    async <T>(
+      kind: SessionControlAction,
+      dispatch: (
+        code: Awaited<ReturnType<typeof loadSessionControlActionCode>>,
+        context: SessionActionContext,
+      ) => Promise<T>,
+    ): Promise<T | undefined> => {
+      const current = () =>
+        mountedRef.current &&
+        selectionScopeRef.current === renderedSelectionScope &&
+        committedSessionActionView.current === sessionActionView &&
+        getGatewayApiBaseUrl() === sessionActionView.installation &&
+        getGatewayAccessRevision() === sessionActionView.access &&
+        getGatewayCallerScopeRevision() === sessionActionView.caller &&
+        input.selectionRevisionRef?.current === sessionActionView.selectionRevision &&
+        input.historicalRevisionRef?.current === sessionActionView.historyRevision;
+      if (
+        !current() ||
+        input.historicalReadOnly ||
+        sessionControlPending ||
+        sessionControlRevisionRef.current !== renderedControlRevision
+      )
+        return;
+      setSessionControlPending(kind);
+      const pendingRevision = sessionControlRevisionRef.current;
+      const actionCurrent = () => current() && sessionControlRevisionRef.current === pendingRevision;
+      try {
+        let code: Awaited<ReturnType<typeof loadSessionControlActionCode>>;
+        try {
+          code = await loadSessionControlActionCode();
+        } catch (error) {
+          if (!actionCurrent()) return;
+          setError(error instanceof Error ? error.message : String(error));
+          if (kind === "code_source") throw error;
+          return;
+        }
+        if (!actionCurrent()) return;
+        return await dispatch(code, {
+          workspaceId,
+          historyView,
+          loadSidebar,
+          refreshSessionAggregate,
+          setSessionMetadataConflictDraft,
+          setError,
+          setQueuedOutbound,
+          setThread,
+          setSelectedSessionId,
+          setHistoryView,
+          nextSessionAfterRemoval,
+          onSessionRemoved,
+          current: actionCurrent,
         });
-        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
-          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
-        setError("This chat changed elsewhere. Your rename draft is preserved; review it and retry.");
-      } else {
-        setError((err as Error).message);
+      } finally {
+        if (mountedRef.current && sessionControlRevisionRef.current === pendingRevision) setSessionControlPending(null);
       }
-    } finally {
-      setSessionControlPending(null);
-    }
-  }, [
-    setSessionControlPending,
-    historyView,
-    loadSidebar,
-    refreshSessionAggregate,
-    renameTitle,
-    selectedSession,
-    setError,
-    setSessionMetadataConflictDraft,
-  ]);
+    },
+    [
+      input.historicalReadOnly,
+      input.historicalRevisionRef,
+      input.selectionRevisionRef,
+      renderedSelectionScope,
+      sessionActionView,
+      renderedControlRevision,
+      sessionControlPending,
+      setSessionControlPending,
+      workspaceId,
+      historyView,
+      loadSidebar,
+      refreshSessionAggregate,
+      setSessionMetadataConflictDraft,
+      setError,
+      setQueuedOutbound,
+      setThread,
+      setSelectedSessionId,
+      setHistoryView,
+      nextSessionAfterRemoval,
+      onSessionRemoved,
+    ],
+  );
+
+  const handleRenameSession = useCallback(async () => {
+    if (selectedSession)
+      await runSessionAction("rename", (code, context) => code.renameSession(context, selectedSession, renameTitle));
+  }, [selectedSession, renameTitle, runSessionAction]);
 
   const handleSaveOrganization = useCallback(async (): Promise<boolean> => {
     if (
       !selectedSession ||
       selectedSession.sessionId !== renderedSelectionScope.selectedSessionId ||
-      (selectedSession.workspaceId ?? "default") !== renderedSelectionScope.workspaceId ||
-      sessionControlPending ||
-      sessionControlRevisionRef.current !== renderedControlRevision
-    ) {
+      (selectedSession.workspaceId ?? "default") !== renderedSelectionScope.workspaceId
+    )
       return false;
-    }
-    const installation = getGatewayApiBaseUrl();
-    const isCurrent = () =>
-      mountedRef.current && selectionScopeRef.current === renderedSelectionScope && getGatewayApiBaseUrl() === installation;
-    if (!isCurrent()) return false;
-
-    setSessionControlPending("organization");
-    const pendingRevision = sessionControlRevisionRef.current;
-    let saved = false;
-    try {
-      await updateChatSession(selectedSession.sessionId, {
-        expectedRevision: selectedSession.revision,
-        folderName: folderName.trim() || "",
-        tags: tagsValue
-          .split(",")
-          .map((item) => item.trim())
-          .filter(Boolean),
-      });
-      saved = true;
-      if (!isCurrent()) return true;
-      setSessionMetadataConflictDraft?.(null);
-      await loadSidebar(historyView, { bypassCache: true, preserveSelection: true });
-    } catch (err) {
-      if (!isCurrent()) return saved;
-      if (saved) {
-        setError("Folder and tags were saved, but the conversation list could not refresh.");
-      } else if (isSessionRevisionConflict(err)) {
-        setSessionMetadataConflictDraft?.({
-          sessionId: selectedSession.sessionId,
-          kind: "organization",
-          folderName,
-          tagsValue,
-        });
-        try {
-          await (refreshSessionAggregate?.(selectedSession.sessionId, { preserveSelection: true }) ??
-            loadSidebar(historyView, { bypassCache: true, preserveSelection: true }));
-        } catch {
-          // Preserve the write conflict result if reading the current version also fails.
-        }
-        if (isCurrent())
-          setError("This chat changed elsewhere. Your organization draft is preserved; review it and retry.");
-      } else {
-        setError((err as Error).message);
-      }
-    } finally {
-      if (mountedRef.current && sessionControlRevisionRef.current === pendingRevision) setSessionControlPending(null);
-    }
-    return saved;
-  }, [
-    setSessionControlPending,
-    folderName,
-    historyView,
-    loadSidebar,
-    refreshSessionAggregate,
-    selectedSession,
-    setError,
-    setSessionMetadataConflictDraft,
-    tagsValue,
-    renderedControlRevision,
-    renderedSelectionScope,
-    sessionControlPending,
-  ]);
+    return (
+      (await runSessionAction("organization", (code, context) =>
+        code.saveSessionOrganization(context, selectedSession, folderName, tagsValue),
+      )) ?? false
+    );
+  }, [selectedSession, renderedSelectionScope, folderName, tagsValue, runSessionAction]);
 
   const handleTogglePinSession = useCallback(async () => {
-    if (!selectedSession) return;
-    setSessionControlPending("pin");
-    try {
-      if (selectedSession.pinned) await unpinChatSession(selectedSession.sessionId, selectedSession.revision);
-      else await pinChatSession(selectedSession.sessionId, selectedSession.revision);
-      await loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId });
-    } catch (err) {
-      if (isSessionRevisionConflict(err)) {
-        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
-          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
-        setError("This chat changed elsewhere. Review the latest state, then click pin again.");
-      } else {
-        setError((err as Error).message);
-      }
-    } finally {
-      setSessionControlPending(null);
-    }
-  }, [setSessionControlPending, historyView, loadSidebar, refreshSessionAggregate, selectedSession, setError]);
+    if (selectedSession)
+      await runSessionAction("pin", (code, context) => code.toggleSessionPin(context, selectedSession));
+  }, [selectedSession, runSessionAction]);
 
   const handleToggleArchiveSession = useCallback(async () => {
-    if (!selectedSession) return;
-    setSessionControlPending("archive");
-    try {
-      const restoring = selectedSession.lifecycleStatus === "archived";
-      if (restoring) await restoreChatSession(selectedSession.sessionId, selectedSession.revision);
-      else await archiveChatSession(selectedSession.sessionId, selectedSession.revision);
-      let nextSessionId: string | null = null;
-      if (!restoring && historyView === "active") {
-        nextSessionId = nextSessionAfterRemoval?.(selectedSession.sessionId) ?? null;
-        setQueuedOutbound((current) => current.filter((item) => item.sessionId !== selectedSession.sessionId));
-        setThread(null);
-        setSelectedSessionId((current) => (current === selectedSession.sessionId ? nextSessionId : current));
-        onSessionRemoved?.({
-          sessionId: selectedSession.sessionId,
-          nextSessionId,
-          label: formatSessionLabel(selectedSession),
-          kind: "archived",
-        });
-      }
-      if (restoring && historyView === "archived") {
-        setHistoryView("active");
-        setSelectedSessionId(selectedSession.sessionId);
-        await loadSidebar("active", { bypassCache: true, preferredSessionId: selectedSession.sessionId });
-      } else {
-        await loadSidebar(historyView, { bypassCache: true, preferredSessionId: nextSessionId ?? undefined });
-      }
-    } catch (err) {
-      if (isSessionRevisionConflict(err)) {
-        await (refreshSessionAggregate?.(selectedSession.sessionId) ??
-          loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
-        setError("This chat changed elsewhere. Review the latest state, then click archive or restore again.");
-      } else {
-        setError((err as Error).message);
-      }
-    } finally {
-      setSessionControlPending(null);
-    }
-  }, [
-    setSessionControlPending,
-    historyView,
-    loadSidebar,
-    refreshSessionAggregate,
-    selectedSession,
-    setError,
-    setQueuedOutbound,
-    setHistoryView,
-    setSelectedSessionId,
-    setThread,
-    nextSessionAfterRemoval,
-    onSessionRemoved,
-  ]);
+    if (selectedSession)
+      await runSessionAction("archive", (code, context) => code.toggleSessionArchive(context, selectedSession));
+  }, [selectedSession, runSessionAction]);
 
   const handleDeleteSession = useCallback(
     (label: string) => {
@@ -548,139 +503,39 @@ export function useChatSessionControls(input: {
   );
 
   const confirmDeleteSession = useCallback(async () => {
-    if (!sessionDeleteConfirm) {
-      return;
-    }
-    setSessionControlPending("delete");
+    if (!sessionDeleteConfirm) return;
     try {
-      await deleteChatSession(sessionDeleteConfirm.sessionId, sessionDeleteConfirm.revision);
-      const nextSessionId = nextSessionAfterRemoval?.(sessionDeleteConfirm.sessionId) ?? null;
-      setQueuedOutbound((current) => current.filter((item) => item.sessionId !== sessionDeleteConfirm.sessionId));
-      setThread(null);
-      setSelectedSessionId((current) => (current === sessionDeleteConfirm.sessionId ? nextSessionId : current));
-      onSessionRemoved?.({
-        sessionId: sessionDeleteConfirm.sessionId,
-        nextSessionId,
-        label: sessionDeleteConfirm.label,
-        kind: "deleted",
-      });
-      await loadSidebar(undefined, { preferredSessionId: nextSessionId ?? undefined });
-    } catch (err) {
-      if (isSessionRevisionConflict(err)) {
-        await (refreshSessionAggregate?.(sessionDeleteConfirm.sessionId) ??
-          loadSidebar(historyView, { bypassCache: true, preferredSessionId: sessionDeleteConfirm.sessionId }));
-        setError("This chat changed elsewhere. Review the latest state, then request deletion again.");
-      } else {
-        setError((err as Error).message);
-      }
+      await runSessionAction("delete", (code, context) => code.deleteSession(context, sessionDeleteConfirm));
     } finally {
-      setSessionControlPending(null);
-      setSessionDeleteConfirm(null);
+      setSessionDeleteConfirm((current) => (current === sessionDeleteConfirm ? null : current));
     }
-  }, [
-    setSessionControlPending,
-    historyView,
-    loadSidebar,
-    refreshSessionAggregate,
-    sessionDeleteConfirm,
-    setError,
-    setQueuedOutbound,
-    setSelectedSessionId,
-    setThread,
-    nextSessionAfterRemoval,
-    onSessionRemoved,
-  ]);
+  }, [sessionDeleteConfirm, runSessionAction]);
 
   const handleAssignProject = useCallback(
     async (value: string) => {
-      if (!selectedSession) return;
-      const assignmentScope = renderedSelectionScope;
-      if (selectionScopeRef.current !== assignmentScope) return;
       if (
-        assignmentScope.selectedSessionId !== selectedSession.sessionId ||
-        assignmentScope.workspaceId !== (selectedSession.workspaceId ?? "default")
+        !selectedSession ||
+        selectedSession.sessionId !== renderedSelectionScope.selectedSessionId ||
+        (selectedSession.workspaceId ?? "default") !== renderedSelectionScope.workspaceId
       )
         return;
-      const installation = getGatewayApiBaseUrl();
-      const isCurrent = () =>
-        mountedRef.current && selectionScopeRef.current === assignmentScope && getGatewayApiBaseUrl() === installation;
-      setSessionControlPending("project");
-      try {
-        await assignChatSessionProject(
-          selectedSession.sessionId,
-          value === "none" ? undefined : value,
-          selectedSession.revision,
-        );
-        if (isCurrent()) await loadSidebar(historyView, { bypassCache: true, preserveSelection: true });
-      } catch (err) {
-        if (!isCurrent()) return;
-        if (isSessionRevisionConflict(err)) {
-          await (refreshSessionAggregate?.(selectedSession.sessionId, { preserveSelection: true }) ??
-            loadSidebar(historyView, { bypassCache: true, preserveSelection: true }));
-          if (isCurrent())
-            setError("This chat changed elsewhere. Review the latest state, then choose the project again.");
-        } else {
-          setError((err as Error).message);
-        }
-      } finally {
-        setSessionControlPending(null);
-      }
+      await runSessionAction("project", (code, context) => code.assignSessionProject(context, selectedSession, value));
     },
-    [
-      setSessionControlPending,
-      historyView,
-      loadSidebar,
-      refreshSessionAggregate,
-      selectedSession,
-      setError,
-      renderedSelectionScope,
-    ],
+    [selectedSession, renderedSelectionScope, runSessionAction],
   );
 
   const handleImportCodeProject = useCallback(
-    async (input: {
-      sourceType: "local_folder" | "github_repo";
-      name?: string;
-      sourcePath?: string;
-      repoUrl?: string;
-      ref?: string;
-    }) => {
-      if (!selectedSession) {
-        throw new Error("Select a Code session before importing a project source.");
-      }
-      setSessionControlPending("code_source");
+    async (input: CodeProjectSourceInput) => {
+      if (!selectedSession) throw new Error("Select a Code session before importing a project source.");
       setError(null);
-      try {
-        const result = await importChatProject({
-          workspaceId,
-          ...input,
-        });
-        await assignChatSessionProject(selectedSession.sessionId, result.project.projectId, selectedSession.revision);
-        await loadSidebar();
-        return result.project;
-      } catch (err) {
-        if (isSessionRevisionConflict(err)) {
-          await (refreshSessionAggregate?.(selectedSession.sessionId) ??
-            loadSidebar(historyView, { bypassCache: true, preferredSessionId: selectedSession.sessionId }));
-        }
-        const message = isSessionRevisionConflict(err)
-          ? "This chat changed elsewhere. The imported project is available; review the latest state and assign it again."
-          : (err as Error).message;
-        setError(message);
-        throw err;
-      } finally {
-        setSessionControlPending(null);
-      }
+      const project = await runSessionAction("code_source", (code, context) =>
+        code.importSessionCodeProject(context, selectedSession, input),
+      );
+      if (!project)
+        throw new DOMException("The conversation changed before the project source could be imported.", "AbortError");
+      return project;
     },
-    [
-      setSessionControlPending,
-      historyView,
-      loadSidebar,
-      refreshSessionAggregate,
-      selectedSession,
-      setError,
-      workspaceId,
-    ],
+    [selectedSession, setError, runSessionAction],
   );
 
   const handleSaveExternalBinding = useCallback(

@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import type { Query, QueryClient, QueryKey } from "@tanstack/react-query";
 import { createInvalidationBatcher, throttleIntervalFor } from "./invalidation-batcher";
-import { requestCockpitToast } from "../ui/toast-runtime";
 import {
   getGatewayApiBaseUrl,
   getGatewayAccessRevision,
@@ -11,7 +10,6 @@ import {
   getGatewayCallerScope,
   subscribeGatewayCallerScope,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
-import { fetchOperatorInbox } from "@goatcitadel/mission-control-shared/api/operator-inbox";
 import {
   connectEventStream,
   type EventStreamConnectionState,
@@ -23,20 +21,17 @@ import {
 } from "@goatcitadel/mission-control-shared/state/event-stream-status-store";
 import { decideNotificationDelivery } from "@goatcitadel/mission-control-shared/state/notification-policy";
 import { deriveRealtimeNotification } from "@goatcitadel/mission-control-shared/state/realtime-derived";
+import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import {
   emitRefresh,
   type RefreshSignal,
   type RefreshTopic,
 } from "@goatcitadel/mission-control-shared/state/refresh-bus";
-import type { OperatorInboxResponse } from "@goatcitadel/contracts";
 import { queryKeys } from "./query-keys";
 import { resolveRealtimeEvent } from "./event-map";
 import { appendRetainedActivity } from "./activity-feed";
-import { inboxItemLocation, resolveInboxNotificationItem } from "./inbox-notification";
 import { useCockpitRoute } from "../app/use-cockpit-route";
-import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/state/operator-attention";
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { showBrowserNotification } from "../../app/browser-notification";
 
 /**
  * An event the map does not know refreshes its keyword topics at most once every five seconds per topic;
@@ -179,75 +174,14 @@ export function createRealtimeSink(queryClient: QueryClient): { sink: RealtimeSi
   return { sink, dispose };
 }
 
-/**
- * Retains live notification waiters across replaced reads. Only a successful owner fetch settles
- * them, never a cached/manual projection. Each later tick replaces a pre-event read; same-tick
- * signals share one read (GL-63). No polling or retry is introduced on owner/auth failures.
- */
-function createInboxReader(queryClient: QueryClient) {
-  const pending = new Map<
-    string,
-    {
-      promise: Promise<OperatorInboxResponse>;
-      resolve: (projection: OperatorInboxResponse) => void;
-      reject: (error: unknown) => void;
-    }
-  >();
-  const ticks = new Map<string, { timer: ReturnType<typeof setTimeout>; promise: Promise<OperatorInboxResponse> }>();
-  const cache = queryClient.getQueryCache();
-  const unsubscribe = cache.subscribe((event) => {
-    if (event.type !== "updated") return;
-    const key = JSON.stringify(event.query.queryKey);
-    const waiting = pending.get(key);
-    if (!waiting) return;
-    if (event.action.type === "success" && !event.action.manual) {
-      pending.delete(key);
-      waiting.resolve(event.query.state.data as OperatorInboxResponse);
-    } else if (event.action.type === "error") {
-      pending.delete(key);
-      waiting.reject(event.action.error);
-    }
-  });
-  return {
-    read(workspaceId: string): Promise<OperatorInboxResponse> {
-      const queryKey = queryKeys.inbox(workspaceId);
-      const key = JSON.stringify(queryKey);
-      const tick = ticks.get(key);
-      if (tick) return tick.promise;
-      let waiting = pending.get(key);
-      if (!waiting) {
-        let resolve!: (projection: OperatorInboxResponse) => void;
-        let reject!: (error: unknown) => void;
-        const promise = new Promise<OperatorInboxResponse>((yes, no) => {
-          resolve = yes;
-          reject = no;
-        });
-        waiting = { promise, resolve, reject };
-        pending.set(key, waiting);
-      }
-      ticks.set(key, { timer: setTimeout(() => ticks.delete(key), 0), promise: waiting.promise });
-      const inFlight = cache.find({ queryKey, exact: true });
-      if (inFlight?.state.fetchStatus === "fetching") void inFlight.cancel({ silent: true });
-      void queryClient
-        .fetchQuery({
-          queryKey,
-          queryFn: ({ signal }) => fetchOperatorInbox(workspaceId, { signal }),
-          staleTime: 0,
-          retry: false,
-        })
-        .catch(() => {
-          /* Intentionally ignored: cache success/error owns settlement; replacement cancellation retains waiters. */
-        });
-      return waiting.promise;
-    },
-    dispose() {
-      unsubscribe();
-      for (const tick of ticks.values()) clearTimeout(tick.timer);
-      ticks.clear();
-      for (const waiting of pending.values()) waiting.reject(new Error("Notification scope retired"));
-      pending.clear();
-    },
-  };
+type RealtimeAttentionCode = typeof import("./realtime-attention");
+let attentionCode: Promise<RealtimeAttentionCode> | undefined;
+
+function loadRealtimeAttention() {
+  return (attentionCode ??= import("./realtime-attention").catch((error: unknown) => {
+    attentionCode = undefined;
+    throw error;
+  }));
 }
 
 function pageFocused(): boolean {
@@ -303,13 +237,12 @@ export function useCockpitRealtime(input: {
     if (!enabled) return;
     let active = true;
     const generation = currentScope.current.generation;
-    const delivered = new Set<string>();
     // An approval decided where it was asked (a one-click card, a Settings dialog) needs no Inbox notification:
     // one already shown is dismissed, and one still waiting on its Inbox read is not shown.
     const settledApprovalIds = new Set<string>();
-    const approvalToastIds = new Map<string, string>();
     const { sink, dispose } = createRealtimeSink(queryClient);
-    const inboxReader = createInboxReader(queryClient);
+    let attention: ReturnType<RealtimeAttentionCode["createRealtimeAttention"]> | undefined;
+    let attentionLoadWarningShown = false;
     const isCurrent = () =>
       active &&
       currentScope.current.enabled &&
@@ -335,13 +268,12 @@ export function useCockpitRealtime(input: {
         const settledApprovalId = event.eventType === "approval_resolved" ? event.links?.approvalId : undefined;
         if (settledApprovalId) {
           settledApprovalIds.add(settledApprovalId);
-          const shownId = approvalToastIds.get(settledApprovalId);
-          approvalToastIds.delete(settledApprovalId);
-          if (shownId) requestCockpitToast((toast) => toast.dismiss(shownId), isCurrent);
+          attention?.dismissApproval(settledApprovalId);
         }
+        if (delivery.replayed) return;
         const notification = deriveRealtimeNotification(event);
         const decision = decideNotificationDelivery(notification, {
-          replayed: delivery.replayed,
+          replayed: false,
           eventSessionId: event.links?.sessionId,
           visibleSessionId: visibleSessionIdRef.current,
           pageFocused: pageFocused(),
@@ -352,68 +284,34 @@ export function useCockpitRealtime(input: {
           isCurrent() &&
           workspaceRef.current.id === scopeWorkspaceId &&
           workspaceRef.current.generation === workspaceGeneration;
-        void inboxReader
-          .read(scopeWorkspaceId)
-          .then((projection) => {
+        if (attention) {
+          attention.deliver(event, notification, scopeWorkspaceId, isCurrentWorkspace);
+          return;
+        }
+        void loadRealtimeAttention()
+          .then(({ createRealtimeAttention }) => {
             if (!isCurrentWorkspace()) return;
-            const item = resolveInboxNotificationItem(projection, event, notification, scopeWorkspaceId);
-            if (!item || delivered.has(item.id)) return;
-            const approvalId = item.kind === "approval" ? item.source.approvalId : undefined;
-            if (approvalId && settledApprovalIds.has(approvalId)) return;
-            const focused = pageFocused();
-            const preferences = preferencesRef.current;
-            const deliveryDecision = decideNotificationDelivery(notification, {
-              replayed: delivery.replayed,
-              eventSessionId: item.source.sessionId,
-              visibleSessionId: visibleSessionIdRef.current,
-              pageFocused: focused,
+            attention ??= createRealtimeAttention({
+              queryClient,
+              isCurrent,
+              settledApprovalIds,
+              navigate: (path) => navigateRef.current(path),
+              visibleSessionId: () => visibleSessionIdRef.current,
+              readPreferences: () => preferencesRef.current,
+              pageFocused,
+              inboxToastDuration,
             });
-            if (!deliveryDecision.toast || (preferences.onlyWhenUnfocused && focused)) return;
-            delivered.add(item.id);
-            const open = () => {
-              if (isCurrentWorkspace()) navigateRef.current(inboxItemLocation(item));
-            };
-            const id = `inbox:${scopeWorkspaceId}:${item.id}`;
-            if (approvalId) approvalToastIds.set(approvalId, id);
-            if (preferences.toastsEnabled)
-              requestCockpitToast(
-                (toast) => {
-                  const show =
-                    notification.tone === "error"
-                      ? toast.error
-                      : notification.tone === "warning"
-                        ? toast.warning
-                        : toast;
-                  show(item.title, {
-                    id,
-                    description: item.summary,
-                    duration: inboxToastDuration(notification.tone),
-                    action: { label: "Open Inbox item", onClick: open },
-                  });
-                },
-                () => {
-                  const currentPreferences = preferencesRef.current;
-                  return (
-                    isCurrentWorkspace() &&
-                    !(approvalId && settledApprovalIds.has(approvalId)) &&
-                    currentPreferences.toastsEnabled &&
-                    !(currentPreferences.onlyWhenUnfocused && pageFocused()) &&
-                    decideNotificationDelivery(notification, {
-                      replayed: delivery.replayed,
-                      eventSessionId: item.source.sessionId,
-                      visibleSessionId: visibleSessionIdRef.current,
-                      pageFocused: pageFocused(),
-                    }).toast
-                  );
-                },
-              );
-            if (deliveryDecision.sound) void playOperatorAttentionSound(notification.soundCue, preferences.soundMode);
-            if (deliveryDecision.desktop && preferences.desktopEnabled && document.visibilityState === "hidden") {
-              showBrowserNotification(item.title, notification.tone, { tag: id, onClick: open });
-            }
+            attention.deliver(event, notification, scopeWorkspaceId, isCurrentWorkspace);
           })
           .catch(() => {
-            /* Ignore failed owner reads; a retained signal must not become a current item. */
+            if (!isCurrent() || attentionLoadWarningShown) return;
+            attentionLoadWarningShown = true;
+            recordClientDiagnostic({
+              level: "warn",
+              category: "stream",
+              event: "cockpit.attention_unavailable",
+              message: "Cockpit notification controls could not load.",
+            });
           });
       },
       setStreamState,
@@ -421,7 +319,7 @@ export function useCockpitRealtime(input: {
     );
     return () => {
       active = false;
-      inboxReader.dispose();
+      attention?.dispose();
       dispose();
       disconnect();
       resetEventStreamStatus();

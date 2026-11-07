@@ -9,7 +9,7 @@ describe("mounted media owner code boundary", () => {
     const eagerImports = [...source.matchAll(/^import\s+(?!type\b)[\s\S]*?\sfrom\s*["'][^"']+["'];/gm)]
       .map((match) => match[0]).join("\n");
     // Existing owner is the subject: no dependency on not-yet-created leaves.
-    expect(eagerImports).not.toMatch(/\b(downloadChatAttachment|generateLlmImage|transcribeVoice|fileToBase64)\b/);
+    expect(eagerImports).not.toMatch(/\b(downloadChatAttachment|generateLlmImage|transcribeVoice|fileToBase64|startVoiceTalkSession|stopVoiceTalkSession|stopRealtimeVoiceSession)\b/);
   });
 });
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -33,7 +33,7 @@ let harnessRenders = 0;
 const upload = vi.fn();
 const error = vi.fn();
 const notice = vi.fn();
-function Harness({ session = "one", active = session, provider = "openai", attachments = [], holdDraftUpdates = false }: { session?: string; active?: string; provider?: string; holdDraftUpdates?: boolean; attachments?: import("@goatcitadel/contracts").ChatAttachmentRecord[] }) {
+function Harness({ session = "one", active = session, provider = "openai", attachments = [], holdDraftUpdates = false, deferVoiceReadiness }: { session?: string; active?: string; provider?: string; holdDraftUpdates?: boolean; attachments?: import("@goatcitadel/contracts").ChatAttachmentRecord[]; deferVoiceReadiness?: boolean }) {
   harnessRenders += 1;
   const [value, setValue] = useState("draw a console");
   draft = value;
@@ -44,7 +44,7 @@ function Harness({ session = "one", active = session, provider = "openai", attac
       { providerId: "google", label: "Google", models: ["gemini-3-pro-image-preview"] },
       ...(provider === "openai-codex" ? [{ providerId: provider, label: provider, models: ["gpt-image-2"] }] : []),
     ],
-    selectedProviderId: provider, routePreflight: null, selectedSessionId: session,
+    selectedProviderId: provider, routePreflight: null, selectedSessionId: session, deferVoiceReadiness,
     activeThreadSessionId: active, pendingAttachments: attachments, draft: value,
     setDraft: holdDraftUpdates ? (update) => { heldDraftUpdates.push(update); } : setValue,
     setError: error, pushLocalNotice: notice, uploadAttachments: upload,
@@ -117,10 +117,55 @@ describe("media action code demand and scoped ownership", () => {
     const loader = vi.spyOn(hook.multimodalCodeLoaders, kind);
     await act(async () => { renderer = create(<Harness />); });
     await act(async () => controls.onMediaControlsOpenChange(true));
+    await act(async () => { await vi.dynamicImportSettled(); });
     expect(api.fetchVoiceStatus).toHaveBeenCalled();
     expect(loader).not.toHaveBeenCalled();
     expect(api.generateLlmImage).not.toHaveBeenCalled();
     expect(encoding.fileToBase64).not.toHaveBeenCalled();
+  });
+
+  it("reads readiness without loading voice action code when the media disclosure opens", async () => {
+    const talk = vi.spyOn(hook.multimodalCodeLoaders, "voiceApi");
+    const realtime = vi.spyOn(hook.multimodalCodeLoaders, "realtime");
+    await act(async () => { renderer = create(<Harness deferVoiceReadiness />); });
+    expect(api.fetchVoiceStatus).not.toHaveBeenCalled();
+    expect(api.fetchVoiceRuntimeStatus).not.toHaveBeenCalled();
+    expect(realtime).not.toHaveBeenCalled();
+    await act(async () => controls.onMediaControlsOpenChange(true));
+    await act(async () => { await vi.dynamicImportSettled(); });
+    expect(controls.voiceInputAvailable).toBe(true);
+    expect(api.fetchVoiceStatus).toHaveBeenCalledTimes(1);
+    expect(api.fetchVoiceRuntimeStatus).toHaveBeenCalledTimes(1);
+    expect(talk).not.toHaveBeenCalled();
+    expect(realtime).not.toHaveBeenCalled();
+  });
+
+  it.each(["cancel", "selection", "access"] as const)("blocks realtime start on %s while loading its code", async (change) => {
+    const start = vi.fn();
+    const createOperation = vi.fn(() => ({ start, stop: vi.fn(), setMuted: vi.fn() }));
+    const gate = deferred<Awaited<ReturnType<typeof hook.multimodalCodeLoaders.realtime>>>();
+    const loader = vi.spyOn(hook.multimodalCodeLoaders, "realtime").mockReturnValue(gate.promise);
+    vi.stubGlobal("window", { RTCPeerConnection: class {} });
+    vi.stubGlobal("navigator", { mediaDevices: { getUserMedia: vi.fn() } });
+    vi.stubGlobal("document", { createElement: vi.fn() });
+    await act(async () => { renderer = create(<Harness deferVoiceReadiness />); });
+    let pending!: Promise<void>;
+    await act(async () => { pending = controls.handleToggleLiveVoice(); });
+    expect(loader).toHaveBeenCalledTimes(1);
+    expect(controls.liveVoiceState).toBe("connecting");
+    if (change === "cancel") await act(async () => { await controls.handleToggleLiveVoice(); });
+    if (change === "selection") await act(async () => renderer!.update(<Harness deferVoiceReadiness session="two" />));
+    if (change === "access") {
+      const access = await import("@goatcitadel/mission-control-shared/api/access-scope");
+      access.notifyGatewayAccessChanged(false);
+    }
+    await act(async () => {
+      gate.resolve({ createRealtimeVoiceOperation: createOperation });
+      await pending;
+    });
+    expect(createOperation).not.toHaveBeenCalled();
+    expect(controls.liveVoiceState).toBe("idle");
+    expect(controls.voiceBusy).toBe(false);
   });
 
   it.each(["image", "transcribe"] as const)("holds real %s code, publishes busy immediately and bounds duplicate activation", async (kind) => {

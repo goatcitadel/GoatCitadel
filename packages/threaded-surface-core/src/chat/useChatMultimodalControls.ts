@@ -7,18 +7,14 @@ import type {
   VoiceRuntimeStatus,
   VoiceStatus,
 } from "@goatcitadel/contracts";
-import {
-  fetchVoiceRuntimeStatus,
-  fetchVoiceStatus,
-  startVoiceTalkSession,
-  stopRealtimeVoiceSession,
-  stopVoiceTalkSession,
-} from "@goatcitadel/mission-control-shared/api/client";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
 import type { ChatErrorSource } from "./chat-error-copy";
 import { getGatewayAccessRevision, getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import { fetchVoiceRuntimeStatus, fetchVoiceStatus } from "@goatcitadel/mission-control-shared/api/client";
 import type { UploadAttachmentOptions, ChatImageRoute, ImageGenerationOptions } from "./multimodal-action-types";
+import type { LiveVoiceUiState } from "./multimodal-live-voice-start.js";
+import type { createRealtimeVoiceOperation } from "./multimodal-realtime-voice.js";
 export type { ImageGenerationOptions } from "./multimodal-action-types";
 
 const SPEAK_REPLIES_PREF_KEY = "goatcitadel.chat.speak-replies.enabled";
@@ -38,9 +34,13 @@ const IMAGE_MODEL_PREFERENCES: Record<"openai" | "openai-codex" | "google", read
 export const multimodalCodeLoaders = {
   image: () => import("./multimodal-image-code.js"),
   transcribe: () => import("./multimodal-transcribe-code.js"),
+  realtime: () => import("./multimodal-realtime-voice.js"),
+  voiceApi: () => import("./multimodal-voice-api.js"),
 };
 let imageCodePromise: ReturnType<typeof multimodalCodeLoaders.image> | undefined;
 let transcribeCodePromise: ReturnType<typeof multimodalCodeLoaders.transcribe> | undefined;
+let realtimeCodePromise: ReturnType<typeof multimodalCodeLoaders.realtime> | undefined;
+let voiceApiPromise: ReturnType<typeof multimodalCodeLoaders.voiceApi> | undefined;
 function loadImageCode() {
   return imageCodePromise ??= multimodalCodeLoaders.image().catch((error: unknown) => {
     imageCodePromise = undefined;
@@ -54,28 +54,22 @@ function loadTranscribeCode() {
   });
 }
 
-type LiveVoiceUiState =
-  | "idle"
-  | "requesting_mic"
-  | "connecting"
-  | "listening"
-  | "speaking"
-  | "thinking"
-  | "stopping"
-  | "error";
-
-interface LiveVoiceConnection {
-  peerConnection: RTCPeerConnection;
-  dataChannel: RTCDataChannel;
-  mediaStream: MediaStream;
-  audioElement: HTMLAudioElement;
-  voiceSessionId: string;
+function loadRealtimeCode() {
+  return realtimeCodePromise ??= multimodalCodeLoaders.realtime().catch((error: unknown) => {
+    realtimeCodePromise = undefined;
+    throw error;
+  });
 }
 
-interface PendingLiveVoiceStart {
-  canceled: boolean;
-  mediaStream: MediaStream | null;
-  voiceSessionId: string | null;
+function loadVoiceApi() {
+  return voiceApiPromise ??= multimodalCodeLoaders.voiceApi().catch((error: unknown) => {
+    voiceApiPromise = undefined;
+    throw error;
+  });
+}
+
+interface LiveVoiceAttempt {
+  operation?: ReturnType<typeof createRealtimeVoiceOperation>;
 }
 
 function isImageAttachment(attachment: ChatAttachmentRecord): boolean {
@@ -208,19 +202,6 @@ function getLiveVoiceStatusLabel(state: LiveVoiceUiState, status?: VoiceStatus["
   return "OpenAI Realtime unavailable";
 }
 
-function cleanupLiveVoiceConnection(connection: LiveVoiceConnection | null): void {
-  if (!connection) {
-    return;
-  }
-  connection.dataChannel.close();
-  connection.peerConnection.close();
-  for (const track of connection.mediaStream.getTracks()) {
-    track.stop();
-  }
-  connection.audioElement.srcObject = null;
-  connection.audioElement.remove();
-}
-
 export function useChatMultimodalControls(input: {
   workspaceId?: string;
   selectionRevisionRef?: { readonly current: number };
@@ -265,16 +246,23 @@ export function useChatMultimodalControls(input: {
 
   const audioInputRef = useRef<HTMLInputElement | null>(null);
   const lastSpokenMessageIdRef = useRef<string | null>(null);
-  const liveVoiceConnectionRef = useRef<LiveVoiceConnection | null>(null);
-  const liveVoiceStartRef = useRef<PendingLiveVoiceStart | null>(null);
+  const liveVoiceAttemptRef = useRef<LiveVoiceAttempt | null>(null);
+  const talkAttemptRef = useRef<object | null>(null);
+  const voiceReadGenerationRef = useRef(0);
   const primedSessionIdRef = useRef<string | null>(null);
   const [mediaReadinessRequested, setMediaReadinessRequested] = useState(false);
   const onMediaControlsOpenChange = useCallback((open: boolean) => {
     if (open) setMediaReadinessRequested(true);
   }, []);
-  const [voiceStatus, setVoiceStatus] = useState<VoiceStatus | null>(null);
-  const [voiceRuntime, setVoiceRuntime] = useState<VoiceRuntimeStatus | null>(null);
-  const [voiceBusy, setVoiceBusy] = useState(false);
+  const [voiceReadiness, setVoiceReadiness] = useState<{
+    authority: string;
+    status: VoiceStatus;
+    runtime: VoiceRuntimeStatus;
+  } | null>(null);
+  const [transcriptionBusy, setTranscriptionBusy] = useState(false);
+  const [talkBusy, setTalkBusy] = useState(false);
+  const [realtimeBusy, setRealtimeBusy] = useState(false);
+  const voiceBusy = transcriptionBusy || talkBusy || realtimeBusy;
   const [liveVoiceState, setLiveVoiceState] = useState<LiveVoiceUiState>("idle");
   const [liveVoiceMuted, setLiveVoiceMuted] = useState(false);
   const [imageBusy, setImageBusy] = useState(false);
@@ -343,6 +331,8 @@ export function useChatMultimodalControls(input: {
     getGatewayApiBaseUrl(), getGatewayAccessRevision(), getGatewayCallerScopeRevision(),
   ]), []);
   const transcriptAuthority = getTranscriptAuthority();
+  const voiceStatus = voiceReadiness?.authority === transcriptAuthority ? voiceReadiness.status : null;
+  const voiceRuntime = voiceReadiness?.authority === transcriptAuthority ? voiceReadiness.runtime : null;
   const mediaSelectionRevision = input.selectionRevisionRef?.current ?? 0;
   const mediaScope = JSON.stringify([selectedSessionId, mediaSelectionRevision, transcriptAuthority, activeThreadSessionId, activeProviderId,
     primaryImageRoute?.providerId, primaryImageRoute?.model, primaryImageRoute?.supportsEdit, googleFallbackImageRoute?.model]);
@@ -368,7 +358,7 @@ export function useChatMultimodalControls(input: {
   useEffect(() => {
     if (transcriptTicketRef.current && transcriptTicketRef.current.generation !== mediaGeneration) {
       transcriptTicketRef.current = null;
-      setVoiceBusy(false);
+      setTranscriptionBusy(false);
     }
   }, [mediaScope, mediaGeneration]);
 
@@ -439,7 +429,7 @@ export function useChatMultimodalControls(input: {
     activeProvider?.capabilities?.voiceInput !== false &&
     realtimeVoiceStatus?.apiKeyReady === true;
   const liveVoiceActive =
-    liveVoiceConnectionRef.current !== null ||
+    liveVoiceAttemptRef.current !== null ||
     liveVoiceState === "requesting_mic" ||
     liveVoiceState === "connecting" ||
     liveVoiceState === "listening" ||
@@ -484,41 +474,37 @@ export function useChatMultimodalControls(input: {
         : "Voice runtime is not ready yet. Install a local voice model in Configure > Runtime.";
 
   const refreshVoiceState = useCallback(async () => {
+    if (!mountedRef.current) return;
+    const generation = ++voiceReadGenerationRef.current;
+    const authority = getTranscriptAuthority();
+    const current = () => mountedRef.current && generation === voiceReadGenerationRef.current &&
+      authority === getTranscriptAuthority();
     try {
       const [status, runtime] = await Promise.all([fetchVoiceStatus(), fetchVoiceRuntimeStatus()]);
-      setVoiceStatus(status);
-      setVoiceRuntime(runtime);
+      if (!current()) return;
+      setVoiceReadiness({ authority, status, runtime });
     } catch {
-      setVoiceStatus(null);
-      setVoiceRuntime(null);
+      if (current()) setVoiceReadiness(null);
     }
-  }, []);
+  }, [getTranscriptAuthority]);
 
   useEffect(() => {
     if (!input.deferVoiceReadiness || mediaReadinessRequested) void refreshVoiceState();
-  }, [input.deferVoiceReadiness, mediaReadinessRequested, refreshVoiceState]);
+  }, [input.deferVoiceReadiness, mediaReadinessRequested, refreshVoiceState, transcriptAuthority]);
 
-  useEffect(
-    () => () => {
-      const connection = liveVoiceConnectionRef.current;
-      const pendingStart = liveVoiceStartRef.current;
-      if (pendingStart) {
-        pendingStart.canceled = true;
-      }
-      for (const track of pendingStart?.mediaStream?.getTracks() ?? []) {
-        track.stop();
-      }
-      cleanupLiveVoiceConnection(connection);
-      liveVoiceConnectionRef.current = null;
-      liveVoiceStartRef.current = null;
-      if (connection?.voiceSessionId) {
-        void stopRealtimeVoiceSession(connection.voiceSessionId).catch(() => undefined);
-      } else if (pendingStart?.voiceSessionId) {
-        void stopRealtimeVoiceSession(pendingStart.voiceSessionId).catch(() => undefined);
-      }
-    },
-    [],
-  );
+  useEffect(() => {
+    setLiveVoiceState("idle");
+    setLiveVoiceMuted(false);
+    setTalkBusy(false);
+    setRealtimeBusy(false);
+    return () => {
+      voiceReadGenerationRef.current += 1;
+      const attempt = liveVoiceAttemptRef.current;
+      liveVoiceAttemptRef.current = null;
+      talkAttemptRef.current = null;
+      void attempt?.operation?.stop().catch(() => undefined);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -573,182 +559,118 @@ export function useChatMultimodalControls(input: {
     voiceOutputAvailable,
   ]);
 
+  const isMediaScopeCurrent = useCallback(() =>
+    mountedRef.current &&
+    generationRef.current === mediaGeneration &&
+    (currentInputRef.current.selectionRevisionRef?.current ?? 0) === mediaSelectionRevision &&
+    getTranscriptAuthority() === transcriptAuthority,
+  [getTranscriptAuthority, mediaGeneration, mediaSelectionRevision, transcriptAuthority]);
+
   const handleToggleVoiceTalk = useCallback(async () => {
-    setVoiceBusy(true);
+    if (!isMediaScopeCurrent() || talkAttemptRef.current) return;
+    const attempt = {};
+    talkAttemptRef.current = attempt;
+    const current = () => talkAttemptRef.current === attempt && isMediaScopeCurrent();
+    setTalkBusy(true);
     setError(null);
     try {
+      const { startVoiceTalkSession, stopVoiceTalkSession } = await loadVoiceApi();
+      if (!current()) return;
       if (voiceStatus?.talk?.activeSessionId) {
         await stopVoiceTalkSession(voiceStatus.talk.activeSessionId);
-        pushLocalNotice("Push-to-talk session stopped.", "neutral");
+        if (current()) pushLocalNotice("Push-to-talk session stopped.", "neutral");
       } else {
         await startVoiceTalkSession({
           mode: "push_to_talk",
           sessionId: selectedSessionId ?? undefined,
         });
-        pushLocalNotice("Push-to-talk session started.", "success");
+        if (current()) pushLocalNotice("Push-to-talk session started.", "success");
       }
-      await refreshVoiceState();
+      if (current()) await refreshVoiceState();
     } catch (error) {
+      if (!current()) return;
       setError((error as Error).message);
       await refreshVoiceState();
     } finally {
-      setVoiceBusy(false);
+      if (talkAttemptRef.current === attempt) {
+        talkAttemptRef.current = null;
+        setTalkBusy(false);
+      }
     }
-  }, [pushLocalNotice, refreshVoiceState, selectedSessionId, setError, voiceStatus?.talk?.activeSessionId]);
+  }, [isMediaScopeCurrent, pushLocalNotice, refreshVoiceState, selectedSessionId, setError, voiceStatus?.talk?.activeSessionId]);
 
-  const stopLiveVoice = useCallback(
-    async (announce = true) => {
-      const connection = liveVoiceConnectionRef.current;
-      const pendingStart = liveVoiceStartRef.current;
-      if (pendingStart) {
-        pendingStart.canceled = true;
-      }
-      if (!connection) {
-        setLiveVoiceState("idle");
-        setLiveVoiceMuted(false);
-        if (pendingStart?.voiceSessionId) {
-          await stopRealtimeVoiceSession(pendingStart.voiceSessionId).catch(() => undefined);
-          await refreshVoiceState();
-        }
-        return;
-      }
-      setLiveVoiceState("stopping");
-      cleanupLiveVoiceConnection(connection);
-      liveVoiceConnectionRef.current = null;
+  const handleToggleLiveVoice = useCallback(async () => {
+    if (!mountedRef.current) return;
+    const previous = liveVoiceAttemptRef.current;
+    if (previous) {
+      liveVoiceAttemptRef.current = null;
+      setRealtimeBusy(false);
       setLiveVoiceMuted(false);
       setLiveVoiceState("idle");
       try {
-        await stopRealtimeVoiceSession(connection.voiceSessionId);
-      } finally {
-        await refreshVoiceState();
-      }
-      if (announce) {
-        pushLocalNotice("OpenAI Realtime voice stopped.", "neutral");
-      }
-    },
-    [pushLocalNotice, refreshVoiceState],
-  );
-
-  const cancelPendingLiveVoiceStart = useCallback(
-    async (announce = true) => {
-      const pendingStart = liveVoiceStartRef.current;
-      if (!pendingStart) {
-        setLiveVoiceState("idle");
-        setLiveVoiceMuted(false);
+        await previous.operation?.stop();
+      } catch (error) {
+        if (!liveVoiceAttemptRef.current && isMediaScopeCurrent()) setError((error as Error).message);
         return;
       }
-      pendingStart.canceled = true;
-      liveVoiceStartRef.current = null;
-      setLiveVoiceState("stopping");
-      for (const track of pendingStart.mediaStream?.getTracks() ?? []) {
-        track.stop();
-      }
-      if (pendingStart.voiceSessionId) {
-        await stopRealtimeVoiceSession(pendingStart.voiceSessionId).catch(() => undefined);
-      }
-      setLiveVoiceMuted(false);
-      setLiveVoiceState("idle");
-      await refreshVoiceState();
-      if (announce) {
+      if (!liveVoiceAttemptRef.current && isMediaScopeCurrent()) {
         pushLocalNotice("OpenAI Realtime voice stopped.", "neutral");
+        await refreshVoiceState();
       }
-    },
-    [pushLocalNotice, refreshVoiceState],
-  );
-
-  const handleToggleLiveVoice = useCallback(async () => {
-    if (liveVoiceConnectionRef.current) {
-      await stopLiveVoice();
       return;
     }
-    if (liveVoiceStartRef.current) {
-      await cancelPendingLiveVoiceStart();
-      return;
-    }
+    if (!isMediaScopeCurrent()) return;
     if (!supportsBrowserRealtimeVoice()) {
       setError("OpenAI Realtime voice needs browser microphone and WebRTC support.");
       setLiveVoiceState("error");
       return;
     }
 
-    setVoiceBusy(true);
+    const attempt: LiveVoiceAttempt = {};
+    liveVoiceAttemptRef.current = attempt;
+    const isStartCurrent = () => liveVoiceAttemptRef.current === attempt && isMediaScopeCurrent();
+    setRealtimeBusy(true);
     setError(null);
     setLiveVoiceState("connecting");
-    let issuedVoiceSessionId: string | null = null;
-    let pendingConnection: LiveVoiceConnection | null = null;
-    const pendingStart: PendingLiveVoiceStart = {
-      canceled: false,
-      mediaStream: null,
-      voiceSessionId: null,
-    };
-    liveVoiceStartRef.current = pendingStart;
-    let canceledStart = false;
-    const abortIfCanceled = () => {
-      if (pendingStart.canceled || liveVoiceStartRef.current !== pendingStart) {
-        canceledStart = true;
-        throw new Error("OpenAI Realtime voice start was canceled.");
-      }
-    };
     try {
-      const { startBrowserRealtimeVoice } = await import("./multimodal-live-voice-start.js");
-      abortIfCanceled();
-      await startBrowserRealtimeVoice({
+      const { createRealtimeVoiceOperation } = await loadRealtimeCode();
+      if (!isStartCurrent()) return;
+      attempt.operation = createRealtimeVoiceOperation({
         sessionId: selectedSessionId,
-        abortIfCanceled,
-        setLiveVoiceState,
-        onVoiceSessionCreated(voiceSessionId) {
-          issuedVoiceSessionId = voiceSessionId;
-          pendingStart.voiceSessionId = voiceSessionId;
-        },
-        onMediaStreamCreated(mediaStream) {
-          pendingStart.mediaStream = mediaStream;
-        },
-        onConnectionCreated(connection) {
-          pendingConnection = connection;
-          liveVoiceConnectionRef.current = connection;
+        isStartCurrent,
+        isAuthorityCurrent: () => getTranscriptAuthority() === transcriptAuthority,
+        setState: (state) => {
+          if (mountedRef.current && liveVoiceAttemptRef.current === attempt) setLiveVoiceState(state);
         },
       });
+      await attempt.operation.start();
+      if (!isStartCurrent()) return;
       pushLocalNotice("OpenAI Realtime voice is live.", "success");
       await refreshVoiceState();
     } catch (error) {
-      cleanupLiveVoiceConnection(pendingConnection);
-      if (!pendingConnection) {
-        for (const track of pendingStart.mediaStream?.getTracks() ?? []) {
-          track.stop();
-        }
-      }
-      if (liveVoiceConnectionRef.current === pendingConnection) {
-        liveVoiceConnectionRef.current = null;
-      }
-      if (issuedVoiceSessionId) {
-        await stopRealtimeVoiceSession(issuedVoiceSessionId).catch(() => undefined);
-      }
-      if (canceledStart || pendingStart.canceled) {
-        setLiveVoiceMuted(false);
-        setLiveVoiceState("idle");
-        await refreshVoiceState();
-        return;
-      }
+      if (!isStartCurrent()) return;
+      liveVoiceAttemptRef.current = null;
       setLiveVoiceState("error");
       setError((error as Error).message);
       await refreshVoiceState();
     } finally {
-      if (liveVoiceStartRef.current === pendingStart) {
-        liveVoiceStartRef.current = null;
+      if (mountedRef.current && liveVoiceAttemptRef.current === attempt) {
+        if (!isStartCurrent()) {
+          liveVoiceAttemptRef.current = null;
+          void attempt.operation?.stop().catch(() => undefined);
+          setLiveVoiceMuted(false);
+          setLiveVoiceState("idle");
+        }
+        setRealtimeBusy(false);
+      } else if (mountedRef.current && !liveVoiceAttemptRef.current) {
+        setRealtimeBusy(false);
       }
-      setVoiceBusy(false);
     }
-  }, [cancelPendingLiveVoiceStart, pushLocalNotice, refreshVoiceState, selectedSessionId, setError, stopLiveVoice]);
+  }, [getTranscriptAuthority, isMediaScopeCurrent, pushLocalNotice, refreshVoiceState, selectedSessionId, setError, transcriptAuthority]);
 
   const handleToggleLiveVoiceMute = useCallback(() => {
-    const connection = liveVoiceConnectionRef.current;
-    if (!connection) {
-      return;
-    }
     const nextMuted = !liveVoiceMuted;
-    for (const track of connection.mediaStream.getAudioTracks()) {
-      track.enabled = !nextMuted;
-    }
+    if (!liveVoiceAttemptRef.current?.operation?.setMuted(nextMuted)) return;
     setLiveVoiceMuted(nextMuted);
     pushLocalNotice(nextMuted ? "OpenAI Realtime microphone muted." : "OpenAI Realtime microphone unmuted.", "neutral");
   }, [liveVoiceMuted, pushLocalNotice]);
@@ -770,7 +692,7 @@ export function useChatMultimodalControls(input: {
         scopeRef.current === ticket.scope && generationRef.current === ticket.generation &&
         (currentInputRef.current.selectionRevisionRef?.current ?? 0) === ticket.revision &&
         getTranscriptAuthority() === ticket.authority;
-      setVoiceBusy(true);
+      setTranscriptionBusy(true);
       setError(null);
       try {
         const code = await loadTranscribeCode();
@@ -790,7 +712,7 @@ export function useChatMultimodalControls(input: {
       } finally {
         if (mountedRef.current && transcriptTicketRef.current === ticket) {
           transcriptTicketRef.current = null;
-          setVoiceBusy(false);
+          setTranscriptionBusy(false);
           if (audioInputRef.current) audioInputRef.current.value = "";
         }
       }

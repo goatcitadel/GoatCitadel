@@ -107,7 +107,7 @@ function Harness({
     handleApplyPresetById: async () => undefined,
     handleAssignProject: controls.handleAssignProject,
     handleAttachKnowledgeUrlValue: async () => undefined,
-    openRunVariableForm: noop,
+    openRunVariableForm: async () => undefined,
     setUiError: api.error,
   });
   const props = {

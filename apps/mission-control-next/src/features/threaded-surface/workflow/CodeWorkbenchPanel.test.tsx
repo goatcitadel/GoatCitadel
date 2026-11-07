@@ -107,6 +107,31 @@ function findButtonByAriaLabel(root: ReactTestInstance, ariaLabel: string): Reac
   return root.findByProps({ "aria-label": ariaLabel });
 }
 
+it("keeps file actions unavailable until the workbench owner is ready and exposes import retry", async () => {
+  const onRefresh = vi.fn();
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<NextCodeWorkbenchPanel panel={buildCodePanel({ workbenchRuntimeStatus: "loading" })} />);
+  });
+  expect(renderer.root.findByProps({ role: "status" }).children).toEqual(["Opening build editor…"]);
+  expect(renderer.root.findAllByType("button")).toHaveLength(0);
+  await act(async () => {
+    renderer.update(
+      <NextCodeWorkbenchPanel panel={buildCodePanel({ workbenchRuntimeStatus: "unavailable", onRefresh })} />,
+    );
+  });
+  expect(renderer.root.findByProps({ role: "alert" }).children.join("")).toContain("couldn’t load");
+  const buttons = renderer.root.findAllByType("button");
+  expect(buttons).toHaveLength(1);
+  act(() => {
+    buttons[0]!.props.onClick();
+  });
+  expect(onRefresh).toHaveBeenCalledOnce();
+  await act(async () => {
+    renderer.unmount();
+  });
+});
+
 describe("NextCodeWorkbenchPanel more-menu Escape handling", () => {
   afterEach(() => {
     vi.restoreAllMocks();

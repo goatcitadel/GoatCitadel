@@ -10,18 +10,12 @@ import type {
   SkillListItem,
 } from "@goatcitadel/contracts";
 import { useCallback, useLayoutEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
-import {
-  activateImportedAgentCatalogEntry,
-  createChatSpecialistCandidate,
-  fetchChatSpecialistCandidates,
-  fetchMcpServers,
-  fetchMcpTemplates,
-  updateChatSpecialistCandidate,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { loadSpecialistActionCode } from "./load-specialist-action-code";
+import type { SpecialistAction } from "./specialist-action-code";
 import { loadConfirmedCapabilitySuggestionAction } from "./load-confirmed-capability-suggestion-action";
 import { getCapabilitySuggestionConfirmationCopy } from "./chat-page-pure-helpers";
 import { useChatContextMutationOwner } from "./useChatContextMutationOwner";
-import { assertContextRecord } from "./context-mutation-evidence";
 import type { OutboundQueueItem } from "./useChatSurfaceOrchestration";
 
 export function useChatSpecialistCapabilityActions(input: {
@@ -111,138 +105,82 @@ export function useChatSpecialistCapabilityActions(input: {
     setCapabilitySuggestionPending(false);
     setCapabilitySuggestionConfirm(null);
   }, [actionView]);
-  const handleCreateSpecialistDraft = useCallback(
-    async (suggestion: ChatSpecialistCandidateSuggestionRecord): Promise<void> => {
-      if (!selectedSession || sending) return;
-      await runSpecialistMutation(
-        "specialist-draft",
-        () =>
-          createChatSpecialistCandidate(selectedSession.sessionId, {
-            turnId: selectedTurnId ?? undefined,
-            suggestion,
-          }),
-        (created) => [assertContextRecord(created, selectedSession.sessionId, workspaceId, "candidateId")],
-        (created, publicationCurrent) => {
-          setSpecialistCandidates((current) =>
-            publicationCurrent()
-              ? [created, ...current.filter((item) => item.candidateId !== created.candidateId)]
-              : current,
-          );
-          setSpecialistSuggestions((current) =>
-            publicationCurrent()
-              ? current.filter((item) => JSON.stringify(item) !== JSON.stringify(suggestion))
-              : current,
-          );
-          pushLocalNotice(`Drafted specialist candidate: ${created.title}.`, "success", publicationCurrent);
+  const isSpecialistCurrent = specialistProjection.isCurrent;
+  const invokeSpecialistAction = useCallback(
+    async (action: SpecialistAction) => {
+      if (!selectedSession || (action.kind !== "inspect" && sending)) return;
+      const sendingRevision = input.sendingRevisionRef?.current;
+      const callerRevision = getGatewayCallerScopeRevision();
+      const current = () =>
+        committedActionView.current === actionView &&
+        isSpecialistCurrent() &&
+        getGatewayCallerScopeRevision() === callerRevision &&
+        input.sendingRevisionRef?.current === sendingRevision;
+      if (!current()) return;
+      let actions: Awaited<ReturnType<typeof loadSpecialistActionCode>>;
+      try {
+        actions = await loadSpecialistActionCode();
+      } catch (error) {
+        if (current()) setError(errorMessage(error));
+        return;
+      }
+      // Request evidence is captured synchronously by the shared owner. Resolve
+      // the code first, then enter that owner only if this intent is still current.
+      if (!current()) return;
+      await actions.runSpecialistAction(
+        {
+          sessionId: selectedSession.sessionId,
+          workspaceId,
+          run: runSpecialistMutation,
+          inspect: inspectSpecialistMutation,
+          setSending,
+          setCandidates: setSpecialistCandidates,
+          setSuggestions: setSpecialistSuggestions,
+          pushLocalNotice,
         },
-        { begin: () => setSending(true), end: () => setSending(false) },
+        action,
       );
     },
     [
       selectedSession,
-      selectedTurnId,
       sending,
+      actionView,
+      isSpecialistCurrent,
+      input.sendingRevisionRef,
+      setError,
       workspaceId,
       runSpecialistMutation,
+      inspectSpecialistMutation,
       setSending,
       setSpecialistCandidates,
       pushLocalNotice,
     ],
+  );
+  const handleCreateSpecialistDraft = useCallback(
+    (suggestion: ChatSpecialistCandidateSuggestionRecord) =>
+      invokeSpecialistAction({ kind: "draft", suggestion, turnId: selectedTurnId }),
+    [invokeSpecialistAction, selectedTurnId],
   );
   const handleSpecialistCandidatePatch = useCallback(
-    async (candidateId: string, patch: ChatSpecialistCandidatePatchInput, notice: string): Promise<void> => {
-      if (!selectedSession || sending) return;
-      await runSpecialistMutation(
-        "specialist-patch",
-        () => updateChatSpecialistCandidate(selectedSession.sessionId, candidateId, patch),
-        (updated) => [assertContextRecord(updated, selectedSession.sessionId, workspaceId, "candidateId", candidateId)],
-        (updated, publicationCurrent) => {
-          setSpecialistCandidates((current) =>
-            publicationCurrent()
-              ? current.map((item) => (item.candidateId === updated.candidateId ? updated : item))
-              : current,
-          );
-          pushLocalNotice(notice, "success", publicationCurrent);
-        },
-        { begin: () => setSending(true), end: () => setSending(false) },
-      );
-    },
-    [
-      selectedSession,
-      sending,
-      workspaceId,
-      runSpecialistMutation,
-      setSending,
-      setSpecialistCandidates,
-      pushLocalNotice,
-    ],
+    (candidateId: string, patch: ChatSpecialistCandidatePatchInput, notice: string) =>
+      invokeSpecialistAction({ kind: "patch", candidateId, patch, notice }),
+    [invokeSpecialistAction],
   );
   const handleActivateCatalogSpecialist = useCallback(
-    async (suggestion: ChatSpecialistCandidateSuggestionRecord): Promise<void> => {
+    async (suggestion: ChatSpecialistCandidateSuggestionRecord) => {
       if (!selectedSession || sending) return;
       if (!suggestion.candidateId) {
         setError("Catalog suggestion is missing its entry identifier.");
         return;
       }
-      await runSpecialistMutation(
-        "specialist-activation",
-        () => activateImportedAgentCatalogEntry(suggestion.candidateId, { sessionId: selectedSession.sessionId }),
-        (activated) => {
-          const id = assertContextRecord(activated.specialist, selectedSession.sessionId, workspaceId, "candidateId");
-          if (
-            activated.catalogEntry.entryId !== suggestion.candidateId ||
-            activated.specialist.routingMode !== "manual_only" ||
-            activated.specialist.status !== "active"
-          )
-            throw new TypeError("The activation receipt does not confirm the reviewed manual-only specialist.");
-          return [activated.catalogEntry.entryId, id];
-        },
-        (activated, publicationCurrent) => {
-          setSpecialistCandidates((current) =>
-            publicationCurrent()
-              ? [
-                  activated.specialist,
-                  ...current.filter((item) => item.candidateId !== activated.specialist.candidateId),
-                ]
-              : current,
-          );
-          setSpecialistSuggestions((current) =>
-            publicationCurrent() ? current.filter((item) => item.candidateId !== suggestion.candidateId) : current,
-          );
-          pushLocalNotice(
-            `Activated ${activated.catalogEntry.definition.frontmatter.name} for this session as a manual-only specialist.`,
-            "success",
-            publicationCurrent,
-          );
-        },
-        { begin: () => setSending(true), end: () => setSending(false) },
-      );
+      await invokeSpecialistAction({ kind: "activate", entryId: suggestion.candidateId });
     },
-    [
-      selectedSession,
-      sending,
-      workspaceId,
-      runSpecialistMutation,
-      setError,
-      setSending,
-      setSpecialistCandidates,
-      pushLocalNotice,
-    ],
+    [invokeSpecialistAction, selectedSession, sending, setError],
   );
-  const handleInspectSpecialists = useCallback(async (): Promise<void> => {
-    if (!selectedSession) return;
-    await inspectSpecialistMutation(
-      () => fetchChatSpecialistCandidates(selectedSession.sessionId, 500),
-      (result) => {
-        if (!Array.isArray(result.items)) throw new TypeError("The Gateway returned no specialist candidates.");
-        result.items.forEach((item) =>
-          assertContextRecord(item, selectedSession.sessionId, workspaceId, "candidateId"),
-        );
-      },
-      (result, publicationCurrent) =>
-        setSpecialistCandidates((current) => (publicationCurrent() ? result.items : current)),
-    );
-  }, [selectedSession, workspaceId, inspectSpecialistMutation, setSpecialistCandidates]);
+  const handleInspectSpecialists = useCallback(
+    () => invokeSpecialistAction({ kind: "inspect" }),
+    [invokeSpecialistAction],
+  );
 
   const dismissCapabilitySuggestion = useCallback((suggestion: ChatCapabilityUpgradeSuggestion) => {
     setCapabilitySuggestions((current) =>
@@ -283,7 +221,6 @@ export function useChatSpecialistCapabilityActions(input: {
     tryBeginOutboundExecutionRef,
   ]);
 
-  const isSpecialistCurrent = specialistProjection.isCurrent;
   const runCapabilitySuggestionAction = useCallback(
     async (suggestion: ChatCapabilityUpgradeSuggestion) => {
       const sendingRevision = input.sendingRevisionRef?.current;
@@ -323,10 +260,11 @@ export function useChatSpecialistCapabilityActions(input: {
         }
 
         if (suggestion.recommendedAction === "connect_mcp") {
-          setMcpServers(await fetchMcpServers().then((result) => result.items));
-          setMcpTemplates(await fetchMcpTemplates().then((result) => result.items));
-          window.location.hash = "mcp";
-          dismissCapabilitySuggestion(suggestion);
+          if (!current()) return;
+          const { openMcpSuggestion } = await loadSpecialistActionCode();
+          if (await openMcpSuggestion(current, setMcpServers, setMcpTemplates)) {
+            if (current()) dismissCapabilitySuggestion(suggestion);
+          }
           return;
         }
 

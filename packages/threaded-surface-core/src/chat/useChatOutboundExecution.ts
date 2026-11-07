@@ -13,10 +13,6 @@ import type {
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useRef, useState } from "react";
-import {
-  isThreadMutatingStreamChunk,
-  updateThreadFromStreamChunk,
-} from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 import type { ChatStreamStatus } from "@goatcitadel/mission-control-shared/components/chat/ChatStreamStatusBar";
 import {
   clearChatStreamActivity,
@@ -27,7 +23,7 @@ import { createChatExecutionCorrelationId, recordChatApprovalPhase, recordChatOu
 import { isAbortError } from "./chat-page-derivations";
 import { shouldApplyFetchedMessagesAfterStream, shouldExecuteLocalChatCommand } from "./chat-page-pure-helpers";
 import type { ChatErrorSource } from "./chat-error-copy";
-import { useChatOperatorPrompts } from "./useChatOperatorPrompts";
+import { useChatOperatorPrompts, type OperatorPromptCustody } from "./useChatOperatorPrompts";
 import { useChatRetainedStreamReattachment } from "./useChatRetainedStreamReattachment";
 import { useChatStreamingPreviewState } from "./useChatStreamingPreviewState";
 import type { OutboundQueueItem, OutboundRequestPrefsSnapshot } from "./useChatSurfaceOrchestration";
@@ -117,7 +113,11 @@ function loadOutboundExecutionCode() {
 }
 
 export function useChatOutboundExecution(
-  input: UseChatOutboundExecutionInput & { externalContext?: UseChatOutboundExternalContext; workspaceId?: string },
+  input: UseChatOutboundExecutionInput & {
+    externalContext?: UseChatOutboundExternalContext;
+    workspaceId?: string;
+    operatorPromptCustody?: OperatorPromptCustody;
+  },
 ) {
   const { sessionConfig, streamConfig, stateConfig, stateSetters, operations, refs, routing } = input;
   // Synced ref: the callback stays render-current without widening the
@@ -270,6 +270,8 @@ export function useChatOutboundExecution(
     handleSelectBranchTurn,
     refreshThreadAndApprovals,
   } = useChatOperatorPrompts({
+    ...input.operatorPromptCustody,
+    workspaceId: input.workspaceId,
     selectedSessionId,
     selectedSession,
     thread,
@@ -639,8 +641,6 @@ export function useChatOutboundExecution(
           onWorkspaceSnapshotFailedRef,
           streamEnabled,
           isBackgroundChatUserInputPrompt,
-          isThreadMutatingStreamChunk,
-          updateThreadFromStreamChunk,
           clearChatStreamActivity,
           recordChatStreamChunkActivity,
           recordClientDiagnostic,

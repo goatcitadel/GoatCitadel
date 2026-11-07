@@ -29,10 +29,9 @@ import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { useSelectedChannelConversation } from "./use-channel-conversation";
 import { useChannelComposerProps } from "./use-channel-composer";
 import { isChannelConversation } from "./channel-conversation-scope";
-import { DeferredBtwSideChatPanel, DeferredSessionStatusPanel } from "./DeferredChatLeaves";
+import { DeferredBtwSideChatPanel, DeferredChatTimerPanel, DeferredSessionStatusPanel } from "./DeferredChatLeaves";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
-import { ChatTimerPanel } from "../../../features/threaded-surface/ChatTimerPanel";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
@@ -407,7 +406,7 @@ export function ChatAreaView({
         {btw ? (
           <DeferredBtwSideChatPanel key={JSON.stringify([btw.workspaceId, btw.parentSessionId])} sideChat={btw} />
         ) : null}
-        {active?.chatTimerPanel ? <ChatTimerPanel panel={active.chatTimerPanel} /> : null}
+        {active?.chatTimerPanel ? <DeferredChatTimerPanel panel={active.chatTimerPanel} /> : null}
       </ChatMainColumn>
     </section>
   );

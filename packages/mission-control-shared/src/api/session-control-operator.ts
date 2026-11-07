@@ -17,20 +17,49 @@
  * can never send malformed control material (e.g. a read-only capability set) nor
  * trust an unvalidated, content-bearing, or secret-leaking response.
  */
-import {
-  parseSessionControlDetailResponse,
-  parseSessionControlHandoffInput,
-  parseSessionControlHandoffResponse,
-  parseSessionControlRevokeInput,
-  parseSessionControlRevokeResponse,
-  type ExternalSessionControlCapability,
-  type SessionControlDetailResponse,
-  type SessionControlHandoffResponse,
-  type SessionControlRevokeResponse,
+import type {
+  ExternalSessionControlCapability,
+  SessionControlDetailResponse,
+  SessionControlHandoffResponse,
+  SessionControlRevokeResponse,
 } from "@goatcitadel/contracts";
-import { request } from "./client-core.js";
+import {
+  readIdleOperatorControlDetail,
+  snapshotSessionControlData,
+} from "@goatcitadel/contracts/session-control-operator-projection";
+import { getGatewayAccessRevision, getGatewayCallerScopeRevision } from "./access-scope.js";
+import { getGatewayApiBaseUrl, request } from "./client-core.js";
 
 const SESSION_ID_PATTERN = /^[A-Za-z0-9._:-]{1,256}$/u;
+
+type ControlProtocol = typeof import("@goatcitadel/contracts/session-control");
+let protocol: ControlProtocol | undefined;
+let protocolLoad: Promise<ControlProtocol> | undefined;
+
+function loadControlProtocol() {
+  return (protocolLoad ??= import("@goatcitadel/contracts/session-control").then(
+    (loaded) => (protocol = loaded),
+    (error: unknown) => {
+      protocolLoad = undefined;
+      throw error;
+    },
+  ));
+}
+
+function captureOperatorScope() {
+  const installation = getGatewayApiBaseUrl();
+  const caller = getGatewayCallerScopeRevision();
+  const access = getGatewayAccessRevision();
+  return () => {
+    if (
+      installation !== getGatewayApiBaseUrl() ||
+      caller !== getGatewayCallerScopeRevision() ||
+      access !== getGatewayAccessRevision()
+    ) {
+      throw new DOMException("Gateway operator access changed.", "AbortError");
+    }
+  };
+}
 
 function controlPath(sessionId: string, suffix: string): string {
   const trimmed = sessionId.trim();
@@ -60,7 +89,13 @@ async function postControl<TResponse>(
 
 /** Read the content-free current owner / generation / lease state and any pending requests. */
 export async function fetchSessionControlDetail(sessionId: string): Promise<SessionControlDetailResponse> {
+  const assertCurrent = captureOperatorScope();
   const payload = await request<unknown>(controlPath(sessionId, ""));
+  assertCurrent();
+  const idle = readIdleOperatorControlDetail(payload);
+  if (idle) return idle;
+  const { parseSessionControlDetailResponse } = protocol ?? (await loadControlProtocol());
+  assertCurrent();
   return parseSessionControlDetailResponse(payload);
 }
 
@@ -77,12 +112,23 @@ export async function handoffSessionControl(
   sessionId: string,
   input: OperatorSessionControlHandoffInput,
 ): Promise<SessionControlHandoffResponse> {
-  const body = parseSessionControlHandoffInput({
+  let effectiveCapabilities: unknown;
+  try {
+    effectiveCapabilities = snapshotSessionControlData(input.effectiveCapabilities);
+  } catch {
+    throw new TypeError("Session control handoff is invalid.");
+  }
+  const intent = {
     requestId: input.requestId,
     expectedGeneration: input.expectedGeneration,
-    effectiveCapabilities: input.effectiveCapabilities,
+    effectiveCapabilities,
     idempotencyKey: input.idempotencyKey ?? newControlIdempotencyKey(),
-  });
+  };
+  const assertCurrent = captureOperatorScope();
+  const { parseSessionControlHandoffInput, parseSessionControlHandoffResponse } =
+    protocol ?? (await loadControlProtocol());
+  const body = parseSessionControlHandoffInput(intent);
+  assertCurrent();
   return postControl(controlPath(sessionId, "/handoff"), body, parseSessionControlHandoffResponse);
 }
 
@@ -105,7 +151,7 @@ export async function revokeSessionControl(
   input: OperatorSessionControlRevokeInput,
 ): Promise<SessionControlRevokeResponse> {
   const idempotencyKey = input.idempotencyKey ?? newControlIdempotencyKey();
-  const body = parseSessionControlRevokeInput(
+  const intent =
     input.target === "request"
       ? { target: "request", requestId: input.requestId, idempotencyKey }
       : {
@@ -113,7 +159,10 @@ export async function revokeSessionControl(
           expectedGeneration: input.expectedGeneration,
           mode: input.mode,
           idempotencyKey,
-        },
-  );
+        };
+  const assertCurrent = captureOperatorScope();
+  const { parseSessionControlRevokeInput, parseSessionControlRevokeResponse } = protocol ?? (await loadControlProtocol());
+  const body = parseSessionControlRevokeInput(intent);
+  assertCurrent();
   return postControl(controlPath(sessionId, "/revoke"), body, parseSessionControlRevokeResponse);
 }

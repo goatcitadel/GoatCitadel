@@ -35,14 +35,30 @@ vi.mock("../../data/use-model-label", () => ({
 vi.mock("./use-chat-model-labels", () => ({ useChatModelLabels: () => (modelId: string) => modelId }));
 // Width and pointer are off by default (a desktop with a keyboard); the phone and touch tests switch them on.
 const media = vi.hoisted(() => ({ phone: false, coarse: false }));
+const phoneOptions = vi.hoisted(() => ({ load: vi.fn<() => Promise<void> | undefined>() }));
+vi.mock(import("./ChatComposerPhoneOptions"), async (importOriginal) => {
+  await phoneOptions.load();
+  return importOriginal();
+});
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({
   useMediaQuery: (query: string) =>
     (media.phone && query === "(width < 640px)") || (media.coarse && query === "(pointer: coarse)"),
 }));
 vi.mock("../../ui/Sheet", () => ({
-  Sheet: ({ open, title, children }: { open: boolean; title: string; children: ReactNode }) =>
+  Sheet: ({
+    open,
+    onOpenChange,
+    title,
+    children,
+  }: {
+    open: boolean;
+    onOpenChange: (open: boolean) => void;
+    title: string;
+    children: ReactNode;
+  }) =>
     open ? (
       <section role="dialog" aria-label={title}>
+        <button type="button" aria-label="Close sheet" onClick={() => onOpenChange(false)} />
         {children}
       </section>
     ) : null,
@@ -69,6 +85,39 @@ function sendButton(): HTMLButtonElement {
   if (!(button instanceof HTMLButtonElement)) throw new Error("Missing Send button");
   return button;
 }
+
+it("loads phone options only on request and leaves a dismissed sheet closed when loading completes", async () => {
+  let finishLoading!: () => void;
+  phoneOptions.load.mockReturnValueOnce(new Promise<void>((resolve) => (finishLoading = resolve)));
+  try {
+    const props = composerProps();
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    media.phone = true;
+    await act(async () => root.render(<ChatTextComposer props={props} />));
+    expect(phoneOptions.load).not.toHaveBeenCalled();
+
+    const options = container.querySelector<HTMLButtonElement>('button[aria-label="Options"]')!;
+    const sheet = () => container.querySelector('[role="dialog"][aria-label="Message options"]');
+    const attachButton = () => sheet()?.querySelector('button[aria-label="Attach files"]');
+    await act(async () => options.click());
+    await vi.waitFor(() => expect(phoneOptions.load).toHaveBeenCalledOnce());
+    expect(sheet()?.querySelector('[role="status"]')?.textContent).toContain("Loading message options");
+    expect(attachButton()).toBeNull();
+    expect(sheet()?.textContent).toContain("Commands and context");
+    await act(async () => sheet()?.querySelector<HTMLButtonElement>('button[aria-label="Close sheet"]')?.click());
+    await act(async () => {
+      finishLoading();
+      await import("./ChatComposerPhoneOptions");
+    });
+    expect(options.getAttribute("aria-expanded")).toBe("false");
+    expect(sheet()).toBeNull();
+
+    await act(async () => options.click());
+    await vi.waitFor(() => expect(attachButton()).toBeTruthy());
+  } finally {
+    finishLoading();
+  }
+});
 
 it("optional background input preserves the composer while required input and approvals block it", () => {
   const prompt = {
@@ -685,6 +734,9 @@ it("keeps governed external-control recovery actions available while send is loc
     } as ComposerProps["sessionControlBanner"],
   });
   await act(async () => root.render(<ChatTextComposer props={props} />));
+  await vi.waitFor(() =>
+    expect(container.querySelector('[aria-label="Revoke external session control"]')).not.toBeNull(),
+  );
   await act(async () =>
     container.querySelector<HTMLButtonElement>('[aria-label="Revoke external session control"]')!.click(),
   );
@@ -806,7 +858,11 @@ it.each(["desktop", "phone"])("keeps a warm Sources disclosure on %s", async (de
   if (media.phone) {
     await act(async () => container.querySelector<HTMLButtonElement>('button[aria-label="Options"]')!.click());
   }
-  const chip = [...container.querySelectorAll("button")].find((button) => button.textContent === "Sources: 1")!;
+  const chip = await vi.waitFor(() => {
+    const found = [...container.querySelectorAll("button")].find((button) => button.textContent === "Sources: 1");
+    expect(found).toBeDefined();
+    return found!;
+  });
   const readPanel = () => container.querySelector('section[aria-label="Read-only external source attachments"]');
   expect(chip.getAttribute("aria-expanded")).toBe("false");
   expect(document.getElementById(chip.getAttribute("aria-controls")!)?.hidden).toBe(true);
@@ -951,7 +1007,9 @@ describe("touch and phone composer", () => {
     await act(async () => options.click());
     const sheet = container.querySelector<HTMLElement>('[role="dialog"][aria-label="Message options"]')!;
     expect(options.getAttribute("aria-expanded")).toBe("true");
-    expect(sheet.querySelector('button[aria-label$="Model and reasoning options"]')).not.toBeNull();
+    await vi.waitFor(() =>
+      expect(sheet.querySelector('button[aria-label$="Model and reasoning options"]')).not.toBeNull(),
+    );
     expect(sheet.querySelector('button[aria-label="Attach files"]')).not.toBeNull();
     expect(sheet.textContent).toContain("Voice and images");
     expect(sheet.querySelectorAll('input[aria-label="Choose files to attach"]')).toHaveLength(0);
@@ -1233,7 +1291,11 @@ it("requires current Sources reload consent and preserves the composer when canc
     const review = async () => {
       recovery!.focus();
       await act(async () => recovery!.click());
-      await vi.waitFor(() => expect(dialog()?.textContent).toContain("Reload app?"));
+      await vi.waitFor(() => {
+        const panel = dialog();
+        expect(panel?.textContent).toContain("Reload app?");
+        expect(panel && buttonIn(panel, "Cancel")).toBeDefined();
+      });
       expect(reload).not.toHaveBeenCalled();
       return dialog()!;
     };
@@ -1274,83 +1336,86 @@ it.each([
   { device: "desktop", outside: false },
   { device: "desktop", outside: true },
   { device: "phone", outside: false },
-])("preserves a cold Sources palette handoff only while focus remains owned ($device, outside=$outside)", async ({ device, outside }) => {
-  media.phone = device === "phone";
-  let release!: () => void;
-  const held = new Promise<void>((resolve) => {
-    release = resolve;
-  });
-  const load = vi.fn(async () => {
-    await held;
-    return vi.importActual<SourcesCode>("../../../features/threaded-surface/ThreadedExternalSourceStrip");
-  });
-  sourcesCode.override = load;
-  try {
-    const read = vi.fn();
-    const props = composerProps({
-      externalSourceControls: sourceControls(read),
-      commandSuggestions: [
-        {
-          key: "sources",
-          command: "Attach a source",
-          description: "Choose a read-only source",
-          applyValue: "",
-          action: { type: "launch_external_source" },
-        },
-      ],
+])(
+  "preserves a cold Sources palette handoff only while focus remains owned ($device, outside=$outside)",
+  async ({ device, outside }) => {
+    media.phone = device === "phone";
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
     });
-    function Harness() {
-      const [open, setOpen] = useState(true);
-      return (
-        <>
-          <button type="button">Outside composer</button>
-          <ChatTextComposer
-            props={{
-              ...props,
-              composerPalette: {
-                enabled: true,
-                globalOpen: open,
-                query: "",
-                failures: [],
-                onOpen: () => setOpen(true),
-                onClose: () => setOpen(false),
-                onQueryChange: vi.fn(),
-                onIndexChange: vi.fn(),
-                onSelect: vi.fn(),
-                loading: false,
-              },
-            }}
-          />
-        </>
-      );
-    }
-    await act(async () => root.render(<Harness />));
-    const palette = container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
-    await act(async () => {
-      palette.focus();
-      palette.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+    const load = vi.fn(async () => {
+      await held;
+      return vi.importActual<SourcesCode>("../../../features/threaded-surface/ThreadedExternalSourceStrip");
     });
-    await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
-    expect(read).not.toHaveBeenCalled();
-    expect(document.activeElement).toBe(props.composerRef.current);
-    const other = buttonIn(container, "Outside composer")!;
-    if (outside) await act(async () => other.focus());
-    await act(async () => {
-      release();
-      await load.mock.results[0]?.value;
-    });
-    const picker = () => container.querySelector('[role="dialog"][aria-modal="true"]');
-    if (outside) {
+    sourcesCode.override = load;
+    try {
+      const read = vi.fn();
+      const props = composerProps({
+        externalSourceControls: sourceControls(read),
+        commandSuggestions: [
+          {
+            key: "sources",
+            command: "Attach a source",
+            description: "Choose a read-only source",
+            applyValue: "",
+            action: { type: "launch_external_source" },
+          },
+        ],
+      });
+      function Harness() {
+        const [open, setOpen] = useState(true);
+        return (
+          <>
+            <button type="button">Outside composer</button>
+            <ChatTextComposer
+              props={{
+                ...props,
+                composerPalette: {
+                  enabled: true,
+                  globalOpen: open,
+                  query: "",
+                  failures: [],
+                  onOpen: () => setOpen(true),
+                  onClose: () => setOpen(false),
+                  onQueryChange: vi.fn(),
+                  onIndexChange: vi.fn(),
+                  onSelect: vi.fn(),
+                  loading: false,
+                },
+              }}
+            />
+          </>
+        );
+      }
+      await act(async () => root.render(<Harness />));
+      const palette = container.querySelector<HTMLInputElement>('input[role="combobox"]')!;
+      await act(async () => {
+        palette.focus();
+        palette.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }));
+      });
+      await vi.waitFor(() => expect(load).toHaveBeenCalledOnce());
       expect(read).not.toHaveBeenCalled();
-      expect(picker()).toBeNull();
-      expect(document.activeElement).toBe(other);
-    } else {
-      await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
-      expect(picker()?.contains(document.activeElement)).toBe(true);
-      if (device === "phone") expect(picker()?.closest('[aria-label="Message options"]')).toBeTruthy();
+      expect(document.activeElement).toBe(props.composerRef.current);
+      const other = buttonIn(container, "Outside composer")!;
+      if (outside) await act(async () => other.focus());
+      await act(async () => {
+        release();
+        await load.mock.results[0]?.value;
+      });
+      const picker = () => container.querySelector('[role="dialog"][aria-modal="true"]');
+      if (outside) {
+        expect(read).not.toHaveBeenCalled();
+        expect(picker()).toBeNull();
+        expect(document.activeElement).toBe(other);
+      } else {
+        await vi.waitFor(() => expect(read).toHaveBeenCalledOnce());
+        expect(picker()?.contains(document.activeElement)).toBe(true);
+        if (device === "phone") expect(picker()?.closest('[aria-label="Message options"]')).toBeTruthy();
+      }
+    } finally {
+      release();
+      sourcesCode.override = undefined;
     }
-  } finally {
-    release();
-    sourcesCode.override = undefined;
-  }
-});
+  },
+);

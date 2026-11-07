@@ -22,23 +22,11 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useChatThreadState } from "./use-chat-thread-state";
 import {
-  fetchChatGeneratedArtifacts,
-  fetchChatHistoryWindow,
-  fetchChatHistoryContinuation,
-  fetchChatCommandCatalog,
-  fetchChatLearnedMemory,
   fetchChatProjects,
-  fetchChatProactiveRuns,
-  fetchChatProactiveStatus,
   fetchChatSessionCoreState,
   fetchChatSessions,
   fetchChatSessionSearch,
-  fetchChatSpecialistCandidates,
-  fetchThreadKnowledgeAttachments,
-  fetchMcpServers,
-  fetchMcpTemplates,
   fetchSettings,
-  fetchSkills,
   type ChatProjectsResponse,
   type ChatGeneratedArtifactsResponse,
   type ChatSessionsResponse,
@@ -50,13 +38,6 @@ import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/stat
 import { recordChatRefreshPhase } from "./chat-causality";
 import { resolveChatRefreshPlan } from "./chat-page-pure-helpers";
 import { retainedReloadMode, useCommitRefValue, type RetainedLoad } from "./retained-reload";
-import {
-  historicalWindowIdentityMismatch,
-  historicalTargetChanged,
-  isHistoricalContinuationValid,
-  mergeHistoricalContinuation,
-} from "./chat-session-history-projection";
-
 import { readRouteSidebarSession } from "./chat-route-session-read";
 import {
   getDevBootstrapPromise,
@@ -85,6 +66,37 @@ import {
 } from "./chat-session-data-bootstrap";
 
 export type { ChatHistoryView, ChatSidebarLoadOptions, CommandCatalogItem } from "./chat-session-data-bootstrap";
+
+type ChatHistoryCode = typeof import("./chat-session-history-code.js");
+let historyCode: Promise<ChatHistoryCode> | undefined;
+type ChatSessionEvidenceCode = typeof import("./chat-session-evidence-code.js");
+let evidenceCode: Promise<ChatSessionEvidenceCode> | undefined;
+
+const EMPTY_CATALOG = { commands: { items: [] }, skills: { items: [] }, servers: { items: [] }, templates: { items: [] } };
+
+function loadChatHistoryCode() {
+  return (historyCode ??= import("./chat-session-history-code.js").catch((error: unknown) => {
+    historyCode = undefined;
+    throw error;
+  }));
+}
+
+function loadChatSessionEvidenceCode() {
+  return (evidenceCode ??= import("./chat-session-evidence-code.js").catch((error: unknown) => {
+    evidenceCode = undefined;
+    throw error;
+  }));
+}
+
+function gatewayScopeCurrent() {
+  const access = getGatewayAccessRevision();
+  const caller = getGatewayCallerScopeRevision();
+  const gateway = getGatewayApiBaseUrl();
+  return () =>
+    access === getGatewayAccessRevision() &&
+    caller === getGatewayCallerScopeRevision() &&
+    gateway === getGatewayApiBaseUrl();
+}
 
 export function useChatSessionData(input: ChatSessionDataInput) {
   const {
@@ -124,6 +136,10 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const [secondaryLoading, setSecondaryLoading] = useState(false);
   const secondaryOwner = useRef(input.secondaryEnabled);
   secondaryOwner.current = input.secondaryEnabled;
+  const secondaryScopeKey = JSON.stringify([workspaceId, input.viewIdentity]);
+  const secondaryScope = useRef({ key: secondaryScopeKey });
+  if (secondaryScope.current.key !== secondaryScopeKey) secondaryScope.current = { key: secondaryScopeKey };
+  const renderedSecondaryScope = secondaryScope.current;
   const [sidebarNextCursor, setSidebarNextCursor] = useState<string | null>(null);
   const [sidebarLoadingMore, setSidebarLoadingMore] = useState(false);
   const [historicalWindow, setHistoricalWindow] = useState<ChatHistoryWindowResponse | null>(null);
@@ -486,16 +502,10 @@ export function useChatSessionData(input: ChatSessionDataInput) {
 
   const openHistoricalWindow = useCallback(
     async (sessionId: string, hit: ChatSessionSearchHitRecord) => {
-      const access = getGatewayAccessRevision();
-      const caller = getGatewayCallerScope();
-      const gateway = getGatewayApiBaseUrl();
+      const gatewayCurrent = gatewayScopeCurrent();
       const generation = ++historicalWindowGenerationRef.current;
-      const current = () =>
-        sidebarMounted.current &&
-        generation === historicalWindowGenerationRef.current &&
-        access === getGatewayAccessRevision() &&
-        caller === getGatewayCallerScope() &&
-        gateway === getGatewayApiBaseUrl();
+      const ownsWindow = () => sidebarMounted.current && generation === historicalWindowGenerationRef.current;
+      const current = () => ownsWindow() && gatewayCurrent();
       historicalContinuationGenerationRef.current += 1;
       const target = { workspaceId, sessionId };
       setHistoricalWindowTarget(target);
@@ -510,14 +520,17 @@ export function useChatSessionData(input: ChatSessionDataInput) {
       }
       setHistoricalWindowLoading(true);
       try {
-        const nextWindow = await fetchChatHistoryWindow({
+        const request = {
           workspaceId: hit.workspaceId,
           sessionId: hit.sessionId,
           messageId: hit.messageId,
           sequence: hit.sequence,
-        });
+        };
+        const { fetchChatHistoryWindow, historicalWindowIdentityMismatch } = await loadChatHistoryCode();
         if (!current()) return false;
-        if (historicalWindowIdentityMismatch(nextWindow, workspaceId, sessionId, hit)) {
+        const nextWindow = await fetchChatHistoryWindow(request);
+        if (!current()) return false;
+        if (historicalWindowIdentityMismatch(nextWindow, workspaceId, sessionId, request)) {
           setHistoricalWindowError("Historical response identity did not match the selected search result");
           return false;
         }
@@ -528,7 +541,7 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         setHistoricalWindowError(error instanceof Error ? error.message : "Historical message could not be loaded");
         return false;
       } finally {
-        if (current()) {
+        if (ownsWindow()) {
           setHistoricalWindowLoading(false);
         }
       }
@@ -554,16 +567,22 @@ export function useChatSessionData(input: ChatSessionDataInput) {
       const cursor = direction === "older" ? currentWindow?.olderCursor : currentWindow?.newerCursor;
       if (!target || currentWindow?.anchor.state !== "found" || !cursor) return false;
       const generation = ++historicalContinuationGenerationRef.current;
+      const gatewayCurrent = gatewayScopeCurrent();
+      const ownsContinuation = () => sidebarMounted.current && generation === historicalContinuationGenerationRef.current;
+      const current = () => ownsContinuation() && gatewayCurrent();
       setHistoricalContinuationLoading(direction);
       setHistoricalContinuationError(null);
       try {
+        const { fetchChatHistoryContinuation, isHistoricalContinuationValid, mergeHistoricalContinuation } =
+          await loadChatHistoryCode();
+        if (!current()) return false;
         const page = await fetchChatHistoryContinuation({
           workspaceId: target.workspaceId,
           sessionId: target.sessionId,
           direction,
           cursor,
         });
-        if (generation !== historicalContinuationGenerationRef.current) return false;
+        if (!current()) return false;
         if (page.cursorState === "stale") {
           setHistoricalContinuationError("Historical continuation is stale because its boundary message changed");
           return false;
@@ -576,11 +595,11 @@ export function useChatSessionData(input: ChatSessionDataInput) {
         setHistoricalWindow((active) => mergeHistoricalContinuation(active, currentWindow, page, direction, target));
         return true;
       } catch (error) {
-        if (generation !== historicalContinuationGenerationRef.current) return false;
+        if (!current()) return false;
         setHistoricalContinuationError(error instanceof Error ? error.message : "Historical continuation failed");
         return false;
       } finally {
-        if (generation === historicalContinuationGenerationRef.current) {
+        if (ownsContinuation()) {
           setHistoricalContinuationLoading(null);
         }
       }
@@ -589,7 +608,10 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   );
 
   useEffect(() => {
-    if (historicalTargetChanged(historicalWindowTarget, workspaceId, selectedSessionId)) {
+    if (
+      historicalWindowTarget &&
+      (historicalWindowTarget.workspaceId !== workspaceId || historicalWindowTarget.sessionId !== selectedSessionId)
+    ) {
       returnToLatest();
     }
   }, [historicalWindowTarget, returnToLatest, selectedSessionId, workspaceId]);
@@ -631,38 +653,27 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   }, [renderedCatalogScope]);
   const loadRuntimeCatalog = useCallback(async () => {
     const generation = ++catalogGeneration.current;
-    const access = getGatewayAccessRevision(),
-      caller = getGatewayCallerScope(),
-      callerRevision = getGatewayCallerScopeRevision(),
-      gateway = getGatewayApiBaseUrl();
+    const gatewayCurrent = gatewayScopeCurrent();
     const { runtimeSettings, commands, skills, servers, templates } = await getDevBootstrapPromise(
       runtimeCatalogBootstrapCache,
       JSON.stringify([renderedCatalogScope.key, includeCatalogEvidence]),
       async () => {
-        const [nextRuntimeSettings, nextCommands, nextSkills, nextServers, nextTemplates] = await Promise.all([
+        const [runtimeSettings, evidence] = await Promise.all([
           fetchSettings(),
-          includeCatalogEvidence ? fetchChatCommandCatalog() : Promise.resolve({ items: [] }),
-          includeCatalogEvidence ? fetchSkills() : Promise.resolve({ items: [] }),
-          includeCatalogEvidence ? fetchMcpServers() : Promise.resolve({ items: [] }),
-          includeCatalogEvidence ? fetchMcpTemplates() : Promise.resolve({ items: [] }),
+          includeCatalogEvidence
+            ? loadChatSessionEvidenceCode().then(({ readRuntimeCatalogEvidence }) =>
+                gatewayCurrent() ? readRuntimeCatalogEvidence() : EMPTY_CATALOG,
+              )
+            : EMPTY_CATALOG,
         ]);
-        return {
-          runtimeSettings: nextRuntimeSettings,
-          commands: nextCommands,
-          skills: nextSkills,
-          servers: nextServers,
-          templates: nextTemplates,
-        };
+        return { runtimeSettings, ...evidence };
       },
     );
     if (
       generation !== catalogGeneration.current ||
       !sidebarMounted.current ||
       catalogScope.current !== renderedCatalogScope ||
-      access !== getGatewayAccessRevision() ||
-      caller !== getGatewayCallerScope() ||
-      callerRevision !== getGatewayCallerScopeRevision() ||
-      gateway !== getGatewayApiBaseUrl()
+      !gatewayCurrent()
     )
       return;
     setSettings(runtimeSettings);
@@ -732,40 +743,42 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   const loadSessionSecondaryState = useCallback(async (sessionId: string, options: ChatSecondaryLoadOptions = {}) => {
     const background = options.background ?? false;
     // Same fence as the core loader: only foreground loads may target a session not yet shown.
-    if (background && sessionId !== selectedSessionIdRef.current) return;
+    if (
+      secondaryScope.current !== renderedSecondaryScope ||
+      (background && sessionId !== selectedSessionIdRef.current)
+    )
+      return;
     const generation = ++loadSecondaryGenerationRef.current;
+    const selectedAtStart = selectedSessionIdRef.current;
+    const gatewayCurrent = gatewayScopeCurrent();
+    const isLatest = () => sidebarMounted.current && generation === loadSecondaryGenerationRef.current;
+    const stillOwnsRead = () => isLatest() && secondaryScope.current === renderedSecondaryScope && gatewayCurrent();
     if (!background) {
       setSecondaryLoading(true);
     }
     try {
-      const [
-        nextProactiveStatus,
-        nextProactiveRuns,
-        nextMemory,
-        nextSpecialists,
-        nextArtifacts,
-        nextKnowledgeAttachments,
-      ] = await Promise.all([
-        fetchChatProactiveStatus(sessionId),
-        fetchChatProactiveRuns(sessionId, 30),
-        fetchChatLearnedMemory(sessionId, 80),
-        fetchChatSpecialistCandidates(sessionId, 80),
-        fetchChatGeneratedArtifacts({ sessionId, limit: 200 }),
-        fetchThreadKnowledgeAttachments(sessionId),
-      ]);
-      if (generation !== loadSecondaryGenerationRef.current || sessionId !== selectedSessionIdRef.current) return;
-      setProactiveStatus(nextProactiveStatus.policy);
-      setProactiveRuns(nextProactiveRuns.items);
-      setLearnedMemory(nextMemory.items);
-      setSpecialistCandidates(nextSpecialists.items);
-      setGeneratedArtifacts(nextArtifacts);
-      setThreadKnowledgeAttachments(nextKnowledgeAttachments);
+      const { readSessionEvidence } = await loadChatSessionEvidenceCode();
+      if (
+        !stillOwnsRead() ||
+        (sessionId !== selectedSessionIdRef.current && selectedAtStart !== selectedSessionIdRef.current)
+      )
+        return;
+      const { proactive, runs, memory, specialists, artifacts, attachments } = await readSessionEvidence(sessionId);
+      if (!stillOwnsRead() || sessionId !== selectedSessionIdRef.current) return;
+      setProactiveStatus(proactive.policy);
+      setProactiveRuns(runs.items);
+      setLearnedMemory(memory.items);
+      setSpecialistCandidates(specialists.items);
+      setGeneratedArtifacts(artifacts);
+      setThreadKnowledgeAttachments(attachments);
+    } catch (error) {
+      if (stillOwnsRead()) throw error;
     } finally {
-      if (!background) {
+      if (isLatest()) {
         setSecondaryLoading(false);
       }
     }
-  }, []);
+  }, [renderedSecondaryScope]);
 
   const loadSessionState = useCallback(
     async (sessionId: string, options: ChatSessionLoadOptions = {}) => {

@@ -424,7 +424,6 @@ export function MissionThreadedControllerHost({
     setDraft,
     setForkConfirm,
     submission,
-    onOpenApprovals,
     pendingAttachments,
     pendingAttachmentModes,
     setPendingAttachmentModes,
@@ -699,9 +698,15 @@ export function MissionThreadedControllerHost({
     contextActions: execution.contextActions,
     composerInteractions: composer.composerInteractions,
     changePlanState,
-    planConfirmations: actions.planConfirmations,
-    planActions: actions.planActions,
-    planOAuth: actions.planOAuth,
+    planContext: {
+      workspaceId,
+      prefsRef: execution.outbound.prefsRef,
+      setPrefs: session.sessionData.setPrefs,
+      setUiError,
+      pushLocalNotice,
+      recordChangePlanResult,
+      onOpenApprovals,
+    },
     sessionControls: session.sessionControls,
   });
   return (
@@ -713,6 +718,7 @@ export function MissionThreadedControllerHost({
         onReturnToChannels={onReturnToChannels}
         onOpenApprovals={onOpenApprovals}
       />
+      {surfaceRuntime.workbenchController.workbenchRuntime}
       {frame}
     </>
   );

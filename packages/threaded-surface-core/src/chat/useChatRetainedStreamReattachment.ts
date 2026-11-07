@@ -1,17 +1,32 @@
-import { capChatTurnReasoning, type ChatStreamChunk, type ChatThreadResponse } from "@goatcitadel/contracts";
-import { updateThreadFromStreamChunk } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
+import type { ChatThreadResponse } from "@goatcitadel/contracts";
 import { useEffect, useRef, type MutableRefObject } from "react";
-import { resumeChatTurnStream } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  getGatewayAccessRevision,
+  getGatewayCallerScopeRevision,
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
   clearChatStreamActivity,
   recordChatStreamChunkActivity,
 } from "@goatcitadel/mission-control-shared/state/chat-stream-activity-store";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
-import { isAbortError } from "./chat-page-derivations";
 import type { ChatStreamingPreviewBuffer } from "./chat-streaming-preview";
 import type { ActiveChatStreamState } from "./useChatOutboundExecution.types";
 
-interface RetainedStreamReattachmentInput {
+type PreviewRuntime = Pick<typeof import("./chat-streaming-preview"), "ChatStreamingPreviewBuffer" | "isReducedMotionPreferred">;
+
+let retainedStreamCode: Promise<typeof import("./retained-chat-stream")> | undefined;
+
+function loadRetainedStreamCode() {
+  return (retainedStreamCode ??= import("./retained-chat-stream").catch((error: unknown) => {
+    retainedStreamCode = undefined;
+    throw error;
+  }));
+}
+
+export interface RetainedStreamReattachmentInput {
   selectedSessionId: string | null;
   thread: ChatThreadResponse | null;
   streamEnabled: boolean;
@@ -19,7 +34,7 @@ interface RetainedStreamReattachmentInput {
   sendingRef: MutableRefObject<boolean>;
   locallyHandledTurnKeysRef: MutableRefObject<Set<string>>;
   setSending: (value: boolean) => void;
-  getStreamingPreviewBuffer: () => ChatStreamingPreviewBuffer;
+  getStreamingPreviewBuffer: (runtime: PreviewRuntime) => ChatStreamingPreviewBuffer;
   clearStreamingPreview: () => void;
   commitThreadUpdate: (updater: (current: ChatThreadResponse | null) => ChatThreadResponse | null) => void;
   loadSessionCoreState: (sessionId: string, options: { background: boolean; includeThread: boolean }) => Promise<void>;
@@ -41,6 +56,8 @@ export function useChatRetainedStreamReattachment(input: RetainedStreamReattachm
             turn.trace.status === "waiting_for_tool",
           )?.turnId
       : undefined;
+  const latestActiveTurnIdRef = useRef(activeTurnId);
+  latestActiveTurnIdRef.current = activeTurnId;
 
   useEffect(() => {
     if (
@@ -53,6 +70,9 @@ export function useChatRetainedStreamReattachment(input: RetainedStreamReattachm
     const sessionId = selectedSessionId;
     const turnId = activeTurnId;
     const controller = new AbortController();
+    const gateway = getGatewayApiBaseUrl();
+    const access = getGatewayAccessRevision();
+    const caller = getGatewayCallerScopeRevision();
     const stream: ActiveChatStreamState = {
       sessionId,
       turnId,
@@ -63,55 +83,13 @@ export function useChatRetainedStreamReattachment(input: RetainedStreamReattachm
     sendingRef.current = true;
     latestRef.current.setSending(true);
     recordChatStreamChunkActivity(sessionId);
-    let terminalSeen = false;
-    let replayedThinking = "";
-
-    const isCurrent = () => activeStreamRef.current === stream && !controller.signal.aborted;
-    const onChunk = (chunk: ChatStreamChunk) => {
-      if (!isCurrent() || chunk.sessionId !== sessionId || (chunk.turnId && chunk.turnId !== turnId)) {
-        return;
-      }
-      recordChatStreamChunkActivity(sessionId);
-      if (typeof stream.lastSequence === "number" && chunk.sequence <= stream.lastSequence) {
-        return;
-      }
-      if (chunk.type === "message_start") {
-        latestRef.current.getStreamingPreviewBuffer().start({ sessionId, turnId, messageId: chunk.messageId });
-      } else if (chunk.type === "delta") {
-        latestRef.current.getStreamingPreviewBuffer().append({
-          sessionId,
-          turnId,
-          messageId: chunk.messageId,
-          delta: chunk.delta,
-        });
-      } else if (chunk.type === "thinking_delta") {
-        // First attachment replays from the beginning, including reasoning the
-        // fetched thread may already contain. Rebuild its bounded value rather
-        // than appending that history twice; retries retain this value/cursor.
-        replayedThinking = capChatTurnReasoning(replayedThinking + chunk.delta);
-        const thinking = replayedThinking;
-        latestRef.current.commitThreadUpdate((current) => {
-          if (current?.sessionId !== sessionId) return current;
-          const turn = current.turns.find((item) => item.turnId === turnId);
-          if (!turn || turn.thinking?.startsWith(thinking)) return current;
-          const replayBase = {
-            ...current,
-            turns: current.turns.map((item) => item === turn ? { ...item, thinking: undefined } : item),
-          };
-          return updateThreadFromStreamChunk(replayBase, { ...chunk, delta: thinking }, null, sessionId, null);
-        });
-      } else if (chunk.type === "message_done") {
-        latestRef.current.getStreamingPreviewBuffer().finish({ clear: false, finalText: chunk.content });
-      } else if (chunk.type === "done" || (chunk.type === "trace_update" &&
-        (chunk.trace.status === "completed" || chunk.trace.status === "partial" ||
-          chunk.trace.status === "failed" || chunk.trace.status === "cancelled"))) {
-        terminalSeen = true;
-      }
-      stream.lastEventId = chunk.eventId;
-      stream.lastSequence = chunk.sequence;
-      if (chunk.runId) stream.runId = chunk.runId;
-    };
-
+    const isCurrent = () =>
+      activeStreamRef.current === stream &&
+      !controller.signal.aborted &&
+      latestRef.current.selectedSessionId === sessionId &&
+      getGatewayApiBaseUrl() === gateway &&
+      getGatewayAccessRevision() === access &&
+      getGatewayCallerScopeRevision() === caller;
     const release = () => {
       if (activeStreamRef.current !== stream) return;
       activeStreamRef.current = null;
@@ -120,22 +98,21 @@ export function useChatRetainedStreamReattachment(input: RetainedStreamReattachm
       latestRef.current.clearStreamingPreview();
       clearChatStreamActivity(sessionId);
     };
+    const subscriptions: Array<() => void> = [];
+    const unsubscribe = () => subscriptions.splice(0).forEach((dispose) => dispose());
+    const revokeIfChanged = () => {
+      if (isCurrent()) return;
+      unsubscribe();
+      controller.abort();
+      release();
+    };
+    subscriptions.push(subscribeGatewayAccessChange(revokeIfChanged), subscribeGatewayCallerScope(revokeIfChanged));
 
     void (async () => {
       try {
-        for (let attempt = 0; attempt < 3; attempt += 1) {
-          try {
-            await resumeChatTurnStream(sessionId, turnId, onChunk, {
-              signal: controller.signal,
-              sinceEventId: stream.lastEventId,
-              originSurface: "chat",
-            });
-            break;
-          } catch (error) {
-            if (!isCurrent() || isAbortError(error)) return;
-            if (terminalSeen || attempt === 2) throw error;
-          }
-        }
+        const { runRetainedChatStream } = await loadRetainedStreamCode();
+        if (!isCurrent() || !latestRef.current.streamEnabled || latestActiveTurnIdRef.current !== turnId) return;
+        await runRetainedChatStream(sessionId, turnId, stream, latestRef, isCurrent);
       } catch (error) {
         if (isCurrent()) {
           recordClientDiagnostic({
@@ -165,11 +142,13 @@ export function useChatRetainedStreamReattachment(input: RetainedStreamReattachm
             });
           }
         }
+        unsubscribe();
         release();
       }
     })();
 
     return () => {
+      unsubscribe();
       controller.abort();
       release();
     };

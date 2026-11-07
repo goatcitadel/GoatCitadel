@@ -2,11 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import * as operator from "./session-control-operator";
 
-const apiMocks = vi.hoisted(() => ({ request: vi.fn() }));
+const apiMocks = vi.hoisted(() => ({
+  request: vi.fn(),
+  installation: "https://test.invalid",
+  protocolLoad: vi.fn<() => Promise<void>>(),
+}));
 
 vi.mock("./client-core.js", () => ({
   request: apiMocks.request,
+  getGatewayApiBaseUrl: () => apiMocks.installation,
 }));
+
+vi.mock(import("@goatcitadel/contracts/session-control"), async (importOriginal) => {
+  await apiMocks.protocolLoad();
+  return importOriginal();
+});
 
 const HEARTBEAT = "2026-07-14T12:00:00.000Z";
 const LEASE_EXPIRES = "2026-07-14T12:01:00.000Z";
@@ -92,8 +102,34 @@ describe("operator session-control client", () => {
     expect(path).toBe("/api/v1/chat/sessions/session-1/control");
     expect(init?.method ?? "GET").toBe("GET");
     expect(detail.control.ownerKind).toBe("operator");
+    expect(apiMocks.protocolLoad).not.toHaveBeenCalled();
     // No token header/material is ever attached by the operator client.
     expect(JSON.stringify(init ?? {})).not.toMatch(/session-control-token/iu);
+  });
+
+  it("does not dispatch an action into a replacement Gateway while the full protocol loads", async () => {
+    let release!: () => void;
+    apiMocks.protocolLoad.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    const pending = operator.revokeSessionControl("session-1", {
+      target: "current_controller",
+      expectedGeneration: 2,
+      mode: "revoke",
+      idempotencyKey: "idem-first",
+    });
+    await vi.waitFor(() => expect(apiMocks.protocolLoad).toHaveBeenCalledOnce());
+    try {
+      apiMocks.installation = "https://replacement.invalid";
+      release();
+      await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+      expect(apiMocks.request).not.toHaveBeenCalled();
+    } finally {
+      apiMocks.installation = "https://test.invalid";
+    }
   });
 
   it("hands off a pending request with a generated idempotency key and validated capabilities", async () => {

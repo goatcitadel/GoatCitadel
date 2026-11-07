@@ -77,6 +77,7 @@ const render = (workspaceId = "workspace-a", consumers = 1) =>
   );
 const settle = () =>
   act(async () => {
+    await vi.dynamicImportSettled();
     await new Promise((resolve) => setTimeout(resolve, 10));
   });
 const data = () => {

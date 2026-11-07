@@ -6,7 +6,7 @@ import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/c
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
 import { deriveCoworkItems } from "./chat-page-derivations";
 import { defaultDockOpenForMode } from "./surface-config";
-import { useChatWorkbench } from "./useChatWorkbench";
+import { useDeferredChatWorkbench } from "./useDeferredChatWorkbench";
 import type { MissionControlDockSectionId } from "./useMissionControlSurfaceState";
 
 function getViewportWidth(): number | undefined {
@@ -33,38 +33,7 @@ export function useChatDockWorkbenchController(input: {
   const [orchestrationLoading, setOrchestrationLoading] = useState(false);
   const [orchestrationError, setOrchestrationError] = useState<string | null>(null);
 
-  const {
-    workbenchState,
-    workbenchTree,
-    selectedWorkbenchFile,
-    selectedWorkbenchFileDiff,
-    workbenchDraftContent,
-    workbenchExpandedPaths,
-    workbenchDiff,
-    workbenchOutput,
-    workbenchLoading,
-    workbenchBusy,
-    workbenchSaving,
-    workbenchError,
-    hasDirtyWorkbenchDraft,
-    workbenchHasRemoteChanges,
-    workbenchDraftPaths,
-    rebaseWorkbenchDraft,
-    setWorkbenchDraftContent,
-    setWorkbenchExpandedPaths,
-    refreshWorkbench,
-    createWorkbenchWorktree,
-    openWorkbenchFile,
-    saveWorkbenchFile,
-    previewWorkbenchFileOperation,
-    runWorkbenchFileOperation,
-    discardWorkbenchDraft,
-    runWorkbenchValidationCommand,
-    applyWorkbenchPatch,
-    exportWorkbenchPatch,
-    revertWorkbenchFile,
-    revertWorkbenchAll,
-  } = useChatWorkbench({
+  const { workbench, workbenchRuntime, workbenchRuntimeStatus, retryWorkbenchRuntime } = useDeferredChatWorkbench({
     sessionId: input.selectedSessionId,
     workspaceId: input.workspaceId,
     // The canonical host loads specialist file evidence when its owning panel opens.
@@ -125,36 +94,10 @@ export function useChatDockWorkbenchController(input: {
     dockOpen,
     setDockOpen,
     activeWorkflowTurn,
-    workbenchState,
-    workbenchTree,
-    selectedWorkbenchFile,
-    selectedWorkbenchFileDiff,
-    workbenchDraftContent,
-    workbenchExpandedPaths,
-    workbenchDiff,
-    workbenchOutput,
-    workbenchLoading,
-    workbenchBusy,
-    workbenchSaving,
-    workbenchError,
-    hasDirtyWorkbenchDraft,
-    workbenchHasRemoteChanges,
-    workbenchDraftPaths,
-    rebaseWorkbenchDraft,
-    setWorkbenchDraftContent,
-    setWorkbenchExpandedPaths,
-    refreshWorkbench,
-    createWorkbenchWorktree,
-    openWorkbenchFile,
-    saveWorkbenchFile,
-    previewWorkbenchFileOperation,
-    runWorkbenchFileOperation,
-    discardWorkbenchDraft,
-    runWorkbenchValidationCommand,
-    applyWorkbenchPatch,
-    exportWorkbenchPatch,
-    revertWorkbenchFile,
-    revertWorkbenchAll,
+    ...workbench,
+    workbenchRuntime,
+    workbenchRuntimeStatus,
+    retryWorkbenchRuntime,
     latestOrchestration,
     orchestrationRun,
     orchestrationCheckpoints,

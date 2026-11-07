@@ -1,32 +1,34 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { getGatewayAccessRevision, subscribeGatewayAccessChange, getGatewayCallerScope, subscribeGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayAccessRevision,
+  getGatewayCallerScopeRevision,
+  subscribeGatewayAccessChange,
+  subscribeGatewayCallerScope,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import type {
-  ChatMessageRecord,
   ChatMode,
-  ChatSessionPrefsPatch,
   ChatSessionPrefsRecord,
   ChatSessionRecord,
   ChatSideChatRecord,
-  ChatStreamChunk,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
 import {
   createChatSideChat,
   fetchChatThread,
-  preflightChatRoute,
-  streamAgentChatMessage,
 } from "@goatcitadel/mission-control-shared/api/client";
-import {
-  isThreadMutatingStreamChunk,
-  type PendingStreamTurnSeed,
-  updateThreadFromStreamChunk,
-} from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
-import {
-  ChatStreamingPreviewBuffer,
-  isReducedMotionPreferred,
-  type ChatStreamingPreview,
-} from "./chat-streaming-preview";
+import type { ChatStreamingPreviewBuffer, ChatStreamingPreview } from "./chat-streaming-preview";
+import type { ChatPreviewRuntime } from "./useChatStreamingPreviewState";
+
+type SideChatStream = typeof import("./btw-side-chat-stream.js");
+let sideChatStream: Promise<SideChatStream> | undefined;
+
+function loadSideChatStream() {
+  return (sideChatStream ??= import("./btw-side-chat-stream.js").catch((error: unknown) => {
+    sideChatStream = undefined;
+    throw error;
+  }));
+}
 
 export interface MissionThreadedBtwSideChatProps {
   open: boolean;
@@ -63,13 +65,26 @@ export function useBtwSideChatController(input: {
   openSideChat: (message?: string) => Promise<void>;
 } {
   const access = useSyncExternalStore(subscribeGatewayAccessChange, getGatewayAccessRevision, getGatewayAccessRevision);
-  const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScope, getGatewayCallerScope);
-  const identity = JSON.stringify([getGatewayApiBaseUrl(), access, caller, input.workspaceId, input.selectedSessionId]);
+  const caller = useSyncExternalStore(
+    subscribeGatewayCallerScope,
+    getGatewayCallerScopeRevision,
+    getGatewayCallerScopeRevision,
+  );
+  const installation = getGatewayApiBaseUrl();
+  const identity = JSON.stringify([installation, access, caller, input.workspaceId, input.selectedSessionId]);
   const scopeRef = useRef({ identity });
   if (scopeRef.current.identity !== identity) scopeRef.current = { identity };
   const scope = scopeRef.current;
   const mounted = useRef(true);
-  const current = useCallback(() => mounted.current && scopeRef.current === scope && access === getGatewayAccessRevision() && caller === getGatewayCallerScope(), [scope, access, caller]);
+  const current = useCallback(
+    () =>
+      mounted.current &&
+      scopeRef.current === scope &&
+      installation === getGatewayApiBaseUrl() &&
+      access === getGatewayAccessRevision() &&
+      caller === getGatewayCallerScopeRevision(),
+    [scope, installation, access, caller],
+  );
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
   const [record, setRecord] = useState<ChatSideChatRecord | null>(null);
@@ -83,11 +98,11 @@ export function useBtwSideChatController(input: {
   const sendingRef = useRef(false);
   const streamingPreviewBufferRef = useRef<ChatStreamingPreviewBuffer | null>(null);
 
-  const getStreamingPreviewBuffer = useCallback(() => {
+  const getStreamingPreviewBuffer = useCallback((runtime: ChatPreviewRuntime) => {
     if (!streamingPreviewBufferRef.current) {
-      streamingPreviewBufferRef.current = new ChatStreamingPreviewBuffer({
+      streamingPreviewBufferRef.current = new runtime.ChatStreamingPreviewBuffer({
         onFlush: (preview) => { if (current()) setStreamingPreview(preview); },
-        isReducedMotion: isReducedMotionPreferred,
+        isReducedMotion: runtime.isReducedMotionPreferred,
       });
     }
     return streamingPreviewBufferRef.current;
@@ -102,22 +117,13 @@ export function useBtwSideChatController(input: {
   }, []);
 
   const promoteStreamingPreviewToThread = useCallback(
-    (sessionId: string) => {
+    (sessionId: string, project: SideChatStream["createInterruptedBtwReplyProjection"]) => {
       const snapshot = streamingPreviewBufferRef.current?.getSnapshot({ forceVisible: true });
       if (!snapshot || snapshot.sessionId !== sessionId || snapshot.text.trim().length === 0) {
         clearStreamingPreview();
         return;
       }
-      const partialChunk: ChatStreamChunk = {
-        type: "message_done",
-        sessionId: snapshot.sessionId,
-        eventId: `local-btw-preview-${Date.now()}`,
-        sequence: -1,
-        turnId: snapshot.turnId,
-        messageId: snapshot.messageId ?? `local-assistant-${snapshot.turnId}`,
-        content: snapshot.text,
-      };
-      setThread((current) => updateThreadFromStreamChunk(current, partialChunk, null, snapshot.sessionId, null));
+      setThread(project(snapshot));
       clearStreamingPreview();
     },
     [clearStreamingPreview],
@@ -199,7 +205,10 @@ export function useBtwSideChatController(input: {
       }
       sendingRef.current = true;
       let sideChat: Awaited<ReturnType<typeof ensureSideChat>>;
+      let code: SideChatStream;
       try {
+        code = await loadSideChatStream();
+        if (!current()) return;
         sideChat = await ensureSideChat();
       } catch (cause) {
         if (!current()) return;
@@ -214,108 +223,21 @@ export function useBtwSideChatController(input: {
       setSending(true);
       setError(null);
       setDraft("");
-      const optimisticPrefs = buildBtwOptimisticPrefs(input.prefs, input.selectedProviderId, input.selectedModel);
-      const userMessage: ChatMessageRecord = {
-        messageId: `local-btw-user-${Date.now()}`,
-        sessionId: sideChat.childSession.sessionId,
-        role: "user",
-        actorType: "user",
-        actorId: "operator",
-        sourceAuthority: "operator",
-        content: message,
-        timestamp: new Date().toISOString(),
-      };
-      const seed: PendingStreamTurnSeed = {
-        userMessage,
-        parentTurnId: threadRef.current?.activeLeafTurnId,
-        branchKind: "append",
-        mode: "send",
-      };
-
       try {
-        const route = await preflightChatRoute(
-          sideChat.childSession.sessionId,
-          {
-            action: "send",
-            providerId: input.selectedProviderId,
-            model: input.selectedModel,
-            mode: "chat",
-            prefsOverride: buildBtwPrefsOverride(input.prefs, input.selectedProviderId, input.selectedModel),
-          },
-          { originSurface: "chat" },
-        );
-        if (!current()) return;
-        if (route.blockedReason) {
-          throw new Error(route.blockedReason);
-        }
-        await streamAgentChatMessage(
-          sideChat.childSession.sessionId,
-          {
-            content: message,
-            providerId: route.effectiveProviderId ?? input.selectedProviderId,
-            model: route.effectiveModel ?? input.selectedModel,
-            routeDecision: route.decision,
-            mode: "chat",
-            prefsOverride: buildBtwPrefsOverride(input.prefs, route.effectiveProviderId, route.effectiveModel),
-            fullWebAccess: input.fullWebAccess,
-            sideChatContext: {
-              parentSessionId: sideChat.item.parentSessionId,
-              originSurface: input.currentSurface,
-              selectedTurnId: input.selectedTurnId ?? undefined,
-              recentTurnLimit: 6,
-            },
-          },
-          (chunk: ChatStreamChunk) => {
-            if (!current()) return;
-            if (chunk.type === "error") {
-              setError(chunk.error || "Side chat stream failed.");
-              promoteStreamingPreviewToThread(sideChat.childSession.sessionId);
-              return;
-            }
-            if (chunk.type === "message_start") {
-              getStreamingPreviewBuffer().start({
-                sessionId: chunk.sessionId,
-                turnId: chunk.turnId,
-                messageId: chunk.messageId,
-              });
-            }
-            if (chunk.type === "delta") {
-              // Per-token deltas feed the rAF-coalesced preview buffer instead of the
-              // thread, so thread identity only changes on real chunk boundaries.
-              getStreamingPreviewBuffer().append({
-                sessionId: chunk.sessionId,
-                turnId: chunk.turnId,
-                messageId: chunk.messageId,
-                delta: chunk.delta,
-              });
-              return;
-            }
-            if (chunk.type === "message_done") {
-              const previewBuffer = getStreamingPreviewBuffer();
-              if (!previewBuffer.matches(chunk.sessionId, chunk.turnId)) {
-                previewBuffer.start({
-                  sessionId: chunk.sessionId,
-                  turnId: chunk.turnId,
-                  messageId: chunk.messageId,
-                });
-              }
-              previewBuffer.finish({ clear: true, forceVisible: false, finalText: chunk.content });
-            }
-            if (!isThreadMutatingStreamChunk(chunk)) {
-              return;
-            }
-            setThread((current) =>
-              updateThreadFromStreamChunk(current, chunk, seed, sideChat.childSession.sessionId, optimisticPrefs),
-            );
-          },
-          { originSurface: "chat" },
-        );
-        if (!current()) return;
-        const finalThread = await fetchChatThread(sideChat.childSession.sessionId);
-        if (current()) setThread(finalThread);
+        await code.streamBtwSideChatTurn({
+          current,
+          getStreamingPreviewBuffer,
+          input,
+          message,
+          parentTurnId: threadRef.current?.activeLeafTurnId,
+          promoteStreamingPreviewToThread,
+          setError,
+          setThread,
+          sideChat,
+        });
       } catch (cause) {
         if (!current()) return;
-        promoteStreamingPreviewToThread(sideChat.childSession.sessionId);
+        promoteStreamingPreviewToThread(sideChat.childSession.sessionId, code.createInterruptedBtwReplyProjection);
         const nextError = cause instanceof Error ? cause.message : "Side chat failed.";
         setError(nextError);
       } finally {
@@ -372,36 +294,4 @@ export function useBtwSideChatController(input: {
   };
 
   return { panelProps, openSideChat };
-}
-
-function buildBtwPrefsOverride(
-  prefs: ChatSessionPrefsRecord | null,
-  providerId?: string,
-  model?: string,
-): ChatSessionPrefsPatch {
-  return {
-    mode: "chat",
-    providerId: providerId ?? prefs?.providerId,
-    model: model ?? prefs?.model,
-    webMode: prefs?.webMode,
-    memoryMode: prefs?.memoryMode,
-    thinkingLevel: prefs?.thinkingLevel,
-    speedMode: prefs?.speedMode,
-    subagentPolicy: prefs?.subagentPolicy,
-  };
-}
-
-function buildBtwOptimisticPrefs(
-  prefs: ChatSessionPrefsRecord | null,
-  providerId?: string,
-  model?: string,
-): ChatSessionPrefsRecord | null {
-  return prefs
-    ? {
-        ...prefs,
-        mode: "chat",
-        providerId: providerId ?? prefs.providerId,
-        model: model ?? prefs.model,
-      }
-    : null;
 }

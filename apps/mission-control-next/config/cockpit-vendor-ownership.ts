@@ -140,6 +140,12 @@ const AUTOMATIC_API_OWNERS = new Set([
   "tasks-query",
   "chat-workbench-operations",
   "chat-optional-actions",
+  "chat-document-operations",
+  "chat-operator-actions",
+  "chat-session-mutations",
+  "chat-history-reads",
+  "chat-session-evidence",
+  "chat-live-stream",
 ]);
 const AUTOMATIC_NATIVE_PRIMITIVES = new Set([
   "FilterPillGroup",

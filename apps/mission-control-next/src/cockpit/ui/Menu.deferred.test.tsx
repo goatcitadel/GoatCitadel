@@ -623,7 +623,7 @@ describe("deferred Menu public contract", () => {
     );
     const cancel = () =>
       [...recovery()!.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === "Cancel")!;
-    expect(document.activeElement).toBe(cancel());
+    await vi.waitFor(() => expect(document.activeElement).toBe(cancel()));
     assertRetained();
     await act(async () => {
       pointer(cancel(), "pointerdown");

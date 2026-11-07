@@ -217,10 +217,11 @@ async function failCode() {
   expect(named("Try again")).toBeUndefined();
 }
 async function openReload() {
+  await vi.waitFor(() => expect(named("Reload app")).toBeDefined());
   const trigger = named("Reload app");
   trigger.focus();
   await act(async () => trigger.click());
-  await vi.waitFor(() => expect(dialog()).not.toBeNull());
+  await vi.waitFor(() => expect(named("Cancel", dialog() ?? host)).toBeDefined());
   return trigger;
 }
 it("requires warned current-document Reload and lets Cancel and Escape retain the answer without retrying code", async () => {

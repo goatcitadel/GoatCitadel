@@ -9,7 +9,7 @@ export function historicalWindowIdentityMismatch(
   nextWindow: ChatHistoryWindowResponse,
   workspaceId: string,
   sessionId: string,
-  hit: ChatSessionSearchHitRecord,
+  hit: Pick<ChatSessionSearchHitRecord, "messageId" | "sequence">,
 ): boolean {
   return (
     nextWindow.anchor.workspaceId !== workspaceId ||
@@ -69,12 +69,4 @@ export function mergeHistoricalContinuation(
     truncated: active.truncated || page.truncated,
     droppedItems: active.droppedItems + page.droppedItems,
   };
-}
-
-export function historicalTargetChanged(
-  target: HistoryTarget | null,
-  workspaceId: string,
-  selectedSessionId: string | null,
-): boolean | null {
-  return target && (target.workspaceId !== workspaceId || target.sessionId !== selectedSessionId);
 }

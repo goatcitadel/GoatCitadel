@@ -17,6 +17,12 @@ const apiMocks = vi.hoisted(() => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/external-source-chat", () => apiMocks);
+const actionImport = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined, requested: false }));
+vi.mock("./external-source-attachment-actions", async (importOriginal) => {
+  actionImport.requested = true;
+  await actionImport.hold;
+  return importOriginal();
+});
 
 const timestamp = "2026-07-14T08:00:00.000Z";
 const hash = (value: string): string => value.repeat(64).slice(0, 64);
@@ -118,6 +124,35 @@ beforeEach(() => {
 });
 
 describe("useExternalSourceAttachments", () => {
+  it("retires the attempted write when the selected conversation changes while action code loads", async () => {
+    let release!: () => void;
+    actionImport.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([], "incarnation-1"));
+    const renderer = await renderHarness();
+    try {
+      let pending!: Promise<boolean>;
+      await act(async () => {
+        pending = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "first" });
+      });
+      await vi.waitFor(() => expect(actionImport.requested).toBe(true));
+      expect(latest!.busyAttachmentId).toBe("attach:first");
+      expect(apiMocks.attachExternalSourceToSession).not.toHaveBeenCalled();
+      await act(async () => renderer.update(<Harness sessionId="session-2" />));
+      await act(async () => {
+        release();
+        expect(await pending).toBe(false);
+      });
+      expect(apiMocks.attachExternalSourceToSession).not.toHaveBeenCalled();
+      expect(latest!.busyAttachmentId).toBeNull();
+    } finally {
+      release();
+      actionImport.hold = undefined;
+      act(() => renderer.unmount());
+    }
+  });
+
   it("admits only one source mutation at a time and refreshes its receipt", async () => {
     apiMocks.fetchExternalSessionAttachments.mockResolvedValue(listResponse([], "incarnation-1"));
     let resolveFirst!: () => void;
@@ -131,6 +166,7 @@ describe("useExternalSourceAttachments", () => {
     let first!: Promise<boolean>;
     await act(async () => {
       first = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "first" });
+      await vi.dynamicImportSettled();
     });
     await act(async () => {
       expect(await latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "second" })).toBe(false);
@@ -177,6 +213,7 @@ describe("useExternalSourceAttachments", () => {
     let pending!: Promise<boolean>;
     await act(async () => {
       pending = latest!.attach({ sourceId: "source-1", importId: "import-1", itemId: "item-old" });
+      await vi.dynamicImportSettled();
     });
     await act(async () => {
       renderer.update(<Harness sessionId="session-2" />);

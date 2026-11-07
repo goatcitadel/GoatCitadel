@@ -16,10 +16,8 @@ import { KeyRound, Plus, RefreshCw, RotateCcw, Save } from "lucide-react";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { presentProviderReadiness } from "@goatcitadel/mission-control-shared/content/provider-readiness";
-import {
-  buildUniversalModelPickerOptions,
-  useProviderModelCatalog,
-} from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
+import { buildUniversalModelPickerOptions } from "@goatcitadel/mission-control-shared/hooks/provider-model-picker-options";
+import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import {
   getErrorMessage,
   type Notice,
@@ -514,12 +512,15 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
                     Apply draft to current settings
                   </NativeButton>
                 ) : null}
-                {providerEditor.value.governedCreation ? <p className="mc-next-settings-copy">
-                  Retained credential storage choice: {providerEditor.value.credentialStorage === "env"
-                    ? `plaintext in this installation's environment file (${providerDraft.apiKeyEnv}). Anyone who can read that file can read the credential.`
-                    : "OS keychain. A keychain failure will not fall back to an environment file."}
-                  {" "}Saving prepares the same governed profile setup for explicit confirmation.
-                </p> : null}
+                {providerEditor.value.governedCreation ? (
+                  <p className="mc-next-settings-copy">
+                    Retained credential storage choice:{" "}
+                    {providerEditor.value.credentialStorage === "env"
+                      ? `plaintext in this installation's environment file (${providerDraft.apiKeyEnv}). Anyone who can read that file can read the credential.`
+                      : "OS keychain. A keychain failure will not fall back to an environment file."}{" "}
+                    Saving prepares the same governed profile setup for explicit confirmation.
+                  </p>
+                ) : null}
                 <ProviderProfileFields
                   providerDraft={providerDraft}
                   setProviderDraft={setProviderDraft}

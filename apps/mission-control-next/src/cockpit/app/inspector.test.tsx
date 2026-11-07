@@ -106,7 +106,7 @@ describe("inspector", () => {
     escape(document);
     expect(container.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
     // Escape on the panel's own header controls still closes it.
-    escape(container.querySelector('[aria-label="Expand inspector"]')!);
+    escape(container.querySelector('[aria-label="Close inspector"]')!);
     expect(container.querySelector('[aria-label="Inspector: Run"]')).toBeNull();
   });
 
@@ -240,7 +240,7 @@ describe("inspector", () => {
     expect(container.querySelector("aside")).toBeNull();
   });
 
-  it("bounds keyboard resize and releases pointer capture when its current inspector closes", () => {
+  it("bounds keyboard resize and releases pointer capture when its current inspector closes", async () => {
     act(() =>
       root.render(
         <InspectorProvider>
@@ -250,6 +250,7 @@ describe("inspector", () => {
       ),
     );
     act(() => api.open({ title: "Run", body: <p>Current run</p> }));
+    await vi.waitFor(() => expect(container.querySelector('[role="separator"]')).not.toBeNull());
     const separator = container.querySelector<HTMLDivElement>('[role="separator"]')!;
     act(() => separator.dispatchEvent(new KeyboardEvent("keydown", { key: "End", bubbles: true })));
     expect(separator.getAttribute("aria-valuenow")).toBe("480");
@@ -345,13 +346,22 @@ describe("inspector", () => {
     act(() => {
       root.render(render(true));
     });
+    await vi.waitFor(() =>
+      expect(document.querySelector('[role="dialog"] [aria-label="Close dialog"]')).not.toBeNull(),
+    );
     expect(document.querySelectorAll('[role="dialog"][data-state="open"]')).toHaveLength(2);
+    const newerDialog = [...document.querySelectorAll('[role="dialog"]')].find((dialog) =>
+      dialog.textContent?.includes("Review change"),
+    );
+    const reviewControl = newerDialog?.querySelector<HTMLButtonElement>('button[aria-label="Close dialog"]');
+    expect(reviewControl).toBeDefined();
+    reviewControl?.focus();
     act(() => {
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "i", ctrlKey: true }));
     });
     expect(document.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
     act(() => {
-      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape" }));
+      reviewControl?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
     });
     expect(document.querySelector('[aria-label="Inspector: Run"]')).not.toBeNull();
   });
@@ -420,9 +430,14 @@ it("overlays a non-modal inspector on 1024–1279px laptops and returns focus on
   expect(document.activeElement).toBe(trigger);
   // Expand still offers the modal reading view.
   await act(async () => trigger.click());
+  await vi.waitFor(() =>
+    expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull(),
+  );
   await act(async () => container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]')!.click());
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence");
-  expect(document.querySelector('[aria-label="Restore docked inspector"]')).not.toBeNull();
+  await vi.waitFor(() => {
+    expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence");
+    expect(document.querySelector('[aria-label="Restore docked inspector"]')).not.toBeNull();
+  });
 });
 it("expands a docked inspector without discarding selection", async () => {
   await act(async () =>
@@ -434,10 +449,13 @@ it("expands a docked inspector without discarding selection", async () => {
     ),
   );
   await act(async () => api.open({ title: "Run", body: <p>Canonical evidence</p> }));
+  await vi.waitFor(() =>
+    expect(container.querySelector('[aria-label="Expand inspector"]')).not.toBeNull(),
+  );
   const expand = container.querySelector<HTMLButtonElement>('[aria-label="Expand inspector"]');
   expect(expand).not.toBeNull();
   await act(async () => expand!.click());
-  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence");
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Canonical evidence"));
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Restore docked inspector"]')!.click());
   expect(container.textContent).toContain("Canonical evidence");
 });
@@ -464,6 +482,9 @@ it("restores phone inspection focus to its originating control", async () => {
   trigger.focus();
   await act(async () => trigger.click());
   // The phone sheet names what it closes.
+  await vi.waitFor(() =>
+    expect(document.querySelector('.cockpit-sheet [aria-label="Close inspector"]')).not.toBeNull(),
+  );
   await act(async () => document.querySelector<HTMLButtonElement>('[aria-label="Close inspector"]')!.click());
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 5));

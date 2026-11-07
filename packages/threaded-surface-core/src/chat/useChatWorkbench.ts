@@ -1,5 +1,5 @@
 import * as draftOwner from "./workbench-session-drafts.js";
-import { useWorkbenchDraftVersion } from "./workbench-session-drafts.js";
+import { scopeWorkbenchDraftSession, useWorkbenchDraftVersion } from "./workbench-session-drafts.js";
 import {
   getGatewayCallerScope,
   getGatewayCallerScopeRevision,
@@ -143,11 +143,18 @@ function loadWorkbenchActionCode(): Promise<WorkbenchActionModule> {
   }));
 }
 
-export function useChatWorkbench(input: { sessionId: string | null; enabled: boolean; workspaceId?: string }) {
-  const { sessionId, enabled } = input;
+const alwaysCurrent = () => true;
+
+export function useChatWorkbench(input: {
+  sessionId: string | null;
+  enabled: boolean;
+  workspaceId?: string;
+  isCurrentOwner?: () => boolean;
+}) {
+  const { sessionId, enabled, isCurrentOwner = alwaysCurrent } = input;
   const callerScope = getGatewayCallerScope();
   const draftHelpers = useMemo(() => {
-    const scoped = (id: string) => (callerScope ? JSON.stringify([callerScope, id]) : id);
+    const scoped = (id: string) => scopeWorkbenchDraftSession(callerScope, id);
     return {
       getWorkbenchDraft: (id: string, path: string) => draftOwner.getWorkbenchDraft(scoped(id), path),
       listWorkbenchDrafts: (id: string | null) => draftOwner.listWorkbenchDrafts(id ? scoped(id) : null),
@@ -220,6 +227,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   const isCurrentAction = useCallback(
     (view: typeof actionView): boolean => {
       return (
+        isCurrentOwner() &&
         mountedRef.current &&
         actionViewRef.current === view &&
         ownerRef.current === owner &&
@@ -228,7 +236,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         getGatewayApiBaseUrl() === view.gateway
       );
     },
-    [owner],
+    [isCurrentOwner, owner],
   );
   const claimAction = useCallback((view: typeof actionView, saving: boolean): ActionAttempt => {
     const attempt = { view, saving, lifetime: actionLifetimeRef.current };
@@ -238,12 +246,16 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   }, []);
   const savingRef = useRef(false);
   const fileReadRef = useRef(0);
-  useWorkbenchDraftVersion();
+  const draftVersion = useWorkbenchDraftVersion();
   const selectedFileRef = useRef<ChatSessionWorkbenchFileResponse | null>(null);
   const draftContentRef = useRef("");
   const dirtyDraftRef = useRef(false);
 
-  const retainedDrafts = listWorkbenchDrafts(sessionId);
+  const retainedDraftPaths = useMemo(() => {
+    // Re-read the mutable draft store on each published revision.
+    void draftVersion;
+    return listWorkbenchDrafts(sessionId).map((entry) => entry.base.path);
+  }, [draftVersion, listWorkbenchDrafts, sessionId]);
   const activeDraft = sessionId && selectedFile ? getWorkbenchDraft(sessionId, selectedFile.path) : undefined;
   const hasDirtyDraft = Boolean(activeDraft);
   const hasRemoteChanges = Boolean(
@@ -269,11 +281,12 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
 
   const setPersistedExpandedPaths = useCallback(
     (nextPaths: string[]) => {
+      if (!isCurrentOwner()) return;
       const normalized = normalizeWorkbenchPaths(nextPaths);
       setExpandedPaths(normalized);
       writeWorkbenchUiState(sessionId, { expandedPaths: normalized });
     },
-    [sessionId],
+    [isCurrentOwner, sessionId],
   );
 
   const updateSelectedFilePath = useCallback(
@@ -301,6 +314,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   const isCurrentSession = useCallback(
     (candidateSessionId: string | null) => {
       return (
+        isCurrentOwner() &&
         mountedRef.current &&
         enabled &&
         Boolean(candidateSessionId) &&
@@ -308,7 +322,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         owner.sessionId === candidateSessionId
       );
     },
-    [enabled, owner],
+    [enabled, isCurrentOwner, owner],
   );
 
   const applySelectedFileState = useCallback(
@@ -589,12 +603,13 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   );
 
   const discardDraft = useCallback(() => {
+    if (!isCurrentOwner()) return;
     const file = selectedFileRef.current;
     if (sessionId && file) draftHelpersRef.current.discardWorkbenchSessionDraft(sessionId, file.path);
     draftContentRef.current = file?.content ?? "";
     setDraftContent(draftContentRef.current);
     setError(null);
-  }, [sessionId]);
+  }, [isCurrentOwner, sessionId]);
 
   const updateDraft = useCallback(
     (content: string) => {
@@ -609,10 +624,11 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
   );
 
   const reviewCurrentFile = useCallback(() => {
+    if (!isCurrentOwner()) return;
     const file = selectedFileRef.current;
     if (sessionId && file) draftHelpersRef.current.rebaseWorkbenchDraft(sessionId, file);
     setError(null);
-  }, [sessionId]);
+  }, [isCurrentOwner, sessionId]);
 
   const runValidationCommand = useCallback(
     async (input: { command: string; args?: string[]; timeoutMs?: number }) => {
@@ -764,7 +780,7 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     workbenchError: error,
     hasDirtyWorkbenchDraft: hasDirtyDraft,
     workbenchHasRemoteChanges: hasRemoteChanges,
-    workbenchDraftPaths: retainedDrafts.map((entry) => entry.base.path),
+    workbenchDraftPaths: retainedDraftPaths,
     rebaseWorkbenchDraft: reviewCurrentFile,
     setWorkbenchDraftContent: updateDraft,
     setWorkbenchExpandedPaths: setPersistedExpandedPaths,

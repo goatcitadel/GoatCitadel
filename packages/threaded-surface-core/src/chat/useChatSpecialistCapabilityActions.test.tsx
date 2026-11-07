@@ -58,10 +58,14 @@ type HarnessSnapshot = {
 let latestHarness: HarnessSnapshot | null = null;
 const actionCode = vi.hoisted(() => ({
   load: undefined as (() => Promise<typeof import("./confirmed-capability-suggestion-action")>) | undefined,
+  loadSpecialist: undefined as (() => Promise<typeof import("./specialist-action-code")>) | undefined,
 }));
 vi.mock("./load-confirmed-capability-suggestion-action", () => ({
   loadConfirmedCapabilitySuggestionAction: () =>
     actionCode.load?.() ?? import("./confirmed-capability-suggestion-action"),
+}));
+vi.mock("./load-specialist-action-code", () => ({
+  loadSpecialistActionCode: () => actionCode.loadSpecialist?.() ?? import("./specialist-action-code"),
 }));
 
 function makeSession(): ChatSessionRecord {
@@ -235,10 +239,41 @@ describe("useChatSpecialistCapabilityActions", () => {
     vi.clearAllMocks();
     setupApiDefaults();
     actionCode.load = undefined;
+    actionCode.loadSpecialist = undefined;
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: { location: { hash: "" } },
     });
+  });
+
+  it("only loads specialist code on demand and refuses a departed conversation before dispatch", async () => {
+    let release!: (code: typeof import("./specialist-action-code")) => void;
+    const code = new Promise<typeof import("./specialist-action-code")>((resolve) => {
+      release = resolve;
+    });
+    actionCode.loadSpecialist = vi.fn(() => code);
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    expect(actionCode.loadSpecialist).not.toHaveBeenCalled();
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = latestHarness!.result.handleSpecialistCandidatePatch("candidate-1", { status: "approved" }, "Updated");
+    });
+    expect(actionCode.loadSpecialist).toHaveBeenCalledOnce();
+    expect(latestHarness!.result.specialistMutation.locked).toBe(false);
+    expect(updateChatSpecialistCandidateMock).not.toHaveBeenCalled();
+    await act(async () => {
+      renderer.update(<Harness selectedSession={{ ...makeSession(), sessionId: "session-2" }} />);
+    });
+    await act(async () => {
+      release(await import("./specialist-action-code"));
+      await pending;
+    });
+    expect(updateChatSpecialistCandidateMock).not.toHaveBeenCalled();
+    expect(latestHarness!.notices).toEqual([]);
+    await act(async () => renderer.unmount());
   });
 
   it("keeps confirmation pending while action code loads and refuses a departed session", async () => {

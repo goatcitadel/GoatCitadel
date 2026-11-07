@@ -1,5 +1,5 @@
 import type { ChatThreadResponse } from "@goatcitadel/contracts";
-import { carryOverStreamedThinking } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
+import { carryOverStreamedThinking } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-thinking";
 import { useCallback, useState, type Dispatch, type SetStateAction } from "react";
 
 /**

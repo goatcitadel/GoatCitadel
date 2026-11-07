@@ -335,12 +335,11 @@ it("uses the Inbox decision owner for a low-risk Chat action and retains its rec
   const button = [...container.querySelectorAll("button")].find((entry) => entry.textContent === "Approve once")!;
   expect(button.disabled).toBe(false);
   await act(async () => button.click());
+  await vi.waitFor(() => expect(container.textContent).toContain("Decision recorded"));
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("safe-new", "approve");
   expect(api.fetchApproval).toHaveBeenCalledWith("safe-new", { workspaceId: "default" });
   expect(oldAction).not.toHaveBeenCalled();
   expect(refresh).toHaveBeenCalledTimes(1);
-  await vi.waitFor(() => expect(container.textContent).toContain("Decision recorded"));
-  expect(container.textContent).toContain("Decision recorded");
   expect(container.textContent).not.toContain("Work completed");
 });
 

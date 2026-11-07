@@ -6,6 +6,13 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ChatRunVariables } from "./ChatRunVariables";
 
+const fieldsImport = vi.hoisted(() => ({ hold: undefined as Promise<void> | undefined, requested: false }));
+vi.mock("./ChatRunVariableFields", async (importOriginal) => {
+  fieldsImport.requested = true;
+  await fieldsImport.hold;
+  return importOriginal();
+});
+
 type Panel = NonNullable<MissionThreadedActiveSessionSurfaceProps["runVariablePanel"]>;
 let root: Root;
 let container: HTMLDivElement;
@@ -60,9 +67,39 @@ async function change(label: string, value: string) {
   });
 }
 
+it("keeps closed fields cold and can close a panel while its fields load", async () => {
+  let release!: () => void;
+  fieldsImport.hold = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  try {
+    const closed = panel({ open: false });
+    const open = panel();
+    await act(async () => root.render(<ChatRunVariables panel={closed} />));
+    expect(fieldsImport.requested).toBe(false);
+    await act(async () => root.render(<ChatRunVariables panel={open} />));
+    await vi.waitFor(() => expect(fieldsImport.requested).toBe(true));
+    expect(container.textContent).toContain("Loading run variables");
+    await act(async () => container.querySelector("button")!.click());
+    expect(open.onClose).toHaveBeenCalledOnce();
+    await act(async () => {
+      root.render(<ChatRunVariables panel={closed} />);
+      release();
+      await vi.dynamicImportSettled();
+    });
+    expect(container.textContent).toBe("");
+  } finally {
+    release();
+    fieldsImport.hold = undefined;
+  }
+});
+
 it("preserves typed bindings and clear values through the controller callbacks", async () => {
   const props = panel();
-  await act(async () => root.render(<ChatRunVariables panel={props} />));
+  await act(async () => {
+    root.render(<ChatRunVariables panel={props} />);
+    await vi.dynamicImportSettled();
+  });
   const count = input("Count") as HTMLInputElement;
   expect(count.type).toBe("number");
   expect(count.min).toBe("1");

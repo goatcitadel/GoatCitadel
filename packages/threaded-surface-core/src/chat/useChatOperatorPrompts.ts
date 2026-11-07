@@ -1,14 +1,8 @@
 import type { ChatSessionRecord, ChatThreadResponse, ChatUserInputPromptResponse } from "@goatcitadel/contracts";
-import { useCallback, useEffect, useRef, useState } from "react";
-import { getGatewayAccessRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
-import {
-  answerChatUserInputPrompt,
-  approveChatTool,
-  denyChatTool,
-  fetchChatPendingApprovals,
-  selectChatBranchTurn,
-  submitChatSecureConfiguration,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { getGatewayAccessRevision, getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { fetchChatPendingApprovals } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import { recordChatApprovalPhase } from "./chat-causality";
 import {
@@ -23,11 +17,25 @@ import {
   type PendingUserInputRecord,
 } from "./chat-pending-user-input";
 import type { ChatOutboundErrorSetter, ChatThreadCommitter } from "./useChatOutboundExecution.types";
+import { loadOperatorPromptActionCode } from "./load-operator-prompt-action-code";
 
-const APPROVAL_RESUMED_REFRESH_DELAYS_MS = [750, 2_000] as const;
-const APPROVAL_FALLBACK_REFRESH_DELAYS_MS = [500, 1_500, 3_000] as const;
+type PromptActionCode = Awaited<ReturnType<typeof loadOperatorPromptActionCode>>;
+type PromptActionAttempt = { scopeCurrent: () => boolean };
+type PromptScope = {
+  sessionId: string | null;
+  workspaceId?: string;
+  active: boolean;
+  lifetime: number;
+  timers: Set<ReturnType<typeof setTimeout>>;
+};
+export type OperatorPromptCustody = {
+  historicalRevisionRef?: { readonly current: number };
+  historicalReadOnly?: boolean;
+  selectionRevisionRef?: { readonly current: number };
+};
 
-interface UseChatOperatorPromptsInput {
+interface UseChatOperatorPromptsInput extends OperatorPromptCustody {
+  workspaceId?: string;
   selectedSessionId: string | null;
   selectedSession: ChatSessionRecord | null;
   thread: ChatThreadResponse | null;
@@ -41,6 +49,10 @@ interface UseChatOperatorPromptsInput {
 }
 
 export function useChatOperatorPrompts({
+  workspaceId,
+  historicalRevisionRef,
+  historicalReadOnly,
+  selectionRevisionRef,
   selectedSessionId,
   selectedSession,
   thread,
@@ -49,29 +61,52 @@ export function useChatOperatorPrompts({
   setError,
   commitThreadUpdate,
 }: UseChatOperatorPromptsInput) {
+  const historicalRevision = historicalRevisionRef?.current;
+  const selectionRevision = selectionRevisionRef?.current;
   const [pendingApproval, setPendingApproval] = useState<PendingApprovalRecord | null>(null);
-  const [approvalPending, setApprovalPending] = useState(false);
   const [pendingUserInput, setPendingUserInput] = useState<PendingUserInputRecord | null>(null);
-  const [userInputPending, setUserInputPending] = useState(false);
-  const approvalRefreshTimersRef = useRef<Set<ReturnType<typeof setTimeout>>>(new Set());
+  const [approvalAttempt, setApprovalAttempt] = useState<PromptActionAttempt | null>(null);
+  const [inputAttempt, setInputAttempt] = useState<PromptActionAttempt | null>(null);
+  const actionAttempts = useRef<Record<"approval" | "user_input", PromptActionAttempt | null>>({
+    approval: null,
+    user_input: null,
+  });
+  const setActionPending = useCallback((source: "approval" | "user_input", attempt: PromptActionAttempt | null) => {
+    if (source === "approval") setApprovalAttempt(attempt);
+    else setInputAttempt(attempt);
+  }, []);
+  const promptsRef = useRef({ approval: pendingApproval, userInput: pendingUserInput });
+  useLayoutEffect(() => {
+    promptsRef.current = { approval: pendingApproval, userInput: pendingUserInput };
+  }, [pendingApproval, pendingUserInput]);
   // Approvals the persisted queue reported as stale (decided, expired, or superseded). A thread
   // snapshot that still shows the turn waiting must not reopen one of these and block the composer.
   const settledApprovalIdsRef = useRef<Set<string>>(new Set());
   const threadRef = useRef(thread);
   threadRef.current = thread;
-  const scopeRef = useRef({ sessionId: selectedSessionId, active: true });
-  if (scopeRef.current.sessionId !== selectedSessionId)
-    scopeRef.current = { sessionId: selectedSessionId, active: true };
+  const scopeRef = useRef<PromptScope>({
+    sessionId: selectedSessionId,
+    workspaceId,
+    active: true,
+    lifetime: 0,
+    timers: new Set(),
+  });
+  if (scopeRef.current.sessionId !== selectedSessionId || scopeRef.current.workspaceId !== workspaceId)
+    scopeRef.current = { sessionId: selectedSessionId, workspaceId, active: true, lifetime: 0, timers: new Set() };
   const scope = scopeRef.current;
-  useEffect(() => {
+  useLayoutEffect(() => {
     scope.active = true;
     return () => {
       scope.active = false;
+      scope.lifetime += 1;
+      for (const timer of scope.timers) clearTimeout(timer);
+      scope.timers.clear();
     };
   }, [scope]);
 
   const refreshPendingApprovalQueue = useCallback(async (sessionId: string, isCancelled?: () => boolean) => {
     const response = await fetchChatPendingApprovals(sessionId);
+    if (isCancelled?.()) return;
     for (const item of response.items) if (item.stale) settledApprovalIdsRef.current.add(item.approvalId);
     const activeItems = response.items.filter(
       (item) => !item.stale && !isApprovalForCancelledTurn(threadRef.current, item.approvalId),
@@ -94,14 +129,9 @@ export function useChatOperatorPrompts({
       },
     });
     const active = activeItems.find((item) => item.approvalId === response.activeApprovalId) ?? activeItems[0] ?? null;
-    if (isCancelled?.()) {
-      // The selected session moved on while this fetch was in flight; do not apply a stale
-      // session's approval to the now-current session. Effect-driven calls pass isCancelled;
-      // handler-driven calls (approve/deny) omit it so their result is always applied.
-      return;
-    }
+    if (isCancelled?.()) return;
     if (!active) {
-      setPendingApproval(null);
+      setPendingApproval((current) => (isCancelled?.() ? current : null));
       return;
     }
     const nextApproval = {
@@ -129,6 +159,7 @@ export function useChatOperatorPrompts({
       codePreview: typeof active.details?.codePreview === "string" ? active.details.codePreview : undefined,
     };
     setPendingApproval((current) => {
+      if (isCancelled?.()) return current;
       const changed =
         !current ||
         current.approvalId !== nextApproval.approvalId ||
@@ -232,248 +263,143 @@ export function useChatOperatorPrompts({
   }, [selectedSessionId, thread]);
 
   useEffect(() => {
-    if (!selectedSession?.sessionId) {
+    if (!selectedSessionId || selectedSession?.sessionId !== selectedSessionId) {
       return;
     }
     let cancelled = false;
-    void refreshPendingApprovalQueue(selectedSession.sessionId, () => cancelled).catch(() => undefined);
+    void refreshPendingApprovalQueue(selectedSessionId, () => cancelled).catch(() => undefined);
     return () => {
       cancelled = true;
     };
-  }, [refreshPendingApprovalQueue, selectedSession?.sessionId]);
+  }, [refreshPendingApprovalQueue, scope, selectedSessionId, selectedSession?.sessionId]);
+
+  const runPromptAction = useCallback(
+    async <T>(
+      source: "approval" | "user_input" | "branch_select",
+      run: (code: PromptActionCode, scopeCurrent: () => boolean) => Promise<T>,
+      intentCurrent: () => boolean = () => true,
+    ) => {
+      const access = getGatewayAccessRevision();
+      const caller = getGatewayCallerScopeRevision();
+      const installation = getGatewayApiBaseUrl();
+      const lifetime = scope.lifetime;
+      const scopeCurrent = () =>
+        scope.active &&
+        scopeRef.current === scope &&
+        scope.lifetime === lifetime &&
+        !historicalReadOnly &&
+        historicalRevisionRef?.current === historicalRevision &&
+        selectionRevisionRef?.current === selectionRevision &&
+        getGatewayAccessRevision() === access &&
+        getGatewayCallerScopeRevision() === caller &&
+        getGatewayApiBaseUrl() === installation;
+      if (!scopeCurrent() || !intentCurrent()) return;
+      const attempt = { scopeCurrent };
+      if (source !== "branch_select") {
+        if (actionAttempts.current[source]?.scopeCurrent()) return;
+        actionAttempts.current[source] = attempt;
+        setActionPending(source, attempt);
+      }
+      let dispatchStarted = false;
+      try {
+        const code = await loadOperatorPromptActionCode();
+        if (!scopeCurrent() || !intentCurrent()) return;
+        dispatchStarted = true;
+        return await run(code, scopeCurrent);
+      } catch (err) {
+        if (scopeCurrent() && (dispatchStarted || intentCurrent())) {
+          setError(err instanceof Error ? err.message : String(err), source);
+        }
+        return null;
+      } finally {
+        if (source !== "branch_select" && actionAttempts.current[source] === attempt) {
+          actionAttempts.current[source] = null;
+          if (scopeRef.current.active) setActionPending(source, null);
+        }
+      }
+    },
+    [scope, historicalReadOnly, historicalRevisionRef, historicalRevision, selectionRevisionRef, selectionRevision, setError, setActionPending],
+  );
 
   const handleSelectBranchTurn = useCallback(
-    async (turnId: string) => {
-      if (!selectedSessionId) {
-        return;
-      }
-      try {
-        recordClientDiagnostic({
-          level: "info",
-          category: "chat",
-          event: "branch.select",
-          message: "Selecting chat branch turn",
-          sessionId: selectedSessionId,
-          turnId,
-        });
-        const nextThread = await selectChatBranchTurn(selectedSessionId, turnId);
-        commitThreadUpdate(nextThread);
-        return nextThread;
-      } catch (err) {
-        setError((err as Error).message, "branch_select");
-        return null;
-      }
-    },
-    [commitThreadUpdate, selectedSessionId, setError],
+    (turnId: string) =>
+      selectedSessionId
+        ? runPromptAction("branch_select", (code, current) =>
+            code.selectOperatorBranch(selectedSessionId, turnId, current, commitThreadUpdate),
+          )
+        : Promise.resolve(undefined),
+    [commitThreadUpdate, selectedSessionId, runPromptAction],
   );
 
-  const handleApprovePending = useCallback(
-    async (allowScope: "once" | "session" | "workspace" = "once") => {
-      if (!selectedSession || !pendingApproval) return;
-      const approvalSessionId = pendingApproval.sessionId?.trim() || selectedSession.sessionId;
-      setApprovalPending(true);
-      try {
-        recordChatApprovalPhase({
-          phase: "resolve_started",
-          sessionId: approvalSessionId,
-          approval: {
-            approvalId: pendingApproval.approvalId,
-            toolName: pendingApproval.toolName,
-            kind: pendingApproval.kind,
-            reason: pendingApproval.reason,
-            riskLevel: pendingApproval.riskLevel,
-            remainingCount: pendingApproval.remainingCount,
-            affectedResourceCount: pendingApproval.affectedResources?.length,
-            requestedOutputIntent: pendingApproval.requestedOutputIntent,
-            expiresAt: pendingApproval.expiresAt,
-          },
-          source: "operator",
-          context: { allowScope, selectedSessionId: selectedSession.sessionId },
-        });
-        const result = await approveChatTool(approvalSessionId, pendingApproval.approvalId, { allowScope });
-        setPendingApproval(null);
-        await refreshPendingApprovalQueue(approvalSessionId);
-        await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
-          () => undefined,
-        );
-        if (approvalSessionId !== selectedSession.sessionId) {
-          await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-        }
-        const refreshDelaysMs = result.resumed
-          ? APPROVAL_RESUMED_REFRESH_DELAYS_MS
-          : APPROVAL_FALLBACK_REFRESH_DELAYS_MS;
-        for (const delayMs of refreshDelaysMs) {
-          const timer = globalThis.setTimeout(() => {
-            approvalRefreshTimersRef.current.delete(timer);
-            void refreshPendingApprovalQueue(approvalSessionId).catch(() => undefined);
-            void loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
-              () => undefined,
-            );
-            if (approvalSessionId !== selectedSession.sessionId) {
-              void refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-            }
-          }, delayMs);
-          approvalRefreshTimersRef.current.add(timer);
-        }
-        const scopeLabel =
-          allowScope === "session"
-            ? "Session allow created."
-            : allowScope === "workspace"
-              ? "Workspace allow created."
-              : "Approved once.";
-        pushLocalNotice(
-          `Approved request ${pendingApproval.approvalId}. ${scopeLabel} ${
-            result.resumed
-              ? "The runtime resumed immediately."
-              : "If the run is no longer live, use Approvals & Recovery to continue from the persisted checkpoint."
-          }`,
-          "success",
-        );
-        recordChatApprovalPhase({
-          phase: "resolved",
-          sessionId: approvalSessionId,
-          approval: {
-            approvalId: pendingApproval.approvalId,
-            toolName: pendingApproval.toolName,
-            kind: pendingApproval.kind,
-            reason: pendingApproval.reason,
-            riskLevel: pendingApproval.riskLevel,
-            remainingCount: pendingApproval.remainingCount,
-            affectedResourceCount: pendingApproval.affectedResources?.length,
-            requestedOutputIntent: pendingApproval.requestedOutputIntent,
-            expiresAt: pendingApproval.expiresAt,
-          },
-          source: "operator",
-          context: {
+  const handleApprovalDecision = useCallback(
+    async (allowScope?: "once" | "session" | "workspace") => {
+      if (!selectedSessionId || selectedSession?.sessionId !== selectedSessionId || !pendingApproval) return;
+      const sessionId = selectedSession.sessionId;
+      const approvalSessionId = pendingApproval.sessionId?.trim() || sessionId;
+      const matches = (prompt: PendingApprovalRecord | null) =>
+        prompt !== null &&
+        prompt.approvalId === pendingApproval.approvalId &&
+        (prompt.sessionId?.trim() || sessionId) === approvalSessionId;
+      await runPromptAction(
+        "approval",
+        (code, current) =>
+          code.decideOperatorApproval(
+            {
+              sessionId,
+              current,
+              notice: pushLocalNotice,
+              loadCore: loadSessionCoreState,
+              refreshQueue: refreshPendingApprovalQueue,
+              timers: scope.timers,
+              clearApproval: () => setPendingApproval((prompt) => (current() && matches(prompt) ? null : prompt)),
+            },
+            pendingApproval,
             allowScope,
-            resumed: result.resumed,
-            resumedRunId: result.resumedRunId,
-            resumedTurnId: result.resumedTurnId,
-            selectedSessionId: selectedSession.sessionId,
-          },
-        });
-      } catch (err) {
-        setError((err as Error).message, "approval");
-      } finally {
-        setApprovalPending(false);
-      }
+          ),
+        () => matches(promptsRef.current.approval),
+      );
     },
-    [loadSessionCoreState, pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError],
+    [loadSessionCoreState, pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, selectedSessionId, runPromptAction, scope],
   );
-
-  const handleDenyPending = useCallback(async () => {
-    if (!selectedSession || !pendingApproval) return;
-    const approvalSessionId = pendingApproval.sessionId?.trim() || selectedSession.sessionId;
-    setApprovalPending(true);
-    try {
-      recordChatApprovalPhase({
-        phase: "resolve_started",
-        sessionId: approvalSessionId,
-        approval: {
-          approvalId: pendingApproval.approvalId,
-          toolName: pendingApproval.toolName,
-          kind: pendingApproval.kind,
-          reason: pendingApproval.reason,
-          riskLevel: pendingApproval.riskLevel,
-          remainingCount: pendingApproval.remainingCount,
-          affectedResourceCount: pendingApproval.affectedResources?.length,
-          requestedOutputIntent: pendingApproval.requestedOutputIntent,
-          expiresAt: pendingApproval.expiresAt,
-        },
-        source: "operator",
-        context: { selectedSessionId: selectedSession.sessionId },
-      });
-      await denyChatTool(approvalSessionId, pendingApproval.approvalId);
-      await refreshPendingApprovalQueue(approvalSessionId);
-      if (approvalSessionId !== selectedSession.sessionId) {
-        await refreshPendingApprovalQueue(selectedSession.sessionId).catch(() => undefined);
-        await loadSessionCoreState(selectedSession.sessionId, { background: true, includeThread: true }).catch(
-          () => undefined,
-        );
-      }
-      pushLocalNotice(`Denied request ${pendingApproval.approvalId}. No action was taken.`, "warning");
-      recordChatApprovalPhase({
-        phase: "dismissed",
-        sessionId: approvalSessionId,
-        approval: {
-          approvalId: pendingApproval.approvalId,
-          toolName: pendingApproval.toolName,
-          kind: pendingApproval.kind,
-          reason: pendingApproval.reason,
-          riskLevel: pendingApproval.riskLevel,
-          remainingCount: pendingApproval.remainingCount,
-          affectedResourceCount: pendingApproval.affectedResources?.length,
-          requestedOutputIntent: pendingApproval.requestedOutputIntent,
-          expiresAt: pendingApproval.expiresAt,
-        },
-        source: "operator",
-        context: { selectedSessionId: selectedSession.sessionId },
-      });
-    } catch (err) {
-      setError((err as Error).message, "approval");
-    } finally {
-      setApprovalPending(false);
-    }
-  }, [loadSessionCoreState, pendingApproval, pushLocalNotice, refreshPendingApprovalQueue, selectedSession, setError]);
+  const handleApprovePending = useCallback(
+    (allowScope: "once" | "session" | "workspace" = "once") => handleApprovalDecision(allowScope),
+    [handleApprovalDecision],
+  );
+  const handleDenyPending = useCallback(() => handleApprovalDecision(), [handleApprovalDecision]);
 
   const handleSubmitUserInput = useCallback(
     async (response: ChatUserInputPromptResponse) => {
-      if (!selectedSession || !pendingUserInput) return;
-      setUserInputPending(true);
-      try {
-        const result =
-          response.kind === "secure_configuration"
-            ? await submitChatSecureConfiguration(
-                selectedSession.sessionId,
-                pendingUserInput.turnId,
-                pendingUserInput.promptId,
-                { secret: response.secret },
-              )
-            : await answerChatUserInputPrompt(
-                selectedSession.sessionId,
-                pendingUserInput.turnId,
-                pendingUserInput.promptId,
-                { response },
-              );
-        setPendingUserInput(null);
-        pushLocalNotice(
-          result.resumed
-            ? `Submitted response for ${pendingUserInput.promptId}. The turn resumed immediately.`
-            : pendingUserInput.delivery === "background"
-              ? "Answer saved. Work continues; the runtime can use it at the next model step."
-              : `Submitted response for ${pendingUserInput.promptId}. Refresh the thread or resume the run when the runtime is ready.`,
-          "success",
-        );
-        await loadSessionCoreState(selectedSession.sessionId, {
-          background: true,
-          includeThread: true,
-        });
-      } catch (err) {
-        setError((err as Error).message, "user_input");
-      } finally {
-        setUserInputPending(false);
-      }
+      if (!selectedSessionId || selectedSession?.sessionId !== selectedSessionId || !pendingUserInput) return;
+      const sessionId = selectedSession.sessionId;
+      const matches = (prompt: PendingUserInputRecord | null) =>
+        prompt !== null && prompt.promptId === pendingUserInput.promptId && prompt.turnId === pendingUserInput.turnId;
+      await runPromptAction(
+        "user_input",
+        (code, current) =>
+          code.submitOperatorPrompt(
+            {
+              sessionId,
+              current,
+              notice: pushLocalNotice,
+              loadCore: loadSessionCoreState,
+              clearInput: () => setPendingUserInput((prompt) => (current() && matches(prompt) ? null : prompt)),
+            },
+            pendingUserInput,
+            response,
+          ),
+        () => matches(promptsRef.current.userInput),
+      );
     },
-    [loadSessionCoreState, pendingUserInput, pushLocalNotice, selectedSession, setError],
+    [loadSessionCoreState, pendingUserInput, pushLocalNotice, selectedSession, selectedSessionId, runPromptAction],
   );
-
-  useEffect(() => {
-    const approvalRefreshTimers = approvalRefreshTimersRef.current;
-    return () => {
-      for (const timer of approvalRefreshTimers) {
-        clearTimeout(timer);
-      }
-      approvalRefreshTimers.clear();
-    };
-  }, [selectedSessionId]);
 
   return {
     pendingApproval,
     setPendingApproval,
     pendingUserInput,
     setPendingUserInput,
-    approvalPending,
-    userInputPending,
+    approvalPending: Boolean(approvalAttempt?.scopeCurrent()),
+    userInputPending: Boolean(inputAttempt?.scopeCurrent()),
     handleApprovePending,
     handleDenyPending,
     handleSubmitUserInput,

@@ -1,6 +1,6 @@
 import { createRealtimeVoiceClientSecret } from "@goatcitadel/mission-control-shared/api/client";
 
-type LiveVoiceUiState =
+export type LiveVoiceUiState =
   | "idle"
   | "requesting_mic"
   | "connecting"
@@ -10,7 +10,7 @@ type LiveVoiceUiState =
   | "stopping"
   | "error";
 
-interface LiveVoiceConnection {
+export interface LiveVoiceConnection {
   peerConnection: RTCPeerConnection;
   dataChannel: RTCDataChannel;
   mediaStream: MediaStream;
