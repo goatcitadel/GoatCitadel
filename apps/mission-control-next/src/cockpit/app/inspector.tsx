@@ -218,7 +218,7 @@ export function InspectorPanel() {
       <PendingDialog
         title={content.title}
         closeLabel="Close inspector"
-        className="cockpit-dialog fixed inset-x-4 top-4 m-0 mx-auto w-[calc(100%-2rem)] max-w-xl rounded-lg border border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim"
+        className="cockpit-dialog cockpit-pending-dialog fixed inset-x-4 top-4 m-0 mx-auto w-auto max-w-xl border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim"
         onDismiss={close}
         onCloseAutoFocus={returnFocus}
         handoff={handoff}
@@ -252,7 +252,7 @@ export function InspectorPanel() {
         </div>
       </header>
       {failed ? (
-        <p role="status" className="px-3 pt-2 text-sm text-fg-muted">
+        <p className="px-3 pt-2 text-sm text-fg-muted">
           Resize and expand controls could not load. The selected details are still available.
         </p>
       ) : null}

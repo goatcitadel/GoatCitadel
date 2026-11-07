@@ -222,7 +222,7 @@ export function ChatTurnDetails({
         </details>
       ) : null}
       {turn.toolRuns.some((run) => run.result?.externalAgent !== undefined) ? (
-        <Suspense fallback={<p role="status">Loading tool report…</p>}>
+        <Suspense fallback={<p aria-busy="true">Loading tool report…</p>}>
           <ChatOpenCodeEvidence
             toolRuns={turn.toolRuns}
             onOpenRunDetails={() => actions.onOpenRunDetails(turn.turnId)}

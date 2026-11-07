@@ -54,8 +54,8 @@ const NON_LIVE_PRIMITIVES = ["ui/EmptyState.tsx", "ui/Callout.tsx"];
 const BANNED_PREFIXES = /["'`>](Problem|Attention|Information|Error): /;
 
 export const LAYER_OWNERS = new Set([
-  "ui/Dialog.tsx",
-  "ui/Sheet.tsx",
+  "ui/DialogRuntime.tsx",
+  "ui/SheetDrawerRuntime.tsx",
   "ui/Menu.tsx",
   "ui/MenuRuntime.tsx",
   "ui/Popover.tsx",

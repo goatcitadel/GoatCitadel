@@ -14,6 +14,9 @@ import {
 } from "./chat-selection-evidence";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const scope = vi.hoisted(() => ({ activeWorkspaceId: "workspace-a", activeCitadelId: "citadel-a" }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => scope }));

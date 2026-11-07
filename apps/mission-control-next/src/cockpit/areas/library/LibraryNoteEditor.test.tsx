@@ -15,6 +15,9 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryNoteEditor } from "./LibraryNoteEditor";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/api/personal-ops", () => ({
   archiveNote: vi.fn(),
   createNote: vi.fn(),

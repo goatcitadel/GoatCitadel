@@ -87,7 +87,8 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           // The row button is named by its visible text: the label, then "Capability · <state> · <owner>".
           await panel.getByRole("button", { name: new RegExp(`^${escapeRegExp(label)}\\s*Capability · `) }).click();
           const dialog = page.getByRole("dialog", { name: `Trust record: ${label}`, exact: true });
-          await dialog.waitFor();
+          // The loading dialog already has the title. Wait for the record body before checking its values.
+          await dialog.getByText("Record ID", { exact: true }).waitFor();
           const detail = await dialog.innerText();
           assert.ok(
             detail.includes(`capability:${capability.capabilityId}`),

@@ -4,6 +4,9 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatThreadTurnRecord } from "@goatcitadel/contracts";
 import { ChatTurnActions, type TurnActionHandlers } from "./ChatTurnActions";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const media = vi.hoisted(() => ({ phone: false }));
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: () => media.phone }));

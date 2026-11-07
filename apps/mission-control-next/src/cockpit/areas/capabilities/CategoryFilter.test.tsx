@@ -93,7 +93,7 @@ describe("CategoryFilter", () => {
     expect(overflow()?.textContent).toBe("+1");
     // It left the overflow list, so only the one category that is still hidden is offered there.
     await act(async () => overflow()?.click());
-    expect(popover()?.textContent).toBe("Creative");
+    await vi.waitFor(() => expect(popover()?.textContent).toBe("Creative"));
   });
 
   it("treats every category selected as All", async () => {

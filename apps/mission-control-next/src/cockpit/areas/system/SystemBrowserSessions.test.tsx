@@ -18,6 +18,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { SystemBrowserSessions } from "./SystemBrowserSessions";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 vi.mock("@goatcitadel/mission-control-shared/api/browser-sessions", () => ({
   closeBrowserSession: vi.fn(),

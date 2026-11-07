@@ -85,7 +85,7 @@ export function MobileNavigationSlot(props: ComponentProps<Runtime>) {
         ))}
       </nav>
       {failed ? (
-        <p role="status" className="px-2 text-xs text-fg-secondary">
+        <p className="px-2 text-xs text-fg-secondary">
           The tab bar could not load. Use these area links to navigate.
         </p>
       ) : null}

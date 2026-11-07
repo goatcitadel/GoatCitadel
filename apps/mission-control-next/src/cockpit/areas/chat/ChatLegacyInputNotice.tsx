@@ -20,8 +20,9 @@ function hasSavedInput(key: string) {
 
 export function ChatLegacyInputNotice(props: Omit<ComponentProps<typeof ChatLegacyInputReview>, "storageKey">) {
   const caller = useSyncExternalStore(subscribeGatewayCallerScope, getGatewayCallerScope, getGatewayCallerScope);
-  const key = `goatcitadel.chat.draft.${props.workspaceId}.${props.sessionId ?? "new"}`;
-  const eligible = Boolean(!reviewLoader.read() && caller && props.workspaceId && hasSavedInput(key));
+  const { workspaceId, sessionId } = props;
+  const key = `goatcitadel.chat.draft.${workspaceId}.${sessionId ?? "new"}`;
+  const eligible = Boolean(!reviewLoader.read() && caller && workspaceId && hasSavedInput(key));
   const { runtime: Review, failed } = useDeferredDialogRuntime(eligible, reviewLoader);
   if (Review) return <Review {...props} storageKey={key} />;
   if (!eligible) return null;

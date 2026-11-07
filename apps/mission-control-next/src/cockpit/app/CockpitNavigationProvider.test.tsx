@@ -13,6 +13,9 @@ import {
   setSectionDirty,
   useFormDirty,
 } from "../../features/native-routes/library/use-form-dirty";
+import { prepareReadyDialogFixture } from "../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const scope = vi.hoisted(() => ({
   installation: "http://owner.invalid",

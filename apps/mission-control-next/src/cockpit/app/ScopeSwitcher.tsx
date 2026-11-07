@@ -156,7 +156,7 @@ export function ScopeSwitcher({
           title="Change operating scope"
           description={pickerDescription}
           closeLabel="Close dialog"
-          className="cockpit-dialog fixed inset-x-4 top-4 m-0 mx-auto w-[calc(100%-2rem)] max-w-xl rounded-lg border border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim sm:top-24"
+          className="cockpit-dialog cockpit-pending-dialog fixed inset-x-4 top-4 m-0 mx-auto w-auto max-w-xl border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim sm:top-24"
           onDismiss={() => setOpen(false)}
           onCloseAutoFocus={onCloseAutoFocus}
           handoff={handoff}
@@ -166,7 +166,7 @@ export function ScopeSwitcher({
               Scope controls could not load. Close the picker to keep using the app, or reload the app.
             </p>
           ) : (
-            <p role="status">Loading scope controls…</p>
+            <p aria-busy="true">Loading scope controls…</p>
           )}
         </PendingDialog>
       ) : null}

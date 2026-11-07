@@ -105,6 +105,7 @@ it("loads validation on explicit review, withholds bytes while loading, and excl
   const loading = deferValidation();
   await mount();
   expect(validator.load).not.toHaveBeenCalled();
+  await vi.waitFor(() => expect(button("Review older saved text")).toBeDefined());
   await act(async () => { button("Review older saved text").click(); button("Review older saved text").click(); });
   await vi.waitFor(() => expect(validator.load).toHaveBeenCalledOnce());
   expect(validator.load).toHaveBeenCalledTimes(1);

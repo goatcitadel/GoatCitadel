@@ -9,6 +9,10 @@ import { ApprovalAuditRecovery } from "./ApprovalAuditRecovery";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { refuseNetwork } from "../../../test/refuse-network";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
+
 const api = vi.hoisted(() => ({
   replay: vi.fn(),
   lifecycle: vi.fn(),

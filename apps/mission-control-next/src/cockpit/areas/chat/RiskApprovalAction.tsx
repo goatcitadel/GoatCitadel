@@ -86,7 +86,7 @@ export function RiskApprovalAction({
         Risk is unavailable, so Approve once is off. Check the approval summary above, or use Deny.
       </p>
     );
-  if (review.loading) return <p role="status">Loading the exact approval preview…</p>;
+  if (review.loading) return <p aria-busy="true">Loading the exact approval preview…</p>;
   if (review.unavailable)
     return <p role="alert">The approval preview could not load. Reopen the review or use Deny.</p>;
   if (approval.kind === "remote_worker.native_runtime" && !specialistReview)

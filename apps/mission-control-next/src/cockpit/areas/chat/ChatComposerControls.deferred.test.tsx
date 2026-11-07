@@ -340,7 +340,10 @@ describe("deferred public model options Popover", () => {
     );
     const cancel = () =>
       [...dialog()!.querySelectorAll<HTMLButtonElement>("button")].find((node) => node.textContent === "Cancel")!;
-    expect(document.activeElement).toBe(cancel());
+    await vi.waitFor(() => {
+      expect(cancel()).toBeDefined();
+      expect(document.activeElement).toBe(cancel());
+    });
     assertRetained();
     await act(async () => cancel().click());
     await vi.waitFor(() => expect(dialog()).toBeNull());
@@ -348,6 +351,7 @@ describe("deferred public model options Popover", () => {
     assertRetained();
     await act(async () => reloadButton.click());
     await vi.waitFor(() => expect(dialog()).not.toBeNull());
+    await vi.waitFor(() => expect(cancel()).toBeDefined());
     await key(cancel(), "Escape");
     await vi.waitFor(() => expect(dialog()).toBeNull());
     assertRetained();

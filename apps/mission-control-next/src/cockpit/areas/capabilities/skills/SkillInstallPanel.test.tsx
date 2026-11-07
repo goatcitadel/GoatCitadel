@@ -16,6 +16,9 @@ import { __resetInboxApprovalAttemptsForTests } from "../../inbox/inbox-approval
 import { __resetSettingsApprovalDialogsForTests } from "../../settings/SettingsApprovalDialog";
 import { __resetSkillInstallPanelsForTests, SkillInstallPanel } from "./SkillInstallPanel";
 import { __resetSkillInstallsForTests } from "./use-skill-install";
+import { prepareReadyDialogFixture } from "../../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const prefs = vi.hoisted(() => ({
   activeCitadelId: "default",
@@ -398,8 +401,9 @@ describe("Install panel: installing", () => {
 
     // Approved in place: read at once, and installed it asks to switch on, which waits for its own approval.
     server = checked({ step: "installed_off" });
+    await vi.waitFor(() => expect(button("Approve once", dialog()!)?.disabled).toBe(false));
     await press(button("Approve once", dialog()!));
-    expect(decisions.resolveApproval).toHaveBeenCalledWith("approval-install", "approve");
+    await vi.waitFor(() => expect(decisions.resolveApproval).toHaveBeenCalledWith("approval-install", "approve"));
     await settle();
     expect(dialog()?.querySelector("h2")?.textContent).toBe("Approve switching on Himalaya?");
     expect(dialog()?.textContent).toContain("Lets the AI use Himalaya in new chats.");

@@ -86,10 +86,13 @@ afterEach(() => {
   __resetSessionDraftsForTests();
 });
 async function click(name: string) {
-  const button = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
-    (item) => !item.closest('[aria-hidden="true"]') && (item.getAttribute("aria-label") ?? item.textContent) === name,
-  )!;
-  expect(button).toBeTruthy();
+  const button = await vi.waitFor(() => {
+    const found = [...document.querySelectorAll<HTMLButtonElement>("button")].find(
+      (item) => !item.closest('[aria-hidden="true"]') && (item.getAttribute("aria-label") ?? item.textContent) === name,
+    );
+    expect(found, `button "${name}"`).toBeTruthy();
+    return found!;
+  });
   await act(async () => button.click());
 }
 async function input(label: string, value: string) {

@@ -8,6 +8,9 @@ import { __resetSessionDraftsForTests } from "../../../features/native-routes/li
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { FilesystemWriteRootsControl } from "./FilesystemWriteRootsControl";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({ fetchSettings: vi.fn(), patchSettings: vi.fn(), fetchChangePlan: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({

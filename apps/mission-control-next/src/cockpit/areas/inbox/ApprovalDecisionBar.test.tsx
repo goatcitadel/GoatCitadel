@@ -80,7 +80,7 @@ it("denies in one neutral click, because denying is the safe choice", async () =
   api.resolveApproval.mockResolvedValue({ approval: { ...approval, status: "rejected" }, effects: [] });
   await act(async () => deny.click());
   expect(document.body.querySelector("[role=dialog]")).toBeNull();
-  expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "reject");
+  await vi.waitFor(() => expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "reject"));
 });
 
 it("shows Expired before the missing-preview message", async () => {
@@ -167,7 +167,9 @@ it("reads a skill approval without a workspace and approves it in one click", as
   await renderDecision(skillApproval, null, onResolved);
   expect(document.body.textContent).not.toContain("The selected workspace changed");
 
+  await vi.waitFor(() => expect(button("Approve once")).toBeDefined());
   await act(async () => button("Approve once").click());
+  await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
   // The check before deciding reads the approval without a workspace: scoped to one, it would not be found.
   expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith(skillApproval.approvalId, {});
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith(skillApproval.approvalId, "approve");
@@ -182,6 +184,7 @@ it("leaves Settings approvals scoped to their workspace", async () => {
   const onResolved = vi.fn();
   await renderDecision(workspaceApproval, "default", onResolved);
   await act(async () => button("Approve once").click());
+  await vi.waitFor(() => expect(onResolved).toHaveBeenCalledTimes(1));
   expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith("approval-a", { workspaceId: "default" });
   expect(onResolved).toHaveBeenCalledTimes(1);
 
@@ -194,6 +197,9 @@ it("leaves Settings approvals scoped to their workspace", async () => {
   await act(async () => root.render(null));
   await renderDecision(workspaceApproval, "default");
   await act(async () => button("Approve once").click());
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain("This approval changed or is no longer in the current pending queue."),
+  );
   expect(api.resolveApproval).not.toHaveBeenCalled();
   expect(document.body.textContent).toContain("This approval changed or is no longer in the current pending queue.");
 });

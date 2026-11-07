@@ -317,7 +317,7 @@ export function Sheet({
         <PendingDialog
           title={title}
           closeLabel={closeLabel}
-          className="cockpit-dialog fixed inset-x-4 top-4 m-0 mx-auto w-[calc(100%-2rem)] max-w-xl rounded-lg border border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim sm:top-24"
+          className="cockpit-dialog cockpit-pending-dialog fixed inset-x-4 top-4 m-0 mx-auto w-auto max-w-xl border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim sm:top-24"
           description={failed ? "Sheet controls are unavailable." : "Loading sheet controls."}
           handoff={pendingHandoff}
           keepFocusForHandoff
@@ -351,7 +351,7 @@ export function Sheet({
               </Button>
             </div>
           ) : (
-            <p role="status" className="min-h-24 text-sm text-fg-muted">
+            <p aria-busy="true" className="min-h-24 text-sm text-fg-muted">
               Loading sheet controls…
             </p>
           )}

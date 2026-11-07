@@ -10,6 +10,9 @@ import {
   setWorkspaceAttempt,
   workspaceAttemptLocked,
 } from "../../features/native-routes/settings/workspace-editor-state";
+import { prepareReadyDialogFixture } from "../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const switchShell = vi.hoisted(() => vi.fn());
 vi.mock("../../shell-preference", () => ({ switchShell, writeShellPreference: vi.fn() }));

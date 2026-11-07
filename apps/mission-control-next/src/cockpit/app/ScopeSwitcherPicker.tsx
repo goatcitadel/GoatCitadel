@@ -95,11 +95,11 @@ export function ScopeSwitcherPicker({
             </select>
           </label>
           {owner.loading ? (
-            <p role="status" className="text-sm text-fg-muted">
+            <p aria-busy="true" className="text-sm text-fg-muted">
               Loading active scope choices…
             </p>
           ) : owner.checking ? (
-            <p role="status" className="text-sm text-fg-muted">
+            <p aria-busy="true" className="text-sm text-fg-muted">
               {CHECKING_FOR_CHANGES}
             </p>
           ) : null}

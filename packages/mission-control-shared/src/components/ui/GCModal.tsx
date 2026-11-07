@@ -27,6 +27,11 @@ const runtimeLoader = createDeferredDialogRuntime(() =>
   import("./GCModalRuntime").then(({ GCModalRuntime }) => GCModalRuntime),
 );
 
+/** Warm the shared modal implementation without opening a modal. */
+export function preloadGCModalRuntime() {
+  return runtimeLoader.load();
+}
+
 export function GCModal(props: GCModalProps) {
   const { runtime: Runtime, failed } = useDeferredDialogRuntime(props.open, runtimeLoader);
   const handoff = useRef(false);

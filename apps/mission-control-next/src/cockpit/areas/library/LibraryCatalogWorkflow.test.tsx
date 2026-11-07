@@ -8,6 +8,9 @@ import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings"
 import { fetchTraceMemoryCandidates, fetchTraceMemoryCandidate, promoteTraceMemoryCandidate } from "@goatcitadel/mission-control-shared/api/memory";
 import { LibraryImportedAgents } from "./LibraryImportedAgents";
 import { LibraryMemoryProposals } from "./LibraryMemoryProposals";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("../../app/use-cockpit-route", () => ({ useCockpitRoute: () => ({ search: "", navigate: vi.fn() }) }));
 vi.mock("@goatcitadel/mission-control-shared/api/agent-catalog", () => ({ fetchImportedAgentCatalog: vi.fn(), fetchImportedAgentCatalogEntry: vi.fn(), importAgencyAgentCatalog: vi.fn(), patchImportedAgentCatalogState: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/settings", () => ({ fetchSettings: vi.fn() }));

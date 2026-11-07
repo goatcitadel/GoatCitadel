@@ -8,6 +8,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { InboxChangePlanDetail } from "./InboxChangePlanDetail";
 import { queryKeys } from "../../data/query-keys";
 import { __resetInboxChangePlanAttemptsForTests } from "./use-inbox-change-plan";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({ fetchOperatorInbox: vi.fn(), fetchChangePlan: vi.fn(), confirmChangePlan: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/operator-inbox", () => ({

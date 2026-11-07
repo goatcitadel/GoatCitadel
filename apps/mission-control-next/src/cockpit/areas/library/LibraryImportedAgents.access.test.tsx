@@ -7,6 +7,9 @@ import { LibraryImportedAgents } from "./LibraryImportedAgents";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 const api = vi.hoisted(() => ({ list: vi.fn(), read: vi.fn(), patch: vi.fn(), import: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/agent-catalog", () => ({
   fetchImportedAgentCatalog: api.list,

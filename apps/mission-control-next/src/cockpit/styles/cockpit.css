@@ -351,6 +351,11 @@ html[data-shell="cockpit"] .mc-dialog-content {
     max-height: calc(100dvh - 7rem);
     overflow-y: auto;
   }
+  .cockpit-pending-dialog {
+    border-width: 1px;
+    border-style: solid;
+    border-radius: var(--radius-lg);
+  }
   .cockpit-chat-host > section {
     display: flex;
     min-height: 0;

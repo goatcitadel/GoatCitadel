@@ -13,6 +13,9 @@ import { fetchApproval, fetchApprovalReplay } from "@goatcitadel/mission-control
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { __resetApprovalOperationAttemptsForTests } from "../inbox/approval-operation-attempts";
 import { CapabilityLifecycleInspector } from "./CapabilityLifecycleInspector";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({ fetchCapabilityCandidate: vi.fn(), fetchCapabilityProposal: vi.fn(), fetchCandidateSkillArtifactReview: vi.fn(), promoteCapabilityCandidate: vi.fn(), revokeCapabilityCandidate: vi.fn(), rollbackCapabilityCandidate: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({ fetchChangePlan: vi.fn(), confirmChangePlan: vi.fn(), respondToChangePlan: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: vi.fn(), fetchApprovalReplay: vi.fn() }));

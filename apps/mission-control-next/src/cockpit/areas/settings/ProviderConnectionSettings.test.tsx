@@ -16,6 +16,9 @@ import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { freshReadsActive } from "@goatcitadel/mission-control-shared/api/fresh-reads";
 import { getGatewayCallerScope, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { clearGatewayAuthState, persistGatewayAuthState } from "@goatcitadel/mission-control-shared/api/client-core";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({
   createChangePlan: vi.fn(),

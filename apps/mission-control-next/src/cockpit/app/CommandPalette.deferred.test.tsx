@@ -170,6 +170,7 @@ it("keeps typed query, selection and only owned input focus through real CMDK ha
   loader.load.mockImplementationOnce(() => held.promise);
   await act(async () => render());
   await vi.waitFor(() => expect(loader.load).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(input()).not.toBeNull());
   const old = input();
   await act(async () => type(old, "needle text"));
   old.focus();
@@ -189,6 +190,7 @@ it("keeps the actual pending input through composition even when its real module
   loader.load.mockImplementationOnce(() => held.promise);
   await act(async () => render());
   await vi.waitFor(() => expect(loader.load).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(input()).not.toBeNull());
   const old = input();
   old.focus();
   await act(async () => old.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true, data: "typed" })));
@@ -210,6 +212,7 @@ it("keeps pending input across the pointerup microtask checkpoint, then releases
   loader.load.mockImplementationOnce(() => held.promise);
   await act(async () => render());
   await vi.waitFor(() => expect(loader.load).toHaveBeenCalledOnce());
+  await vi.waitFor(() => expect(input()).not.toBeNull());
   const old = input();
   await act(async () => type(old, "selected query"));
   old.focus();
@@ -344,6 +347,7 @@ async function openReload() {
   trigger.focus();
   await act(async () => trigger.click());
   await vi.waitFor(() => expect(review()).toBeDefined());
+  await vi.waitFor(() => expect(named("Cancel", review()!)).toBeDefined());
   return trigger;
 }
 it("keeps the same outside answer and requires warned Reload; Cancel/Escape retain current controls with no Retry", async () => {

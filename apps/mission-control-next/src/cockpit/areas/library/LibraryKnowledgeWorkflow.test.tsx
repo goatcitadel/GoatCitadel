@@ -40,6 +40,9 @@ import { LibraryEngineeringLearnings } from "./LibraryEngineeringLearnings";
 import { LibraryKnowledgeActions } from "./LibraryKnowledgeActions";
 import { LibraryExternalSources } from "./LibraryExternalSources";
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("../../app/use-cockpit-route", () => ({
   useCockpitRoute: () => ({ search: window.location.search, navigate: vi.fn() }),
 }));

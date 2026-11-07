@@ -278,14 +278,14 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           fallback={
             <section
               aria-label="Pending question"
-              className="mt-3 rounded-md border border-status-waiting bg-raised p-3 text-sm"
+              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
             >
               <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
               {isBackgroundChatUserInputPrompt(input) ? (
                 <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
               ) : null}
               <p className="mt-1 text-fg-secondary">{input.question}</p>
-              <p role="status" className="mt-2 text-xs text-fg-muted">Loading answer controls…</p>
+              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading answer controls…</p>
             </section>
           }
         >

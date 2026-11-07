@@ -13,8 +13,13 @@ describe("optional API implementation ownership", () => {
     const exports = [...chatSource.matchAll(/export\s*\{([^}]+)\}\s*from\s*["']\.\/([^"']+)["']/g)];
     expect(exports.some(match => match[2] === leaf + ".js" && match[1]!.split(",").map(item => item.trim()).includes(name))).toBe(true);
   });
-  it.each(["fetchChatDelegationRun", "fetchLatestChatWorkspaceExplorer", "fetchChatProactiveStatus"])("retains mandatory %s implementation", name => {
+  it.each(["fetchChatDelegationRun", "fetchLatestChatWorkspaceExplorer"])("retains mandatory %s implementation", name => {
     expect(chatSource).toContain("export async function " + name + "(");
+  });
+  it("keeps the proactive status implementation in session evidence and forwards its public export", () => {
+    expect(chatSource).not.toContain("export async function fetchChatProactiveStatus(");
+    expect(chatSource).toMatch(/export\s*\{[^}]*\bfetchChatProactiveStatus\b[^}]*\}\s*from\s*"\.\/chat-session-evidence\.js"/u);
+    expect(source("./chat-session-evidence.ts")).toContain("export async function fetchChatProactiveStatus(");
   });
   it.each(["../../../../packages/threaded-surface-core/src/chat/workbench-read-code.ts", "../../../../packages/threaded-surface-core/src/chat/workbench-action-code.ts", "../../../../apps/mission-control-next/src/cockpit/areas/work/run-workspace-context.ts"])("binds demanded workbench reads directly in %s", path => {
     const consumer = source(path);

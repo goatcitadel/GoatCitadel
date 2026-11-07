@@ -11,12 +11,13 @@ it("names help, moves focus to close, and closes with Escape", async () => {
     await act(async () => root.render(<Harness />));
     const trigger = container.querySelector("button")!; trigger.focus();
     await act(async () => trigger.click());
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Settings"));
     const dialog = document.querySelector('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Keyboard shortcuts");
     expect(dialog.textContent).toContain("Settings");
-    expect(dialog.contains(document.activeElement)).toBe(true);
+    await vi.waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
     await act(async () => document.activeElement!.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true })));
-    expect(document.querySelector('[role="dialog"]')).toBeNull();
+    await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')).toBeNull());
     // The dialog returns focus asynchronously; wait for it instead of racing it under load.
     await vi.waitFor(() => expect(document.activeElement).toBe(trigger));
   } finally { act(() => root.unmount()); container.remove(); }

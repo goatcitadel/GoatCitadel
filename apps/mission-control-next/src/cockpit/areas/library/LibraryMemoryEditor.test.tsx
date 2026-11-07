@@ -18,6 +18,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryMemoryEditor } from "./LibraryMemoryEditor";
 import { __resetInboxApprovalAttemptsForTests } from "../inbox/inbox-approval-attempts";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ resolveApproval: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/memory", () => ({
   fetchMemoryItems: vi.fn(),
@@ -521,7 +524,7 @@ it("uses the real Library decision portal then replaces its pending decision rec
   });
   await click("Review danger approval");
   await click("Approve once");
-  expect(resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
+  await vi.waitFor(() => expect(resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve"));
   await vi.waitFor(() =>
     expect(document.querySelector('[aria-label="Memory request receipt"]')?.textContent).toContain(
       "Memory effect is pending",

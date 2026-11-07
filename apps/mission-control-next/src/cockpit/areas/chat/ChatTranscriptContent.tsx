@@ -218,7 +218,7 @@ export const Turn = memo(function Turn({
             <DeferredChatLeaf
               label="Continue"
               identity={turn.turnId}
-              fallback={<p role="status" className="mt-2 text-xs text-fg-muted">Loading continuation controls…</p>}
+              fallback={<p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading continuation controls…</p>}
             >
               <ChatContinueAction turn={turn} isLatest={isLatest} actions={continueActions} />
             </DeferredChatLeaf>
@@ -240,7 +240,7 @@ export const Turn = memo(function Turn({
         <DeferredChatLeaf
           label="Response recovery"
           identity={turn.turnId}
-          fallback={<p role="status" className="text-sm text-fg-muted">Loading response recovery…</p>}
+          fallback={<p aria-busy="true" className="text-sm text-fg-muted">Loading response recovery…</p>}
         >
           <ChatTurnFailureCard
             failed={failed}
@@ -291,7 +291,7 @@ export const Turn = memo(function Turn({
       !streaming &&
       actions.selectedSessionId &&
       turnReadsDraft(turn) ? (
-        <Suspense fallback={<p role="status">Loading skill capture…</p>}>
+        <Suspense fallback={<p aria-busy="true">Loading skill capture…</p>}>
           <WorkflowSkillCaptureControl
             turn={turn}
             sessionId={actions.selectedSessionId}
@@ -400,7 +400,7 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
         {receipt && !receipt.dismissed ? (
           <Suspense
             fallback={
-              <p role="status" className="min-h-24">
+              <p aria-busy="true" className="min-h-24">
                 Loading change-plan receipt…
               </p>
             }

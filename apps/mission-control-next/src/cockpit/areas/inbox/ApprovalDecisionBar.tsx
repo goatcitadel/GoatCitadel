@@ -354,7 +354,7 @@ function ApprovalDecisionReview({
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
       {review.loading || specialist.loading ? (
-        <p role="status">Loading the exact approval preview…</p>
+        <p aria-busy="true">Loading the exact approval preview…</p>
       ) : review.unavailable || specialist.unavailable ? (
         <p role="alert">The approval preview could not load. Reopen the review or use Deny.</p>
       ) : hasPreview || specializedReview ? (

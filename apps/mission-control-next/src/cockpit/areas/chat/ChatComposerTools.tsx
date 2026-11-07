@@ -211,7 +211,7 @@ export function ChatComposerTools({
                   Message options could not load. Close the sheet and try again, or reload the app.
                 </p>
               ) : (
-                <p role="status" className="text-sm text-fg-muted">
+                <p aria-busy="true" className="text-sm text-fg-muted">
                   Loading message options…
                 </p>
               )}

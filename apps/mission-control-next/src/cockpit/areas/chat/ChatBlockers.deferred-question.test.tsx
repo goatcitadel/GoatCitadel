@@ -62,7 +62,7 @@ it("shows the question immediately and never mounts an answer form for a retired
     await render(prompt);
     await vi.waitFor(() => expect(questionCode.started).toHaveBeenCalledOnce());
     expect(host.textContent).toContain(prompt.question);
-    expect(host.querySelector('[role="status"]')?.textContent).toContain("Loading answer controls");
+    expect(host.querySelector('[aria-busy="true"]')?.textContent).toContain("Loading answer controls");
     expect(form()).toBeNull();
 
     await render(null, "conversation-b");

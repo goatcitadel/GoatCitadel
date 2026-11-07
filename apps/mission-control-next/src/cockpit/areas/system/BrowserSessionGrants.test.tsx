@@ -14,6 +14,9 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { BrowserSessionGrants } from "./BrowserSessionGrants";
 import { NEVER_EXPIRES_TTL } from "./browser-sessions-model";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 vi.mock("@goatcitadel/mission-control-shared/api/browser-sessions", () => ({
   createBrowserSessionGrant: vi.fn(),

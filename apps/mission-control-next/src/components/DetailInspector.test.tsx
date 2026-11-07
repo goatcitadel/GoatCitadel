@@ -8,6 +8,9 @@ import { DetailInspector } from "./DetailInspector";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../features/native-routes/library/session-drafts";
 import { useDraftLeave } from "../features/native-routes/library/DraftLeaveDialog";
 import { __resetFormDirtyRegistryForTests } from "../features/native-routes/library/use-form-dirty";
+import { prepareReadyDialogFixture } from "../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture("shared");
 vi.mock("@goatcitadel/mission-control-shared/hooks/useMediaQuery", () => ({ useMediaQuery: () => false }));
 let root: ReturnType<typeof createRoot>;
 function Editors() {

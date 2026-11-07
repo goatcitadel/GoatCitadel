@@ -172,7 +172,7 @@ export function ChatLegacyInputReview({
       ) : null}
       {checking ? (
         <>
-          <p role="status">Checking saved input…</p>
+          <p aria-busy="true">Checking saved input…</p>
           <Button size="sm" onClick={cancelCheck}>
             Cancel review
           </Button>

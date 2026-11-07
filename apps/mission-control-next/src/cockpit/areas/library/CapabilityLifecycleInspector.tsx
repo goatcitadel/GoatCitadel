@@ -61,7 +61,7 @@ function LifecycleInspector({ item, workspaceId }: { item: CapabilityCatalogEntr
   });
   return (
     <section className="grid gap-3" aria-label="Capability lifecycle">
-      {proposal.isFetching || candidate.isFetching ? <p role="status">Reading capability lifecycle…</p> : null}
+      {proposal.isFetching || candidate.isFetching ? <p aria-busy="true">Reading capability lifecycle…</p> : null}
       {proposal.error || candidate.error ? (
         <Callout tone="error">
           {describeApiError(proposal.error ?? candidate.error).summary} No lifecycle change is available until the saved
@@ -245,7 +245,7 @@ function CandidateVersions({
           </li>
         ))}
       </ul>
-      {artifacts.isFetching ? <p role="status">Reading immutable artifacts…</p> : null}
+      {artifacts.isFetching ? <p aria-busy="true">Reading immutable artifacts…</p> : null}
       {artifacts.error ? <Callout tone="error">{describeApiError(artifacts.error).summary}</Callout> : null}
       {artifacts.data ? (
         <section aria-label="Immutable version artifacts">

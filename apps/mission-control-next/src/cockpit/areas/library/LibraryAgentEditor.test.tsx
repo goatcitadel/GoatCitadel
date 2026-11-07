@@ -7,6 +7,9 @@ import { fetchAgent, createAgentProfile, updateAgentProfile, archiveAgentProfile
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryAgentEditor } from "./LibraryAgentEditor";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({ fetchAgent: vi.fn(), createAgentProfile: vi.fn(), updateAgentProfile: vi.fn(), archiveAgentProfile: vi.fn(), restoreAgentProfile: vi.fn() }));
 const agent: AgentProfileRecord = { agentId: "a", roleId: "custom", name: "Agent", title: "Role", summary: "Summary", specialties: ["testing"], aliases: [], defaultTools: [], isBuiltin: false, editable: true, lifecycleStatus: "active", status: "idle", sessionCount: 0, activeSessions: 0, createdAt: "now", updatedAt: "one" };
 let root: Root, container: HTMLDivElement, client: QueryClient;

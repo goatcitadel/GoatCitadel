@@ -1,20 +1,28 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RiskApprovalAction } from "./RiskApprovalAction";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
 import { refuseNetwork } from "../../../test/refuse-network";
+
+prepareReadyDialogFixture();
 
 const { beforeConfirmationLoad } = vi.hoisted(() => ({
   beforeConfirmationLoad: vi.fn<() => Promise<void>>(),
 }));
+let confirmationBody: typeof import("./RiskApprovalConfirmationBody");
 
-vi.mock(import("./RiskApprovalConfirmationBody"), async (importOriginal) => {
+beforeAll(async () => {
+  confirmationBody = await vi.importActual("./RiskApprovalConfirmationBody");
+});
+
+vi.mock(import("./RiskApprovalConfirmationBody"), async () => {
   await beforeConfirmationLoad();
-  return importOriginal();
+  return confirmationBody;
 });
 
 // The review summary names workspaces from the workspace list.
