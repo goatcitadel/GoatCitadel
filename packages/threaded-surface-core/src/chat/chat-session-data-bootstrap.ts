@@ -1,4 +1,5 @@
 import type { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
+import type { RefreshSignal } from "@goatcitadel/mission-control-shared/state/refresh-bus";
 import type { recordChatRefreshPhase } from "./chat-causality";
 import type {
   ChatMode,
@@ -313,6 +314,21 @@ export function chatViewRefreshPhase(
     plan: { refreshSidebar, refreshSession },
   };
 }
+export function ignoredPrebootstrapRefreshDiagnostic(
+  signal: Pick<RefreshSignal, "eventId" | "eventType" | "timestamp" | "source">,
+  startedAt: number,
+): Parameters<typeof recordClientDiagnostic>[0] | undefined {
+  if (!(signal.eventId && signal.eventType !== "fallback_poll" && startedAt > 0 && signal.timestamp < startedAt))
+    return;
+  return {
+    level: "debug",
+    category: "refresh",
+    event: "ignored_prebootstrap_signal",
+    message: "Ignored replayed chat refresh signal during initial hydrate",
+    context: { eventId: signal.eventId, eventType: signal.eventType, source: signal.source },
+  };
+}
+
 export function sidebarLoadDiagnostic(
   workspaceId: string,
   historyView: ChatHistoryView,

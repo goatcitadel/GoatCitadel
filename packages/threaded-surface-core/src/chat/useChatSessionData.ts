@@ -46,6 +46,7 @@ import {
   sidebarRefreshPriority,
   chatViewRefreshPhase,
   sidebarLoadDiagnostic,
+  ignoredPrebootstrapRefreshDiagnostic,
   appendSidebarSessions,
   projectChatSessionSearch,
   reconcileSidebarSessions,
@@ -920,23 +921,9 @@ export function useChatSessionData(input: ChatSessionDataInput) {
   useRefreshSubscription(
     "chat",
     async (signal) => {
-      if (
-        signal.eventId &&
-        signal.eventType !== "fallback_poll" &&
-        refreshSubscriptionStartedAtRef.current > 0 &&
-        signal.timestamp < refreshSubscriptionStartedAtRef.current
-      ) {
-        recordClientDiagnostic({
-          level: "debug",
-          category: "refresh",
-          event: "ignored_prebootstrap_signal",
-          message: "Ignored replayed chat refresh signal during initial hydrate",
-          context: {
-            eventId: signal.eventId,
-            eventType: signal.eventType,
-            source: signal.source,
-          },
-        });
+      const ignored = ignoredPrebootstrapRefreshDiagnostic(signal, refreshSubscriptionStartedAtRef.current);
+      if (ignored) {
+        recordClientDiagnostic(ignored);
         return;
       }
       const now = Date.now();
