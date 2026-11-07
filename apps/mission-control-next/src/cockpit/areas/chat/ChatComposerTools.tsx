@@ -12,25 +12,15 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { ChatComposerControls, ChatComposerNotices } from "./ChatComposerControls";
 import { ChatMediaControls } from "./ChatMediaControls";
 import { ChatSourcesChip } from "./ChatSourcesChip";
+import { loadChatComposerSources } from "./load-chat-composer-sources";
 import type { ComposerProps } from "./ChatTextComposer.types";
-
-type SourcesCode = typeof import("../../../features/threaded-surface/ThreadedExternalSourceStrip");
-let pendingSourcesCode: Promise<SourcesCode> | undefined;
-function loadSourcesCode() {
-  return (pendingSourcesCode ??= import("../../../features/threaded-surface/ThreadedExternalSourceStrip").catch(
-    (cause) => {
-      pendingSourcesCode = undefined;
-      throw cause;
-    },
-  ));
-}
 
 export function useComposerSources(scopeKey: string, panelId: string, attachmentCount: number | undefined) {
   const [attachIntent, setAttachIntent] = useState<{ owner: object; token: number }>();
   const onOpenChange = useCallback((open: boolean) => {
     if (!open) setAttachIntent(undefined);
   }, []);
-  const view = useDeferredOverlay({ scopeKey, load: loadSourcesCode, onOpenChange });
+  const view = useDeferredOverlay({ scopeKey, load: loadChatComposerSources, onOpenChange });
   const [warmOwner, setWarmOwner] = useState<typeof view.owner>();
   const nextToken = useRef(0);
   useEffect(() => {

@@ -11,7 +11,16 @@ import {
   type ComposerProps,
 } from "./ChatTextComposer";
 import { withoutFileInput } from "./channel-file-input";
-const sourcesCode = vi.hoisted(() => ({ starts: 0, held: undefined as Promise<void> | undefined }));
+type SourcesCode = typeof import("../../../features/threaded-surface/ThreadedExternalSourceStrip");
+const sourcesCode = vi.hoisted(() => ({
+  starts: 0,
+  held: undefined as Promise<void> | undefined,
+  override: undefined as (() => Promise<SourcesCode>) | undefined,
+}));
+vi.mock(import("./load-chat-composer-sources"), async (importOriginal) => {
+  const actual = await importOriginal();
+  return { loadChatComposerSources: () => sourcesCode.override?.() ?? actual.loadChatComposerSources() };
+});
 vi.mock(import("../../../features/threaded-surface/ThreadedExternalSourceStrip"), async (importOriginal) => {
   sourcesCode.starts++;
   await sourcesCode.held;
@@ -1199,19 +1208,17 @@ describe("channel conversation composer", () => {
 });
 
 it("requires current Sources reload consent and preserves the composer when canceled", async () => {
-  vi.resetModules();
   const load = vi.fn(async () => {
     throw new TypeError("Failed to fetch dynamically imported module: private-fixture");
   });
-  vi.doMock("../../../features/threaded-surface/ThreadedExternalSourceStrip", load);
+  sourcesCode.override = load;
   const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
   try {
-    const { ChatTextComposer: RecoveryComposer } = await import("./ChatTextComposer");
     const { beginApprovalOperation, releaseApprovalOperationCheck } =
       await import("@goatcitadel/mission-control-shared/state/scoped-operation-attempts");
     const controls = sourceControls(vi.fn());
     const props = composerProps({ draft: "Keep this unsent draft", externalSourceControls: controls });
-    await act(async () => root.render(<RecoveryComposer props={props} />));
+    await act(async () => root.render(<ChatTextComposer props={props} />));
     const action = buttonIn(await openPlusPanel(), "Sources: none")!;
     await act(async () => {
       action.focus();
@@ -1259,7 +1266,7 @@ it("requires current Sources reload consent and preserves the composer when canc
     expect(controls.onLoadCandidates).not.toHaveBeenCalled();
   } finally {
     reload.mockRestore();
-    vi.doUnmock("../../../features/threaded-surface/ThreadedExternalSourceStrip");
+    sourcesCode.override = undefined;
   }
 });
 
@@ -1269,19 +1276,16 @@ it.each([
   { device: "phone", outside: false },
 ])("preserves a cold Sources palette handoff only while focus remains owned ($device, outside=$outside)", async ({ device, outside }) => {
   media.phone = device === "phone";
-  const modulePath = "../../../features/threaded-surface/ThreadedExternalSourceStrip";
   let release!: () => void;
   const held = new Promise<void>((resolve) => {
     release = resolve;
   });
   const load = vi.fn(async () => {
     await held;
-    return vi.importActual<typeof import("../../../features/threaded-surface/ThreadedExternalSourceStrip")>(modulePath);
+    return vi.importActual<SourcesCode>("../../../features/threaded-surface/ThreadedExternalSourceStrip");
   });
-  vi.resetModules();
-  vi.doMock(modulePath, load);
+  sourcesCode.override = load;
   try {
-    const { ChatTextComposer: ColdComposer } = await import("./ChatTextComposer");
     const read = vi.fn();
     const props = composerProps({
       externalSourceControls: sourceControls(read),
@@ -1300,7 +1304,7 @@ it.each([
       return (
         <>
           <button type="button">Outside composer</button>
-          <ColdComposer
+          <ChatTextComposer
             props={{
               ...props,
               composerPalette: {
@@ -1333,7 +1337,7 @@ it.each([
     if (outside) await act(async () => other.focus());
     await act(async () => {
       release();
-      await vi.dynamicImportSettled();
+      await load.mock.results[0]?.value;
     });
     const picker = () => container.querySelector('[role="dialog"][aria-modal="true"]');
     if (outside) {
@@ -1347,6 +1351,6 @@ it.each([
     }
   } finally {
     release();
-    vi.doUnmock(modulePath);
+    sourcesCode.override = undefined;
   }
 });

@@ -101,9 +101,27 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
         assert.ok((await details.innerText()).includes(initial.connectionId));
         assert.ok((await details.innerText()).includes(initial.revision));
         await panel.getByText("Connection details", { exact: true }).click();
-        await panel.getByRole("button", { name: `Review enable ${label}`, exact: true }).click();
         const enableDialog = page.getByRole("dialog", { name: "Enable integration?", exact: true });
-        await enableDialog.waitFor();
+        const disableDialog = page.getByRole("dialog", { name: "Disable integration?", exact: true });
+        const refreshRefusal = panel.getByText(
+          "The connection list is refreshing. Nothing was changed; try again when it finishes.",
+          { exact: true },
+        );
+        async function openReview(action, dialog) {
+          const review = panel.getByRole("button", { name: `Review ${action} ${label}`, exact: true });
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            const writesBefore = writes.length;
+            // The row disables Review while the directory fetch is pending.
+            await review.click();
+            await dialog.or(refreshRefusal).first().waitFor();
+            if (await dialog.isVisible()) return;
+            // The owner's background refresh can legitimately refuse the read-only review.
+            // Only retry this explicit no-write outcome. Other failures and any mutation still fail the proof.
+            assert.equal(writes.length, writesBefore, "A refused integration review dispatched a write.");
+          }
+          throw new Error("The integration directory did not settle long enough to open the review.");
+        }
+        await openReview("enable", enableDialog);
         assert.ok((await enableDialog.innerText()).includes(label));
         assert.ok(!(await enableDialog.innerText()).includes(initial.revision));
         assert.ok((await enableDialog.innerText()).includes("runtime synchronization"));
@@ -128,7 +146,7 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
         await enableDialog.waitFor({ state: "hidden" });
         await recorder.assertPageBackground(page, "default");
         assert.deepEqual(writes, [], "Cancelling integration review mutated the owner.");
-        await panel.getByRole("button", { name: `Review enable ${label}`, exact: true }).click();
+        await openReview("enable", enableDialog);
         await checkReviewBounds(enableDialog, viewport, "Enable reviewed integration");
         const waitPatch = () => page.waitForResponse((response) => response.request().method() === "PATCH" && new URL(response.url()).pathname === route);
         const enabledResponse = waitPatch();
@@ -142,9 +160,7 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
         assertIntegrationEnabledSaved({ before: initial, after: enabled, response: await enabledReply.json(), request: writes[0].body, enabled: true });
         await panel.getByText(`Connection ${label} enabled. Saved state is confirmed; external connectivity has not been tested.`, { exact: true }).waitFor();
         await panel.scrollIntoViewIfNeeded(); await audit("enabled");
-        await panel.getByRole("button", { name: `Review disable ${label}`, exact: true }).click();
-        const disableDialog = page.getByRole("dialog", { name: "Disable integration?", exact: true });
-        await disableDialog.waitFor();
+        await openReview("disable", disableDialog);
         assert.ok((await disableDialog.innerText()).includes(label));
         await checkReviewBounds(disableDialog, viewport, "Disable reviewed integration");
         const disabledResponse = waitPatch();

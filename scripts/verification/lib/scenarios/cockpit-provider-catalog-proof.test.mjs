@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { assertProviderCatalogProof, requireFreshProviderCatalog, selectProviderCatalogRead, revealProviderConfiguration } from "./cockpit-provider-catalog-proof.mjs";
+import { assertProviderCatalogProof, matchProviderCatalogRead, readProviderCatalogResult, requireFreshProviderCatalog, selectProviderCatalogRead, revealProviderConfiguration } from "./cockpit-provider-catalog-proof.mjs";
 
 function proof() {
   const before = { revision: 4, activeProviderId: "stub", activeModel: "test-model",
@@ -37,6 +37,28 @@ describe("provider catalog browser proof assertions", () => {
   });
   it("rejects refresh without a new or still-pending read", () => {
     assert.throws(() => selectProviderCatalogRead([], []), /no new or in-flight/);
+  });
+  it("reads only the exact provider's owner row from a startup packet", async () => {
+    const direct = (path) => ({ method: () => "GET", url: () => `http://fixture.invalid${path}` });
+    const paths = ["/api/v1/llm/config", "/api/v1/llm/models?providerId=other", "/api/v1/llm/models?providerId=stub"];
+    const packet = (reads) =>
+      direct("/api/v1/startup-reads?" + new URLSearchParams({
+        reads: JSON.stringify(reads.map((path, index) => ({ path, correlationId: `synthetic-${index}` }))),
+      }));
+    const request = packet(paths);
+    const modelRead = matchProviderCatalogRead(request, "stub");
+    assert.deepEqual(modelRead, { transport: "startup_batch", index: 2, count: 3 });
+    assert.deepEqual(matchProviderCatalogRead(request), { transport: "startup_batch", index: 0, count: 3 });
+    assert.equal(matchProviderCatalogRead(request, "absent"), null);
+    assert.deepEqual(matchProviderCatalogRead(direct(paths[2]), "stub"), { transport: "direct" });
+    assert.equal(matchProviderCatalogRead(direct(paths[2] + "&providerId=other"), "stub"), null);
+    assert.throws(() => matchProviderCatalogRead(packet([...paths, paths[2]]), "stub"), /ambiguous/);
+    const models = proof().modelCatalog;
+    const items = [{ status: 200, bodyText: "{}" }, { status: 500, bodyText: "{}" }, { status: 200, bodyText: JSON.stringify(models) }];
+    const response = (rows) => ({ status: () => 200, json: async () => ({ items: rows }) });
+    assert.deepEqual(await readProviderCatalogResult(response(items), modelRead), models);
+    await assert.rejects(readProviderCatalogResult(response(items.slice(1)), modelRead), /does not match/);
+    await assert.rejects(readProviderCatalogResult(response([...items.slice(0, 2), { ...items[2], directReadRequired: true }]), modelRead), /successful batch item/);
   });
   it("waits for a real fresh catalog after stale and fallback owner reads", async () => {
     const fresh = proof().modelCatalog;
