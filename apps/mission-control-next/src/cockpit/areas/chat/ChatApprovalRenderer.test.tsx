@@ -7,7 +7,7 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 let ChatBlockers: typeof import("./ChatBlockers").ChatBlockers;
 let ChatApprovalRenderer: typeof import("./ChatApprovalRenderer").ChatApprovalRenderer;
 let ApiRequestError: typeof import("@goatcitadel/mission-control-shared/api/http-internal").ApiRequestError;
-const loader = vi.hoisted(() => ({ load: vi.fn<() => Promise<void>>() }));
+const loader = vi.hoisted(() => ({ load: vi.fn<(kind: "decision" | "settlement") => Promise<void>>() }));
 const grantLoads = vi.hoisted(() => ({ count: 0 }));
 const identity = vi.hoisted(() => ({
   gateway: "http://gateway-a",
@@ -54,18 +54,22 @@ const resolved = vi.fn(),
   submit = vi.fn();
 // An owner change can start a retry that outlives its component. Drain all calls before resetting the mocks.
 const bodyLoads = new Set<Promise<unknown>>();
-vi.mock("./load-chat-approval-renderer", () => ({
-  importChatApprovalRendererBody() {
+vi.mock("./load-chat-approval-renderer", () => {
+  function trackLoad<T>(kind: "decision" | "settlement", importCode: () => Promise<T>) {
     const load = (async () => {
-      await loader.load();
-      return import("./ChatApprovalRendererBody");
+      await loader.load(kind);
+      return importCode();
     })();
     const drop = () => bodyLoads.delete(load);
     bodyLoads.add(load);
     void load.then(drop, drop);
     return load;
-  },
-}));
+  }
+  return {
+    importChatApprovalRendererBody: () => trackLoad("decision", () => import("./ChatApprovalRendererBody")),
+    importChatApprovalSettlement: () => trackLoad("settlement", () => import("../inbox/ApprovalSettlement")),
+  };
+});
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (cause: Error) => void;
   const promise = new Promise<T>((success, failure) => {
@@ -270,19 +274,19 @@ it("does not import approval renderers or read an approval without a pending sig
   expect(host.textContent).toContain("Which direction?");
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
-it("starts code with the signal while the canonical GET is held, preserves facts, then uses the original one-click owner", async () => {
+it("preserves signal facts while the canonical GET is held and loads only pending decision code for the current record", async () => {
   const code = deferCode(),
     read = deferred<ApprovalRequest>();
   record = { ...record, preview: { targets: ["canonical-only-target.txt"] } };
   api.fetchApproval.mockImplementationOnce(() => read.promise);
   await act(async () => renderBlockers());
   await vi.waitFor(() => {
-    expect(loader.load).toHaveBeenCalledTimes(1);
     expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith(record.approvalId, {
       workspaceId: "workspace-a",
       signal: expect.any(AbortSignal),
     });
   });
+  expect(loader.load).not.toHaveBeenCalled();
   expect(host.textContent).toContain("Current request");
   expect(host.textContent).toContain("Touches: safe-target.txt");
   expect(host.textContent).toContain("Exact preview");
@@ -290,6 +294,7 @@ it("starts code with the signal while the canonical GET is held, preserves facts
   expect(button("Approve once")).toBeUndefined();
   await act(async () => read.resolve(record));
   await vi.waitFor(() => expect(host.textContent).toContain("Loading approval controls"));
+  expect(loader.load).toHaveBeenCalledExactlyOnceWith("decision");
   // Stream facts remain visible; full canonical review is still behind the missing code, so no decision is admitted.
   expect(host.textContent).not.toContain("canonical-only-target.txt");
   expect(host.querySelector('section[aria-label="Approval scope and consequences"]')).toBeNull();
@@ -424,6 +429,7 @@ it("preserves the recorded decision while canonical follow-on code loads", async
   await act(async () => renderBlockers());
   await vi.waitFor(() => expect(host.textContent).toContain("Decision recorded"));
   expect(host.textContent).toContain("Loading follow-on work");
+  expect(loader.load).toHaveBeenCalledExactlyOnceWith("settlement");
   expect(button("Approve once")).toBeUndefined();
   expect(api.fetchApprovalReplay).not.toHaveBeenCalled();
   await act(async () => code.resolve());
@@ -434,6 +440,24 @@ it("preserves the recorded decision while canonical follow-on code loads", async
   await vi.waitFor(() => expect(host.textContent).toContain("Original linked work"));
   expect(api.fetchDurableRun).toHaveBeenCalledExactlyOnceWith("original-run-a");
   expect(host.textContent).not.toContain("Work completed");
+  expect(api.resolveApproval).not.toHaveBeenCalled();
+});
+
+it("ignores a pending chunk failure when the same approval has settled", async () => {
+  const decision = deferCode();
+  await act(async () => renderDirect());
+  await vi.waitFor(() => expect(loader.load).toHaveBeenCalledExactlyOnceWith("decision"));
+  const settlement = deferCode();
+  record = { ...record, status: "approved" };
+  await act(async () => renderDirect());
+  await vi.waitFor(() => expect(loader.load).toHaveBeenNthCalledWith(2, "settlement"));
+  await act(async () => decision.reject(new Error("old pending code failed")));
+  expect(host.textContent).toContain("Decision recorded");
+  expect(host.textContent).toContain("Loading follow-on work");
+  expect(button("Reload app")).toBeUndefined();
+  expect(button("Approve once")).toBeUndefined();
+  await act(async () => settlement.resolve());
+  await vi.waitFor(() => expect(api.fetchApprovalReplay).toHaveBeenCalledExactlyOnceWith("approval-a"));
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
 

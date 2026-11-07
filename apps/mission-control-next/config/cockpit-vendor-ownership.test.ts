@@ -745,6 +745,13 @@ it("leaves globally retained capability operations and query automatic when the 
   expect(createCockpitBootChunkSelector()(f.query)).toBeUndefined();
 });
 
+const approvalChunks = ["ChatApprovalRendererBody", "ChatApprovalRendererSettlement"] as const;
+function expectedApprovalChunk(owner: string) {
+  return /\/(?:ApprovalSettlement\.tsx|approval-follow-on\.ts|ApprovalChangePlanOutcome\.tsx|durable-chat-turn-payload\.[jt]s)$/u.test(owner)
+    ? approvalChunks[1]
+    : approvalChunks[0];
+}
+
 function approvalBodyOwnerFixture(bootOwner = false) {
   const root = "C:/repo/src/cockpit-entry.tsx",
     app = "C:/repo/apps/mission-control-next/src/cockpit/";
@@ -922,13 +929,13 @@ function approvalBodyOwnerFixture(bootOwner = false) {
     graph,
   };
 }
-it("consolidates only all sixteen known cold-excluded approval presentation owners under the existing dynamic boundary label", () => {
+it("consolidates the sixteen proven approval presentation owners into pending and settled boundaries", () => {
   const f = approvalBodyOwnerFixture(),
     select = createCockpitBootChunkSelector(),
     boot = collectCockpitBootBindings(f.graph, f.root);
   for (const owner of f.owners) {
     expect(boot.has(owner)).toBe(false);
-    expect(select(owner, f.graph)).toBe("ChatApprovalRendererBody");
+    expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
     expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
   }
 });
@@ -1013,7 +1020,7 @@ it.each([
     expect(collectCockpitBootBindings(f.graph, f.root).has(owner)).toBe(true);
     const select = createCockpitBootChunkSelector();
     expect(select(owner, f.graph)).toBe(chunk);
-    for (const candidate of f.owners) expect(select(candidate, f.graph)).not.toBe("ChatApprovalRendererBody");
+    for (const candidate of f.owners) expect(approvalChunks).not.toContain(select(candidate, f.graph));
   },
 );
 
@@ -1026,7 +1033,7 @@ it("keeps conservative payload authority automatic while consolidating all sixte
   expect(proof.has(f.durableAuthority)).toBe(false);
   const select = createCockpitBootChunkSelector();
   expect(select(f.durableAuthority, f.graph)).toBeUndefined();
-  for (const owner of f.owners) expect(select(owner, f.graph)).toBe("ChatApprovalRendererBody");
+  for (const owner of f.owners) expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
 });
 it("keeps a genuine future payload-authority value binding cold independently of the optional presentation group", () => {
   const f = approvalBodyOwnerFixture(),
@@ -1047,7 +1054,7 @@ it("keeps a genuine future payload-authority value binding cold independently of
   expect(proof.has(f.durableAuthority)).toBe(true);
   const select = createCockpitBootChunkSelector();
   expect(select(f.durableAuthority, f.graph)).toBe("cockpit-foundation");
-  for (const owner of f.owners) expect(select(owner, f.graph)).toBe("ChatApprovalRendererBody");
+  for (const owner of f.owners) expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
 });
 it.each(unprovedApprovalMetadata)(
   "retains the shared authority's automatic fallback when its own %s metadata is unproved",
@@ -1062,7 +1069,7 @@ it.each(unprovedApprovalMetadata)(
       f.modules.set(owner.replace("/dist/", "/src/").replace(/\.js$/, ".ts"), { ...info });
     const select = createCockpitBootChunkSelector();
     expect(select(owner, f.graph)).toBeUndefined();
-    for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe("ChatApprovalRendererBody");
+    for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
   },
 );
 
@@ -1159,14 +1166,14 @@ it("retains the known lazy presentation group when an ordinary owner is discarde
   expect(usesAutomaticCockpitPlacement(f.externalEvidence)).toBe(false);
   const select = createCockpitBootChunkSelector();
   expect(select(f.externalEvidence, f.graph)).toBe("ChatApprovalRendererBody");
-  for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe("ChatApprovalRendererBody");
+  for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
 });
 it("keeps nonpositive shared authority automatic without disabling proven optional presentation owners", () => {
   const f = approvalBodyOwnerFixture();
   f.modules.get(f.durableAuthority)!.isIncluded = false;
   const select = createCockpitBootChunkSelector();
   expect(select(f.durableAuthority, f.graph)).toBeUndefined();
-  for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe("ChatApprovalRendererBody");
+  for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
 });
 
 const workbenchOperationNames = [
@@ -1406,10 +1413,10 @@ it.each(["src", "dist"] as const)("joins the exact twelve proven residual approv
   const named = new Set<string>(), boot = collectCockpitBootBindings(f.graph, root, named);
   for (const owner of f.residual) {
     expect(boot.has(owner)).toBe(false); expect(named.has(owner)).toBe(false);
-    expect(select(owner, f.graph)).toBe("ChatApprovalRendererBody");
+    expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
     expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
   }
-  for (const owner of f.owners) expect(select(owner, f.graph)).toBe("ChatApprovalRendererBody");
+  for (const owner of f.owners) expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
 });
 const residualFailures = ["missing", "discarded", "unknown", "ast", "body", "duplicate", "cold", "conservative", "initial"] as const;
 it.each(residualApprovalAliases.flatMap((_, index) => residualFailures.map(kind => [index, kind] as const)))(
@@ -1428,14 +1435,14 @@ it.each(residualApprovalAliases.flatMap((_, index) => residualFailures.map(kind 
     if (kind === "initial") f.modules.set("C:/repo/src/main.tsx", { isIncluded: true, importedIds: [owner], ast: program([]) });
     if (kind === "conservative") f.modules.set(root, { isIncluded: true, importedIds: [owner], ast: program([]) });
     const select = createCockpitBootChunkSelector();
-    for (const candidate of f.residual) expect(select(candidate, f.graph)).not.toBe("ChatApprovalRendererBody");
-    for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe("ChatApprovalRendererBody");
+    for (const candidate of f.residual) expect(approvalChunks).not.toContain(select(candidate, f.graph));
+    for (const candidate of f.owners) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
   },
 );
 it("does not form the residual group without the proven eighteen-owner demand anchor", () => {
   const f = residualApprovalFixture(); f.modules.delete(f.owners[12]!);
   const select = createCockpitBootChunkSelector();
-  for (const owner of f.residual) expect(select(owner, f.graph)).not.toBe("ChatApprovalRendererBody");
+  for (const owner of f.residual) expect(approvalChunks).not.toContain(select(owner, f.graph));
 });
 function chatDemandFixture(directory: "src" | "dist" = "dist") {
   const owners = chatDemandOwnerAliases.map(
@@ -1467,7 +1474,7 @@ it.each(["src", "dist"] as const)(
     for (const owner of f.owners) {
       expect(cold.has(owner)).toBe(false);
       expect(named.has(owner)).toBe(false);
-      expect(select(owner, f.graph)).toBe("ChatApprovalRendererBody");
+      expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
       expect(createCockpitBootChunkSelector()(owner)).toBeUndefined();
     }
   },
@@ -1496,7 +1503,7 @@ it.each(chatDemandOwnerAliases.map((_, index) => index))(
     expect(named.has(owner)).toBe(true);
     const select = createCockpitBootChunkSelector();
     expect(select(owner, f.graph)).toBe(owner.includes("/packages/") ? "cockpit-foundation" : "cockpit-entry");
-    for (const candidate of f.owners) expect(select(candidate, f.graph)).not.toBe("ChatApprovalRendererBody");
+    for (const candidate of f.owners) expect(approvalChunks).not.toContain(select(candidate, f.graph));
   },
 );
 const demandMetadataFailures = [
@@ -1520,7 +1527,7 @@ it.each(chatDemandOwnerAliases.flatMap((_, index) => demandMetadataFailures.map(
     if (kind === "malformed-body") info.ast = { type: "Program", body: null };
     if (kind === "ambiguous-owner") f.modules.set(owner.replace("C:/repo/", "C:/duplicate/"), { ...info });
     const select = createCockpitBootChunkSelector();
-    for (const candidate of f.owners) expect(select(candidate, f.graph)).not.toBe("ChatApprovalRendererBody");
+    for (const candidate of f.owners) expect(approvalChunks).not.toContain(select(candidate, f.graph));
   },
 );
 it.each(chatDemandOwnerAliases.map((_, index) => index).filter((index) => index !== 17))(
@@ -1529,7 +1536,7 @@ it.each(chatDemandOwnerAliases.map((_, index) => index).filter((index) => index 
     const f = chatDemandFixture();
     f.modules.get(f.owners[index]!)!.isIncluded = false;
     const select = createCockpitBootChunkSelector();
-    for (const owner of f.owners) expect(select(owner, f.graph)).not.toBe("ChatApprovalRendererBody");
+    for (const owner of f.owners) expect(approvalChunks).not.toContain(select(owner, f.graph));
   },
 );
 it.each(chatDemandOwnerAliases.map((_, index) => index))(
@@ -1545,8 +1552,8 @@ it.each(chatDemandOwnerAliases.map((_, index) => index))(
     expect(named.has(owner)).toBe(false);
     const select = createCockpitBootChunkSelector();
     for (const candidate of f.owners) {
-      if (index === 13) expect(select(candidate, f.graph)).toBe("ChatApprovalRendererBody");
-      else expect(select(candidate, f.graph)).not.toBe("ChatApprovalRendererBody");
+      if (index === 13) expect(select(candidate, f.graph)).toBe(expectedApprovalChunk(candidate));
+      else expect(approvalChunks).not.toContain(select(candidate, f.graph));
     }
   },
 );
@@ -1555,7 +1562,7 @@ it("keeps reset/bootstrap imports outside the optional demand group", () => {
     owner = f.owners[12]!;
   f.modules.set("C:/repo/src/main.tsx", { isIncluded: true, importedIds: [owner], ast: program([]) });
   const select = createCockpitBootChunkSelector();
-  for (const candidate of f.owners) expect(select(candidate, f.graph)).not.toBe("ChatApprovalRendererBody");
+  for (const candidate of f.owners) expect(approvalChunks).not.toContain(select(candidate, f.graph));
 });
 it("rejects simultaneous source and dist aliases rather than arbitrarily selecting one", () => {
   const f = chatDemandFixture();
@@ -1564,13 +1571,13 @@ it("rejects simultaneous source and dist aliases rather than arbitrarily selecti
     f.modules.set(alias, { isIncluded: true, importedIds: [], ast: program([]) });
   }
   const select = createCockpitBootChunkSelector();
-  for (const owner of f.owners) expect(select(owner, f.graph)).not.toBe("ChatApprovalRendererBody");
+  for (const owner of f.owners) expect(approvalChunks).not.toContain(select(owner, f.graph));
 });
 it("retains the older sixteen-owner fallback when a new demand-only owner is missing", () => {
   const f = approvalBodyOwnerFixture();
   const select = createCockpitBootChunkSelector();
   expect(f.modules.has("C:/repo" + chatDemandOwnerAliases[12]![0])).toBe(false);
-  for (const owner of f.owners) expect(select(owner, f.graph)).toBe("ChatApprovalRendererBody");
+  for (const owner of f.owners) expect(select(owner, f.graph)).toBe(expectedApprovalChunk(owner));
   expect(select(f.durableAuthority, f.graph)).toBeUndefined();
 });
 

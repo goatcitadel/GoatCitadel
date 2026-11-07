@@ -24,10 +24,13 @@ import { readCockpitHistory, subscribeCockpitHistory } from "../../app/cockpit-h
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { DeferredOutsideRootWriteGrantOptions } from "./DeferredOutsideRootWriteGrantOptions";
-import { importChatApprovalRendererBody } from "./load-chat-approval-renderer";
+import { importChatApprovalRendererBody, importChatApprovalSettlement } from "./load-chat-approval-renderer";
 
-type RendererCode = typeof import("./ChatApprovalRendererBody");
-type DecisionProps = ComponentProps<RendererCode["ApprovalDecisionBar"]>;
+type DecisionCode = Awaited<ReturnType<typeof importChatApprovalRendererBody>>;
+type SettlementCode = Awaited<ReturnType<typeof importChatApprovalSettlement>>;
+type RendererCode = ({ kind: "decision" } & DecisionCode) | ({ kind: "settlement" } & SettlementCode);
+type RendererKind = RendererCode["kind"];
+type DecisionProps = ComponentProps<DecisionCode["ApprovalDecisionBar"]>;
 type ChatApprovalRendererProps = Omit<DecisionProps, "approval" | "workspaceId"> & {
   /** Chat reads and decides its approvals in the conversation's workspace. */
   workspaceId: string;
@@ -80,16 +83,19 @@ function ApprovalRecordRecovery({ pending, recovery }: { pending: boolean; recov
 }
 
 // Shared code only; records, callbacks and decision attempts stay with their existing owners.
-let rendererLoad: Promise<RendererCode> | undefined;
-function loadRendererCode() {
-  rendererLoad ??= importChatApprovalRendererBody().catch((cause) => {
-    rendererLoad = undefined;
+const rendererLoads: Partial<Record<RendererKind, Promise<RendererCode>>> = {};
+function loadRendererCode(kind: RendererKind) {
+  const startLoad = async (): Promise<RendererCode> =>
+    kind === "decision"
+      ? { kind, ...(await importChatApprovalRendererBody()) }
+      : { kind, ...(await importChatApprovalSettlement()) };
+  return (rendererLoads[kind] ??= startLoad().catch((cause) => {
+    delete rendererLoads[kind];
     throw cause;
-  });
-  return rendererLoad;
+  }));
 }
 
-type Owner = { scope: string };
+type Owner = { scope: string; kind: RendererKind | undefined };
 type LoadState = { owner: Owner; code: RendererCode } | { owner: Owner; failed: true };
 type ReloadReview = { owner: Owner; history: string; url: string; trigger: HTMLButtonElement };
 
@@ -122,7 +128,9 @@ export function ChatApprovalRenderer({
     decisionProps.sessionId,
     approvalId,
   ]);
-  const owner = useMemo<Owner>(() => ({ scope }), [scope]);
+  const record = approval?.approvalId === approvalId ? approval : undefined;
+  const kind = record ? (record.status === "pending" ? "decision" : "settlement") : undefined;
+  const owner = useMemo<Owner>(() => ({ scope, kind }), [scope, kind]);
   const committedOwner = useRef(owner);
   const mounted = useRef(true);
   const cancelButton = useRef<HTMLButtonElement>(null);
@@ -156,11 +164,11 @@ export function ChatApprovalRenderer({
     setReview(undefined);
   }, [owner, history]);
   useEffect(() => {
-    if (!approvalId) return;
+    if (!approvalId || !kind) return;
     let active = true;
     const owned = () => active && current();
-    // Load with the signal, in parallel with the owner's existing canonical record read.
-    void loadRendererCode().then(
+    // The signal may be stale. Only the current record chooses which branch to load.
+    void loadRendererCode(kind).then(
       (code) => {
         if (owned()) setState({ owner, code });
       },
@@ -171,11 +179,10 @@ export function ChatApprovalRenderer({
     return () => {
       active = false;
     };
-  }, [approvalId, owner, current]);
+  }, [approvalId, kind, owner, current]);
   const ownedState = state?.owner === owner ? state : undefined;
   const code = ownedState && "code" in ownedState ? ownedState.code : undefined;
   const failed = Boolean(ownedState && "failed" in ownedState);
-  const record = approval?.approvalId === approvalId ? approval : undefined;
   const hasRecord = Boolean(record);
   useLayoutEffect(() => {
     if (hasRecord && failed) return;
@@ -225,7 +232,7 @@ export function ChatApprovalRenderer({
             <p className="min-h-10">
               {record.status === "pending" ? "Loading approval controls…" : "Loading follow-on work…"}
             </p>
-          ) : record.status === "pending" ? (
+          ) : code.kind === "decision" ? (
             <>
               <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
               {decisionProps.sessionId ? (

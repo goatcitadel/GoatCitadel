@@ -1,15 +1,12 @@
 import {
-  buildAppHref,
   getRouteReleaseStatus,
   isPrimaryRailRoute,
-  RAIL_GROUPS,
   RAIL_ITEMS,
   type AppRoute,
-  type RailGroup,
-  type RailItem,
   type ReleaseSurfaceStatus,
 } from "../../../app/route-model";
-import { channelAdvancedSetupHref, connectorSetupHref, type ConnectorSetupSection } from "../../app/routes";
+import { CONNECTOR_SETUP_SECTIONS, cockpitSettingsGroups, settingsSectionHref } from "./settings-route-homes";
+export { CONNECTOR_SETUP_SECTIONS } from "./settings-route-homes";
 
 export interface SettingsDestinationEntry {
   section: string;
@@ -57,79 +54,18 @@ const NATIVE_SECTIONS = new Set([
   "onboarding",
 ]);
 
-/** The sections Capabilities › Connectors › Advanced setup shows, in its tab order. */
-export const CONNECTOR_SETUP_SECTIONS: readonly ConnectorSetupSection[] = ["mcp", "integrations", "web-search"];
-
-/**
- * The Cockpit's Settings pages. Settings › Connections was retired (2026-10-30): MCP servers, Integrations and Web &
- * Search moved to Capabilities › Connectors › Advanced setup and Channels to Chat › Messaging › Advanced channel
- * setup. Capability packs were retired; plugins live on Capabilities › Plugins. Classic keeps the shared rail groups.
- */
-function cockpitSettingsGroups(): RailGroup[] {
-  return (RAIL_GROUPS.settings ?? []).filter((group) => group.id !== "settings-connections");
-}
-
-type SettingsSection = NonNullable<AppRoute["section"]>;
-
-function sectionHref(section: SettingsSection, item: RailItem): string {
-  return section === "general"
-    ? "/settings/general#appearance"
-    : section === "providers"
-      ? "/settings/models#providers"
-      : section === "tools"
-        ? "/settings/safety#approval-mode"
-        : section === "budget"
-          ? "/settings/safety#budget-mode"
-          : section === "local-ai"
-            ? "/settings/models#local-ai"
-            : section === "trust-policy"
-              ? "/settings/safety#trust-policy"
-              : section === "permissions"
-                ? "/settings/safety#permission-profile"
-                : section === "hooks"
-                  ? "/settings/safety#hooks"
-                  : section === "onboarding"
-                    ? "/settings/first-run"
-                    : section === "personalities"
-                      ? "/settings/general#work-personality"
-                      : section === "access"
-                        ? "/settings/access#device-access"
-                        : section === "workspaces"
-                          ? "/settings/citadel#workspace-directory"
-                          : section === "citadel-blueprint"
-                            ? "/settings/citadel#citadel-blueprint"
-                            : section === "citadel-overview"
-                              ? "/settings/citadel#citadel-overview"
-                              : section === "citadel"
-                                ? "/settings/citadel#citadel-mason"
-                                : section === "citadel-wards"
-                                  ? "/settings/citadel#citadel-wards"
-                                  : section === "citadel-council"
-                                    ? "/settings/citadel#citadel-council"
-                                    : section === "citadel-vault"
-                                      ? "/settings/citadel#citadel-vault"
-                                      : section === "citadel-capabilities"
-                                        ? "/settings/citadel#citadel-capabilities"
-                                        : section === "workspace-capabilities"
-                                          ? "/settings/citadel#workspace-capabilities"
-                                          : section === "integrations" || section === "mcp" || section === "web-search"
-                                            ? connectorSetupHref(section)
-                                            : section === "channels"
-                                              ? channelAdvancedSetupHref()
-                                              : section === "runtime"
-                                                ? "/settings/advanced#managed-runtime"
-                                                : buildAppHref({ area: item.area, section });
-}
-
 /** One rail section's destination; undefined when the rail has no such section, or discovery leaves it out. */
-function destinationEntry(section: SettingsSection, discovery: boolean): SettingsDestinationEntry | undefined {
+function destinationEntry(
+  section: NonNullable<AppRoute["section"]>,
+  discovery: boolean,
+): SettingsDestinationEntry | undefined {
   const item =
     RAIL_ITEMS.settings.find((entry) => entry.section === section) ??
     RAIL_ITEMS.library.find((entry) => entry.section === section);
   if (!item) return undefined;
   const discoverable = isPrimaryRailRoute(item);
   if (discovery && !discoverable) return undefined;
-  const href = sectionHref(section, item);
+  const href = settingsSectionHref(section, item);
   return {
     section,
     discoverable,

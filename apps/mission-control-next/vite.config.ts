@@ -288,6 +288,14 @@ const COCKPIT_APPROVAL_AUTHORITY_OWNER_SUFFIXES = [
   "/packages/contracts/src/durable-chat-turn-payload.ts",
 ] as const;
 
+// These owners render the settled receipt. The pending decision and tool body do not import them.
+const COCKPIT_APPROVAL_SETTLEMENT_OWNER_SUFFIXES = [
+  "/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalSettlement.tsx",
+  "/apps/mission-control-next/src/cockpit/areas/inbox/approval-follow-on.ts",
+  "/apps/mission-control-next/src/cockpit/areas/inbox/ApprovalChangePlanOutcome.tsx",
+  ...COCKPIT_APPROVAL_AUTHORITY_OWNER_SUFFIXES,
+] as const;
+
 // These exact first-use tool/approval owners otherwise emit nine separate demand requests.
 // Keep the existing approval group as fallback when this larger optional boundary is unproved.
 const COCKPIT_CHAT_DEMAND_OWNER_SUFFIXES = [
@@ -496,9 +504,11 @@ export function createCockpitBootChunkSelector() {
           }
         }
       }
-      if (lazyApprovalResidualModules?.has(id)) return "ChatApprovalRendererBody";
-      if (lazyChatDemandModules?.has(id)) return "ChatApprovalRendererBody";
-      if (lazyApprovalBodyModules?.has(id)) return "ChatApprovalRendererBody";
+      if (lazyApprovalResidualModules?.has(id) || lazyChatDemandModules?.has(id) || lazyApprovalBodyModules?.has(id)) {
+        return COCKPIT_APPROVAL_SETTLEMENT_OWNER_SUFFIXES.some((suffix) => normalizedId.endsWith(suffix))
+          ? "ChatApprovalRendererSettlement"
+          : "ChatApprovalRendererBody";
+      }
       // Conservative barrel reachability cannot override an existing automatic owner.
       // Only a fully resolved included value binding proves ordinary cold ownership.
       if (knownApprovalOwner && usesAutomaticCockpitPlacement(id) && !namedBootBindings?.has(id)) return undefined;

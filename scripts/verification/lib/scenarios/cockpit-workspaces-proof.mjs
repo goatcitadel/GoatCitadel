@@ -296,10 +296,20 @@ export async function runCockpitWorkspacesProof({ context, browser, stack, citad
           diagnosticTarget = { id: lifecycleOwner.workspaceId, revision: lifecycleOwner.revision };
           const dialog = await review(action, lifecycleOwner);
           const confirm = dialog.getByRole("button", { name: `Confirm ${action} workspace`, exact: true });
+          const activate = async () => {
+            for (let attempt = 0; attempt < 3; attempt += 1) {
+              await confirm.click();
+              const clicks = await readWorkspaceClickPhase(page, diagnosticClickPhase);
+              // A refresh can disable the control between pointer down and up.
+              // Never repeat an observed activation or an ambiguous dispatch.
+              if (clicks.diagnosticGap || clicks.counts.click !== 0 || restoreDiagnostic.counts.lifecyclePosts !== 0) return;
+            }
+            throw new Error(`The ${action} confirmation received no click while the directory refreshed.`);
+          };
           const [reply] = await Promise.all([
             page.waitForResponse((response) => response.request().method() === "POST"
               && new URL(response.url()).pathname === `${ownerPath}/${action}`),
-            confirm.click(),
+            activate(),
           ]);
           assert.equal(reply.status(), 200);
           await dialog.waitFor({ state: "hidden" });
