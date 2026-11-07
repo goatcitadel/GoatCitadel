@@ -6,6 +6,7 @@ import {
   getGatewayAccessRevision,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import type { WorkbenchReadOwner } from "./workbench-read-code.js";
 import type { WorkbenchActionOwner } from "./workbench-action-code.js";
 import { useMemo, useCallback, useEffect, useRef, useState } from "react";
 import type {
@@ -18,14 +19,6 @@ import type {
   ChatSessionWorkbenchRecord,
   ChatSessionWorkbenchTreeResponse,
 } from "@goatcitadel/contracts";
-import {
-  fetchChatSessionWorkbench,
-  fetchChatSessionWorkbenchDiff,
-  fetchChatSessionWorkbenchFile,
-  fetchChatSessionWorkbenchFileDiff,
-  fetchChatSessionWorkbenchOutput,
-  fetchChatSessionWorkbenchTree,
-} from "@goatcitadel/mission-control-shared/api/chat";
 import { useRefreshSubscription } from "@goatcitadel/mission-control-shared/hooks/useRefreshSubscription";
 
 interface StoredWorkbenchUiState {
@@ -131,24 +124,14 @@ function deriveDefaultExpandedPaths(
   return normalizeWorkbenchPaths([...nextPaths]);
 }
 
-function resolveWorkbenchFileCandidates(input: {
-  currentSelectedFilePath?: string;
-  storedSelectedFilePath?: string;
-  activeFilePath?: string;
-  changedFiles: string[];
-  items: ChatSessionWorkbenchTreeResponse["items"];
-}): string[] {
-  const filePaths = new Set(input.items.filter((item) => item.kind === "file").map((item) => item.path));
-  const candidates = [
-    input.currentSelectedFilePath,
-    input.storedSelectedFilePath,
-    input.activeFilePath,
-    ...input.changedFiles,
-    ...input.items.filter((item) => item.kind === "file").map((item) => item.path),
-  ];
-  return [...new Set(candidates.map((path) => path?.trim()).filter(Boolean) as string[])].filter((path) =>
-    filePaths.has(path),
-  );
+
+type WorkbenchReadModule = typeof import("./workbench-read-code.js");
+let workbenchReadCode: Promise<WorkbenchReadModule> | undefined;
+function loadWorkbenchReadCode(): Promise<WorkbenchReadModule> {
+  return workbenchReadCode ??= import("./workbench-read-code.js").catch((cause: unknown) => {
+    workbenchReadCode = undefined;
+    throw cause;
+  });
 }
 
 type WorkbenchActionModule = typeof import("./workbench-action-code.js");
@@ -352,49 +335,83 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
     [sessionId, updateSelectedFilePath],
   );
 
-  const loadWorkbenchFileSelection = useCallback(
-    async (
-      requestSessionId: string,
-      relativePath: string,
-      options: { preserveDraft?: boolean } = {},
-    ): Promise<ChatSessionWorkbenchFileResponse | null> => {
-      const readId = ++fileReadRef.current;
-      const [nextFile, nextFileDiff] = await Promise.all([
-        fetchChatSessionWorkbenchFile(requestSessionId, relativePath),
-        fetchChatSessionWorkbenchFileDiff(requestSessionId, relativePath),
-      ]);
-      if (!isCurrentSession(requestSessionId) || readId !== fileReadRef.current) {
-        return null;
+
+  const readLoadingAttemptRef = useRef<{ view: typeof actionView; lifetime: number } | null>(null);
+  useEffect(() => {
+    const attempt = readLoadingAttemptRef.current;
+    if (attempt && (!isCurrentAction(attempt.view) || attempt.lifetime !== actionLifetimeRef.current)) {
+      readLoadingAttemptRef.current = null;
+      setLoading(false);
+    }
+  }, [actionView, isCurrentAction]);
+  const makeReadOwner = useCallback((view: typeof actionView, lifetime: number, loadingToken?: object): WorkbenchReadOwner => {
+    const current = () => isCurrentAction(view) && actionLifetimeRef.current === lifetime;
+    return {
+      requireCurrent: () => { if (!current()) throw new Error("The workbench read owner changed."); },
+      isCurrentSession: candidate => current() && isCurrentSession(candidate),
+      selectedFileRef, draftContentRef, fileReadRef, dirtyDraftRef,
+      setState, setTree, setDiff, setOutput, setSelectedFile, setSelectedFileDiff, setDraftContent, setError,
+      setLoading: value => { if (current() && readLoadingAttemptRef.current === loadingToken) setLoading(value); },
+      setPersistedExpandedPaths, deriveDefaultExpandedPaths, readWorkbenchUiState,
+      describeWorkbenchActionError, applySelectedFileState,
+    };
+  }, [applySelectedFileState, isCurrentAction, isCurrentSession, setPersistedExpandedPaths]);
+  const loadWorkbenchFileSelection = useCallback(async (
+    requestSessionId: string, relativePath: string, options: { preserveDraft?: boolean } = {},
+  ): Promise<ChatSessionWorkbenchFileResponse | null> => {
+    const view = actionViewRef.current;
+    const lifetime = actionLifetimeRef.current;
+    if (!isCurrentSession(requestSessionId) || !isCurrentAction(view)) return null;
+    const readId = ++fileReadRef.current;
+    const readOwner = makeReadOwner(view, lifetime);
+    readOwner.fileReadGeneration = readId;
+    const code = await loadWorkbenchReadCode();
+    if (!readOwner.isCurrentSession(requestSessionId) || readId !== fileReadRef.current) return null;
+    return code.createWorkbenchReadCode(readOwner).loadFileSelection(requestSessionId, relativePath, options);
+  }, [isCurrentAction, isCurrentSession, makeReadOwner]);
+  const refresh = useCallback(async () => {
+    // Read attempts capture the live action view without changing the enabled subscription cadence.
+    const view = actionViewRef.current;
+    if (!enabled || !sessionId || !isCurrentSession(sessionId) || !isCurrentAction(view)) return;
+    const lifetime = actionLifetimeRef.current;
+    const token = { view, lifetime };
+    readLoadingAttemptRef.current = token;
+    setLoading(true);
+    const readOwner = makeReadOwner(view, lifetime, token);
+    try {
+      const code = await loadWorkbenchReadCode();
+      if (!readOwner.isCurrentSession(sessionId)) return;
+      await code.createWorkbenchReadCode(readOwner).refresh(sessionId);
+    } catch (cause) {
+      if (readOwner.isCurrentSession(sessionId)) setError(describeWorkbenchActionError(cause, "Unable to load workbench."));
+    } finally {
+      if (readLoadingAttemptRef.current === token) {
+        readLoadingAttemptRef.current = null;
+        if (readOwner.isCurrentSession(sessionId)) setLoading(false);
       }
-      if (
-        nextFile.path !== relativePath ||
-        nextFile.state.sessionId !== requestSessionId ||
-        nextFileDiff.path !== relativePath ||
-        nextFileDiff.state.sessionId !== requestSessionId
-      )
-        throw new Error("File evidence does not match the selected session and path.");
-      applySelectedFileState(nextFile, nextFileDiff, options);
-      return nextFile;
-    },
-    [applySelectedFileState, isCurrentSession],
-  );
+    }
+  }, [enabled, isCurrentAction, isCurrentSession, makeReadOwner, sessionId]);
 
   const loadFile = useCallback(
     async (relativePath: string) => {
-      if (!sessionId) {
+      const view = actionViewRef.current;
+      if (!sessionId || !isCurrentSession(sessionId) || !isCurrentAction(view)) {
         return false;
       }
       const requestSessionId = sessionId;
+      const lifetime = actionLifetimeRef.current;
+      const current = () => isCurrentSession(requestSessionId) && isCurrentAction(view) && actionLifetimeRef.current === lifetime;
+      const attempt = claimAction(view, false);
       setBusy(true);
       try {
         await loadWorkbenchFileSelection(requestSessionId, relativePath);
-        if (!isCurrentSession(requestSessionId)) {
+        if (!current()) {
           return false;
         }
         setError(null);
         return true;
       } catch (cause) {
-        if (isCurrentSession(requestSessionId)) {
+        if (current()) {
           const retained = draftHelpersRef.current.getWorkbenchDraft(requestSessionId, relativePath);
           if (retained) {
             selectedFileRef.current = retained.base;
@@ -411,112 +428,14 @@ export function useChatWorkbench(input: { sessionId: string | null; enabled: boo
         }
         return false;
       } finally {
-        if (isCurrentSession(requestSessionId)) {
-          setBusy(false);
+        if (busyAttemptRef.current === attempt) {
+          busyAttemptRef.current = null;
+          if (mountedRef.current && actionLifetimeRef.current === lifetime) setBusy(false);
         }
       }
     },
-    [isCurrentSession, loadWorkbenchFileSelection, sessionId],
+    [claimAction, isCurrentAction, isCurrentSession, loadWorkbenchFileSelection, sessionId],
   );
-
-  const refresh = useCallback(async () => {
-    if (!enabled || !sessionId) {
-      resetWorkbench();
-      return;
-    }
-    const requestSessionId = sessionId;
-    const storedUiState = readWorkbenchUiState(requestSessionId);
-    setLoading(true);
-    try {
-      const workbench = await fetchChatSessionWorkbench(requestSessionId);
-      if (!isCurrentSession(requestSessionId)) {
-        return;
-      }
-      setState(workbench.state);
-      setError(null);
-
-      if (workbench.state.worktreeStatus !== "ready") {
-        setTree(null);
-        if (!dirtyDraftRef.current) {
-          setSelectedFile(null);
-          setSelectedFileDiff(null);
-          setDraftContent("");
-        }
-        setDiff(null);
-        setOutput(null);
-        return;
-      }
-
-      const [nextTree, nextDiff, nextOutput] = await Promise.all([
-        fetchChatSessionWorkbenchTree(requestSessionId),
-        fetchChatSessionWorkbenchDiff(requestSessionId),
-        fetchChatSessionWorkbenchOutput(requestSessionId),
-      ]);
-      if (!isCurrentSession(requestSessionId)) {
-        return;
-      }
-
-      const currentSelectedPath = selectedFileRef.current?.path;
-      const candidatePaths = resolveWorkbenchFileCandidates({
-        currentSelectedFilePath: currentSelectedPath,
-        storedSelectedFilePath: storedUiState.selectedFilePath,
-        activeFilePath: nextOutput.state.activeFilePath,
-        changedFiles: nextTree.changedFiles,
-        items: nextTree.items,
-      });
-      const preferredSelectedPath = candidatePaths[0];
-
-      setTree(nextTree);
-      setDiff(nextDiff);
-      setOutput(nextOutput);
-      setState(nextOutput.state);
-      setPersistedExpandedPaths(
-        deriveDefaultExpandedPaths(nextTree, preferredSelectedPath, storedUiState.expandedPaths),
-      );
-
-      if (candidatePaths.length === 0) {
-        if (dirtyDraftRef.current)
-          setError("The current file is no longer listed. Your draft is preserved; refresh before saving.");
-        else {
-          setSelectedFile(null);
-          setSelectedFileDiff(null);
-          setDraftContent("");
-        }
-        return;
-      }
-
-      let loaded = false;
-      let lastError: unknown;
-      for (const candidatePath of candidatePaths) {
-        try {
-          await loadWorkbenchFileSelection(requestSessionId, candidatePath, {
-            preserveDraft: dirtyDraftRef.current && selectedFileRef.current?.path === candidatePath,
-          });
-          loaded = true;
-          break;
-        } catch (cause) {
-          lastError = cause;
-        }
-      }
-
-      if (!loaded && isCurrentSession(requestSessionId)) {
-        if (!dirtyDraftRef.current) {
-          setSelectedFile(null);
-          setSelectedFileDiff(null);
-          setDraftContent("");
-        }
-        setError(describeWorkbenchActionError(lastError, "Unable to load the active workbench file."));
-      }
-    } catch (cause) {
-      if (isCurrentSession(requestSessionId)) {
-        setError(describeWorkbenchActionError(cause, "Unable to load workbench."));
-      }
-    } finally {
-      if (isCurrentSession(requestSessionId)) {
-        setLoading(false);
-      }
-    }
-  }, [enabled, isCurrentSession, loadWorkbenchFileSelection, resetWorkbench, sessionId, setPersistedExpandedPaths]);
 
   const runOptionalAction = useCallback(
     async <Value, Input = undefined>(

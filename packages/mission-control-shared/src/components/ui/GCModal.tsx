@@ -1,4 +1,4 @@
-import { useRef, type ReactNode } from "react";
+import { useRef, type ComponentProps, type ReactNode } from "react";
 import { Button } from "./button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./dialog";
 
@@ -16,6 +16,7 @@ interface GCModalProps {
   confirmDisabled?: boolean;
   dismissDisabled?: boolean;
   onConfirm?: () => void | Promise<void>;
+  onOpenAutoFocus?: ComponentProps<typeof DialogContent>["onOpenAutoFocus"];
 }
 
 export function GCModal({
@@ -32,6 +33,7 @@ export function GCModal({
   confirmDisabled = false,
   dismissDisabled = false,
   onConfirm,
+  onOpenAutoFocus,
 }: GCModalProps) {
   const returnFocusRef = useRef<HTMLElement | null>(null);
   return (
@@ -45,8 +47,9 @@ export function GCModal({
       }}
     >
       <DialogContent
-        onOpenAutoFocus={() => {
+        onOpenAutoFocus={(event) => {
           returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+          onOpenAutoFocus?.(event);
         }}
         onCloseAutoFocus={(event) => {
           const opener = returnFocusRef.current;

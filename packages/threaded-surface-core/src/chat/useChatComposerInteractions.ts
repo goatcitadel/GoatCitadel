@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from "react";
 import type { ChatAttachmentRecord, ChatMode, ChatSessionPrefsPatch, ChatSessionRecord } from "@goatcitadel/contracts";
 import { uploadChatAttachment } from "@goatcitadel/mission-control-shared/api/client";
-import { getGatewayAccessRevision, getGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayAccessRevision, getGatewayCallerScope, getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import type { UploadAttachmentOptions } from "./multimodal-action-types";
 import type { CommandSuggestionItem } from "../chat-command-suggestions";
 
 export function isPlanningModeToggleShortcut(input: {
@@ -24,6 +25,9 @@ export function applyComposerSuggestion(currentDraft: string, suggestion: string
 }
 
 export function useChatComposerInteractions(input: {
+  workspaceId?: string;
+  selectedSessionId?: string | null;
+  selectionRevisionRef?: { readonly current: number };
   draft: string;
   lastEditableDraft?: string | null;
   commandSuggestions: CommandSuggestionItem[];
@@ -33,7 +37,7 @@ export function useChatComposerInteractions(input: {
   sending: boolean;
   selectedSession: ChatSessionRecord | null;
   messageMode: ChatMode;
-  ensureSession: () => Promise<ChatSessionRecord>;
+  ensureSession: (onResolved?: (session: ChatSessionRecord) => void) => Promise<ChatSessionRecord>;
   handleSend: () => Promise<void>;
   handleCreateSession: (mode: ChatMode) => Promise<void>;
   handleArchiveWorkspaceMissionChats: () => Promise<void>;
@@ -89,44 +93,137 @@ export function useChatComposerInteractions(input: {
   const dragDepthRef = useRef(0);
 
   const [attachmentUpload, setAttachmentUpload] = useState<{ pending: number; error: string | null }>({ pending: 0, error: null });
-  const uploadScope = JSON.stringify([getGatewayApiBaseUrl(), getGatewayAccessRevision(), getGatewayCallerScope(), selectedSession?.workspaceId, selectedSession?.sessionId]);
-  const uploadScopeRef = useRef(uploadScope);
-  uploadScopeRef.current = uploadScope;
-  const uploadOwnerRef = useRef<object | null>(null);
+  const workspace = input.workspaceId ?? selectedSession?.workspaceId;
+  const selectedId = input.selectedSessionId === undefined ? selectedSession?.sessionId ?? null : input.selectedSessionId;
+  const selectionRevision = input.selectionRevisionRef?.current ?? 0;
+  const uploadBase = JSON.stringify([getGatewayApiBaseUrl(), getGatewayAccessRevision(),
+    getGatewayCallerScopeRevision(), getGatewayCallerScope(), workspace]);
+  type UploadTicket = {
+    generation: number; base: string; revision: number; selectedId: string | null;
+    workspace: string | undefined; recordSeen: boolean; destination?: string;
+    selectionSeen: boolean; confirmationOpen: boolean; revoked: boolean;
+  };
+  const observed = { base: uploadBase, selectedId, revision: selectionRevision,
+    recordId: selectedSession?.sessionId ?? null, recordWorkspace: selectedSession?.workspaceId };
+  const observedKey = JSON.stringify(observed);
+  const ownerStateRef = useRef({ key: observedKey, generation: 0, observed });
+  const uploadOwnerRef = useRef<UploadTicket | null>(null);
+  const latestUploadRef = useRef<UploadTicket | null>(null);
+  const revokedActiveRef = useRef(false);
+  const resetUploadStateRef = useRef(false);
+  const mountedRef = useRef(true);
+  const [, refreshMountGeneration] = useState(0);
+  if (ownerStateRef.current.key !== observedKey) {
+    const generation = ownerStateRef.current.generation + 1;
+    const ticket = latestUploadRef.current;
+    let allowed = Boolean(ticket && !ticket.revoked && ticket.base === uploadBase);
+    if (ticket && allowed) {
+      const target = ticket.destination ?? ticket.selectedId;
+      const expectedRevision = ticket.revision + (ticket.destination ? 1 : 0);
+      const waitingForOwnSelection = Boolean(ticket.destination && !ticket.selectionSeen &&
+        selectedId === null && selectionRevision === ticket.revision);
+      allowed = waitingForOwnSelection || (selectedId === target && selectionRevision === expectedRevision);
+      if (allowed && !waitingForOwnSelection && ticket.destination) ticket.selectionSeen = true;
+      if (observed.recordId !== null) {
+        allowed = allowed && observed.recordId === target && observed.recordWorkspace === ticket.workspace;
+        if (allowed) ticket.recordSeen = true;
+      } else if (ticket.recordSeen) allowed = false;
+      if (allowed) ticket.generation = generation;
+    }
+    if (ticket && !allowed) {
+      resetUploadStateRef.current = true;
+      ticket.revoked = true;
+      if (uploadOwnerRef.current === ticket) { uploadOwnerRef.current = null; revokedActiveRef.current = true; }
+    }
+    ownerStateRef.current = { key: observedKey, generation, observed };
+  }
+  const renderedGeneration = ownerStateRef.current.generation;
+  const renderedGenerationRef = useRef(renderedGeneration);
+  renderedGenerationRef.current = renderedGeneration;
+  const liveInputRef = useRef(input);
+  liveInputRef.current = input;
+  const currentUpload = useCallback((ticket: UploadTicket, publication = false) => {
+    const revision = liveInputRef.current.selectionRevisionRef?.current ?? ownerStateRef.current.observed.revision;
+    return mountedRef.current && (publication || latestUploadRef.current === ticket) && !ticket.revoked &&
+      ticket.generation === ownerStateRef.current.generation &&
+      ticket.base === JSON.stringify([getGatewayApiBaseUrl(), getGatewayAccessRevision(),
+        getGatewayCallerScopeRevision(), getGatewayCallerScope(), ticket.workspace]) &&
+      (revision === ticket.revision + (ticket.destination ? 1 : 0) ||
+        Boolean(ticket.destination && !ticket.selectionSeen && revision === ticket.revision));
+  }, []);
   useEffect(() => {
-    // Idempotent reset: keeping the same idle state avoids a render loop when a caller's setSending is not stable.
-    setAttachmentUpload((current) => (current.pending === 0 && current.error === null ? current : { pending: 0, error: null }));
+    mountedRef.current = true;
+    if (ownerStateRef.current.generation !== renderedGenerationRef.current) refreshMountGeneration((value) => value + 1);
     return () => {
-      if (uploadOwnerRef.current) { uploadOwnerRef.current = null; setSending(false); }
+      mountedRef.current = false;
+      ownerStateRef.current.generation += 1;
+      if (latestUploadRef.current) latestUploadRef.current.revoked = true;
+      if (uploadOwnerRef.current) { revokedActiveRef.current = true; uploadOwnerRef.current = null; liveInputRef.current.setSending(false); }
     };
-  }, [uploadScope, setSending]);
+  }, []);
+  useEffect(() => {
+    if (resetUploadStateRef.current && !uploadOwnerRef.current) {
+      resetUploadStateRef.current = false;
+      setAttachmentUpload((state) => state.pending || state.error ? { pending: 0, error: null } : state);
+    }
+    if (revokedActiveRef.current && !uploadOwnerRef.current) {
+      revokedActiveRef.current = false;
+      setAttachmentUpload({ pending: 0, error: null });
+      setSending(false);
+    }
+  }, [renderedGeneration, setSending]);
   const uploadAttachments = useCallback(
-    async (files: File[]) => {
-      if (files.length === 0 || sending || uploadOwnerRef.current) return;
-      const owner = {};
+    async (files: File[], options?: UploadAttachmentOptions): Promise<boolean> => {
+      if (!mountedRef.current || uploadBase !== JSON.stringify([getGatewayApiBaseUrl(), getGatewayAccessRevision(),
+        getGatewayCallerScopeRevision(), getGatewayCallerScope(), workspace]) || ownerStateRef.current.generation !== renderedGeneration ||
+        (input.selectionRevisionRef?.current ?? selectionRevision) !== selectionRevision ||
+        files.length === 0 || sending || uploadOwnerRef.current) return false;
+      const owner: UploadTicket = { generation: renderedGeneration, base: uploadBase,
+        revision: selectionRevision, selectedId, workspace, recordSeen: Boolean(selectedSession),
+        selectionSeen: false, confirmationOpen: true, revoked: false };
       uploadOwnerRef.current = owner;
-      const access = getGatewayAccessRevision();
-      const caller = getGatewayCallerScope();
-      const current = () => uploadOwnerRef.current === owner && uploadScopeRef.current === uploadScope
-        && access === getGatewayAccessRevision() && caller === getGatewayCallerScope();
+      latestUploadRef.current = owner;
+      resetUploadStateRef.current = false;
+      revokedActiveRef.current = false;
       setSending(true);
       setAttachmentUpload({ pending: files.length, error: null });
       try {
-        const session = await ensureSession();
-        if (!current()) return;
+        const session = await ensureSession((created) => {
+          if (!owner.confirmationOpen) return;
+          if (!currentUpload(owner) || owner.destination || owner.selectedId !== null ||
+            owner.recordSeen || !input.selectionRevisionRef || !owner.workspace || created.workspaceId !== owner.workspace || !created.sessionId.trim()) {
+            owner.revoked = true; return;
+          }
+          const destination = created.sessionId;
+          if (options?.onCreatedSession && options.onCreatedSession({ ...created }) !== true) { owner.revoked = true; return; }
+          owner.destination = destination;
+        });
+        owner.confirmationOpen = false;
+        if (owner.destination && input.selectionRevisionRef?.current !== owner.revision + 1) return false;
+        const target = owner.destination ?? owner.selectedId;
+        if (!currentUpload(owner) || !target || session.sessionId !== target || session.workspaceId !== owner.workspace) return false;
         const uploaded = await Promise.all(files.map((file) => uploadChatAttachment({
           sessionId: session.sessionId, projectId: session.projectId ?? selectedSession?.projectId ?? undefined, file,
         })));
-        if (!current()) return;
-        setPendingAttachments((attachments) => [...attachments, ...uploaded]);
+        if (!currentUpload(owner)) return false;
+        setPendingAttachments((attachments) => currentUpload(owner, true) ? [...attachments, ...uploaded] : attachments);
         setAttachmentUpload({ pending: 0, error: null });
+        return true;
       } catch (err) {
-        if (current()) setAttachmentUpload({ pending: 0, error: (err as Error).message });
+        owner.confirmationOpen = false;
+        if (currentUpload(owner)) setAttachmentUpload({ pending: 0, error: (err as Error).message });
+        return false;
       } finally {
-        if (current()) { uploadOwnerRef.current = null; setSending(false); }
+        owner.confirmationOpen = false;
+        if (uploadOwnerRef.current === owner) {
+          uploadOwnerRef.current = null;
+          setSending(false);
+          setAttachmentUpload((state) => state.pending ? { ...state, pending: 0 } : state);
+        }
       }
     },
-    [ensureSession, selectedSession?.projectId, sending, setPendingAttachments, setSending, uploadScope],
+    [currentUpload, ensureSession, input.selectionRevisionRef, renderedGeneration, selectedSession, selectedId,
+      selectionRevision, sending, setPendingAttachments, setSending, uploadBase, workspace],
   );
 
   const handleComposerKeyDown = useCallback(

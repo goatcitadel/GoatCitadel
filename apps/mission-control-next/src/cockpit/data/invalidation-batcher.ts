@@ -43,12 +43,43 @@ export function createInvalidationBatcher(
   const pending = new Map<string, { queryKey: QueryKey; predicate?: InvalidationPredicate }>();
   const lastRun = new Map<string, number>();
   const trailing = new Map<string, ReturnType<typeof setTimeout>>();
+  const deferredRefreshes = new Set<Query>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
 
   const run = (id: string, queryKey: QueryKey, predicate?: InvalidationPredicate) => {
     lastRun.set(id, now());
-    void queryClient.invalidateQueries(predicate ? { queryKey, predicate } : { queryKey });
+    const filters = predicate ? { queryKey, predicate } : { queryKey };
+    if (queryKey[0] !== "tasks") {
+      void queryClient.invalidateQueries(filters);
+      return;
+    }
+    const fetching = new Set<Query>();
+    for (const query of queryClient.getQueryCache().findAll(filters)) {
+      const pendingFetch = query.promise;
+      if (!query.meta?.deferRealtimeInvalidationWhileFetching || query.state.fetchStatus === "idle" || !pendingFetch)
+        continue;
+      fetching.add(query);
+      if (deferredRefreshes.has(query)) continue;
+      deferredRefreshes.add(query);
+      // A forced refetch cancels an infinite query's continuation. Refresh the same cached owner after it settles.
+      const refresh = () => {
+        deferredRefreshes.delete(query);
+        if (!disposed) {
+          void queryClient.invalidateQueries({
+            queryKey: query.queryKey,
+            exact: true,
+            predicate: (entry) => entry === query,
+          });
+        }
+      };
+      void pendingFetch.then(refresh, refresh);
+    }
+    void queryClient.invalidateQueries(
+      fetching.size
+        ? { queryKey, predicate: (query) => !fetching.has(query) && (!predicate || predicate(query)) }
+        : filters,
+    );
   };
   const flush = () => {
     if (timer !== undefined) clearTimeout(timer);
@@ -92,6 +123,7 @@ export function createInvalidationBatcher(
       timer = undefined;
       for (const handle of trailing.values()) clearTimeout(handle);
       trailing.clear();
+      deferredRefreshes.clear();
       pending.clear();
     },
   };

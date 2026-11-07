@@ -1,4 +1,9 @@
 import type {
+  ChatSessionWorkbenchTreeResponse,
+  ChatSessionWorkbenchReadOptions,
+  ChatSessionWorkbenchOutputResponse,
+  ChatSessionWorkbenchFileDiffResponse,
+  ChatSessionWorkbenchDiffResponse,
   ChatSessionWorkbenchCommandRunRequest,
   ChatSessionWorkbenchCommandRunResponse,
   ChatSessionWorkbenchFileOperationPreviewRequest,
@@ -121,5 +126,57 @@ export async function revertChatSessionWorkbenchChanges(
       method: "POST",
       body: JSON.stringify({}),
     },
+  );
+}
+
+export async function fetchChatSessionWorkbench(
+  sessionId: string,
+  options?: ChatSessionWorkbenchReadOptions,
+): Promise<{ state: ChatSessionWorkbenchRecord }> {
+  return request<{ state: ChatSessionWorkbenchRecord }>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench${options?.preview ? "?preview=true" : ""}`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchTree(
+  sessionId: string,
+  options?: ChatSessionWorkbenchReadOptions,
+): Promise<ChatSessionWorkbenchTreeResponse> {
+  return request<ChatSessionWorkbenchTreeResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/tree${options?.preview ? "?preview=true" : ""}`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchFile(
+  sessionId: string,
+  relativePath: string,
+  options?: ChatSessionWorkbenchReadOptions,
+): Promise<ChatSessionWorkbenchFileResponse> {
+  const query = new URLSearchParams({ path: relativePath });
+  if (options?.preview) query.set("preview", "true");
+  return request<ChatSessionWorkbenchFileResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file?${query.toString()}`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchFileDiff(
+  sessionId: string,
+  relativePath: string,
+): Promise<ChatSessionWorkbenchFileDiffResponse> {
+  const query = new URLSearchParams({ path: relativePath });
+  return request<ChatSessionWorkbenchFileDiffResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-diff?${query.toString()}`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchDiff(sessionId: string): Promise<ChatSessionWorkbenchDiffResponse> {
+  return request<ChatSessionWorkbenchDiffResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/diff`,
+  );
+}
+
+export async function fetchChatSessionWorkbenchOutput(sessionId: string): Promise<ChatSessionWorkbenchOutputResponse> {
+  return request<ChatSessionWorkbenchOutputResponse>(
+    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/output`,
   );
 }

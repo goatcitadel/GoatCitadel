@@ -1,4 +1,19 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import {
+  lazy,
+  Suspense,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
+import { PageErrorBoundary } from "../PageErrorBoundary";
+import { secureFields } from "./change-plan-secure-fields";
+const ChatChangePlanActionDialogBody = lazy(async () => ({
+  default: (await import("./ChatChangePlanActionDialogBody")).ChatChangePlanActionDialogBody,
+}));
 import type { ChangePlanPublicFormField, ChangePlanRecord, ChangePlanRequiredAction } from "@goatcitadel/contracts";
 import { GCModal } from "../ui";
 import { fetchCandidateSkillArtifactReview, fetchCapabilityCandidate } from "../../api/capabilities";
@@ -51,8 +66,70 @@ export function ChatChangePlanActionDialog({
   onReviewArtifacts,
   onOpenNativePathPicker,
 }: ChatChangePlanActionDialogProps) {
+  const [bodyReady, setBodyReady] = useState(false);
+  const [failedBodyKey, setFailedBodyKey] = useState<string | null>(null);
+  const loadingFocus = useRef<HTMLParagraphElement>(null);
+  const waitingForBodyFocus = useRef(false);
+  const loadingFocusIntent = useRef(false);
   const action = plan?.requiredAction;
   const actionKey = action ? `${plan.planId}:${plan.revision}:${action.actionId}` : "closed";
+  const bodyFailed = failedBodyKey === actionKey;
+  useLayoutEffect(() => {
+    if (!plan || !action || bodyReady || bodyFailed || typeof document === "undefined") return;
+    const markIntent = () => {
+      if (waitingForBodyFocus.current) loadingFocusIntent.current = true;
+    };
+    document.addEventListener("keydown", markIntent, true);
+    document.addEventListener("pointerdown", markIntent, true);
+    document.addEventListener("pointermove", markIntent, true);
+    return () => {
+      document.removeEventListener("keydown", markIntent, true);
+      document.removeEventListener("pointerdown", markIntent, true);
+      document.removeEventListener("pointermove", markIntent, true);
+    };
+  }, [plan, action, bodyReady, bodyFailed]);
+  const handleOpenAutoFocus = useCallback(
+    (event: Event) => {
+      const sentinel = loadingFocus.current;
+      if (bodyReady || bodyFailed || !sentinel) return;
+      event.preventDefault();
+      loadingFocusIntent.current = false;
+      waitingForBodyFocus.current = true;
+      sentinel.focus({ preventScroll: true });
+    },
+    [bodyReady, bodyFailed],
+  );
+  const handleBodyReady = useCallback(() => {
+    const sentinel = loadingFocus.current;
+    if (
+      waitingForBodyFocus.current &&
+      !loadingFocusIntent.current &&
+      sentinel &&
+      sentinel.ownerDocument.activeElement === sentinel
+    ) {
+      const dialog = sentinel.closest<HTMLElement>('[role="dialog"]');
+      const first = dialog
+        ? [...dialog.querySelectorAll<HTMLElement>("input,select,textarea,button,a[href],summary,[tabindex]")].find(
+            (element) =>
+              element.tabIndex >= 0 &&
+              !element.matches(":disabled") &&
+              !element.closest("[hidden]") &&
+              !(element instanceof HTMLInputElement && element.type === "hidden") &&
+              getComputedStyle(element).display !== "none" &&
+              getComputedStyle(element).visibility !== "hidden",
+          )
+        : undefined;
+      first?.focus({ preventScroll: true });
+    }
+    waitingForBodyFocus.current = false;
+    setBodyReady(true);
+  }, []);
+  const handleBodyError = useCallback(() => {
+    waitingForBodyFocus.current = false;
+    setFailedBodyKey(actionKey);
+    setBodyReady(false);
+  }, [actionKey]);
+
   const publicFormFields = action?.kind === "public_form" ? action.fields : undefined;
   const [values, setValues] = useState<Record<string, string | number | boolean>>({});
   const [secureValues, setSecureValues] = useState<Record<string, string>>({});
@@ -119,7 +196,7 @@ export function ChatChangePlanActionDialog({
   if (!plan || !action) return null;
 
   const submit = async () => {
-    if (!previewReady) return;
+    if (!previewReady || !bodyReady) return;
     switch (action.kind) {
       case "confirmation":
         await onConfirm(plan);
@@ -151,6 +228,7 @@ export function ChatChangePlanActionDialog({
   return (
     <GCModal
       className="chat-change-plan-modal"
+      onOpenAutoFocus={handleOpenAutoFocus}
       open
       onOpenChange={(open) => {
         if (!open && !pending) onClose();
@@ -163,6 +241,7 @@ export function ChatChangePlanActionDialog({
       danger={plan.risk === "danger" || linkedPlan?.risk === "danger"}
       confirmPending={pending || waiting}
       confirmDisabled={
+        !bodyReady ||
         !previewReady ||
         missingRequired ||
         (action.kind === "secure_input" &&
@@ -173,201 +252,35 @@ export function ChatChangePlanActionDialog({
       dismissDisabled={pending}
       onConfirm={action.kind === "approval" && (renderApprovalAction || !onOpenApproval) ? undefined : submit}
     >
-      <div className="chat-change-plan-action-dialog" data-action-kind={action.kind}>
-        {action.kind === "approval" && renderApprovalAction ? renderApprovalAction(plan, pending) : null}
-        <dl>
-          <div>
-            <dt>Scope</dt>
-            <dd>{scopeLabel(plan)}</dd>
-          </div>
-          <div>
-            <dt>Risk</dt>
-            <dd>{plan.risk}</dd>
-          </div>
-          <div>
-            <dt>Exact revision</dt>
-            <dd>{plan.revision}</dd>
-          </div>
-        </dl>
-        {linkedPlan ? (
-          <section className="chat-change-plan-linked-scope" aria-label="Linked future Chat default">
-            <strong>Also change future Chats</strong>
-            <p>{linkedPlan.title}</p>
-            <dl>
-              <div>
-                <dt>Scope</dt>
-                <dd>{scopeLabel(linkedPlan)}</dd>
-              </div>
-              <div>
-                <dt>Exact revision</dt>
-                <dd>{linkedPlan.revision}</dd>
-              </div>
-            </dl>
-          </section>
-        ) : null}
-        {action.kind === "public_form" ? (
-          <div className="chat-change-plan-form">
-            {action.fields.map((field) => (
-              <PublicField
-                key={field.fieldId}
-                field={field}
-                value={values[field.fieldId]}
-                onChange={(value) => setValues((current) => ({ ...current, [field.fieldId]: value }))}
-              />
-            ))}
-          </div>
-        ) : null}
-        {action.kind === "secure_input" ? (
-          <div className="chat-change-plan-form">
-            {secureFields(action).map((field) => (
-              <label className="chat-change-plan-field" key={field.fieldId}>
-                <span>
-                  {field.label}
-                  {field.required === false ? "" : " *"}
-                </span>
-                <input
-                  type="password"
-                  autoComplete="off"
-                  spellCheck={false}
-                  value={secureValues[field.fieldId] ?? ""}
-                  onChange={(event) =>
-                    setSecureValues((current) => ({
-                      ...current,
-                      [field.fieldId]: event.currentTarget.value,
-                    }))
-                  }
-                  aria-describedby={`change-plan-secret-custody-${field.fieldId}`}
-                />
-                <small id={`change-plan-secret-custody-${field.fieldId}`}>
-                  {field.description ??
-                    "Sent only to the Gateway's dedicated secure owner. It is not added to Chat or model context."}
-                </small>
-              </label>
-            ))}
-          </div>
-        ) : null}
-        {action.kind === "artifact_review" ? (
-          <div className="chat-change-plan-artifact-review">
-            <p>Review these immutable evidence references before continuing:</p>
-            {needsCandidatePreview ? (
-              artifactReview?.key === actionKey && artifactReview.data ? (
-                <div aria-label="Verified candidate artifacts">
-                  {artifactReview.data.artifacts.map((artifact) => (
-                    <details key={artifact.artifactRef} open={artifact.label === "Instructions"}>
-                      <summary>{artifact.label}</summary>
-                      {/* A bounded scroll region must be keyboard-reachable and named. */}
-                      <pre
-                        role="region"
-                        aria-label={`${artifact.label} artifact content`}
-                        tabIndex={0}
-                        style={{
-                          whiteSpace: "pre-wrap",
-                          overflowWrap: "anywhere",
-                          maxHeight: "24rem",
-                          overflow: "auto",
-                        }}
-                      >
-                        {artifact.content}
-                      </pre>
-                    </details>
-                  ))}
-                </div>
-              ) : (
-                <p role="status">
-                  {artifactReview?.key === actionKey && artifactReview.error
-                    ? artifactReview.error
-                    : "Loading verified artifacts…"}
-                </p>
-              )
-            ) : null}
-            <ul aria-label="Immutable evidence references" tabIndex={0}>
-              {action.artifactRefs.map((reference) => (
-                <li key={reference}>{reference}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-        {action.kind === "native_path_picker" ? (
-          <p>The source path is selected by the native desktop picker and is never exposed to Chat or the model.</p>
-        ) : null}
-        {action.kind === "approval" ? (
-          <p>This change requires a separate canonical approval. Opening it does not apply the change.</p>
-        ) : null}
-        {action.kind === "oauth" ? (
-          <p>Authorization continues in the provider-owned OAuth flow. Tokens never pass through this dialog.</p>
-        ) : null}
-        {error ? (
-          <p className="error" role="alert">
-            {error}
-          </p>
-        ) : null}
-      </div>
+      {!bodyReady && !bodyFailed ? (
+        <p ref={loadingFocus} tabIndex={-1} aria-busy="true">
+          Opening setup review…
+        </p>
+      ) : null}
+      <PageErrorBoundary pageLabel="Setup review" resetKey={actionKey} onError={handleBodyError}>
+        <Suspense fallback={null}>
+          <ChatChangePlanActionDialogBody
+            plan={plan}
+            action={action}
+            linkedPlan={linkedPlan}
+            pending={pending}
+            error={error}
+            values={values}
+            setValues={setValues}
+            secureValues={secureValues}
+            setSecureValues={setSecureValues}
+            artifactKey={artifactReview?.key}
+            artifactItems={artifactReview?.data?.artifacts}
+            artifactError={artifactReview?.error}
+            hasArtifactData={Boolean(artifactReview?.data)}
+            needsCandidatePreview={needsCandidatePreview}
+            actionKey={actionKey}
+            renderApprovalAction={renderApprovalAction}
+            onReady={handleBodyReady}
+          />
+        </Suspense>
+      </PageErrorBoundary>
     </GCModal>
-  );
-}
-
-function secureFields(action: Extract<ChangePlanRequiredAction, { kind: "secure_input" }>) {
-  return action.fields?.length ? action.fields : [{ fieldId: "credential", label: "Credential", required: true }];
-}
-
-function PublicField({
-  field,
-  value,
-  onChange,
-}: {
-  field: ChangePlanPublicFormField;
-  value: string | number | boolean | undefined;
-  onChange: (value: string | number | boolean) => void;
-}) {
-  if (field.type === "boolean") {
-    return (
-      <label className="chat-change-plan-field chat-change-plan-checkbox">
-        <input type="checkbox" checked={value === true} onChange={(event) => onChange(event.currentTarget.checked)} />
-        <span>
-          {field.label}
-          {field.required ? " *" : ""}
-        </span>
-        {field.description ? <small>{field.description}</small> : null}
-      </label>
-    );
-  }
-  if (field.type === "select") {
-    return (
-      <label className="chat-change-plan-field">
-        <span>
-          {field.label}
-          {field.required ? " *" : ""}
-        </span>
-        <select
-          value={typeof value === "string" ? value : ""}
-          onChange={(event) => onChange(event.currentTarget.value)}
-        >
-          <option value="">Choose…</option>
-          {(field.options ?? []).map((option) => (
-            <option key={option.value} value={option.value}>
-              {option.label}
-            </option>
-          ))}
-        </select>
-        {field.description ? <small>{field.description}</small> : null}
-      </label>
-    );
-  }
-  return (
-    <label className="chat-change-plan-field">
-      <span>
-        {field.label}
-        {field.required ? " *" : ""}
-      </span>
-      <input
-        type={field.type === "number" ? "number" : field.type === "url" ? "url" : "text"}
-        value={typeof value === "string" || typeof value === "number" ? value : ""}
-        onChange={(event) =>
-          onChange(field.type === "number" ? event.currentTarget.valueAsNumber : event.currentTarget.value)
-        }
-      />
-      {field.description ? <small>{field.description}</small> : null}
-    </label>
   );
 }
 
@@ -401,27 +314,4 @@ function dialogDescription(plan: ChangePlanRecord, action: ChangePlanRequiredAct
     return action.purpose === "rollback" ? action.confirmationText : `${action.confirmationText}\n\n${plan.impact}`;
   }
   return `${plan.summary} ${plan.impact}`;
-}
-
-function scopeLabel(plan: ChangePlanRecord): string {
-  switch (plan.scope) {
-    case "current_chat":
-      return "Current Chat only";
-    case "installation":
-      return "Future Chats and installation defaults";
-    case "provider":
-      return "Provider connection";
-    case "runtime":
-      return "Runtime configuration";
-    case "channel":
-      return "Channel connection";
-    case "remediation":
-      return "Governed repair";
-    case "capability":
-      return "Capability lifecycle";
-    case "improvement":
-      return "Improvement lifecycle";
-    case "product_source":
-      return "Registered GoatCitadel source";
-  }
 }

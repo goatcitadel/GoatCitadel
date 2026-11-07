@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import { DETERMINISTIC_LLM_MODEL, startDeterministicLlmStub } from "./deterministic-llm-stub.mjs";
-import { buildClassicOwnerUrl } from "./classic-owner-navigation.mjs";
+import { openAdvancedProviderProfiles, selectFixtureProviderSettings } from "./cockpit-provider-connection-proof.mjs";
 
 const providerAt = (config, providerId) =>
   config.providerConfigs?.find((provider) => provider.providerId === providerId);
@@ -189,7 +189,7 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
             waitUntil: "domcontentloaded",
           });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const panel = page.getByRole("region", { name: "Provider profiles", exact: true });
+          const panel = await openAdvancedProviderProfiles(page);
           const beforeCreate = await readConfig();
           stage = "review new profile without an owner write";
           await panel.getByRole("button", { name: "Add provider profile", exact: true }).click();
@@ -222,7 +222,7 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
           stage = "create and confirm exact profile";
           await editor.getByRole("button", { name: "Review provider profile", exact: true }).click();
           let owner = await submitProfile(beforeCreate, submitted, review, true);
-          await panel.getByRole("combobox", { name: "Manage provider", exact: true }).selectOption(providerId);
+          await selectFixtureProviderSettings(panel, providerId, label);
           stage = "edit and confirm exact profile";
           await panel.getByRole("button", { name: "Edit provider profile", exact: true }).click();
           const edit = page.getByRole("dialog", { name: "Edit provider profile", exact: true });
@@ -300,6 +300,8 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
           const secretRoute = `/api/v1/secrets/providers/${encodeURIComponent(providerId)}`;
           assert.equal((await api(`${secretRoute}/status`)).hasSecret, true);
           await panel.getByRole("button", { name: "Refresh profiles", exact: true }).click();
+          await panel.getByRole("region", { name: "Provider connection", exact: true })
+            .getByRole("button", { name: "Refresh connection", exact: true }).click();
           stage = "cancel then confirm native credential removal";
           await panel.getByRole("button", { name: "Remove saved API credential", exact: true }).click();
           const remove = page.getByRole("dialog", { name: "Remove saved API credential?", exact: true });
@@ -345,7 +347,7 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
           await approvalOwner.waitFor();
           assert.equal(
             await approvalOwner.getAttribute("href"),
-            buildClassicOwnerUrl(`/ops/approvals?approvalId=${encodeURIComponent(approvalId)}&shell=classic`),
+            `/inbox?workspaceId=default&approvalId=${encodeURIComponent(approvalId)}&shell=cockpit#providers`,
           );
           assert.ok((await approvalDialog.innerText()).includes("separate canonical approval"));
           await capture("credential-approval-review");
@@ -523,7 +525,7 @@ export async function runCockpitProviderManagementProof({ context, browser, stac
               assertProviderManagementSaved({ before, after: await readConfig(), submitted: input });
               await panel
                 .getByRole("region", { name: "Provider change status", exact: true })
-                .getByText("awaiting input", { exact: false })
+                .getByText("Needs your input", { exact: true })
                 .waitFor();
               await panel.getByRole("button", { name: "Review required step", exact: true }).click();
               const secure = page.getByRole("dialog");

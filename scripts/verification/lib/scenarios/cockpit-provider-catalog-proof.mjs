@@ -1,5 +1,52 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { createRequire } from "node:module";
+
+const requireContract = createRequire(import.meta.url);
+const startupReadContract = () => requireContract("../../../../packages/contracts/dist/gateway-startup-reads.js");
+
+/** Capture the canonical read whether it traveled on its own or inside a startup packet. */
+export function matchProviderCatalogRead(request, providerId) {
+  if (request.method() !== "GET") return null;
+  const url = new URL(request.url());
+  const matches = (candidate) =>
+    providerId === undefined
+      ? candidate.pathname === "/api/v1/llm/config" && !candidate.search
+      : candidate.pathname === "/api/v1/llm/models" &&
+        candidate.searchParams.size === 1 &&
+        candidate.searchParams.get("providerId") === providerId;
+  if (url.pathname !== "/api/v1/startup-reads") return matches(url) ? { transport: "direct" } : null;
+  const { isStartupReadRequest, STARTUP_READ_BATCH_LIMIT, STARTUP_READ_BATCH_QUERY_LIMIT } = startupReadContract();
+  assert.ok(Buffer.byteLength(url.pathname + url.search) <= STARTUP_READ_BATCH_QUERY_LIMIT + 100);
+  assert.equal(url.searchParams.size, 1);
+  const reads = JSON.parse(url.searchParams.get("reads"));
+  assert.ok(Array.isArray(reads) && reads.length <= STARTUP_READ_BATCH_LIMIT && reads.every(isStartupReadRequest));
+  const indices = reads.flatMap((read, index) => (matches(new URL(read.path, url)) ? [index] : []));
+  assert.ok(indices.length <= 1, "Provider owner read is ambiguous in the startup packet.");
+  return indices.length ? { transport: "startup_batch", index: indices[0], count: reads.length } : null;
+}
+
+export async function readProviderCatalogResult(response, membership) {
+  assert.ok(response && membership, "Provider owner response is missing.");
+  assert.equal(response.status(), 200, "Provider read did not receive a successful Gateway response.");
+  const payload = await response.json();
+  if (membership.transport === "direct") return payload;
+  assert.ok(Array.isArray(payload?.items) && payload.items.length === membership.count, "Startup response does not match the request.");
+  const result = payload.items[membership.index];
+  const { STARTUP_READ_BATCH_BODY_LIMIT } = startupReadContract();
+  assert.ok(result?.status === 200 && result.directReadRequired === undefined && typeof result.bodyText === "string"
+    && Buffer.byteLength(result.bodyText) <= STARTUP_READ_BATCH_BODY_LIMIT, "Provider owner response was not a successful batch item.");
+  return JSON.parse(result.bodyText);
+}
+
+export async function revealProviderConfiguration(disclosure, controls) {
+  await disclosure.waitFor();
+  const expanded = await disclosure.getAttribute("aria-expanded");
+  assert.ok(expanded === "true" || expanded === "false", "Provider configuration must expose its disclosure state.");
+  if (expanded === "false") await disclosure.click();
+  await controls.waitFor();
+  assert.equal(await disclosure.getAttribute("aria-expanded"), "true", "Provider configuration did not open.");
+}
 
 export function assertProviderCatalogProof({ before, after, providerId, modelCatalog, rendered, mutations }) {
   assert.ok(Array.isArray(before?.providers), "Provider proof requires the Gateway provider list.");
@@ -72,8 +119,7 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
           page.on("request", (request) => {
             const url = new URL(request.url());
             const pathname = url.pathname;
-            if (request.method() === "GET" && pathname === "/api/v1/llm/models"
-              && url.searchParams.get("providerId") === providerId) {
+            if (matchProviderCatalogRead(request, providerId)) {
               catalogReads.push(request);
               pendingCatalogReads.add(request);
             }
@@ -87,20 +133,29 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/models?shell=cockpit#providers"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
           await page.waitForFunction((theme) => document.documentElement.dataset.theme === theme, variant === "mobile" ? "light" : "dark");
+          const advanced = page.getByRole("region", { name: "Advanced providers", exact: true });
+          await revealProviderConfiguration(
+            advanced.getByRole("button", { name: "Advanced provider configuration", exact: true }),
+            advanced.locator("#expert-provider-controls"),
+          );
           const panel = page.getByRole("region", { name: "Providers and model catalogs", exact: true });
           const select = panel.getByRole("combobox", { name: "Inspect provider", exact: true });
           await select.waitFor();
           await select.selectOption(providerId);
           const pendingAtClick = [...pendingCatalogReads];
           const actionStart = catalogReads.length;
-          await panel.getByRole("button", { name: "Refresh models", exact: true }).click();
+          const refreshModels = panel.getByRole("button", { name: "Refresh models", exact: true });
+          const arrival = pendingAtClick.length === 0
+            ? page.waitForRequest((request) => Boolean(matchProviderCatalogRead(request, providerId)))
+            : Promise.resolve();
+          await Promise.all([arrival, refreshModels.click()]);
           await panel.getByRole("heading", { name: "Live catalog", exact: true }).waitFor();
           await panel.locator('[aria-busy="false"]').waitFor();
           const modelRequest = selectProviderCatalogRead(pendingAtClick, catalogReads.slice(actionStart));
-          const response = await modelRequest.response();
-          assert.ok(response, "Model refresh request has no owner response.");
-          assert.equal(response.status(), 200, "Model refresh did not receive a successful Gateway response.");
-          const modelCatalog = await response.json();
+          const modelCatalog = await readProviderCatalogResult(
+            await modelRequest.response(),
+            matchProviderCatalogRead(modelRequest, providerId),
+          );
           await panel.getByRole("heading", { name: "Live catalog", exact: true }).waitFor();
           await panel.getByRole("list", { name: "Discovered models" }).waitFor();
           const rendered = {
@@ -113,10 +168,11 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
           await panel.getByText("No models match this filter.", { exact: true }).waitFor();
           await panel.getByRole("searchbox", { name: "Filter models", exact: true }).fill("");
           await panel.getByRole("list", { name: "Discovered models" }).waitFor();
-          const configResponse = page.waitForResponse((candidate) => candidate.request().method() === "GET"
-            && new URL(candidate.url()).pathname === "/api/v1/llm/config");
-          await panel.getByRole("button", { name: "Refresh providers", exact: true }).click();
-          assert.equal((await configResponse).status(), 200, "Provider refresh failed.");
+          const [configResponse] = await Promise.all([
+            page.waitForResponse((response) => Boolean(matchProviderCatalogRead(response.request()))),
+            panel.getByRole("button", { name: "Refresh providers", exact: true }).click(),
+          ]);
+          await readProviderCatalogResult(configResponse, matchProviderCatalogRead(configResponse.request()));
           await select.waitFor();
           const after = await requestJson(stack.gatewayUrl, "/api/v1/llm/config");
           assertOk(after, `read ${variant} provider owner after inspection`);

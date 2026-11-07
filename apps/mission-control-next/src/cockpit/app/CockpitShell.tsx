@@ -205,7 +205,7 @@ function CockpitShellContent({
                 <AreaErrorBoundary label="Projects" resetKey={pathname + search}>
                   <Suspense
                     fallback={
-                      <p role="status" className="p-4">
+                      <p aria-busy="true" className="p-4">
                         Loading projects…
                       </p>
                     }

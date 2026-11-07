@@ -14,8 +14,6 @@ import {
   fetchChatSessionWorkbenchTree as canonicalFetchChatSessionWorkbenchTree,
   fetchChatSessionWorkbenchDiff as canonicalFetchChatSessionWorkbenchDiff,
   fetchChatSessionWorkbenchOutput as canonicalFetchChatSessionWorkbenchOutput,
-} from "@goatcitadel/mission-control-shared/api/chat";
-import {
   createChatSessionWorkbenchWorktree as canonicalCreateChatSessionWorkbenchWorktree,
   saveChatSessionWorkbenchFile as canonicalSaveChatSessionWorkbenchFile,
   previewChatSessionWorkbenchFileOperation as canonicalPreviewChatSessionWorkbenchFileOperation,

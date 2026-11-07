@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir } from "node:fs/promises";
 
 export function assertMcpRegistrationAgreement({ request, receipt, owner, label, existingIds = [] }) {
@@ -22,7 +23,7 @@ export async function runCockpitMcpRegistrationProof({ context, browser, stack, 
     await runScenario(context, { id: `ux-budgets.cockpit-mcp-registration.${variant}`, lane: "ux-budgets",
       title: `Native MCP reviewed registration, deletion and cached inspection ${variant}`, subsystem: "mission-control-ux" }, async () => {
       let stage = "prepare isolated browser", browserContext, page;
-      const writes = [], screenshots = [], unexpected = [], screenshotDir = path.join(context.artifactRoot, "screenshots");
+      const writes = [], presenceWrites = [], screenshots = [], unexpected = [], screenshotDir = path.join(context.artifactRoot, "screenshots");
       try {
         const label = `UX MCP registration ${variant} ${Date.now()}`, before = await api("/api/v1/mcp/servers");
         const theme = variant === "mobile" ? "light" : "dark";
@@ -32,7 +33,9 @@ export async function runCockpitMcpRegistrationProof({ context, browser, stack, 
         page = await browserContext.newPage();
         page.on("request", (request) => {
           const route = new URL(request.url()).pathname;
-          if (!["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) || !route.startsWith("/api/v1/")) return;
+          const kind = classifyCockpitProofWrite(request.method(), route);
+          if (kind === "presence") presenceWrites.push({ method: request.method(), pathname: route });
+          if (kind !== "owner") return;
           if ((route === "/api/v1/mcp/servers" && request.method() === "POST") || (/^\/api\/v1\/mcp\/servers\/[^/]+$/.test(route) && request.method() === "DELETE"))
             writes.push({ method: request.method(), route, body: request.postDataJSON() });
           else unexpected.push(`${request.method()} ${route}`);
@@ -113,13 +116,13 @@ export async function runCockpitMcpRegistrationProof({ context, browser, stack, 
         await registration.getByText(/^MCP registration outcome is unconfirmed/).first().waitFor();
         assert.equal(await registration.getByRole("button", { name: "Review MCP registration", exact: true }).isDisabled(), true);
         assert.equal(writes.length, 3); assert.deepEqual(unexpected, []); await capture("unknown-locked");
-        return { status: "passed", metrics: { browserCreations: 2, browserDeletions: 1, cancelledWrites: 0, staleDeletionWrites: 0,
+        return { status: "passed", metrics: { notificationPresenceWrites: presenceWrites.length, browserCreations: 2, browserDeletions: 1, cancelledWrites: 0, staleDeletionWrites: 0,
           exactOwnerAgreement: true, cachedInspectionOnly: true, responseLossInjected: true, remountLock: true, blockingAxe: 0,
           limitation: "Disabled disposable stdio records. Saved configuration and cached metadata only; no connections, commands, OAuth or tools executed." }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page && !page.isClosed()) { try { await mkdir(screenshotDir, { recursive: true }); const file = path.join(screenshotDir, `ux-budgets-cockpit-mcp-registration-${variant}-failure.png`);
           await page.screenshot({ path: file, fullPage: false }); screenshots.push(relativeToRun(context, file)); } catch { /* Keep original failure. */ } }
-        return { status: "failed", error: `${stage}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`, metrics: { failedStage: stage, browserWrites: writes.length }, artifacts: emptyArtifacts({ screenshots }) };
+        return { status: "failed", error: `${stage}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`, metrics: { notificationPresenceWrites: presenceWrites.length, failedStage: stage, browserWrites: writes.length }, artifacts: emptyArtifacts({ screenshots }) };
       } finally { await browserContext?.close(); }
       async function capture(name) {
         await mkdir(screenshotDir, { recursive: true }); await page.addScriptTag({ path: axeSourcePath }); const audit = await auditPageAccessibility(page);

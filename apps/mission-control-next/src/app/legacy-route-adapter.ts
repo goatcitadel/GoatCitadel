@@ -1,4 +1,6 @@
-import { buildAppHref, normalizeAppRoute, parseAppRoute, type AppRoute } from "./route-model";
+import { buildAppHref, parseAppRoute } from "./route-address";
+import { normalizeAppRoute } from "./route-release-kernel";
+import type { AppRoute } from "./route-model";
 
 export function adaptLegacyUrl(input: string | URL): AppRoute | null {
   const url = typeof input === "string" ? new URL(input, "http://goatcitadel.local") : input;

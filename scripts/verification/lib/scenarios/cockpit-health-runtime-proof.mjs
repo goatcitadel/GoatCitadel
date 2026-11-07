@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 
@@ -66,12 +67,14 @@ export async function runCockpitHealthRuntimeProof({ context, browser, stack, ci
         }, theme);
         await installMissionControlNextBrowserState(browserContext, "default", citadelId);
         page = await browserContext.newPage();
-        const mutations = [];
+        const mutations = [], presenceWrites = [];
         let documentRequests = 0;
         page.on("request", (request) => {
           if (request.isNavigationRequest() && request.frame() === page.mainFrame()) documentRequests += 1;
           const pathname = new URL(request.url()).pathname;
-          if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")) mutations.push(pathname);
+          const method = request.method(), kind = classifyCockpitProofWrite(method, pathname);
+          if (kind === "presence") presenceWrites.push({ method, pathname });
+          if (kind === "owner") mutations.push(pathname);
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/system?shell=cockpit"), { waitUntil: "domcontentloaded" });
         await page.getByRole("button", { name: "Review local runtime start", exact: true }).click({ timeout: 30_000 });
@@ -117,7 +120,7 @@ export async function runCockpitHealthRuntimeProof({ context, browser, stack, ci
           before: before.body, after: after.body, mutations });
         return { status: "passed", metrics: { actualRuntimeStarted: false, disabledOwnerPreserved: true,
           nativeLocalAiNavigation: true, documentReloads: documentRequests - documentRequestsBefore,
-          mutationRequests: 0, blockingAxe: 0, overflow }, artifacts: emptyArtifacts({ screenshots }) };
+          mutationRequests: 0, notificationPresenceWrites: presenceWrites.length, blockingAxe: 0, overflow }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page) {
           const directory = path.join(context.artifactRoot, "screenshots");

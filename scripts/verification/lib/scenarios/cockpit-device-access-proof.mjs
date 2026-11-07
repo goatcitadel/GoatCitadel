@@ -1,5 +1,17 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { createOwnerReadDiagnostic, retainOwnerReadDiagnostic, captureOwnerReadUi } from "./cockpit-approval-mode-proof.mjs";
+
+export function projectDeviceOwnerEvidence(body, subjectId, peerId, current = { observed: false }) {
+  const items = Array.isArray(body?.items) ? body.items : null;
+  return { total: items?.length ?? null,
+    subjectIndex: items ? items.findIndex(item => item.grantId === subjectId) : null,
+    peerIndex: items ? items.findIndex(item => item.grantId === peerId) : null,
+    currentGrantPresent: current.observed ? Boolean(current.grantId) : null,
+    subjectIsCurrent: current.observed ? current.grantId === subjectId : null,
+    peerIsCurrent: current.observed ? current.grantId === peerId : null,
+  };
+}
 
 /** Device grants are created through the real request/approval owners in a disposable runtime. */
 export async function runCockpitDeviceAccessProof({ context, browser, stack, citadelId, viewports, deps }) {
@@ -42,6 +54,16 @@ export async function runCockpitDeviceAccessProof({ context, browser, stack, cit
       const browserContext = await browser.newContext({ viewport, colorScheme: theme });
       let page;
       const screenshots = [];
+      const diagnostics = [], ownerDiagnostic = createOwnerReadDiagnostic(), diagnosticStartedAt = Date.now();
+      let grantsBody, current = { observed: false }, pendingResponses = 0, responseReads = 0, diagnosticWriteFailure = false;
+      const retainDiagnostic = async () => {
+        if (pendingResponses || !current.observed || !grantsBody?.items) ownerDiagnostic.unavailable();
+        if (page && !page.isClosed()) await captureOwnerReadUi(page, "device", ownerDiagnostic, { pendingResponses });
+        const diagnosticPath = path.join(context.artifactRoot, "diagnostics", `device-access-owner-${variant}.json`);
+        const retained = await retainOwnerReadDiagnostic(ownerDiagnostic.snapshot(), diagnosticPath);
+        diagnosticWriteFailure ||= retained.writeFailure;
+        if (retained.retained && !diagnostics.length) diagnostics.push(relativeToRun(context, diagnosticPath));
+      };
       try {
         await browserContext.addInitScript((value) => {
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
@@ -51,14 +73,46 @@ export async function runCockpitDeviceAccessProof({ context, browser, stack, cit
         page = await browserContext.newPage();
         const mutations = [];
         page.on("request", (request) => {
-          const pathname = new URL(request.url()).pathname;
+          const url = new URL(request.url()), pathname = url.pathname;
+          if (["/api/v1/auth/devices", "/api/v1/auth/current"].includes(pathname)) ownerDiagnostic.record({
+            kind: "request", owner: pathname === "/api/v1/auth/devices" ? "device_grants" : "current_access",
+            method: request.method(), scope: "not_applicable", elapsedMs: Date.now() - diagnosticStartedAt,
+            queryShape: pathname === "/api/v1/auth/devices" ? url.searchParams.get("view") === "all" ? "view_all" : "other" : "not_applicable",
+          });
           if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method())
             && /^\/api\/v1\/auth\/(devices|companion)/.test(pathname)) mutations.push(`${request.method()} ${pathname}`);
+        });
+        page.on("requestfailed", request => {
+          const pathname = new URL(request.url()).pathname;
+          if (["/api/v1/auth/devices", "/api/v1/auth/current"].includes(pathname)) ownerDiagnostic.record({
+            kind: "request_failed", owner: pathname === "/api/v1/auth/devices" ? "device_grants" : "current_access",
+            method: request.method(), elapsedMs: Date.now() - diagnosticStartedAt,
+          });
+        });
+        page.on("response", async response => {
+          const pathname = new URL(response.url()).pathname;
+          if (!["/api/v1/auth/devices", "/api/v1/auth/current"].includes(pathname)) return;
+          ownerDiagnostic.record({ kind: "response", owner: pathname === "/api/v1/auth/devices" ? "device_grants" : "current_access",
+            method: response.request().method(), status: response.status(), elapsedMs: Date.now() - diagnosticStartedAt });
+          if (responseReads >= 32) { ownerDiagnostic.unavailable(); return; }
+          responseReads += 1; pendingResponses += 1;
+          try {
+            if (response.status() !== 200) { ownerDiagnostic.unavailable(); return; }
+            const body = await response.json();
+            if (pathname === "/api/v1/auth/devices") {
+              // Retain only owner indexes/counts, never the device response.
+              grantsBody = { items: Array.isArray(body?.items) ? body.items.map(item => ({ grantId: item.grantId })) : null };
+              if (!grantsBody.items) ownerDiagnostic.unavailable();
+            } else current = { observed: true, grantId: body?.grantId };
+            ownerDiagnostic.device(projectDeviceOwnerEvidence(grantsBody, subject.grantId, other.grantId, current));
+          } catch { ownerDiagnostic.unavailable(); }
+          finally { pendingResponses -= 1; }
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/access?shell=cockpit"), { waitUntil: "domcontentloaded" });
         const panel = page.getByRole("region", { name: "Approved devices", exact: true });
         const row = panel.getByRole("listitem").filter({ has: page.getByRole("heading", { name: subject.deviceLabel, exact: true }) });
         await row.waitFor();
+        await retainDiagnostic();
         await row.getByRole("button", { name: "Revoke access", exact: true }).click();
         const dialog = page.getByRole("dialog", { name: "Revoke device access?", exact: true });
         await dialog.waitFor();
@@ -104,14 +158,15 @@ export async function runCockpitDeviceAccessProof({ context, browser, stack, cit
         assert.equal(await row.getByRole("button", { name: "Revoke access", exact: true }).isDisabled(), true);
         return { status: "passed", metrics: { actualGrantRevoked: true, otherGrantUnchanged: true,
           reviewCancelledWithoutMutation: true, revokedStateSurvivesReload: true, deviceTokensRetrieved: false,
-          companionSessionRevocationExercised: false, blockingAxe: 0 }, artifacts: emptyArtifacts({ screenshots }) };
+          companionSessionRevocationExercised: false, blockingAxe: 0, diagnosticWriteFailure }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
       } catch (error) {
-        if (page) {
+        await retainDiagnostic();
+        if (page && !page.isClosed()) try {
           const directory = path.join(context.artifactRoot, "screenshots"); await mkdir(directory, { recursive: true });
           const screenshot = path.join(directory, `ux-budgets-cockpit-device-access-${variant}-failure.png`);
           await page.screenshot({ path: screenshot, fullPage: false }); screenshots.push(relativeToRun(context, screenshot));
-        }
-        return { status: "failed", error: String(error?.stack ?? error), artifacts: emptyArtifacts({ screenshots }) };
+        } catch { ownerDiagnostic.unavailable(); }
+        return { status: "failed", error: String(error?.stack ?? error), metrics: { diagnosticWriteFailure }, artifacts: emptyArtifacts({ screenshots, diagnostics }) };
       } finally { await browserContext.close(); }
     });
   }

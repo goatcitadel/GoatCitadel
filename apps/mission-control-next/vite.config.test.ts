@@ -163,7 +163,7 @@ describe("mission-control-next vite config", () => {
     expect(config.build?.minify).toBe("terser");
     // Keep Vite's module, Safari, source-map and identifier-mangling defaults.
     // An exact options assertion also rejects unsafe compression/property mangling.
-    expect(config.build?.terserOptions).toStrictEqual({ compress: { passes: 2 } });
+    expect(config.build?.terserOptions).toStrictEqual({ maxWorkers: 2, compress: { passes: 2 } });
     expect(config.build?.chunkSizeWarningLimit).toBe(900);
   });
 

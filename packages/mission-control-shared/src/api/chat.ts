@@ -13,10 +13,7 @@ import type {
   ChangePlanResponseInput,
   ChangePlanStatus,
   ChatDelegateAcceptRequest,
-  ChatDelegateRequest,
   ChatDelegateResponse,
-  ChatDelegateSuggestRequest,
-  ChatDelegateSuggestResponse,
   ChatDelegatedScopeCandidatesResponse,
   ChatDelegatedScopeExpansionRequest,
   ChatDelegatedScopeExpansionResponse,
@@ -41,13 +38,6 @@ import type {
   ChatSendMessageResponse,
   ChatSideChatRecord,
   ChatSessionBindingRecord,
-  ChatSessionWorkbenchDiffResponse,
-  ChatSessionWorkbenchFileDiffResponse,
-  ChatSessionWorkbenchFileResponse,
-  ChatSessionWorkbenchOutputResponse,
-  ChatSessionWorkbenchRecord,
-  ChatSessionWorkbenchReadOptions,
-  ChatSessionWorkbenchTreeResponse,
   ChatSessionBulkArchiveResult,
   ChatSessionOrigin,
   ChatSessionPrefsPatch,
@@ -66,7 +56,6 @@ import type {
   CreateGeneratedArtifactVersionRequest,
   DocumentPatchProposalListResponse,
   DocumentPatchProposalRecord,
-  DelegatedFilesystemScopePublicProjection,
   ChatSpecialistCandidatePatchInput,
   ChatSpecialistCandidateRecord,
   ChatSpecialistCandidateSuggestionRecord,
@@ -106,10 +95,16 @@ import {
   readGatewayAuthHeaders,
   request,
 } from "./client-core.js";
-import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
+import { consumeSseResponse } from "./streaming.js";
 import { uploadHashHeaders } from "./upload-hash.js";
 import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./platform.js";
 export {
+  fetchChatSessionWorkbench,
+  fetchChatSessionWorkbenchTree,
+  fetchChatSessionWorkbenchFile,
+  fetchChatSessionWorkbenchFileDiff,
+  fetchChatSessionWorkbenchDiff,
+  fetchChatSessionWorkbenchOutput,
   createChatSessionWorkbenchWorktree,
   saveChatSessionWorkbenchFile,
   previewChatSessionWorkbenchFileOperation,
@@ -120,6 +115,15 @@ export {
   revertChatSessionWorkbenchFile,
   revertChatSessionWorkbenchChanges,
 } from "./chat-workbench-operations.js";
+
+export {
+  runChatDelegation,
+  runChatResearch,
+  streamChatDelegation,
+  suggestChatDelegation,
+  triggerChatProactive,
+} from "./chat-optional-actions.js";
+export type { ChatDelegationStreamChunk, ChatDelegationStreamScopeControl } from "./chat-optional-actions.js";
 
 export interface ChatRequestSurfaceOptions {
   originSurface?: ChatMode;
@@ -605,58 +609,6 @@ export async function setChatSessionBinding(
 export async function fetchChatSessionBinding(sessionId: string): Promise<{ item: ChatSessionBindingRecord | null }> {
   return request<{ item: ChatSessionBindingRecord | null }>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/binding`,
-  );
-}
-
-export async function fetchChatSessionWorkbench(
-  sessionId: string,
-  options?: ChatSessionWorkbenchReadOptions,
-): Promise<{ state: ChatSessionWorkbenchRecord }> {
-  return request<{ state: ChatSessionWorkbenchRecord }>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench${options?.preview ? "?preview=true" : ""}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchTree(
-  sessionId: string,
-  options?: ChatSessionWorkbenchReadOptions,
-): Promise<ChatSessionWorkbenchTreeResponse> {
-  return request<ChatSessionWorkbenchTreeResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/tree${options?.preview ? "?preview=true" : ""}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchFile(
-  sessionId: string,
-  relativePath: string,
-  options?: ChatSessionWorkbenchReadOptions,
-): Promise<ChatSessionWorkbenchFileResponse> {
-  const query = new URLSearchParams({ path: relativePath });
-  if (options?.preview) query.set("preview", "true");
-  return request<ChatSessionWorkbenchFileResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file?${query.toString()}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchFileDiff(
-  sessionId: string,
-  relativePath: string,
-): Promise<ChatSessionWorkbenchFileDiffResponse> {
-  const query = new URLSearchParams({ path: relativePath });
-  return request<ChatSessionWorkbenchFileDiffResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-diff?${query.toString()}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchDiff(sessionId: string): Promise<ChatSessionWorkbenchDiffResponse> {
-  return request<ChatSessionWorkbenchDiffResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/diff`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchOutput(sessionId: string): Promise<ChatSessionWorkbenchOutputResponse> {
-  return request<ChatSessionWorkbenchOutputResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/output`,
   );
 }
 
@@ -1717,22 +1669,6 @@ export async function updateChatProactivePolicy(
   });
 }
 
-export async function triggerChatProactive(
-  sessionId: string,
-  input?: {
-    source?: "scheduler" | "manual" | "chat";
-    reason?: string;
-    surface?: ChatMode;
-    permissionProfileId?: string;
-    localOperatorOverrideId?: string;
-  },
-): Promise<ProactiveRunRecord> {
-  return request<ProactiveRunRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/trigger`, {
-    method: "POST",
-    body: JSON.stringify(input ?? {}),
-  });
-}
-
 export async function fetchChatProactiveRuns(sessionId: string, limit = 50): Promise<{ items: ProactiveRunRecord[] }> {
   return request<{ items: ProactiveRunRecord[] }>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/runs?limit=${Math.max(1, Math.min(limit, 500))}`,
@@ -1822,19 +1758,6 @@ export async function updateChatSpecialistCandidate(
   );
 }
 
-export async function suggestChatDelegation(
-  sessionId: string,
-  input: ChatDelegateSuggestRequest = {},
-): Promise<ChatDelegateSuggestResponse> {
-  return request<ChatDelegateSuggestResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/suggest`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
 export async function acceptChatDelegation(
   sessionId: string,
   input: ChatDelegateAcceptRequest,
@@ -1879,26 +1802,6 @@ export async function parseChatCommand(
   });
 }
 
-export async function runChatResearch(
-  sessionId: string,
-  input: {
-    query: string;
-    mode?: "quick" | "deep";
-    providerId?: string;
-    model?: string;
-    policyRunId?: string;
-    policyTaskId?: string;
-    permissionProfileId?: string;
-    localOperatorOverrideId?: string;
-    surface?: ChatMode;
-  },
-): Promise<ResearchSummaryRecord> {
-  return request<ResearchSummaryRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/research/run`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
 export async function fetchChatResearchRun(
   sessionId: string,
   runId: string,
@@ -1909,77 +1812,6 @@ export async function fetchChatResearchRun(
   return request<{ run: ResearchRunRecord; sources: ResearchSourceRecord[] }>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/research/${encodeURIComponent(runId)}`,
   );
-}
-
-export async function runChatDelegation(sessionId: string, input: ChatDelegateRequest): Promise<ChatDelegateResponse> {
-  return request<ChatDelegateResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate`, {
-    method: "POST",
-    ...originSurfaceInit({ originSurface: input.surfaceMode }),
-    body: JSON.stringify(input),
-  });
-}
-
-export type ChatDelegationStreamScopeControl = DelegatedFilesystemScopePublicProjection;
-
-export interface ChatDelegationStreamChunk {
-  type: "status" | "step" | "done" | "error";
-  runId?: string;
-  taskId?: string;
-  message?: string;
-  step?: {
-    stepId: string;
-    runId: string;
-    role: string;
-    label?: string;
-    status: string;
-    index: number;
-    startedAt: string;
-    finishedAt?: string;
-    durationMs?: number;
-    summary?: string;
-    output?: string;
-    error?: string;
-    failureGuidance?: string;
-    /** Public delegated-scope projection; canonical host paths stay Gateway-owned. */
-    scopeControl?: ChatDelegationStreamScopeControl;
-  };
-  result?: ChatDelegateResponse;
-  error?: string;
-}
-
-export async function streamChatDelegation(
-  sessionId: string,
-  input: ChatDelegateRequest,
-  onChunk: (chunk: ChatDelegationStreamChunk) => void,
-  options: { signal?: AbortSignal } = {},
-): Promise<void> {
-  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/stream`;
-  const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
-    method: "POST",
-    headers: buildGatewayHeaders(path, "POST", correlationId, {
-      "x-goatcitadel-session-id": sessionId,
-      ...originSurfaceHeader({ originSurface: input.surfaceMode }),
-    }),
-    body: JSON.stringify(input),
-    signal: options.signal,
-  });
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    handleGatewayAuthRejectionResponse(response.status, text, path);
-    throw new Error(`API error ${response.status}: ${text}`);
-  }
-  let streamError: string | null = null;
-  for await (const dataText of iterateSsePayloads(response.body)) {
-    const chunk = parseSseJson<ChatDelegationStreamChunk>(dataText);
-    onChunk(chunk);
-    if (chunk.type === "error") {
-      streamError = chunk.error || "Streaming request failed.";
-    }
-  }
-  if (streamError) {
-    throw new Error(streamError);
-  }
 }
 
 export async function fetchChatDelegationRun(sessionId: string, runId: string): Promise<ChatDelegationRunDetail> {

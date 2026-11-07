@@ -1,4 +1,25 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
+import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
+
+/** Keep exact owner writes and retained background receipts as separate evidence. */
+export function createIntegrationMutationRecorder() {
+  const writes = [], background = createReviewedMutationRecorder();
+  const { presence } = background;
+  let total = 0;
+  return { writes, presence, get total() { return total; },
+    record(request) {
+      const pathname = new URL(request.url()).pathname;
+      const kind = classifyCockpitProofWrite(request.method(), pathname);
+      if (!kind) return;
+      total++;
+      if (kind === "presence") background.record(request);
+      else writes.push({ method: request.method(), pathname, body: request.postDataJSON() });
+    },
+    async assertBackground(expected) { await background.assertBackground(expected); },
+    async assertPageBackground(page, workspaceId) { if (presence.length) await background.assertPageBackground(page, workspaceId); },
+  };
+}
 import { mkdir } from "node:fs/promises";
 
 export function assertIntegrationEnabledSaved({ before, after, response, request, enabled }) {
@@ -59,21 +80,17 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
       const theme = variant === "mobile" ? "light" : "dark";
       const browserContext = await browser.newContext({ viewport, colorScheme: theme });
       const screenshots = [];
-      const writes = [];
+      const recorder = createIntegrationMutationRecorder();
+      const { writes } = recorder;
       let page;
       try {
         await browserContext.addInitScript((value) => {
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
           window.localStorage.setItem("goatcitadel.ui.theme.v1", value);
         }, theme);
-        await installMissionControlNextBrowserState(browserContext, "default", citadelId);
+        await installMissionControlNextBrowserState(browserContext, "default", citadelId, { showTechnicalDetails: true });
         page = await browserContext.newPage();
-        page.on("request", (request) => {
-          const pathname = new URL(request.url()).pathname;
-          if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")) {
-            writes.push({ method: request.method(), pathname, body: request.postDataJSON() });
-          }
-        });
+        page.on("request", request => recorder.record(request));
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/capabilities/connectors/advanced?shell=cockpit#integration-connections"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         await page.waitForFunction((value) => document.documentElement.dataset.theme === value, theme);
@@ -84,13 +101,32 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
         assert.ok((await details.innerText()).includes(initial.connectionId));
         assert.ok((await details.innerText()).includes(initial.revision));
         await panel.getByText("Connection details", { exact: true }).click();
-        await panel.getByRole("button", { name: `Review enable ${label}`, exact: true }).click();
         const enableDialog = page.getByRole("dialog", { name: "Enable integration?", exact: true });
-        await enableDialog.waitFor();
+        const disableDialog = page.getByRole("dialog", { name: "Disable integration?", exact: true });
+        const refreshRefusal = panel.getByText(
+          "The connection list is refreshing. Nothing was changed; try again when it finishes.",
+          { exact: true },
+        );
+        async function openReview(action, dialog) {
+          const review = panel.getByRole("button", { name: `Review ${action} ${label}`, exact: true });
+          for (let attempt = 0; attempt < 3; attempt += 1) {
+            const writesBefore = writes.length;
+            // The row disables Review while the directory fetch is pending.
+            await review.click();
+            await dialog.or(refreshRefusal).first().waitFor();
+            if (await dialog.isVisible()) return;
+            // The owner's background refresh can legitimately refuse the read-only review.
+            // Only retry this explicit no-write outcome. Other failures and any mutation still fail the proof.
+            assert.equal(writes.length, writesBefore, "A refused integration review dispatched a write.");
+          }
+          throw new Error("The integration directory did not settle long enough to open the review.");
+        }
+        await openReview("enable", enableDialog);
         assert.ok((await enableDialog.innerText()).includes(label));
         assert.ok(!(await enableDialog.innerText()).includes(initial.revision));
         assert.ok((await enableDialog.innerText()).includes("runtime synchronization"));
         await checkReviewBounds(enableDialog, viewport, "Enable reviewed integration");
+        await recorder.assertPageBackground(page, "default");
         assert.deepEqual(writes, [], "Opening integration review mutated the owner.");
         assert.deepEqual(await read(), initial);
         const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
@@ -108,8 +144,9 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
         await audit("review");
         await enableDialog.getByRole("button", { name: "Keep current state", exact: true }).click();
         await enableDialog.waitFor({ state: "hidden" });
+        await recorder.assertPageBackground(page, "default");
         assert.deepEqual(writes, [], "Cancelling integration review mutated the owner.");
-        await panel.getByRole("button", { name: `Review enable ${label}`, exact: true }).click();
+        await openReview("enable", enableDialog);
         await checkReviewBounds(enableDialog, viewport, "Enable reviewed integration");
         const waitPatch = () => page.waitForResponse((response) => response.request().method() === "PATCH" && new URL(response.url()).pathname === route);
         const enabledResponse = waitPatch();
@@ -123,9 +160,7 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
         assertIntegrationEnabledSaved({ before: initial, after: enabled, response: await enabledReply.json(), request: writes[0].body, enabled: true });
         await panel.getByText(`Connection ${label} enabled. Saved state is confirmed; external connectivity has not been tested.`, { exact: true }).waitFor();
         await panel.scrollIntoViewIfNeeded(); await audit("enabled");
-        await panel.getByRole("button", { name: `Review disable ${label}`, exact: true }).click();
-        const disableDialog = page.getByRole("dialog", { name: "Disable integration?", exact: true });
-        await disableDialog.waitFor();
+        await openReview("disable", disableDialog);
         assert.ok((await disableDialog.innerText()).includes(label));
         await checkReviewBounds(disableDialog, viewport, "Disable reviewed integration");
         const disabledResponse = waitPatch();
@@ -139,7 +174,9 @@ export async function runCockpitIntegrationConnectionsProof({ context, browser, 
         assertIntegrationEnabledSaved({ before: enabled, after: disabled, response: await disabledReply.json(), request: writes[1].body, enabled: false });
         assert.equal(disabled.status, "paused", "The proof must not assert connectivity or alter saved status.");
         await panel.scrollIntoViewIfNeeded(); const overflow = await audit("disabled");
-        return { status: "passed", metrics: { browserMutations: 2, cancelledReviewMutations: 0,
+        await recorder.assertPageBackground(page, "default");
+        return { status: "passed", metrics: { browserMutations: 2, totalBrowserMutations: recorder.total,
+          systemPresenceHeartbeats: recorder.presence.length, cancelledReviewMutations: 0,
           exactRevisionsConfirmed: true, reviewDialogsAndActionsWithinViewport: true, configurationAndScopeUnchanged: true, enabledThenDisabled: true,
           integrationActionsInvoked: 0, externalConnectivityTested: false, blockingAxe: 0, overflow }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { reviewNavigationDraft } from "./cockpit-navigation-draft-proof.mjs";
+import { requestCockpitSettingsPage, selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
 import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
 
 // Mirrors apps/mission-control-next/src/cockpit/areas/settings/tool-grant-labels.ts (TS + contracts types,
@@ -33,6 +34,25 @@ export function assertReviewedToolGrant(input, receipt, owner) {
   const rows = owner.items.filter((item) => item.grantId === receipt.grantId);
   assert.equal(rows.length, 1);
   assert.deepEqual(rows[0], receipt);
+}
+
+export async function inspectRecordedToolGrantIdentity(detail,receipt,owner) {
+  const records=owner.items.filter(item=>item.grantId===receipt.grantId);
+  assert.equal(records.length,1,"Recorded grant owner identity is missing or duplicated");assert.deepEqual(records[0],receipt,"Recorded grant scope differs from canonical owner");
+  const summary=detail.locator("details > summary").filter({hasText:/^\s*Grant identity\s*$/u});
+  assert.equal(await summary.count(),1,"Recorded grant identity disclosure is missing or duplicated");
+  assert.equal((await summary.textContent())?.trim(),"Grant identity");
+  const disclosure=summary.locator("..");assert.equal(await disclosure.count(),1);
+  if(await disclosure.getAttribute("open")===null)await summary.click();
+  const identity=await disclosure.evaluate(element=>{
+    const field=label=>{
+      const terms=[...element.querySelectorAll("dt")].filter(term=>term.textContent?.trim()===label);
+      if(terms.length!==1||terms[0].nextElementSibling?.tagName!=="DD")throw new Error("Recorded grant identity term is missing or duplicated");
+      return terms[0].nextElementSibling.textContent?.trim();
+    };
+    return {grantId:field("Grant ID"),scopeRef:field("Scope reference")};
+  });
+  assert.deepEqual(identity,{grantId:receipt.grantId,scopeRef:receipt.scopeRef},"Recorded grant disclosure differs from exact receipt and owner");
 }
 
 export async function runCockpitToolGrantsProof({ context, browser, stack, citadelId, viewports, deps }) {
@@ -83,7 +103,7 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
             window.localStorage.setItem("goatcitadel.ui.theme.v1", value);
           }, theme);
-          await installMissionControlNextBrowserState(browserContext, workspace.workspaceId, workspace.citadelId);
+          await installMissionControlNextBrowserState(browserContext, workspace.workspaceId, workspace.citadelId,{showTechnicalDetails:true});
           page = await browserContext.newPage();
           page.on("request", (request) => traffic.record(request));
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/safety?shell=cockpit#approval-mode"), {
@@ -141,7 +161,7 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             .click();
           const detail = page.getByRole("dialog", { name: "Recorded tool grant", exact: true });
           await detail.waitFor();
-          assert.ok((await detail.innerText()).includes(receipt.grantId));
+          await inspectRecordedToolGrantIdentity(detail,receipt,await read("/api/v1/tools/grants?limit=400"));
           await page.addScriptTag({ path: axeSourcePath });
           const dir = path.join(context.artifactRoot, "screenshots");
           await mkdir(dir, { recursive: true });
@@ -182,7 +202,7 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             .click();
           const revoke = page.getByRole("dialog", { name: "Revoke tool grant", exact: true });
           await revoke.waitFor();
-          assert.ok((await revoke.innerText()).includes(receipt.grantId));
+          await inspectRecordedToolGrantIdentity(revoke, receipt, await read("/api/v1/tools/grants?limit=400"));
           const revokeResponse = page.waitForResponse(
             (response) =>
               response.request().method() === "POST" &&
@@ -237,21 +257,14 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             assert.equal(await panel.getByRole("button", { name: "Review new grant", exact: true }).isDisabled(), true);
             assert.equal(writes.length, 3, "Draft navigation retried the unconfirmed grant mutation.");
           };
-          const openGeneral = () =>
-            page
-              .getByRole("navigation", { name: "Settings pages", exact: true })
-              .getByRole("link", { name: "General", exact: true })
-              .click();
+          const openGeneral = () => requestCockpitSettingsPage(page, { label: "General", href: "/settings/general" });
           await reviewNavigationDraft(page, openGeneral, "Cancel");
           await retainedDraft();
           await reviewNavigationDraft(page, openGeneral, "Keep draft and close");
           await page.waitForURL((value) => value.pathname === "/settings/general");
           await page.getByRole("tab", { name: "Appearance", exact: true }).waitFor();
           assert.equal(writes.length, 3);
-          await page
-            .getByRole("navigation", { name: "Settings pages", exact: true })
-            .getByRole("link", { name: "Safety", exact: true })
-            .click();
+          await selectCockpitSettingsPage(page, { label: "Safety", href: "/settings/safety" });
           await page.getByRole("tab", { name: "Tools", exact: true }).click();
           await page.waitForURL((value) => value.pathname === "/settings/safety" && value.hash === "#approval-mode");
           await panel.getByRole("button", { name: "Review new grant", exact: true }).waitFor();

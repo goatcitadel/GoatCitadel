@@ -16,6 +16,10 @@ import {
   REMOTE_WORKER_PROTOCOL_VERSION,
   buildRemoteWorkerAssignmentParentContext,
   canonicalJsonString,
+  REMOTE_WORKER_ARTIFACT_MANIFEST_SCHEMA_VERSION,
+  REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256,
+  normalizeRemoteWorkerArtifactManifest,
+  remoteWorkerAssignmentCanonicalSha256,
   remoteWorkerAssignmentParentContextSha256,
   type FinalizeRemoteWorkerBootstrapAdmissionCommand,
   type RemoteWorkerAssignmentEventInput,
@@ -38,9 +42,11 @@ import { PostgresSyncDatabaseClient } from "./postgres/sync.js";
 import { RemoteWorkerAdmissionRepository } from "./remote-worker-admission-repo.js";
 import {
   RemoteWorkerAssignmentRepository,
+  type RemoteWorkerChatArtifactAdmission,
   type RemoteWorkerAssignmentProtectedCommitFence,
 } from "./remote-worker-assignment-repo.js";
 import { TaskRepository } from "./task-repo.js";
+import { RemoteWorkerArtifactRepository } from "./remote-worker-artifact-repo.js";
 import type { DatabaseClient } from "./db.js";
 import { createDatabase } from "./sqlite.js";
 import { verifyWorkerToolBudgets } from "./remote-worker-tool-budget-fixture.js";
@@ -60,6 +66,166 @@ const postgresConnectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim
 const postgresIt = postgresConnectionString ? it : it.skip;
 const D = (value: string): string => createHash("sha256").update(value, "utf8").digest("hex");
 const FUTURE = "2099-01-01T00:00:00.000Z";
+
+postgresIt("worker artifact publication preserves continuous authority on PostgreSQL", { timeout: 120_000 }, async () => {
+  assert.ok(postgresConnectionString);
+  const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "artifact_admission_controls");
+  try {
+    const seed = randomUUID().replaceAll("-", "");
+    const h = seedProtectedFenceHarness(scope.db, seed, true);
+    await verifyWorkerArtifactContinuation(scope.db, seed, { workerId: h.finalized.generation.workerId,
+      workerGeneration: h.finalized.generation.workerGeneration, nodeId: h.finalized.generation.nodeId,
+      nodeAdmissionGeneration: h.admitted.admission.admissionGeneration }, h.fence);
+  } finally { await scope.teardown(); }
+});
+
+postgresIt("keeps artifact admission parent and payload atomic across a concurrent PostgreSQL heartbeat", { timeout: 120_000 }, async () => {
+  assert.ok(postgresConnectionString);
+  const scope = await createRemoteWorkerPostgresTestScope(postgresConnectionString, "artifact_admission_overlap");
+  const barrier = new Int32Array(new SharedArrayBuffer(4));
+  const pending: Array<Promise<ArtifactAdmissionRaceResult>> = [];
+  try {
+    const seed = randomUUID().replaceAll("-", "");
+    const h = seedProtectedFenceHarness(scope.db, seed, true);
+    const assignments = new RemoteWorkerAssignmentRepository(scope.db), runs = new DurableRunRepository(scope.db);
+    const prepared = prepareChatOfferFixture(scope.db, true, `-admission-${seed}`);
+    const assignment = assignments.scheduleTaskBoundChatOffer(prepared.offerInput).assignment;
+    const leaseTokenSha256 = D(`${seed}:lease`);
+    const started = assignments.startGeneration({ registryWorkspaceId: "default", assignmentId: assignment.assignmentId,
+      workerId: h.finalized.generation.workerId, workerGeneration: h.finalized.generation.workerGeneration,
+      nodeId: h.finalized.generation.nodeId, nodeAdmissionGeneration: h.admitted.admission.admissionGeneration,
+      dispatchOwnerId: prepared.offerInput.dispatchOwnerId, durableRunAttempt: prepared.offerInput.durableRunAttempt,
+      leaseTokenSha256, idempotencyKey: `${seed}:start` });
+    const ref = { registryWorkspaceId: "default", assignmentId: assignment.assignmentId,
+      assignmentGeneration: started.generation.assignmentGeneration };
+    const upload = new RemoteWorkerArtifactRepository(scope.db).openUpload({ ...ref, uploadAttempt: 1,
+      declaredFileCount: 1, declaredTotalBytes: 5, stagingRootSha256: D("atomic-staging"),
+      expiresAt: new Date(Date.now() + 120_000).toISOString(), idempotencyKey: `${seed}:upload` });
+    const pathHash = D(canonicalJsonString({ logicalPath: "response.txt" }));
+    const publication = { idempotencyKey: `${seed}:publish`, manifest: normalizeRemoteWorkerArtifactManifest({
+      schemaVersion: REMOTE_WORKER_ARTIFACT_MANIFEST_SCHEMA_VERSION, identity: upload.identity,
+      pathJailSha256: assignment.manifest.pathJailSha256, workerClaimIds: [], workerClaimSha256: D(canonicalJsonString([])),
+      requiredVerifierProfileSha256: REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256, fileCount: 1, totalBytes: 5,
+      entries: [{ entryIndex: 0, logicalPath: "response.txt", logicalPathSha256: pathHash,
+        blobSha256: D("hello"), byteCount: 5, mimeType: "text/plain" }],
+    }), files: [{ logicalPath: "response.txt", logicalPathSha256: pathHash, mimeType: "text/plain", byteCount: 5, blobSha256: D("hello") }] };
+    const input = { ...ref, leaseTokenSha256, expectedLeaseRevision: started.lease.leaseRevision, uploadId: upload.uploadId, publication };
+    const parent = runs.getRun(prepared.durableRunId);
+    const connection = new URL(postgresConnectionString);
+    connection.searchParams.set("options", `-csearch_path=${scope.schemaName}`);
+    const admission = runArtifactAdmissionRaceWorker(connection.toString(), `artifact-admit-${seed}`,
+      { operation: "admit", input, fence: h.fence, barrier: barrier.buffer });
+    pending.push(admission.result);
+    await admission.locked;
+    const heartbeatName = `artifact-heartbeat-${seed}`;
+    const heartbeat = runArtifactAdmissionRaceWorker(connection.toString(), heartbeatName,
+      { operation: "heartbeat", input: { runId: parent.runId, workerId: parent.leaseOwnerId,
+        leaseHeartbeatAt: runs.readDatabaseNow(), leaseExpiresAt: parent.leaseExpiresAt } });
+    pending.push(heartbeat.result);
+    // This is a live second backend waiting on the canonical durable row,
+    // not a scheduled promise or an inferred ordering from final versions.
+    const deadline = Date.now() + 30_000;
+    let blocked = false;
+    while (Date.now() < deadline) {
+      const observed = await scope.scopedPool.query<{ waiting: boolean }>(
+        `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE application_name = $1
+          AND wait_event_type = 'Lock' AND position('UPDATE durable_runs' IN query) > 0) AS waiting`, [heartbeatName]);
+      if (observed.rows[0]?.waiting) { blocked = true; break; }
+      await new Promise(resolve => setTimeout(resolve, 25));
+    }
+    assert.ok(blocked, "real heartbeat must wait for the admission transaction's durable row lock");
+    Atomics.store(barrier, 0, 1); Atomics.notify(barrier, 0);
+    const admitted = await admission.result, renewed = await heartbeat.result;
+    assert.ok(admitted.ok && admitted.admission);
+    assert.ok(renewed.ok);
+    const captured = admitted.admission;
+    assert.equal(captured.continuingArtifact.parentDispatchAuthority.durableRunVersion, parent.version);
+    assert.equal(captured.publicationSha256, remoteWorkerAssignmentCanonicalSha256(publication));
+    const current = runs.getRun(parent.runId);
+    assert.ok(current.version > parent.version);
+    const live = assignments.resolveActiveChatExecution({ ...ref, continuingArtifact: captured.continuingArtifact }, h.fence);
+    assert.equal(live.workload.durableRunPayloadSha256, captured.continuingArtifact.durableRunPayloadSha256);
+    assert.throws(() => assignments.admitChatArtifactPublication(input, h.fence));
+    assert.equal(new RemoteWorkerArtifactRepository(scope.db).getUpload(ref.registryWorkspaceId, ref.assignmentId,
+      ref.assignmentGeneration, upload.uploadId).committedManifestSha256, null);
+  } finally {
+    Atomics.store(barrier, 0, 1); Atomics.notify(barrier, 0);
+    await Promise.allSettled(pending);
+    await scope.teardown();
+  }
+});
+
+type ArtifactAdmissionRaceResult = { ok: true; admission?: RemoteWorkerChatArtifactAdmission } | { ok: false };
+
+function runArtifactAdmissionRaceWorker(connectionString: string, applicationName: string, request: unknown): {
+  locked: Promise<void>; result: Promise<ArtifactAdmissionRaceResult>;
+} {
+  const extension = import.meta.url.endsWith(".js") ? ".js" : ".ts";
+  const worker = new Worker(ARTIFACT_ADMISSION_RACE_WORKER, { eval: true, workerData: {
+    connectionOptions: { connectionString, database: decodeURIComponent(new URL(connectionString).pathname.slice(1)) || "postgres",
+      applicationName, pool: { max: 1, connectionTimeoutMs: 10_000 } }, request,
+    repositoryModuleUrl: new URL(`./remote-worker-assignment-repo${extension}`, import.meta.url).href,
+    durableModuleUrl: new URL(`./durable-run-repo${extension}`, import.meta.url).href,
+    postgresModuleUrl: new URL(`./postgres/sync${extension}`, import.meta.url).href,
+    tsxApiUrl: import.meta.resolve("tsx/esm/api"),
+  } });
+  let resolveLocked!: () => void, rejectLocked!: (error: Error) => void;
+  const locked = new Promise<void>((resolve, reject) => { resolveLocked = resolve; rejectLocked = reject; });
+  const result = new Promise<ArtifactAdmissionRaceResult>((resolve, reject) => {
+    worker.on("message", (message: { kind: "locked" } | { kind: "result"; result: ArtifactAdmissionRaceResult }) => {
+      if (message.kind === "locked") resolveLocked();
+      else { rejectLocked(new Error("Admission worker finished before its lock barrier.")); resolve(message.result); }
+    });
+    worker.once("error", error => { rejectLocked(error); reject(error); });
+    worker.once("exit", () => { rejectLocked(new Error("Admission worker exited before barrier.")); reject(new Error("Admission worker exited before result.")); });
+  });
+  // Heartbeat mode has no lock barrier, and callers attach result after the
+  // admission barrier. Attach handlers now to avoid transient unhandled errors.
+  void locked.catch(() => undefined); void result.catch(() => undefined);
+  return { locked, result };
+}
+
+const ARTIFACT_ADMISSION_RACE_WORKER = String.raw`
+const { parentPort, workerData } = require("node:worker_threads");
+void (async () => {
+  let db, result;
+  try {
+    const { tsImport } = await import(workerData.tsxApiUrl);
+    const { PostgresSyncDatabaseClient } = await tsImport(workerData.postgresModuleUrl, workerData.postgresModuleUrl);
+    db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
+    if (workerData.request.operation === "heartbeat") {
+      const { DurableRunRepository } = await tsImport(workerData.durableModuleUrl, workerData.durableModuleUrl);
+      result = { ok: !!new DurableRunRepository(db).renewLease(workerData.request.input) };
+    } else {
+      const { RemoteWorkerAssignmentRepository } = await tsImport(workerData.repositoryModuleUrl, workerData.repositoryModuleUrl);
+      let gated = false;
+      const delegate = new Proxy(db, { get(target, property) {
+        if (property === "prepare") return sql => {
+          const statement = target.prepare(sql);
+          if (!sql.includes("FROM remote_worker_artifact_uploads")) return statement;
+          return new Proxy(statement, { get(stmt, method) {
+            if (method === "get") return (...args) => {
+              const value = stmt.get(...args);
+              if (!gated) {
+                gated = true; parentPort.postMessage({ kind: "locked" });
+                if (Atomics.wait(new Int32Array(workerData.request.barrier), 0, 0, 30000) === "timed-out")
+                  throw new Error("Admission lock barrier timed out.");
+              }
+              return value;
+            };
+            const value = Reflect.get(stmt, method); return typeof value === "function" ? value.bind(stmt) : value;
+          } });
+        };
+        const value = Reflect.get(target, property); return typeof value === "function" ? value.bind(target) : value;
+      } });
+      const admitted = new RemoteWorkerAssignmentRepository(delegate).admitChatArtifactPublication(workerData.request.input, workerData.request.fence);
+      result = { ok: true, admission: admitted.admission };
+    }
+  } catch { result = { ok: false }; }
+  finally { if (db) db.close(); }
+  parentPort.postMessage({ kind: "result", result });
+})();
+`;
 
 postgresIt("native approval binding upgrades existing PostgreSQL expectation rows", { timeout: 120_000 }, async () => {
   assert.ok(postgresConnectionString);
@@ -477,11 +643,11 @@ it("worker tool model budgets use canonical protected authority on SQLite", () =
   }
 });
 
-it("worker artifact publication preserves continuous authority on SQLite", () => {
+it("worker artifact publication preserves continuous authority on SQLite", async () => {
   const db = createDatabase({ dbPath: ":memory:" });
   try {
     const h = seedProtectedFenceHarness(db, "sqlite-artifact", true);
-    verifyWorkerArtifactContinuation(
+    await verifyWorkerArtifactContinuation(
       db,
       "sqlite-artifact",
       {
@@ -965,7 +1131,7 @@ describe("RemoteWorkerAssignmentRepository live PostgreSQL authority", () => {
           toolBudget.fence,
         );
         const artifactWorker = seedProtectedFenceHarness(setupDb, `${suffix}-artifact`, true);
-        verifyWorkerArtifactContinuation(
+        await verifyWorkerArtifactContinuation(
           setupDb,
           `${suffix}-artifact`,
           {

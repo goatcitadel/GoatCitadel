@@ -71,7 +71,12 @@ export function McpDeleteControl({
               </dd>
             </dl>
             <div className="flex flex-wrap gap-2">
-              <Button variant="danger" disabled={control.mutation.pending} onClick={() => void control.confirm()}>
+              <Button
+                variant="danger"
+                className="max-sm:min-h-11"
+                disabled={control.mutation.pending}
+                onClick={() => void control.confirm()}
+              >
                 Delete reviewed MCP server
               </Button>
               <Button disabled={control.mutation.phase === "saving"} onClick={control.cancel}>

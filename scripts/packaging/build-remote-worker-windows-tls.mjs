@@ -1,7 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { createHash } from "node:crypto";
-import { spawnSync } from "node:child_process";
+import { runOwnedWindowsCompilerSync } from "./lib/native-compiler-job.mjs";
 import { fileURLToPath } from "node:url";
 import { withNativeCompilerScratch } from "./lib/native-compiler-scratch.mjs";
 import {
@@ -147,11 +147,12 @@ export function compileTlsNative({
   const output = [];
   withNativeCompilerScratch((scratch) => {
     for (const [index, args] of commands.entries()) {
-      const result = spawnSync(toolchain.compilerPath, args, {
+      const result = runOwnedWindowsCompilerSync(toolchain.compilerPath, args, {
         cwd: outputDirectory,
         encoding: "utf8",
         windowsHide: true,
         timeout: compilerTimeoutMs,
+        scratch,
         env: {
           SystemRoot: process.env.SystemRoot,
           PATH: path.dirname(toolchain.compilerPath),
@@ -160,6 +161,7 @@ export function compileTlsNative({
         },
       });
       output.push(`${commands.length > 1 ? `Native build step ${index + 1}/${commands.length}\n` : ""}${result.stdout ?? ""}${result.stderr ?? ""}`);
+      output.push(`\nNative compiler ownership: ${JSON.stringify(result.ownership)}\n`);
       if (result.error || result.status !== 0) {
         fs.writeFileSync(path.join(outputDirectory, `${outputName}.build.log`), output.join(""), { flag: "wx" });
         throw new Error(`Native TLS build failed (${result.status ?? result.error?.code}): ${output.join("")}`);

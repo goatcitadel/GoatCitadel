@@ -92,7 +92,12 @@ it.each([404, 405, 200])("settles independent direct fallbacks after one reader 
   });
   vi.stubGlobal("fetch", fetch);
   beginStartupReadWindow(scope);
-  const cancelled = fetchStartupRead(scope.installation + "/api/v1/settings", init(controller.signal), scope, () => true);
+  const cancelled = fetchStartupRead(
+    scope.installation + "/api/v1/settings",
+    init(controller.signal),
+    scope,
+    () => true,
+  );
   const kept = fetchStartupRead(scope.installation + "/api/v1/agents", init(), scope, () => true);
   const outcomes = Promise.allSettled([cancelled, kept]);
   await vi.waitFor(() => expect(finishPeer).toBeTypeOf("function"));
@@ -282,4 +287,31 @@ it("coalesces promise-scheduled metadata reads within the same browser task", as
   expect(fetch).toHaveBeenCalledOnce();
   expect(await responses[0]!.json()).toEqual({ owner: "settings" });
   expect(await responses[1]!.json()).toEqual({ owner: "agents" });
+});
+
+it("coalesces a no-store workspace Messaging read with startup reads and preserves unread counts", async () => {
+  const overview = {
+    workspaceId: "workspace-a",
+    channels: [{ connectionId: "channel-a", conversations: [{ sessionId: "session-a", newMessageCount: 7 }] }],
+  };
+  const fetch = vi.fn().mockResolvedValue(json({ items: [result(overview), result({ revision: 3 })] }));
+  vi.stubGlobal("fetch", fetch);
+  beginStartupReadWindow(scope);
+  const messaging = fetchStartupRead(
+    scope.installation + "/api/v1/chat/messaging?workspaceId=workspace-a",
+    { ...init(), cache: "no-store" },
+    scope,
+    () => true,
+  );
+  const settings = fetchStartupRead(scope.installation + "/api/v1/settings", init(), scope, () => true);
+  const responses = await Promise.all([messaging, settings]);
+  expect(fetch).toHaveBeenCalledOnce();
+  const request = new URL(fetch.mock.calls[0]![0]);
+  expect(request.pathname).toBe("/api/v1/startup-reads");
+  expect(JSON.parse(request.searchParams.get("reads")!).map((row: { path: string }) => row.path)).toEqual([
+    "/api/v1/chat/messaging?workspaceId=workspace-a",
+    "/api/v1/settings",
+  ]);
+  expect(await responses[0]!.json()).toEqual(overview);
+  expect(await responses[1]!.json()).toEqual({ revision: 3 });
 });

@@ -823,10 +823,10 @@ test(
         asyncStorageModuleUrl: new URL(`../async-storage${runtimeModuleExtension}`, import.meta.url).href,
         postgresModuleUrl: new URL(`./sync${runtimeModuleExtension}`, import.meta.url).href,
         approvalServiceModuleUrl: new URL(
-          `../../../../apps/gateway/src/services/approval-resolution-effects-service${runtimeModuleExtension}`,
+          "../../../../apps/gateway/dist/services/approval-resolution-effects-service.js",
           import.meta.url,
         ).href,
-        tsxApiUrl: import.meta.resolve("tsx/esm/api"),
+        tsxApiUrl: runtimeModuleExtension === ".ts" ? import.meta.resolve("tsx/esm/api") : undefined,
       };
       workerA = new Worker(DELEGATION_APPROVAL_FANIN_WORKER_SOURCE, {
         eval: true,
@@ -6812,19 +6812,26 @@ async function waitForWorkerSignalCount(
   label: string,
   workersCompletion: Promise<void>,
 ): Promise<void> {
+  let cancelled = false;
   const waitForCount = (async () => {
     const deadline = Date.now() + timeoutMs;
-    while (signals.length < expected && Date.now() < deadline) {
+    while (!cancelled && signals.length < expected && Date.now() < deadline) {
       await new Promise((resolve) => setTimeout(resolve, 25));
     }
-    assert.ok(signals.length >= expected, `expected ${expected} ${label}(s), received ${signals.length}`);
+    if (!cancelled) {
+      assert.ok(signals.length >= expected, `expected ${expected} ${label}(s), received ${signals.length}`);
+    }
   })();
-  await Promise.race([
-    waitForCount,
-    workersCompletion.then(() => {
-      assert.ok(signals.length >= expected, `workers completed before reporting ${expected} ${label}(s)`);
-    }),
-  ]);
+  try {
+    await Promise.race([
+      waitForCount,
+      workersCompletion.then(() => {
+        assert.ok(signals.length >= expected, `workers completed before reporting ${expected} ${label}(s)`);
+      }),
+    ]);
+  } finally {
+    cancelled = true;
+  }
 }
 
 function waitForTaskUpdateWorker(worker: Worker): Promise<{ description?: string; priority?: string }> {
@@ -7049,20 +7056,19 @@ const DELEGATION_APPROVAL_FANIN_WORKER_SOURCE = String.raw`
     let asyncStorage;
     let failure;
     try {
-      const { tsImport } = await import(workerData.tsxApiUrl);
-      const { Storage } = await tsImport(workerData.storageModuleUrl, workerData.storageModuleUrl);
-      const { createLocalAsyncStorage } = await tsImport(
-        workerData.asyncStorageModuleUrl,
-        workerData.asyncStorageModuleUrl,
+      const loadStorageModule = workerData.tsxApiUrl
+        ? (await import(workerData.tsxApiUrl)).tsImport
+        : (url) => import(url);
+      const { Storage } = await loadStorageModule(workerData.storageModuleUrl, workerData.storageModuleUrl);
+      const { createLocalAsyncStorage } = await loadStorageModule(
+        workerData.asyncStorageModuleUrl, workerData.asyncStorageModuleUrl,
       );
-      const { PostgresSyncDatabaseClient } = await tsImport(
-        workerData.postgresModuleUrl,
-        workerData.postgresModuleUrl,
+      const { PostgresSyncDatabaseClient } = await loadStorageModule(
+        workerData.postgresModuleUrl, workerData.postgresModuleUrl,
       );
-      const { ApprovalEffectsService } = await tsImport(
-        workerData.approvalServiceModuleUrl,
-        workerData.approvalServiceModuleUrl,
-      );
+      // The proof runs after the workspace build. Loading the emitted Gateway
+      // owner also avoids transpiling its graph twice during worker startup.
+      const { ApprovalEffectsService } = await import(workerData.approvalServiceModuleUrl);
       db = new PostgresSyncDatabaseClient(workerData.connectionOptions);
       storage = new Storage({ db, transcriptsDir: ".", auditDir: "." });
       asyncStorage = createLocalAsyncStorage(storage);

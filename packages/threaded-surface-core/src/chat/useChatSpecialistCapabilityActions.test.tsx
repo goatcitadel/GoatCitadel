@@ -56,6 +56,13 @@ type HarnessSnapshot = {
 };
 
 let latestHarness: HarnessSnapshot | null = null;
+const actionCode = vi.hoisted(() => ({
+  load: undefined as (() => Promise<typeof import("./confirmed-capability-suggestion-action")>) | undefined,
+}));
+vi.mock("./load-confirmed-capability-suggestion-action", () => ({
+  loadConfirmedCapabilitySuggestionAction: () =>
+    actionCode.load?.() ?? import("./confirmed-capability-suggestion-action"),
+}));
 
 function makeSession(): ChatSessionRecord {
   return {
@@ -152,6 +159,8 @@ function Harness(props: {
   selectedTurnId?: string | null;
   surfaceMode?: "chat" | "cowork" | "code";
   sendingInitial?: boolean;
+  sending?: boolean;
+  sendingRevisionRef?: { current: number };
   tryBegin?: boolean;
 }) {
   const [sending, setSending] = useState(Boolean(props.sendingInitial));
@@ -184,7 +193,8 @@ function Harness(props: {
     selectedSession,
     selectedTurnId: props.selectedTurnId === undefined ? "turn-1" : props.selectedTurnId,
     surfaceMode: props.surfaceMode ?? "chat",
-    sending,
+    sending: props.sending ?? sending,
+    sendingRevisionRef: props.sendingRevisionRef,
     setError,
     setSending,
     setSpecialistCandidates,
@@ -224,10 +234,128 @@ describe("useChatSpecialistCapabilityActions", () => {
     latestHarness = null;
     vi.clearAllMocks();
     setupApiDefaults();
+    actionCode.load = undefined;
     Object.defineProperty(globalThis, "window", {
       configurable: true,
       value: { location: { hash: "" } },
     });
+  });
+
+  it("keeps confirmation pending while action code loads and refuses a departed session", async () => {
+    let release!: (code: typeof import("./confirmed-capability-suggestion-action")) => void;
+    const code = new Promise<typeof import("./confirmed-capability-suggestion-action")>((resolve) => {
+      release = resolve;
+    });
+    actionCode.load = vi.fn(() => code);
+    let renderer!: ReturnType<typeof create>;
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      latestHarness!.result.handleCapabilitySuggestionAction(makeCapabilitySuggestion());
+    });
+    expect(actionCode.load).not.toHaveBeenCalled();
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = latestHarness!.result.confirmCapabilitySuggestionAction();
+    });
+    expect(latestHarness!.result.capabilitySuggestionPending).toBe(true);
+    expect(actionCode.load).toHaveBeenCalledOnce();
+    expect(fetchSkillsMock).not.toHaveBeenCalled();
+    await act(async () => {
+      renderer.update(<Harness selectedSession={{ ...makeSession(), sessionId: "session-2" }} />);
+    });
+    expect(latestHarness!.result.capabilitySuggestionPending).toBe(false);
+    await act(async () => {
+      release(await import("./confirmed-capability-suggestion-action"));
+      await pending;
+    });
+    expect(fetchSkillsMock).not.toHaveBeenCalled();
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
+    expect(latestHarness!.notices).toEqual([]);
+  });
+
+  it("reports action code failure without dispatch and allows explicit retry", async () => {
+    actionCode.load = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("Capability controls could not load."))
+      .mockImplementation(() => import("./confirmed-capability-suggestion-action"));
+    await act(async () => {
+      create(<Harness />);
+    });
+    const suggestion = makeCapabilitySuggestion();
+    await act(async () => latestHarness!.result.handleCapabilitySuggestionAction(suggestion));
+    await act(async () => latestHarness!.result.confirmCapabilitySuggestionAction());
+    expect(latestHarness!.errors).toContain("Capability controls could not load.");
+    expect(latestHarness!.result.capabilitySuggestionPending).toBe(false);
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
+    await act(async () => latestHarness!.result.handleCapabilitySuggestionAction(suggestion));
+    await act(async () => latestHarness!.result.confirmCapabilitySuggestionAction());
+    expect(updateSkillStateMock).toHaveBeenCalledOnce();
+  });
+
+  it.each(["turn", "mode", "sending"] as const)(
+    "revokes held action code after a same-session %s change and return without revision refs",
+    async (change) => {
+      let release!: (code: typeof import("./confirmed-capability-suggestion-action")) => void;
+      const code = new Promise<typeof import("./confirmed-capability-suggestion-action")>((resolve) => {
+        release = resolve;
+      });
+      actionCode.load = vi.fn(() => code);
+      let renderer!: ReturnType<typeof create>;
+      await act(async () => {
+        renderer = create(<Harness />);
+      });
+      await act(async () => latestHarness!.result.handleCapabilitySuggestionAction(makeCapabilitySuggestion()));
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = latestHarness!.result.confirmCapabilitySuggestionAction();
+      });
+      expect(latestHarness!.result.capabilitySuggestionPending).toBe(true);
+      const changed =
+        change === "turn"
+          ? { selectedTurnId: "turn-2" }
+          : change === "mode"
+            ? { surfaceMode: "code" as const }
+            : { sending: true };
+      await act(async () => renderer.update(<Harness {...changed} />));
+      await act(async () => renderer.update(<Harness />));
+      expect(latestHarness!.result.capabilitySuggestionPending).toBe(false);
+      await act(async () => {
+        release(await import("./confirmed-capability-suggestion-action"));
+        await pending;
+      });
+      expect(fetchSkillsMock).not.toHaveBeenCalled();
+      expect(updateSkillStateMock).not.toHaveBeenCalled();
+      expect(latestHarness!.errors).toEqual([]);
+      expect(latestHarness!.notices).toEqual([]);
+    },
+  );
+
+  it("does not publish a code-load failure after the sending revision rotates", async () => {
+    let reject!: (error: Error) => void;
+    const code = new Promise<typeof import("./confirmed-capability-suggestion-action")>((_, fail) => {
+      reject = fail;
+    });
+    actionCode.load = vi.fn(() => code);
+    const sendingRevisionRef = { current: 1 };
+    await act(async () => {
+      create(<Harness sendingRevisionRef={sendingRevisionRef} />);
+    });
+    await act(async () => latestHarness!.result.handleCapabilitySuggestionAction(makeCapabilitySuggestion()));
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = latestHarness!.result.confirmCapabilitySuggestionAction();
+    });
+    sendingRevisionRef.current += 1;
+    await act(async () => {
+      reject(new Error("Obsolete code-load failure"));
+      await pending;
+    });
+    expect(latestHarness!.errors).toEqual([]);
+    expect(latestHarness!.result.capabilitySuggestionPending).toBe(false);
+    expect(fetchSkillsMock).not.toHaveBeenCalled();
+    expect(updateSkillStateMock).not.toHaveBeenCalled();
   });
 
   it.each(["draft", "patch", "activate"] as const)(
@@ -563,6 +691,72 @@ describe("useChatSpecialistCapabilityActions", () => {
     expect(latestHarness?.mcpTemplates[0]?.templateId).toBe("template-1");
     expect((globalThis.window as any).location.hash).toBe("mcp");
   });
+
+  it.each(["session", "unmount"] as const)(
+    "revokes capability construction when %s changes during the first-use builder import",
+    async (change) => {
+      let release!: () => void;
+      let observed!: () => void;
+      const requested = new Promise<void>((resolve) => {
+        observed = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      vi.doMock("./capability-candidate-builders.js", async () => {
+        observed();
+        await gate;
+        return await vi.importActual<typeof import("./capability-candidate-builders.js")>(
+          "./capability-candidate-builders.js",
+        );
+      });
+      let renderer!: ReturnType<typeof create>;
+      let operation: Promise<void> | undefined;
+      let unmounted = false;
+      try {
+        await act(async () => {
+          renderer = create(<Harness />);
+          await flushEffects();
+        });
+        const suggestion = makeCapabilitySuggestion({
+          kind: "code_mode_build",
+          recommendedAction: "build_code_mode_skill_candidate",
+          title: "Build report helper",
+          summary: "Build a reusable report helper.",
+          reason: "No current capability matches.",
+        });
+        await act(async () => {
+          latestHarness!.result.handleCapabilitySuggestionAction(suggestion);
+        });
+        await act(async () => {
+          operation = latestHarness!.result.confirmCapabilitySuggestionAction();
+          await requested;
+        });
+        expect(createCapabilityProposalMock).not.toHaveBeenCalled();
+        expect(createCodeModeRunMock).not.toHaveBeenCalled();
+        await act(async () => {
+          if (change === "unmount") {
+            renderer.unmount();
+            unmounted = true;
+          } else {
+            renderer.update(<Harness selectedSession={{ ...makeSession(), sessionId: "session-2" }} />);
+          }
+          await flushEffects();
+        });
+        await act(async () => {
+          release();
+          await operation;
+        });
+        expect(createCapabilityProposalMock).not.toHaveBeenCalled();
+        expect(createCodeModeRunMock).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await operation;
+        if (renderer && !unmounted) await act(async () => renderer.unmount());
+        vi.doUnmock("./capability-candidate-builders.js");
+      }
+    },
+  );
 
   it("creates a proposal and Code Mode run for reusable capability build suggestions", async () => {
     await act(async () => {

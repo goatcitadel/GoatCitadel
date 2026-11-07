@@ -11,27 +11,42 @@ type Input = {
   selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
   workspaceId: NonNullable<MissionThreadedControllerHostProps["workspaceId"]>;
   setAgenticRunTree: React.Dispatch<React.SetStateAction<AgenticRunTreeResponse | null>>;
+  threadReady: boolean;
   /** Changes when the run may have moved on (an approval was settled, the latest turn changed state). */
   refreshKey?: string;
 };
 
 /** Reads the selected session run tree, ignoring obsolete async completions. */
-export function useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRunTree, refreshKey }: Input) {
-  const resolveAgenticRunTree = useCallback(async (canReadTree?: () => boolean): Promise<AgenticRunTreeResponse | null> => {
-    if (!selection.selectedSessionId) {
-      return null;
-    }
-    const response = await fetchAgenticRuns({
-      workspaceId,
-      sessionId: selection.selectedSessionId,
-      surface: "chat",
-      limit: 1,
-    });
-    const runId = response.items[0]?.runId;
-    return runId && canReadTree?.() !== false ? fetchAgenticRunTree(runId, { workspaceId }) : null;
-  }, [selection.selectedSessionId, workspaceId]);
+export function useChatAgenticTreeRefresh({
+  selection,
+  workspaceId,
+  setAgenticRunTree,
+  threadReady,
+  refreshKey,
+}: Input) {
+  const resolveAgenticRunTree = useCallback(
+    async (canReadTree?: () => boolean): Promise<AgenticRunTreeResponse | null> => {
+      if (!selection.selectedSessionId) {
+        return null;
+      }
+      const response = await fetchAgenticRuns({
+        workspaceId,
+        sessionId: selection.selectedSessionId,
+        surface: "chat",
+        limit: 1,
+      });
+      const runId = response.items[0]?.runId;
+      return runId && canReadTree?.() !== false ? fetchAgenticRunTree(runId, { workspaceId }) : null;
+    },
+    [selection.selectedSessionId, workspaceId],
+  );
 
   useEffect(() => {
+    // Wait for the selected thread's first real refresh key before loading its tree.
+    if (!threadReady) {
+      setAgenticRunTree(null);
+      return;
+    }
     let cancelled = false;
     void resolveAgenticRunTree(() => !cancelled)
       .then((tree) => {
@@ -48,7 +63,7 @@ export function useChatAgenticTreeRefresh({ selection, workspaceId, setAgenticRu
     return () => {
       cancelled = true;
     };
-  }, [resolveAgenticRunTree, setAgenticRunTree, refreshKey]);
+  }, [resolveAgenticRunTree, setAgenticRunTree, threadReady, refreshKey]);
 
   return { resolveAgenticRunTree };
 }

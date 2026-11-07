@@ -1,6 +1,53 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
 import { clickClassicOwnerNavigation } from "./classic-owner-navigation.mjs";
+import { citadelPresenceInit,assertCitadelPresenceProvenance } from "./citadel-presence-provenance.mjs";
+export { assertCitadelPresenceHeartbeat } from "./citadel-presence-provenance.mjs";
+
+export function assertCitadelNativeGovernanceHref({ href, sourceUrl, citadelId, workspaceId }) {
+  assert.ok(typeof href === "string" && href.startsWith("/") && !href.startsWith("//") && !href.includes("\\"));
+  const source = new URL(sourceUrl), expected = new URL("/library/citadel-overview", source);
+  expected.search = source.search;
+  expected.searchParams.set("citadelId", citadelId);
+  expected.searchParams.set("workspaceId", workspaceId);
+  expected.searchParams.delete("shell"); expected.searchParams.delete("shellScope");
+  expected.searchParams.set("shell", "cockpit"); expected.hash = source.hash;
+  const actual = new URL(href, source);
+  assert.equal(actual.origin, source.origin);
+  assert.equal(actual.href, expected.href, "Native governance link must retain its exact Citadel/workspace and carried route state");
+  return actual.href;
+}
+
+export async function navigateCitadelProofSettingsPage(page, variant, section) {
+  assert.ok(variant === "desktop" || variant === "mobile");
+  assert.ok(section === "general" || section === "citadel");
+  const navigation = page.getByRole("navigation", { name: "Settings pages", exact: true });
+  const href = `/settings/${section}`;
+  if (variant === "mobile") {
+    await navigation.getByRole("combobox", { name: "Settings pages: choose a section", exact: true }).selectOption(href);
+  } else {
+    const link = navigation.getByRole("link", { name: section === "general" ? "General" : "Citadel", exact: true });
+    assert.equal(await link.getAttribute("href"), href); await link.click();
+  }
+  await retainCitadelGuardedNavigation(page, url => url.pathname === href);
+}
+
+async function retainCitadelGuardedNavigation(page, expectedUrl) {
+  const leave = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
+  // Either the actual owner raises its review or it completes with the retained editor already closed.
+  const first = await Promise.race([
+    leave.waitFor({ state: "visible", timeout: 30_000 }).then(() => "review"),
+    page.waitForURL(expectedUrl, { timeout: 30_000 }).then(() => "destination"),
+  ]);
+  if (first === "review") {
+    const keep = leave.getByRole("button", { name: "Keep draft and close", exact: true });
+    await keep.waitFor(); assert.equal(await keep.isEnabled(), true);
+    await keep.click(); await leave.waitFor({ state: "hidden" });
+  }
+  await page.waitForURL(expectedUrl);
+  return first === "review";
+}
 
 const profile = ({ hasCharter: _projection, ...record }) => record;
 export function assertCitadelMetadataAgreement({ before, request, receipt, owner, existingIds = [] }) {
@@ -44,23 +91,6 @@ export function assertCitadelClassicRetention({ before, after, submitted, displa
   assert.deepEqual(profile(owner), profile(receipt), "Navigation changed the canonical Citadel record.");
 }
 
-/** The classic shell publishes only this observed presence lease while its owner mounts. */
-export function assertCitadelPresenceHeartbeat({ method, pathname, body, status, receipt }, expected) {
-  assert.equal(method, "PUT"); assert.equal(pathname, "/api/v1/notifications/presence");
-  assert.deepEqual(Object.keys(body).sort(), ["clientId", "focused", "leaseId", "ttlMs", "visible", "workspaceId"]);
-  assert.equal(body.workspaceId, expected.workspaceId);
-  for (const field of ["clientId", "leaseId"]) {
-    assert.ok(typeof expected[field] === "string" && expected[field].length > 0);
-    assert.equal(body[field], expected[field]);
-  }
-  assert.equal(typeof body.focused, "boolean"); assert.equal(typeof body.visible, "boolean");
-  assert.equal(body.ttlMs, 90_000); assert.equal(status, 200);
-  assert.deepEqual(Object.keys(receipt).sort(), ["clientId", "expiresAt", "focused", "leaseId", "updatedAt", "visible", "workspaceId"]);
-  for (const field of ["workspaceId", "clientId", "leaseId", "focused", "visible"]) assert.equal(receipt[field], body[field]);
-  assert.ok(Number.isFinite(Date.parse(receipt.updatedAt)));
-  assert.equal(Date.parse(receipt.expiresAt) - Date.parse(receipt.updatedAt), body.ttlMs);
-}
-
 /** Real directory writes against new disposable records only; no governance or active-selection changes. */
 export async function runCockpitCitadelDirectoryProof({ context, browser, stack, citadelId, viewports, deps }) {
   const { assertOk, auditPageAccessibility, axeSourcePath, buildVerificationUiUrl, emptyArtifacts,
@@ -82,6 +112,8 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
         const description = "Disposable native Citadel metadata fixture.", editedDescription = "Reviewed metadata only; no governance changes.";
         const theme = variant === "mobile" ? "light" : "dark";
         browserContext = await browser.newContext({ viewport, colorScheme: theme });
+        const presenceClientId=randomUUID(),presenceObserverKey="__syntheticCitadelPresenceObserver";
+        await browserContext.addInitScript(citadelPresenceInit,{clientId:presenceClientId,observerKey:presenceObserverKey,limit:256,gatewayOrigin:new URL(stack.gatewayUrl).origin});
         await browserContext.addInitScript(value => { window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"); window.localStorage.setItem("goatcitadel.ui.theme.v1", value); }, theme);
         await installMissionControlNextBrowserState(browserContext, "default", citadelId);
         page = await browserContext.newPage();
@@ -175,8 +207,8 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
         assertCitadelMetadataAgreement({ before: saved, request: writes[4].body, receipt: lostReceipt, owner: await read(saved.citadelId) });
         await page.unroute(`**${ownerPath}`, lose);
         await editor.getByRole("button", { name: "Close Citadel editor and keep draft", exact: true }).click();
-        const nav = page.getByRole("navigation", { name: "Settings pages", exact: true });
-        await nav.getByRole("link", { name: "General", exact: true }).click(); await nav.getByRole("link", { name: "Citadel", exact: true }).click();
+        await navigateCitadelProofSettingsPage(page, variant, "general");
+        await navigateCitadelProofSettingsPage(page, variant, "citadel");
         await page.getByRole("tab", { name: "Workspaces", exact: true }).click();
         // The unknown outcome deliberately keeps its lock; remount can reuse a fresh query-cache snapshot.
         // Follow the operator's explicit inspection action instead of assuming an automatic owner refresh.
@@ -186,14 +218,31 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
         assert.equal(await panel.getByRole("button", { name: `Archive Citadel ${unknownName}`, exact: true }).isDisabled(), true);
         assert.equal(writes.length, 5); assert.deepEqual(await selection(), originalSelection);
         await capture("unknown-locked");
-        stage = "retain unknown write and dirty draft through the actual classic owner link";
+        stage = "retain unknown write through the actual native governance link";
         const transitionBefore = { documentNavigations, browserMutations: writes.length, selection: await selection() };
         const sentinel = `citadel-owner-${unique}`;
         await page.evaluate(value => { window.__citadelProofDocument = value; window.__citadelProofRoot = document.getElementById("root"); }, sentinel);
-        await panel.getByRole("link", { name: "Open Citadel governance", exact: true }).click();
-        const leave = page.getByRole("dialog", { name: "Unsaved changes", exact: true });
-        if (await leave.isVisible()) await leave.getByRole("button", { name: "Keep draft and close", exact: true }).click();
-        await page.waitForURL(url => url.pathname === "/library/citadel-overview" && url.searchParams.get("shell") === "classic");
+        const governance = panel.getByRole("link", { name: "Open Citadel governance", exact: true });
+        const governanceUrl = assertCitadelNativeGovernanceHref({ href: await governance.getAttribute("href"),
+          sourceUrl: page.url(), citadelId: originalSelection.citadel, workspaceId: originalSelection.workspace });
+        await governance.click();
+        const nativeReviewKept = await retainCitadelGuardedNavigation(page, url => url.href === governanceUrl);
+        const nativeAfter = await page.evaluate(value => ({ sameDocument: window.__citadelProofDocument === value,
+          sameRoot: window.__citadelProofRoot === document.getElementById("root"), shell: document.documentElement.dataset.shell }), sentinel);
+        assert.deepEqual(nativeAfter, { sameDocument: true, sameRoot: true, shell: "cockpit" });
+        assert.equal(documentNavigations, transitionBefore.documentNavigations);
+        assert.equal(writes.length, 5); assert.deepEqual(await selection(), originalSelection);
+        assert.deepEqual(profile(await read(saved.citadelId)), profile(lostReceipt));
+        stage = "retain unknown write and dirty draft through the actual Command palette Classic request";
+        await page.keyboard.press("Control+k");
+        const palette = page.getByRole("dialog", { name: "Command palette", exact: true });
+        await palette.getByRole("combobox", { name: "Search or run a command", exact: true }).fill("Switch to classic Mission Control");
+        const presenceBeforeClassic=await page.evaluate(key=>window[key]?.snapshot(),presenceObserverKey);
+        assert.ok(presenceBeforeClassic?.complete,"Presence observer incomplete before actual Classic request");
+        const presenceTransition={afterSend:presenceBeforeClassic.sends.length,afterGeneration:presenceBeforeClassic.generations.at(-1)?.sequence};
+        await palette.getByRole("option", { name: "Switch to classic Mission Control", exact: true }).click();
+        const classicReviewKept = await retainCitadelGuardedNavigation(page, url =>
+          url.origin === new URL(governanceUrl).origin && url.searchParams.get("shell") === "classic");
         await page.waitForFunction(() => document.documentElement.dataset.shell === "classic");
         await clickClassicOwnerNavigation(page, page.getByRole("navigation", { name: "Primary mission areas", exact: true }).getByRole("button", { name: "Settings", exact: true }));
         await clickClassicOwnerNavigation(page, page.getByRole("button", { name: /^Citadel: / }));
@@ -216,18 +265,25 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
         const final = (await list()).items;
         for (const previous of original) assert.deepEqual(final.find(item => item.citadelId === previous.citadelId), previous);
         await capture("classic-unknown-locked", classicEditor);
-        const expectedPresence = await page.evaluate(() => ({ workspaceId: window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"),
-          clientId: window.sessionStorage.getItem("goatcitadel.notification-client-id"), leaseId: window.sessionStorage.getItem("goatcitadel.notification-lease-id") }));
         const observedPresence = presence.slice();
         await Promise.all(observedPresence.map(entry => entry.completed));
-        for (const entry of observedPresence) { if (entry.error) throw entry.error; assertCitadelPresenceHeartbeat(entry, expectedPresence); }
+        for (const entry of observedPresence)if(entry.error)throw entry.error;
+        const presenceState=await page.evaluate(key=>({snapshot:window[key]?.snapshot(),clientId:window.sessionStorage.getItem("goatcitadel.notification-client-id"),workspaceId:window.localStorage.getItem("goatcitadel.ui.workspace_id.v1")}),presenceObserverKey);
+        assert.equal(presenceState.clientId,presenceClientId);assert.equal(presenceState.workspaceId,"default");
+        const presenceProof=assertCitadelPresenceProvenance({snapshot:presenceState.snapshot,entries:observedPresence,clientId:presenceClientId,workspaceId:"default",transition:presenceTransition});
+        // Persist matched synthetic identities/counts only; unrelated generation ledger never leaves the proof.
+        const {redactSecretText}=await import("../../../../packages/contracts/dist/secret-redaction.js");
+        const presenceEvidenceText=redactSecretText(JSON.stringify(presenceProof)).value;
+        assert.ok(Buffer.byteLength(presenceEvidenceText)<=8192,"Matched presence evidence exceeds bound");
+        const presenceEvidence=JSON.parse(presenceEvidenceText);
         assert.equal(writes.length, 5);
         return { status: "passed", metrics: { browserMutations: 5, fixturePeerMutations: 1, staleMetadataWrites: 0, cancelLifecycleWrites: 0,
           systemPresenceHeartbeats: observedPresence.length, systemPresenceOwner: "PUT /api/v1/notifications/presence",
-          systemPresenceScope: expectedPresence.workspaceId, systemPresenceReceiptsConfirmed: true,
-          systemPresenceEvidence: observedPresence.map(({ method, pathname, body, status, receipt }) => ({ method, pathname, body, status, receipt })),
+          systemPresenceScope: "default", systemPresenceReceiptsConfirmed: true,
+          systemPresenceGenerationProof:presenceEvidence,
           exactOwnerReceipts: true, archiveRestoreConfirmed: true, activeSelectionUnchanged: true, preexistingCitadelsUnchanged: true,
-          retainedUnknownAcrossRemount: true, sameDocumentClassicOwner: true, retainedDraftAndUnknownAcrossShells: true,
+          retainedUnknownAcrossRemount: true, nativeGovernanceScopeConfirmed: true, nativeReviewKept,
+          explicitCommandPaletteClassicRequest: true, classicReviewKept, sameDocumentClassicOwner: true, retainedDraftAndUnknownAcrossShells: true,
           blockingAxe: 0, limitation: "Disposable directory metadata only. Governance is inspected through the actual owner link; no charter, access policy, membership or runtime activation changes." }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page && !page.isClosed()) { try { await mkdir(screenshotDir, { recursive: true }); const file = path.join(screenshotDir, `ux-budgets-cockpit-citadel-directory-${variant}-failure.png`); await page.screenshot({ path: file, fullPage: false }); screenshots.push(relativeToRun(context, file)); } catch { /* Preserve original failure. */ } }

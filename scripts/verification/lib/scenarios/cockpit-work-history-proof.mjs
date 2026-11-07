@@ -132,8 +132,32 @@ export async function runCockpitWorkHistoryProof({ context, browser, stack, cita
             runs.map((run) => `/work/runs/${encodeURIComponent(run.runId)}?shell=cockpit`);
           if (JSON.stringify(await links()) !== JSON.stringify(expectedLinks(first.body.items)))
             throw new Error("History UI differs from first owner page.");
-          await page.getByRole("button", { name: "Load older runs", exact: true }).click();
-          await page.getByText("101 saved runs loaded.", { exact: false }).waitFor();
+          const loadOlder = page.getByRole("button", { name: "Load older runs", exact: true });
+          const historyRequests = [];
+          const observeHistory = (request, outcome) => {
+            const url = new URL(request.url());
+            if (
+              url.pathname === "/api/v1/durable/runs" &&
+              url.searchParams.get("workspaceId") === fixture.workspaceId
+            ) {
+              historyRequests.push(`${url.searchParams.has("cursor") ? "continuation" : "first page"}: ${outcome}`);
+            }
+          };
+          page.on("request", (request) => observeHistory(request, "requested"));
+          page.on("response", (response) => observeHistory(response.request(), response.status()));
+          page.on("requestfailed", (request) => observeHistory(request, "failed"));
+          const wasEnabled = await loadOlder.isEnabled();
+          try {
+            // A live refresh may disable this button after the first page renders.
+            // Use an actionable click; the row traversal below still exercises the keyboard.
+            await loadOlder.click();
+            await page.getByText("101 saved runs loaded.", { exact: false }).waitFor();
+          } catch (cause) {
+            throw new Error(
+              `History pagination after activation (button initially enabled: ${wasEnabled}; browser requests: ${historyRequests.join(", ") || "none"}).`,
+              { cause },
+            );
+          }
           const wanted = expectedLinks(expected),
             visited = new Map();
           // Traverse the real keyboard owner instead of timed scroll jumps while

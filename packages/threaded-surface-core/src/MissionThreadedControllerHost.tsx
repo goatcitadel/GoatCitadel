@@ -1,4 +1,4 @@
-import { WorkspaceChannelPlanReview } from "./chat/WorkspaceChannelPlanReview";
+import { DeferredWorkspaceChannelPlanReview } from "./chat/DeferredWorkspaceChannelPlanReview";
 import { detectComposerPaletteTrigger } from "./chat/composer-palette";
 import { createChatActiveSessionPresentation } from "./chat/controller/createChatActiveSessionPresentation";
 import { createChatChangePlanReceipt } from "./chat/controller/createChatChangePlanReceipt";
@@ -706,7 +706,8 @@ export function MissionThreadedControllerHost({
   });
   return (
     <>
-      <WorkspaceChannelPlanReview
+      <DeferredWorkspaceChannelPlanReview
+        key={workspaceId}
         workspaceId={workspaceId}
         routeSearch={routeSearch}
         onReturnToChannels={onReturnToChannels}

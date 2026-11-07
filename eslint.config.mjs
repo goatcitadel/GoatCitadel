@@ -16,6 +16,7 @@ export default tseslint.config(
       "**/.claude/**",
       "**/.worktrees/**",
       "**/.scratch/**",
+      ".superpowers/**",
       "**/.ds-sync/**",
       "ds-bundle/**",
       ".design-sync/.cache/**",

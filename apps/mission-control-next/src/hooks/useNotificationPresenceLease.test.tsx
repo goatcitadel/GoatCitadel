@@ -38,6 +38,35 @@ describe("useNotificationPresenceLease", () => {
     vi.restoreAllMocks();
   });
 
+  it("reuses a preseeded client and delegates one native UUID for the mounted lease", async () => {
+    const clientId = crypto.randomUUID();
+    window.sessionStorage.setItem("goatcitadel.notification-client-id", clientId);
+    const original = crypto.randomUUID;
+    const generated: string[] = [];
+    vi.spyOn(crypto, "randomUUID").mockImplementation(function () {
+      const value = Reflect.apply(original, crypto, []);
+      generated.push(value);
+      return value;
+    });
+    await act(async () => {
+      renderer = create(createElement(Harness, { workspaceId: "presence-native-fixture" }));
+    });
+    expect(generated).toHaveLength(1);
+    expect(mocks.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({ workspaceId: "presence-native-fixture", clientId, leaseId: generated[0], ttlMs: 90_000 }),
+    );
+    expect(generated[0]).not.toBe(clientId);
+    expect(window.sessionStorage.getItem("goatcitadel.notification-client-id")).toBe(clientId);
+    expect(window.sessionStorage.getItem("goatcitadel.notification-lease-id")).toBeNull();
+    await act(async () => {
+      renderer?.unmount();
+      renderer = undefined;
+    });
+    expect(mocks.upsert.mock.calls.at(-1)![0]).toMatchObject({
+      clientId, leaseId: generated[0], focused: false, visible: false,
+    });
+  });
+
   it("publishes focused/visible leases and explicitly releases presence on cleanup", async () => {
     await act(async () => {
       renderer = create(createElement(Harness, { workspaceId: "workspace-1", sessionId: "session-1" }));

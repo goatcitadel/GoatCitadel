@@ -1,6 +1,7 @@
 import { runCockpitChatContextProof } from "./cockpit-chat-context-proof.mjs";
 import { runCockpitProviderConnectionProof } from "./cockpit-provider-connection-proof.mjs";
 import { runCockpitWorkArtifactProof } from "./cockpit-work-artifact-proof.mjs";
+import { runCockpitWorkHistoryProof } from "./cockpit-work-history-proof.mjs";
 import { runCockpitLibraryLinkProof } from "./cockpit-library-link-proof.mjs";
 import { runCockpitLibraryPolicyProof } from "./cockpit-library-policy-proof.mjs";
 import { runCockpitWorkContextProof } from "./cockpit-work-context-proof.mjs";
@@ -85,6 +86,7 @@ const OWNER_PROOFS = {
   "mcp-policy-requests": runCockpitMcpPolicyRequestsProof,
   "provider-connection": runCockpitProviderConnectionProof,
   "work-artifact": runCockpitWorkArtifactProof,
+  "work-history": runCockpitWorkHistoryProof,
   "library-links": runCockpitLibraryLinkProof,
   "library-policy": runCockpitLibraryPolicyProof,
   "work-context": runCockpitWorkContextProof,

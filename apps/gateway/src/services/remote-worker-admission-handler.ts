@@ -18,7 +18,10 @@ const ROUTE_NOT_FOUND_BODY = canonicalJsonString({ error: "REMOTE_WORKER_ROUTE_N
 const ADMISSION_REJECTED_BODY = canonicalJsonString({ error: "REMOTE_WORKER_ADMISSION_REJECTED" });
 
 export interface RemoteWorkerAdmissionExchangePort {
-  exchange(input: RemoteWorkerAdmissionExchangeInput): Promise<RemoteWorkerAdmissionExchangeResult>;
+  exchange(
+    input: RemoteWorkerAdmissionExchangeInput,
+    signal?: AbortSignal,
+  ): Promise<RemoteWorkerAdmissionExchangeResult>;
 }
 
 export type RemoteWorkerBootstrapExchangeResponse = Readonly<
@@ -51,13 +54,16 @@ export function createRemoteWorkerAdmissionNativeRequestHandler(input: {
       return fixedJsonResponse(400, INVALID_REQUEST_BODY);
     }
     try {
-      const result = await service.exchange({
-        method: request.method,
-        rawPath: request.rawPath,
-        headers: request.headers,
-        body,
-        transportIdentity: request.transportIdentity,
-      });
+      const result = await service.exchange(
+        {
+          method: request.method,
+          rawPath: request.rawPath,
+          headers: request.headers,
+          body,
+          transportIdentity: request.transportIdentity,
+        },
+        request.signal,
+      );
       const response: RemoteWorkerBootstrapExchangeResponse = Object.freeze({
         schemaVersion: REMOTE_WORKER_BOOTSTRAP_EXCHANGE_RESPONSE_SCHEMA_VERSION,
         ...result,

@@ -3,6 +3,8 @@
 // header's "Conversations" button. Both hold the filters, Recent/Archived, the rows in
 // navigation "Conversations" (the current row has aria-current="page") and Load more.
 // These helpers drive either layout by accessible name.
+import assert from "node:assert/strict";
+
 export const CONVERSATIONS = "Conversations";
 export const CLOSE_SHEET = "Close sheet";
 const SEARCH_HIT_ACTION = "Open matching message";
@@ -29,16 +31,24 @@ export async function openConversationList(page, { timeout = 30_000 } = {}) {
   const opener = page.getByRole("button", { name: CONVERSATIONS, exact: true });
   await rail(page).or(sheet(page)).or(opener).filter({ visible: true }).first().waitFor({ timeout });
   if (await rail(page).isVisible()) return rail(page);
-  if (!(await sheet(page).isVisible())) await opener.click({ timeout });
-  await sheet(page).waitFor({ timeout });
-  return sheet(page);
+  const currentSheet = sheet(page);
+  // Selection closes the native sheet before its exit animation retires the DOM.
+  // Do not inspect that old list or toggle its opener until retirement completes.
+  if (await currentSheet.isVisible() && await currentSheet.getAttribute("data-state") === "closed") {
+    await currentSheet.waitFor({ state: "hidden", timeout });
+  }
+  if (!(await currentSheet.isVisible())) await opener.click({ timeout });
+  await currentSheet.waitFor({ timeout });
+  return currentSheet;
 }
 
 /** Close the phone sheet when it is open; the desktop rail stays. */
 export async function closeConversationList(page) {
   const open = sheet(page);
   if (!(await open.isVisible())) return;
-  await open.getByRole("button", { name: CLOSE_SHEET, exact: true }).click();
+  if (await open.getAttribute("data-state") !== "closed") {
+    await open.getByRole("button", { name: CLOSE_SHEET, exact: true }).click();
+  }
   await open.waitFor({ state: "hidden" });
 }
 
@@ -72,7 +82,9 @@ export async function readCurrentConversation(page, { expectedTitle, timeout = 1
   let label = null;
   try {
     for (;;) {
-      label = (await current.count()) ? ((await current.first().textContent()) ?? "").trim() : null;
+      const count = await current.count();
+      assert.ok(count <= 1, "Conversation list has ambiguous current rows");
+      label = count === 1 ? ((await current.textContent()) ?? "").trim() : null;
       if (!expectedTitle || label?.startsWith(expectedTitle) || Date.now() >= deadline) break;
       await page.waitForTimeout(250);
     }

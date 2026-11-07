@@ -29,11 +29,10 @@ import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { useSelectedChannelConversation } from "./use-channel-conversation";
 import { useChannelComposerProps } from "./use-channel-composer";
 import { isChannelConversation } from "./channel-conversation-scope";
-import { ThreadedBtwSideChatPanel } from "../../../features/threaded-surface/ThreadedBtwSideChatPanel";
+import { DeferredBtwSideChatPanel, DeferredSessionStatusPanel } from "./DeferredChatLeaves";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { ChatTimerPanel } from "../../../features/threaded-surface/ChatTimerPanel";
-import { ChatSessionStatusPanel } from "../../../features/threaded-surface/ChatSessionStatusPanel";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
@@ -137,7 +136,7 @@ export function ChatAreaView({
   const inspectorTab = useRef<ChatInspectorTab | null>(null);
   const [buildOpen, setBuildOpen] = useState(false);
   const [conversationsOpen, setConversationsOpen] = useState(false);
-  const active = input.activeSessionSurfaceProps;
+  const { activeSessionSurfaceProps: active, btwSideChatProps: btw } = input;
   const selectedSessionId = input.sessionRail.selectedSessionId ?? undefined;
   const inspectorIdentity = JSON.stringify([
     getGatewayApiBaseUrl(),
@@ -394,10 +393,8 @@ export function ChatAreaView({
         ) : (
           <ChatEmptyState rail={input.sessionRail} onOpenConversations={() => setConversationsOpen(true)} />
         )}
-        {active?.sessionStatusPanel?.open && !buildOpen ? (
-          <div className="cockpit-chat-status-panel overflow-y-auto border-t border-line-subtle p-3">
-            <ChatSessionStatusPanel panel={active.sessionStatusPanel} />
-          </div>
+        {active?.sessionStatusPanel ? (
+          <DeferredSessionStatusPanel key={selectedSessionId} hidden={buildOpen} panel={active.sessionStatusPanel} />
         ) : null}
         {composerProps && !buildOpen ? (
           <ChatTextComposer
@@ -407,7 +404,9 @@ export function ChatAreaView({
             onOpenSchedules={() => navigate("/work/schedules")}
           />
         ) : null}
-        {input.btwSideChatProps ? <ThreadedBtwSideChatPanel sideChat={input.btwSideChatProps} /> : null}
+        {btw ? (
+          <DeferredBtwSideChatPanel key={JSON.stringify([btw.workspaceId, btw.parentSessionId])} sideChat={btw} />
+        ) : null}
         {active?.chatTimerPanel ? <ChatTimerPanel panel={active.chatTimerPanel} /> : null}
       </ChatMainColumn>
     </section>

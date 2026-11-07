@@ -1,6 +1,7 @@
 /* eslint-disable max-lines -- keep async/sync migration, bootstrap replacement, and final catalog fencing in one transaction owner. */
 
 import { createHash } from "node:crypto";
+import { buildScopedRoutedContextV128Sql, scopePathFlavorV122Sql } from "./schema-convergence-v229.js";
 import type { PoolClient } from "pg";
 import { APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL } from "../approval-execution-linkage-postgres-compatibility.js";
 import type { DatabaseClient } from "../db.js";
@@ -1252,6 +1253,56 @@ async function reconcileLegacyCompoundV124Ledger(
   return client.getAppliedMigrationRows(tx, migrationSchema);
 }
 
+/** Exact frozen historical SQL, scoped to the transaction's validated namespace. */
+function postgresAtomicMigrationStatements(
+  migration: PostgresMigration,
+  migrationSchema: PostgresMigrationSchemaIdentity | undefined,
+): readonly string[] {
+  if (migration.version === 122 && migration.name === "workspace_path_bridge_posix_flavor") {
+    if (
+      !migrationSchema ||
+      migration.integritySha256 !== "881d90b8db7c78e8871189704acf1bc3e705d21518cc1560ae65793c6ff381bf" ||
+      !isCanonicalMigration(migration, 122, "workspace_path_bridge_posix_flavor")
+    ) {
+      throw new Error(
+        "Postgres migration 122 schema-scoped compatibility requires its exact canonical definition and validated namespace.",
+      );
+    }
+    // Registry validation has already checked the frozen SQL against this digest.
+    return [scopePathFlavorV122Sql(migration.sql, migrationSchema.name)];
+  }
+  if (migration.version !== 128 || migration.name !== "document_editing") {
+    return approvalExecutionLinkageV209Statements(migration);
+  }
+  const fingerprint = createHash("sha256")
+    .update(`atomic\n${normalizeMigrationSql(migration.sql)}`)
+    .digest("hex");
+  if (
+    !isCanonicalMigration(migration, 128, "document_editing") ||
+    fingerprint !== "79837e50880fc7af7902d38fc49f1fc813bcb06635f44207ea9360cf9d365e12" ||
+    !migrationSchema
+  ) {
+    throw new Error(
+      "Postgres migration 128 schema-scoped compatibility requires its exact canonical definition and validated namespace.",
+    );
+  }
+  const begin = migration.sql.indexOf("DO $routed_context_v2$");
+  const endMarker = "$routed_context_v2$;";
+  const end = migration.sql.indexOf(endMarker, begin);
+  if (
+    begin < 0 ||
+    end < 0 ||
+    migration.sql.indexOf("DO $routed_context_v2$", begin + 1) !== -1 ||
+    migration.sql.indexOf(endMarker, end + 1) !== -1
+  ) {
+    throw new Error("Postgres migration 128 compatibility boundary changed.");
+  }
+  return [
+    migration.sql.slice(0, begin),
+    buildScopedRoutedContextV128Sql(migrationSchema.name),
+    migration.sql.slice(end + endMarker.length),
+  ];
+}
 /** Run the historical statements unchanged, with a corrected projector before the pending backfill. */
 function approvalExecutionLinkageV209Statements(migration: PostgresMigration): readonly string[] {
   if (
@@ -1284,7 +1335,7 @@ async function executePostgresAtomicMigration(
     await prepareRemoteWorkerMeshBootstrapForAuthority(tx, migrationSchema, migration);
     await prepareMobilePushBootstrapForAuthority(tx, migrationSchema, migration);
     await prepareMobileApprovalKeyBootstrapForAuthority(tx, migrationSchema, migration);
-    for (const sql of approvalExecutionLinkageV209Statements(migration)) {
+    for (const sql of postgresAtomicMigrationStatements(migration, migrationSchema)) {
       await tx.query(sql);
     }
     return false;
@@ -2054,7 +2105,9 @@ function executePostgresAtomicMigrationSync(
     prepareRemoteWorkerMeshBootstrapForAuthoritySync(db, migrationSchema, migration);
     prepareMobilePushBootstrapForAuthoritySync(db, migrationSchema, migration);
     prepareMobileApprovalKeyBootstrapForAuthoritySync(db, migrationSchema, migration);
-    const statements = db.dialect === "postgres" ? approvalExecutionLinkageV209Statements(migration) : [migration.sql];
+    const statements = db.dialect === "postgres"
+      ? postgresAtomicMigrationStatements(migration, migrationSchema)
+      : [migration.sql];
     for (const sql of statements) {
       db.exec(sql);
     }

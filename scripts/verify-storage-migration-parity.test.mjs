@@ -1015,8 +1015,8 @@ test("current registries and checked-in manifest cover every migration exactly",
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
   assert.equal(sqlite.migrations.length, 278);
   assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 278]);
-  assert.equal(postgres.migrations.length, 228);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 228]);
+  assert.equal(postgres.migrations.length, 229);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 229]);
   assert.equal(sqlite.migrations.at(-1)?.name, "chat_artifact_render_receipts");
   assert.equal(sqlite.migrations.find((record) => record.version === 277)?.name, "model_comparison_execution_claims");
   assert.equal(sqlite.migrations.find((record) => record.version === 276)?.name, "mobile_push_approval_already_resolved_classification");
@@ -1050,7 +1050,7 @@ test("current registries and checked-in manifest cover every migration exactly",
     "purge_credential_route_idempotency_payload_hashes",
   );
   assert.equal(postgres.migrations.find((record) => record.version === 218)?.name, "citadel_vault_chamber_keys_schema_convergence");
-  assert.equal(postgres.migrations.at(-1)?.name, "approval_execution_linkage_json_compatibility");
+  assert.equal(postgres.migrations.at(-1)?.name, "chat_routed_context_namespace_convergence");
   assert.equal(postgres.migrations.find((record) => record.version === 225)?.name, "mobile_push_approval_already_resolved_classification");
   assert.equal(postgres.migrations.find((record) => record.version === 224)?.name, "reset_chat_review_depth");
   assert.equal(postgres.migrations.find((record) => record.version === 223)?.name, "plugin_install_change_plans");
@@ -1147,7 +1147,7 @@ test("current registries and checked-in manifest cover every migration exactly",
       2, 119, 120, 121, 122, 134, 135, 136, 137, 138, 140, 141, 145, 147, 148, 149, 150, 151, 152, 153, 154, 155, 156,
       157, 158, 159, 160, 161, 162, 163, 164, 165, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 179,
       180, 181, 182, 183, 184, 185, 186, 187, 188, 189, 190, 191, 192, 193, 194, 195, 196, 198, 200, 204, 205, 206, 207,
-      209, 210, 211, 213, 214, 215, 217, 218, 220, 223, 224, 225, 226, 227, 228,
+      209, 210, 211, 213, 214, 215, 217, 218, 220, 223, 224, 225, 226, 227, 228, 229,
     ],
   );
   assert.equal(

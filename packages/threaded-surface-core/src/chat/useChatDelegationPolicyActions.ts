@@ -1,4 +1,3 @@
-/* eslint-disable max-lines -- Delegation actions keep launch, streaming observation, background attention, and report rehydration in one hook so their generation fences stay aligned. */
 import type {
   ChatDelegateRequest,
   ChatDelegateResponse,
@@ -19,22 +18,23 @@ import type {
   ProactivePolicy,
   ProactiveRunRecord,
 } from "@goatcitadel/contracts";
-import { WORKFLOW_SKILL_CAPTURE_MARKER } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useMemo, useRef, useState, type MutableRefObject } from "react";
 import {
-  ApiRequestError,
-  fetchChatProactiveStatus,
   fetchChatDelegationRun,
   fetchLatestChatWorkspaceExplorer,
-  runChatDelegation,
-  runChatResearch,
-  streamChatDelegation,
-  suggestChatDelegation,
-  triggerChatProactive,
-  updateChatProactivePolicy,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { resolveActiveWorkflowTurn } from "@goatcitadel/mission-control-shared/components/chat/active-workflow-turn";
-import { toTitleCase } from "./chat-page-normalizers";
+
+
+import type { ActiveExplorerObservation, DelegationActionOwner, DelegationActions } from "./delegation-action-code.types";
+
+let delegationActionCode: Promise<typeof import("./delegation-action-code")> | undefined;
+function loadDelegationActionCode() {
+  return delegationActionCode ??= import("./delegation-action-code").catch((error: unknown) => {
+    delegationActionCode = undefined;
+    throw error;
+  });
+}
 
 export interface ChatProactivePolicyPatch {
   proactiveMode?: ChatProactiveMode;
@@ -47,7 +47,7 @@ export interface ChatProactivePolicyPatch {
   reflectionMode?: ChatReflectionMode;
 }
 
-const CODE_DELEGATION_PRESETS = {
+export const CODE_DELEGATION_PRESETS = {
   implement: {
     label: "Implement",
     mode: "sequential" as const,
@@ -109,23 +109,14 @@ export interface ActiveChatDelegationRun {
   explorer?: ChatDelegateResponse["explorer"];
 }
 
-interface ActiveExplorerObservation {
-  controller: AbortController;
-  generation: number;
-  sessionId: string;
-  parentRunId: string;
-  stepIds: Set<string>;
-  handoffRequested: boolean;
-}
-
-class ExplorerObservationDetachedError extends Error {
+export class ExplorerObservationDetachedError extends Error {
   public constructor() {
     super("Workspace explorer observation continued in background.");
     this.name = "ExplorerObservationDetachedError";
   }
 }
 
-function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDelegationStep {
+export function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDelegationStep {
   return {
     stepId: step.stepId,
     runId: step.runId,
@@ -147,7 +138,7 @@ function toActiveDelegationStep(step: ChatDelegationStepRecord): ActiveChatDeleg
   };
 }
 
-function toActiveDelegationScopeControl(
+export function toActiveDelegationScopeControl(
   scope: DelegatedFilesystemScopePublicProjection | undefined,
 ): ActiveChatDelegationStep["scopeControl"] {
   if (!scope) return undefined;
@@ -182,35 +173,6 @@ export function inferDelegationRunStatus(
     return "failed";
   }
   return fallback;
-}
-
-function formatDelegationNotice(
-  label: string,
-  result: ChatDelegateResponse,
-): { message: string; tone: "success" | "neutral" | "warning" } {
-  const status = result.status ?? inferDelegationRunStatus(result.steps);
-  if (status === "running") {
-    return {
-      message: `${label} is waiting:\n${result.stitchedOutput}`,
-      tone: "neutral",
-    };
-  }
-  if (status === "partial") {
-    return {
-      message: `${label} finished partially:\n${result.stitchedOutput}`,
-      tone: "neutral",
-    };
-  }
-  if (status === "failed") {
-    return {
-      message: `${label} failed:\n${result.stitchedOutput}`,
-      tone: "warning",
-    };
-  }
-  return {
-    message: `${label} completed:\n${result.stitchedOutput}`,
-    tone: "success",
-  };
 }
 
 export function createSeedDelegationSteps(request: ChatDelegateRequest): ActiveChatDelegationStep[] {
@@ -335,7 +297,7 @@ export function shouldHydrateTraceDelegationRun(
   return current.runId === runId && current.status === "running";
 }
 
-function buildDelegationGraph(
+export function buildDelegationGraph(
   selectedTurn: ChatThreadTurnRecord | null,
   fallbackRoles: string[],
 ): Pick<ChatDelegateRequest, "roles" | "steps"> {
@@ -360,7 +322,7 @@ function buildDelegationGraph(
   };
 }
 
-export function useChatDelegationPolicyActions(input: {
+export interface UseChatDelegationPolicyActionsInput {
   selectedSession: ChatSessionRecord | null;
   thread: ChatThreadResponse | null;
   selectedTurnId: string | null;
@@ -376,7 +338,7 @@ export function useChatDelegationPolicyActions(input: {
   codeModeNeedsProjectBinding: boolean;
   loadSidebar: () => Promise<void>;
   refreshSessionAggregate?: (sessionId: string) => Promise<void>;
-  ensureSession: () => Promise<ChatSessionRecord>;
+  ensureSession: (onResolved?: (session: ChatSessionRecord) => void) => Promise<ChatSessionRecord>;
   setError: (value: string | null) => void;
   setSending: (value: boolean) => void;
   setPrefs: React.Dispatch<React.SetStateAction<ChatSessionPrefsRecord | null>>;
@@ -385,7 +347,9 @@ export function useChatDelegationPolicyActions(input: {
   pushLocalNotice: (content: string, tone?: "neutral" | "success" | "warning") => void;
   lastLocalPrefMutationAtRef: MutableRefObject<number>;
   runtimeBlockerActiveRef?: MutableRefObject<boolean>;
-}) {
+}
+
+export function useChatDelegationPolicyActions(input: UseChatDelegationPolicyActionsInput) {
   const {
     selectedSession,
     draft,
@@ -396,18 +360,10 @@ export function useChatDelegationPolicyActions(input: {
     surfaceMode,
     fullWebAccess,
     sending,
-    streamEnabled,
     codeModeNeedsProjectBinding,
-    loadSidebar,
-    refreshSessionAggregate,
-    ensureSession,
     setError,
     setSending,
-    setPrefs,
-    setProactiveStatus,
-    setProactiveRuns,
     pushLocalNotice,
-    lastLocalPrefMutationAtRef,
     runtimeBlockerActiveRef,
   } = input;
 
@@ -422,6 +378,60 @@ export function useChatDelegationPolicyActions(input: {
     () => resolveSelectedTurn(input.thread, input.selectedTurnId),
     [input.selectedTurnId, input.thread],
   );
+
+  // A rendered scope lifetime is monotonic, including A -> B -> A navigation.
+  const lifetimeRef = useRef(0);
+  const mountedRef = useRef(true);
+  const attemptRef = useRef<object | null>(null);
+  const publicationRef = useRef<object | null>(null);
+  const sessionAdoptionRef = useRef<{ token: object; scope: string; adopt: () => void } | null>(null);
+  const scopeRoute = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
+  const scopeForSession = (session: ChatSessionRecord | null) => JSON.stringify([
+    session?.sessionId, session?.projectId, selectedTurn?.turnId, selectedTurn?.trace.durable?.runId,
+    scopeRoute.providerId, scopeRoute.model, input.fullWebAccess, input.codeModeNeedsProjectBinding,
+    input.surfaceMode, session?.workspaceId,
+  ]);
+  const scope = scopeForSession(selectedSession);
+  const scopeRef = useRef(scope);
+  const releaseOnScopeChangeRef = useRef(false);
+  if (scopeRef.current !== scope) {
+    scopeRef.current = scope;
+    lifetimeRef.current += 1;
+    const adoption = sessionAdoptionRef.current;
+    if (adoption && adoption.token === attemptRef.current && adoption.scope === scope && !runtimeBlockerActiveRef?.current) {
+      // ensureSession independently confirmed this exact creation before selecting it.
+      adoption.adopt();
+    } else {
+      directDelegationGenerationRef.current += 1;
+      explorerAttentionGenerationRef.current += 1;
+      releaseOnScopeChangeRef.current = attemptRef.current !== null;
+      attemptRef.current = null;
+      publicationRef.current = null;
+      activeExplorerObservationRef.current?.controller.abort();
+      activeExplorerObservationRef.current = null;
+    }
+    sessionAdoptionRef.current = null;
+  }
+  useEffect(() => {
+    if (releaseOnScopeChangeRef.current) {
+      releaseOnScopeChangeRef.current = false;
+      setSending(false);
+    }
+  }, [scope, setSending]);
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+      directDelegationGenerationRef.current += 1;
+      attemptRef.current = null;
+      publicationRef.current = null;
+      sessionAdoptionRef.current = null;
+      activeExplorerObservationRef.current?.controller.abort();
+      activeExplorerObservationRef.current = null;
+    };
+  }, []);
+  const renderLifetime = lifetimeRef.current;
+
   const selectedSessionIdRef = useRef(selectedSession?.sessionId);
   const selectedDurableParentRunIdRef = useRef(selectedTurn?.trace.durable?.runId);
   selectedSessionIdRef.current = selectedSession?.sessionId;
@@ -570,317 +580,6 @@ export function useChatDelegationPolicyActions(input: {
     selectedSession?.sessionId,
   ]);
 
-  const handleRunQuickResearch = useCallback(async () => {
-    if (sending || runtimeBlockerActiveRef?.current) return;
-    const session = await ensureSession();
-    const query = draft.trim() || messages.filter((item) => item.role === "user").at(-1)?.content || "";
-    if (!query) {
-      setError("Enter a query first or send a user message before research.");
-      return;
-    }
-    setSending(true);
-    try {
-      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
-      const policyTaskId = activeDelegationRun?.taskId;
-      const summary = await runChatResearch(session.sessionId, {
-        query,
-        mode: prefs?.webMode === "deep" ? "deep" : "quick",
-        providerId: prefs?.providerId ?? selectedProviderId,
-        model: prefs?.model ?? selectedModel,
-        ...(policyRunId ? { policyRunId } : {}),
-        ...(policyTaskId ? { policyTaskId } : {}),
-        surface: surfaceMode,
-      });
-      pushLocalNotice(`Research summary:\n${summary.summary}\n\nSources: ${summary.sources.length}`, "success");
-      setError(null);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
-  }, [
-    draft,
-    ensureSession,
-    messages,
-    prefs?.model,
-    prefs?.providerId,
-    prefs?.webMode,
-    selectedModel,
-    selectedProviderId,
-    activeDelegationRun?.taskId,
-    activeDelegationRun?.runId,
-    activeWorkflowTurn?.trace.orchestration?.runId,
-    surfaceMode,
-    pushLocalNotice,
-    runtimeBlockerActiveRef,
-    sending,
-    setError,
-    setSending,
-  ]);
-
-  const handleProactivePolicyPatch = useCallback(
-    async (patch: ChatProactivePolicyPatch) => {
-      if (!selectedSession) return;
-      lastLocalPrefMutationAtRef.current = Date.now();
-      try {
-        const updated = await updateChatProactivePolicy(selectedSession.sessionId, {
-          ...patch,
-          expectedRevision: prefs?.revision ?? selectedSession.revision,
-        });
-        setProactiveStatus(updated);
-        setPrefs((current) =>
-          current
-            ? {
-                ...current,
-                revision: updated.revision,
-                proactiveMode: updated.mode,
-                autonomyBudget: updated.autonomyBudget,
-                retrievalMode: updated.retrievalMode,
-                reflectionMode: updated.reflectionMode,
-              }
-            : current,
-        );
-        setProactivePolicyDraft(null);
-        setProactivePolicyConflict(false);
-        await (refreshSessionAggregate?.(selectedSession.sessionId) ?? loadSidebar());
-      } catch (err) {
-        if (err instanceof ApiRequestError && err.status === 409) {
-          const latest = await fetchChatProactiveStatus(selectedSession.sessionId);
-          await (refreshSessionAggregate?.(selectedSession.sessionId) ?? loadSidebar());
-          setProactiveStatus(latest.policy);
-          setPrefs((current) =>
-            current
-              ? {
-                  ...current,
-                  revision: latest.policy.revision,
-                  proactiveMode: latest.policy.mode,
-                  autonomyBudget: latest.policy.autonomyBudget,
-                  retrievalMode: latest.policy.retrievalMode,
-                  reflectionMode: latest.policy.reflectionMode,
-                }
-              : current,
-          );
-          setProactivePolicyDraft(patch);
-          setProactivePolicyConflict(true);
-          setError(
-            "This chat changed elsewhere. Canonical policy was refreshed; your unsaved policy draft is preserved for review and retry.",
-          );
-        } else {
-          setError((err as Error).message);
-        }
-      }
-    },
-    [
-      lastLocalPrefMutationAtRef,
-      loadSidebar,
-      prefs?.revision,
-      refreshSessionAggregate,
-      selectedSession,
-      setError,
-      setPrefs,
-      setProactiveStatus,
-    ],
-  );
-
-  const handleTriggerProactive = useCallback(async () => {
-    if (!selectedSession || sending) return;
-    setSending(true);
-    try {
-      const run = await triggerChatProactive(selectedSession.sessionId, {
-        source: "manual",
-        reason: `Operator triggered from ${surfaceMode} workspace.`,
-        surface: surfaceMode,
-      });
-      setProactiveRuns((current) => [run, ...current].slice(0, 30));
-      pushLocalNotice(`Proactive run ${run.status}: ${run.reasoningSummary}`);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
-  }, [pushLocalNotice, selectedSession, sending, setError, setProactiveRuns, setSending, surfaceMode]);
-
-  const handleSuggestDelegation = useCallback(async () => {
-    if (!selectedSession || sending) return;
-    const objective =
-      draft.trim() ||
-      messages
-        .filter((item) => item.role === "user")
-        .at(-1)
-        ?.content?.trim() ||
-      "";
-    if (!objective) {
-      setError("Write a request first so I can suggest a delegation plan.");
-      return;
-    }
-    if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
-      setError("Skill capture drafts instructions in one Chat turn. Send the prepared request to continue.");
-      return;
-    }
-    setSending(true);
-    try {
-      const suggested = await suggestChatDelegation(selectedSession.sessionId, { objective });
-      setDelegationSuggestion(suggested.suggestion);
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
-  }, [draft, messages, selectedSession, sending, setError, setSending]);
-
-  const runDelegationAction = useCallback(
-    async (sessionId: string, request: ChatDelegateRequest, label: string) => {
-      const delegationGeneration = ++directDelegationGenerationRef.current;
-      const attachedTurnId = selectedTurn?.turnId ?? null;
-      const mode = resolveDelegationMode(request.mode);
-      setActiveDelegationRun({
-        attachedTurnId,
-        label,
-        objective: request.objective,
-        mode,
-        status: "running",
-        steps: createSeedDelegationSteps(request),
-      });
-
-      const observeAsStream = streamEnabled || request.executionProfile === "read_only_explorer";
-      if (!observeAsStream) {
-        const result = await runChatDelegation(sessionId, request);
-        setActiveDelegationRun({
-          runId: result.runId,
-          taskId: result.taskId,
-          executionPlanId: result.executionPlanId,
-          attachedTurnId,
-          label,
-          objective: request.objective,
-          mode,
-          status: inferDelegationRunStatus(result.steps.map(toActiveDelegationStep)),
-          steps: result.steps.map(toActiveDelegationStep).sort((left, right) => left.index - right.index),
-          stitchedOutput: result.stitchedOutput,
-          explorer: result.explorer,
-        });
-        return result;
-      }
-
-      let finalResult: ChatDelegateResponse | null = null;
-      const expectedSteps = request.steps?.length ?? request.roles.length;
-      const explorerObservation =
-        request.executionProfile === "read_only_explorer" && request.policyRunId
-          ? {
-              controller: new AbortController(),
-              generation: delegationGeneration,
-              sessionId,
-              parentRunId: request.policyRunId,
-              stepIds: new Set<string>(),
-              handoffRequested: false,
-            }
-          : null;
-      if (explorerObservation) {
-        activeExplorerObservationRef.current = explorerObservation;
-      }
-      try {
-        const handleChunk: Parameters<typeof streamChatDelegation>[2] = (chunk) => {
-          if (delegationGeneration !== directDelegationGenerationRef.current) {
-            return;
-          }
-          if (chunk.type === "status") {
-            setActiveDelegationRun((current) => applyDelegationStatusChunk(current, chunk));
-            if (chunk.message) {
-              pushLocalNotice(chunk.message);
-            }
-            return;
-          }
-          if (chunk.type === "step" && chunk.step) {
-            explorerObservation?.stepIds.add(chunk.step.stepId);
-            const nextStep: ActiveChatDelegationStep = {
-              stepId: chunk.step.stepId,
-              runId: chunk.step.runId,
-              role: chunk.step.role,
-              label: chunk.step.label,
-              status: chunk.step.status as ChatDelegationStepStatus,
-              index: chunk.step.index,
-              startedAt: chunk.step.startedAt,
-              finishedAt: chunk.step.finishedAt,
-              durationMs: chunk.step.durationMs,
-              summary: chunk.step.summary,
-              output: chunk.step.output,
-              error: chunk.step.error,
-              scopeControl: toActiveDelegationScopeControl(chunk.step.scopeControl),
-            };
-            setActiveDelegationRun((current) => applyDelegationStepChunk(current, chunk, nextStep));
-            if (chunk.step.status === "running") {
-              pushLocalNotice(
-                `${toTitleCase(chunk.step.role)} started ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}.`,
-              );
-            } else if (chunk.step.status === "completed") {
-              pushLocalNotice(
-                `${toTitleCase(chunk.step.role)} completed ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}.`,
-                "success",
-              );
-            } else if (chunk.step.status === "failed") {
-              pushLocalNotice(
-                `${toTitleCase(chunk.step.role)} failed ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}: ${chunk.step.error ?? "Unknown failure."}`,
-                "warning",
-              );
-            } else if (chunk.step.status === "skipped") {
-              pushLocalNotice(
-                `${toTitleCase(chunk.step.role)} skipped ${label.toLowerCase()} step ${chunk.step.index + 1}/${expectedSteps}: ${chunk.step.error ?? "Dependency did not settle successfully."}`,
-                "warning",
-              );
-            }
-            return;
-          }
-          if (chunk.type === "done" && chunk.result) {
-            finalResult = chunk.result;
-            const steps = chunk.result.steps
-              .map(toActiveDelegationStep)
-              .sort((left, right) => left.index - right.index);
-            setActiveDelegationRun((current) => ({
-              runId: chunk.result!.runId,
-              taskId: chunk.result!.taskId,
-              executionPlanId: chunk.result!.executionPlanId,
-              attachedTurnId: current?.attachedTurnId ?? attachedTurnId,
-              label: current?.label ?? label,
-              objective: current?.objective ?? request.objective,
-              mode: current?.mode ?? mode,
-              status: inferDelegationRunStatus(steps),
-              steps,
-              stitchedOutput: chunk.result!.stitchedOutput,
-              explorer: chunk.result!.explorer,
-            }));
-          }
-        };
-        if (explorerObservation) {
-          await streamChatDelegation(sessionId, request, handleChunk, {
-            signal: explorerObservation.controller.signal,
-          });
-        } else {
-          await streamChatDelegation(sessionId, request, handleChunk);
-        }
-      } catch (error) {
-        if (explorerObservation?.handoffRequested && explorerObservation.controller.signal.aborted) {
-          throw new ExplorerObservationDetachedError();
-        }
-        if (delegationGeneration === directDelegationGenerationRef.current) {
-          setActiveDelegationRun((current) => applyDelegationStreamFailure(current));
-        }
-        throw error;
-      } finally {
-        if (activeExplorerObservationRef.current === explorerObservation) {
-          activeExplorerObservationRef.current = null;
-        }
-      }
-
-      if (explorerObservation?.handoffRequested && explorerObservation.controller.signal.aborted) {
-        throw new ExplorerObservationDetachedError();
-      }
-      if (!finalResult) {
-        throw new Error(`${label} finished without a final result payload.`);
-      }
-      return finalResult;
-    },
-    [pushLocalNotice, selectedTurn?.turnId, streamEnabled],
-  );
-
   const continueActiveExplorerInBackground = useCallback(
     (input: { parentRunId: string; watcherId: string }): boolean => {
       const observation = activeExplorerObservationRef.current;
@@ -902,6 +601,8 @@ export function useChatDelegationPolicyActions(input: {
         directDelegationGenerationRef.current += 1;
       }
       explorerAttentionGenerationRef.current += 1;
+      attemptRef.current = null;
+      publicationRef.current = null;
       setSending(false);
       observation.controller.abort();
       return true;
@@ -978,192 +679,117 @@ export function useChatDelegationPolicyActions(input: {
     [activeDelegationRun?.label, activeDelegationRun?.runId, selectedSession?.sessionId, selectedTurn?.turnId],
   );
 
-  const buildDelegationRequest = useCallback(
-    (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>) => {
-      const graph = buildDelegationGraph(selectedTurn, roles);
+
+  // Admission and visible seed state belong to the mounted owner, before any import.
+  const prepareDelegation = (method: keyof DelegationActions, args: unknown[]): { request: ChatDelegateRequest; label: string } | null => {
+    if (method === "handleAcceptDelegation" && delegationSuggestion) {
+      return { request: buildSeedRequest(delegationSuggestion.objective, delegationSuggestion.roles, delegationSuggestion.mode), label: "Delegation" };
+    }
+    if (method === "handleRunCodeDelegation" && selectedSession) {
+      const preset = CODE_DELEGATION_PRESETS[args[0] as keyof typeof CODE_DELEGATION_PRESETS];
+      const objective = draft.trim() || messages.filter(item => item.role === "user").at(-1)?.content?.trim() || selectedSession.title?.trim() || "";
+      if (!objective || codeModeNeedsProjectBinding) return null;
+      return { request: buildSeedRequest(preset.prefix + objective, [...preset.roles], preset.mode), label: preset.label };
+    }
+    if (method === "handleExploreWorkspace" && selectedSession?.projectId && selectedTurn?.trace.durable?.runId && !selectedTurnHasDelegation && draft.trim()) {
       const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
-      const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
-      const policyTaskId = activeDelegationRun?.taskId;
-      return {
-        objective,
-        roles: graph.roles,
-        mode,
-        surfaceMode,
-        providerId: route.providerId,
-        model: route.model,
-        ...(fullWebAccess ? { fullWebAccess: true } : {}),
-        ...(policyRunId ? { policyRunId } : {}),
-        ...(policyTaskId ? { policyTaskId } : {}),
-        ...(graph.steps?.length ? { steps: graph.steps } : {}),
-      } satisfies ChatDelegateRequest;
-    },
-    [
-      activeDelegationRun?.taskId,
-      activeDelegationRun?.runId,
-      activeWorkflowTurn?.trace.orchestration?.runId,
-      fullWebAccess,
-      prefs,
-      selectedModel,
-      selectedProviderId,
-      selectedTurn,
-      surfaceMode,
-    ],
-  );
-
-  const handleAcceptDelegation = useCallback(async () => {
-    if (!selectedSession || !delegationSuggestion || sending) return;
-    setSending(true);
+      return { request: { objective: draft.trim(), roles: ["Workspace explorer"], mode: "sequential", surfaceMode: "chat", ...route, executionProfile: "read_only_explorer", policyRunId: selectedTurn.trace.durable.runId }, label: "Workspace exploration" };
+    }
+    return null;
+  };
+  const buildSeedRequest = (objective: string, roles: string[], mode: NonNullable<ChatDelegateRequest["mode"]>): ChatDelegateRequest => {
+    const graph = buildDelegationGraph(selectedTurn, roles);
+    const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
+    const policyRunId = activeDelegationRun?.runId ?? activeWorkflowTurn?.trace.orchestration?.runId;
+    return { objective, ...graph, mode, surfaceMode, ...route,
+      ...(fullWebAccess ? { fullWebAccess: true } : {}),
+      ...(policyRunId ? { policyRunId } : {}),
+      ...(activeDelegationRun?.taskId ? { policyTaskId: activeDelegationRun.taskId } : {}) };
+  };
+  async function invoke<K extends Exclude<keyof DelegationActions, "runDelegationAction">>(method: K, ...args: Parameters<DelegationActions[K]>): Promise<void> {
+    const policy = method === "handleProactivePolicyPatch";
+    if (!mountedRef.current || renderLifetime !== lifetimeRef.current || (!policy && (attemptRef.current || sending || runtimeBlockerActiveRef?.current))) return;
+    if (method !== "handleRunQuickResearch" && !selectedSession) return;
+    if (method === "handleAcceptDelegation" && !delegationSuggestion) return;
+    if (method === "handleRunCodeDelegation" && codeModeNeedsProjectBinding) {
+      setError("Bind this Code session to a project before running delegated implementation work.");
+      return;
+    }
+    if (method === "handleExploreWorkspace") {
+      const error = !selectedSession?.projectId ? "Bind this Chat to a project before exploring its governed workspace scope."
+        : !selectedTurn?.trace.durable?.runId ? "Send a Chat turn first so workspace exploration can attach to durable progress and recovery."
+        : selectedTurnHasDelegation ? "This Chat turn already owns delegated work. Send a new turn before exploring the workspace."
+        : !draft.trim() ? "Write what you want to find, then choose Explore workspace." : null;
+      if (error) { setError(error); return; }
+    }
+    const prepared = prepareDelegation(method, args);
+    if (method === "handleRunCodeDelegation" && !prepared) {
+      setError("Write a coding objective first so GoatCitadel has something concrete to implement or review.");
+      return;
+    }
+    const token = {};
+    let actionLifetime = renderLifetime;
+    if (!policy) {
+      attemptRef.current = token;
+      publicationRef.current = token;
+    }
+    // Completed updates may still be queued in React after busy ownership releases.
+    const isCurrent = () => mountedRef.current && actionLifetime === lifetimeRef.current && (policy || publicationRef.current === token) && !runtimeBlockerActiveRef?.current;
+    if (!policy) setSending(true);
+    if (prepared) {
+      directDelegationGenerationRef.current += 1;
+      setActiveDelegationRun({ attachedTurnId: selectedTurn?.turnId ?? null, label: prepared.label,
+        objective: prepared.request.objective, mode: resolveDelegationMode(prepared.request.mode), status: "running", steps: createSeedDelegationSteps(prepared.request) });
+    }
+    const actionInput = method === "handleRunQuickResearch" && !selectedSession ? {
+      ...input,
+      ensureSession: async () => {
+        let confirmedScope: string | undefined;
+        const result = await input.ensureSession(created => {
+          if (!isCurrent() || !created.sessionId) return;
+          confirmedScope = scopeForSession(created);
+          sessionAdoptionRef.current = {
+            token, scope: confirmedScope, adopt: () => { actionLifetime = lifetimeRef.current; },
+          };
+        });
+        if (confirmedScope && scopeForSession(result) !== confirmedScope) {
+          throw new Error("Created conversation does not match its confirmed research owner.");
+        }
+        return result;
+      },
+    } : input;
+    const owner: DelegationActionOwner = { input: actionInput, delegationSuggestion, activeDelegationRun, selectedTurn,
+      activeWorkflowTurn, selectedTurnHasDelegation, setActiveDelegationRun, setDelegationSuggestion,
+      setProactivePolicyDraft, setProactivePolicyConflict, directDelegationGenerationRef,
+      activeExplorerObservationRef, explorerAttentionGenerationRef, isCurrent };
+    let codeLoaded = false;
     try {
-      const accepted = await runDelegationAction(
-        selectedSession.sessionId,
-        buildDelegationRequest(delegationSuggestion.objective, delegationSuggestion.roles, delegationSuggestion.mode),
-        "Delegation",
-      );
-      const notice = formatDelegationNotice("Delegation", accepted);
-      pushLocalNotice(notice.message, notice.tone);
-      setDelegationSuggestion(null);
-      await loadSidebar();
-    } catch (err) {
-      setError((err as Error).message);
-    } finally {
-      setSending(false);
-    }
-  }, [
-    buildDelegationRequest,
-    delegationSuggestion,
-    loadSidebar,
-    pushLocalNotice,
-    runDelegationAction,
-    selectedSession,
-    sending,
-    setError,
-    setSending,
-  ]);
-
-  const handleRunCodeDelegation = useCallback(
-    async (presetKey: keyof typeof CODE_DELEGATION_PRESETS) => {
-      if (!selectedSession || sending) {
-        return;
-      }
-      if (codeModeNeedsProjectBinding) {
-        setError("Bind this Code session to a project before running delegated implementation work.");
-        return;
-      }
-      const baseObjective =
-        draft.trim() ||
-        messages
-          .filter((item) => item.role === "user")
-          .at(-1)
-          ?.content?.trim() ||
-        selectedSession.title?.trim() ||
-        "";
-      if (!baseObjective) {
-        setError("Write a coding objective first so GoatCitadel has something concrete to implement or review.");
-        return;
-      }
-      const preset = CODE_DELEGATION_PRESETS[presetKey];
-      setSending(true);
-      try {
-        const result = await runDelegationAction(
-          selectedSession.sessionId,
-          buildDelegationRequest(`${preset.prefix}${baseObjective}`, [...preset.roles], preset.mode),
-          preset.label,
-        );
-        const notice = formatDelegationNotice(preset.label, result);
-        pushLocalNotice(notice.message, notice.tone);
-        setDelegationSuggestion(null);
-        await loadSidebar();
-      } catch (err) {
-        setError((err as Error).message);
-      } finally {
-        setSending(false);
-      }
-    },
-    [
-      buildDelegationRequest,
-      codeModeNeedsProjectBinding,
-      draft,
-      loadSidebar,
-      messages,
-      pushLocalNotice,
-      runDelegationAction,
-      selectedSession,
-      sending,
-      setError,
-      setSending,
-    ],
-  );
-
-  const handleExploreWorkspace = useCallback(async () => {
-    if (!selectedSession || sending) return;
-    if (!selectedSession.projectId) {
-      setError("Bind this Chat to a project before exploring its governed workspace scope.");
-      return;
-    }
-    const durableParentRunId = selectedTurn?.trace.durable?.runId;
-    if (!durableParentRunId) {
-      setError("Send a Chat turn first so workspace exploration can attach to durable progress and recovery.");
-      return;
-    }
-    if (selectedTurnHasDelegation) {
-      setError("This Chat turn already owns delegated work. Send a new turn before exploring the workspace.");
-      return;
-    }
-    const objective = draft.trim();
-    if (!objective) {
-      setError("Write what you want to find, then choose Explore workspace.");
-      return;
-    }
-    const attentionGeneration = ++explorerAttentionGenerationRef.current;
-    setSending(true);
-    try {
-      const route = resolveDelegationRoute(prefs, selectedProviderId, selectedModel);
-      const result = await runDelegationAction(
-        selectedSession.sessionId,
-        {
-          objective,
-          roles: ["Workspace explorer"],
-          mode: "sequential",
-          surfaceMode: "chat",
-          providerId: route.providerId,
-          model: route.model,
-          executionProfile: "read_only_explorer",
-          policyRunId: durableParentRunId,
-        },
-        "Workspace exploration",
-      );
-      const gaps = result.explorer
-        ? ` ${result.explorer.partialResult ? "Partial result" : "Complete result"}; ${result.explorer.gaps.length} explicit gap${result.explorer.gaps.length === 1 ? "" : "s"}.`
-        : "";
-      pushLocalNotice(
-        `Workspace exploration ${result.status}.${gaps}`,
-        result.status === "failed" ? "warning" : "success",
-      );
-      await loadSidebar();
-    } catch (err) {
-      if (!(err instanceof ExplorerObservationDetachedError)) {
-        setError((err as Error).message);
+      const code = await loadDelegationActionCode();
+      if (!isCurrent()) return;
+      codeLoaded = true;
+      const actions = code.createDelegationActionCode(owner);
+      const action = actions[method] as (...parameters: Parameters<DelegationActions[K]>) => Promise<void>;
+      await action(...args);
+    } catch (error) {
+      if (isCurrent()) {
+        if (!codeLoaded && prepared) setActiveDelegationRun(activeDelegationRun);
+        setError((error as Error).message);
       }
     } finally {
-      if (explorerAttentionGenerationRef.current === attentionGeneration) {
+      if (sessionAdoptionRef.current?.token === token) sessionAdoptionRef.current = null;
+      if (!policy && mountedRef.current && actionLifetime === lifetimeRef.current && attemptRef.current === token) {
+        attemptRef.current = null;
         setSending(false);
       }
     }
-  }, [
-    draft,
-    loadSidebar,
-    prefs,
-    pushLocalNotice,
-    runDelegationAction,
-    selectedModel,
-    selectedProviderId,
-    selectedSession,
-    selectedTurnHasDelegation,
-    selectedTurn,
-    sending,
-    setError,
-    setSending,
-  ]);
+  }
+  const handleRunQuickResearch = () => invoke("handleRunQuickResearch");
+  const handleProactivePolicyPatch = (patch: ChatProactivePolicyPatch) => invoke("handleProactivePolicyPatch", patch);
+  const handleTriggerProactive = () => invoke("handleTriggerProactive");
+  const handleSuggestDelegation = () => invoke("handleSuggestDelegation");
+  const handleAcceptDelegation = () => invoke("handleAcceptDelegation");
+  const handleRunCodeDelegation = (preset: keyof typeof CODE_DELEGATION_PRESETS) => invoke("handleRunCodeDelegation", preset);
+  const handleExploreWorkspace = () => invoke("handleExploreWorkspace");
 
   return {
     activeDelegationRun,

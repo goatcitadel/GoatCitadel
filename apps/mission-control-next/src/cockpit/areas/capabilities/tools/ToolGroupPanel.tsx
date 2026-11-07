@@ -74,7 +74,7 @@ function GroupDetails({
 }) {
   const lines = presentGroupBlockLines(group);
   return (
-    <div className="space-y-4">
+    <div className="space-y-4 [&>details>summary]:min-h-6">
       {/* The inspector's title names the group, so the panel starts with its risk and state (P2-R44). */}
       <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
         <RiskBadge risk={group.risk} />
@@ -92,7 +92,7 @@ function GroupDetails({
         <ToolGroupToolList group={group} usage={usage} />
       </Section>
 
-      <NativeOwnerLink scope={group.groupId} href={SAFETY_RULES_HREF} className="text-sm">
+      <NativeOwnerLink scope={group.groupId} href={SAFETY_RULES_HREF} className="flex min-h-6 items-center text-sm">
         Detailed rules are in Settings › Safety
       </NativeOwnerLink>
 

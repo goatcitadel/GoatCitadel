@@ -1,5 +1,27 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
+import { createReviewedMutationRecorder } from "./cockpit-reviewed-mutations.mjs";
+
+/** Keep exact owner writes and retained background receipts as separate evidence. */
+export function createPolicyMutationRecorder() {
+  const policyRequests = [], mutations = [], background = createReviewedMutationRecorder();
+  const { presence } = background;
+  let total = 0;
+  return { policyRequests, mutations, presence, get total() { return total; },
+    record(request) {
+      const pathname = new URL(request.url()).pathname;
+      if (pathname === "/api/v1/tools/access/evaluate") policyRequests.push(request);
+      const kind = classifyCockpitProofWrite(request.method(), pathname);
+      if (!kind) return;
+      total++;
+      if (kind === "presence") background.record(request);
+      else mutations.push(pathname);
+    },
+    async assertBackground(expected) { await background.assertBackground(expected); },
+    async assertPageBackground(page, workspaceId) { if (presence.length) await background.assertPageBackground(page, workspaceId); },
+  };
+}
 
 export function assertPolicyEvaluationOwnerAgreement({ expected, submitted, owner, effective }) {
   assert.deepEqual(submitted, expected, "Policy request changed selected identity, argument values, or omitted fields");
@@ -52,22 +74,22 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         await browserContext.addInitScript((value) => {
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
           window.localStorage.setItem("goatcitadel.ui.theme.v1", value);
-          // The policy check sits in the panel's Technical details, which render only with this preference on.
-          window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "true");
         }, theme);
-        await installMissionControlNextBrowserState(browserContext, workspaceId, citadelId);
+        await installMissionControlNextBrowserState(browserContext, workspaceId, citadelId, { showTechnicalDetails: true });
         page = await browserContext.newPage();
-        const policyRequests = [];
-        const mutations = [];
-        page.on("request", (request) => {
-          const pathname = new URL(request.url()).pathname;
-          if (pathname === "/api/v1/tools/access/evaluate") policyRequests.push(request);
-          if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")) mutations.push(pathname);
-        });
+        const recorder = createPolicyMutationRecorder();
+        const { policyRequests, mutations } = recorder;
+        page.on("request", request => recorder.record(request));
         await page.goto(buildVerificationUiUrl(stack.uiUrl, `/capabilities/tools?shell=cockpit&item=${encodeURIComponent(`group:${group.id}`)}`), { waitUntil: "domcontentloaded" });
         // The inspector's body is a region named "Inspector: <group>", on a wide screen and inside the phone sheet alike.
         const detail = page.getByRole("region", { name: /^Inspector: /u });
-        await detail.locator("summary", { hasText: "Technical details" }).click({ timeout: 30_000 });
+        const technical = detail.locator("summary", { hasText: /^Technical details$/u });
+        await technical.waitFor({ timeout: 30_000 });
+        assert.equal(await technical.count(), 1);
+        assert.equal(await technical.locator("..").getAttribute("open"), null, "Technical policy disclosure starts closed");
+        assert.equal(policyRequests.length, 0, "Closed technical disclosure must not evaluate policy");
+        await technical.click();
+        assert.equal(policyRequests.length, 0, "Opening technical disclosure must not evaluate policy");
         // The check starts on the group's first tool; pick the tool this proof evaluates.
         await detail.getByRole("combobox", { name: /^Check a tool's policy(?:\s|$)/u }).selectOption(item.toolName);
         const inspector = detail.getByRole("region", { name: "Tool policy inspector", exact: true });
@@ -98,6 +120,7 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         await result.getByText(presentRiskLevel(owner.riskLevel).label, { exact: true }).waitFor();
         assert.deepEqual(await result.locator("li").allTextContents(), owner.reasonCodes.slice(0, 12).map(humanizeToken));
         await result.getByText(`Profile: ${effective.body.permissionProfile.label}`, { exact: true }).waitFor();
+        await recorder.assertPageBackground(page, workspaceId);
         assert.ok(mutations.every((pathname) => pathname === "/api/v1/tools/access/evaluate"),
           `Policy inspector issued other mutations: ${mutations.join(", ")}`);
         await page.waitForFunction((value) => document.documentElement.dataset.theme === value, theme);
@@ -105,7 +128,9 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         const axe = await auditPageAccessibility(page);
         const blocking = axe.violations.filter((entry) => ["serious", "critical"].includes(entry.impact));
         const overflow = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
-        assert.equal(blocking.length, 0, `Blocking policy accessibility: ${blocking.map((entry) => entry.id).join(", ")}`);
+        assert.equal(blocking.length, 0, `Blocking policy accessibility: ${JSON.stringify(
+          blocking.map(({ id, nodes }) => ({ id, targets: nodes.map(({ target }) => target) })),
+        )}`);
         assert.ok(overflow <= 1, `Policy horizontal overflow: ${overflow}px`);
         const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
         const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-library-policy-${variant}.png`);
@@ -123,7 +148,10 @@ export async function runCockpitLibraryPolicyProof({ context, browser, stack, ci
         assert.equal(await inspector.getByRole("combobox", { name: /^Agent(?:\s|$)/u }).inputValue(), activeAgents.length === 1 ? agent.agentId : "");
         assert.equal(await inspector.getByRole("combobox", { name: /^Conversation(?:\s|$)/u }).inputValue(), sessionId);
         assert.equal(await result.count(), 0);
+        await recorder.assertPageBackground(page, workspaceId);
+        assert.equal(mutations.length, 1, "Policy inspector issued an extra owner mutation");
         return { status: "passed", metrics: { workspaceId, sessionId, agentId: agent.agentId, toolName: tool.toolName,
+          totalBrowserMutations: recorder.total, systemPresenceHeartbeats: recorder.presence.length,
           advisoryDecisionRecorded: true, actualToolExecuted: false, exactExampleArguments: true,
           ownerDecisionMatched: true, staleResultCleared: true, evaluationRequests: policyRequests.length, blockingAxe: 0, overflow },
         artifacts: emptyArtifacts({ screenshots: [relativeToRun(context, screenshot)] }) };

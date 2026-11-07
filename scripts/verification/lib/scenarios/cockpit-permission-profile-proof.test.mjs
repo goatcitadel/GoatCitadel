@@ -1,6 +1,22 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { assertPermissionActivationOwnerAgreement } from "./cockpit-permission-profile-proof.mjs";
+import { assertPermissionActivationOwnerAgreement, assertRemountedPermissionProfileLocked } from "./cockpit-permission-profile-proof.mjs";
+
+test("remounted uncertain profile opens choices for inspection and keeps review disabled without writes", async () => {
+  let open = false; const writes = [], events = [];
+  const panel = {
+    getByText: () => ({ waitFor: async () => { events.push("uncertain"); } }),
+    getByRole(role, options) {
+      assert.equal(role, "button");
+      if (options.name instanceof RegExp) return { waitFor: async () => {}, getAttribute: async () => String(open),
+        click: async () => { open = true; events.push("disclose"); } };
+      assert.equal(options.name, "Review Chat profile selection");
+      return { isDisabled: async () => { assert.equal(open, true, "Review is absent until choices are reopened"); events.push("disabled"); return true; } };
+    },
+  };
+  await assertRemountedPermissionProfileLocked(panel);
+  assert.deepEqual(events, ["uncertain", "disclose", "disabled"]); assert.deepEqual(writes, []);
+});
 
 const fixture = () => ({ workspaceId: "workspace", reviewed: { input: { operation: "activate", workspaceId: "workspace", surface: "chat" },
   target: { workspaceId: "workspace", operatorId: "operator" }, profile: { profileId: "safe", revision: "a".repeat(64) }, revision: "b".repeat(64) },

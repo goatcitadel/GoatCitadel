@@ -15,6 +15,7 @@ const MAX_RESPONSE_BYTES = 16 * 1024 * 1024;
 const MAX_ENUMERATE_RESPONSE_BYTES = MAX_RESPONSE_BYTES;
 const MAX_HASH_RESPONSE_BYTES = 1024 * 1024;
 const READ_RESPONSE_METADATA_BYTES = 512 * 1024;
+const MAX_TRUST_BATCH_ITEMS = 4;
 const PROGRAM_ENV_NAME = "GOATCITADEL_REMOTE_WORKER_NO_FOLLOW_PROGRAM";
 const POWERSHELL_PROGRAM = buildPowerShellProgram();
 const POWERSHELL_PROGRAM_GZIP = gzipSync(Buffer.from(POWERSHELL_PROGRAM, "utf8"), { level: 9 }).toString("base64");
@@ -139,6 +140,92 @@ export async function readRemoteWorkerWindowsFile(
     withShorterResponseLimit(options, framedReadResponseLimit(maxBytes)),
   );
   return parseReadResponse(raw, root, relative, maxBytes);
+}
+
+const TRUST_BATCH_ENVELOPE_BYTES = 256;
+
+export interface RemoteWorkerWindowsTrustReadRequest {
+  readonly rootPath: string;
+  readonly relativePath: string;
+  readonly maxBytes: number;
+}
+
+/** Reads fresh evidence, preserving standalone read framing for unusually long paths. */
+export async function readRemoteWorkerWindowsTrustFiles(
+  requests: readonly RemoteWorkerWindowsTrustReadRequest[],
+  options: RemoteWorkerWindowsNoFollowOptions = {},
+): Promise<readonly RemoteWorkerWindowsFileEvidence[]> {
+  if (requests.length < 1 || requests.length > MAX_TRUST_BATCH_ITEMS) {
+    throw invalid("Windows trust-read batch size is invalid.");
+  }
+  const pending = requests.map((item) => ({
+    schemaVersion: SCHEMA_VERSION,
+    operation: "read_file" as const,
+    rootPath: canonicalLocalDrivePath(item.rootPath),
+    relativePath: canonicalRelativePath(item.relativePath, false),
+    maxBytes: boundedInteger(item.maxBytes, 1, MAX_CONTENT_FILE_BYTES, "content file byte limit"),
+  }));
+  const batchRequest = (count: number) => ({
+    schemaVersion: SCHEMA_VERSION,
+    operation: "trust_read_batch",
+    requests: pending.slice(0, count),
+  });
+  const evidence: RemoteWorkerWindowsFileEvidence[] = [];
+  const assertActive = (): void => {
+    if (options.signal?.aborted) throw invalid("Windows no-follow inspection was aborted.");
+  };
+  try {
+    while (pending.length > 0) {
+      assertActive();
+      let groupSize = pending.length;
+      while (groupSize > 0 && Buffer.byteLength(JSON.stringify(batchRequest(groupSize))) > MAX_PROTOCOL_REQUEST_BYTES) {
+        groupSize -= 1;
+      }
+      if (groupSize === 0) {
+        const request = pending.shift()!;
+        evidence.push(
+          await readRemoteWorkerWindowsFile(request.rootPath, request.relativePath, request.maxBytes, options),
+        );
+        continue;
+      }
+      const batch = batchRequest(groupSize);
+      pending.splice(0, groupSize);
+      const jsonLimit = batch.requests.reduce(
+        (sum, request) => sum + trustReadJsonLimit(request.maxBytes),
+        TRUST_BATCH_ENVELOPE_BYTES,
+      );
+      const raw = await invokeFixedHelper(
+        batch,
+        withShorterResponseLimit(options, 12 + base64EncodedLength(jsonLimit)),
+      );
+      const record = exactRecord(raw, ["schemaVersion", "operation", "results"]);
+      const results = record.results;
+      if (
+        record.schemaVersion !== SCHEMA_VERSION ||
+        record.operation !== batch.operation ||
+        !Array.isArray(results) ||
+        results.length !== batch.requests.length
+      ) {
+        throw invalid("Windows trust-read batch response is invalid.");
+      }
+      for (const [index, request] of batch.requests.entries()) {
+        const item: unknown = results[index];
+        if (Buffer.byteLength(JSON.stringify(item) ?? "") > trustReadJsonLimit(request.maxBytes)) {
+          throw invalid("Windows trust-read item response exceeded its byte limit.");
+        }
+        evidence.push(parseReadResponse(item, request.rootPath, request.relativePath, request.maxBytes));
+      }
+    }
+    assertActive();
+    return Object.freeze(evidence);
+  } catch (error) {
+    for (const item of evidence) item.content.fill(0);
+    throw error;
+  }
+}
+
+function trustReadJsonLimit(maxBytes: number): number {
+  return base64EncodedLength(maxBytes) + READ_RESPONSE_METADATA_BYTES;
 }
 
 export async function hashRemoteWorkerWindowsFile(
@@ -1081,6 +1168,26 @@ try {
     if ($request.requests.Count -lt 1 -or $request.requests.Count -gt 32) { throw 'batch' }
     $results=@(foreach($item in $request.requests){if($item.operation -notin @('enumerate','hash_file')){throw 'batch operation'}; Inspect-One $item})
     Frame @{schemaVersion='${SCHEMA_VERSION}';operation='batch';results=$results}
+  } elseif ($request.operation -ceq 'trust_read_batch') {
+    if ((@($request.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'operation,requests,schemaVersion' -or
+        $request.schemaVersion -cne '${SCHEMA_VERSION}' -or
+        $request.requests -isnot [array] -or $request.requests.Count -lt 1 -or
+        $request.requests.Count -gt ${MAX_TRUST_BATCH_ITEMS}) { throw 'trust batch' }
+    foreach ($item in $request.requests) {
+      if ((@($item.PSObject.Properties.Name | Sort-Object) -join ',') -cne 'maxBytes,operation,relativePath,rootPath,schemaVersion' -or
+          $item.schemaVersion -cne '${SCHEMA_VERSION}' -or $item.operation -cne 'read_file' -or
+          $item.rootPath -isnot [string] -or $item.relativePath -isnot [string] -or
+          ($item.maxBytes -isnot [int] -and $item.maxBytes -isnot [long]) -or
+          $item.maxBytes -lt 1 -or $item.maxBytes -gt ${MAX_CONTENT_FILE_BYTES}) { throw 'trust batch item' }
+    }
+    $results = @(foreach ($item in $request.requests) {
+      $result = Inspect-One $item
+      $itemJson = $result | ConvertTo-Json -Depth 20 -Compress
+      $itemLimit = 4 * [Math]::Ceiling($item.maxBytes / 3.0) + ${READ_RESPONSE_METADATA_BYTES}
+      if ([Text.Encoding]::UTF8.GetByteCount($itemJson) -gt $itemLimit) { throw 'trust batch response' }
+      $result
+    })
+    Frame @{schemaVersion='${SCHEMA_VERSION}';operation='trust_read_batch';results=$results}
   } else { Frame (Inspect-One $request) }
 } catch { exit 73 }
 `;

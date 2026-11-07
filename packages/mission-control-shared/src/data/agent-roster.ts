@@ -61,7 +61,7 @@ export const BUILTIN_AGENT_ROSTER: AgentRoleTemplate[] = [
     title: "Implementation Engineer",
     summary: "Implements features, refactors safely, and keeps delivery moving.",
     specialties: ["TypeScript", "Refactors", "Integration"],
-    defaultTools: ["fs.read", "fs.write", "shell.exec", "git.exec"],
+    defaultTools: ["fs.read", "fs.write", "shell.exec", "git.status", "git.diff"],
     aliases: ["coder", "developer", "implementation", "engineer"],
     priority: BUILTIN_PRIORITY.coder,
   },

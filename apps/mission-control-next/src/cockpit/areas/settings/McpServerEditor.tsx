@@ -138,12 +138,17 @@ export function McpServerEditor({
                     </dd>
                   </dl>
                   <McpPolicySummary args={server.args ?? []} policy={server.policy} />
-                  <Button size="sm" onClick={control.acceptReview}>
+                  <Button size="sm" className="max-sm:min-h-11" onClick={control.acceptReview}>
                     Use current server review
                   </Button>
                 </>
               ) : (
-                <Button size="sm" disabled={control.review.loading} onClick={() => void control.review.refresh()}>
+                <Button
+                  size="sm"
+                  className="max-sm:min-h-11"
+                  disabled={control.review.loading}
+                  onClick={() => void control.review.refresh()}
+                >
                   Reload server review
                 </Button>
               )}
@@ -256,6 +261,7 @@ export function McpServerEditor({
               <div className="flex flex-wrap gap-2">
                 <Button
                   variant="primary"
+                  className="max-sm:min-h-11"
                   disabled={!canSave || reviewed !== reviewIdentity}
                   onClick={() => {
                     setReviewed(null);
@@ -268,7 +274,12 @@ export function McpServerEditor({
               </div>
             </section>
           ) : (
-            <Button variant="primary" disabled={!canSave} onClick={() => setReviewed(reviewIdentity)}>
+            <Button
+              variant="primary"
+              className="max-sm:min-h-11"
+              disabled={!canSave}
+              onClick={() => setReviewed(reviewIdentity)}
+            >
               Review MCP changes
             </Button>
           )}

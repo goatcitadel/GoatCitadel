@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir } from "node:fs/promises";
 
 const editable = (runtime) => ({ enabled: runtime.enabled, autoStart: runtime.autoStart,
@@ -13,6 +14,19 @@ export function assertManagedRuntimeSaved({ before, after, alias, request }) {
   assert.equal(after.llamaCpp.enabled, false, "The fixture must never enable a local process.");
   assert.equal(after.llamaCpp.autoStart, false, "The fixture must never request auto-start.");
   for (const key of ["command", "modelPath", "modelsRootPath"]) assert.equal(after.llamaCpp[key], before.llamaCpp[key]);
+}
+
+export function collectManagedRuntimeReadyView() {
+  const panel = document.getElementById("managed-runtime");
+  if (!panel) return null;
+  const refresh = [...panel.querySelectorAll("button")].find(button => button.textContent?.trim() === "Refresh runtime settings");
+  const field = name => [...panel.querySelectorAll("label")].find(label => label.textContent?.trim() === name)?.querySelector("input");
+  const alias = field("Model alias"), endpoint = field("Runtime endpoint");
+  const mode = [...panel.querySelectorAll("p")].some(item => /^Mode: Managed · Process:/u.test(item.textContent?.trim() ?? ""));
+  const revision = [...panel.querySelectorAll("details[open] p")].map(item => item.textContent?.trim())
+    .find(value => /^Settings version \d+$/u.test(value ?? ""));
+  return refresh && !refresh.disabled && alias && endpoint && mode && revision
+    ? { alias: alias.value, endpoint: endpoint.value, revision } : null;
 }
 
 /** Only the disposable, disabled verification runtime is changed; every write uses its governed owner. */
@@ -75,30 +89,24 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
             window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
             window.localStorage.setItem("goatcitadel.ui.theme.v1", value);
           }, theme);
-          await installMissionControlNextBrowserState(browserContext, "default", citadelId);
+          await installMissionControlNextBrowserState(browserContext, "default", citadelId, { showTechnicalDetails: true });
           page = await browserContext.newPage();
           page.on("request", (request) => {
-            if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && new URL(request.url()).pathname.startsWith("/api/v1/"))
-              writes.push({ path: new URL(request.url()).pathname, method: request.method(), body: request.postDataJSON() });
+            const pathname = new URL(request.url()).pathname;
+            if (classifyCockpitProofWrite(request.method(), pathname) === "owner")
+              writes.push({ path: pathname, method: request.method(), body: request.postDataJSON() });
           });
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/advanced?shell=cockpit"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
           await page.waitForFunction((value) => document.documentElement.dataset.theme === value, theme);
           const panel = page.getByRole("region", { name: "Managed local runtime", exact: true });
           const aliasInput = panel.getByRole("textbox", { name: "Model alias", exact: true });
+          const technical = panel.locator("details").filter({ has: page.getByText(`Settings version ${before.revision}`, { exact: true }) });
+          await technical.waitFor();
+          await technical.getByText("Technical details", { exact: true }).click();
           // A background settings refetch temporarily removes the control-ready subtree. Capture one
           // rendered, refresh-ready observation instead of combining values across that transition.
-          const readyView = await page.waitForFunction(() => {
-            const panel = document.getElementById("managed-runtime");
-            if (!panel) return null;
-            const refresh = [...panel.querySelectorAll("button")].find(button => button.textContent?.trim() === "Refresh runtime settings");
-            const field = name => [...panel.querySelectorAll("label")].find(label => label.textContent?.trim() === name)?.querySelector("input");
-            const alias = field("Model alias"), endpoint = field("Runtime endpoint");
-            const revision = [...panel.querySelectorAll("p")].map(item => item.textContent?.replace(/\s+/gu, " ").trim())
-              .find(value => /^Mode: Managed · settings revision \d+ · Process:/u.test(value ?? ""));
-            return refresh && !refresh.disabled && alias && endpoint && revision
-              ? { alias: alias.value, endpoint: endpoint.value, revision } : null;
-          });
+          const readyView = await page.waitForFunction(collectManagedRuntimeReadyView);
           const observed = await readyView.jsonValue(); await readyView.dispose();
           const canonical = await read();
           assert.equal(canonical.revision, before.revision, "The canonical settings changed before editing.");
@@ -106,7 +114,7 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
           assert.equal(canonical.llamaCpp.managementMode, "managed");
           assert.equal(observed.alias, before.llamaCpp.alias);
           assert.equal(observed.endpoint, before.llamaCpp.baseUrl);
-          assert.equal(Number(/settings revision (\d+) ·/u.exec(observed.revision)?.[1]), before.revision);
+          assert.equal(observed.revision, `Settings version ${before.revision}`);
           assert.deepEqual(writes, [], "Reading runtime readiness sent a mutation.");
           await page.addScriptTag({ path: axeSourcePath });
           const screenshotDir = path.join(context.artifactRoot, "screenshots"); await mkdir(screenshotDir, { recursive: true });
@@ -140,7 +148,10 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
           const refreshPlan = panel.getByRole("button", { name: "Refresh runtime change status", exact: true });
           if (await refreshPlan.count()) await refreshPlan.click();
           await panel.getByRole("button", { name: "Refresh runtime settings", exact: true }).click();
-          await panel.getByText(/settings revision/).filter({ hasText: String(saved.revision) }).waitFor();
+          const savedTechnical = panel.locator("details").filter({ has: page.getByText(`Settings version ${saved.revision}`, { exact: true }) });
+          await savedTechnical.waitFor();
+          if (!await savedTechnical.evaluate(node => node.open)) await savedTechnical.getByText("Technical details", { exact: true }).click();
+          await savedTechnical.getByText(`Settings version ${saved.revision}`, { exact: true }).waitFor();
           assert.equal(await aliasInput.inputValue(), alias);
           await panel.scrollIntoViewIfNeeded(); await audit("saved");
           await aliasInput.fill(before.llamaCpp.alias);
@@ -150,7 +161,7 @@ export async function runCockpitManagedRuntimeProof({ context, browser, stack, c
           // The save's live event refreshes the panel shortly after `save` returns, and that refresh decides
           // whether this review is still confirmable. Branching before it lands races the refresh between the
           // check and the click. The open modal hides the region from role queries, so locate it by id.
-          await page.locator("#managed-runtime").getByText(new RegExp(`settings revision ${restored.revision}\\b`, "u")).waitFor();
+          await page.locator("#managed-runtime details").getByText(`Settings version ${restored.revision}`, { exact: true }).waitFor({ state: "attached" });
           const staleConfirm = dialog.getByRole("button", { name: "Apply reviewed runtime settings", exact: true });
           if (await staleConfirm.isDisabled()) {
             assert.ok((await dialog.innerText()).includes("This review is no longer current."));

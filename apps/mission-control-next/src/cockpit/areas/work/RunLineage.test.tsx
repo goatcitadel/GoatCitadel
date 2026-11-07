@@ -158,6 +158,22 @@ async function click(label: string) {
 }
 
 describe("Work delegation lineage", () => {
+  it("renders a 69 B citation as one full metadata paragraph with its nested hash and canonical row links", async () => {
+    const value = snapshot();
+    const source = value.synthesis.lineage[0]!;
+    source.byteCount = 69;
+    api.fetchDurableBackgroundTaskRail.mockResolvedValue(value);
+    await render();
+    await click("Inspect lineage");
+    const rows = container.querySelectorAll('[aria-label="Recorded synthesis sources"] ol > li');
+    expect(rows).toHaveLength(value.synthesis.lineage.length);
+    const metadata = rows[0]!.querySelectorAll(":scope > p")[1]!;
+    expect(metadata.textContent).toBe(`69 B · SHA-256 ${source.sha256}`);
+    expect(metadata.querySelector("span")?.textContent).toBe(source.sha256);
+    expect([...rows[0]!.querySelectorAll("a")].map(link => ({ text: link.textContent, href: link.getAttribute("href") })))
+      .toEqual([{ text: "Cited child run", href: "/work/runs/child%2Fa?shell=cockpit" }]);
+    expect(api.controlDurableBackgroundTask).not.toHaveBeenCalled();
+  });
   it("reads exact run/workspace/session lineage on demand and displays server-authored source links", async () => {
     await render();
     expect(api.fetchDurableBackgroundTaskRail).not.toHaveBeenCalled();

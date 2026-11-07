@@ -21,7 +21,7 @@ async function waitUntil(read, predicate, page, label) {
   throw new Error(`Timed out waiting for ${label}.`);
 }
 
-async function lastTurn(page, content) {
+async function turnById(page, turnId, content) {
   const messages = page.locator('[aria-label="Messages"]');
   const scroller = messages.locator("[data-transcript-scroller]");
   await scroller.waitFor();
@@ -29,8 +29,11 @@ async function lastTurn(page, content) {
     element.scrollTop = element.scrollHeight;
     element.dispatchEvent(new element.ownerDocument.defaultView.Event("scroll", { bubbles: true }));
   });
-  const turn = messages.locator("article[data-turn-id]").filter({ hasText: content });
+  assert.ok(typeof turnId === "string" && turnId.length > 0);
+  const turn = messages.locator(`article[data-turn-id=${JSON.stringify(turnId)}]`);
   await turn.waitFor();
+  assert.equal(await turn.count(), 1, "Turn actions require one exact canonical turn.");
+  assert.ok((await turn.innerText()).includes(content), "Exact turn must retain its canonical message.");
   return turn;
 }
 
@@ -64,7 +67,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   const forkRoute = `${prefix}${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(sourceTurn.turnId)}/fork`;
   const forkWrites = () => writes.filter((write) => write.pathname.endsWith("/fork"));
   const providersBefore = providerSnapshot(providerStub);
-  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "New conversation from here");
+  await clickTurnAction(await turnById(page, sourceTurn.turnId, sourceTurn.userMessage.content), "New conversation from here");
   const dialog = page.getByRole("dialog", { name: "Start a new conversation from this message?", exact: true });
   await dialogBounds(dialog, viewport, ["Create conversation", "Cancel"]);
   assert.ok((await dialog.innerText()).includes("read-only provenance, not replayed"));
@@ -78,7 +81,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   );
   assert.deepEqual(await api(threadRoute), initial);
   assert.equal(forkWrites().length, 0, "Cancel created a fork.");
-  await clickTurnAction(await lastTurn(page, sourceTurn.userMessage.content), "New conversation from here");
+  await clickTurnAction(await turnById(page, sourceTurn.turnId, sourceTurn.userMessage.content), "New conversation from here");
   await dialogBounds(dialog, viewport, ["Create conversation", "Cancel"]);
   const responsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && pathOf(response.url()) === forkRoute,
@@ -119,17 +122,17 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   } else {
     await page.getByRole("heading", { name: response.session.title, level: 1, exact: true }).waitFor();
   }
-  await lastTurn(page, sourceTurn.userMessage.content);
-  await capture("fork-created");
-
   const copied = forkThread.turns.find((turn) => turn.turnId === forkThread.activeLeafTurnId);
-  await clickTurnAction(await lastTurn(page, copied.userMessage.content), "Edit and resend");
+  assert.ok(copied?.userMessage);
+  await turnById(page, copied.turnId, copied.userMessage.content);
+  await capture("fork-created");
+  await clickTurnAction(await turnById(page, copied.turnId, copied.userMessage.content), "Edit your message and resend");
   const revised = `Independent fork sibling ${scope.variant} ${forkId}.`;
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(revised);
   const send = page.getByRole("button", { name: "Send edited message", exact: true });
   await waitUntil(() => send.isEnabled(), Boolean, page, "reviewed branch readiness");
   await send.click();
-  await waitUntil(
+  const completedEdit = await waitUntil(
     () => api(forkThreadRoute),
     (thread) =>
       thread.turns.some(
@@ -139,10 +142,12 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
     page,
     "completed edit sibling",
   );
+  const revisedTurn = completedEdit.turns.find((turn) => turn.userMessage.content === revised && turn.branch.isSelectedPath);
+  assert.ok(revisedTurn);
   // Canonical completion can precede the browser's stream settlement. Wait for
   // the normal composer and settled turn actions before switching branches.
   await page.getByRole("button", { name: "Send", exact: true }).waitFor();
-  await waitForTurnAction(await lastTurn(page, revised), "Edit and resend");
+  await waitForTurnAction(await turnById(page, revisedTurn.turnId, revised), "Edit your message and resend");
   await waitUntil(
     () => page.getByRole("textbox", { name: "Message", exact: true }).inputValue(),
     (value) => value === "",
@@ -185,7 +190,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
     const selectionResponse = page.waitForResponse(
       (result) => result.request().method() === "POST" && pathOf(result.url()) === selectRoute,
     );
-    await (await lastTurn(page, displayed.userMessage.content))
+    await (await turnById(page, displayed.turnId, displayed.userMessage.content))
       .getByRole("button", { name: `Switch to version ${index + 1}`, exact: true })
       .click();
     const selection = await selectionResponse;
@@ -195,7 +200,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
     assertSiblingSelection({ before: current, after, targetId, otherId, expectedTarget });
     assertSiblingSelection({ before: current, after: await selection.json(), targetId, otherId, expectedTarget });
     const selected = after.turns.find((turn) => turn.turnId === targetId);
-    await lastTurn(page, selected.userMessage.content);
+    await turnById(page, selected.turnId, selected.userMessage.content);
     assert.equal(
       await page.locator('[aria-label="Messages"]').getByText(displayed.userMessage.content, { exact: true }).count(),
       0,

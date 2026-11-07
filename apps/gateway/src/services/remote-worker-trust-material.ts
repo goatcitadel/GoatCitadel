@@ -7,7 +7,7 @@ import {
   type KeyObject,
 } from "node:crypto";
 import type { EnabledRemoteWorkerRuntimeConfig } from "./remote-worker-runtime-config.js";
-import { readRemoteWorkerNoFollowFile } from "./remote-worker-installed-tree-scanner.js";
+import { readRemoteWorkerNoFollowTrustFiles } from "./remote-worker-installed-tree-scanner.js";
 
 export const REMOTE_WORKER_TRUST_MATERIAL_LIMITS = Object.freeze({
   serverCertificateChainBytes: 1024 * 1024,
@@ -53,6 +53,7 @@ export class RemoteWorkerTrustMaterialError extends Error {
 export async function loadRemoteWorkerTrustMaterial(
   config: EnabledRemoteWorkerRuntimeConfig,
   now: Date = new Date(),
+  signal?: AbortSignal,
 ): Promise<RemoteWorkerTrustMaterial> {
   const clockMs = now.getTime();
   if (!Number.isFinite(clockMs)) throw invalid("Remote worker trust-material clock is invalid.");
@@ -61,22 +62,30 @@ export async function loadRemoteWorkerTrustMaterial(
   let clientCaBytes: Buffer | undefined;
   let signerBytes: Buffer | undefined;
   try {
-    serverCertificateBytes = await readRemoteWorkerNoFollowFile(
-      config.tls.serverCertificateFile,
-      REMOTE_WORKER_TRUST_MATERIAL_LIMITS.serverCertificateChainBytes,
+    const files = await readRemoteWorkerNoFollowTrustFiles(
+      [
+        {
+          filePath: config.tls.serverCertificateFile,
+          maxBytes: REMOTE_WORKER_TRUST_MATERIAL_LIMITS.serverCertificateChainBytes,
+        },
+        { filePath: config.tls.serverKeyFile, maxBytes: REMOTE_WORKER_TRUST_MATERIAL_LIMITS.serverPrivateKeyBytes },
+        { filePath: config.tls.clientCaFile, maxBytes: REMOTE_WORKER_TRUST_MATERIAL_LIMITS.clientCaCertificateBytes },
+        {
+          filePath: config.manifestSigner.publicKeyFile,
+          maxBytes: REMOTE_WORKER_TRUST_MATERIAL_LIMITS.manifestSignerPublicKeyBytes,
+        },
+      ],
+      { signal },
     );
-    serverKeyBytes = await readRemoteWorkerNoFollowFile(
-      config.tls.serverKeyFile,
-      REMOTE_WORKER_TRUST_MATERIAL_LIMITS.serverPrivateKeyBytes,
-    );
-    clientCaBytes = await readRemoteWorkerNoFollowFile(
-      config.tls.clientCaFile,
-      REMOTE_WORKER_TRUST_MATERIAL_LIMITS.clientCaCertificateBytes,
-    );
-    signerBytes = await readRemoteWorkerNoFollowFile(
-      config.manifestSigner.publicKeyFile,
-      REMOTE_WORKER_TRUST_MATERIAL_LIMITS.manifestSignerPublicKeyBytes,
-    );
+    if (files.length !== 4) {
+      for (const bytes of files) bytes.fill(0);
+      throw invalid("Remote worker trust material file count is invalid.");
+    }
+    serverCertificateBytes = files[0]!;
+    serverKeyBytes = files[1]!;
+    clientCaBytes = files[2]!;
+    signerBytes = files[3]!;
+    signal?.throwIfAborted();
 
     const serverCertificates = parseCertificateChain(serverCertificateBytes, 16);
     const serverLeaf = serverCertificates[0] as X509Certificate;

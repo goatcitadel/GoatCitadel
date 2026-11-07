@@ -1,6 +1,6 @@
 import { resolveCockpitCompatibility } from "./cockpit-compatibility";
 import { SHELL_HISTORY_POSITION, SHELL_NAVIGATION_EVENTS } from "../../app/shell-transition";
-import { buildConnectorSetupDestinations, buildSettingsDestinations } from "../areas/settings/settings-destinations";
+import { buildConnectorSetupRouteHomes, buildSettingsRouteHomes } from "../areas/settings/settings-route-homes";
 import { CONNECTOR_SETUP_PATH } from "./routes";
 import {
   COCKPIT_LOCATION_EVENT,
@@ -65,8 +65,8 @@ export function retainsSettingsPage(from: string, to: string): boolean {
     return false;
   const page =
     source.pathname === CONNECTOR_SETUP_PATH
-      ? { entries: buildConnectorSetupDestinations() }
-      : buildSettingsDestinations().find((candidate) => source.pathname === `/settings/${candidate.id}`);
+      ? { entries: buildConnectorSetupRouteHomes() }
+      : buildSettingsRouteHomes().find((candidate) => source.pathname === `/settings/${candidate.id}`);
   return Boolean(
     page &&
     page.entries.some((entry) => {

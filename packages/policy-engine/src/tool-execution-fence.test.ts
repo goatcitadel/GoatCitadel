@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { ToolPolicyConfig } from "@goatcitadel/contracts";
 import { createSqliteAsyncStorage, Storage } from "@goatcitadel/storage";
 import { ToolExecutionPreconditionError, ToolPolicyEngine } from "./engine.js";
@@ -136,25 +136,39 @@ describe("ToolPolicyEngine execution fence", () => {
     }
   }, 20_000);
 
-  it.each([
-    ["shell.exec", { command: "node --version" }],
-    ["shell.exec_background", { command: "node --version" }],
-    ["tests.run", { manager: "pnpm" }],
-    ["lint.run", { manager: "pnpm" }],
-    ["build.run", { manager: "pnpm" }],
-  ] as const)("awaits the async precondition at the deepest %s process boundary", async (toolName, args) => {
-    const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-process-fence-"));
-    tempRoots.push(root);
-    const storage = new Storage({
-      dbPath: ":memory:",
-      transcriptsDir: path.join(root, "transcripts"),
-      auditDir: path.join(root, "audit"),
-    });
-    const asyncStorage = createSqliteAsyncStorage(storage);
-    const engine = new ToolPolicyEngine(createPolicy(root), asyncStorage);
-    const boundaries: unknown[] = [];
+  describe("async precondition at the deepest process boundary", () => {
+    let root: string;
+    let asyncStorage: ReturnType<typeof createSqliteAsyncStorage> | undefined;
+    let engine: ToolPolicyEngine;
 
-    try {
+    beforeAll(async () => {
+      root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-process-fence-"));
+      const storage = new Storage({
+        dbPath: ":memory:",
+        transcriptsDir: path.join(root, "transcripts"),
+        auditDir: path.join(root, "audit"),
+      });
+      asyncStorage = createSqliteAsyncStorage(storage);
+      engine = new ToolPolicyEngine(createPolicy(root), asyncStorage);
+    });
+
+    afterAll(async () => {
+      try {
+        await asyncStorage?.close();
+      } finally {
+        if (root) await fs.rm(root, { recursive: true, force: true });
+      }
+    });
+
+    it.each([
+      ["shell.exec", { command: "node --version" }],
+      ["shell.exec_background", { command: "node --version" }],
+      ["tests.run", { manager: "pnpm" }],
+      ["lint.run", { manager: "pnpm" }],
+      ["build.run", { manager: "pnpm" }],
+    ] as const)("awaits the precondition for %s", async (toolName, args) => {
+      const boundaries: unknown[] = [];
+
       const result = await engine.invoke(
         {
           toolName,
@@ -179,9 +193,7 @@ describe("ToolPolicyEngine execution fence", () => {
         result: { workspacePathBridge: { status: "blocked", reasonCode: "git_identity_mismatch" } },
       });
       expect(boundaries).toEqual([{ toolName, cwd: root }]);
-    } finally {
-      await asyncStorage.close();
-    }
+    });
   });
 
   it("still propagates a durable fence failure from the deepest process boundary", async () => {

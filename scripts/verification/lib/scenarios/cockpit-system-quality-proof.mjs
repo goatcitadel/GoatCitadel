@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 
@@ -72,12 +73,12 @@ export async function runCockpitSystemQualityProof({ context, browser, stack, ci
           window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit");
           window.localStorage.setItem("goatcitadel.ui.theme.v1", theme);
         }, variant === "mobile" ? "light" : "dark");
-        await installMissionControlNextBrowserState(browserContext, workspace.workspaceId, workspace.citadelId);
+        await installMissionControlNextBrowserState(browserContext, workspace.workspaceId, workspace.citadelId, { showTechnicalDetails: true });
         page = await browserContext.newPage();
         const writes = [], ownerReads = [];
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
-          if (pathname.startsWith("/api/") && ["POST", "PATCH", "PUT", "DELETE"].includes(request.method())) writes.push(pathname);
+          if (classifyCockpitProofWrite(request.method(), pathname) === "owner") writes.push(pathname);
           if (pathname === "/api/v1/ops/quality") ownerReads.push(request.url());
         });
         const snapshotResponse = page.waitForResponse((response) => response.request().method() === "GET"
@@ -93,7 +94,15 @@ export async function runCockpitSystemQualityProof({ context, browser, stack, ci
         const packLink = page.getByRole("region", { name: "Prompt packs", exact: true }).getByRole("link", { name: `Review ${imported.pack.name}`, exact: true });
         const link = new URL(await packLink.getAttribute("href"), stack.uiUrl);
         assert.equal(link.searchParams.get("view"), `pack:${imported.pack.packId}`);
-        assert.equal(link.searchParams.get("shell"), "classic");
+        const nativePackTarget=new URL("/library/prompt-packs",page.url());
+        nativePackTarget.search=new URL(page.url()).search;
+        nativePackTarget.hash=new URL(page.url()).hash;
+        nativePackTarget.searchParams.set("shell","cockpit");
+        nativePackTarget.searchParams.delete("shellScope");
+        nativePackTarget.searchParams.set("view",`pack:${imported.pack.packId}`);
+        nativePackTarget.searchParams.set("workspaceId",workspace.workspaceId);
+        nativePackTarget.searchParams.set("citadelId",workspace.citadelId);
+        assert.equal(link.href,nativePackTarget.href,"Quality evidence must retain the exact native prompt-pack owner and scope");
         const packReportResponse = page.waitForResponse((result) => result.request().method() === "GET"
           && new URL(result.url()).pathname === `/api/v1/prompt-packs/${imported.pack.packId}/report`);
         await page.getByRole("button", { name: `Inspect ${imported.pack.name}`, exact: true }).click();

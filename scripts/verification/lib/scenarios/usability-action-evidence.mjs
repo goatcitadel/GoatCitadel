@@ -471,7 +471,7 @@ const ACTION_ASSERTIONS = Object.freeze({
   "route.settings-access.revoked-and-persisted-credentials": [
     a(
       "apps/mission-control-next/src/features/native-routes/SettingsNativePage.test.tsx",
-      "prefers a valid session OAuth flow over stale local storage",
+      "scrubs both local and session OAuth flows that lack Change Plan binding",
     ),
     a(
       "apps/mission-control-next/src/features/native-routes/SettingsNativePage.test.tsx",

@@ -226,6 +226,7 @@ function Harness(props: {
     },
     uploadAttachments: async (files) => {
       uploadedFilesRef.current.push(files);
+      return true;
     },
   });
 
@@ -484,6 +485,9 @@ describe("useChatMultimodalControls", () => {
     await flushAsyncEffects();
     expect(latest!.controls.liveVoiceState).toBe("connecting");
 
+    // This scenario cancels after token dispatch. The first-use module may load
+    // asynchronously; cancellation during its import has separate coverage.
+    await vi.waitFor(() => expect(apiMocks.createRealtimeVoiceClientSecret).toHaveBeenCalledTimes(1));
     await act(async () => {
       await latest!.controls.handleToggleLiveVoice();
       await flushAsyncEffects();
@@ -773,6 +777,7 @@ describe("useChatMultimodalControls", () => {
           providerOptions={[openaiProvider] as never}
           selectedProviderId={null}
           selectedSessionId={null}
+          activeThreadSessionId={null}
           routePreflight={{ effectiveProviderId: undefined }}
           pendingAttachments={[
             {
@@ -1061,5 +1066,74 @@ describe("useChatMultimodalControls", () => {
       value: "Unable to read binary content.",
       source: "image_edit",
     });
+  });
+
+  it("admits only one image action before React publishes busy", async () => {
+    let renderer!: ReactTestRenderer;
+    let release!: (value: unknown) => void;
+    apiMocks.generateLlmImage.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    await act(async () => { renderer = create(<Harness />); });
+    let first!: Promise<boolean>;
+    let second!: Promise<boolean>;
+    act(() => {
+      first = latest!.controls.handleGenerateImage();
+      second = latest!.controls.handleGenerateImage();
+    });
+    try {
+      expect(latest!.controls.imageBusy).toBe(true);
+      await flushAsyncEffects();
+      expect(apiMocks.generateLlmImage).toHaveBeenCalledTimes(1);
+    } finally {
+      // Resolve every request even on the expected assertion RED.
+      await act(async () => {
+        release({ operation: "generate", data: [{ b64Json: "aW1hZ2U=" }] });
+        await Promise.all([first, second]);
+        renderer.unmount();
+      });
+      void first;
+      void second;
+    }
+  });
+
+  it("does not upload an old image result after selected-session ownership changes", async () => {
+    let renderer!: ReactTestRenderer;
+    let release!: (value: unknown) => void;
+    apiMocks.generateLlmImage.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    await act(async () => { renderer = create(<Harness />); });
+    let pending!: Promise<boolean>;
+    act(() => { pending = latest!.controls.handleGenerateImage({ clearDraftOnSuccess: true, trigger: "auto_send" }); });
+    await act(async () => { renderer.update(<Harness selectedSessionId="session-2" activeThreadSessionId="session-2" />); });
+    try {
+      await act(async () => {
+        release({ operation: "generate", data: [{ b64Json: "aW1hZ2U=" }] });
+        await pending;
+      });
+      expect(latest!.snapshot().uploadedFiles).toEqual([]);
+      expect(latest!.snapshot().draft).toBe("draw a launch console");
+      await expect(pending).resolves.toBe(false);
+    } finally {
+      await act(async () => renderer.unmount());
+    }
+  });
+
+  it("does not insert a transcript into a different selected session", async () => {
+    let renderer!: ReactTestRenderer;
+    let release!: (value: { text: string }) => void;
+    apiMocks.transcribeVoice.mockReturnValue(new Promise((resolve) => { release = resolve; }));
+    await act(async () => { renderer = create(<Harness draft="Existing" />); });
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = latest!.controls.handleAudioFileSelected({ item: () => new File(["audio"], "note.wav", { type: "audio/wav" }) } as unknown as FileList);
+      await flushAsyncEffects();
+    });
+    expect(latest!.controls.voiceBusy).toBe(true);
+    await act(async () => { renderer.update(<Harness selectedSessionId="session-2" activeThreadSessionId="session-2" />); });
+    try {
+      await act(async () => { release({ text: "old transcript" }); await pending; });
+      expect(latest!.snapshot().draft).toBe("Existing");
+      expect(latest!.snapshot().notices).not.toContainEqual({ message: "Inserted transcript from note.wav.", tone: "success" });
+    } finally {
+      await act(async () => renderer.unmount());
+    }
   });
 });

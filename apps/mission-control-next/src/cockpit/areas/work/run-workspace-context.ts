@@ -1,10 +1,10 @@
 import type { ChatSessionWorkbenchRecord } from "@goatcitadel/contracts";
 import {
-  fetchChatSessionStatus,
   fetchChatSessionWorkbench,
   fetchChatSessionWorkbenchFile,
   fetchChatSessionWorkbenchTree,
-} from "@goatcitadel/mission-control-shared/api/chat";
+} from "@goatcitadel/mission-control-shared/api/chat-workbench-operations";
+import { fetchChatSessionStatus } from "@goatcitadel/mission-control-shared/api/chat";
 import type { ObserveRunTraceResponse } from "@goatcitadel/mission-control-shared/api/durable";
 import { durableRunWorkspaceId } from "../../data/durable-run-scope";
 

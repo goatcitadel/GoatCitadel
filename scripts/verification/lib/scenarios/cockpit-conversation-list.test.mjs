@@ -27,6 +27,11 @@ function fakeConversationPage(layout, { currentLabel = "Alpha 2m ago" } = {}) {
       first: () => self,
       waitFor: async (options) => calls.push(["waitFor", path.join(" > "), options?.state ?? "visible"]),
       isVisible: async () => visible(key),
+      getAttribute: async (name) => {
+        assert.equal(name, "data-state");
+        assert.equal(key, "dialog:Conversations");
+        return sheetOpen ? "open" : "closed";
+      },
       count: async () => 1,
       textContent: async () => currentLabel,
       getByRole: (role, options) => locator([...path, describe(role, options)]),

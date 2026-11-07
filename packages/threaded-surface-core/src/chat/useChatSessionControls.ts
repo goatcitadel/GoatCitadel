@@ -243,6 +243,7 @@ export function useChatSessionControls(input: {
       if (!isCreationViewCurrent())
         throw new DOMException("The first-send conversation view changed before creation.", "AbortError");
       const creationScope = selectionScopeRef.current;
+      const creationSelectionRevision = input.selectionRevisionRef?.current;
       const nextHistoryView: ChatHistoryView = historyView === "archived" ? "active" : historyView;
       const installation = getGatewayApiBaseUrl();
       const creationKey = chatSessionCreationKey(installation, workspaceId);
@@ -280,7 +281,12 @@ export function useChatSessionControls(input: {
         publishChatSessionCreation(creationKey, attempt);
         throw cause;
       }
-      if (!mountedRef.current || selectionScopeRef.current !== creationScope || !isCreationViewCurrent()) {
+      if (
+        !mountedRef.current ||
+        selectionScopeRef.current !== creationScope ||
+        input.selectionRevisionRef?.current !== creationSelectionRevision ||
+        !isCreationViewCurrent()
+      ) {
         // A navigation abort must not restore the old draft into the newly selected scope.
         throw new DOMException("Session selection changed while the new conversation was being created.", "AbortError");
       }
@@ -299,6 +305,7 @@ export function useChatSessionControls(input: {
     [
       historyView,
       initialOutboundSessionCreationRef,
+      input.selectionRevisionRef,
       isCreationViewCurrent,
       loadSidebar,
       onSessionCreated,

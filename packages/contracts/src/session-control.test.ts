@@ -783,3 +783,176 @@ describe("content-free bounded projections", () => {
     ).toThrow(/list response is invalid/u);
   });
 });
+
+describe("session control schema boundary regressions", () => {
+  it.each([
+    ["NaN", Number.NaN, false],
+    ["positive infinity", Number.POSITIVE_INFINITY, false],
+    ["negative infinity", Number.NEGATIVE_INFINITY, false],
+    ["negative zero", -0, false],
+    ["zero", 0, false],
+    ["fraction", 1.5, false],
+    ["one", 1, true],
+    ["maximum safe integer", Number.MAX_SAFE_INTEGER, true],
+    ["above maximum safe integer", Number.MAX_SAFE_INTEGER + 1, false],
+  ] as const)("validates body generation %s without mutating its input", (_label, generation, valid) => {
+    const input = { expectedGeneration: generation, idempotencyKey: "heartbeat-boundary" };
+    const descriptors = Object.getOwnPropertyDescriptors(input);
+    if (valid) {
+      expect(parseSessionControlHeartbeatInput(input).expectedGeneration).toBe(generation);
+    } else {
+      let caught: unknown;
+      try {
+        parseSessionControlHeartbeatInput(input);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(TypeError);
+      expect((caught as Error).message).toBe("Session control heartbeat is invalid.");
+    }
+    expect(Object.getOwnPropertyDescriptors(input)).toEqual(descriptors);
+    expect(Object.is(input.expectedGeneration, generation)).toBe(true);
+    expect(Object.isFrozen(input)).toBe(false);
+  });
+
+  it.each([
+    ["more than two entries", () => ["send", "read", "send"]],
+    [
+      "sparse array",
+      () => {
+        const value = new Array<string>(2);
+        value[0] = "send";
+        return value;
+      },
+    ],
+    ["decorated array", () => Object.assign(["send"], { note: "not-authority" })],
+  ] as const)("rejects a capability %s with exact public errors and unchanged descriptors", (_label, create) => {
+    const capabilities = create();
+    const descriptors = Object.getOwnPropertyDescriptors(capabilities);
+    const request = {
+      expectedGeneration: 1,
+      clientInstanceId: "client-a",
+      tokenHashSha256: TOKEN_HASH,
+      capabilities,
+      idempotencyKey: "request-boundary",
+    };
+    for (const [parse, message] of [
+      [() => normalizeExternalSessionControlCapabilities(capabilities), "Session control capability set is invalid."],
+      [() => parseSessionControlRequestInput(request), "Session control request is invalid."],
+    ] as const) {
+      let caught: unknown;
+      try {
+        parse();
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(TypeError);
+      expect((caught as Error).message).toBe(message);
+      expect(Object.getOwnPropertyDescriptors(capabilities)).toEqual(descriptors);
+      expect(request.capabilities).toBe(capabilities);
+      expect(Object.isFrozen(capabilities)).toBe(false);
+      expect(Object.isFrozen(request)).toBe(false);
+    }
+  });
+
+  it.each([
+    ["valid leap day", "2024-02-29T12:00:00.000Z", true],
+    ["nonleap February 29", "2026-02-29T12:00:00.000Z", false],
+    ["February 30", "2024-02-30T12:00:00.000Z", false],
+    ["April 31", "2026-04-31T12:00:00.000Z", false],
+  ] as const)("validates canonical UTC %s against the actual calendar", (_label, updatedAt, valid) => {
+    const input = { ...operatorControl(1, "session_initialized"), updatedAt };
+    if (valid) expect(parseSessionControlRecord(input).updatedAt).toBe(updatedAt);
+    else {
+      let caught: unknown;
+      try {
+        parseSessionControlRecord(input);
+      } catch (error) {
+        caught = error;
+      }
+      expect(caught).toBeInstanceOf(TypeError);
+      expect((caught as Error).message).toBe("Session control record is invalid.");
+    }
+    expect(input.updatedAt).toBe(updatedAt);
+    expect(Object.isFrozen(input)).toBe(false);
+  });
+
+  it("returns detached deeply frozen projections with immutable data descriptors", () => {
+    const input = { control: externalControl(), pendingRequests: [] };
+    const output = parseSessionControlDetailResponse(input);
+    if (output.control.ownerKind !== "external_companion") throw new Error("Expected external projection.");
+    expect(output).not.toBe(input);
+    expect(output.control).not.toBe(input.control);
+    expect(output.control.boundExternalController).not.toBe(input.control.boundExternalController);
+    expect(output.control.capabilities).not.toBe(input.control.capabilities);
+    expect(output.pendingRequests).not.toBe(input.pendingRequests);
+    for (const value of [
+      output,
+      output.control,
+      output.control.boundExternalController,
+      output.control.capabilities,
+      output.pendingRequests,
+    ]) {
+      expect(Object.isFrozen(value)).toBe(true);
+    }
+    for (const [object, key] of [
+      [output.control, "generation"],
+      [output.control.boundExternalController, "clientInstanceId"],
+      [output.control.capabilities, "0"],
+    ] as const) {
+      expect(Object.getOwnPropertyDescriptor(object, key)).toMatchObject({
+        enumerable: true,
+        writable: false,
+        configurable: false,
+      });
+    }
+    expect(Object.getOwnPropertyDescriptor(output.pendingRequests, "length")).toMatchObject({
+      enumerable: false,
+      writable: false,
+      configurable: false,
+    });
+    expect(Object.getOwnPropertyDescriptor(input.control.boundExternalController, "clientInstanceId")).toMatchObject({
+      enumerable: true,
+      writable: true,
+      configurable: true,
+    });
+    expect(Object.isFrozen(input.control)).toBe(false);
+    expect(Object.isFrozen(input.control.boundExternalController)).toBe(false);
+    input.control.boundExternalController.clientInstanceId = "changed-after-parse";
+    expect(output.control.boundExternalController.clientInstanceId).toBe("client-a");
+  });
+});
+
+describe("session control strict object boundaries", () => {
+  it("rejects unrecognized request fields without exposing their values", () => {
+    const input = {
+      expectedGeneration: 1,
+      idempotencyKey: "heartbeat-boundary",
+      unexpected: "synthetic-private-value",
+    };
+    let error: unknown;
+    try {
+      parseSessionControlHeartbeatInput(input);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toBe("Session control heartbeat is invalid.");
+    expect(input.unexpected).toBe("synthetic-private-value");
+    expect(Object.isFrozen(input)).toBe(false);
+  });
+  it("rejects unrecognized nested controller fields without exposing their values", () => {
+    const input = externalControl();
+    const controller = { ...input.boundExternalController, unexpected: "synthetic-private-value" };
+    let error: unknown;
+    try {
+      parseSessionControlRecord({ ...input, boundExternalController: controller });
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(TypeError);
+    expect((error as Error).message).toBe("Session control record is invalid.");
+    expect(controller.unexpected).toBe("synthetic-private-value");
+    expect(Object.isFrozen(controller)).toBe(false);
+  });
+});

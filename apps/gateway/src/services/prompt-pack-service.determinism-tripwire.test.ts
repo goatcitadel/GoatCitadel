@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
@@ -89,13 +90,13 @@ describe("prompt-pack determinism tripwire", () => {
     expect(markdown).not.toContain(DETERMINISM_ALARM_PREFIX);
   });
 
-  it("keeps gateway source free of raw NUL bytes so text tooling can search every file", () => {
+  it("keeps gateway source free of raw NUL bytes so text tooling can search every file", async () => {
     // A raw NUL (byte 0x00) once landed in the tripwire key separator of
     // prompt-pack-service.ts; ripgrep then treated the whole 10k-line file as
     // binary and silently stopped searching it. The separator must stay written
     // as an escape sequence, and no source file may carry raw NUL bytes.
     const srcRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
-    const offenders: string[] = [];
+    const sourceFiles: string[] = [];
     const visit = (dir: string): void => {
       for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
         const entryPath = path.join(dir, entry.name);
@@ -112,12 +113,22 @@ describe("prompt-pack determinism tripwire", () => {
         if (!isTypeScriptSource) {
           continue;
         }
-        if (fs.readFileSync(entryPath).includes(0)) {
-          offenders.push(path.relative(srcRoot, entryPath).split(path.sep).join("/"));
-        }
+        sourceFiles.push(entryPath);
       }
     };
     visit(srcRoot);
-    expect(offenders).toEqual([]);
+    // Overlap file I/O without opening the entire source tree at once.
+    const offenders: string[] = [];
+    const batchSize = 64;
+    for (let offset = 0; offset < sourceFiles.length; offset += batchSize) {
+      const batch = sourceFiles.slice(offset, offset + batchSize);
+      const contents = await Promise.all(batch.map((file) => readFile(file)));
+      for (const [index, bytes] of contents.entries()) {
+        if (bytes.includes(0)) {
+          offenders.push(path.relative(srcRoot, batch[index]!).split(path.sep).join("/"));
+        }
+      }
+    }
+    expect(offenders.sort()).toEqual([]);
   });
 });

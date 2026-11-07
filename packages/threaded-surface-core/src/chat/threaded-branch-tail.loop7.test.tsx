@@ -198,7 +198,7 @@ describe("threaded branch-tail coverage", () => {
   it("covers attachment upload project scoping and drag-depth branches", async () => {
     uploadChatAttachmentMock.mockResolvedValue({ attachmentId: "attachment-loop11" });
     await act(async () => {
-      create(<ComposerHarness selectedSession={{ projectId: "project-loop11" }} />);
+      create(<ComposerHarness selectedSession={{ sessionId: "session-loop7", projectId: "project-loop11" }} />);
     });
 
     const file = new File(["branch tail"], "tail.txt", { type: "text/plain" });

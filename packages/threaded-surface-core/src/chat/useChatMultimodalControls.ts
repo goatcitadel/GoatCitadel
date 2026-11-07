@@ -1,25 +1,25 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type {
   ChatAttachmentRecord,
+  ChatSessionRecord,
   RoutingPreflightResult,
   ChatTurnLifecycleStatus,
   VoiceRuntimeStatus,
   VoiceStatus,
 } from "@goatcitadel/contracts";
 import {
-  createRealtimeVoiceClientSecret,
-  downloadChatAttachment,
   fetchVoiceRuntimeStatus,
   fetchVoiceStatus,
-  generateLlmImage,
   startVoiceTalkSession,
   stopRealtimeVoiceSession,
   stopVoiceTalkSession,
-  transcribeVoice,
 } from "@goatcitadel/mission-control-shared/api/client";
 import type { ChatModelProviderOption } from "@goatcitadel/mission-control-shared/components/ChatModelPicker";
-import { fileToBase64 } from "../settings-page-utils";
 import type { ChatErrorSource } from "./chat-error-copy";
+import { getGatewayAccessRevision, getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import type { UploadAttachmentOptions, ChatImageRoute, ImageGenerationOptions } from "./multimodal-action-types";
+export type { ImageGenerationOptions } from "./multimodal-action-types";
 
 const SPEAK_REPLIES_PREF_KEY = "goatcitadel.chat.speak-replies.enabled";
 const OPENAI_IMAGE_MODEL_PREFERENCES = ["gpt-image-2", "gpt-image-1"] as const;
@@ -34,16 +34,24 @@ const IMAGE_MODEL_PREFERENCES: Record<"openai" | "openai-codex" | "google", read
   google: GOOGLE_IMAGE_MODEL_PREFERENCES,
 };
 
-interface ChatImageRoute {
-  providerId: "openai" | "openai-codex" | "google";
-  model: string;
-  label: string;
-  supportsEdit: boolean;
+// These functions cache code only. Rejected loads are retried on the next explicit action.
+export const multimodalCodeLoaders = {
+  image: () => import("./multimodal-image-code.js"),
+  transcribe: () => import("./multimodal-transcribe-code.js"),
+};
+let imageCodePromise: ReturnType<typeof multimodalCodeLoaders.image> | undefined;
+let transcribeCodePromise: ReturnType<typeof multimodalCodeLoaders.transcribe> | undefined;
+function loadImageCode() {
+  return imageCodePromise ??= multimodalCodeLoaders.image().catch((error: unknown) => {
+    imageCodePromise = undefined;
+    throw error;
+  });
 }
-
-export interface ImageGenerationOptions {
-  clearDraftOnSuccess?: boolean;
-  trigger?: "button" | "auto_send";
+function loadTranscribeCode() {
+  return transcribeCodePromise ??= multimodalCodeLoaders.transcribe().catch((error: unknown) => {
+    transcribeCodePromise = undefined;
+    throw error;
+  });
 }
 
 type LiveVoiceUiState =
@@ -70,36 +78,8 @@ interface PendingLiveVoiceStart {
   voiceSessionId: string | null;
 }
 
-const OPENAI_REALTIME_CALLS_URL = "https://api.openai.com/v1/realtime/calls";
-
 function isImageAttachment(attachment: ChatAttachmentRecord): boolean {
   return attachment.mediaType === "image" || attachment.mimeType.startsWith("image/");
-}
-
-function blobToBase64(blob: Blob): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => {
-      const result = reader.result;
-      if (typeof result !== "string") {
-        reject(new Error("Unable to read binary content."));
-        return;
-      }
-      const comma = result.indexOf(",");
-      resolve(comma >= 0 ? result.slice(comma + 1) : result);
-    };
-    reader.onerror = reject.bind(null, new Error("Unable to read binary content."));
-    reader.readAsDataURL(blob);
-  });
-}
-
-function base64ToFile(base64: string, fileName: string, mimeType = "image/png"): File {
-  const bytes = atob(base64);
-  const out = new Uint8Array(bytes.length);
-  for (let index = 0; index < bytes.length; index += 1) {
-    out[index] = bytes.charCodeAt(index);
-  }
-  return new File([out], fileName, { type: mimeType });
 }
 
 function normalizeOptionalString(value?: string | null): string | undefined {
@@ -188,15 +168,6 @@ function buildImageRoute(
   return null;
 }
 
-function shouldRetryImageGenerationWithGoogleFallback(error: string): boolean {
-  const normalized = error.toLowerCase();
-  return (
-    normalized.includes("organization must be verified") ||
-    (normalized.includes("verify organization") && normalized.includes("gpt-image-2")) ||
-    (normalized.includes("403") && normalized.includes("gpt-image-2"))
-  );
-}
-
 function supportsBrowserRealtimeVoice(): boolean {
   if (typeof window === "undefined" || typeof navigator === "undefined") {
     return false;
@@ -237,46 +208,6 @@ function getLiveVoiceStatusLabel(state: LiveVoiceUiState, status?: VoiceStatus["
   return "OpenAI Realtime unavailable";
 }
 
-function mapRealtimeEventToLiveVoiceState(eventType: string): LiveVoiceUiState | null {
-  if (
-    eventType === "response.audio.delta" ||
-    eventType === "response.output_audio.delta" ||
-    eventType === "output_audio_buffer.started"
-  ) {
-    return "speaking";
-  }
-  if (
-    eventType === "input_audio_buffer.speech_stopped" ||
-    eventType === "response.created" ||
-    eventType === "response.output_item.added"
-  ) {
-    return "thinking";
-  }
-  if (
-    eventType === "input_audio_buffer.speech_started" ||
-    eventType === "response.done" ||
-    eventType === "output_audio_buffer.stopped"
-  ) {
-    return "listening";
-  }
-  if (eventType === "error") {
-    return "error";
-  }
-  return null;
-}
-
-function parseRealtimeEventType(raw: MessageEvent["data"]): string | null {
-  if (typeof raw !== "string") {
-    return null;
-  }
-  try {
-    const parsed = JSON.parse(raw) as { type?: unknown };
-    return typeof parsed.type === "string" ? parsed.type : null;
-  } catch {
-    return null;
-  }
-}
-
 function cleanupLiveVoiceConnection(connection: LiveVoiceConnection | null): void {
   if (!connection) {
     return;
@@ -291,6 +222,9 @@ function cleanupLiveVoiceConnection(connection: LiveVoiceConnection | null): voi
 }
 
 export function useChatMultimodalControls(input: {
+  workspaceId?: string;
+  selectionRevisionRef?: { readonly current: number };
+  selectedSession?: ChatSessionRecord | null;
   /** Native disclosures request readiness on intent; compatibility callers retain eager reads. */
   deferVoiceReadiness?: boolean;
   providerOptions: ChatModelProviderOption[];
@@ -308,7 +242,7 @@ export function useChatMultimodalControls(input: {
   setDraft: React.Dispatch<React.SetStateAction<string>>;
   setError: (value: string | null, source?: ChatErrorSource) => void;
   pushLocalNotice: (message: string, tone?: "neutral" | "warning" | "critical" | "success") => void;
-  uploadAttachments: (files: File[]) => Promise<void>;
+  uploadAttachments: (files: File[], options?: UploadAttachmentOptions) => Promise<boolean>;
 }) {
   const {
     providerOptions,
@@ -391,6 +325,102 @@ export function useChatMultimodalControls(input: {
     }
     return buildImageRoute(imageProviderOptions.find((provider) => provider.providerId === "google"));
   }, [imageProviderOptions, primaryImageRoute]);
+  const mountedRef = useRef(true);
+  const [, refreshImageMountGeneration] = useState(0);
+  const currentInputRef = useRef(input);
+  currentInputRef.current = input;
+  type MediaTicket = { scope: string; generation: number; draft: string; revision: number; authority: string };
+  type ImageTicket = {
+    generation: number; base: string; revision: number; draft: string; selectedId: string | null;
+    workspace: string | undefined; destination?: string; selectionSeen: boolean;
+    recordSeen: boolean; threadSeen: boolean; confirmationOpen: boolean; revoked: boolean;
+  };
+  const imageTicketRef = useRef<ImageTicket | null>(null);
+  const imagePublicationRef = useRef<ImageTicket | null>(null);
+  const transcriptTicketRef = useRef<MediaTicket | null>(null);
+  const getTranscriptAuthority = useCallback(() => JSON.stringify([
+    currentInputRef.current.workspaceId ?? currentInputRef.current.selectedSession?.workspaceId,
+    getGatewayApiBaseUrl(), getGatewayAccessRevision(), getGatewayCallerScopeRevision(),
+  ]), []);
+  const transcriptAuthority = getTranscriptAuthority();
+  const mediaSelectionRevision = input.selectionRevisionRef?.current ?? 0;
+  const mediaScope = JSON.stringify([selectedSessionId, mediaSelectionRevision, transcriptAuthority, activeThreadSessionId, activeProviderId,
+    primaryImageRoute?.providerId, primaryImageRoute?.model, primaryImageRoute?.supportsEdit, googleFallbackImageRoute?.model]);
+  const scopeRef = useRef(mediaScope);
+  const generationRef = useRef(0);
+  if (scopeRef.current !== mediaScope) generationRef.current += 1;
+  scopeRef.current = mediaScope;
+  const mediaGeneration = generationRef.current;
+  const renderedImageGenerationRef = useRef(0);
+  useEffect(() => {
+    mountedRef.current = true;
+    if (imageOwnerRef.current.generation !== renderedImageGenerationRef.current) refreshImageMountGeneration((value) => value + 1);
+    return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
+      imageOwnerRef.current.generation += 1;
+      if (imageTicketRef.current) imageTicketRef.current.revoked = true;
+      imageTicketRef.current = null;
+      if (imagePublicationRef.current) imagePublicationRef.current.revoked = true;
+      imagePublicationRef.current = null;
+    };
+  }, []);
+  useEffect(() => {
+    if (transcriptTicketRef.current && transcriptTicketRef.current.generation !== mediaGeneration) {
+      transcriptTicketRef.current = null;
+      setVoiceBusy(false);
+    }
+  }, [mediaScope, mediaGeneration]);
+
+  const imageWorkspace = input.workspaceId ?? input.selectedSession?.workspaceId;
+  const imageRevision = input.selectionRevisionRef?.current ?? 0;
+  const imageBase = JSON.stringify([imageWorkspace, getGatewayApiBaseUrl(), getGatewayAccessRevision(),
+    getGatewayCallerScopeRevision(), activeProviderId, primaryImageRoute, googleFallbackImageRoute]);
+  const imageObservation = { selectedId: selectedSessionId, revision: imageRevision,
+    recordId: input.selectedSession?.sessionId ?? null, recordWorkspace: input.selectedSession?.workspaceId,
+    threadId: activeThreadSessionId ?? null };
+  const imageObservationKey = JSON.stringify([imageBase, imageObservation]);
+  const imageOwnerRef = useRef({ generation: 0, key: imageObservationKey });
+  if (imageOwnerRef.current.key !== imageObservationKey) {
+    const generation = imageOwnerRef.current.generation + 1;
+    const ticket = imageTicketRef.current ?? imagePublicationRef.current;
+    let allowed = Boolean(ticket && !ticket.revoked && ticket.base === imageBase);
+    if (ticket && allowed) {
+      const target = ticket.destination ?? ticket.selectedId;
+      const waitingForOwnSelection = Boolean(ticket.destination && !ticket.selectionSeen &&
+        selectedSessionId === null && imageRevision === ticket.revision);
+      allowed = waitingForOwnSelection || (selectedSessionId === target &&
+        imageRevision === ticket.revision + (ticket.destination ? 1 : 0));
+      if (allowed && !waitingForOwnSelection && ticket.destination) ticket.selectionSeen = true;
+      if (imageObservation.recordId !== null) {
+        allowed = allowed && imageObservation.recordId === target && imageObservation.recordWorkspace === ticket.workspace;
+        if (allowed) ticket.recordSeen = true;
+      } else if (ticket.recordSeen) allowed = false;
+      if (imageObservation.threadId !== null) {
+        allowed = allowed && imageObservation.threadId === target;
+        if (allowed) ticket.threadSeen = true;
+      } else if (ticket.threadSeen) allowed = false;
+      if (allowed) ticket.generation = generation;
+    }
+    if (ticket && !allowed) { ticket.revoked = true; imageTicketRef.current = null; }
+    imageOwnerRef.current = { generation, key: imageObservationKey };
+  }
+  const imageGeneration = imageOwnerRef.current.generation;
+  renderedImageGenerationRef.current = imageGeneration;
+  const hasCurrentImageBase = useCallback((ticket: ImageTicket) =>
+    ticket.base === JSON.stringify([currentInputRef.current.workspaceId ?? currentInputRef.current.selectedSession?.workspaceId,
+        getGatewayApiBaseUrl(), getGatewayAccessRevision(), getGatewayCallerScopeRevision(), activeProviderId,
+        primaryImageRoute, googleFallbackImageRoute]), [activeProviderId, googleFallbackImageRoute, primaryImageRoute]);
+  const currentImage = useCallback((ticket: ImageTicket) => {
+    const revision = currentInputRef.current.selectionRevisionRef?.current ?? imageRevision;
+    return mountedRef.current && imageTicketRef.current === ticket && !ticket.revoked &&
+      ticket.generation === imageOwnerRef.current.generation && currentInputRef.current.draft === ticket.draft &&
+      hasCurrentImageBase(ticket) &&
+      (revision === ticket.revision + (ticket.destination ? 1 : 0) ||
+        Boolean(ticket.destination && !ticket.selectionSeen && revision === ticket.revision));
+  }, [hasCurrentImageBase, imageRevision]);
+  useEffect(() => { if (!imageTicketRef.current) setImageBusy(false); }, [imageGeneration]);
+
   const latestImageAttachment = useMemo(
     () => [...pendingAttachments].reverse().find(isImageAttachment) ?? null,
     [pendingAttachments],
@@ -645,7 +675,6 @@ export function useChatMultimodalControls(input: {
     setError(null);
     setLiveVoiceState("connecting");
     let issuedVoiceSessionId: string | null = null;
-    let pendingMediaStream: MediaStream | null = null;
     let pendingConnection: LiveVoiceConnection | null = null;
     const pendingStart: PendingLiveVoiceStart = {
       canceled: false,
@@ -661,84 +690,30 @@ export function useChatMultimodalControls(input: {
       }
     };
     try {
-      const token = await createRealtimeVoiceClientSecret({
-        surface: "chat",
-        sessionId: selectedSessionId ?? undefined,
-      });
-      issuedVoiceSessionId = token.voiceSessionId;
-      pendingStart.voiceSessionId = token.voiceSessionId;
+      const { startBrowserRealtimeVoice } = await import("./multimodal-live-voice-start.js");
       abortIfCanceled();
-      setLiveVoiceState("requesting_mic");
-      const mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      pendingMediaStream = mediaStream;
-      pendingStart.mediaStream = mediaStream;
-      abortIfCanceled();
-      setLiveVoiceState("connecting");
-
-      const peerConnection = new window.RTCPeerConnection();
-      const audioElement = document.createElement("audio");
-      audioElement.autoplay = true;
-      audioElement.setAttribute("data-goatcitadel-live-voice", "true");
-      document.body?.appendChild(audioElement);
-
-      peerConnection.ontrack = (event) => {
-        audioElement.srcObject = event.streams[0] ?? null;
-      };
-      for (const track of mediaStream.getAudioTracks()) {
-        peerConnection.addTrack(track, mediaStream);
-      }
-      const dataChannel = peerConnection.createDataChannel("oai-events");
-      dataChannel.onopen = () => setLiveVoiceState("listening");
-      dataChannel.onmessage = (event) => {
-        const eventType = parseRealtimeEventType(event.data);
-        const nextState = eventType ? mapRealtimeEventToLiveVoiceState(eventType) : null;
-        if (nextState) {
-          setLiveVoiceState(nextState);
-        }
-      };
-      dataChannel.onerror = () => setLiveVoiceState("error");
-
-      pendingConnection = {
-        peerConnection,
-        dataChannel,
-        mediaStream,
-        audioElement,
-        voiceSessionId: token.voiceSessionId,
-      };
-      liveVoiceConnectionRef.current = pendingConnection;
-      abortIfCanceled();
-
-      const offer = await peerConnection.createOffer();
-      if (!offer.sdp) {
-        throw new Error("Unable to create a WebRTC offer for OpenAI Realtime voice.");
-      }
-      await peerConnection.setLocalDescription(offer);
-      abortIfCanceled();
-      const sdpResponse = await fetch(OPENAI_REALTIME_CALLS_URL, {
-        method: "POST",
-        body: offer.sdp,
-        headers: {
-          Authorization: `Bearer ${token.clientSecret.value}`,
-          "Content-Type": "application/sdp",
+      await startBrowserRealtimeVoice({
+        sessionId: selectedSessionId,
+        abortIfCanceled,
+        setLiveVoiceState,
+        onVoiceSessionCreated(voiceSessionId) {
+          issuedVoiceSessionId = voiceSessionId;
+          pendingStart.voiceSessionId = voiceSessionId;
+        },
+        onMediaStreamCreated(mediaStream) {
+          pendingStart.mediaStream = mediaStream;
+        },
+        onConnectionCreated(connection) {
+          pendingConnection = connection;
+          liveVoiceConnectionRef.current = connection;
         },
       });
-      if (!sdpResponse.ok) {
-        const message = (await sdpResponse.text()).trim() || sdpResponse.statusText || "Realtime connection failed.";
-        throw new Error(`OpenAI Realtime WebRTC connection failed (${sdpResponse.status}): ${message}`);
-      }
-      abortIfCanceled();
-      await peerConnection.setRemoteDescription({
-        type: "answer",
-        sdp: await sdpResponse.text(),
-      });
-      abortIfCanceled();
-      setLiveVoiceState("listening");
       pushLocalNotice("OpenAI Realtime voice is live.", "success");
       await refreshVoiceState();
     } catch (error) {
       cleanupLiveVoiceConnection(pendingConnection);
       if (!pendingConnection) {
-        for (const track of pendingMediaStream?.getTracks() ?? []) {
+        for (const track of pendingStart.mediaStream?.getTracks() ?? []) {
           track.stop();
         }
       }
@@ -785,134 +760,100 @@ export function useChatMultimodalControls(input: {
   const handleAudioFileSelected = useCallback(
     async (files: FileList | null) => {
       const file = files?.item(0);
-      if (!file) {
-        return;
-      }
+      if (!file || !mountedRef.current || generationRef.current !== mediaGeneration ||
+        (currentInputRef.current.selectionRevisionRef?.current ?? 0) !== mediaSelectionRevision ||
+        getTranscriptAuthority() !== transcriptAuthority ||
+        scopeRef.current !== mediaScope || voiceBusy || transcriptTicketRef.current) return;
+      const ticket = { scope: mediaScope, generation: mediaGeneration, draft, revision: mediaSelectionRevision, authority: transcriptAuthority };
+      transcriptTicketRef.current = ticket;
+      const isCurrent = () => mountedRef.current && transcriptTicketRef.current === ticket &&
+        scopeRef.current === ticket.scope && generationRef.current === ticket.generation &&
+        (currentInputRef.current.selectionRevisionRef?.current ?? 0) === ticket.revision &&
+        getTranscriptAuthority() === ticket.authority;
       setVoiceBusy(true);
       setError(null);
       try {
-        const text = await fileToBase64(file).then((bytesBase64) =>
-          transcribeVoice({
-            bytesBase64,
-            mimeType: file.type || "audio/wav",
-          }),
-        );
-        setDraft((current) => (current.trim() ? `${current.trim()}\n\n${text.text}` : text.text));
+        const code = await loadTranscribeCode();
+        if (!isCurrent()) return;
+        const text = await code.transcribeAudioFile(file, isCurrent);
+        if (!isCurrent()) return;
+        setDraft((current) => mountedRef.current && scopeRef.current === ticket.scope && generationRef.current === ticket.generation &&
+          (currentInputRef.current.selectionRevisionRef?.current ?? 0) === ticket.revision &&
+          getTranscriptAuthority() === ticket.authority
+          ? (current.trim() ? `${current.trim()}\n\n${text}` : text) : current);
         pushLocalNotice(`Inserted transcript from ${file.name}.`, "success");
         await refreshVoiceState();
       } catch (error) {
+        if (!isCurrent()) return;
         setError((error as Error).message);
         await refreshVoiceState();
       } finally {
-        setVoiceBusy(false);
-        if (audioInputRef.current) {
-          audioInputRef.current.value = "";
+        if (mountedRef.current && transcriptTicketRef.current === ticket) {
+          transcriptTicketRef.current = null;
+          setVoiceBusy(false);
+          if (audioInputRef.current) audioInputRef.current.value = "";
         }
       }
     },
-    [pushLocalNotice, refreshVoiceState, setDraft, setError],
+    [draft, mediaScope, mediaGeneration, mediaSelectionRevision, transcriptAuthority, getTranscriptAuthority, voiceBusy, pushLocalNotice, refreshVoiceState, setDraft, setError],
   );
 
   const runImageGeneration = useCallback(
     async (mode: "generate" | "edit", options?: ImageGenerationOptions): Promise<boolean> => {
+      if (!mountedRef.current || imageBase !== JSON.stringify([imageWorkspace, getGatewayApiBaseUrl(),
+        getGatewayAccessRevision(), getGatewayCallerScopeRevision(), activeProviderId, primaryImageRoute, googleFallbackImageRoute]) ||
+        imageOwnerRef.current.generation !== imageGeneration ||
+        (input.selectionRevisionRef?.current ?? imageRevision) !== imageRevision ||
+        currentInputRef.current.draft !== draft || imageTicketRef.current) return false;
+      if ((input.selectedSession && input.selectedSession.sessionId !== selectedSessionId) ||
+        (activeThreadSessionId && activeThreadSessionId !== selectedSessionId)) return false;
       const prompt = draft.trim();
-      if (!prompt) {
-        setError("Add an image prompt first.");
-        return false;
-      }
+      if (!prompt) { setError("Add an image prompt first."); return false; }
+      const ticket: ImageTicket = { generation: imageGeneration, base: imageBase, revision: imageRevision,
+        draft, selectedId: selectedSessionId, workspace: imageWorkspace, selectionSeen: false,
+        recordSeen: Boolean(input.selectedSession), threadSeen: Boolean(activeThreadSessionId),
+        confirmationOpen: true, revoked: false };
+      imageTicketRef.current = ticket;
+      imagePublicationRef.current = ticket;
+      const isCurrent = () => currentImage(ticket);
       setImageBusy(true);
       setError(null);
       try {
-        if (!primaryImageRoute) {
-          throw new Error("Image generation is unavailable on the current routes.");
-        }
-        if (mode === "edit" && !primaryImageRoute.supportsEdit) {
-          throw new Error("Image editing is unavailable on the current image route.");
-        }
-        const referenceImages =
-          mode === "edit" && latestImageAttachment
-            ? [
-                await downloadChatAttachment(latestImageAttachment.attachmentId).then(
-                  async ({ blob, fileName, mimeType }) => ({
-                    bytesBase64: await blobToBase64(blob),
-                    fileName,
-                    mimeType,
-                  }),
-                ),
-              ]
-            : undefined;
-        const runRequest = async (route: ChatImageRoute) =>
-          generateLlmImage({
-            providerId: route.providerId,
-            model: route.model,
-            prompt,
-            referenceImages,
-            ...(route.providerId === "openai"
-              ? { outputFormat: "png" as const }
-              : { responseFormat: "b64_json" as const }),
-          });
-        let routeUsed = primaryImageRoute;
-        let response;
-        try {
-          response = await runRequest(primaryImageRoute);
-        } catch (error) {
-          const message = (error as Error).message;
-          if (
-            mode === "generate" &&
-            googleFallbackImageRoute &&
-            shouldRetryImageGenerationWithGoogleFallback(message)
-          ) {
-            routeUsed = googleFallbackImageRoute;
-            pushLocalNotice(
-              `OpenAI image route unavailable. Retrying via ${googleFallbackImageRoute.label}.`,
-              "warning",
-            );
-            response = await runRequest(googleFallbackImageRoute);
-          } else {
-            throw error;
-          }
-        }
-        const first = response.data[0];
-        if (!first?.b64Json) {
-          throw new Error("Image generation returned no image payload.");
-        }
-        const file = base64ToFile(
-          first.b64Json,
-          `goatcitadel-${response.operation}-${new Date().toISOString().replace(/[:.]/g, "-")}.png`,
-          "image/png",
-        );
-        await uploadAttachments([file]);
-        if (options?.clearDraftOnSuccess) {
-          setDraft("");
-        }
-        pushLocalNotice(
-          response.operation === "edit"
-            ? "Edited image added to the draft attachments."
-            : options?.trigger === "auto_send"
-              ? `Detected image request and generated it via ${routeUsed.label}.`
-              : routeUsed.providerId === "google"
-                ? `Generated image added to the draft attachments via ${routeUsed.label}.`
-                : "Generated image added to the draft attachments.",
-          "success",
-        );
-        return true;
+        const code = await loadImageCode();
+        if (!isCurrent()) return false;
+        return await code.runImageGeneration({ mode, prompt, primaryImageRoute, googleFallbackImageRoute,
+          latestImageAttachment, options, isCurrent, uploadAttachments, setError, pushLocalNotice,
+          onCreatedSession: (created) => {
+            if (!ticket.confirmationOpen) return false;
+            if (!isCurrent() || ticket.destination || ticket.selectedId !== null ||
+              ticket.recordSeen || ticket.threadSeen || !input.selectionRevisionRef || !ticket.workspace ||
+              created.workspaceId !== ticket.workspace || !created.sessionId.trim()) {
+              ticket.revoked = true; return false;
+            }
+            const destination = { workspaceId: ticket.workspace, sessionId: created.sessionId };
+            if (options?.onCreatedSession && options.onCreatedSession(destination) !== true) { ticket.revoked = true; return false; }
+            ticket.destination = destination.sessionId;
+            return true;
+          },
+          clearDraft: () => setDraft((current) => mountedRef.current && imagePublicationRef.current === ticket &&
+            hasCurrentImageBase(ticket) && !ticket.revoked && ticket.generation === imageOwnerRef.current.generation &&
+            (input.selectionRevisionRef?.current ?? imageRevision) === ticket.revision + (ticket.destination ? 1 : 0) &&
+            current === ticket.draft ? "" : current),
+        });
       } catch (error) {
-        setError((error as Error).message, mode === "edit" ? "image_edit" : "image_generate");
+        if (isCurrent()) setError((error as Error).message, mode === "edit" ? "image_edit" : "image_generate");
         return false;
       } finally {
-        setImageBusy(false);
+        ticket.confirmationOpen = false;
+        if (mountedRef.current && imageTicketRef.current === ticket) {
+          imageTicketRef.current = null;
+          setImageBusy(false);
+        }
       }
     },
-    [
-      draft,
-      googleFallbackImageRoute,
-      latestImageAttachment,
-      primaryImageRoute,
-      pushLocalNotice,
-      setDraft,
-      setError,
-      uploadAttachments,
-    ],
+    [activeProviderId, currentImage, hasCurrentImageBase, draft, imageGeneration, imageRevision, imageBase, imageWorkspace, input.selectionRevisionRef,
+      input.selectedSession, selectedSessionId, activeThreadSessionId, googleFallbackImageRoute,
+      latestImageAttachment, primaryImageRoute, pushLocalNotice, setDraft, setError, uploadAttachments],
   );
 
   return {

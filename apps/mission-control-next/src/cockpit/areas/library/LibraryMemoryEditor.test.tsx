@@ -109,6 +109,32 @@ async function click(name: string, { expectDisabled = false }: { expectDisabled?
   });
   await act(async () => button.click());
 }
+it("inspects the exact selected canonical memory among same-title records without requesting a write", async () => {
+  vi.mocked(fetchMemoryItems).mockResolvedValue({
+    items: [{ ...item, itemId: "foreign-id", title: item.title, content: "Other same-title memory" }, item],
+    total: 2, snapshotAt: "now",
+  });
+  await render();
+  expect(container.querySelector("textarea")?.value).toBe(item.content);
+  expect(fetchMemoryItems).toHaveBeenCalledWith(expect.objectContaining({ workspaceId: "one" }));
+  expect(patchMemoryItem).not.toHaveBeenCalled();
+  expect(forgetMemoryItem).not.toHaveBeenCalled();
+  expect(resolveApproval).not.toHaveBeenCalled();
+  expect(document.querySelector('[aria-label="Request memory changes"]')).toBeNull();
+});
+
+it("refuses a selected memory naming a foreign workspace without exposing an editable substitute or writing", async () => {
+  vi.mocked(fetchMemoryItems).mockResolvedValue({ items: [{ ...item, workspaceId: "foreign" }], total: 1, snapshotAt: "now" });
+  await act(async () => root.render(
+    <QueryClientProvider client={client}><LibraryMemoryEditor itemId="m-a" workspaceId="one" /></QueryClientProvider>,
+  ));
+  await vi.waitFor(() => expect(container.textContent).toContain("Changes are locked."));
+  expect(container.querySelector("textarea")).toBeNull();
+  expect(patchMemoryItem).not.toHaveBeenCalled();
+  expect(forgetMemoryItem).not.toHaveBeenCalled();
+  expect(resolveApproval).not.toHaveBeenCalled();
+});
+
 it("treats a 202 memory request as pending, retains the draft and persists the receipt in its real portal", async () => {
   vi.mocked(fetchApprovalReplay).mockResolvedValue(replay("pending"));
   vi.mocked(fetchMemoryItemHistory).mockResolvedValue({ items: [] });

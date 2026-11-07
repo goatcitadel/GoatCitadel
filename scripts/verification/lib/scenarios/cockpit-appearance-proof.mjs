@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir } from "node:fs/promises";
 
 /** Browser preferences and real Chromium permission state; does not assert installed OS delivery. */
@@ -10,7 +11,7 @@ export async function runCockpitAppearanceProof({ context, browser, stack, citad
       title: `Cockpit appearance, saved attention preferences and host permission ${variant}`, subsystem: "mission-control-ux" }, async () => {
       const browserContext = await browser.newContext({ viewport, colorScheme: "light" });
       const screenshots = [];
-      const writes = [];
+      const writes = [], presenceWrites = [];
       let nativeTestRequested = false;
       let grantedPermissionSupported = false;
       let page;
@@ -30,8 +31,11 @@ export async function runCockpitAppearanceProof({ context, browser, stack, citad
         }, citadelId);
         page = await browserContext.newPage();
         page.on("request", (request) => {
-          if (["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) && new URL(request.url()).pathname.startsWith("/api/v1/")) {
-            writes.push({ method: request.method(), pathname: new URL(request.url()).pathname });
+          const method = request.method(), pathname = new URL(request.url()).pathname;
+          const kind = classifyCockpitProofWrite(method, pathname);
+          if (kind === "presence") presenceWrites.push({ method, pathname });
+          if (kind === "owner") {
+            writes.push({ method, pathname });
           }
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/general?shell=cockpit"), { waitUntil: "domcontentloaded" });
@@ -110,7 +114,7 @@ export async function runCockpitAppearanceProof({ context, browser, stack, citad
         assert.deepEqual(writes, [], "Browser preferences mutated Gateway runtime state.");
         return { status: "passed", metrics: { savedPreferencesSurviveReload: true, unsolicitedPermissionRequests: 0,
           hostPermissionRefresh: true, grantedPermissionSupported, nativeTestRequested, installedOsDeliveryVerified: false,
-          runtimeMutations: writes.length, blockingAxe: 0 },
+          runtimeMutations: writes.length, notificationPresenceWrites: presenceWrites.length, blockingAxe: 0 },
           notes: grantedPermissionSupported ? [] : ["Native notification permission remained denied in headless Chromium; the real blocked UI was verified. Granted/test behavior has focused unit coverage, not installed-host delivery proof."],
           artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {

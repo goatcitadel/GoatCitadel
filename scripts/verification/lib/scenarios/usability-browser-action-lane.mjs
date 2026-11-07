@@ -6,13 +6,13 @@ import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 
 import { NEXT_RELEASE_SURFACE_MANIFEST } from "../release-surface-manifest.mjs";
-import { prepareVerificationRuntime, requestJson, stopVerificationStack } from "../runtime.mjs";
+import { requestJson, stopVerificationStack } from "../runtime.mjs";
 import {
   DETERMINISTIC_LLM_DEFAULT_REPLY,
   DETERMINISTIC_LLM_KEY_ENV,
   startDeterministicLlmStub,
-  writeDeterministicLlmProviderConfig,
 } from "./deterministic-llm-stub.mjs";
+import { prepareUsabilityRuntime } from "./usability-runtime-fixture.mjs";
 import { readBrowserSseDiagnostics } from "./browser-helpers.mjs";
 import {
   captureBrowserActionCheckpoint,
@@ -41,21 +41,20 @@ const PROMPT_PACK_BENCHMARK_JUDGE_RULE_ID = "prompt-pack-benchmark-judge";
 const PROMPT_PACK_MEMORY_DISTILLER_RULE_ID = "prompt-pack-benchmark-memory-context-distillation";
 // Exact provider-visible request shape for each streamed benchmark execution of
 // the authored fixture pack, keyed by the user prompt each test sends verbatim.
-// Profile-free Chat carries the base chat system prompt and the memory-context
-// system message before the exact authored user prompt. Preserve the role order
-// as well as the count so an unexpected injected message cannot pass this proof.
+// Preserve the observed profile-free Chat system-message count and role order
+// before the exact authored prompt so unexpected injected messages fail proof.
 const PROMPT_PACK_BENCHMARK_EXECUTION_SIGNATURES = Object.freeze([
   Object.freeze({
     testCode: "TEST-91",
     userContentSha256: createHash("sha256").update("Reply with exactly: PROMPT_PACK_AUTHORED_OK", "utf8").digest("hex"),
-    messageCount: 3,
+    messageCount: 4,
   }),
   Object.freeze({
     testCode: "TEST-92",
     userContentSha256: createHash("sha256")
       .update("Compare the deterministic fixture response and report the final result.", "utf8")
       .digest("hex"),
-    messageCount: 3,
+    messageCount: 4,
   }),
 ]);
 const DEV_VERIFICATION_VAULT_KEY_ENV = "GOATCITADEL_VERIFY_VAULT_KEY_BASE64";
@@ -218,7 +217,7 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
 
   try {
     if (needsSettingsFixture) settingsFixtureServer = await startSettingsBrowserFixtureServer();
-    runtimeRoot = await prepareVerificationRuntime(`${context.runId}-browser-actions`);
+    runtimeRoot = await prepareUsabilityRuntime(`${context.runId}-browser-actions`, stub.baseUrl);
     if (requestedBundleIds === null || requestedBundleIds.has("library-catalog-memory")) {
       const skillRoot = path.join(runtimeRoot, "skills", "extra", "usability-browser-curator-fixture");
       await fs.mkdir(skillRoot, { recursive: true });
@@ -229,7 +228,6 @@ export async function runUsabilityBrowserActionLane(context, options = {}, deps)
       );
     }
     const codeModeProject = needsChatCodeFixture ? await prepareCodeModeVerificationProject(runtimeRoot) : undefined;
-    await writeDeterministicLlmProviderConfig(runtimeRoot, stub.baseUrl);
     if (needsSettingsFixture) {
       // Only the disposable fixture is configured for the managed editor. It
       // must remain disabled, without auto-start, throughout the alias review.
@@ -1104,7 +1102,8 @@ export function filterExpectedBrowserConsoleMessages(snapshot, browserActionStep
   const notFoundErrors = consoleMessages.filter(
     (message) =>
       message.type === "error" &&
-      message.text === "Failed to load resource: the server responded with a status of 404 (Not Found)",
+      message.text === "Failed to load resource: the server responded with a status of 404 (Not Found)" &&
+      message.location?.path === cancelledPath,
   );
   const acknowledgeScheduleAbsence =
     cancelledPath !== undefined &&
@@ -3301,6 +3300,21 @@ async function apiProbe(probe, state) {
         child,
         watcherId: requireText(watcher.body?.watcherId, "waiting child watcher"),
       };
+      const rail = await checkedRequest(
+        state.gatewayUrl,
+        durableBackgroundTaskRailRoute(parent.runId, state.fixture.workspaceId, state.sessionId),
+        {},
+        probe,
+      );
+      const task = validateAttachedDurableWatcher(rail.body, {
+        parentRunId: parent.runId,
+        workspaceId: state.fixture.workspaceId,
+        sessionId: state.sessionId,
+        watcherId: state.fixture.durableWatcher.watcherId,
+        childRunId: child.runId,
+      });
+      validateDurableTaskLinks(task, child);
+      if (!task.controls.detach.enabled) throw new Error("waiting watcher was not eligible to detach");
       return {
         status: watcher.status,
         outcome: `attached exact waiting child ${child.runId} to planning parent ${parent.runId}`,
@@ -3368,20 +3382,20 @@ async function apiProbe(probe, state) {
       if (probe === "channel-plan-bound") {
         if (
           plan.target.expectedRevision !== before.revision ||
-          plan.status !== "awaiting_input" ||
-          plan.requiredAction?.kind !== "public_form"
+          plan.status !== "awaiting_confirmation" ||
+          plan.requiredAction?.kind !== "confirmation"
         )
-          throw new Error("channel handoff did not preserve the exact reviewed revision and public form gate");
-        return { status: 200, outcome: `exact channel plan ${plan.planId} awaits field review` };
+          throw new Error("channel handoff did not preserve the exact reviewed revision and confirmation gate");
+        return { status: 200, outcome: `exact channel plan ${plan.planId} awaits confirmation of its reviewed draft` };
       }
       if (probe === "channel-plan-approve") {
         if (
           plan.status !== "awaiting_approval" ||
           plan.requiredAction?.kind !== "approval" ||
           !plan.requiredAction.approvalId ||
-          plan.target.expectedRevision <= before.revision
+          plan.target.expectedRevision !== before.revision
         )
-          throw new Error("channel confirmation did not enter its required approval gate after reviewed fields");
+          throw new Error("channel confirmation did not enter its required approval gate at the reviewed revision");
         const approvalId = plan.requiredAction.approvalId;
         const resolved = await checkedRequest(
           state.gatewayUrl,
@@ -4840,7 +4854,7 @@ export function validatePromptPackBenchmarkDispatchRecords(records, baselineCoun
         (record) =>
           record?.messageCount !== signature.messageCount ||
           record?.behavior !== undefined ||
-          !isDeepStrictEqual(record?.promptMetadata?.roles, ["system", "system", "user"]),
+          !isDeepStrictEqual(record?.promptMetadata?.roles, ["system", "system", "system", "user"]),
       )
     ) {
       throw new Error(

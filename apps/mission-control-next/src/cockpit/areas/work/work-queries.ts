@@ -11,6 +11,7 @@ export function workspaceDurableRunsOptions(workspaceId: string) {
   const installation = getGatewayApiBaseUrl();
   return infiniteQueryOptions({
     queryKey: queryKeys.durableRunHistory(workspaceId),
+    meta: { deferRealtimeInvalidationWhileFetching: true },
     initialPageParam: "",
     queryFn: async ({ pageParam, signal }) => {
       const page = await fetchDurableRunHistory(
