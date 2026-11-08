@@ -135,7 +135,7 @@ function CandidatePlan({
     <section className="grid gap-3 border-t border-line-subtle pt-3" aria-label="Candidate change plan">
       <h3 className="font-semibold">{plan?.title ?? seed.title}</h3>
       <p>Applies to this workspace.</p>
-      {query.isFetching ? <p role="status">Reading change plan…</p> : null}
+      {query.isFetching ? <p aria-busy="true">Reading change plan…</p> : null}
       {query.error ? <Callout tone="error">{describeApiError(query.error).summary}</Callout> : null}
       {plan ? (
         <>

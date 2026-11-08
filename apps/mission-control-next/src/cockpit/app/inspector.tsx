@@ -252,7 +252,7 @@ export function InspectorPanel() {
         </div>
       </header>
       {failed ? (
-        <p className="px-3 pt-2 text-sm text-fg-muted">
+        <p role="status" className="px-3 pt-2 text-sm text-fg-muted">
           Resize and expand controls could not load. The selected details are still available.
         </p>
       ) : null}

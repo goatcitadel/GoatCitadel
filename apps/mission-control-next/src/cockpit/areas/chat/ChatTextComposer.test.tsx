@@ -101,7 +101,7 @@ it("loads phone options only on request and leaves a dismissed sheet closed when
     const attachButton = () => sheet()?.querySelector('button[aria-label="Attach files"]');
     await act(async () => options.click());
     await vi.waitFor(() => expect(phoneOptions.load).toHaveBeenCalledOnce());
-    expect(sheet()?.querySelector('[role="status"]')?.textContent).toContain("Loading message options");
+    expect(sheet()?.querySelector('[aria-busy="true"]')?.textContent).toContain("Loading message options");
     expect(attachButton()).toBeNull();
     expect(sheet()?.textContent).toContain("Commands and context");
     await act(async () => sheet()?.querySelector<HTMLButtonElement>('button[aria-label="Close sheet"]')?.click());
