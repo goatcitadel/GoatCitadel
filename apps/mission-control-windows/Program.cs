@@ -14,15 +14,13 @@ public static class Program
 
         var currentInstance = AppInstance.GetCurrent();
         var mainInstance = AppInstance.FindOrRegisterForKey("main");
-        var activationArgs = currentInstance.GetActivatedEventArgs();
-
         if (!mainInstance.IsCurrent)
         {
+            var activationArgs = currentInstance.GetActivatedEventArgs();
             mainInstance.RedirectActivationToAsync(activationArgs).AsTask().GetAwaiter().GetResult();
             return;
         }
 
-        ActivationService.SetInitialActivationArguments(activationArgs);
         mainInstance.Activated += (_, eventArgs) => ActivationService.HandleActivation(eventArgs);
 
         Application.Start(_ =>

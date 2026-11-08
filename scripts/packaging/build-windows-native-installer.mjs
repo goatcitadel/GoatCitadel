@@ -182,6 +182,8 @@ export function renderIss({
 #define MyOutputDir "${normalizeForInno(currentOutDir)}"
 #define MyBundleTarget "${bundleTarget}"
 #define MyDesktopExe "app\\desktop\\GoatCitadel-Mission-Control-Windows.exe"
+#define MyToastAppId "GoatCitadel.MissionControl"
+#define MyToastActivator "CB0511D2-B348-4602-A08F-AEBC71B07A42"
 #define MyIdentityPackage "app\\identity\\GoatCitadel-Mission-Control-Windows-Identity.msix"
 #define MyIdentityPackageName "GoatCitadel.MissionControl.Windows"
 #define MyInstallMarker ".goatcitadel-install"
@@ -238,10 +240,12 @@ Source: "{#MyPayloadValidator}"; DestDir: "{tmp}"; DestName: "validate-windows-b
 ; installer remains usable but truthfully reports proof unverified.
 
 [Icons]
-Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"
+Name: "{autoprograms}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"; AppUserModelID: "{#MyToastAppId}"; AppUserModelToastActivatorCLSID: "{#MyToastActivator}"
 Name: "{autodesktop}\\GoatCitadel"; Filename: "{app}\\{#MyDesktopExe}"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Registry]
+Root: HKCU; Subkey: "Software\\Classes\\AppUserModelId\\{#MyToastAppId}"; ValueType: string; ValueName: "CustomActivator"; ValueData: "{{{#MyToastActivator}}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\\Classes\\CLSID\\{{{#MyToastActivator}}\\LocalServer32"; ValueType: string; ValueName: ""; ValueData: """{app}\\{#MyDesktopExe}"" ----AppNotificationActivated:"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\\Classes\\goatcitadel"; ValueType: string; ValueName: ""; ValueData: "URL:GoatCitadel Protocol"; Flags: uninsdeletekey
 Root: HKCU; Subkey: "Software\\Classes\\goatcitadel"; ValueType: string; ValueName: "URL Protocol"; ValueData: ""
 Root: HKCU; Subkey: "Software\\Classes\\goatcitadel\\DefaultIcon"; ValueType: string; ValueName: ""; ValueData: "{app}\\{#MyDesktopExe},0"
