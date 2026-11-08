@@ -30,6 +30,34 @@
     <EmbeddedResource Include="Assets\tray.ico" LogicalName="GoatCitadel.MissionControl.Windows.Assets.tray.ico" />
   </ItemGroup>
 
+  <!-- AppNotificationManager.Register loads this DLL beside the executable.
+       The self-contained SDK 2.x targets omit it from the framework MSIX
+       (microsoft/WindowsAppSDK#6774). Use the pinned SDK's matching architecture. -->
+  <Target Name="_IncludeWindowsNotificationResource"
+          BeforeTargets="AssignTargetPaths"
+          DependsOnTargets="GetWindowsAppSDKNativePlatform"
+          Condition="'$(WindowsAppSDKSelfContained)' == 'true' and '$(WindowsPackageType)' == 'None'">
+    <PropertyGroup>
+      <_NotificationResourceName>Microsoft.WindowsAppRuntime.Insights.Resource.dll</_NotificationResourceName>
+      <_NotificationFrameworkArchive>$(MicrosoftWindowsAppSDKPackageDir)tools\MSIX\win10-$(NativePlatform)\Microsoft.WindowsAppRuntime.2.msix</_NotificationFrameworkArchive>
+      <_NotificationResourceDirectory>$(IntermediateOutputPath)notification-resource\</_NotificationResourceDirectory>
+      <_NotificationResourcePath>$(_NotificationResourceDirectory)$(_NotificationResourceName)</_NotificationResourcePath>
+    </PropertyGroup>
+    <Error Condition="!Exists('$(_NotificationFrameworkArchive)')"
+           Text="Cannot include the Windows notification resource. The matching Windows App SDK framework archive is missing." />
+    <Unzip SourceFiles="$(_NotificationFrameworkArchive)"
+           DestinationFolder="$(_NotificationResourceDirectory)"
+           Include="$(_NotificationResourceName)" />
+    <Error Condition="!Exists('$(_NotificationResourcePath)')"
+           Text="The Windows App SDK framework archive does not contain $(_NotificationResourceName)." />
+    <ItemGroup>
+      <None Include="$(_NotificationResourcePath)"
+            Link="$(_NotificationResourceName)"
+            CopyToOutputDirectory="PreserveNewest"
+            CopyToPublishDirectory="PreserveNewest" />
+    </ItemGroup>
+  </Target>
+
   <!--
     WinUI 3 unpackaged publish fix.
     `dotnet build` generates the app resource index ($(AssemblyName).pri) and compiled XAML
