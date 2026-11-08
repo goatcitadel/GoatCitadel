@@ -246,7 +246,7 @@ export async function runCockpitWorkspacesProof({ context, browser, stack, citad
         const review = async (action, record) => {
           await panel.getByRole("button", { name: `${action === "archive" ? "Archive" : "Restore"} workspace ${updatedName}`, exact: true }).click();
           const dialog = page.getByRole("dialog", { name: `${action === "archive" ? "Archive" : "Restore"} workspace?`, exact: true });
-          await dialog.waitFor({ state: "visible" });
+          await dialog.getByRole("button", { name: `Confirm ${action} workspace`, exact: true }).waitFor({ state: "visible" });
           for (const value of [record.workspaceId, String(record.revision), citadelId]) {
             assert.equal(await dialog.locator("dd").filter({ hasText: new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`) }).count(), 1,
               "Lifecycle review omitted exact owner evidence.");

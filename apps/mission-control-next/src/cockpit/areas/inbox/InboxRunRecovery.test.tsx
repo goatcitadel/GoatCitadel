@@ -7,6 +7,9 @@ import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
 import { InboxRunRecovery } from "./InboxRunRecovery";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({
   fetchDurableRun: vi.fn(),
