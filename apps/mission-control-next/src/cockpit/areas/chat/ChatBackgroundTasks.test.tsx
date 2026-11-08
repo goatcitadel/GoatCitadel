@@ -14,6 +14,9 @@ import { __resetBackgroundControlsForTests } from "../../../features/threaded-su
 import { ChatBackgroundTasks } from "./ChatBackgroundTasks";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 vi.mock("@goatcitadel/mission-control-shared/api/durable", () => ({
   controlDurableBackgroundTask: vi.fn(),

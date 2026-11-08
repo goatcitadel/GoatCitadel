@@ -59,7 +59,7 @@ describe("mobile push approval-already-resolved classification migration", () =>
     const postgres = POSTGRES_MIGRATIONS.find((migration) => migration.version === POSTGRES_VERSION);
     assert.equal(postgres?.name, MOBILE_PUSH_APPROVAL_RESOLVED_MIGRATION_NAME);
     assert.equal(postgres?.sql, MOBILE_PUSH_APPROVAL_RESOLVED_POSTGRES_SQL);
-    assert.equal(POSTGRES_MIGRATIONS.at(-1)?.version, 228);
+    assert.equal(POSTGRES_MIGRATIONS.at(-1)?.version, 229);
     assert.match(MOBILE_PUSH_APPROVAL_RESOLVED_POSTGRES_SQL, /'approval_already_resolved'/u);
   });
 

@@ -6,6 +6,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { ModelsSettings } from "./ModelsSettings";
 import { clearAllDirty, setSectionDirty } from "../../../features/native-routes/library/use-form-dirty";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({ fetchOnboardingState: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);

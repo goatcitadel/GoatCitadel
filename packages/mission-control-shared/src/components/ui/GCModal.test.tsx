@@ -1,6 +1,6 @@
 import { act, create } from "react-test-renderer";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { GCModal } from "./GCModal";
+import { GCModalRuntime } from "./GCModalRuntime";
 
 vi.mock("./dialog", () => ({
   Dialog: (props: any) => <section>{props.children}</section>,
@@ -20,7 +20,7 @@ describe("GCModal focus return", () => {
     const doc = { activeElement: opener, body: new Element() };
     vi.stubGlobal("HTMLElement", Element);
     vi.stubGlobal("document", doc);
-    const renderer = create(<GCModal open title="Review" onOpenChange={vi.fn()} />);
+    const renderer = create(<GCModalRuntime open title="Review" onOpenChange={vi.fn()} />);
     const content = renderer.root.findByType("article");
     act(() => content.props.onOpenAutoFocus());
     doc.activeElement = new Element();

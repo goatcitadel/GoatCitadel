@@ -1,12 +1,15 @@
 import type { RemoteWorkerArtifactManifest, RemoteWorkerArtifactPartDescriptor, ResolvedRemoteWorkerAssignmentAuthority } from "@goatcitadel/contracts";
-import type { RemoteWorkerArtifactUploadRecord, RemoteWorkerAssignmentProtectedCommitFence } from "@goatcitadel/storage";
+import { createHash } from "node:crypto";
+import { snapshotRemoteWorkerArtifactPublication, snapshotRemoteWorkerChatArtifactAdmission,
+  type RemoteWorkerArtifactPublicationBinding, type RemoteWorkerChatArtifactAdmission,
+  type RemoteWorkerArtifactUploadRecord, type RemoteWorkerAssignmentProtectedCommitFence } from "@goatcitadel/storage";
 import type { AppendPartInput, CommitArtifactInput, OpenUploadInput } from "./remote-worker-artifact-settlement-service.js";
 import type { CurrentRemoteWorkerRuntimeCredentialAuthority } from "./remote-worker-current-authority-service.js";
 import { rejected } from "./remote-worker-assignment-execution-validators.js";
 export interface ArtifactSettlementPort {
     openUpload(input: OpenUploadInput): RemoteWorkerArtifactUploadRecord | Promise<RemoteWorkerArtifactUploadRecord>;
     appendPart(input: AppendPartInput): RemoteWorkerArtifactUploadRecord | Promise<RemoteWorkerArtifactUploadRecord>;
-    commitArtifact(input: CommitArtifactInput): RemoteWorkerArtifactUploadRecord | Promise<RemoteWorkerArtifactUploadRecord>;
+    commitArtifact(input: CommitArtifactInput, admission?: RemoteWorkerChatArtifactAdmission): RemoteWorkerArtifactUploadRecord | Promise<RemoteWorkerArtifactUploadRecord>;
 }
 export interface ArtifactSubmissionDependencies {
   readonly artifacts: ArtifactSettlementPort;
@@ -35,6 +38,20 @@ export type ArtifactSubmission =
 export function isArtifactSubmission(value: { kind: string }): value is ArtifactSubmission {
   return ["artifact.open", "artifact.part", "artifact.commit"].includes(value.kind);
 }
+
+/** One normalization for admission and runtime; hashes the actual decoded bytes. */
+export function artifactPublicationBinding(input: Pick<CommitArtifactInput, "idempotencyKey" | "manifest" | "files">): RemoteWorkerArtifactPublicationBinding {
+  return snapshotRemoteWorkerArtifactPublication({ idempotencyKey: input.idempotencyKey, manifest: input.manifest,
+    files: input.files.map(file => ({ logicalPath: file.logicalPath, logicalPathSha256: file.logicalPathSha256,
+      mimeType: file.mimeType, byteCount: file.bytes.byteLength,
+      blobSha256: createHash("sha256").update(file.bytes).digest("hex") })) });
+}
+
+export function artifactCommitPublicationBinding(submission: Extract<ArtifactSubmission, { kind: "artifact.commit" }>,
+  idempotencyKey: string): RemoteWorkerArtifactPublicationBinding {
+  return artifactPublicationBinding({ idempotencyKey, manifest: submission.manifest,
+    files: submission.files.map(({ bytesBase64, ...file }) => ({ ...file, bytes: Buffer.from(bytesBase64, "base64") })) });
+}
 /** The artifact owner checks assignment identity before any CAS write. */
 export async function dispatchArtifactSubmission(owners: ArtifactSubmissionDependencies, input: {
   readonly identity: { registryWorkspaceId: string; assignmentId: string; assignmentGeneration: number;
@@ -42,7 +59,8 @@ export async function dispatchArtifactSubmission(owners: ArtifactSubmissionDepen
   readonly submission: ArtifactSubmission;
   readonly idempotencyKey: string;
   readonly signal: AbortSignal;
-  readonly fenced: { authority: CurrentRemoteWorkerRuntimeCredentialAuthority; records: ResolvedRemoteWorkerAssignmentAuthority };
+  readonly fenced: { authority: CurrentRemoteWorkerRuntimeCredentialAuthority; records: ResolvedRemoteWorkerAssignmentAuthority;
+    artifactAdmission?: RemoteWorkerChatArtifactAdmission };
 }) {
   const { identity, submission, idempotencyKey, signal, fenced } = input;
   signal.throwIfAborted();
@@ -68,6 +86,7 @@ export async function dispatchArtifactSubmission(owners: ArtifactSubmissionDepen
     return ({ disposition: "artifact_recorded", upload } as const);
   }
   if (submission.kind === "artifact.commit") {
+    if (!fenced.artifactAdmission) throw rejected("Remote worker artifact publication admission is unavailable.");
     // The manifest carries a full settlement identity, and the CAS writer
     // shards blobs by its executionWorkspaceId BEFORE storage compares the
     // manifest identity. Bind every field to the fenced records here so a
@@ -91,7 +110,7 @@ export async function dispatchArtifactSubmission(owners: ArtifactSubmissionDepen
       // a CAS commit cannot keep installing blobs after the socket is gone
       // and the durable nonce is already spent.
       signal: signal,
-    });
+    }, snapshotRemoteWorkerChatArtifactAdmission(fenced.artifactAdmission));
     return ({ disposition: "artifact_recorded", upload } as const);
   }
   throw rejected("Unsupported artifact submission.");

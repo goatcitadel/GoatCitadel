@@ -6,6 +6,9 @@ import type { DurableDeadLetterRecord, DurableRunRecord } from "@goatcitadel/con
 import { UiPreferencesProvider } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WorkRunControls } from "./WorkRunControls";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({
   fetchDurableRun: vi.fn(),

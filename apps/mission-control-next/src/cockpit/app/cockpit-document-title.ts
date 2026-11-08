@@ -1,4 +1,4 @@
-import { navigationRailItems, RAIL_GROUPS, RAIL_ITEMS } from "../../app/route-model";
+import { RAIL_GROUPS, readRouteSectionLabel } from "../../app/route-navigation-metadata";
 import { SYSTEM_IMPROVEMENT_VIEW, SYSTEM_VIEWS } from "../areas/system/system-views";
 import { WORK_VIEWS } from "../areas/work/work-views";
 
@@ -40,8 +40,12 @@ function routeModelLabel(area: string | undefined, section: string): string | un
     const page = RAIL_GROUPS.settings?.find((group) => group.id === `settings-${section}`);
     if (page) return page.label;
   }
-  const items = mapping.area === "settings" ? navigationRailItems("settings") : RAIL_ITEMS[mapping.area];
-  return items.find((item) => item.section === section)?.label;
+  return (
+    readRouteSectionLabel(mapping.area, section) ??
+    (mapping.area === "settings" && section.startsWith("citadel")
+      ? readRouteSectionLabel("library", section)
+      : undefined)
+  );
 }
 
 function decodeSection(section: string): string {

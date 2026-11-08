@@ -6,6 +6,8 @@ import type { ChatThreadTurnRecord, ChatUserInputPromptRecord } from "@goatcitad
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { refuseNetwork } from "../../../test/refuse-network";
+import { InspectorProvider as InitialInspectorProvider } from "../../app/inspector";
+import { ChatTranscript as InitialTranscript } from "./ChatTranscript";
 let InspectorProvider: typeof import("../../app/inspector").InspectorProvider;
 
 const loader = vi.hoisted(() => ({
@@ -27,10 +29,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/approvals", async (original) =>
     createdAt: "2026-10-01T00:00:00Z",
   }),
 }));
-vi.mock("@goatcitadel/mission-control-shared/api/client", async (original) => ({
-  ...(await original<typeof import("@goatcitadel/mission-control-shared/api/client")>()),
-  resolveApproval: mutations.resolve,
-}));
+vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ resolveApproval: mutations.resolve }));
 vi.mock("@goatcitadel/mission-control-shared/api/sessions", async (original) => ({
   ...(await original<typeof import("@goatcitadel/mission-control-shared/api/sessions")>()),
   fetchRuntimeLifecycle: vi.fn().mockResolvedValue({ canonical: {}, turns: [] }),
@@ -51,6 +50,7 @@ refuseNetwork();
 let Transcript: typeof import("./ChatTranscript").ChatTranscript;
 let root: Root, host: HTMLDivElement, client: QueryClient;
 let release: () => void;
+let firstFixture = true;
 function record(index: number): ChatThreadTurnRecord {
   return {
     turnId: "record-" + index,
@@ -118,7 +118,7 @@ function factory() {
   };
 }
 beforeEach(async () => {
-  vi.resetModules();
+  if (!firstFixture) vi.resetModules();
   mutations.resolve.mockReset();
   preview.value = null;
   loader.fullCount = 0;
@@ -131,8 +131,16 @@ beforeEach(async () => {
     await loader.load();
     return factory();
   });
-  Transcript = (await import("./ChatTranscript")).ChatTranscript;
-  InspectorProvider = (await import("../../app/inspector")).InspectorProvider;
+  if (firstFixture) {
+    // First module evaluation belongs to test collection, before the per-case fixture starts.
+    Transcript = InitialTranscript;
+    InspectorProvider = InitialInspectorProvider;
+    firstFixture = false;
+  } else {
+    const [transcript, inspector] = await Promise.all([import("./ChatTranscript"), import("../../app/inspector")]);
+    Transcript = transcript.ChatTranscript;
+    InspectorProvider = inspector.InspectorProvider;
+  }
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
@@ -171,6 +179,7 @@ it.each(["text", "single_select"] as const)(
     const submit = vi.fn();
     const extra = { pendingUserInput: prompt, userInputPending: false, onSubmitUserInput: submit };
     await act(async () => render(props(100, extra)));
+    await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
     const form = host.querySelector<HTMLFormElement>('form[aria-label="Pending question"]')!;
     const field = form.querySelector<HTMLInputElement>(
       kind === "text" ? 'input[type="text"]' : 'input[value="second"]',
@@ -233,9 +242,15 @@ it("keeps an open critical approval review, typed confirmation and focus through
   await act(async () =>
     [...host.querySelectorAll("button")].find((button) => button.textContent === "Review nuclear approval")!.click(),
   );
-  const dialog = document.querySelector<HTMLElement>('[role="dialog"][data-state="open"]')!;
-  expect(dialog).not.toBeNull();
-  const field = dialog.querySelector<HTMLInputElement>("input")!;
+  await act(async () => {
+    await Promise.all([import("../../ui/DialogRuntime"), import("./RiskApprovalConfirmationBody")]);
+  });
+  const { dialog, field } = await vi.waitFor(() => {
+    const current = document.querySelector<HTMLElement>('[role="dialog"][data-state="open"]');
+    const input = current?.querySelector<HTMLInputElement>("input");
+    expect(input).toBeInstanceOf(HTMLInputElement);
+    return { dialog: current!, field: input! };
+  });
   await act(async () => setText(field, "approve"));
   field.focus();
   await act(async () => render(props(1000, extra)));
@@ -281,7 +296,9 @@ it("retains tail streaming, optimistic text and the canonical pending decision o
   expect(host.textContent).toContain("Tail response still streaming");
   expect(host.textContent).toContain("Unshown canonical question");
   expect(host.textContent).toContain("More messages could not be shown");
-  expect(host.querySelector('form[aria-label="Pending question"]')?.textContent).toContain("Continue?");
+  await vi.waitFor(() =>
+    expect(host.querySelector('form[aria-label="Pending question"]')?.textContent).toContain("Continue?"),
+  );
   // CH-10: the decision is signalled by its own card and the composer line, not by the jump button.
   expect(host.textContent).not.toContain("Decision waiting");
   expect(submit).not.toHaveBeenCalled();

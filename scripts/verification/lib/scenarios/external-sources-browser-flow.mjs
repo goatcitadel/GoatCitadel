@@ -53,8 +53,6 @@ const STUB_PROVIDER_ID = DETERMINISTIC_LLM_PROVIDER_ID;
 const STUB_MODEL = DETERMINISTIC_LLM_MODEL;
 const STUB_REPLY_TEXT = DETERMINISTIC_LLM_DEFAULT_REPLY;
 const STUB_KEY_ENV = DETERMINISTIC_LLM_KEY_ENV;
-const KNOWLEDGE_APPROVAL_KIND = "external_source.knowledge_snapshot";
-const SOURCE_STRIP_SELECTOR = 'section[aria-label="Read-only external source attachments"]';
 
 /** Closure-packet row 3: light/dark × desktop/mobile. */
 export const EXTERNAL_SOURCES_BROWSER_COMBOS = Object.freeze([
@@ -429,20 +427,18 @@ export async function runExternalSourcesBrowserFlow({
         }
       });
 
-      await step("next-turn-inclusion-unavailable", async () => {
-        // New Chat turns use live capabilities, so an attached source cannot be
-        // selected for the next turn; the picker must say so and keep it off.
+      await step("next-turn-inclusion-is-explicit", async () => {
+        // The verification Gateway enables explicit context for new turns.
+        // A durable attachment stays out of model context unless selected.
         const picker = sourcePicker(page);
         const include = attachedChip(picker, comboState.sourceLabel).getByRole("checkbox", {
           name: `Include ${comboState.sourceLabel} in the next turn`,
           exact: true,
         });
-        if (!(await include.isDisabled()) || (await include.isChecked())) {
-          throw new Error("an attached external source can still be selected for the next turn");
-        }
-        await picker
-          .getByText("Including external sources in new Chat turns is temporarily unavailable", { exact: false })
-          .waitFor();
+        if (await include.isChecked()) throw new Error("attaching an external source selected it automatically");
+        await include.check();
+        await picker.getByText("1 source(s) selected for the next turn", { exact: true }).waitFor();
+        await include.uncheck();
         await picker.getByText("No sources selected", { exact: true }).waitFor();
         await picker.getByRole("button", { name: "Done reviewing sources", exact: true }).click();
         await picker.waitFor({ state: "detached" });
@@ -450,7 +446,14 @@ export async function runExternalSourcesBrowserFlow({
 
       await step("send-excludes-attached-sources", async () => {
         await page.getByLabel("Message composer").fill("Reply without any attached external source context.");
-        await page.locator(".mc-next-composer-primary", { hasText: "Send" }).click();
+        const sendPath = `/api/v1/chat/sessions/${encodeURIComponent(comboState.sessionId)}/agent-send/stream`;
+        const [sent] = await Promise.all([
+          page.waitForRequest((request) => request.method() === "POST" && new URL(request.url()).pathname === sendPath),
+          page.getByRole("button", { name: "Send", exact: true }).click(),
+        ]);
+        if (sent.postDataJSON()?.contextRefs?.some((ref) => ref.kind === "external_attachment")) {
+          throw new Error("a deselected external source was submitted as model context");
+        }
         // The stub provider completes the real turn end-to-end. Scope the
         // reply wait to a thread turn so a stub-derived session TITLE can
         // never satisfy it.
@@ -466,70 +469,82 @@ export async function runExternalSourcesBrowserFlow({
           const firstLine = error instanceof Error ? error.message.split("\n")[0] : String(error);
           throw new Error(`${firstLine} — server turn state: ${diagnosis}`, { cause: error });
         }
-        // The attachment stays read-only evidence: no retained selection rode along with the send.
-        const stripText = await (await revealSourceStrip(page)).strip.innerText();
-        if (stripText.includes("retained source selection")) {
-          throw new Error("an external source selection was retained across the send");
-        }
       });
 
       await step("request-knowledge-copy", async () => {
         const picker = await openSourcePicker(page);
         const chip = attachedChip(picker, comboState.sourceLabel);
         await chip.getByText("Source details and actions", { exact: true }).click();
-        await chip
-          .getByRole("button", { name: "Request a governed knowledge copy of this source", exact: true })
-          .click();
+        const requestPath =
+          `/api/v1/library/external-source-imports/${encodeURIComponent(comboState.importId)}/knowledge-snapshot-requests`;
+        const [response] = await Promise.all([
+          page.waitForResponse(
+            (entry) => entry.request().method() === "POST" && new URL(entry.url()).pathname === requestPath,
+          ),
+          chip.getByRole("button", { name: "Request a governed knowledge copy of this source", exact: true }).click(),
+        ]);
+        const { approvalId } = await response.json();
+        if (!response.ok() || typeof approvalId !== "string" || !approvalId) {
+          throw new Error(`knowledge copy request returned no approval receipt (${response.status()})`);
+        }
+        comboState.approvalId = approvalId;
         // The notice can land in a collapsed or live-region node behind the open picker; the
         // approval reference is the request truth, and the next step resolves it in the inbox.
         const notice = page.getByText(/Knowledge copy requested\. Resolve approval /u).first();
         await notice.waitFor({ state: "attached", timeout: 60_000 });
         const noticeText = (await notice.textContent()) ?? "";
         const suffixMatch = noticeText.match(/Resolve approval ([0-9a-f-]{8}) /u);
-        if (!suffixMatch) {
+        if (suffixMatch?.[1] !== approvalId.slice(-8)) {
           throw new Error(`knowledge-request notice carried no approval reference: ${noticeText}`);
         }
-        comboState.approvalIdSuffix = suffixMatch[1];
       });
 
       await step("approve-in-approvals-inbox", async () => {
-        await gotoRoute(page, activeStack.uiUrl, `/ops/approvals?theme=${combo.theme}`);
-        // Queue rows only summarize; the decision controls live in the selected approval's inspector.
-        await page.getByText(KNOWLEDGE_APPROVAL_KIND, { exact: true }).first().click({ timeout: 60_000 });
+        const approvalId = encodeURIComponent(comboState.approvalId);
+        await gotoRoute(page, activeStack.uiUrl, `/ops/approvals?theme=${combo.theme}&approvalId=${approvalId}`);
         await page
           .locator(".mc-next-approvals-inspector")
           .getByRole("button", { name: "Approve now", exact: true })
           .click({ timeout: 60_000 });
-        await page.getByText("Approve this request?", { exact: false }).waitFor();
-        await page.getByRole("button", { name: "Approve", exact: true }).click();
-        // The pending knowledge approval leaves the queue once resolved.
-        await page
-          .getByRole("button", { name: "Approve now" })
-          .first()
-          .waitFor({ state: "detached", timeout: 60_000 })
-          .catch(() => undefined);
+        const confirmation = page.getByRole("dialog", { name: "Approve this request?", exact: true });
+        const resolvePath = `/api/v1/approvals/${approvalId}/resolve`;
+        const [decision] = await Promise.all([
+          page.waitForResponse(
+            (entry) => entry.request().method() === "POST" && new URL(entry.url()).pathname === resolvePath,
+          ),
+          confirmation.getByRole("button", { name: "Approve", exact: true }).click(),
+        ]);
+        const { approval } = await decision.json();
+        if (!decision.ok() || approval?.approvalId !== comboState.approvalId || approval.status !== "approved") {
+          throw new Error(`the exact knowledge copy approval did not settle as approved (${decision.status()})`);
+        }
       });
 
       await step("recovered-snapshot-visible-with-provenance", async () => {
         // The approval-resolution effects worker executes the recovered C2
         // apply; the Journey read surface is the operator-visible completion
         // evidence (the same truth the closure integration test asserts).
-        const event = await pollForSnapshotCreated(activeStack.gatewayUrl, comboState.approvalIdSuffix, 120_000);
-        comboState.approvalId = event.approvalId;
+        const event = await pollForSnapshotCreated(activeStack.gatewayUrl, comboState.approvalId, 120_000);
 
-        await gotoRoute(page, activeStack.uiUrl, `/library/journey?theme=${combo.theme}`);
+        const sessionId = encodeURIComponent(comboState.sessionId);
+        await gotoRoute(page, activeStack.uiUrl, `/library/journey?theme=${combo.theme}&sessionId=${sessionId}`);
         await page.getByText("Journey timeline", { exact: false }).first().waitFor({ timeout: 60_000 });
-        const snapshotRow = page.getByText("Snapshot created", { exact: true }).first();
+        const snapshotRow = page
+          .getByRole("button", { name: /^Snapshot created\b/iu })
+          .filter({ hasText: event.subjectId });
         await snapshotRow.waitFor({ timeout: 60_000 });
         await snapshotRow.click();
-        // The evidence panel renders the approval linkage and content-free
-        // provenance (evidence refs + summary carry the full approval id).
-        // Scope the wait to the DETAIL stack: the timeline list's own row body
-        // also contains "approval · <id>" in a collapsed (hidden) preview and
-        // a page-wide `.first()` would pin that hidden node forever.
-        const evidencePanel = page.locator(".mc-next-settings-stack");
-        await evidencePanel.getByText("Snapshot created", { exact: true }).first().waitFor({ timeout: 60_000 });
-        await evidencePanel.getByText(comboState.approvalId, { exact: false }).first().waitFor({ timeout: 60_000 });
+        // Inspect the selected event's visible, content-free summary and provenance.
+        const evidencePanel = page.locator(".mc-next-settings-stack .mc-next-detail-inspector");
+        await evidencePanel.getByRole("heading", { name: "Snapshot created", exact: true }).waitFor({ timeout: 60_000 });
+        await evidencePanel
+          .getByRole("region", { name: "Event summary", exact: true })
+          .getByText(comboState.approvalId, { exact: true })
+          .waitFor({ timeout: 60_000 });
+        await evidencePanel
+          .getByRole("region", { name: "Provenance", exact: true })
+          .getByText(comboState.importId, { exact: true })
+          .waitFor({ timeout: 60_000 });
         const pageText = await page.locator("body").innerText();
         if (pageText.includes(fx.SYNTHETIC_CODEX_VISIBLE_USER_TEXT)) {
           throw new Error("transcript content leaked into the Journey provenance surface");
@@ -653,43 +668,16 @@ function sourcePicker(page) {
   return page.getByRole("dialog", { name: "Attached sources", exact: true });
 }
 
-/**
- * The read-only sources strip stays hidden behind the composer's "Sources: ..." control: a pill beside the + once
- * sources are attached, otherwise a row in the + panel. Opening it shows the strip; with nothing attached it also
- * opens the source picker directly. Idempotent: an already-visible strip is left open (a second click would close it).
- */
-async function revealSourceStrip(page) {
-  const strip = page.locator(SOURCE_STRIP_SELECTOR);
-  if (await strip.isVisible()) {
-    return { strip, pickerOpenedByChip: false };
-  }
-  let chip = page.getByRole("button", { name: /^Sources: /u });
-  const plus = page.getByRole("button", { name: "Add and options", exact: true });
-  if (!(await chip.count()) && (await plus.count()) && (await plus.getAttribute("aria-expanded")) === "false") {
-    await plus.click();
-    chip = page
-      .getByRole("dialog", { name: "Add and options", exact: true })
-      .getByRole("button", { name: /^Sources: / });
-  }
-  await chip.waitFor({ timeout: 60_000 });
-  let pickerOpenedByChip = false;
-  if ((await chip.getAttribute("aria-expanded")) !== "true") {
-    pickerOpenedByChip = (await chip.innerText()).trim() === "Sources: none";
-    await chip.click();
-  }
-  await strip.waitFor({ timeout: 60_000 });
-  return { strip, pickerOpenedByChip };
-}
-
 /** The Chat strip keeps attach, inspection and knowledge-copy actions inside its source picker dialog. */
 async function openSourcePicker(page) {
-  const { strip, pickerOpenedByChip } = await revealSourceStrip(page);
   const picker = sourcePicker(page);
-  // With nothing attached, the chip click opens the picker itself; its modal backdrop would block "Choose sources".
-  if (!pickerOpenedByChip && !(await picker.isVisible())) {
-    await strip.getByRole("button", { name: "Choose sources", exact: true }).click();
-  }
-  await picker.waitFor({ timeout: 30_000 });
+  if (await picker.isVisible()) return picker;
+  const choose = page
+    .getByRole("region", { name: "Read-only external source attachments", exact: true })
+    .getByRole("button", { name: "Choose sources", exact: true });
+  // The Classic strip mounts after session data confirms attachment support.
+  await choose.click({ timeout: 60_000 });
+  await picker.waitFor({ timeout: 60_000 });
   return picker;
 }
 
@@ -723,7 +711,7 @@ async function describeLatestTurn(gatewayUrl, sessionId) {
   }
 }
 
-async function pollForSnapshotCreated(gatewayUrl, approvalIdSuffix, timeoutMs) {
+async function pollForSnapshotCreated(gatewayUrl, approvalId, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastBody = "";
   while (Date.now() < deadline) {
@@ -737,8 +725,7 @@ async function pollForSnapshotCreated(gatewayUrl, approvalIdSuffix, timeoutMs) {
       const match = items.find(
         (item) =>
           item?.action === "snapshot_created" &&
-          typeof item?.approvalId === "string" &&
-          item.approvalId.includes(approvalIdSuffix),
+          item?.approvalId === approvalId,
       );
       if (match) {
         return match;
@@ -747,7 +734,7 @@ async function pollForSnapshotCreated(gatewayUrl, approvalIdSuffix, timeoutMs) {
     await new Promise((resolve) => setTimeout(resolve, 1_000));
   }
   throw new Error(
-    `snapshot_created Journey evidence for approval …${approvalIdSuffix} did not appear within ${timeoutMs}ms. Last body: ${lastBody}`,
+    `snapshot_created Journey evidence for approval …${approvalId.slice(-8)} did not appear within ${timeoutMs}ms. Last body: ${lastBody}`,
   );
 }
 

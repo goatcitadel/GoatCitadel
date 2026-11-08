@@ -873,6 +873,15 @@ export const devVerificationRoutes: FastifyPluginAsync = async (fastify) => {
       undefined,
       oldCreatedAt,
     );
+    // Forward replay starts after its cursor. Delete a real later row as well,
+    // so that cursor is strictly before the retained-stream pruning boundary.
+    await storage.append(
+      "verification_replay_gap_seed",
+      "events",
+      { kind: "verification_seed" },
+      undefined,
+      oldCreatedAt,
+    );
     const prunedCount = await storage.pruneOlderThan(pruneCutoff);
     const explicitEvent = await fastify.services.devVerification.publishRealtime(
       "verification_memory_refresh",

@@ -2,8 +2,11 @@ import {
   REMOTE_WORKER_CHAT_OUTPUT_PROFILE,
   REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256,
   remoteWorkerArtifactManifestSha256,
+  canonicalJsonString,
+  remoteWorkerAssignmentCanonicalSha256,
 } from "@goatcitadel/contracts";
-import type { AsyncStorage } from "@goatcitadel/storage";
+import { snapshotRemoteWorkerChatArtifactAdmission, type RemoteWorkerChatArtifactAdmission, type AsyncStorage } from "@goatcitadel/storage";
+import { artifactPublicationBinding } from "./remote-worker-artifact-submissions.js";
 import {
   RemoteWorkerArtifactSettlementService,
   type OpenUploadInput,
@@ -57,8 +60,32 @@ export class RemoteWorkerArtifactRuntime {
     return await this.owner(input).appendPart(input);
   }
 
-  public async commitArtifact(input: CommitArtifactInput) {
-    const execution = await this.authority(input);
+  public async commitArtifact(input: CommitArtifactInput, admission?: RemoteWorkerChatArtifactAdmission) {
+    let admittedPublication: AuthorityInput | undefined;
+    if (admission) {
+      const captured = snapshotRemoteWorkerChatArtifactAdmission(admission);
+      // Own bytes before crossing any await: freezing a Buffer does not make
+      // its contents immutable, and the caller must not mutate our CAS input.
+      input = { ...input, files: input.files.map(file => Object.freeze({ ...file, bytes: Buffer.from(file.bytes) })) };
+      const binding = artifactPublicationBinding(input);
+      input = { ...input, manifest: binding.manifest };
+      if (captured.registryWorkspaceId !== input.registryWorkspaceId || captured.assignmentId !== input.assignmentId ||
+        captured.assignmentGeneration !== input.assignmentGeneration || captured.uploadId !== input.uploadId ||
+        captured.continuingArtifact.uploadId !== input.uploadId || !input.protectedAuthority ||
+        canonicalJsonString(captured.protectedAuthority) !== canonicalJsonString(input.protectedAuthority) ||
+        captured.publicationSha256 !== remoteWorkerAssignmentCanonicalSha256(binding))
+        throw new Error("Worker artifact differs from its admitted publication.");
+      input = { ...input, protectedAuthority: captured.protectedAuthority };
+      admittedPublication = { ...input, continuingArtifact: captured.continuingArtifact };
+    }
+    // The signed protocol captured exact authority atomically. Its first live
+    // read now checks that admission's continuous ownership; generic callers
+    // still enter through the unchanged exact-token fence.
+    const execution = await this.authority(admittedPublication ?? {
+      registryWorkspaceId: input.registryWorkspaceId, assignmentId: input.assignmentId,
+      assignmentGeneration: input.assignmentGeneration, leaseTokenSha256: input.leaseTokenSha256,
+      protectedAuthority: input.protectedAuthority,
+    });
     if (
       input.manifest.requiredVerifierProfileSha256 !== REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256 ||
       input.manifest.pathJailSha256 !== execution.authority.assignment.manifest.pathJailSha256 ||
@@ -83,7 +110,7 @@ export class RemoteWorkerArtifactRuntime {
     // The request entered through the exact worker lease fence above. Keep its
     // parent and payload binding while the same upload crosses asynchronous CAS
     // I/O; a routine heartbeat must not revoke our own in-flight publication.
-    const publication: AuthorityInput = { ...input, continuingArtifact: {
+    const publication: AuthorityInput = admittedPublication ?? { ...input, continuingArtifact: {
       uploadId: input.uploadId,
       leaseRevision: execution.authority.lease.leaseRevision,
       parentDispatchAuthority: execution.authority.lease.parentDispatchAuthority,

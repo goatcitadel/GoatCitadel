@@ -1,3 +1,6 @@
+import { RAIL_GROUPS, ROUTE_SECTION_LABELS, navigationAreaForRoute } from "./route-navigation-metadata";
+export { RAIL_GROUPS, CITADEL_PAGE_LABELS, navigationAreaForRoute } from "./route-navigation-metadata";
+export { parseAppRoute, buildAppHref } from "./route-address";
 import { readRouteReleaseStatus } from "./route-release-status";
 export { ROUTE_RELEASE_SCOPE, getRouteReleaseScope, describeReleaseScopeForOperator } from "./route-release-scope";
 import { normalizeAppRoute, getRouteReleaseKey } from "./route-release-kernel";
@@ -108,19 +111,6 @@ export interface RouteReleaseScope {
   verification: string;
   note: string;
 }
-
-/**
- * Citadel page names, plain name first. One map for the Settings tabs, the nav rail, page headings and document
- * titles. Slugs and URLs keep their Citadel names.
- */
-export const CITADEL_PAGE_LABELS = {
-  "citadel-overview": "Citadel overview",
-  citadel: "Guided setup · Mason",
-  "citadel-wards": "Rules · Wards",
-  "citadel-council": "Agents · Council",
-  "citadel-vault": "Secrets · Vault",
-  "citadel-blueprint": "Export/import · Blueprint",
-} as const satisfies Partial<Record<LibrarySection, string>>;
 
 export const AREA_META: Record<PrimaryArea, AreaMeta> = {
   chat: {
@@ -307,126 +297,126 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   library: [
     {
       id: "library-citadel-overview",
-      label: CITADEL_PAGE_LABELS["citadel-overview"],
+      label: ROUTE_SECTION_LABELS.library["citadel-overview"],
       description: "See the active Citadel's Charter, Chambers, and Gatehouse settings.",
       area: "library",
       section: "citadel-overview",
     },
     {
       id: "library-citadel",
-      label: CITADEL_PAGE_LABELS.citadel,
+      label: ROUTE_SECTION_LABELS.library["citadel"],
       description: "Stage Personal or Company Citadels before connecting accounts or opening Gates.",
       area: "library",
       section: "citadel",
     },
     {
       id: "library-citadel-wards",
-      label: CITADEL_PAGE_LABELS["citadel-wards"],
+      label: ROUTE_SECTION_LABELS.library["citadel-wards"],
       description: "List, add, and test the Gatehouse rules (Wards). A deny rule always wins.",
       area: "library",
       section: "citadel-wards",
     },
     {
       id: "library-citadel-council",
-      label: CITADEL_PAGE_LABELS["citadel-council"],
+      label: ROUTE_SECTION_LABELS.library["citadel-council"],
       description: "Choose which agents from the catalog sit on this Citadel's Council.",
       area: "library",
       section: "citadel-council",
     },
     {
       id: "library-citadel-vault",
-      label: CITADEL_PAGE_LABELS["citadel-vault"],
+      label: ROUTE_SECTION_LABELS.library["citadel-vault"],
       description: "Store, reveal, and delete sealed Citadel secrets.",
       area: "library",
       section: "citadel-vault",
     },
     {
       id: "library-citadel-blueprint",
-      label: CITADEL_PAGE_LABELS["citadel-blueprint"],
+      label: ROUTE_SECTION_LABELS.library["citadel-blueprint"],
       description: "Export a secret-free Blueprint, or validate and import one.",
       area: "library",
       section: "citadel-blueprint",
     },
     {
       id: "library-agents",
-      label: "Agents",
+      label: ROUTE_SECTION_LABELS.library["agents"],
       description: "Reusable agent profiles and catalog controls.",
       area: "library",
       section: "agents",
     },
     {
       id: "library-skills",
-      label: "Skills",
+      label: ROUTE_SECTION_LABELS.library["skills"],
       description: "Curate reusable behavior and activation posture.",
       area: "library",
       section: "skills",
     },
     {
       id: "library-capabilities",
-      label: "Capabilities",
+      label: ROUTE_SECTION_LABELS.library["capabilities"],
       description: "See what skills, tools, providers, MCP entries, and channels are available or degraded.",
       area: "library",
       section: "capabilities",
     },
     {
       id: "library-memory",
-      label: "Memory",
+      label: ROUTE_SECTION_LABELS.library["memory"],
       description: "Maintain durable memory items and lifecycle policy.",
       area: "library",
       section: "memory",
     },
     {
       id: "library-journey",
-      label: "Journey",
+      label: ROUTE_SECTION_LABELS.library["journey"],
       description: "Inspect experimental read-only skill-learning and candidate evidence.",
       area: "library",
       section: "journey",
     },
     {
       id: "library-knowledge",
-      label: "Knowledge",
+      label: ROUTE_SECTION_LABELS.library["knowledge"],
       description: "Knowledge ingest and retrieval as attachable context.",
       area: "library",
       section: "knowledge",
     },
     {
       id: "library-notes",
-      label: "Notes",
+      label: ROUTE_SECTION_LABELS.library["notes"],
       description: "Business notes, checklists, reminders, and follow-ups.",
       area: "library",
       section: "notes",
     },
     {
       id: "library-communications",
-      label: "Mail",
+      label: ROUTE_SECTION_LABELS.library["communications"],
       description: "Mail, calendar agenda, contacts, and approval-gated drafts.",
       area: "library",
       section: "communications",
     },
     {
       id: "library-files",
-      label: "Files",
+      label: ROUTE_SECTION_LABELS.library["files"],
       description: "Browse uploaded and workspace files outside Build.",
       area: "library",
       section: "files",
     },
     {
       id: "library-artifacts",
-      label: "Artifacts",
+      label: ROUTE_SECTION_LABELS.library["artifacts"],
       description: "Reopen generated outputs from conversation, planning, and build work.",
       area: "library",
       section: "artifacts",
     },
     {
       id: "library-prompt-packs",
-      label: "Prompt packs",
+      label: ROUTE_SECTION_LABELS.library["prompt-packs"],
       description: "Author, export, benchmark, review prompt packs, and inspect model comparisons.",
       area: "library",
       section: "prompt-packs",
     },
     {
       id: "library-curator",
-      label: "Skill curator",
+      label: ROUTE_SECTION_LABELS.library["curator"],
       description: "Review ranked skill health, immunity flags, and archive proposals.",
       area: "library",
       section: "curator",
@@ -435,91 +425,91 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   ops: [
     {
       id: "ops-boards",
-      label: "Saved boards",
+      label: ROUTE_SECTION_LABELS.ops["boards"],
       description: "Trusted saved layouts composed from canonical Ops summaries.",
       area: "ops",
       section: "boards",
     },
     {
       id: "ops-activity",
-      label: "Activity",
+      label: ROUTE_SECTION_LABELS.ops["activity"],
       description: "Realtime event feed and retained operational signal.",
       area: "ops",
       section: "activity",
     },
     {
       id: "ops-sessions",
-      label: "Sessions",
+      label: ROUTE_SECTION_LABELS.ops["sessions"],
       description: "Session timelines, summaries, and operator evidence.",
       area: "ops",
       section: "sessions",
     },
     {
       id: "ops-schedules",
-      label: "Schedules",
+      label: ROUTE_SECTION_LABELS.ops["schedules"],
       description: "Cron posture and scheduler review queue.",
       area: "ops",
       section: "schedules",
     },
     {
       id: "ops-workers",
-      label: "Remote workers",
+      label: ROUTE_SECTION_LABELS.ops["workers"],
       description: "Operator-visible remote-worker registry, assignments, events, and reconciliation.",
       area: "ops",
       section: "workers",
     },
     {
       id: "ops-improvement",
-      label: "Improvement",
+      label: ROUTE_SECTION_LABELS.ops["improvement"],
       description: "Replay and improvement loops.",
       area: "ops",
       section: "improvement",
     },
     {
       id: "ops-notifications",
-      label: "Notifications",
+      label: ROUTE_SECTION_LABELS.ops["notifications"],
       description: "Runtime issues, self-repair proposals, and operator follow-up.",
       area: "ops",
       section: "notifications",
     },
     {
       id: "ops-approvals",
-      label: "Approvals",
+      label: ROUTE_SECTION_LABELS.ops["approvals"],
       description: "Decision inbox, replay, and approval history.",
       area: "ops",
       section: "approvals",
     },
     {
       id: "ops-costs",
-      label: "Costs",
+      label: ROUTE_SECTION_LABELS.ops["costs"],
       description: "Spend visibility without a dashboard maze.",
       area: "ops",
       section: "costs",
     },
     {
       id: "ops-quality",
-      label: "Quality",
+      label: ROUTE_SECTION_LABELS.ops["quality"],
       description: "Eval proof, prompt-pack gates, and export posture.",
       area: "ops",
       section: "quality",
     },
     {
       id: "ops-runtime",
-      label: "Runtime",
+      label: ROUTE_SECTION_LABELS.ops["runtime"],
       description: "Gateway health, daemon posture, host vitals, and backups.",
       area: "ops",
       section: "runtime",
     },
     {
       id: "ops-diagnostics",
-      label: "Diagnostics",
+      label: ROUTE_SECTION_LABELS.ops["diagnostics"],
       description: "Durable, daemon, admin, docs, and readiness diagnostics.",
       area: "ops",
       section: "diagnostics",
     },
     {
       id: "ops-kanban",
-      label: "Kanban",
+      label: ROUTE_SECTION_LABELS.ops["kanban"],
       description: "Multi-agent board with distress signals, retry budgets, and bulk operator controls.",
       area: "ops",
       section: "kanban",
@@ -528,133 +518,133 @@ export const RAIL_ITEMS: Record<PrimaryArea, RailItem[]> = {
   settings: [
     {
       id: "settings-general",
-      label: "General",
+      label: ROUTE_SECTION_LABELS.settings["general"],
       description: "Base defaults every other surface inherits.",
       area: "settings",
       section: "general",
     },
     {
       id: "settings-onboarding",
-      label: "Get started",
+      label: ROUTE_SECTION_LABELS.settings["onboarding"],
       description: "Try a safe demo or connect a model. Everything else is optional.",
       area: "settings",
       section: "onboarding",
     },
     {
       id: "settings-providers",
-      label: "Providers & models",
+      label: ROUTE_SECTION_LABELS.settings["providers"],
       description: "Provider credentials, model catalogs, and active routing defaults.",
       area: "settings",
       section: "providers",
     },
     {
       id: "settings-personalities",
-      label: "Personalities",
+      label: ROUTE_SECTION_LABELS.settings["personalities"],
       description: "Conversation personality presets and the global conversation default.",
       area: "settings",
       section: "personalities",
     },
     {
       id: "settings-access",
-      label: "Access & devices",
+      label: ROUTE_SECTION_LABELS.settings["access"],
       description: "Gateway sign-in, approved devices, and desktop and mobile access checks.",
       area: "settings",
       section: "access",
     },
     {
       id: "settings-permissions",
-      label: "Permissions",
+      label: ROUTE_SECTION_LABELS.settings["permissions"],
       description: "Permission profiles, active defaults, and local overrides.",
       area: "settings",
       section: "permissions",
     },
     {
       id: "settings-trust-policy",
-      label: "Trust & policy",
+      label: ROUTE_SECTION_LABELS.settings["trust-policy"],
       description: "Read-only view of trust for capabilities, tools, and sources.",
       area: "settings",
       section: "trust-policy",
     },
     {
       id: "settings-runtime",
-      label: "Runtime configuration",
+      label: ROUTE_SECTION_LABELS.settings["runtime"],
       description: "Managed local runtime, Gateway process, and local voice.",
       area: "settings",
       section: "runtime",
     },
     {
       id: "settings-local-ai",
-      label: "Local AI",
+      label: ROUTE_SECTION_LABELS.settings["local-ai"],
       description: "llama.cpp setup, hardware readiness, model fit, local endpoints, and serve jobs.",
       area: "settings",
       section: "local-ai",
     },
     {
       id: "settings-workspaces",
-      label: "Workspaces",
+      label: ROUTE_SECTION_LABELS.settings["workspaces"],
       description: "Citadel and workspace directory, workspace details, and design context.",
       area: "settings",
       section: "workspaces",
     },
     {
       id: "settings-integrations",
-      label: "Integrations",
+      label: ROUTE_SECTION_LABELS.settings["integrations"],
       description: "Connections, connectors, and integration overview.",
       area: "settings",
       section: "integrations",
     },
     {
       id: "settings-channels",
-      label: "Channels",
+      label: ROUTE_SECTION_LABELS.settings["channels"],
       description: "Comms and delivery setup.",
       area: "settings",
       section: "channels",
     },
     {
       id: "settings-mcp",
-      label: "MCP servers",
+      label: ROUTE_SECTION_LABELS.settings["mcp"],
       description: "MCP server status, templates, and transport configuration.",
       area: "settings",
       section: "mcp",
     },
     {
       id: "settings-web-search",
-      label: "Web & Search",
+      label: ROUTE_SECTION_LABELS.settings["web-search"],
       description: "Firecrawl, search engines, and web-search API keys.",
       area: "settings",
       section: "web-search",
     },
     {
       id: "settings-tools",
-      label: "Tools",
+      label: ROUTE_SECTION_LABELS.settings["tools"],
       description: "Low-level tool catalog and scoped allow/deny grants.",
       area: "settings",
       section: "tools",
     },
     {
       id: "settings-hooks",
-      label: "Hooks",
+      label: ROUTE_SECTION_LABELS.settings["hooks"],
       description: "Governed lifecycle hooks, delivery status, and history.",
       area: "settings",
       section: "hooks",
     },
     {
       id: "settings-budget",
-      label: "Budgets",
+      label: ROUTE_SECTION_LABELS.settings["budget"],
       description: "Choose a budget preference: Saver, Balanced, or Power. It is not a dollar limit.",
       area: "settings",
       section: "budget",
     },
     {
       id: "settings-workspace-capabilities",
-      label: "Workspace capabilities",
+      label: ROUTE_SECTION_LABELS.settings["workspace-capabilities"],
       description: "Choose which skills, integrations, and MCP servers this workspace uses.",
       area: "settings",
       section: "workspace-capabilities",
     },
     {
       id: "settings-citadel-capabilities",
-      label: "Citadel capabilities",
+      label: ROUTE_SECTION_LABELS.settings["citadel-capabilities"],
       description: "Govern which skills, integrations, and MCP servers exist in this Citadel.",
       area: "settings",
       section: "citadel-capabilities",
@@ -708,67 +698,6 @@ export interface RailGroup {
   sections: NonNullable<AppRoute["section"]>[];
 }
 
-/**
- * Single source of truth for rail grouping. Drives both the nav rail
- * (buildRailSections) and breadcrumb derivation (routeKicker), so the two can
- * never disagree. Areas absent here render as one ungrouped rail. Sections
- * intentionally omitted from every group stay reachable via deep link but are
- * not surfaced in grouped navigation. Release-bearing trust/setup settings stay
- * grouped so operators can find them without command search.
- */
-export const RAIL_GROUPS: Partial<Record<PrimaryArea, RailGroup[]>> = {
-  settings: [
-    { id: "settings-general", label: "General", sections: ["general", "personalities"] },
-    { id: "settings-models", label: "Models", sections: ["onboarding", "providers", "local-ai"] },
-    {
-      id: "settings-connections",
-      label: "Connections",
-      sections: ["channels", "integrations", "mcp", "web-search"],
-    },
-    { id: "settings-safety", label: "Safety", sections: ["permissions", "tools", "trust-policy", "hooks", "budget"] },
-    {
-      id: "settings-citadel",
-      label: "Citadel",
-      sections: [
-        "citadel-overview",
-        "workspaces",
-        "citadel",
-        "citadel-wards",
-        "citadel-council",
-        "citadel-vault",
-        "citadel-blueprint",
-        "workspace-capabilities",
-        "citadel-capabilities",
-      ],
-    },
-    { id: "settings-access", label: "Access", sections: ["access"] },
-    { id: "settings-advanced", label: "Advanced", sections: ["runtime"] },
-  ],
-  library: [
-    { id: "library-agents", label: "Agents", sections: ["agents"] },
-    {
-      id: "library-skills",
-      label: "Skills and tools",
-      sections: ["skills", "capabilities", "prompt-packs", "curator", "journey"],
-    },
-    { id: "library-knowledge", label: "Knowledge", sections: ["knowledge", "memory", "notes"] },
-    { id: "library-files", label: "Files", sections: ["files", "artifacts"] },
-    { id: "library-mail", label: "Mail", sections: ["communications"] },
-  ],
-  ops: [
-    { id: "ops-approvals", label: "Approvals", sections: ["approvals"] },
-    { id: "ops-activity", label: "Activity", sections: ["activity", "sessions", "notifications"] },
-    { id: "ops-work-board", label: "Work board", sections: ["kanban", "boards", "schedules"] },
-    { id: "ops-costs", label: "Costs", sections: ["costs"] },
-    { id: "ops-health", label: "Health", sections: ["runtime", "diagnostics", "workers"] },
-    { id: "ops-quality", label: "Quality", sections: ["quality", "improvement"] },
-  ],
-};
-
-/** Navigation ownership can change while old public paths remain canonical. */
-export function navigationAreaForRoute(route: Pick<AppRoute, "area" | "section">): PrimaryArea {
-  return route.area === "library" && route.section?.startsWith("citadel") ? "settings" : route.area;
-}
 export function navigationRailItems(area: PrimaryArea): RailItem[] {
   if (area === "settings")
     return [
@@ -812,87 +741,6 @@ export function routeKicker(route: AppRoute): string {
     return `${areaLabel} · ${group.label} · ${sectionLabel}`;
   }
   return `${areaLabel} · ${sectionLabel}`;
-}
-
-export function parseAppRoute(input: string | URL): AppRoute {
-  const url = typeof input === "string" ? new URL(input, "http://goatcitadel.local") : input;
-  const rawParts = url.pathname
-    .split("/")
-    .map((part) => part.trim())
-    .filter(Boolean);
-  const parts = rawParts.map((part) => part.toLowerCase());
-  const params = url.searchParams;
-  const area = (parts[0] as PrimaryArea | undefined) ?? "chat";
-  const normalizedArea = isPrimaryArea(area) ? area : "chat";
-  const routeArea = normalizedArea;
-  const routeSection = area === "settings" && parts[1] === "safety" ? "permissions" : parts[1];
-  const rawMode = readParam(params, "mode");
-  const parsedMode = rawMode === "chat" ? "chat" : undefined;
-  const nextRoute: AppRoute = normalizeAppRoute({
-    area: routeArea,
-    channelPlan: readParam(params, "channelPlan"),
-    channelDraft: readParam(params, "channelDraft"),
-    channelWorkspace: readParam(params, "channelWorkspace"),
-    channelConnection: readParam(params, "channelConnection"),
-    channelRevision: /^[1-9][0-9]*$/.test(params.get("channelRevision") ?? "")
-      ? Number(params.get("channelRevision"))
-      : undefined,
-    section: routeArea === "projects" ? undefined : (routeSection as AppRoute["section"]),
-    mode: parsedMode,
-    sessionId: readParam(params, "sessionId"),
-    turnId: readParam(params, "turnId"),
-    runId: readParam(params, "runId"),
-    artifactId: readParam(params, "artifactId"),
-    approvalId: readParam(params, "approvalId"),
-    projectId:
-      area === "projects"
-        ? safeDecodePathSegment(rawParts[1]) || readParam(params, "projectId")
-        : readParam(params, "projectId"),
-    theme: readParam(params, "theme"),
-    view: readParam(params, "view"),
-    category: readParam(params, "category"),
-    evidence: readParam(params, "evidence"),
-    includeGlobal: readParam(params, "includeGlobal"),
-    eventId: readParam(params, "eventId"),
-  });
-  return nextRoute;
-}
-
-export function buildAppHref(route: AppRoute): string {
-  const next = normalizeAppRoute(route);
-  const params = new URLSearchParams();
-  writeParam(params, "channelPlan", next.channelPlan);
-  writeParam(params, "channelDraft", next.channelDraft);
-  writeParam(params, "channelWorkspace", next.channelWorkspace);
-  writeParam(params, "channelConnection", next.channelConnection);
-  if (next.channelRevision) params.set("channelRevision", String(next.channelRevision));
-  writeParam(params, "sessionId", next.sessionId);
-  writeParam(params, "turnId", next.turnId);
-  writeParam(params, "runId", next.runId);
-  writeParam(params, "artifactId", next.artifactId);
-  writeParam(params, "approvalId", next.approvalId);
-  if (next.area !== "projects") {
-    writeParam(params, "projectId", next.projectId);
-  }
-  writeParam(params, "view", next.view);
-  if (next.area === "library" && next.section === "journey") {
-    writeParam(params, "category", next.category);
-    writeParam(params, "evidence", next.evidence);
-    writeParam(params, "includeGlobal", next.includeGlobal);
-    writeParam(params, "eventId", next.eventId);
-  }
-  // theme is a global localStorage preference, not per-URL state (see 819ef761f); do not serialize it into hrefs.
-  // Chat is the only operator conversation surface; legacy mode params are not serialized.
-
-  const path =
-    next.area === "chat"
-      ? "/chat"
-      : next.area === "projects"
-        ? `/projects${next.projectId ? `/${encodeURIComponent(next.projectId)}` : ""}`
-        : `/${next.area}/${next.section ?? ""}`;
-
-  const query = params.toString();
-  return query ? `${path}?${query}` : path;
 }
 
 export function getRouteLabel(route: AppRoute): string {
@@ -995,38 +843,4 @@ export function isRailItemActive(route: AppRoute, item: RailItem): boolean {
     return true;
   }
   return item.section === next.section;
-}
-
-function isPrimaryArea(value: string | undefined): value is PrimaryArea {
-  return (
-    value === "chat" ||
-    value === "cowork" ||
-    value === "code" ||
-    value === "projects" ||
-    value === "library" ||
-    value === "ops" ||
-    value === "settings"
-  );
-}
-
-function readParam(params: URLSearchParams, key: string): string | undefined {
-  const value = params.get(key)?.trim();
-  return value ? value : undefined;
-}
-
-function safeDecodePathSegment(value: string | undefined): string | undefined {
-  if (!value) {
-    return undefined;
-  }
-  try {
-    return decodeURIComponent(value);
-  } catch {
-    return value;
-  }
-}
-
-function writeParam(params: URLSearchParams, key: string, value?: string): void {
-  if (value?.trim()) {
-    params.set(key, value.trim());
-  }
 }

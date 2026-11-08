@@ -1,6 +1,34 @@
 import { proveRetainedSettingsTabDraft } from "./cockpit-navigation-draft-proof.mjs";
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir } from "node:fs/promises";
+import { selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
+
+export async function assertCitadelLastTabIdentity(tab) {
+  assert.equal((await tab.innerText()).trim(), "Export/import · Blueprint");
+}
+
+/** Prove release-hidden controls stay unavailable, including a same-document deep link. */
+export async function assertCitadelCapabilityBoundary(page) {
+  const before = await page.evaluate(() => ({ href: location.href, timeOrigin: performance.timeOrigin,
+    workspace: window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"), citadel: window.localStorage.getItem("goatcitadel.ui.citadel_id.v1") }));
+  const current = new URL(before.href);assert.equal(current.pathname, "/settings/citadel");assert.equal(current.hash, "#citadel-blueprint");
+  await page.evaluate(() => { window.location.hash = "citadel-capabilities"; });
+  await page.waitForURL(url => url.pathname === current.pathname && url.search === current.search && url.hash === "#citadel-capabilities");
+  await page.getByText("This capability is hidden from the current release. Technical display preferences do not enable it.", { exact: true }).waitFor();
+  assert.equal(await page.getByRole("region", { name: "Citadel capability selections", exact: true }).count(), 0);
+  for (const label of ["Citadel capabilities", "Workspace capabilities"]) assert.equal(await page.getByRole("tab", { name: label, exact: true }).count(), 0);
+  for (const label of ["Skills", "Integrations", "MCP servers"]) {
+    assert.equal(await page.getByRole("region", { name: `${label} selection`, exact: true }).count(), 0);
+  }
+  await page.evaluate(hash => { window.location.hash = hash; }, current.hash);
+  await page.waitForURL(url => url.href === current.href);
+  await page.getByRole("region", { name: "Citadel Blueprint", exact: true }).waitFor();
+  assert.deepEqual(await page.evaluate(() => ({ href: location.href, timeOrigin: performance.timeOrigin,
+    workspace: window.localStorage.getItem("goatcitadel.ui.workspace_id.v1"), citadel: window.localStorage.getItem("goatcitadel.ui.citadel_id.v1") })), before,
+  "Hidden Settings deep link replaced the document or selected scope");
+  return { intentionalHiddenCitadelCapabilityControls: 3 };
+}
 
 export function assertSettingsTabsOwnerUnchanged(before, after, writes) {
   assert.deepEqual(writes, [], "Settings tab navigation dispatched a runtime mutation.");
@@ -24,6 +52,12 @@ export function assertSettingsCapabilityOwnerUnchanged(citadelId, before, after,
     }
   }
   assert.deepEqual(after, before, "Read-only Settings tabs changed Citadel capability selections.");
+}
+
+export async function finishSettingsCapabilityBoundary({ citadelId, before, readCapabilities, writes, boundary }) {
+  assert.deepEqual(boundary, { intentionalHiddenCitadelCapabilityControls: 3 });
+  assertSettingsCapabilityOwnerUnchanged(citadelId, before, await readCapabilities(), writes);
+  return boundary;
 }
 
 /** Radix roving focus settles after the key event. Keep the exact target assertion bounded. */
@@ -51,7 +85,7 @@ export async function runCockpitSettingsTabsProof({ context, browser, stack, cit
       title: `Settings section keyboard, history and retained selection ${variant}`, subsystem: "mission-control-ux" }, async () => {
       const theme = variant === "mobile" ? "light" : "dark";
       const browserContext = await browser.newContext({ viewport, colorScheme: theme });
-      const screenshots = [], writes = [];
+      const screenshots = [], writes = [], presenceWrites = [];
       let page;
       try {
         const before = await read();
@@ -65,13 +99,16 @@ export async function runCockpitSettingsTabsProof({ context, browser, stack, cit
         await installMissionControlNextBrowserState(browserContext, "default", citadelId);
         page = await browserContext.newPage();
         page.on("request", (request) => {
-          if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && new URL(request.url()).pathname.startsWith("/api/v1/")) writes.push({ method: request.method(), path: new URL(request.url()).pathname });
+          const method = request.method(), pathname = new URL(request.url()).pathname;
+          const kind = classifyCockpitProofWrite(method, pathname);
+          if (kind === "presence") presenceWrites.push({ method, path: pathname });
+          if (kind === "owner") writes.push({ method, path: pathname });
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/general?shell=cockpit"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         const timeOrigin = await page.evaluate(() => performance.timeOrigin);
         const appearance = page.getByRole("tab", { name: "Appearance", exact: true });
-        const personality = page.getByRole("tab", { name: "Personalities", exact: true });
+        const personality = page.getByRole("tablist", { name: "General sections", exact: true }).getByRole("tab", { name: "Personalities · Experimental", exact: true });
         await appearance.waitFor();
         assert.equal(await appearance.getAttribute("aria-selected"), "true");
         await appearance.focus(); await page.keyboard.press("ArrowRight");
@@ -108,35 +145,31 @@ export async function runCockpitSettingsTabsProof({ context, browser, stack, cit
           await page.screenshot({ path: screenshot, fullPage: false }); screenshots.push(relativeToRun(context, screenshot));
         };
         await audit("retained");
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Citadel", exact: true }).click();
+        await selectCockpitSettingsPage(page, { label: "Citadel", href: "/settings/citadel" });
         const tabs = page.getByRole("tablist", { name: "Citadel sections", exact: true });
         await tabs.waitFor();
-        const last = tabs.getByRole("tab").last();
-        assert.equal((await last.innerText()).trim(), "Citadel capabilities");
-        await tabs.getByRole("tab").first().focus(); await page.keyboard.press("End");
+        assert.deepEqual(await tabs.getByRole("tab").allTextContents(), ["Citadel overview", "Workspaces", "Guided setup · Mason", "Rules · Wards", "Agents · Council", "Secrets · Vault", "Export/import · Blueprint"]);
+        const last = tabs.getByRole("tab", { name: "Export/import · Blueprint", exact: true });
+        await assertCitadelLastTabIdentity(last);
+        const first = tabs.getByRole("tab", { name: "Citadel overview", exact: true });
+        const selectedBeforeEnd = await tabs.getByRole("tab", { selected: true }).getAttribute("id");
+        await first.focus(); await page.keyboard.press("End");
         await waitForSettingsTabFocus(page, last);
+        assert.equal(await tabs.getByRole("tab", { selected: true }).getAttribute("id"), selectedBeforeEnd, "End focus movement activated a Settings section");
         await page.keyboard.press("Enter");
-        await page.waitForURL(url => url.pathname === "/settings/citadel" && url.hash === "#citadel-capabilities");
+        await page.waitForURL(url => url.pathname === "/settings/citadel" && url.hash === "#citadel-blueprint");
         assert.equal(await last.getAttribute("aria-selected"), "true");
-        const capabilities = page.getByRole("region", { name: "Citadel capability selections", exact: true });
-        await capabilities.waitFor();
-        for (const label of ["Skills", "Integrations", "MCP servers"]) {
-          const selection = capabilities.getByRole("region", { name: `${label} selection`, exact: true });
-          await selection.waitFor();
-          await selection.getByRole("heading", { name: label, exact: true }).waitFor();
-          const refresh = selection.getByRole("button", { name: `Refresh ${label.toLowerCase()} scope`, exact: true });
-          await refresh.waitFor();
-          await page.waitForFunction(element => !element.disabled, await refresh.elementHandle(), { timeout: 30_000 });
-        }
+        await page.getByRole("region", { name: "Citadel Blueprint", exact: true }).waitFor();
+        const hiddenBoundary = await assertCitadelCapabilityBoundary(page);
         assert.equal(await page.evaluate(() => performance.timeOrigin), timeOrigin, "Citadel tabs replaced the browser document.");
         await audit("narrow-tabs");
         const draftNavigation = await proveRetainedSettingsTabDraft({ page, readGrants: async () => {
           const response = await requestJson(stack.gatewayUrl, "/api/v1/tools/grants?limit=400"); assertOk(response, "Settings tabs grant owner"); return response.body;
         } });
         assertSettingsTabsOwnerUnchanged(before, await read(), writes);
-        assertSettingsCapabilityOwnerUnchanged(citadelId, capabilitiesBefore, await readCapabilities(), writes);
+        await finishSettingsCapabilityBoundary({ citadelId, before: capabilitiesBefore, readCapabilities, writes, boundary: hiddenBoundary });
         return { status: "passed", metrics: { keyboardManualActivation: true, historyRestored: true, selectionRetained: true,
-          documentRetained: true, draftNavigation, nativeCitadelResourceOwners: 3, browserMutations: 0, blockingAxe: 0, overflow: 0 }, artifacts: emptyArtifacts({ screenshots }) };
+          documentRetained: true, draftNavigation, ...hiddenBoundary, browserMutations: 0, notificationPresenceWrites: presenceWrites.length, blockingAxe: 0, overflow: 0 }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page && !page.isClosed()) {
           try {

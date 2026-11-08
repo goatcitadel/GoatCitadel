@@ -13,6 +13,9 @@ import { fetchApproval, fetchApprovalReplay } from "@goatcitadel/mission-control
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { __resetApprovalOperationAttemptsForTests } from "../inbox/approval-operation-attempts";
 import { CapabilityLifecycleInspector } from "./CapabilityLifecycleInspector";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/api/capabilities", () => ({ fetchCapabilityCandidate: vi.fn(), fetchCapabilityProposal: vi.fn(), fetchCandidateSkillArtifactReview: vi.fn(), promoteCapabilityCandidate: vi.fn(), revokeCapabilityCandidate: vi.fn(), rollbackCapabilityCandidate: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({ fetchChangePlan: vi.fn(), confirmChangePlan: vi.fn(), respondToChangePlan: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({ fetchApproval: vi.fn(), fetchApprovalReplay: vi.fn() }));
@@ -27,7 +30,18 @@ async function click(name: string) { expect(button(name)).toBeTruthy(); await ac
 async function render() { await act(async () => root.render(<QueryClientProvider client={client}><CapabilityLifecycleInspector item={{ capabilityId: "candidate:a", kind: "candidate_skill", category: "built_in", title: "Candidate", summary: "Summary", callable: false, candidateId: "candidate-a" }} workspaceId="one" /></QueryClientProvider>)); await vi.waitFor(() => expect(button("Review promote")?.disabled).toBe(false)); }
 async function request() { await render(); await click("Review promote"); await click("Request capability change"); await vi.waitFor(() => expect(button("Review required candidate action")?.disabled).toBe(false)); }
 it("retains the Evolution plan and confirms only its fresh exact action in the actual review portal", async () => {
-  await request(); expect(fetchChangePlan).toHaveBeenCalledWith("plan-a", { workspaceId: "one" }); await click("Review required candidate action"); const receipt = { ...plan, revision: 3, status: "applied" as const, requiredAction: undefined, result: { summary: "Owner reports applied" } }; vi.mocked(confirmChangePlan).mockImplementation(async () => { vi.mocked(fetchChangePlan).mockResolvedValue(receipt); return receipt; }); await click("Apply exact change"); await act(async () => { await client.invalidateQueries(); });
+  await request(); expect(fetchChangePlan).toHaveBeenCalledWith("plan-a", { workspaceId: "one" }); await click("Review required candidate action");
+  await act(async () => { await vi.dynamicImportSettled(); });
+  await vi.waitFor(() => {
+    const apply = button("Apply exact change");
+    expect(apply).toBeTruthy();
+    expect(apply.closest('[role="dialog"]')).not.toBeNull();
+    expect(apply.closest('[aria-hidden="true"]')).toBeNull();
+    expect(apply.disabled).toBe(false);
+  });
+  const receipt = { ...plan, revision: 3, status: "applied" as const, requiredAction: undefined, result: { summary: "Owner reports applied" } }; vi.mocked(confirmChangePlan).mockImplementation(async () => { vi.mocked(fetchChangePlan).mockResolvedValue(receipt); return receipt; }); await click("Apply exact change"); await act(async () => { await client.invalidateQueries(); });
+  await vi.waitFor(() => expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Owner reports applied"));
+
   expect(confirmChangePlan).toHaveBeenCalledExactlyOnceWith("plan-a", { workspaceId: "one" }, { expectedRevision: 2, actionNonce: "nonce-a" }); expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Owner reports applied");
 });
 it("reads immutable artifact refs before recording their review, then exposes the real approval", async () => {

@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, NoteRecord } from "@goatcitadel/contracts";
 import { useChatDocuments } from "./useChatDocuments";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 
 const api = vi.hoisted(() => ({
   listNotes: vi.fn(),
@@ -168,6 +169,17 @@ describe("Chat document owner extraction", () => {
     expect(current.documents?.notes[0]?.workspaceId).toBe("two");
     expect(api.listNotes).toHaveBeenCalledTimes(count);
     expect(setUiError).not.toHaveBeenCalled();
+  });
+  it("rejects a save if Gateway access changes before the document API can dispatch", async () => {
+    await act(async () => {
+      renderer = create(<Harness readEnabled={false} />);
+    });
+    await act(async () => {
+      const save = current.documents!.onSaveNote!(note("one"), "retained draft");
+      notifyGatewayAccessChanged(false);
+      await expect(save).rejects.toMatchObject({ name: "AbortError" });
+    });
+    expect(api.updateNote).not.toHaveBeenCalled();
   });
 });
 

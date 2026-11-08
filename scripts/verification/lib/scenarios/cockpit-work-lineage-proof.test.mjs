@@ -7,7 +7,29 @@ import test from "node:test";
 import { Storage } from "../../../../packages/storage/dist/index.js";
 import { projectDurableBackgroundTaskRail } from "../../../../apps/gateway/dist/services/durable-background-task-projection.js";
 import { RuntimeLifecycleReadService } from "../../../../apps/gateway/dist/services/runtime-lifecycle-read-service.js";
-import { assertLineageNativeNavigation, seedWorkLineageRecords, visibleLinks } from "./cockpit-work-lineage-proof.mjs";
+import { assertLineageCitationRows, assertLineageNativeNavigation, seedWorkLineageRecords, visibleLinks } from "./cockpit-work-lineage-proof.mjs";
+import { formatBytes } from "../../../../packages/mission-control-shared/dist/content/format.js";
+
+test("citation rows bind ordered canonical identity, formatted size and the entire hash", () => {
+  const sources = ["a", "b"].map((letter, index) => ({ byteCount: 69 + index, sha256: letter.repeat(64),
+    links: [{ kind: "durable_run", id: `child/${letter}`, label: "Child run" }] }));
+  const rows = sources.map(source => ({ paragraphs: ["Cited delegated output", `${formatBytes(source.byteCount)} · SHA-256 ${source.sha256}`],
+    links: visibleLinks(source.links) }));
+  assert.doesNotThrow(() => assertLineageCitationRows(rows, sources, formatBytes));
+  const changes = [
+    value => value.reverse(),
+    value => value.pop(),
+    value => value.push(structuredClone(value[0])),
+    value => { value[0].paragraphs[1] = `69 bytes · SHA-256 ${sources[0].sha256}`; },
+    value => { value[0].paragraphs[1] = value[0].paragraphs[1].slice(0, -1); },
+    value => { value[0].links[0].href = "/work/runs/foreign?shell=cockpit"; },
+    value => { value[0].links[0].text = "Other owner"; },
+  ];
+  for (const change of changes) {
+    const changed = structuredClone(rows); change(changed);
+    assert.throws(() => assertLineageCitationRows(changed, sources, formatBytes));
+  }
+});
 
 test("lineage proof binds supported link labels and encoded identities to the native shell", () => {
   assert.deepEqual(visibleLinks([
@@ -28,7 +50,7 @@ test("lineage navigation proof rejects reloaded documents, changed scope and mis
       run: { payload: { workspaceId: "workspace" } } },
     workspaceId: "workspace", citadelId: "citadel", selection: { workspaceId: "workspace", citadelId: "citadel" },
     documentRequestsBefore: 1, documentRequestsAfter: 1, marker: "same-document", expectedMarker: "same-document",
-    chatHref: "/chat?sessionId=child-session&shell=cockpit",
+    chatHref: "/chat?workspaceId=workspace&runId=child&sessionId=child-session&shell=cockpit",
   };
   assert.doesNotThrow(() => assertLineageNativeNavigation(proof));
   const changes = [
@@ -43,7 +65,9 @@ test("lineage navigation proof rejects reloaded documents, changed scope and mis
     (value) => { value.trace.lifecycle.response.canonical.runId = "other"; },
     (value) => { value.trace.lifecycle.response.canonical.sessionId = "parent-session"; },
     (value) => { value.trace.run.payload.workspaceId = "foreign"; },
-    (value) => { value.chatHref = "/chat?sessionId=parent-session&shell=cockpit"; },
+    (value) => { value.chatHref = value.chatHref.replace("sessionId=child-session", "sessionId=parent-session"); },
+    (value) => { value.chatHref = value.chatHref.replace("workspaceId=workspace", "workspaceId=foreign"); },
+    (value) => { value.chatHref = value.chatHref.replace("runId=child", "runId=parent"); },
   ];
   for (const change of changes) {
     const invalid = structuredClone(proof);

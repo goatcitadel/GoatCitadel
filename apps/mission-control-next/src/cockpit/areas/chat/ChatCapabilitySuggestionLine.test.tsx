@@ -3,7 +3,8 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatCapabilityUpgradeSuggestion } from "@goatcitadel/contracts";
-import { ChatCapabilitySuggestionLine, selectTurnCapabilitySuggestions } from "./ChatCapabilitySuggestionLine";
+import { ChatCapabilitySuggestionLine } from "./ChatCapabilitySuggestionLine";
+import { selectTurnCapabilitySuggestions } from "./turn-capability-suggestions";
 
 function suggestion(
   title: string,

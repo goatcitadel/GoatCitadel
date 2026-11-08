@@ -21,6 +21,34 @@ function item(source: ComposerPaletteItem["source"], key: string, command = key)
 }
 
 describe("composer palette", () => {
+  it("preserves legacy ranking exports and ranked row identity", async () => {
+    const leaf = await import("./composer-palette-ranking.js");
+    const legacy = await import("./composer-palette-search-code.js");
+    expect(rankComposerPaletteItems).toBe(leaf.rankComposerPaletteItems);
+    expect(legacy.rankComposerPaletteItems).toBe(leaf.rankComposerPaletteItems);
+    expect(legacy.nameMatchScore).toBe(leaf.nameMatchScore);
+    const row = item("commands", "help");
+    expect(rankComposerPaletteItems([row], "commands", "help")[0]).toBe(row);
+  });
+  it("retains the exact five minute TTL and 24 result default", async () => {
+    const clock = vi.spyOn(Date, "now");
+    try {
+      clock.mockReturnValue(1000);
+      const load = vi.fn(() => Array.from({ length: 30 }, (_, index) => item("commands", "row-" + index)));
+      const registry = new ComposerPaletteSourceRegistry([{ id: "commands", label: "Commands", load }]);
+      const input = { sessionKey: "s", workspaceId: "w", mode: "all" as const, query: "" };
+      expect((await registry.search(input)).items).toHaveLength(24);
+      clock.mockReturnValue(300999);
+      await registry.search({ ...input, query: "row" });
+      expect(load).toHaveBeenCalledTimes(1);
+      clock.mockReturnValue(301000);
+      await registry.search(input);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect((await registry.search({ ...input, limit: 7 })).items).toHaveLength(7);
+    } finally {
+      clock.mockRestore();
+    }
+  });
   it("recognizes slash, contextual, and compatibility skill triggers", () => {
     expect(detectComposerPaletteTrigger(" /mod")).toEqual({ mode: "commands", query: "mod" });
     expect(detectComposerPaletteTrigger("read @project")).toEqual({ mode: "context", query: "project" });

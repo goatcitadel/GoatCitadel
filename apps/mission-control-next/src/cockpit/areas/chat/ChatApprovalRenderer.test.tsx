@@ -7,7 +7,8 @@ import type { ApprovalRequest } from "@goatcitadel/contracts";
 let ChatBlockers: typeof import("./ChatBlockers").ChatBlockers;
 let ChatApprovalRenderer: typeof import("./ChatApprovalRenderer").ChatApprovalRenderer;
 let ApiRequestError: typeof import("@goatcitadel/mission-control-shared/api/http-internal").ApiRequestError;
-const loader = vi.hoisted(() => ({ load: vi.fn<() => Promise<void>>() }));
+const loader = vi.hoisted(() => ({ load: vi.fn<(kind: "decision" | "settlement") => Promise<void>>() }));
+const grantLoads = vi.hoisted(() => ({ count: 0 }));
 const identity = vi.hoisted(() => ({
   gateway: "http://gateway-a",
   caller: "caller-a",
@@ -51,22 +52,24 @@ let root: Root, host: HTMLDivElement, client: QueryClient, record: ApprovalReque
 const resolved = vi.fn(),
   invalidated = vi.fn(),
   submit = vi.fn();
-// An owner change can start a retry load that outlives its test. Vitest keeps factory exports on a mock node
-// shared across doMock calls, so a load settling after the next test's doMock would be returned to that test's
-// import without running its factory (loader.load). afterEach waits for these loads.
+// An owner change can start a retry that outlives its component. Drain all calls before resetting the mocks.
 const bodyLoads = new Set<Promise<unknown>>();
-function installBodyMock() {
-  vi.doMock("./ChatApprovalRendererBody", () => {
+vi.mock("./load-chat-approval-renderer", () => {
+  function trackLoad<T>(kind: "decision" | "settlement", importCode: () => Promise<T>) {
     const load = (async () => {
-      await loader.load();
-      return vi.importActual<typeof import("./ChatApprovalRendererBody")>("./ChatApprovalRendererBody");
+      await loader.load(kind);
+      return importCode();
     })();
     const drop = () => bodyLoads.delete(load);
     bodyLoads.add(load);
     void load.then(drop, drop);
     return load;
-  });
-}
+  }
+  return {
+    importChatApprovalRendererBody: () => trackLoad("decision", () => import("./ChatApprovalRendererBody")),
+    importChatApprovalSettlement: () => trackLoad("settlement", () => import("../inbox/ApprovalSettlement")),
+  };
+});
 function deferred<T>() {
   let resolve!: (value: T) => void, reject!: (cause: Error) => void;
   const promise = new Promise<T>((success, failure) => {
@@ -186,6 +189,11 @@ function renderDirect({
 }
 beforeEach(async () => {
   vi.resetModules();
+  grantLoads.count = 0;
+  vi.doMock("./OutsideRootWriteGrantOptions", async (importOriginal) => {
+    grantLoads.count += 1;
+    return importOriginal<typeof import("./OutsideRootWriteGrantOptions")>();
+  });
   navigation.revision = 1;
   navigation.listeners.clear();
   window.history.replaceState({ fixturePosition: 7 }, "", "/chat?sessionId=session-a&shell=cockpit#current");
@@ -213,23 +221,51 @@ beforeEach(async () => {
     canonical: { approvalId: record.approvalId },
     turns: [],
   }));
-  installBodyMock();
-  ChatBlockers = (await import("./ChatBlockers")).ChatBlockers;
-  ChatApprovalRenderer = (await import("./ChatApprovalRenderer")).ChatApprovalRenderer;
-  ApiRequestError = (await import("@goatcitadel/mission-control-shared/api/http-internal")).ApiRequestError;
   client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
+  const [blockers, renderer, errors] = await Promise.all([
+    import("./ChatBlockers"),
+    import("./ChatApprovalRenderer"),
+    import("@goatcitadel/mission-control-shared/api/http-internal"),
+  ]);
+  ChatBlockers = blockers.ChatBlockers;
+  ChatApprovalRenderer = renderer.ChatApprovalRenderer;
+  ApiRequestError = errors.ApiRequestError;
 });
 afterEach(async () => {
   await act(async () => root.unmount());
   await Promise.allSettled([...bodyLoads]);
-  // Let the mocker store the settled exports before the next test's doMock invalidates them.
-  await new Promise((settle) => setTimeout(settle, 0));
   host.remove();
   client.clear();
   vi.restoreAllMocks();
+});
+it.each([{}, { outsideRootWrite: {} }, { outsideRootWrite: { kind: "outside_root_write", candidates: [] } }])(
+  "keeps ordinary and malformed grant previews cold while ordinary decisions remain available %j",
+  async (preview) => {
+    record = { ...record, preview: { targets: ["safe-target.txt"], ...preview } };
+    await act(async () => renderDirect());
+    await act(async () => {
+      expect(loader.load).toHaveBeenCalledOnce();
+      await Promise.all([...bodyLoads]);
+    });
+    expect(button("Approve once")).toBeDefined();
+    expect(grantLoads.count).toBe(0);
+    expect(button("Deny")).toBeDefined();
+    expect(api.resolveApproval).not.toHaveBeenCalled();
+  },
+);
+it("loads grant code when current pending candidates are valid", async () => {
+  record = { ...record, preview: { targets: ["C:/Scratch/report/out.txt"], outsideRootWrite: {
+    kind: "outside_root_write", targets: ["C:/Scratch/report/out.txt"],
+    candidates: [{ rootId: "owr_0123456789abcdef", path: "C:/Scratch/report" }],
+    durations: ["15m", "1h", "8h"], defaultDuration: "1h",
+  } } };
+  await act(async () => renderDirect());
+  await vi.waitFor(() => expect(host.textContent).toContain("Or approve and open a folder"));
+  expect(grantLoads.count).toBe(1);
+  expect(button("Deny")).toBeDefined();
 });
 it("does not import approval renderers or read an approval without a pending signal", async () => {
   await act(async () => renderBlockers({ approval: false, question: true }));
@@ -238,19 +274,19 @@ it("does not import approval renderers or read an approval without a pending sig
   expect(host.textContent).toContain("Which direction?");
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
-it("starts code with the signal while the canonical GET is held, preserves facts, then uses the original one-click owner", async () => {
+it("preserves signal facts while the canonical GET is held and loads only pending decision code for the current record", async () => {
   const code = deferCode(),
     read = deferred<ApprovalRequest>();
   record = { ...record, preview: { targets: ["canonical-only-target.txt"] } };
   api.fetchApproval.mockImplementationOnce(() => read.promise);
   await act(async () => renderBlockers());
   await vi.waitFor(() => {
-    expect(loader.load).toHaveBeenCalledTimes(1);
     expect(api.fetchApproval).toHaveBeenCalledExactlyOnceWith(record.approvalId, {
       workspaceId: "workspace-a",
       signal: expect.any(AbortSignal),
     });
   });
+  expect(loader.load).not.toHaveBeenCalled();
   expect(host.textContent).toContain("Current request");
   expect(host.textContent).toContain("Touches: safe-target.txt");
   expect(host.textContent).toContain("Exact preview");
@@ -258,6 +294,7 @@ it("starts code with the signal while the canonical GET is held, preserves facts
   expect(button("Approve once")).toBeUndefined();
   await act(async () => read.resolve(record));
   await vi.waitFor(() => expect(host.textContent).toContain("Loading approval controls"));
+  expect(loader.load).toHaveBeenCalledExactlyOnceWith("decision");
   // Stream facts remain visible; full canonical review is still behind the missing code, so no decision is admitted.
   expect(host.textContent).not.toContain("canonical-only-target.txt");
   expect(host.querySelector('section[aria-label="Approval scope and consequences"]')).toBeNull();
@@ -277,7 +314,10 @@ it("starts code with the signal while the canonical GET is held, preserves facts
   // follow-on outcome lands (#542); counting before that read settled made this test flaky.
   const followOn = deferred<{ approval: ApprovalRequest; effects: never[]; events: never[] }>();
   api.fetchApprovalReplay.mockImplementation(() => followOn.promise);
-  await act(async () => button("Approve once").click());
+  await act(async () => {
+    button("Approve once").click();
+    await vi.dynamicImportSettled();
+  });
   expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-a", "approve");
   expect(api.fetchApproval).toHaveBeenCalledWith("approval-a", { workspaceId: "workspace-a" });
   expect(resolved).toHaveBeenCalledTimes(1);
@@ -392,6 +432,7 @@ it("preserves the recorded decision while canonical follow-on code loads", async
   await act(async () => renderBlockers());
   await vi.waitFor(() => expect(host.textContent).toContain("Decision recorded"));
   expect(host.textContent).toContain("Loading follow-on work");
+  expect(loader.load).toHaveBeenCalledExactlyOnceWith("settlement");
   expect(button("Approve once")).toBeUndefined();
   expect(api.fetchApprovalReplay).not.toHaveBeenCalled();
   await act(async () => code.resolve());
@@ -402,6 +443,24 @@ it("preserves the recorded decision while canonical follow-on code loads", async
   await vi.waitFor(() => expect(host.textContent).toContain("Original linked work"));
   expect(api.fetchDurableRun).toHaveBeenCalledExactlyOnceWith("original-run-a");
   expect(host.textContent).not.toContain("Work completed");
+  expect(api.resolveApproval).not.toHaveBeenCalled();
+});
+
+it("ignores a pending chunk failure when the same approval has settled", async () => {
+  const decision = deferCode();
+  await act(async () => renderDirect());
+  await vi.waitFor(() => expect(loader.load).toHaveBeenCalledExactlyOnceWith("decision"));
+  const settlement = deferCode();
+  record = { ...record, status: "approved" };
+  await act(async () => renderDirect());
+  await vi.waitFor(() => expect(loader.load).toHaveBeenNthCalledWith(2, "settlement"));
+  await act(async () => decision.reject(new Error("old pending code failed")));
+  expect(host.textContent).toContain("Decision recorded");
+  expect(host.textContent).toContain("Loading follow-on work");
+  expect(button("Reload app")).toBeUndefined();
+  expect(button("Approve once")).toBeUndefined();
+  await act(async () => settlement.resolve());
+  await vi.waitFor(() => expect(api.fetchApprovalReplay).toHaveBeenCalledExactlyOnceWith("approval-a"));
   expect(api.resolveApproval).not.toHaveBeenCalled();
 });
 
@@ -425,6 +484,7 @@ async function openReload() {
   await vi.waitFor(() =>
     expect(dialog()?.textContent).toContain("Unsent question answers and unsaved edits may be lost"),
   );
+  await vi.waitFor(() => expect(dialogButton("Cancel")).toBeDefined());
   return trigger;
 }
 it("exposes truthful code-load recovery without automatic reload, another import, decision or raw exception", async () => {
@@ -445,6 +505,7 @@ it.each(["text", "choice", "secure"] as const)(
   async (kind) => {
     const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
     await failedCode({ question: true, choice: kind === "choice", secure: kind === "secure" });
+    await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
     const form = host.querySelector<HTMLFormElement>('form[aria-label="Pending question"]')!;
     const input = form.querySelector<HTMLInputElement>(
       kind === "choice" ? 'input[value="right"]' : kind === "secure" ? 'input[type="password"]' : 'input[type="text"]',
@@ -487,6 +548,7 @@ it.each(["text", "choice", "secure"] as const)(
 it("consumes explicit current-document consent once without submitting inputs, deciding or writing draft storage", async () => {
   const reload = vi.spyOn(window.location, "reload").mockImplementation(() => undefined);
   await failedCode({ question: true, choice: true });
+  await vi.waitFor(() => expect(host.querySelector('form[aria-label="Pending question"]')).not.toBeNull());
   const form = host.querySelector('form[aria-label="Pending question"]')!;
   await openReload();
   const confirm = dialogButton("Reload app");

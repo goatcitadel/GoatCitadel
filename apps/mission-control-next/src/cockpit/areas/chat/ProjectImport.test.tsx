@@ -7,6 +7,9 @@ import { ProjectImport } from "./ProjectImport";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 const api = vi.hoisted(() => ({ import: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({ importChatProject: api.import }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({

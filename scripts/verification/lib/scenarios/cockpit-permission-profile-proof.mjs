@@ -1,7 +1,15 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import { openPermissionProfileChoices } from "./cockpit-permission-context-proof.mjs";
+import { selectCockpitSettingsPage } from "./cockpit-settings-page-navigation.mjs";
+
+export async function assertRemountedPermissionProfileLocked(panel) {
+  await panel.getByText(/Permission selection outcome is uncertain\./).waitFor();
+  await openPermissionProfileChoices(panel);
+  assert.equal(await panel.getByRole("button", { name: "Review Chat profile selection", exact: true }).isDisabled(), true);
+}
 
 export function assertPermissionActivationOwnerAgreement({ workspaceId, reviewed, request, receipt, effective }) {
   assert.equal(reviewed.input.operation, "activate");
@@ -80,7 +88,7 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
           if (request.method() === "POST" && pathname === "/api/v1/tools/permission-profiles/activate") writes.push(request.postDataJSON());
-          else if (["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) && pathname.startsWith("/api/v1/")
+          else if (classifyCockpitProofWrite(request.method(), pathname) === "owner"
             && pathname !== "/api/v1/tools/permission-profiles/selection-review") unrelatedWrites.push(`${request.method()} ${pathname}`);
         });
         stage = "open native permission owner";
@@ -180,10 +188,9 @@ export async function runCockpitPermissionProfileProof({ context, browser, stack
         assertPermissionActivationOwnerAgreement({ workspaceId, reviewed: uncertainReview, request: writes[1], receipt: ownerReply, effective: await readEffective() });
         await page.unroute("**/api/v1/tools/permission-profiles/activate", loseAcknowledgement);
         // A component remount within the current app session must retain the lock.
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "General", exact: true }).click();
-        await page.getByRole("navigation", { name: "Settings pages", exact: true }).getByRole("link", { name: "Safety", exact: true }).click();
-        await panel.getByText(/Permission selection outcome is uncertain\./).waitFor();
-        assert.equal(await panel.getByRole("button", { name: "Review Chat profile selection", exact: true }).isDisabled(), true);
+        await selectCockpitSettingsPage(page, { label: "General", href: "/settings/general" });
+        await selectCockpitSettingsPage(page, { label: "Safety", href: "/settings/safety" });
+        await assertRemountedPermissionProfileLocked(panel);
         assert.equal(writes.length, 2); assert.deepEqual(unrelatedWrites, []);
         await audit("unknown-locked");
         return { status: "passed", metrics: { workspaceId, profileId: selected.profileId, cancelledActivationWrites: 0,

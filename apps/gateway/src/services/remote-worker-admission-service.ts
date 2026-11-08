@@ -145,6 +145,7 @@ export interface RemoteWorkerAdmissionServiceDependencies {
   readonly loadTrustMaterial?: (
     config: EnabledRemoteWorkerRuntimeConfig,
     now: Date,
+    signal?: AbortSignal,
   ) => RemoteWorkerTrustMaterial | Promise<RemoteWorkerTrustMaterial>;
   readonly randomBytes?: (size: number) => Buffer;
   readonly now?: () => Date;
@@ -175,6 +176,7 @@ export class RemoteWorkerAdmissionService {
   private readonly loadTrustMaterial: (
     config: EnabledRemoteWorkerRuntimeConfig,
     now: Date,
+    signal?: AbortSignal,
   ) => RemoteWorkerTrustMaterial | Promise<RemoteWorkerTrustMaterial>;
   private readonly randomBytes: (size: number) => Buffer;
   private readonly now: () => Date;
@@ -183,18 +185,21 @@ export class RemoteWorkerAdmissionService {
     this.admissionStore = dependencies.admissionStore;
     this.evidenceVerifier = dependencies.evidenceVerifier ?? unavailableRemoteWorkerAdmissionEvidenceVerifier;
     this.readRuntimeConfig = dependencies.readRuntimeConfig ?? (() => parseRemoteWorkerRuntimeConfig());
-    this.loadTrustMaterial =
-      dependencies.loadTrustMaterial ?? ((config, now) => loadRemoteWorkerTrustMaterial(config, now));
+    this.loadTrustMaterial = dependencies.loadTrustMaterial ?? loadRemoteWorkerTrustMaterial;
     this.randomBytes = dependencies.randomBytes ?? cryptoRandomBytes;
     this.now = dependencies.now ?? (() => new Date());
   }
 
-  public async exchange(input: RemoteWorkerAdmissionExchangeInput): Promise<RemoteWorkerAdmissionExchangeResult> {
+  public async exchange(
+    input: RemoteWorkerAdmissionExchangeInput,
+    signal?: AbortSignal,
+  ): Promise<RemoteWorkerAdmissionExchangeResult> {
     let credentialBytes: Buffer | undefined;
     let transportIdentity: RemoteWorkerTransportIdentity | undefined;
     try {
       const request = snapshotExchangeInput(input);
       transportIdentity = request.transportIdentity;
+      signal?.throwIfAborted();
       const bootstrapSecretSha256 = bootstrapAuthorizationSha256(request.headers);
       const storedBootstrap = await this.admissionStore.findBootstrapBySecretSha256(bootstrapSecretSha256);
       if (storedBootstrap === undefined) {
@@ -231,7 +236,8 @@ export class RemoteWorkerAdmissionService {
       });
       request.transportIdentity.tlsExporter.fill(0);
 
-      const manifestTrust = await this.verifyStoredManifest(bootstrap, now);
+      const manifestTrust = await this.verifyStoredManifest(bootstrap, now, signal);
+      signal?.throwIfAborted();
       const runtimeManifestSha256 = sha256Utf8(canonicalJsonString(bootstrap.runtimeManifest));
       const transportReceiptSha256 = remoteWorkerTransportReceiptSha256({
         receipt: prepared.receipt,
@@ -301,6 +307,7 @@ export class RemoteWorkerAdmissionService {
         bootstrap.protectedAdmissionSignerPin !== undefined,
       );
 
+      signal?.throwIfAborted();
       const generatedCredentialBytes = this.randomBytes(32);
       if (!Buffer.isBuffer(generatedCredentialBytes)) {
         throw rejected("Remote worker credential generation is unavailable.");
@@ -309,6 +316,7 @@ export class RemoteWorkerAdmissionService {
       if (credentialBytes.byteLength !== 32) {
         throw rejected("Remote worker credential generation is unavailable.");
       }
+      signal?.throwIfAborted();
       const credentialSecret = credentialBytes.toString("base64url");
       if (credentialSecret.length !== 43) {
         throw rejected("Remote worker credential generation is unavailable.");
@@ -349,6 +357,9 @@ export class RemoteWorkerAdmissionService {
           ? {}
           : { verifiedProtectedAdmissionEvidence: evidence.verifiedProtectedAdmissionEvidence }),
       });
+      // Only the transport owns cancellation. Once the atomic repository call
+      // starts, its durable replay contract remains authoritative.
+      signal?.throwIfAborted();
       const outcome = snapshotAdmissionOutcome(
         await this.admissionStore.finalizeBootstrapAdmissionWithNonce(
           Object.freeze({
@@ -401,17 +412,20 @@ export class RemoteWorkerAdmissionService {
   private async verifyStoredManifest(
     bootstrap: RemoteWorkerBootstrapRecord,
     now: Date,
+    signal?: AbortSignal,
   ): Promise<{
     readonly receipt: RemoteWorkerManifestVerificationReceipt;
     readonly credentialTtlSeconds: number;
   }> {
     const config = await this.readRuntimeConfig();
+    signal?.throwIfAborted();
     if (config.enabled !== true) {
       throw rejected("Remote worker runtime trust configuration is unavailable.");
     }
-    const trustMaterial = await this.loadTrustMaterial(config, now);
+    const trustMaterial = await this.loadTrustMaterial(config, now, signal);
     let signerPublicKeySpkiDer: Buffer | undefined;
     try {
+      signal?.throwIfAborted();
       signerPublicKeySpkiDer = trustMaterial.manifestSignerPublicKeySpkiDer();
       const receipt = verifyRemoteWorkerRuntimeManifestSignature({
         manifest: bootstrap.runtimeManifest,

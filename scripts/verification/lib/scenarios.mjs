@@ -5357,15 +5357,15 @@ async function stabilizeMissionControlNextFileFixtureMtime(runtimeRoot, serializ
   await fs.utimes(fullPath, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME, MISSION_CONTROL_NEXT_FILE_FIXTURE_MTIME);
 }
 
-async function installMissionControlNextBrowserState(browserContext, workspaceId, citadelId = "personal") {
+async function installMissionControlNextBrowserState(browserContext, workspaceId, citadelId = "personal", options = {}) {
   await browserContext.addInitScript(
-    ({ activeWorkspaceId, activeCitadelId }) => {
+    ({ activeWorkspaceId, activeCitadelId, showTechnicalDetails }) => {
       window.localStorage.setItem("goatcitadel.ui.workspace_id.v1", activeWorkspaceId);
       window.localStorage.setItem("goatcitadel.ui.citadel_id.v1", activeCitadelId);
       window.localStorage.setItem("goatcitadel.ui.mode.v1", "simple");
-      window.localStorage.setItem("goatcitadel.ui.technical_details.v1", "false");
+      window.localStorage.setItem("goatcitadel.ui.technical_details.v1", showTechnicalDetails ? "true" : "false");
     },
-    { activeWorkspaceId: workspaceId, activeCitadelId: citadelId },
+    { activeWorkspaceId: workspaceId, activeCitadelId: citadelId, showTechnicalDetails: options.showTechnicalDetails === true },
   );
 }
 

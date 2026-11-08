@@ -1,3 +1,5 @@
+import { EventEmitter } from "node:events";
+import { PassThrough } from "node:stream";
 import { createHash } from "node:crypto";
 import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
@@ -12,6 +14,7 @@ import {
   hashRemoteWorkerWindowsFiles,
   hashRemoteWorkerWindowsFile,
   readRemoteWorkerWindowsFile,
+  readRemoteWorkerWindowsTrustFiles,
   remoteWorkerWindowsNoFollowHelperDiagnostics,
   validateRemoteWorkerWindowsNoFollowResponse,
 } from "./remote-worker-windows-no-follow.js";
@@ -94,6 +97,63 @@ function hashResponse(overrides: Record<string, unknown> = {}): Record<string, u
 }
 
 describe("remote worker Windows no-follow protocol", () => {
+  it.runIf(process.platform === "win32")(
+    "clears earlier decoded contents when a later response row has the wrong path",
+    async () => {
+      const reply = Buffer.from(
+        JSON.stringify({
+          schemaVersion: "goatcitadel.remote-worker-windows-no-follow.v1",
+          operation: "trust_read_batch",
+          results: [readResponse(), readResponse({ relativePath: "vendor/unrequested.js" })],
+        }),
+        "utf8",
+      );
+      const frame = Buffer.from(`${reply.byteLength}\n${reply.toString("base64")}\n`, "ascii");
+      const fakeSpawn = vi.fn(() => {
+        const child = Object.assign(new EventEmitter(), {
+          stdin: new PassThrough(),
+          stdout: new PassThrough(),
+          stderr: new PassThrough(),
+          kill: vi.fn(() => true),
+        });
+        child.stdin.resume();
+        child.stdin.once("finish", () => {
+          child.stdout.end(frame);
+          child.stderr.end();
+          queueMicrotask(() => child.emit("close", 0));
+        });
+        return child;
+      });
+      vi.resetModules();
+      vi.doMock("node:child_process", async (importOriginal) => ({
+        ...(await importOriginal<typeof import("node:child_process")>()),
+        spawn: fakeSpawn,
+      }));
+      const from = Buffer.from;
+      const decoded: Buffer[] = [];
+      const fromSpy = vi.spyOn(Buffer, "from").mockImplementation(((...args: unknown[]) => {
+        const value = Reflect.apply(from, Buffer, args) as Buffer;
+        if (args[0] === "YWJj" && args[1] === "base64") decoded.push(value);
+        return value;
+      }) as typeof Buffer.from);
+      try {
+        const owner = await import("./remote-worker-windows-no-follow.js");
+        await expect(
+          owner.readRemoteWorkerWindowsTrustFiles([
+            { rootPath: ROOT, relativePath: "vendor/a.js", maxBytes: 16 },
+            { rootPath: ROOT, relativePath: "vendor/b.js", maxBytes: 16 },
+          ]),
+        ).rejects.toThrow(/response binding is invalid/u);
+        expect(fakeSpawn).toHaveBeenCalledTimes(1);
+        expect(decoded.map((bytes) => [...bytes])).toEqual([[0, 0, 0]]);
+        expect(owner.remoteWorkerWindowsNoFollowHelperDiagnostics().active).toBe(false);
+      } finally {
+        fromSpy.mockRestore();
+        vi.doUnmock("node:child_process");
+        vi.resetModules();
+      }
+    },
+  );
   it("accepts only exact request-bound, double-enumerated handle evidence", () => {
     const evidence = validateRemoteWorkerWindowsNoFollowResponse(enumerateResponse(), {
       operation: "enumerate",
@@ -249,6 +309,58 @@ describe("remote worker Windows no-follow protocol", () => {
     const diagnostics = remoteWorkerWindowsNoFollowHelperDiagnostics();
     expect(diagnostics.maximumHashResponseBytes).toBeLessThan(diagnostics.maximumHashFileBytes / 100);
   });
+
+  it("rejects invalid trust batch sizes, paths, and per-item limits before spawning", async () => {
+    const item = { rootPath: ROOT, relativePath: "trust.pem", maxBytes: 3 };
+    await expect(readRemoteWorkerWindowsTrustFiles([])).rejects.toThrow("batch size");
+    await expect(readRemoteWorkerWindowsTrustFiles(Array.from({ length: 5 }, () => item))).rejects.toThrow(
+      "batch size",
+    );
+    await expect(readRemoteWorkerWindowsTrustFiles([item, { ...item, relativePath: "../escape.pem" }])).rejects.toThrow(
+      "path",
+    );
+    await expect(readRemoteWorkerWindowsTrustFiles([item, { ...item, maxBytes: 1024 * 1024 + 1 }])).rejects.toThrow(
+      "content file byte limit",
+    );
+    const controller = new AbortController();
+    controller.abort();
+    await expect(readRemoteWorkerWindowsTrustFiles([item], { signal: controller.signal })).rejects.toThrow("aborted");
+    expect(remoteWorkerWindowsNoFollowHelperDiagnostics().active).toBe(false);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "reads four ordered trust items across roots and rejects an oversized later item as a whole",
+    async () => {
+      const firstRoot = await mkdtemp(join(tmpdir(), "goat-worker-trust-batch-a-"));
+      cleanupRoots.push(firstRoot);
+      const secondRoot = await mkdtemp(join(tmpdir(), "goat-worker-trust-batch-b-"));
+      cleanupRoots.push(secondRoot);
+      const requests = [
+        { rootPath: firstRoot, relativePath: "cert.pem", maxBytes: 3 },
+        { rootPath: secondRoot, relativePath: "key.pem", maxBytes: 4 },
+        { rootPath: firstRoot, relativePath: "ca.pem", maxBytes: 5 },
+        { rootPath: secondRoot, relativePath: "signer.pem", maxBytes: 6 },
+      ];
+      const contents = ["abc", "defg", "hijkl", "mnopqr"];
+      for (const [index, request] of requests.entries()) {
+        await writeFile(join(request.rootPath, request.relativePath), contents[index]!);
+      }
+      const options = { deadlineMs: 30_000 };
+      const result = await readRemoteWorkerWindowsTrustFiles(requests, options);
+      try {
+        expect(result.map(({ rootPath, relativePath }) => ({ rootPath, relativePath }))).toEqual(
+          requests.map(({ rootPath, relativePath }) => ({ rootPath, relativePath })),
+        );
+        expect(result.map(({ content }) => content.toString("ascii"))).toEqual(contents);
+      } finally {
+        for (const item of result) item.content.fill(0);
+      }
+      await writeFile(join(secondRoot, "signer.pem"), "too long");
+      await expect(readRemoteWorkerWindowsTrustFiles(requests, options)).rejects.toThrow("inspection failed");
+      expect(remoteWorkerWindowsNoFollowHelperDiagnostics().active).toBe(false);
+    },
+    60_000,
+  );
 
   it.runIf(process.platform === "win32")(
     "rejects SUBST aliases instead of treating them as native fixed-volume roots",

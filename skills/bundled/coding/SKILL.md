@@ -12,7 +12,8 @@ metadata:
     - fs.read
     - fs.write
     - shell.exec
-    - git.exec
+    - git.status
+    - git.diff
   keywords:
     - implement
     - refactor
@@ -74,4 +75,5 @@ Do not use this skill when:
 - `fs.read` - inspect source files and contracts
 - `fs.write` - apply code changes
 - `shell.exec` - run builds, tests, and validation commands
-- `git.exec` - manage commits and diffs
+- `git.status` - inspect the working tree
+- `git.diff` - review code changes before handoff

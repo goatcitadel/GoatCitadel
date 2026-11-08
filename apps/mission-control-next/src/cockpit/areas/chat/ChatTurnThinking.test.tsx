@@ -34,14 +34,15 @@ afterEach(() => {
   container.remove();
   client.clear();
 });
-function render(node: ReactNode) {
-  return act(async () =>
+async function render(node: ReactNode) {
+  await act(async () =>
     root.render(
       <QueryClientProvider client={client}>
         <InspectorProvider>{node}</InspectorProvider>
       </QueryClientProvider>,
     ),
   );
+  await act(async () => vi.dynamicImportSettled());
 }
 const section = () => container.querySelector<HTMLDetailsElement>('[data-testid="chat-turn-thinking"]');
 

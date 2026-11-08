@@ -9,6 +9,9 @@ import { CockpitNavigationContext, type CockpitNavigationOwner } from "../../app
 import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ChatTextComposer, type ComposerProps } from "./ChatTextComposer";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 // Catalog labels read the query cache; these tests exercise the controls, so the model id stands in for its name.
 vi.mock("../../data/use-model-label", () => ({
   useModelLabel: (_providerId?: string, modelId?: string) => modelId ?? "Unknown model",
@@ -107,7 +110,7 @@ function Harness({
     handleApplyPresetById: async () => undefined,
     handleAssignProject: controls.handleAssignProject,
     handleAttachKnowledgeUrlValue: async () => undefined,
-    openRunVariableForm: noop,
+    openRunVariableForm: async () => undefined,
     setUiError: api.error,
   });
   const props = {
@@ -214,6 +217,7 @@ describe("reviewed Cockpit palette project reassignment through the real control
     await render();
     await open();
     await click("Switch project");
+    await vi.waitFor(() => expect(api.refresh).toHaveBeenCalled());
     expect(api.assign).toHaveBeenCalledExactlyOnceWith("conversation-a", "destination", 7);
     expect(api.refresh).toHaveBeenCalledWith("active", { bypassCache: true, preserveSelection: true });
   });
@@ -328,7 +332,7 @@ describe("reviewed Cockpit palette project reassignment through the real control
       confirm.click();
       confirm.click();
     });
-    expect(api.assign).toHaveBeenCalledOnce();
+    await vi.waitFor(() => expect(api.assign).toHaveBeenCalledOnce());
   });
   it("does not reselect the old conversation when its assignment response settles after navigation", async () => {
     let settle!: () => void;
@@ -341,7 +345,7 @@ describe("reviewed Cockpit palette project reassignment through the real control
     await render();
     await open();
     await click("Switch project");
-    expect(api.assign).toHaveBeenCalledWith("conversation-a", "destination", 7);
+    await vi.waitFor(() => expect(api.assign).toHaveBeenCalledWith("conversation-a", "destination", 7));
     await render({
       selectedSessionId: "conversation-b",
       projectSwitchContext: {
@@ -366,6 +370,7 @@ describe("reviewed Cockpit palette project reassignment through the real control
     await render({}, "citadel-a");
     await open();
     await click("Switch project");
+    await vi.waitFor(() => expect(api.assign).toHaveBeenCalled());
     await render({}, "citadel-b");
     await render({}, "citadel-a");
     await act(async () => settle());
@@ -400,7 +405,7 @@ it("native Projects assignment handoff uses the existing review and controller e
   expect(api.assign).not.toHaveBeenCalled();
   await click("Review project assignment");
   await click("Switch project");
-  expect(api.assign).toHaveBeenCalledExactlyOnceWith("conversation-a", "destination", 7);
+  await vi.waitFor(() => expect(api.assign).toHaveBeenCalledExactlyOnceWith("conversation-a", "destination", 7));
 });
 it("native assignment handoff closes on changed caller access without persisting", async () => {
   window.history.replaceState(null, "", "/chat?sessionId=conversation-a&assignProjectId=destination&shell=cockpit");

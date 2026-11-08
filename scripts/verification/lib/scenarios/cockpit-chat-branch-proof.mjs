@@ -37,7 +37,10 @@ export async function runCockpitChatBranchProof({ context, browser, stack, citad
           await messages.waitFor({ timeout: 30_000 });
           const scroller = messages.locator('[data-transcript-scroller]');
           await scroller.evaluate((element) => { element.scrollTop = element.scrollHeight; element.dispatchEvent(new element.ownerDocument.defaultView.Event("scroll", { bubbles: true })); });
-          await clickTurnAction(messages, "Edit and resend", { timeout: 10_000 });
+          const sourceArticle = messages.locator(`article[data-turn-id=${JSON.stringify(source.turnId)}]`);
+          await sourceArticle.waitFor({ timeout: 10_000 });
+          if (await sourceArticle.count() !== 1) throw new Error("Branch proof requires the exact canonical turn.");
+          await clickTurnAction(sourceArticle, "Edit your message and resend", { timeout: 10_000 });
           await page.getByRole("status").getByText("Editing a new version of this message.").waitFor();
           const revised = `Branch proof ${variant} revised message.`;
           await page.getByRole("textbox", { name: "Message", exact: true }).fill(revised);

@@ -10,6 +10,9 @@ import {
   useFormDirty,
   getDirtySectionKeys,
 } from "../../../features/native-routes/library/use-form-dirty";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: "workspace", activeCitadelId: "citadel" }),
 }));

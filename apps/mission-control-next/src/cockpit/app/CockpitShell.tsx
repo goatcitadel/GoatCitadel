@@ -14,7 +14,7 @@ import { GatewayUnavailableBanner } from "./GatewayUnavailableBanner";
 import { CockpitNavigationContext, useCockpitNavigation } from "./cockpit-navigation-context";
 import { CockpitNavigationProvider } from "./CockpitNavigationProvider";
 import { InspectorPanel, InspectorProvider } from "./inspector";
-import { MobileTabBar } from "./MobileTabBar";
+import { MobileNavigationSlot } from "./MobileNavigationSlot";
 import { COCKPIT_AREAS } from "./routes";
 import { Sidebar } from "./Sidebar";
 import { ChatContextHandoffNotice } from "./use-cockpit-shell-switch";
@@ -205,7 +205,7 @@ function CockpitShellContent({
                 <AreaErrorBoundary label="Projects" resetKey={pathname + search}>
                   <Suspense
                     fallback={
-                      <p role="status" className="p-4">
+                      <p aria-busy="true" className="p-4">
                         Loading projects…
                       </p>
                     }
@@ -269,8 +269,8 @@ function CockpitShellContent({
           </EmbeddedPageHeaderProvider>
           <InspectorPanel />
         </div>
-        {!firstRun ? (
-          <MobileTabBar
+        {!firstRun && !wide ? (
+          <MobileNavigationSlot
             onOpenPalette={openPaletteFrom}
             streamState={streamState}
           />

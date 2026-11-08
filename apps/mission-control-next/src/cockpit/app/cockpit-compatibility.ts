@@ -4,8 +4,8 @@ import { PLUGINS_HREF } from "../areas/capabilities/plugins/plugin-links";
 import { SKILLS_HREF, skillIdFromCapabilityId, skillItemHref } from "../areas/capabilities/skills/skill-links";
 import { TOOLS_HREF, toolHref, toolNameFromCapabilityId } from "../areas/capabilities/tools/tool-links";
 import { adaptLegacyUrl } from "../../app/legacy-route-adapter";
-import { buildAppHref, parseAppRoute } from "../../app/route-model";
-import { buildSettingsDestinations } from "../areas/settings/settings-destinations";
+import { buildAppHref, parseAppRoute } from "../../app/route-address";
+import { buildSettingsRouteHomes } from "../areas/settings/settings-route-homes";
 import { isGoogleOAuthReturnFragment } from "../../features/native-routes/settings/google-oauth-return";
 import { isMcpOAuthReturnFragment } from "../../features/native-routes/settings/mcp-oauth-return";
 import {
@@ -67,7 +67,7 @@ const catalogKinds: Record<CapabilityKind, true> = {
   mesh_mcp_server: true,
   mesh_skill: true,
 };
-const settings = buildSettingsDestinations();
+const settings = buildSettingsRouteHomes();
 const opsNative: Record<string, string> = {
   approvals: "/inbox",
   activity: "/system/activity",

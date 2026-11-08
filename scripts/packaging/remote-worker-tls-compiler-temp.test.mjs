@@ -29,6 +29,7 @@ test("MSVC links from the 222-character output path used by nested Fast fixtures
     process.env.TMP = outputDirectory;
     const executable = compileTlsNative({ target: "windows-x64", outputDirectory,
       sources: [source], outputName: "probe.exe" });
+    assertCompilerOwnership(executable);
     const result = spawnSync(executable, [], { encoding: "utf8", windowsHide: true, timeout: 5000 });
     assert.equal(result.error, undefined);
     assert.equal(result.status, 0, result.stderr);
@@ -59,7 +60,22 @@ test("TLS adapter bytes remain reproducible with short scratch and deeply nested
     fs.mkdirSync(outputDirectory);
     const artifact = compileTlsNative({ target: "windows-x64", outputDirectory,
       sources, outputName: TLS_ADAPTER_DLL, dll: true });
+    assertCompilerOwnership(artifact);
     return createHash("sha256").update(fs.readFileSync(artifact)).digest("hex");
   });
   assert.equal(hashes[0], hashes[1]);
 });
+
+function assertCompilerOwnership(artifact) {
+  const prefix = "Native compiler ownership: ";
+  const rows = fs.readFileSync(artifact + ".build.log", "utf8").split(/\r?\n/u).filter((line) => line.startsWith(prefix));
+  assert(rows.length > 0, "Actual compiler invocation must record its private Job proof");
+  for (const line of rows) {
+    const ownership = JSON.parse(line.slice(prefix.length));
+    assert.equal(ownership.jobEmpty, true);
+    assert.equal(ownership.rootExited, true);
+    assert.equal(ownership.rootExitCode, 0);
+    assert.equal(ownership.atomicMembership, true);
+    assert.equal(ownership.callerVerified, true);
+  }
+}

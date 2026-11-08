@@ -1,14 +1,14 @@
+import { rankComposerPaletteItems } from "./composer-palette-ranking.js";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
   getGatewayCallerScopeRevision,
   getGatewayAccessRevision,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
-import {
-  rankComposerPaletteItems,
-  type ComposerPaletteItem,
-  type ComposerPaletteSourceFailure,
-  type ComposerPaletteMode,
+import type {
+  ComposerPaletteItem,
+  ComposerPaletteSourceFailure,
+  ComposerPaletteMode,
 } from "./composer-palette.js";
 import type { BuildSourcesInput } from "./composer-palette-source-types.js";
 export { buildChatComposerPaletteSources } from "./composer-palette-source-builders.js";

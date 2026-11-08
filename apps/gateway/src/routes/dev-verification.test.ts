@@ -1227,6 +1227,53 @@ describe("dev verification routes", () => {
     });
   });
 
+  it("seeds a cursor before an actual later deletion, rather than at the forward replay boundary", async () => {
+    let sequence = 40;
+    const rows: Array<{ sequence: number; timestamp: string; eventId: string }> = [];
+    let lastPrunedSequence: number | undefined;
+    const append = vi.fn((_type: string, _source: string, _payload: unknown, _correlation: unknown, timestamp: string) => {
+      // Allocator holes must never be mistaken for deleted events.
+      sequence += 3;
+      const row = { sequence, timestamp, eventId: `seed-${sequence}` };
+      rows.push(row);
+      return row;
+    });
+    const pruneOlderThan = vi.fn((cutoff: string) => {
+      const deleted = rows.filter((row) => row.timestamp < cutoff);
+      lastPrunedSequence = Math.max(...deleted.map((row) => row.sequence));
+      rows.splice(0, rows.length, ...rows.filter((row) => row.timestamp >= cutoff));
+      return deleted.length;
+    });
+    const publishRealtime = vi.fn(() => {
+      sequence += 3;
+      const row = { sequence, timestamp: new Date().toISOString(), eventId: `retained-${sequence}` };
+      rows.push(row);
+      return row;
+    });
+    app = Fastify();
+    app.decorate("routeAccessManifest", []);
+    decorateDevVerification(app, {
+      isDevDiagnosticsEnabled: () => true,
+      storage: { realtimeEvents: { append, pruneOlderThan } },
+      publishRealtime,
+      getRealtimeEventSequenceBounds: () => ({
+        oldestSequence: rows[0]?.sequence,
+        newestSequence: rows.at(-1)?.sequence,
+        lastPrunedSequence,
+      }),
+    });
+    app.decorate("gatewayConfig", { rootDir: "f:/tmp/goatcitadel-dev" } as never);
+    await app.register(devVerificationRoutes);
+    const response = await app.inject({ method: "POST", url: "/api/v1/dev/verification/realtime-truth-seed" });
+    expect(response.statusCode).toBe(201);
+    const seeded = response.json();
+    const cursor = Number(seeded.staleCursor);
+    expect(append.mock.results.some((result) => result.value.sequence === cursor)).toBe(true);
+    expect(cursor).toBeLessThan(seeded.bounds.lastPrunedSequence);
+    expect(seeded.bounds.lastPrunedSequence).toBeLessThan(seeded.bounds.oldestSequence);
+    expect(seeded.prunedCount).toBeGreaterThanOrEqual(2);
+  });
+
   it("seeds deterministic realtime truth events and replay-gap cursor data", async () => {
     const append = vi.fn().mockReturnValueOnce({
       eventId: "evt-stale",
@@ -1236,12 +1283,20 @@ describe("dev verification routes", () => {
       timestamp: "2026-04-21T00:00:00.000Z",
       payload: { kind: "verification_seed" },
     });
-    const pruneOlderThan = vi.fn(() => 1);
+    append.mockReturnValueOnce({
+      eventId: "evt-stale-later",
+      sequence: 8,
+      eventType: "verification_replay_gap_seed",
+      source: "events",
+      timestamp: "2026-04-21T00:00:00.000Z",
+      payload: { kind: "verification_seed" },
+    });
+    const pruneOlderThan = vi.fn(() => 2);
     const publishRealtime = vi
       .fn()
       .mockReturnValueOnce({
         eventId: "evt-explicit",
-        sequence: 8,
+        sequence: 9,
         eventType: "verification_memory_refresh",
         source: "memory",
         timestamp: "2026-04-22T00:00:00.000Z",
@@ -1252,7 +1307,7 @@ describe("dev verification routes", () => {
       })
       .mockReturnValueOnce({
         eventId: "evt-compat",
-        sequence: 9,
+        sequence: 10,
         eventType: "approval_hint_emitted",
         source: "approvals",
         timestamp: "2026-04-22T00:00:01.000Z",
@@ -1273,8 +1328,9 @@ describe("dev verification routes", () => {
       },
       publishRealtime,
       getRealtimeEventSequenceBounds: () => ({
-        oldestSequence: 8,
-        newestSequence: 9,
+        oldestSequence: 9,
+        newestSequence: 10,
+        lastPrunedSequence: 8,
       }),
     });
     app.decorate("gatewayConfig", {
@@ -1295,6 +1351,7 @@ describe("dev verification routes", () => {
       undefined,
       expect.any(String),
     );
+    expect(append).toHaveBeenCalledTimes(2);
     expect(pruneOlderThan).toHaveBeenCalledWith(expect.any(String));
     expect(publishRealtime).toHaveBeenNthCalledWith(
       1,
@@ -1321,10 +1378,11 @@ describe("dev verification routes", () => {
     );
     expect(response.json()).toMatchObject({
       staleCursor: "7",
-      prunedCount: 1,
+      prunedCount: 2,
       bounds: {
-        oldestSequence: 8,
-        newestSequence: 9,
+        oldestSequence: 9,
+        newestSequence: 10,
+        lastPrunedSequence: 8,
       },
       explicitEvent: {
         eventId: "evt-explicit",

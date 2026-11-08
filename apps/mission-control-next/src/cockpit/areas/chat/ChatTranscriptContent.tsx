@@ -9,14 +9,9 @@ import {
 } from "@goatcitadel/contracts";
 import { NativeMessageRenderer as AssistantMessageRenderer } from "./NativeMessageRenderer";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
-import {
-  ActorTimestamp,
-  ChatThreadNotices,
-  ChatNoticeTechnicalDetails,
-} from "@goatcitadel/mission-control-shared/components/chat/ChatThreadReadingPrimitives";
+import { ActorTimestamp } from "@goatcitadel/mission-control-shared/components/chat/ChatThreadReadingPrimitives";
 import { presentChatTurnStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { formatBytes } from "@goatcitadel/mission-control-shared/content/format";
-import { OctagonAlert, TriangleAlert } from "lucide-react";
 import { liveTurnStatusLabel, presentAttachmentType } from "./chat-vocabulary";
 import { describeChannelMessageSource, type ChannelConversationContext } from "./channel-conversation";
 import { useInChannelConversation } from "./channel-conversation-scope";
@@ -28,23 +23,22 @@ import type {
 } from "@goatcitadel/threaded-surface-core";
 import { StatusBadge } from "../../ui/StatusBadge";
 import { ChatBlockers } from "./ChatBlockers";
-import { ChatCapabilitySuggestionLine } from "./ChatCapabilitySuggestionLine";
-import { ChatCodeModeRequestCard } from "./ChatCodeModeRequestCard";
-import { ChatBrowserErrandCards } from "./ChatBrowserErrandCard";
+import { DeferredChatCapabilitySuggestionLine } from "./DeferredChatCapabilitySuggestionLine";
+import { DeferredCodeModeRequestCard, DeferredBrowserErrandCards, DeferredChatLeaf } from "./DeferredChatLeaves";
 import { ChatClampedUserMessage } from "./ChatClampedUserMessage";
-import { ChatContinueAction } from "./ChatContinueAction";
 import { ChatRunCard } from "./ChatRunCard";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
-import { ChatNoticeText } from "./ChatNoticeText";
+import { ChatTranscriptNotices } from "./ChatTranscriptNotices";
 import { ChatTurnDetails } from "./ChatTurnDetails";
-import { ChatTurnFailureCard } from "./ChatTurnFailureCard";
-import { ChatTurnThinking } from "./ChatTurnThinking";
-import { TurnReceipt } from "./ChatTurnReceipt";
 import { turnReadsDraft, type TurnActions } from "./use-turn-actions";
 
 const ChatChangePlanCard = lazy(async () => ({
   default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard,
 }));
+const ChatContinueAction = lazy(async () => ({ default: (await import("./ChatContinueAction")).ChatContinueAction }));
+const ChatTurnFailureCard = lazy(async () => ({ default: (await import("./ChatTurnFailureCard")).ChatTurnFailureCard }));
+const ChatTurnThinking = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).ChatTurnThinking }));
+const TurnReceipt = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).TurnReceipt }));
 
 const WorkflowSkillCaptureControl = lazy(() =>
   import("../../../features/native-routes/library/WorkflowSkillCaptureControl").then((module) => ({
@@ -185,11 +179,25 @@ export const Turn = memo(function Turn({
               <StatusBadge status={presentChatTurnStatus(turn.trace.status)} />
             ) : null}
           </div>
-          <ChatTurnThinking
-            thinking={turn.thinking}
-            live={streaming || !isChatTurnTerminalStatus(turn.trace.status)}
-            answerStarted={Boolean(assistantText)}
-          />
+          {turn.thinking?.trim() ? (
+            <DeferredChatLeaf
+              label="Thought process"
+              identity={turn.turnId}
+              fallback={
+                <p role="status" className="mb-2 text-xs text-fg-muted">
+                  {!assistantText && (streaming || !isChatTurnTerminalStatus(turn.trace.status))
+                    ? "Thinking…"
+                    : "Loading thought process…"}
+                </p>
+              }
+            >
+              <ChatTurnThinking
+                thinking={turn.thinking}
+                live={streaming || !isChatTurnTerminalStatus(turn.trace.status)}
+                answerStarted={Boolean(assistantText)}
+              />
+            </DeferredChatLeaf>
+          ) : null}
           {assistantText ? (
             <AssistantMessageRenderer
               role="assistant"
@@ -206,32 +214,53 @@ export const Turn = memo(function Turn({
             </p>
           ) : null}
           {/* Continue sends a message, which a channel conversation would deliver or post to the channel. */}
-          {continueActions && stopped && assistantText && !streaming && resendable ? (
-            <ChatContinueAction turn={turn} isLatest={isLatest} actions={continueActions} />
+          {continueActions && isLatest && stopped && assistantText && !streaming && resendable ? (
+            <DeferredChatLeaf
+              label="Continue"
+              identity={turn.turnId}
+              fallback={<p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading continuation controls…</p>}
+            >
+              <ChatContinueAction turn={turn} isLatest={isLatest} actions={continueActions} />
+            </DeferredChatLeaf>
           ) : null}
-          {turn.assistantMessage && !streaming ? <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} /> : null}
+          {turn.assistantMessage && !streaming ? (
+            <DeferredChatLeaf
+              label="Message details"
+              identity={turn.turnId}
+              fallback={<p className="mt-2 text-xs text-fg-muted">{presentChatTurnStatus(turn.trace.status).label}</p>}
+            >
+              <TurnReceipt turn={turn} onInspectTurn={onInspectTurn} />
+            </DeferredChatLeaf>
+          ) : null}
         </div>
       ) : !failed && !partial ? (
         <p className="text-xs text-fg-muted">{presentChatTurnStatus(turn.trace.status).label}</p>
       ) : null}
       {failed || partial ? (
-        <ChatTurnFailureCard
-          failed={failed}
-          answered={Boolean(assistantText)}
-          failureClass={turn.trace.failure?.failureClass}
-          hint={recoveryHint(turn, resendable)}
-          onNewConversation={actions.historicalReadOnly ? undefined : onNewConversation}
-        />
+        <DeferredChatLeaf
+          label="Response recovery"
+          identity={turn.turnId}
+          fallback={<p aria-busy="true" className="text-sm text-fg-muted">Loading response recovery…</p>}
+        >
+          <ChatTurnFailureCard
+            failed={failed}
+            answered={Boolean(assistantText)}
+            failureClass={turn.trace.failure?.failureClass}
+            hint={recoveryHint(turn, resendable)}
+            onNewConversation={actions.historicalReadOnly ? undefined : onNewConversation}
+          />
+        </DeferredChatLeaf>
       ) : null}
       {/* Its own row, not inside the reply: the request waits for the operator before any reply text exists. */}
-      <ChatCodeModeRequestCard
+      <DeferredCodeModeRequestCard
         turn={turn}
         workspaceId={actions.workspaceId}
         onRefreshThread={actions.onRefreshThread}
       />
-      <ChatBrowserErrandCards toolRuns={turn.toolRuns} />
+      <DeferredBrowserErrandCards toolRuns={turn.toolRuns} />
       {actions.onCapabilitySuggestionAction && actions.onDismissCapabilitySuggestion ? (
-        <ChatCapabilitySuggestionLine
+        <DeferredChatCapabilitySuggestionLine
+          turnId={turn.turnId}
           suggestions={capabilitySuggestions}
           onAction={actions.onCapabilitySuggestionAction}
           onDismiss={actions.onDismissCapabilitySuggestion}
@@ -262,7 +291,7 @@ export const Turn = memo(function Turn({
       !streaming &&
       actions.selectedSessionId &&
       turnReadsDraft(turn) ? (
-        <Suspense fallback={<p role="status">Loading skill capture…</p>}>
+        <Suspense fallback={<p aria-busy="true">Loading skill capture…</p>}>
           <WorkflowSkillCaptureControl
             turn={turn}
             sessionId={actions.selectedSessionId}
@@ -330,15 +359,6 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
   const hasRenderedPreviewTurn = context.renderedTurns
     ? renderedTurns.some((turn) => turn.turnId === pendingTurnId)
     : hasPreviewTurn;
-  const importantNotices =
-    props.notices?.filter((notice) => notice.tone === "warning" || notice.tone === "critical") ?? [];
-  const routineNotices =
-    props.notices?.filter((notice) => notice.tone !== "warning" && notice.tone !== "critical") ?? [];
-  // Notices remain owned by the conversation controller; only routine history folds away.
-  const latestRoutine = routineNotices.reduce<(typeof routineNotices)[number] | undefined>(
-    (latest, notice) => (!latest || notice.timestamp > latest.timestamp ? notice : latest),
-    undefined,
-  );
   return (
     <>
       <div className="mx-auto max-w-3xl px-3 pb-3 sm:px-6">
@@ -376,47 +396,11 @@ export function ChatTranscriptFooter({ context }: { context?: TranscriptFooterCo
               : undefined
           }
         />
-        {importantNotices.map((notice) => {
-          // Critical differs from a warning by its label and icon, not only by colour.
-          const critical = notice.tone === "critical";
-          const Icon = critical ? OctagonAlert : TriangleAlert;
-          return (
-            <div
-              role="note"
-              key={notice.id}
-              className={`flex gap-2 rounded-md border p-2 text-sm text-fg-secondary ${critical ? "border-status-failed" : "border-status-waiting"}`}
-              aria-label={critical ? "Critical conversation notice" : "Conversation warning"}
-            >
-              <Icon
-                aria-hidden="true"
-                className={`mt-0.5 size-4 shrink-0 ${critical ? "text-status-failed" : "text-status-waiting"}`}
-              />
-              <div className="min-w-0">
-                <strong className="font-medium text-fg">{critical ? "Critical: " : "Warning: "}</strong>
-                <ChatNoticeText content={notice.content} />
-                <ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${notice.id}`} notice={notice} />
-              </div>
-            </div>
-          );
-        })}
-        {latestRoutine ? (
-          <div
-            role="note"
-            className="rounded-md border border-line-subtle bg-raised p-2 text-sm text-fg-secondary"
-            aria-label="Latest conversation update"
-          >
-            <ChatNoticeText content={latestRoutine.content} />
-            <ChatNoticeTechnicalDetails key={`${props.selectedSessionId}:${latestRoutine.id}`} notice={latestRoutine} />
-          </div>
-        ) : null}
-        <ChatThreadNotices
-          notices={routineNotices.filter((notice) => notice !== latestRoutine)}
-          scopeKey={props.selectedSessionId}
-        />
+        <ChatTranscriptNotices notices={props.notices} selectedSessionId={props.selectedSessionId} />
         {receipt && !receipt.dismissed ? (
           <Suspense
             fallback={
-              <p role="status" className="min-h-24">
+              <p aria-busy="true" className="min-h-24">
                 Loading change-plan receipt…
               </p>
             }

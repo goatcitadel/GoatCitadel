@@ -1,5 +1,9 @@
 import type { ChatCompletionReasoningEffort } from "@goatcitadel/contracts";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
+import {
+  createDeferredDialogRuntime,
+  useDeferredDialogRuntime,
+} from "@goatcitadel/mission-control-shared/components/ui/deferred-dialog";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useDeferredOverlay } from "../../ui/deferred-overlay-owner";
@@ -9,28 +13,18 @@ import { Dialog } from "../../ui/Dialog";
 import { IconButton } from "../../ui/IconButton";
 import { Sheet } from "../../ui/Sheet";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
-import { ChatComposerControls, ChatComposerNotices } from "./ChatComposerControls";
-import { ChatMediaControls } from "./ChatMediaControls";
-import { ChatSourcesChip } from "./ChatSourcesChip";
+import { ChatComposerNotices } from "./ChatComposerControls";
+import { loadChatComposerSources } from "./load-chat-composer-sources";
 import type { ComposerProps } from "./ChatTextComposer.types";
 
-type SourcesCode = typeof import("../../../features/threaded-surface/ThreadedExternalSourceStrip");
-let pendingSourcesCode: Promise<SourcesCode> | undefined;
-function loadSourcesCode() {
-  return (pendingSourcesCode ??= import("../../../features/threaded-surface/ThreadedExternalSourceStrip").catch(
-    (cause) => {
-      pendingSourcesCode = undefined;
-      throw cause;
-    },
-  ));
-}
+const phoneOptionsRuntime = createDeferredDialogRuntime(() => import("./ChatComposerPhoneOptions"));
 
 export function useComposerSources(scopeKey: string, panelId: string, attachmentCount: number | undefined) {
   const [attachIntent, setAttachIntent] = useState<{ owner: object; token: number }>();
   const onOpenChange = useCallback((open: boolean) => {
     if (!open) setAttachIntent(undefined);
   }, []);
-  const view = useDeferredOverlay({ scopeKey, load: loadSourcesCode, onOpenChange });
+  const view = useDeferredOverlay({ scopeKey, load: loadChatComposerSources, onOpenChange });
   const [warmOwner, setWarmOwner] = useState<typeof view.owner>();
   const nextToken = useRef(0);
   useEffect(() => {
@@ -98,6 +92,12 @@ export function ChatComposerTools({
   onChooseModel?: () => void;
 }) {
   const controlsProps = composerControlsProps(props);
+  // A channel conversation sends through its own route and never offers model, media, or source controls here.
+  const channelConversation = Boolean(props.channelReply || props.channelCheck);
+  const { runtime: phoneOptions, failed: phoneOptionsFailed } = useDeferredDialogRuntime(
+    phone && optionsOpen && !channelConversation,
+    phoneOptionsRuntime,
+  );
   const { Strip, view } = sources;
   const reloadCancel = useRef<HTMLButtonElement>(null);
   const sourcesPanel = props.externalSourceControls ? (
@@ -179,28 +179,6 @@ export function ChatComposerTools({
       onRemove={props.onRemoveQueuedItem}
     />
   );
-  const controls = (
-    <ChatComposerControls
-      props={controlsProps}
-      reasoningEfforts={reasoningEfforts}
-      scopeKey={props.selectedSessionId ?? ""}
-      notices={!phone}
-      sourcesChip={
-        props.externalSourceControls ? (
-          <ChatSourcesChip
-            controls={props.externalSourceControls}
-            open={sources.open}
-            panelId={sources.panelId}
-            onToggle={sources.onToggle}
-          />
-        ) : null
-      }
-    />
-  );
-  // A channel conversation answers on its own route and takes no sources or files from here, so the model, mode,
-  // sources and attachment tools stay out of it, also while its channel is still being resolved. Queued messages,
-  // route notices and commands remain.
-  const channelConversation = Boolean(props.channelReply || props.channelCheck);
   if (!phone)
     return (
       <>
@@ -222,9 +200,23 @@ export function ChatComposerTools({
         <div className="space-y-3">
           {channelConversation ? null : (
             <>
-              {controls}
+              {phoneOptions ? (
+                <phoneOptions.ChatComposerPhoneOptions
+                  props={controlsProps}
+                  reasoningEfforts={reasoningEfforts}
+                  sources={sources}
+                />
+              ) : phoneOptionsFailed ? (
+                <p role="alert" className="text-sm text-status-failed">
+                  Message options could not load. Close the sheet and try again, or reload the app.
+                </p>
+              ) : (
+                <p aria-busy="true" className="text-sm text-fg-muted">
+                  Loading message options…
+                </p>
+              )}
               {sourcesPanel}
-              <ChatMediaControls props={props} />
+              {phoneOptions ? <phoneOptions.ChatMediaControls props={props} /> : null}
             </>
           )}
           <Button

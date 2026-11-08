@@ -54,3 +54,58 @@ test("fresh browser fixtures exclude operator config, private workspaces and sch
     await fs.rm(parent, { recursive: true, force: true });
   }
 });
+
+
+async function withBoundedRuntimeFixture(run) {
+  const parent = await fs.mkdtemp(path.join(os.tmpdir(), "goat-ux-path-test-"));
+  const canonicalParent = await fs.realpath(parent);
+  const canonicalTemp = await fs.realpath(os.tmpdir());
+  assert.equal(path.dirname(canonicalParent).toLowerCase(), canonicalTemp.toLowerCase());
+  assert.ok(path.basename(canonicalParent).startsWith("goat-ux-path-test-"));
+  try {
+    const sourceRoot = path.join(canonicalParent, "source");
+    await fs.mkdir(path.join(sourceRoot, "config"), { recursive: true });
+    await fs.copyFile(path.join(repoRoot, "config", "goatcitadel.example.json"),
+      path.join(sourceRoot, "config", "goatcitadel.example.json"));
+    await run({ parent: canonicalParent, sourceRoot });
+  } finally {
+    // Revalidate this exact exclusively created parent before recursive disposal.
+    assert.equal(await fs.realpath(canonicalParent), canonicalParent);
+    assert.equal(path.dirname(canonicalParent).toLowerCase(), canonicalTemp.toLowerCase());
+    assert.ok(path.basename(canonicalParent).startsWith("goat-ux-path-test-"));
+    await fs.rm(canonicalParent, { recursive: true, force: true });
+  }
+}
+
+test("short UX runtime names retain full correlation without expanding owned Git paths", async () => {
+  await withBoundedRuntimeFixture(async ({ parent, sourceRoot }) => {
+    const runId = "cockpit-ux-budgets-" + "correlation-".repeat(24);
+    const options = { sourceRoot, tempParent: parent, copySkills: false, runtimeBasename: "ux" };
+    const first = await prepareUsabilityRuntime(runId, "http://127.0.0.1:12345/v1", options);
+    const second = await prepareUsabilityRuntime(runId, "http://127.0.0.1:12345/v1", options);
+    assert.notEqual(first, second, "each runtime remains a fresh exclusive directory");
+    for (const root of [first, second]) {
+      assert.equal(path.dirname(root), parent);
+      assert.match(path.basename(root), /^goatcitadel-usability-ux-[A-Za-z0-9]{6}$/u);
+      assert.equal(path.basename(root).length, 31);
+      assert.deepEqual(JSON.parse(await fs.readFile(path.join(root, "verification-runtime.json"), "utf8")), {
+        schemaVersion: 1, runId,
+      });
+      const config = JSON.parse(await fs.readFile(path.join(root, "config", "goatcitadel.json"), "utf8"));
+      assert.deepEqual(config.cronJobs, { jobs: [] });
+      assert.equal(config.llm.providers[0].baseUrl, "http://127.0.0.1:12345/v1");
+    }
+  });
+});
+
+test("unsupported UX runtime basenames reject before any source read or path creation", async () => {
+  await withBoundedRuntimeFixture(async ({ parent }) => {
+    const before = await fs.readdir(parent);
+    for (const runtimeBasename of ["../escape", "nested/name", "other", "", true]) {
+      await assert.rejects(prepareUsabilityRuntime("fixture", "http://127.0.0.1:12345/v1", {
+        sourceRoot: path.join(parent, "missing-source"), tempParent: parent, runtimeBasename,
+      }), error => error instanceof TypeError && error.message === "Unsupported verification runtime basename.");
+    }
+    assert.deepEqual(await fs.readdir(parent), before);
+  });
+});

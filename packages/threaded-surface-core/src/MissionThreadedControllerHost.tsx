@@ -1,4 +1,4 @@
-import { WorkspaceChannelPlanReview } from "./chat/WorkspaceChannelPlanReview";
+import { DeferredWorkspaceChannelPlanReview } from "./chat/DeferredWorkspaceChannelPlanReview";
 import { detectComposerPaletteTrigger } from "./chat/composer-palette";
 import { createChatActiveSessionPresentation } from "./chat/controller/createChatActiveSessionPresentation";
 import { createChatChangePlanReceipt } from "./chat/controller/createChatChangePlanReceipt";
@@ -424,7 +424,6 @@ export function MissionThreadedControllerHost({
     setDraft,
     setForkConfirm,
     submission,
-    onOpenApprovals,
     pendingAttachments,
     pendingAttachmentModes,
     setPendingAttachmentModes,
@@ -699,19 +698,27 @@ export function MissionThreadedControllerHost({
     contextActions: execution.contextActions,
     composerInteractions: composer.composerInteractions,
     changePlanState,
-    planConfirmations: actions.planConfirmations,
-    planActions: actions.planActions,
-    planOAuth: actions.planOAuth,
+    planContext: {
+      workspaceId,
+      prefsRef: execution.outbound.prefsRef,
+      setPrefs: session.sessionData.setPrefs,
+      setUiError,
+      pushLocalNotice,
+      recordChangePlanResult,
+      onOpenApprovals,
+    },
     sessionControls: session.sessionControls,
   });
   return (
     <>
-      <WorkspaceChannelPlanReview
+      <DeferredWorkspaceChannelPlanReview
+        key={workspaceId}
         workspaceId={workspaceId}
         routeSearch={routeSearch}
         onReturnToChannels={onReturnToChannels}
         onOpenApprovals={onOpenApprovals}
       />
+      {surfaceRuntime.workbenchController.workbenchRuntime}
       {frame}
     </>
   );

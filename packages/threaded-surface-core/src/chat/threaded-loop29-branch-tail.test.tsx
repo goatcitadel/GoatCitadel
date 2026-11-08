@@ -27,7 +27,7 @@ const hookMocks = vi.hoisted(() => ({
   useRefreshSubscription: vi.fn(),
 }));
 
-vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
+vi.mock("@goatcitadel/mission-control-shared/api/chat-workbench-operations", () => ({
   applyChatSessionWorkbenchPatch: apiMocks.applyChatSessionWorkbenchPatch,
   createChatSessionWorkbenchWorktree: apiMocks.createChatSessionWorkbenchWorktree,
   exportChatSessionWorkbenchPatch: apiMocks.exportChatSessionWorkbenchPatch,
@@ -117,6 +117,11 @@ describe("threaded workbench loop 29 branch tails", () => {
     await act(async () => {
       create(<Harness />);
       await flushAsyncEffects();
+    });
+
+    // Mount effects start the optional read import after the initial act callback.
+    await act(async () => {
+      await vi.dynamicImportSettled();
     });
 
     expect(latest?.workbenchExpandedPaths).toEqual(["src", "src/nested"]);

@@ -1,4 +1,4 @@
-import { dispatchArtifactSubmission, isArtifactSubmission, type ArtifactSubmission, type ArtifactSubmissionDependencies } from "./remote-worker-artifact-submissions.js";
+import { artifactCommitPublicationBinding, dispatchArtifactSubmission, isArtifactSubmission, type ArtifactSubmission, type ArtifactSubmissionDependencies } from "./remote-worker-artifact-submissions.js";
 import {
   inferenceRequestProjection,
   inferenceFrameProjection,
@@ -19,6 +19,7 @@ import {
   REMOTE_WORKER_SETTLEMENT_BOUNDS,
   authorizeRemoteWorkerInferenceRequestSubmission,
   canonicalJsonString,
+  remoteWorkerAssignmentCanonicalSha256,
   evaluateRemoteWorkerRuntimeCredentialRoutePolicy,
   normalizeRemoteWorkerArtifactManifest,
   normalizeRemoteWorkerArtifactPart,
@@ -42,9 +43,9 @@ import {
   type RemoteWorkerPopV2RouteBinding,
   type ResolvedRemoteWorkerAssignmentAuthority,
 } from "@goatcitadel/contracts";
-import type {
-  RemoteWorkerArtifactUploadRecord,
-  RemoteWorkerAssignmentProtectedCommitFence,
+import { snapshotRemoteWorkerChatArtifactAdmissionResult, type AdmitRemoteWorkerChatArtifactInput, type RemoteWorkerChatArtifactAdmission,
+  type RemoteWorkerArtifactUploadRecord,
+  type RemoteWorkerAssignmentProtectedCommitFence,
 } from "@goatcitadel/storage";
 import { snapshotRemoteWorkerAssignmentDispatchAuthority } from "./remote-worker-assignment-dispatch-service.js";
 import type { RemoteWorkerAssignmentMeshAuthorityPort } from "./remote-worker-assignment-protocol-service.js";
@@ -68,6 +69,7 @@ import { normalizeRemoteWorkerCellObjectInventoryPageSubmission, type RemoteWork
   type RemoteWorkerCellObjectInventoryPageExchange } from "@goatcitadel/contracts";
 import {
   RemoteWorkerAssignmentExecutionProtocolError,
+  classifyArtifactAdmissionRejection,
   assertPlainRecord,
   base64Bytes,
   canonical32ByteSecret,
@@ -168,6 +170,10 @@ export interface RemoteWorkerSettlementSubmissionOwnerPort extends NativeSubmiss
 }
 
 export interface RemoteWorkerAssignmentExecutionStorePort {
+  admitChatArtifactPublication(input: AdmitRemoteWorkerChatArtifactInput,
+    protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence): Awaitable<{
+      records: ResolvedRemoteWorkerAssignmentAuthority; admission: RemoteWorkerChatArtifactAdmission;
+    }>;
   findAssignmentAggregate(
     registryWorkspaceId: string,
     assignmentId: string,
@@ -360,7 +366,7 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
         throw rejected("Remote worker execution replay protection is unavailable.");
       }
       if (!consumed) throw rejected("Remote worker execution request nonce was already consumed.");
-      const fencedRecords = await this.recheckProtectedFenceInTransaction(request.payload, authority.current);
+      const fencedRecords = await this.recheckProtectedFenceInTransaction(request.payload, authority.current, request.body.idempotencyKey);
       return await this.executeAuthorized(request.route, request.body.idempotencyKey, request.payload, {
         authority: authority.current,
         ...fencedRecords,
@@ -383,11 +389,14 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
   private async recheckProtectedFenceInTransaction(
     payload: NormalizedPayload,
     credential: CurrentRemoteWorkerRuntimeCredentialAuthority,
+    idempotencyKey: string,
   ): Promise<{
     records: ResolvedRemoteWorkerAssignmentAuthority;
     protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence;
+    artifactAdmission?: RemoteWorkerChatArtifactAdmission;
   }> {
-    const aggregate = await this.dependencies.assignments.findAssignmentAggregate(
+    const assignments = this.dependencies.assignments;
+    const aggregate = await assignments.findAssignmentAggregate(
       payload.registryWorkspaceId,
       payload.assignmentId,
     );
@@ -396,13 +405,27 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
     }
     const fence = await this.resolveProtectedCommitFence(credential, aggregate.assignment, aggregate.generation);
     let resolved: ResolvedRemoteWorkerAssignmentAuthority | undefined;
+    let artifactAdmission: RemoteWorkerChatArtifactAdmission | undefined;
+    let publicationSha256: string | undefined;
     try {
-      resolved = await this.dependencies.assignments.resolveActiveAuthorityByLeaseTokenHash(
-        payload.leaseTokenSha256,
-        fence,
-      );
-    } catch {
-      throw rejected("Remote worker execution protected fence was rejected in the storage transaction.");
+      if (payload.kind === "settlement" && payload.submission.kind === "artifact.commit") {
+        const publication = artifactCommitPublicationBinding(payload.submission, idempotencyKey);
+        publicationSha256 = remoteWorkerAssignmentCanonicalSha256(publication);
+        const admitted = snapshotRemoteWorkerChatArtifactAdmissionResult(await assignments.admitChatArtifactPublication({
+          registryWorkspaceId: payload.registryWorkspaceId, assignmentId: payload.assignmentId,
+          assignmentGeneration: payload.assignmentGeneration, leaseTokenSha256: payload.leaseTokenSha256,
+          expectedLeaseRevision: payload.leaseRevision, uploadId: payload.submission.uploadId,
+          publication,
+        }, fence));
+        resolved = admitted.records;
+        artifactAdmission = admitted.admission;
+      } else {
+        resolved = await assignments.resolveActiveAuthorityByLeaseTokenHash(payload.leaseTokenSha256, fence);
+      }
+    } catch (error) {
+      throw rejected("Remote worker execution protected fence was rejected in the storage transaction.",
+        payload.kind === "settlement" && payload.submission.kind === "artifact.commit"
+          ? classifyArtifactAdmissionRejection(error) : undefined);
     }
     if (
       resolved === undefined ||
@@ -415,7 +438,15 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
     ) {
       throw rejected("Remote worker execution lease authority is unavailable.");
     }
-    return { records: resolved, protectedAuthority: fence };
+    if (payload.kind === "settlement" && payload.submission.kind === "artifact.commit" &&
+      (!artifactAdmission || artifactAdmission.registryWorkspaceId !== payload.registryWorkspaceId ||
+        artifactAdmission.assignmentId !== payload.assignmentId || artifactAdmission.assignmentGeneration !== payload.assignmentGeneration ||
+        artifactAdmission.uploadId !== payload.submission.uploadId || artifactAdmission.continuingArtifact.uploadId !== payload.submission.uploadId ||
+        artifactAdmission.continuingArtifact.leaseRevision !== payload.leaseRevision ||
+        artifactAdmission.publicationSha256 !== publicationSha256 ||
+        canonicalJsonString(artifactAdmission.protectedAuthority) !== canonicalJsonString(fence)))
+      throw rejected("Remote worker artifact publication admission is inconsistent.");
+    return { records: resolved, protectedAuthority: fence, ...(artifactAdmission ? { artifactAdmission } : {}) };
   }
 
   private async resolveProtectedCommitFence(
@@ -512,6 +543,7 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
       readonly authority: CurrentRemoteWorkerRuntimeCredentialAuthority;
       readonly records: ResolvedRemoteWorkerAssignmentAuthority;
       readonly protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence;
+      readonly artifactAdmission?: RemoteWorkerChatArtifactAdmission;
       readonly signal?: AbortSignal;
     },
   ): Promise<RemoteWorkerAssignmentExecutionProtocolResponse> {
@@ -548,6 +580,7 @@ export class RemoteWorkerAssignmentExecutionProtocolService implements RemoteWor
       readonly authority: CurrentRemoteWorkerRuntimeCredentialAuthority;
       readonly records: ResolvedRemoteWorkerAssignmentAuthority;
       readonly protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence;
+      readonly artifactAdmission?: RemoteWorkerChatArtifactAdmission;
       readonly signal?: AbortSignal;
     },
   ): Promise<RemoteWorkerAssignmentExecutionProtocolResponse> {

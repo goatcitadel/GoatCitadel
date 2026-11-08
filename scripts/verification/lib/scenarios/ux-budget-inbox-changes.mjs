@@ -1,6 +1,7 @@
 import { CHAT_VIEWPORTS, measureLayout } from "./ux-budget-measurements.mjs";
 import { evaluateHorizontalOverflow } from "../ux-budgets.mjs";
 import { mkdir } from "node:fs/promises";
+import { captureAccessibilityEvidence } from "./ux-budget-accessibility-evidence.mjs";
 
 export async function runUxBudgetInboxChanges(environment) {
   const { context, browser, stack, fixture, deps } = environment;
@@ -15,6 +16,7 @@ export async function runUxBudgetInboxChanges(environment) {
     relativeToRun,
     requestJson,
     runScenario,
+    writeJson,
   } = deps;
   for (const { variant, viewport } of CHAT_VIEWPORTS) {
     await runScenario(
@@ -181,8 +183,7 @@ export async function runUxBudgetInboxChanges(environment) {
           const page = await browserContext.newPage();
           await page.goto(buildVerificationUiUrl(stack.uiUrl, "/inbox"), { waitUntil: "domcontentloaded" });
           await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
-          const row = page.locator("li[data-inbox-item]").filter({ hasText: item.title });
-          await row.getByRole("button", { name: "Details" }).click();
+          await openInboxDocumentProposalRow(page, item, fixture.workspaceId);
           const detail = page.getByRole("region", { name: "Current document proposal" });
           await detail.getByText(afterBody, { exact: false }).waitFor();
           await page.waitForFunction(() => {
@@ -197,14 +198,38 @@ export async function runUxBudgetInboxChanges(environment) {
           await page.screenshot({ path: reviewShot, fullPage: false });
           await page.addScriptTag({ path: axeSourcePath });
           const axe = await auditPageAccessibility(page);
+          const overflow = evaluateHorizontalOverflow(await page.evaluate(measureLayout));
+          // Capture THIS result before deciding the unchanged blocking rules; do not rerun axe for diagnostics.
+          const evidence = await captureAccessibilityEvidence({ artifactRoot: context.artifactRoot,
+            scenarioId: `ux-budgets.cockpit-inbox-document-proposal.${variant}`, variant, phase: "document-review",
+            workspaceId: fixture.workspaceId, proposalId: proposal.proposalId, viewport, overflow, audit: axe,
+            sensitiveValues: fixture.sensitiveValues ?? [],
+          }, { writeJson });
           const blockingAxe = axe.violations.filter(
             (violation) => violation.impact === "serious" || violation.impact === "critical",
           );
-          const overflow = evaluateHorizontalOverflow(await page.evaluate(measureLayout));
-          if (blockingAxe.length || !overflow.pass) {
-            throw new Error(
-              `Inbox document ${variant}: accessibility ${blockingAxe.map((violation) => violation.id).join(", ") || "clear"}; overflow ${overflow.overflow}px`,
-            );
+          if (blockingAxe.length || !overflow.pass || !evidence.complete) {
+            const originalFailure = `Inbox document ${variant}: accessibility ${blockingAxe.map((violation) => violation.id).join(", ") || "clear"}; overflow ${overflow.overflow}px`;
+            return { status: "failed",
+              error: blockingAxe.length || !overflow.pass ? originalFailure : `Inbox document ${variant}: accessibility evidence incomplete.`,
+              notes: evidence.complete ? [] : [`Accessibility evidence gap: ${evidence.gapReason}; no document decision attempted.`],
+              metrics: { blockingAxe: blockingAxe.length, overflow: overflow.overflow, evidenceComplete: evidence.complete },
+              artifacts: emptyArtifacts({ diagnostics: evidence.relativePath ? [evidence.relativePath] : [],
+                screenshots: [relativeToRun(context, reviewShot)] }),
+            };
+          }
+          // Existing axe/overflow failures take precedence. Their same-audit evidence is already saved.
+          let linkInteraction;
+          try {
+            linkInteraction = await inspectDocumentLibraryLink(detail);
+          } catch {
+            linkInteraction = { pass: false, error: "Document Library link interaction could not be measured." };
+          }
+          if (!linkInteraction.pass) {
+            return { status: "failed", error: `Inbox document ${variant}: Library link target or keyboard focus failed.`,
+              metrics: { blockingAxe: 0, overflow: overflow.overflow, evidenceComplete: true, libraryLink: linkInteraction },
+              artifacts: emptyArtifacts({ diagnostics: [evidence.relativePath], screenshots: [relativeToRun(context, reviewShot)] }),
+            };
           }
           const decisionButton = detail.getByRole("button", {
             name: decision === "apply" ? "Apply change" : "Reject change",
@@ -213,7 +238,11 @@ export async function runUxBudgetInboxChanges(environment) {
           await page.screenshot({ path: confirmShot, fullPage: false });
           const before = await requestJson(stack.gatewayUrl, proposalUrl);
           assertOk(before, `read ${variant} unmodified document proposal`);
-          if (before.body?.items?.find((entry) => entry.proposalId === proposal.proposalId)?.state !== "pending") {
+          await assertSelectedDocumentProposalRow(page, item.id);
+          const currentProposal = before.body?.items?.find((entry) => entry.proposalId === proposal.proposalId);
+          if (currentProposal?.state !== "pending" || currentProposal.workspaceId !== fixture.workspaceId ||
+            currentProposal.targetKind !== "personal_note" || currentProposal.targetId !== note.body.noteId ||
+            currentProposal.proposedContent !== afterBody) {
             throw new Error("Opening the Inbox document decision changed its canonical owner state.");
           }
           await decisionButton.click();
@@ -252,8 +281,11 @@ export async function runUxBudgetInboxChanges(environment) {
               blockingAxe: 0,
               overflow: overflow.overflow,
               canonicalState: decision === "apply" ? "applied" : "rejected",
+              evidenceComplete: true,
+              libraryLink: linkInteraction,
             },
             artifacts: emptyArtifacts({
+              diagnostics: [evidence.relativePath],
               screenshots: [reviewShot, confirmShot].map((shot) => relativeToRun(context, shot)),
             }),
           };
@@ -263,4 +295,62 @@ export async function runUxBudgetInboxChanges(environment) {
       },
     );
   }
+}
+
+/** Real layout and native keyboard checks; no navigation or decision is activated. */
+async function inspectDocumentLibraryLink(detail) {
+  const link = detail.getByRole("link", { name: "Open notes", exact: true });
+  if (await link.count() !== 1) return { pass: false, error: "Expected one note Library link." };
+  const apply = detail.getByRole("button", { name: "Apply change", exact: true });
+  const reject = detail.getByRole("button", { name: "Reject change", exact: true });
+  const refresh = detail.getByRole("button", { name: "Refresh", exact: true });
+  const focused = (element) => element === document.activeElement;
+  await refresh.focus();
+  const refreshFocusable = await refresh.evaluate(focused);
+  await apply.focus();
+  await apply.press("Shift+Tab");
+  const geometry = await link.evaluate((element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    const center = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    return { width: rect.width, height: rect.height,
+      inViewport: rect.left >= 0 && rect.top >= 0 && rect.right <= window.innerWidth && rect.bottom <= window.innerHeight,
+      unobscured: Boolean(center && element.contains(center)),
+      visible: style.visibility === "visible" && style.display !== "none",
+      keyboardFocused: element === document.activeElement && element.matches(":focus-visible"),
+      href: element.getAttribute("href"),
+    };
+  });
+  await link.press("Tab");
+  const applyReachable = await apply.evaluate(focused);
+  await apply.press("Tab");
+  const rejectReachable = await reject.evaluate(focused);
+  return { ...geometry, refreshFocusable, applyReachable, rejectReachable,
+    pass: geometry.width >= 24 && geometry.height >= 24 && geometry.inViewport && geometry.unobscured &&
+      geometry.visible && geometry.keyboardFocused && geometry.href === "/library/notes?shell=cockpit" &&
+      refreshFocusable && applyReachable && rejectReachable,
+  };
+}
+
+/** The projection identity, not a repeated review title, selects the semantic Inbox row. */
+export async function openInboxDocumentProposalRow(page, item, workspaceId) {
+  if (!item?.source?.proposalId || item.id !== "document_proposal:" + item.source.proposalId || item.source.workspaceId !== workspaceId) {
+    throw new Error("Inbox document row lacks its canonical owner and workspace.");
+  }
+  const escapedId = await page.evaluate((id) => window.CSS.escape(id), item.id);
+  const row = page.locator(`[data-inbox-row="${escapedId}"][data-inbox-item]`);
+  await row.waitFor({ state: "visible", timeout: 30_000 });
+  if (await row.count() !== 1 || await row.getAttribute("data-inbox-row") !== item.id) throw new Error("Inbox document row identity is missing or duplicated.");
+  const details = row.getByRole("button", { name: "Details", exact: true });
+  await details.waitFor({ state: "visible", timeout: 30_000 });
+  if (await details.count() !== 1) throw new Error("Inbox document row has ambiguous Details controls.");
+  await details.click();
+  await assertSelectedDocumentProposalRow(page, item.id);
+}
+
+async function assertSelectedDocumentProposalRow(page, itemId) {
+  await page.waitForFunction((id) => {
+    const rows = [...document.querySelectorAll("[data-inbox-row]")].filter((row) => row.getAttribute("data-inbox-row") === id);
+    return rows.length === 1 && rows[0].getAttribute("data-selected") === "true";
+  }, itemId, { timeout: 30_000 });
 }

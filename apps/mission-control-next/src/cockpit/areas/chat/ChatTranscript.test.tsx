@@ -488,7 +488,11 @@ describe("ChatTranscript", () => {
       clientHeight: { configurable: true, value: 200 },
       scrollTop: { configurable: true, writable: true, value: 350 },
     });
-    const input = container.querySelector<HTMLInputElement>('form[aria-label="Pending question"] input[type="text"]')!;
+    const input = await vi.waitFor(() => {
+      const field = container.querySelector<HTMLInputElement>('form[aria-label="Pending question"] input[type="text"]');
+      expect(field).not.toBeNull();
+      return field!;
+    });
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "Retain this answer");
       input.dispatchEvent(new Event("input", { bubbles: true }));
@@ -570,6 +574,11 @@ describe("ChatTranscript", () => {
       'details[aria-label="Tool activity for this turn"]',
     )!;
     const summary = disclosure.querySelector("summary")!;
+    expect(disclosure.open).toBe(true);
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await vi.waitFor(() =>
+      expect(disclosure.querySelector('[data-tool-run-id="first"]')).not.toBeNull(),
+    );
     const row = disclosure.querySelector('[data-tool-run-id="first"]');
     disclosure.open = true;
     summary.focus();
@@ -608,6 +617,14 @@ describe("ChatTranscript", () => {
     const activity = container.querySelector('details[aria-label="Tool activity for this turn"]')!;
     expect(activity.textContent).toContain("1 failed");
     expect(activity.textContent).toContain("1 approval needed");
+    expect((activity as HTMLDetailsElement).open).toBe(true);
+    await act(async () => { await vi.dynamicImportSettled(); });
+    await vi.waitFor(() => {
+      for (const id of ["failed", "approval", "uncertain"]) {
+        expect(activity.querySelector(`[data-tool-run-id="${id}"]`)).not.toBeNull();
+      }
+    });
+    expect(activity.querySelectorAll("li")).toHaveLength(3);
     expect(activity.textContent).toContain("1 needs review");
     expect(activity.textContent).toContain("Automatic replay is suppressed");
     expect(activity.textContent).toContain("Inspect before retrying");
@@ -760,6 +777,7 @@ describe("ChatTranscript", () => {
         ),
       );
     await render(props);
+    await vi.waitFor(() => expect(container.querySelector('input[value="option-a"]')).not.toBeNull());
     await act(async () => container.querySelector<HTMLInputElement>('input[value="option-a"]')!.click());
     expect(container.querySelector<HTMLInputElement>('input[value="option-a"]')!.checked).toBe(true);
     await render({
@@ -872,6 +890,7 @@ describe("ChatTranscript", () => {
     );
     expect(container.textContent).toContain("Assistant visible");
     expect(container.textContent).not.toContain("Assistant hidden");
+    await act(async () => vi.dynamicImportSettled());
     const receipt = [...container.querySelectorAll("button")].find((button) =>
       button.textContent?.endsWith(" · Open message details"),
     );
@@ -927,7 +946,7 @@ describe("ChatTranscript", () => {
     );
     expect(container.textContent).toContain("User failed");
     // The recovery sentence names only the controls that exist below the message (no Retry here).
-    expect(container.textContent).toContain("Use Run details under More, below this message.");
+    await vi.waitFor(() => expect(container.textContent).toContain("Use Run details under More, below this message."));
     expect(container.querySelectorAll('[role="alert"]')).toHaveLength(0);
   });
 
@@ -981,7 +1000,7 @@ describe("ChatTranscript", () => {
       ),
     );
     expect(container.textContent).toContain("Stopped — partial answer");
-    expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(true);
+    await vi.waitFor(() => expect([...container.querySelectorAll("button")].some((b) => b.textContent === "Continue")).toBe(true));
   });
 
   it("offers Continue only on the latest stopped turn and drafts the follow-up", async () => {
@@ -997,7 +1016,9 @@ describe("ChatTranscript", () => {
         </InspectorProvider>,
       ),
     );
-    const continues = [...container.querySelectorAll("button")].filter((b) => b.textContent === "Continue");
+    const continueButtons = () => [...container.querySelectorAll("button")].filter((b) => b.textContent === "Continue");
+    await vi.waitFor(() => expect(continueButtons()).toHaveLength(1));
+    const continues = continueButtons();
     expect(continues).toHaveLength(1);
     await act(async () => continues[0]?.click());
     expect(onDraftChange).toHaveBeenCalledWith("Continue from where you stopped.");
@@ -1252,6 +1273,7 @@ it.each(["Partial answer retained", ""])(
         </InspectorProvider>,
       ),
     );
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Response recovery"]')).not.toBeNull());
     const recovery = container.querySelectorAll('[aria-label="Response recovery"]');
     expect(recovery).toHaveLength(1);
     expect(recovery[0]?.textContent).toContain("Run the same turn again once.");
@@ -1528,6 +1550,7 @@ it("tells a failure from a warning and a critical notice from a warning without 
       </InspectorProvider>,
     ),
   );
+  await vi.waitFor(() => expect(container.querySelector('[aria-label="Response recovery"]')).not.toBeNull());
   const recovery = container.querySelector('[aria-label="Response recovery"]')!;
   expect(recovery.className).toContain("border-status-failed");
   expect(recovery.textContent).toContain("The model took too long to answer");

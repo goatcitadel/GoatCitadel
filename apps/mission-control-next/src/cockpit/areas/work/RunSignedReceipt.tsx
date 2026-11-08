@@ -2,12 +2,14 @@ import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useRef, useState } from "react";
 import {
   fetchEvidenceReceipt,
-  isApiRequestError,
   verifyEvidenceReceipt,
   type EvidenceReceipt,
   type EvidenceReceiptVerification,
 } from "@goatcitadel/mission-control-shared/api/client";
-import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
+import {
+  describeApiError,
+  describeEvidenceReceiptError,
+} from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { TimeText } from "../../ui/TimeText";
 import { RECEIPT_OUTCOMES } from "./work-vocabulary";
 import { Button } from "../../ui/Button";
@@ -40,17 +42,7 @@ export function RunSignedReceipt({ runId }: { runId: string }) {
       const verification = await verifyEvidenceReceipt(receipt);
       setInspection({ receipt, verification });
     } catch (cause) {
-      const responseError =
-        isApiRequestError(cause) && cause.status === 503 && cause.body && typeof cause.body === "object"
-          ? (cause.body as { error?: unknown }).error
-          : undefined;
-      setError(
-        typeof responseError === "string" &&
-          // copy-guard: not copy (matches the server error text; the operator reads the sentence below)
-          responseError.startsWith("OS keychain is unavailable, so the Evidence Receipt signing key")
-          ? "This host cannot build a signed receipt because its OS keychain is unavailable. Existing receipts can still be verified offline."
-          : describeApiError(cause).summary,
-      );
+      setError(describeEvidenceReceiptError(cause));
     } finally {
       loading.current = false;
       setBusy(false);

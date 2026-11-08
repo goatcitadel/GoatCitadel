@@ -393,6 +393,107 @@ function service(fixture: Fixture, includeEvidence = true): RemoteWorkerAdmissio
 }
 
 describe("RemoteWorkerAdmissionService", () => {
+  it("forwards the out-of-band native request signal to trust loading", async () => {
+    const fixture = createFixture();
+    const signal = new AbortController().signal;
+    const loadTrustMaterial = vi.fn((config: EnabledRemoteWorkerRuntimeConfig, now: Date) =>
+      fixture.loadTrustMaterial(config, now),
+    );
+    const admission = new RemoteWorkerAdmissionService({
+      admissionStore: fixture.store,
+      evidenceVerifier: fixture.evidenceVerifier,
+      readRuntimeConfig: fixture.readRuntimeConfig,
+      randomBytes: fixture.randomBytes,
+      now: () => NOW,
+      loadTrustMaterial,
+    });
+    await expect(admission.exchange(fixture.input, signal)).resolves.toMatchObject({ disposition: "admitted" });
+    expect(loadTrustMaterial).toHaveBeenCalledOnce();
+    expect(loadTrustMaterial).toHaveBeenCalledWith(expect.any(Object), NOW, signal);
+  });
+
+  it("clears owned credential bytes without serializing when generation cancels admission", async () => {
+    const fixture = createFixture();
+    const transport = new AbortController();
+    const generated = Buffer.alloc(32, 0x45);
+    const serialize = vi.spyOn(generated, "toString");
+    fixture.randomBytes.mockImplementationOnce(() => {
+      transport.abort();
+      return generated;
+    });
+    const outcome = await service(fixture)
+      .exchange(fixture.input, transport.signal)
+      .then(
+        (value) => ({ status: "fulfilled", value }),
+        (error: unknown) => ({ status: "rejected", error }),
+      );
+    expect(fixture.store.finalizeBootstrapAdmissionWithNonce).not.toHaveBeenCalled();
+    expect(serialize).not.toHaveBeenCalled();
+    expect(generated.equals(Buffer.alloc(32))).toBe(true);
+    expect(outcome).toMatchObject({ status: "rejected", error: { code: "REMOTE_WORKER_ADMISSION_REJECTED" } });
+  });
+
+  it.each(["trust", "evidence"] as const)(
+    "does not finalize when the native request is aborted during deferred %s",
+    async (stage) => {
+      const fixture = createFixture();
+      const transport = new AbortController();
+      let entered!: () => void;
+      let release!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const admission = new RemoteWorkerAdmissionService({
+        admissionStore: fixture.store,
+        readRuntimeConfig: fixture.readRuntimeConfig,
+        randomBytes: fixture.randomBytes,
+        now: () => NOW,
+        loadTrustMaterial: async (config, now) => {
+          if (stage === "trust") {
+            entered();
+            await gate;
+          }
+          // Deliberately complete even when cancelled, as a custom loader can.
+          return fixture.loadTrustMaterial(config, now);
+        },
+        evidenceVerifier: {
+          verify: async (input) => {
+            if (stage === "evidence") {
+              entered();
+              await gate;
+            }
+            return fixture.evidenceVerifier.verify(input);
+          },
+        },
+      });
+      const pending = admission.exchange(fixture.input, transport.signal);
+      try {
+        await Promise.race([
+          started,
+          pending.then(() => {
+            throw new Error("Admission completed before the fixture barrier.");
+          }),
+        ]);
+        transport.abort();
+        release();
+        const outcome = await pending.then(
+          (value) => ({ status: "fulfilled", value }),
+          (error: unknown) => ({ status: "rejected", error }),
+        );
+        expect(fixture.store.finalizeBootstrapAdmissionWithNonce).not.toHaveBeenCalled();
+        expect(fixture.randomBytes).not.toHaveBeenCalled();
+        expect(outcome).toMatchObject({ status: "rejected", error: { code: "REMOTE_WORKER_ADMISSION_REJECTED" } });
+        if (stage === "trust") expect(fixture.evidenceVerifier.verify).not.toHaveBeenCalled();
+      } finally {
+        release();
+        await pending.catch(() => undefined);
+      }
+    },
+  );
+
   it.each([true, false])(
     "binds bootstrap v2 proof to the stored worker generation (matching: %s)",
     async (matching) => {

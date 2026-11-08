@@ -8,7 +8,7 @@ afterEach(() => {
   if (root) act(() => root.unmount());
   container?.remove();
 });
-function mount(overrides = {}) {
+async function mount(overrides = {}) {
   container = document.createElement("div");
   document.body.append(container);
   const textarea = document.createElement("textarea");
@@ -18,12 +18,13 @@ function mount(overrides = {}) {
   container.append(host);
   root = createRoot(host);
   const props = { draft: "", historicalReadOnly: false, sending: false, onDraftChange: vi.fn(), ...overrides };
-  act(() => root.render(<ChatConversationStarters props={props} />));
+  await act(async () => root.render(<ChatConversationStarters props={props} />));
+  await act(async () => vi.dynamicImportSettled());
   return props;
 }
 describe("conversation starters", () => {
-  it("fills a draft and focuses its composer without sending", () => {
-    const props = mount();
+  it("fills a draft and focuses its composer without sending", async () => {
+    const props = await mount();
     const button = [...container.querySelectorAll("button")].find((b) => b.textContent?.includes("Plan a change"))!;
     act(() => button.click());
     expect(props.onDraftChange).toHaveBeenCalledWith(
@@ -32,8 +33,8 @@ describe("conversation starters", () => {
     expect(document.activeElement?.id).toBe("cockpit-chat-draft");
     expect(container.querySelector('a[href^="/library/knowledge"]')).not.toBeNull();
   });
-  it("lists the starters as plain secondary buttons, not bordered cards (CH-N23)", () => {
-    mount();
+  it("lists the starters as plain secondary buttons, not bordered cards (CH-N23)", async () => {
+    await mount();
     const list = container.querySelector('ul[aria-label="Starting prompts"]')!;
     expect(list).not.toBeNull();
     expect(list.className).not.toContain("grid");
@@ -47,8 +48,8 @@ describe("conversation starters", () => {
   });
   it.each([{ draft: "keep this" }, { historicalReadOnly: true }, { sending: true }])(
     "never overwrites or starts work in a restricted state %o",
-    (overrides) => {
-      const props = mount(overrides);
+    async (overrides) => {
+      const props = await mount(overrides);
       expect(container.querySelector("button")).toBeNull();
       expect(props.onDraftChange).not.toHaveBeenCalled();
     },

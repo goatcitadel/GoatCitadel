@@ -100,14 +100,39 @@ export function assertLineageNativeNavigation({ url, uiUrl, child, trace, select
   assert.equal(trace.lifecycle.response.canonical.runId, child.childRunId);
   assert.equal(trace.lifecycle.response.canonical.sessionId, child.scope.sessionId);
   assert.equal(trace.run.payload.workspaceId, workspaceId);
-  assert.equal(chatHref, `/chat?sessionId=${encodeURIComponent(child.scope.sessionId)}&shell=cockpit`);
+  const chat = new URL(chatHref, uiUrl);
+  assert.equal(chat.origin, new URL(uiUrl).origin);
+  assert.equal(chat.pathname, "/chat");
+  assert.equal(chat.hash, "");
+  assert.deepEqual([...chat.searchParams].sort(), [
+    ["runId", child.childRunId], ["sessionId", child.scope.sessionId], ["shell", "cockpit"], ["workspaceId", workspaceId],
+  ]);
 }
 
 async function renderedLinks(locator) {
   return locator.locator("a").evaluateAll((links) => links.map((link) => ({ text: link.textContent, href: link.getAttribute("href") })));
 }
 
+export function collectLineageCitationRows(rows) {
+  return rows.map(row => ({
+    paragraphs: [...row.querySelectorAll(":scope > p")].map(node => node.textContent.trim()),
+    links: [...row.querySelectorAll("a")].map(node => ({ text: node.textContent, href: node.getAttribute("href") })),
+  }));
+}
+
+export function assertLineageCitationRows(rows, sources, formatBytes) {
+  assert.equal(rows.length, sources.length, "Cited source row count changed");
+  for (const [index, source] of sources.entries()) {
+    assert.match(source.sha256, /^[0-9a-f]{64}$/u);
+    assert.ok(Number.isSafeInteger(source.byteCount) && source.byteCount >= 0);
+    assert.equal(rows[index].paragraphs.length, 2);
+    assert.equal(rows[index].paragraphs[1], `${formatBytes(source.byteCount)} · SHA-256 ${source.sha256}`);
+    assert.deepEqual(rows[index].links, visibleLinks(source.links), "Cited source row identity/order changed");
+  }
+}
+
 export async function runCockpitWorkLineageProof({ context, browser, stack, citadelId, viewports, deps }) {
+  const { formatBytes } = await import(new URL("../../../../packages/mission-control-shared/dist/content/format.js", import.meta.url));
   const { assertOk, auditPageAccessibility, axeSourcePath, buildVerificationUiUrl, emptyArtifacts,
     installMissionControlNextBrowserState, path, relativeToRun, requestJson, runScenario } = deps;
   for (const { variant, viewport } of viewports) {
@@ -144,7 +169,7 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
       try {
         await browserContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"));
         await browserContext.addInitScript((value) => window.localStorage.setItem("goatcitadel.ui.theme.v1", value), theme);
-        await installMissionControlNextBrowserState(browserContext, workspaceId, citadelId);
+        await installMissionControlNextBrowserState(browserContext, workspaceId, citadelId, { showTechnicalDetails: true });
         const page = await browserContext.newPage();
         const requests = [];
         let documentRequests = 0;
@@ -154,6 +179,12 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
         });
         await page.goto(buildVerificationUiUrl(stack.uiUrl, `/work/runs/${encodeURIComponent(parentRunId)}?shell=cockpit`), { waitUntil: "domcontentloaded" });
         const lineage = page.getByRole("region", { name: "Delegation lineage", exact: true });
+        const disclosure = page.locator("summary", { hasText: /^Run lineage$/u });
+        await disclosure.waitFor({ timeout: 30_000 });
+        assert.equal(await disclosure.count(), 1);
+        assert.equal(await lineage.isVisible(), false, "Run lineage starts behind its closed technical disclosure");
+        assert.equal(requests.length, 0, "Closed lineage disclosure must not inspect its owner");
+        await disclosure.click();
         await lineage.waitFor({ timeout: 30_000 });
         await page.waitForFunction((value) => document.documentElement.dataset.theme === value, theme);
         assert.equal(requests.length, 0, "Lineage owner reads require explicit inspection");
@@ -172,9 +203,8 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
         await synthesis.getByText(SYNTHESIS, { exact: true }).waitFor();
         await synthesis.getByText("5 additional cited sources are outside this display.", { exact: true }).waitFor();
         assert.equal(await synthesis.locator("li").count(), DISPLAY_LIMIT);
-        for (const source of snapshot.synthesis.lineage.slice(0, DISPLAY_LIMIT)) {
-          await synthesis.getByText(`${source.byteCount} bytes · SHA-256 ${source.sha256}`, { exact: true }).waitFor();
-        }
+        assertLineageCitationRows(await synthesis.locator("ol > li").evaluateAll(collectLineageCitationRows),
+          snapshot.synthesis.lineage.slice(0, DISPLAY_LIMIT), formatBytes);
         assert.deepEqual(await renderedLinks(synthesis), snapshot.synthesis.lineage.slice(0, DISPLAY_LIMIT).flatMap((source) => visibleLinks(source.links)));
         assert.ok(requests.length > 0 && requests.every((request) => request.method === "GET"
           && new URL(request.url).pathname === ownerPath && new URL(request.url).searchParams.get("workspaceId") === workspaceId
@@ -197,12 +227,16 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
         const firstChild = verified[0];
         const marker = randomUUID(), documentRequestsBefore = documentRequests;
         await page.evaluate((value) => { window.__lineageNavigationMarker = value; }, marker);
-        await children.locator("li").first().getByRole("link", { name: "Child run", exact: true }).click();
+        const childHref = `/work/runs/${encodeURIComponent(firstChild.childRunId)}?shell=cockpit`;
+        const childLink = children.getByRole("link", { name: "Child run", exact: true })
+          .and(page.locator(`a[href="${childHref}"]`));
+        assert.equal(await childLink.count(), 1);
+        await childLink.click();
         await page.waitForURL(new URL(`/work/runs/${encodeURIComponent(firstChild.childRunId)}?shell=cockpit`, stack.uiUrl).href);
+        const childDisclosure = page.locator("summary", { hasText: /^Run lineage$/u });
+        if (await childDisclosure.locator("..").getAttribute("open") === null) await childDisclosure.click();
         await page.getByRole("region", { name: "Delegation lineage", exact: true }).waitFor();
-        const childChatHref = `/chat?sessionId=${encodeURIComponent(firstChild.scope.sessionId)}&shell=cockpit`;
-        const chatLink = page.getByRole("link", { name: "Open this conversation in Chat", exact: true })
-          .and(page.locator(`a[href="${childChatHref}"]`));
+        const chatLink = page.getByRole("link", { name: "Open this conversation in Chat", exact: true });
         await chatLink.waitFor();
         const childTrace = await requestJson(stack.gatewayUrl, `/api/v1/observe/runs/${encodeURIComponent(firstChild.childRunId)}/trace`);
         assertOk(childTrace, "independently read navigated child owner");
@@ -215,7 +249,7 @@ export async function runCockpitWorkLineageProof({ context, browser, stack, cita
         const foreignContext = await browser.newContext({ viewport, colorScheme: theme });
         try {
           await foreignContext.addInitScript(() => window.localStorage.setItem("goatcitadel.ui.shell.v1", "cockpit"));
-          await installMissionControlNextBrowserState(foreignContext, foreignWorkspaceId, citadelId);
+          await installMissionControlNextBrowserState(foreignContext, foreignWorkspaceId, citadelId, { showTechnicalDetails: true });
           const foreignPage = await foreignContext.newPage();
           const foreignReads = [];
           foreignPage.on("request", (request) => {

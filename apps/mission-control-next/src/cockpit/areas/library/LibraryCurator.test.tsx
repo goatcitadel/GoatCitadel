@@ -14,6 +14,9 @@ import {
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { LibraryCurator } from "./LibraryCurator";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 vi.mock("@goatcitadel/mission-control-shared/api/platform", () => ({
   archiveCuratorSkill: vi.fn(),

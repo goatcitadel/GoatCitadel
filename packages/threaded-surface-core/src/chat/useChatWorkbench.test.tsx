@@ -48,6 +48,12 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat", () => ({
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/chat-workbench-operations", () => ({
+  fetchChatSessionWorkbench: apiMocks.fetchChatSessionWorkbench,
+  fetchChatSessionWorkbenchTree: apiMocks.fetchChatSessionWorkbenchTree,
+  fetchChatSessionWorkbenchFile: apiMocks.fetchChatSessionWorkbenchFile,
+  fetchChatSessionWorkbenchFileDiff: apiMocks.fetchChatSessionWorkbenchFileDiff,
+  fetchChatSessionWorkbenchDiff: apiMocks.fetchChatSessionWorkbenchDiff,
+  fetchChatSessionWorkbenchOutput: apiMocks.fetchChatSessionWorkbenchOutput,
   createChatSessionWorkbenchWorktree: apiMocks.createChatSessionWorkbenchWorktree,
   saveChatSessionWorkbenchFile: apiMocks.saveChatSessionWorkbenchFile,
   previewChatSessionWorkbenchFileOperation: apiMocks.previewChatSessionWorkbenchFileOperation,
@@ -228,6 +234,9 @@ describe("useChatWorkbench", () => {
       create(<Harness />);
       await flushAsyncEffects();
     });
+
+    // Mount effects start the first optional read import after the initial act callback.
+    await act(async () => { await vi.dynamicImportSettled(); });
 
     expect(apiMocks.fetchChatSessionWorkbench).toHaveBeenCalledWith("session-1");
     expect(apiMocks.fetchChatSessionWorkbenchFile).toHaveBeenCalledWith("session-1", "src/index.ts");

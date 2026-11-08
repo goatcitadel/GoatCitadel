@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   fetchChatSessionWorkbenchFile: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/chat", () => api);
+vi.mock("@goatcitadel/mission-control-shared/api/chat-workbench-operations", () => api);
 vi.mock("../../ui/Sheet", () => ({
   Sheet: ({
     open,

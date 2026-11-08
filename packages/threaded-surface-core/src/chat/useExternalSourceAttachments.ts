@@ -11,13 +11,11 @@ import type {
   ExternalSourceAttachmentCandidateRecord,
 } from "@goatcitadel/contracts";
 import {
-  attachExternalSourceToSession,
-  detachExternalSourceAttachment,
   fetchExternalSessionAttachments,
   fetchExternalSourceAttachmentCandidates,
   isExternalSourceCapabilityAbsent,
-  requestExternalSourceKnowledgeSnapshot,
 } from "@goatcitadel/mission-control-shared/api/external-source-chat";
+import type { ExternalAttachmentAction } from "./external-source-attachment-actions";
 
 /**
  * HX-407 C3/C4b Chat-side external-source attachment state.
@@ -269,31 +267,48 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
   const runMutation = useCallback(
     async (
       busyKey: string,
-      operation: (isCurrent: () => boolean) => Promise<void>,
+      action: ExternalAttachmentAction,
       failureNotice: string,
     ): Promise<boolean> => {
-      if (mutationActiveRef.current || operationLocked || !currentAccess()) return false;
+      if (!sessionId || !sessionIncarnationId || mutationActiveRef.current || operationLocked || !currentAccess())
+        return false;
       mutationActiveRef.current = true;
       const scope = scopeGenerationRef.current;
       const mutation = ++mutationSequenceRef.current;
       const isCurrent = () => scopeGenerationRef.current === scope && currentAccess();
       setBusyAttachmentId(busyKey);
+      let codeLoaded = false;
       try {
         const completed = await runOperation(
           sessionIncarnationId ?? "missing",
           async () => {
+            const code = await import("./external-source-attachment-actions");
+            codeLoaded = true;
             if (!isCurrent()) throw new Error("The source conversation changed.");
+            return code;
           },
-          async () => {
-            await operation(isCurrent);
+          async ({ dispatchExternalAttachmentAction }) => {
+            const notice = await dispatchExternalAttachmentAction(action, {
+              workspaceId,
+              sessionId,
+              expectedSessionIncarnationId: sessionIncarnationId,
+            });
+            if (isCurrent()) pushLocalNotice?.(notice.message, notice.tone);
             return true;
           },
+          undefined,
+          false,
+          isCurrent,
         );
         if (!completed) return false;
         if (isCurrent()) await reload();
         return true;
       } catch (mutationError) {
         if (!isCurrent()) return false;
+        if (!codeLoaded) {
+          setError("Source controls could not load. No request was sent. Try again or reload the app.");
+          return false;
+        }
         // The shared operation owner rethrows a user-facing error; classify the Gateway cause behind it.
         const cause =
           mutationError instanceof Error && mutationError.cause !== undefined ? mutationError.cause : mutationError;
@@ -320,7 +335,7 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
         }
       }
     },
-    [pushLocalNotice, reload, currentAccess, operationLocked, runOperation, sessionIncarnationId],
+    [pushLocalNotice, reload, currentAccess, operationLocked, runOperation, sessionId, sessionIncarnationId, workspaceId],
   );
 
   const attach = useCallback(
@@ -330,21 +345,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       }
       return runMutation(
         `attach:${seed.itemId}`,
-        async (isCurrent) => {
-          await attachExternalSourceToSession({
-            workspaceId,
-            sessionId,
-            expectedSessionIncarnationId: sessionIncarnationId,
-            sourceId: seed.sourceId,
-            importId: seed.importId,
-            itemId: seed.itemId,
-          });
-          if (isCurrent()) pushLocalNotice?.("Attached the imported item read-only.", "success");
-        },
+        { kind: "attach", seed },
         "The external source attach did not return a confirmed receipt.",
       );
     },
-    [canMutate, pushLocalNotice, runMutation, sessionId, sessionIncarnationId, workspaceId],
+    [canMutate, runMutation, sessionId, sessionIncarnationId],
   );
 
   const detach = useCallback(
@@ -355,21 +360,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       }
       return runMutation(
         attachmentId,
-        async (isCurrent) => {
-          await detachExternalSourceAttachment({
-            workspaceId,
-            sessionId,
-            attachmentId,
-            expectedRevision: attachment.revision,
-            expectedSessionIncarnationId: sessionIncarnationId,
-          });
-          if (isCurrent())
-            pushLocalNotice?.("Detached the external source. Imported evidence remains immutable.", "neutral");
-        },
+        { kind: "detach", attachment },
         "The external source detach did not return a confirmed receipt.",
       );
     },
-    [attachments, canMutate, pushLocalNotice, runMutation, sessionId, sessionIncarnationId, workspaceId],
+    [attachments, canMutate, runMutation, sessionId, sessionIncarnationId],
   );
 
   const requestKnowledgeSnapshot = useCallback(
@@ -380,28 +375,11 @@ export function useExternalSourceAttachments(input: UseExternalSourceAttachments
       }
       return runMutation(
         `knowledge:${attachmentId}`,
-        async (isCurrent) => {
-          const receipt = await requestExternalSourceKnowledgeSnapshot({
-            workspaceId,
-            sessionId,
-            expectedSessionIncarnationId: sessionIncarnationId,
-            attachmentId,
-            importId: attachment.importId,
-            itemId: attachment.itemId,
-            expectedAttachmentRevision: attachment.revision,
-          });
-          if (isCurrent())
-            pushLocalNotice?.(
-              receipt.approvalId
-                ? `Knowledge copy requested. Resolve approval ${receipt.approvalId.slice(-8)} in the approvals inbox.`
-                : "Knowledge copy requested. Resolve it in the approvals inbox.",
-              "success",
-            );
-        },
+        { kind: "knowledge", attachment },
         "The knowledge copy request did not return a confirmed receipt.",
       );
     },
-    [attachments, canMutate, pushLocalNotice, runMutation, sessionId, sessionIncarnationId, workspaceId],
+    [attachments, canMutate, runMutation, sessionId, sessionIncarnationId],
   );
 
   const dismissUncertainOperation = useCallback((): boolean => {

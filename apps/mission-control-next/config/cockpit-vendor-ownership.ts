@@ -139,6 +139,13 @@ const AUTOMATIC_API_OWNERS = new Set([
   "capabilities-query",
   "tasks-query",
   "chat-workbench-operations",
+  "chat-optional-actions",
+  "chat-document-operations",
+  "chat-operator-actions",
+  "chat-session-mutations",
+  "chat-history-reads",
+  "chat-session-evidence",
+  "chat-live-stream",
 ]);
 const AUTOMATIC_NATIVE_PRIMITIVES = new Set([
   "FilterPillGroup",
@@ -405,4 +412,70 @@ export function collectCockpitBootBindings(
   }
   visitOwn(rootId);
   return result;
+}
+
+// A matched emitted graph proved these exact vendor leaves already belong to cold Chat.
+// Group only the complete live proof; no versioned install path or optional sibling is admitted.
+const COLD_COCKPIT_RUNTIME_VENDOR_SUFFIXES = [
+  "/node_modules/@radix-ui/react-visually-hidden/dist/index.mjs",
+  "/node_modules/@radix-ui/react-use-size/dist/index.mjs",
+  "/node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs",
+  "/node_modules/@floating-ui/core/dist/floating-ui.core.mjs",
+  "/node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs",
+  "/node_modules/@floating-ui/dom/dist/floating-ui.dom.mjs",
+  "/node_modules/@floating-ui/react-dom/dist/floating-ui.react-dom.mjs",
+  "/node_modules/@radix-ui/react-arrow/dist/index.mjs",
+  "/node_modules/@radix-ui/react-popper/dist/index.mjs",
+  "/node_modules/@radix-ui/react-popover/dist/index.mjs",
+  "/node_modules/@radix-ui/react-tooltip/dist/index.mjs",
+  "/node_modules/zod/v4/core/util.js",
+  "/node_modules/zod/v4/core/core.js",
+  "/node_modules/zod/v4/core/errors.js",
+  "/node_modules/zod/v4/core/parse.js",
+  "/node_modules/zod/v4/core/regexes.js",
+  "/node_modules/zod/v4/core/checks.js",
+  "/node_modules/zod/v4/core/doc.js",
+  "/node_modules/zod/v4/core/versions.js",
+  "/node_modules/zod/v4/core/schemas.js",
+  "/node_modules/zod/v4/core/api.js",
+  "/node_modules/zod/v4/mini/schemas.js",
+] as const;
+
+/** Build-only proof. null is a stable failure result for the selector's per-build cache. */
+export function findColdCockpitRuntimeVendors(graph: CockpitBootModuleGraph): Set<string> | null {
+  const roots = [...graph.getModuleIds()];
+  const owners = COLD_COCKPIT_RUNTIME_VENDOR_SUFFIXES.map((suffix) =>
+    roots.filter((id) => normalize(id).endsWith(suffix)),
+  );
+  if (owners.some((matches) => matches.length !== 1)) return null;
+  const cockpit = roots.filter((id) => normalize(id).endsWith("/src/cockpit-entry.tsx"));
+  const main = roots.filter((id) => normalize(id).endsWith("/src/main.tsx"));
+  if (cockpit.length !== 1 || main.length !== 1) return null;
+  const named = new Set<string>();
+  const boot = collectCockpitBootBindings(graph, cockpit[0]!, named);
+  const initial = new Set<string>();
+  const pending = [main[0]!];
+  while (pending.length) {
+    const id = pending.pop()!;
+    if (initial.has(id)) continue;
+    initial.add(id);
+    const info = graph.getModuleInfo(id);
+    if (!info) return null;
+    pending.push(...info.importedIds);
+  }
+  const known = owners.flat();
+  if (
+    !known.every((id) => {
+      const info = graph.getModuleInfo(id);
+      return (
+        info?.isIncluded === true &&
+        programBody(info.ast) !== undefined &&
+        boot.has(id) &&
+        !named.has(id) &&
+        !initial.has(id)
+      );
+    })
+  )
+    return null;
+  return new Set(known);
 }

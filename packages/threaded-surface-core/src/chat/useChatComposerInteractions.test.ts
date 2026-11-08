@@ -440,7 +440,7 @@ it("does not attach a late upload to another selected conversation", async () =>
   uploadChatAttachmentMock.mockImplementation(() => new Promise((resolve) => { finish = resolve; }));
   let renderer!: ReturnType<typeof create>;
   await act(async () => { renderer = create(React.createElement(ComposerHarness, { sessionId: "session-1" })); });
-  let pending!: Promise<void>;
+  let pending!: ReturnType<ComposerHarnessApi["uploadAttachments"]>;
   await act(async () => { pending = latest!.uploadAttachments([makeFile()]); });
   expect(latest!.attachmentUpload.pending).toBe(1);
   await act(async () => renderer.update(React.createElement(ComposerHarness, { sessionId: "session-2" })));

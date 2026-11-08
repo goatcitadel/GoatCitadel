@@ -1,6 +1,6 @@
 import { backingCapacityObservationFixture } from "../../../../packages/contracts/src/remote-worker-cell-backing-capacity-test-fixture.js";
 import { nativeArtifactFixture } from "../../../../packages/contracts/src/remote-worker-native-artifact-test-fixture.js";
-import { remoteWorkerNativeFileReceiptSha256 } from "@goatcitadel/contracts";
+import { ConflictError, remoteWorkerNativeFileReceiptSha256 } from "@goatcitadel/contracts";
 import { windowsRuntimeDispatchFixture } from "../../../remote-worker/src/worker-windows-runtime-dispatch-test-fixture.js";
 import { prepareWindowsRuntimeDispatch } from "@goatcitadel/contracts/remote-worker-runtime-node";
 import {
@@ -45,6 +45,11 @@ import {
   type RemoteWorkerInferenceRequestSubmission,
 } from "@goatcitadel/contracts";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { snapshotRemoteWorkerChatArtifactAdmission, type AdmitRemoteWorkerChatArtifactInput,
+  type RemoteWorkerAssignmentProtectedCommitFence, type RemoteWorkerChatArtifactAdmission } from "@goatcitadel/storage";
+import type { CommitArtifactInput } from "./remote-worker-artifact-settlement-service.js";
+import { dispatchArtifactSubmission } from "./remote-worker-artifact-submissions.js";
+import { remoteWorkerAssignmentCanonicalSha256 } from "@goatcitadel/contracts";
 import type { RemoteWorkerAssignmentMeshAuthorityPort } from "./remote-worker-assignment-protocol-service.js";
 import {
   REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES,
@@ -312,6 +317,16 @@ function dependencies(f: Fixture) {
   };
   const assignments = {
     findAssignmentAggregate: vi.fn(async () => ({ assignment: f.assignment, generation: f.generation })),
+    admitChatArtifactPublication: vi.fn(async (input: AdmitRemoteWorkerChatArtifactInput, fence: RemoteWorkerAssignmentProtectedCommitFence) => {
+      fences.push(fence);
+      if (input.leaseTokenSha256 !== D(f.rawLeaseToken)) throw new Error("Fixture exact artifact token rejected.");
+      return { records: { assignment: f.assignment, generation: f.generation, lease: f.lease },
+        admission: snapshotRemoteWorkerChatArtifactAdmission({ registryWorkspaceId: input.registryWorkspaceId,
+          assignmentId: input.assignmentId, assignmentGeneration: input.assignmentGeneration, uploadId: input.uploadId,
+          protectedAuthority: fence, publicationSha256: remoteWorkerAssignmentCanonicalSha256(input.publication),
+          continuingArtifact: { uploadId: input.uploadId, leaseRevision: f.lease.leaseRevision,
+            parentDispatchAuthority: f.lease.parentDispatchAuthority, durableRunPayloadSha256: D("fixture-payload") } }) };
+    }),
     resolveActiveAuthorityByLeaseTokenHash: vi.fn(async (leaseTokenSha256: string, fence: unknown) => {
       fences.push(fence);
       return leaseTokenSha256 === D(f.rawLeaseToken)
@@ -330,7 +345,8 @@ function dependencies(f: Fixture) {
     artifacts: {
       openUpload: vi.fn(async () => ({ uploadId: "upload-a", uploadState: "open", uploadRevision: 1 })),
       appendPart: vi.fn(async () => ({ uploadId: "upload-a", uploadState: "open", uploadRevision: 2 })),
-      commitArtifact: vi.fn(async () => ({ uploadId: "upload-a", uploadState: "committed", uploadRevision: 3 })),
+      commitArtifact: vi.fn(async (_input: CommitArtifactInput, _admission?: RemoteWorkerChatArtifactAdmission) =>
+        ({ uploadId: "upload-a", uploadState: "committed", uploadRevision: 3 })),
     },
     effects: {
       dispatchEffect: vi.fn(async () => ({
@@ -2589,6 +2605,80 @@ describe("RemoteWorkerAssignmentExecutionProtocolService", () => {
       expect.objectContaining({ fence: expect.objectContaining({ leaseTokenSha256: D(f.rawLeaseToken) }) }),
     );
     expect(deps.nonceConsumer.consume).toHaveBeenCalledTimes(4);
+    expect(deps.assignments.admitChatArtifactPublication).toHaveBeenCalledOnce();
+    const handoff = deps.settlement.artifacts.commitArtifact.mock.calls[0]?.[1];
+    expect(handoff).toMatchObject({ uploadId: "upload-a", assignmentId: f.assignment.assignmentId,
+      continuingArtifact: { leaseRevision: f.lease.leaseRevision, parentDispatchAuthority: f.lease.parentDispatchAuthority } });
+    expect(Object.isFrozen(handoff)).toBe(true);
+    expect(Object.isFrozen(handoff!.continuingArtifact.parentDispatchAuthority)).toBe(true);
+  });
+
+  it("retains only allowlisted artifact admission failure provenance after signed nonce consumption", async () => {
+    for (const [cause, reason] of [
+      [new ConflictError({ code: "STATE_CONFLICT", message: "remote worker assignment lease parent dispatch authority conflicts with durable assignment authority." }), "lease_parent_dispatch_mismatch"],
+      [new ConflictError({ code: "STATE_CONFLICT", message: "synthetic-secret unrelated conflict" }), "other"],
+      [new Error("synthetic-secret unknown storage failure"), "other"],
+    ] as const) {
+      const f = fixture(), deps = dependencies(f);
+      deps.assignments.admitChatArtifactPublication.mockRejectedValueOnce(cause);
+      const promise = service(f, deps).execute(signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { kind: "artifact.commit", uploadId: "upload-a", manifest: artifactManifest(f), files: [{
+          logicalPath: "dir/file.bin", logicalPathSha256: D(canonicalJsonString({ logicalPath: "dir/file.bin" })),
+          bytesBase64: Buffer.from("hello").toString("base64"), mimeType: "application/octet-stream",
+        }] })));
+      const error = await promise.then(() => undefined, error => error);
+      expect(error).toBeInstanceOf(RemoteWorkerAssignmentExecutionProtocolError);
+      expect(error.message).toBe("Remote worker execution protected fence was rejected in the storage transaction.");
+      expect(error.diagnostic).toStrictEqual({ stage: "artifact_admission", reason });
+      expect(JSON.stringify(error)).not.toContain("synthetic-secret");
+      expect(error.cause).toBeUndefined();
+      expect(deps.nonceConsumer.consume).toHaveBeenCalledOnce();
+      expect(deps.assignments.admitChatArtifactPublication).toHaveBeenCalledOnce();
+      expect(deps.assignments.resolveActiveAuthorityByLeaseTokenHash).not.toHaveBeenCalled();
+      expect(deps.settlement.artifacts.commitArtifact).not.toHaveBeenCalled();
+      expect(deps.inference.performInference).not.toHaveBeenCalled();
+      expect(deps.settlement.effects.dispatchEffect).not.toHaveBeenCalled();
+    }
+  });
+
+  it("rejects missing or request-swapped internal artifact admission before domain dispatch", async () => {
+    const corruptions: Array<(admission: RemoteWorkerChatArtifactAdmission) => RemoteWorkerChatArtifactAdmission> = [
+      admission => ({ ...admission, uploadId: "other-upload" }),
+      admission => ({ ...admission, assignmentId: "other-assignment" }),
+      admission => ({ ...admission, assignmentGeneration: admission.assignmentGeneration + 1 }),
+      admission => ({ ...admission, publicationSha256: D("other-publication") }),
+      admission => ({ ...admission, continuingArtifact: { ...admission.continuingArtifact,
+        leaseRevision: admission.continuingArtifact.leaseRevision + 1 } }),
+      admission => ({ ...admission, protectedAuthority: { ...admission.protectedAuthority,
+        credentialAuthority: { ...admission.protectedAuthority.credentialAuthority, workerId: "other-worker" } } }),
+    ];
+    for (const corrupt of corruptions) {
+      const f = fixture(), deps = dependencies(f);
+      const realAdmission = deps.assignments.admitChatArtifactPublication.getMockImplementation()!;
+      deps.assignments.admitChatArtifactPublication.mockImplementationOnce(async (input, fence) => {
+        const result = await realAdmission(input, fence);
+        return { ...result, admission: corrupt(result.admission) };
+      });
+      await expect(service(f, deps).execute(signedRequest(f, REMOTE_WORKER_ASSIGNMENT_EXECUTION_ROUTES.settlementSubmission,
+        settlementPayload(f, { kind: "artifact.commit", uploadId: "upload-a", manifest: artifactManifest(f), files: [{
+          logicalPath: "dir/file.bin", logicalPathSha256: D(canonicalJsonString({ logicalPath: "dir/file.bin" })),
+          bytesBase64: Buffer.from("hello").toString("base64"), mimeType: "application/octet-stream",
+        }] })))).rejects.toThrow("artifact publication admission is inconsistent");
+      expect(deps.settlement.artifacts.commitArtifact).not.toHaveBeenCalled();
+      expect(deps.assignments.resolveActiveAuthorityByLeaseTokenHash).not.toHaveBeenCalled();
+      expect(deps.nonceConsumer.consume).toHaveBeenCalledOnce();
+    }
+    const f = fixture(), deps = dependencies(f);
+    await expect(dispatchArtifactSubmission(deps.settlement, {
+      identity: { registryWorkspaceId: f.assignment.registryWorkspaceId, assignmentId: f.assignment.assignmentId,
+        assignmentGeneration: f.generation.assignmentGeneration, leaseTokenSha256: D(f.rawLeaseToken),
+        protectedAuthority: { credentialAuthority: {} as RemoteWorkerAssignmentProtectedCommitFence["credentialAuthority"],
+          meshAdmission: {} as RemoteWorkerAssignmentProtectedCommitFence["meshAdmission"] } },
+      submission: { kind: "artifact.commit", uploadId: "upload-a", manifest: artifactManifest(f), files: [] },
+      idempotencyKey: "missing-internal-admission", signal: new AbortController().signal,
+      fenced: { authority: f.authority, records: { assignment: f.assignment, generation: f.generation, lease: f.lease } },
+    })).rejects.toThrow("artifact publication admission is unavailable");
+    expect(deps.settlement.artifacts.commitArtifact).not.toHaveBeenCalled();
   });
 
   it("rejects v1 downgrade, target drift, a proof signed for another route code, and payload/route disagreement before nonce", async () => {

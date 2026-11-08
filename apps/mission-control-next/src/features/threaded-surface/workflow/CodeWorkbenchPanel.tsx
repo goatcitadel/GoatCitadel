@@ -48,6 +48,27 @@ import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/com
 import { getValidationCommandPresets, type WorkbenchPaneId, extractCodeBlocks, isPendingPatchBlock } from "./format";
 
 export function NextCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
+  if (panel.props.workbenchRuntimeStatus === "loading") {
+    return (
+      <p className="mc-next-panel-banner" role="status">
+        Opening build editor…
+      </p>
+    );
+  }
+  if (panel.props.workbenchRuntimeStatus === "unavailable") {
+    return (
+      <div className="mc-next-panel-banner warning">
+        <p role="alert">The build editor couldn’t load. Try again or reload GoatCitadel.</p>
+        <button type="button" className="mc-next-panel-button" onClick={panel.props.onRefresh}>
+          Try again
+        </button>
+      </div>
+    );
+  }
+  return <ReadyCodeWorkbenchPanel panel={panel} />;
+}
+
+function ReadyCodeWorkbenchPanel({ panel }: { panel: CodePanelType }) {
   const {
     selectedTurn,
     needsProjectBinding,

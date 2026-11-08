@@ -4,19 +4,29 @@ import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { useQuery } from "@tanstack/react-query";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { useEffect, useRef, useState } from "react";
+import { lazy, useEffect, useRef, useState } from "react";
 import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
-import { ChatPendingQuestion } from "./ChatPendingQuestion";
+import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
-import { readSpecialistEvidence, specialistEvidenceMatches } from "../inbox/specialist-approval-evidence";
+import { specialistApprovalCode } from "../inbox/load-specialist-approval-code";
+import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
+import {
+  getGatewayAccessRevision,
+  getGatewayCallerScopeRevision,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
+
+const ChatPendingQuestion = lazy(async () => ({
+  default: (await import("./ChatPendingQuestion")).ChatPendingQuestion,
+}));
 
 type Blockers = Pick<
   MissionThreadedActiveSessionSurfaceProps,
@@ -95,18 +105,31 @@ export function ChatBlockers({ props }: { props: Blockers }) {
     reviewedApproval?.status === "pending" && reviewedApproval.kind === "code_mode.run" ? reviewedApproval : undefined;
   const specialistQuery = useQuery({
     queryKey: ["approvals", "specialist", workspaceId, specialistTarget],
-    queryFn: () => readSpecialistEvidence(specialistTarget!),
+    queryFn: async ({ signal }) => {
+      const installation = getGatewayApiBaseUrl();
+      const access = getGatewayAccessRevision();
+      const caller = getGatewayCallerScopeRevision();
+      const assertCurrent = () => {
+        signal.throwIfAborted();
+        if (
+          installation !== getGatewayApiBaseUrl() ||
+          access !== getGatewayAccessRevision() ||
+          caller !== getGatewayCallerScopeRevision()
+        )
+          throw new DOMException("Approval access changed.", "AbortError");
+      };
+      const { readSpecialistEvidence, specialistEvidenceMatches } = await specialistApprovalCode.load();
+      assertCurrent();
+      const evidence = await readSpecialistEvidence(specialistTarget!);
+      assertCurrent();
+      return specialistEvidenceMatches(specialistTarget!, evidence) ? evidence : null;
+    },
     enabled: Boolean(specialistTarget),
     retry: false,
     staleTime: 0,
   });
   const specialistEvidence =
-    specialistTarget &&
-    !specialistQuery.isError &&
-    specialistQuery.data &&
-    specialistEvidenceMatches(specialistTarget, specialistQuery.data)
-      ? specialistQuery.data
-      : undefined;
+    specialistTarget && !specialistQuery.isError && specialistQuery.data ? specialistQuery.data : undefined;
   // Until the evidence matches, Approve stays disabled: say why, as the Inbox detail does, and offer a fresh read.
   const specialistChecking = !specialistQuery.isError && (specialistQuery.isPending || specialistQuery.isFetching);
   // A browser errand step shows the picture of the page the errand is about to act on, above the decision.
@@ -115,6 +138,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       ? errandScreenshotAttachmentId(reviewedApproval?.preview)
       : undefined;
   const input = props.pendingUserInput;
+  const questionScope = input ? JSON.stringify([workspaceId, props.selectedSessionId, input.promptId]) : "";
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
@@ -247,12 +271,26 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       ) : null}
       {/* CH-N06: blockers only render inside the Chat transcript, so no "open in Chat" link. */}
       {input ? (
-        <ChatPendingQuestion
-          key={input.promptId}
-          prompt={input}
-          pending={props.userInputPending}
-          onSubmit={props.onSubmitUserInput}
-        />
+        <DeferredChatLeaf
+          key={questionScope}
+          identity={questionScope}
+          label="Answer controls"
+          fallback={
+            <section
+              aria-label="Pending question"
+              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
+            >
+              <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
+              {isBackgroundChatUserInputPrompt(input) ? (
+                <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
+              ) : null}
+              <p className="mt-1 text-fg-secondary">{input.question}</p>
+              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading answer controls…</p>
+            </section>
+          }
+        >
+          <ChatPendingQuestion prompt={input} pending={props.userInputPending} onSubmit={props.onSubmitUserInput} />
+        </DeferredChatLeaf>
       ) : null}
     </div>
   );

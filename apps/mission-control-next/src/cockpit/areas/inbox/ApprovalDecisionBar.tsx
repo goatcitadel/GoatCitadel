@@ -1,17 +1,13 @@
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
-import {
-  readSpecialistEvidence,
-  specialistEvidenceMatches,
-  specialistEvidenceKey,
-  type SpecialistEvidence,
-} from "./specialist-approval-evidence";
-import { SpecialistApprovalReview } from "./SpecialistApprovalReview";
+import type { SpecialistEvidence } from "./specialist-approval-evidence";
+import { specialistEvidenceKey } from "./specialist-approval-key";
+import { specialistApprovalCode } from "./load-specialist-approval-code";
+import { useDeferredApprovalCode } from "./use-deferred-approval-code";
 import { connectorSetupHref } from "../../app/routes";
 import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { canonicalJsonString, type ApprovalRequest, type OperatorInboxItem } from "@goatcitadel/contracts";
-import { resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
 import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
@@ -19,19 +15,18 @@ import { RiskApprovalAction } from "../chat/RiskApprovalAction";
 import { queryKeys } from "../../data/query-keys";
 import { Button } from "../../ui/Button";
 import { hasExpired, useMinuteClock } from "./use-minute-clock";
-import { CHANGED_APPROVAL_RECORD, canResolveInboxApproval, matchesInboxApprovalDecision } from "./inbox-approval-guard";
-import { buildApprovalRequestReviewEvidenceModel } from "@goatcitadel/mission-control-shared/content/approval-helpers";
-import { ApprovalReviewSummary } from "./ApprovalReviewSummary";
+import { CHANGED_APPROVAL_RECORD, canResolveInboxApproval } from "./inbox-approval-guard";
+import { ApprovalReviewSummaryContent } from "./ApprovalReviewSummaryContent";
+import { useApprovalReviewEvidence } from "./use-approval-review-evidence";
 import { splitApprovalExplanation } from "./approval-preview";
 import { approvalDecisionMessage, approvalResolutionLine } from "./approval-settlement";
 import { nullWhenMissing } from "./inbox-record-read";
-import { runPrepareApprove, type PrepareApprove } from "./prepare-approve";
+import type { PrepareApprove } from "./prepare-approve";
 import {
   beginInboxApprovalAttempt,
   releaseInboxApprovalCheck,
   releaseUncertainInboxApprovalAttempt,
   settleUncertainInboxApprovalAttempt,
-  updateInboxApprovalAttempt,
   useInboxApprovalAttempt,
 } from "./inbox-approval-attempts";
 
@@ -148,11 +143,17 @@ function ApprovalDecisionReview({
   const [rechecking, setRechecking] = useState(false);
   const current = useRef(true);
   const approveRef = useRef<HTMLSpanElement>(null);
+  const approveFocus = useRef<{ origin: Element | null; cancel: () => void } | null>(null);
   const denyRef = useRef<HTMLButtonElement>(null);
   const sessionChanged = Boolean(sessionId && approval.linkage?.sessionId && sessionId !== approval.linkage.sessionId);
   const scopeChanged = (activeWorkspaceId ?? "default") !== workspaceId || sessionChanged;
-  const specialistReady = Boolean(specialistEvidence && specialistEvidenceMatches(approval, specialistEvidence));
-  const hasPreview = Boolean(buildApprovalRequestReviewEvidenceModel(approval)) || specialistReady;
+  const specialist = useDeferredApprovalCode(specialistApprovalCode, Boolean(specialistEvidence));
+  const specialistCode = specialist.code;
+  const specialistReady = Boolean(
+    specialistEvidence && specialistCode?.specialistEvidenceMatches(approval, specialistEvidence),
+  );
+  const review = useApprovalReviewEvidence(approval);
+  const hasPreview = Boolean(review.evidence) || specialistReady;
   const specializedReview =
     Boolean(approval.mcpElicitation) ||
     approval.kind === "remote_worker.native_runtime" ||
@@ -167,8 +168,33 @@ function ApprovalDecisionReview({
     };
   }, []);
   useEffect(() => {
-    if (focusAction === "approve")
-      approveRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)")?.focus();
+    if (focusAction !== "approve") return;
+    const origin = document.activeElement;
+    const cancel = () => {
+      approveFocus.current = null;
+      document.removeEventListener("focusin", onFocus);
+    };
+    const onFocus = (event: FocusEvent) => {
+      if (event.target !== origin) cancel();
+    };
+    // An explicit keyboard request can outlive a cold preview. Moving focus gives it up.
+    approveFocus.current = { origin, cancel };
+    document.addEventListener("focusin", onFocus);
+    return cancel;
+  }, [focusAction, approval.approvalId]);
+  useEffect(() => {
+    const request = approveFocus.current;
+    if (!request || !hasPreview) return;
+    if (document.activeElement !== request.origin || request.origin === denyRef.current) {
+      request.cancel();
+      return;
+    }
+    const button = approveRef.current?.querySelector<HTMLButtonElement>("button:not(:disabled)");
+    if (!button) return;
+    request.cancel();
+    button.focus();
+  }, [focusAction, approval.approvalId, hasPreview, specialistReady]);
+  useEffect(() => {
     if (focusAction === "deny") denyRef.current?.focus();
   }, [focusAction, approval.approvalId]);
 
@@ -205,76 +231,27 @@ function ApprovalDecisionReview({
     if (!token) return;
     setError("");
     setNotice("");
-    let mutationAttempted = false;
     let resolvedMessage: string | undefined;
     try {
-      const latest = await readCurrent();
-      // A different selection, workspace, or reviewed record unmounts this review.
-      // Cancel before dispatch; after dispatch retain the original action's outcome.
-      if (!current.current || !access.current()) return;
-      const record = latest ?? undefined;
-      if (
-        !canResolveInboxApproval(
-          item,
-          approval,
-          record,
-          workspaceId,
-          Date.now(),
-          specialistReady || decision === "reject",
-        )
-      ) {
-        setError(CHANGED_APPROVAL_RECORD);
-        onInvalidated();
-        return;
-      }
-      if (specializedReview && decision === "approve") {
-        const fresh = await readSpecialistEvidence(approval);
-        if (!current.current || !access.current()) return;
-        if (
-          !canResolveInboxApproval(item, approval, record, workspaceId, Date.now(), true) ||
-          !specialistEvidence ||
-          !specialistEvidenceMatches(approval, fresh) ||
-          specialistEvidenceKey(fresh) !== specialistEvidenceKey(specialistEvidence)
-        ) {
-          setError("Specialist review changed. Refresh and review the current target before approving.");
-          onInvalidated("Specialist review changed. Refresh and review the current target before approving.");
-          return;
-        }
-      }
-      if (decision === "approve" && prepareApprove) {
-        const failure = await runPrepareApprove(prepareApprove, workspaceId, approval.approvalId, token);
-        // The preparation may already have changed something (Code Mode is on). A review that remounted meanwhile
-        // does not send this click, and its owner says so (choose again, or why it stopped) instead of dropping it.
-        const outlived = !current.current || !access.current();
-        if (outlived) onInvalidated(failure?.summary, failure?.line);
-        else if (failure) setError(failure.line);
-        if (outlived || failure) return;
-      }
-      updateInboxApprovalAttempt(
+      const { submitInboxApproval } = await import("./submit-inbox-approval");
+      resolvedMessage = await submitInboxApproval({
+        approval,
+        decision,
         workspaceId,
-        approval.approvalId,
+        item,
         token,
-        "submitted",
-        "Recording the approval decision…",
-      );
-      mutationAttempted = true;
-      const result = await resolveApproval(approval.approvalId, decision);
-      if (!matchesInboxApprovalDecision(item, approval, result.approval, workspaceId, decision)) {
-        throw new Error("The returned record does not confirm this approval and decision.");
-      }
-      const message = approvalDecisionMessage(result.approval, result.effects);
-      updateInboxApprovalAttempt(workspaceId, approval.approvalId, token, "resolved", message);
-      resolvedMessage = message;
+        specializedReview,
+        specialistReady,
+        specialistEvidence,
+        specialistCode,
+        prepareApprove,
+        readCurrent,
+        isCurrent: () => current.current && access.current(),
+        onError: setError,
+        onInvalidated,
+      });
     } catch (cause) {
-      if (mutationAttempted) {
-        updateInboxApprovalAttempt(
-          workspaceId,
-          approval.approvalId,
-          token,
-          "uncertain",
-          "Decision outcome is uncertain. Check again to read the current record before taking another action.",
-        );
-      } else if (current.current) {
+      if (current.current && access.current()) {
         setError(`Could not check the current approval. ${describeApiError(cause).summary}`);
       }
     } finally {
@@ -333,7 +310,12 @@ function ApprovalDecisionReview({
     const resolution = approvalResolutionLine(approval);
     return (
       <section aria-label="Recorded approval decision" className="space-y-2">
-        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
+        <ApprovalReviewSummaryContent
+          approval={approval}
+          workspaceId={workspaceId}
+          evidence={review.evidence}
+          showExpiry={!expiryShownNearby}
+        />
         <p role="status">{approvalDecisionMessage(approval)}</p>
         {resolution ? <p className="text-fg-secondary">{resolution}</p> : null}
       </section>
@@ -342,7 +324,12 @@ function ApprovalDecisionReview({
   if (approval.mcpElicitation)
     return (
       <>
-        <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
+        <ApprovalReviewSummaryContent
+          approval={approval}
+          workspaceId={workspaceId}
+          evidence={review.evidence}
+          showExpiry={!expiryShownNearby}
+        />
         <p className="text-fg-muted">
           This request carries an MCP server question, which can&apos;t be decided here. Pending MCP server requests are
           listed in Capabilities › Connectors › Advanced setup.{" "}
@@ -366,9 +353,18 @@ function ApprovalDecisionReview({
 
   return (
     <div className="space-y-2 border-t border-line-subtle pt-3">
-      {hasPreview || specializedReview ? (
+      {review.loading || specialist.loading ? (
+        <p aria-busy="true">Loading the exact approval preview…</p>
+      ) : review.unavailable || specialist.unavailable ? (
+        <p role="alert">The approval preview could not load. Reopen the review or use Deny.</p>
+      ) : hasPreview || specializedReview ? (
         compact ? null : (
-          <ApprovalReviewSummary approval={approval} workspaceId={workspaceId} showExpiry={!expiryShownNearby} />
+          <ApprovalReviewSummaryContent
+            approval={approval}
+            workspaceId={workspaceId}
+            evidence={review.evidence}
+            showExpiry={!expiryShownNearby}
+          />
         )
       ) : (
         <p role="alert">
@@ -398,9 +394,10 @@ function ApprovalDecisionReview({
                 expiresAt: approval.expiresAt,
               }}
               reviewedApproval={approval}
+              reviewEvidence={review.evidence}
               specialistReview={
-                specialistReady && specialistEvidence ? (
-                  <SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
+                specialistReady && specialistEvidence && specialistCode ? (
+                  <specialistCode.SpecialistApprovalReview approval={approval} evidence={specialistEvidence} />
                 ) : undefined
               }
               pending={Boolean(attempt) || (specializedReview && !specialistReady)}

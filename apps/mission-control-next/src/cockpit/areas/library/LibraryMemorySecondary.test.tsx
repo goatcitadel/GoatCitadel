@@ -10,6 +10,9 @@ import { __resetApprovalOperationAttemptsForTests } from "../inbox/approval-oper
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 const mocks = vi.hoisted(() => ({
   settings: vi.fn(),
   list: vi.fn(),

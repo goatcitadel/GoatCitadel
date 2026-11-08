@@ -115,7 +115,7 @@ export function useChatComposerPaletteActions({
             pushLocalNotice("Explore workspace delegation is temporarily unavailable.", "warning");
             break;
           case "open_template_form": {
-            openRunVariableForm({
+            await openRunVariableForm({
               title: item.command,
               invocation: item.action.invocation,
               schema: item.action.schema,

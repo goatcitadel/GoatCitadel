@@ -5,6 +5,9 @@ import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { AutonomousActivationGrantRecord, ChatProjectRecord } from "@goatcitadel/contracts";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { ProjectFanout } from "./ProjectFanout";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 const preferences = vi.hoisted(() => ({ showTechnicalDetails: false }));
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({ useUiPreferences: () => preferences }));
 const api = vi.hoisted(() => ({ list: vi.fn(), projects: vi.fn(), create: vi.fn(), revoke: vi.fn() }));

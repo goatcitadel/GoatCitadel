@@ -38,6 +38,7 @@ it("skips an obsolete automatic tree read and keeps the explicit resolver availa
       selection: { selectedSessionId: "session-1" },
       workspaceId: "workspace-1",
       setAgenticRunTree: setTree,
+      threadReady: true,
       refreshKey,
     });
     resolveManually = owner.resolveAgenticRunTree;
@@ -61,4 +62,28 @@ it("skips an obsolete automatic tree read and keeps the explicit resolver availa
   expect(await resolveManually?.()).toEqual({ runId: "explicit-run" });
   expect(api.tree).toHaveBeenLastCalledWith("explicit-run", { workspaceId: "workspace-1" });
   expect(api.list).toHaveBeenCalledTimes(3);
+});
+
+it("loads the automatic tree once when the selected thread first hydrates", async () => {
+  api.list.mockResolvedValue({ items: [{ runId: "hydrated-run" }] });
+  api.tree.mockResolvedValue({ runId: "hydrated-run" });
+  const setTree = vi.fn();
+  function Harness({ threadReady }: { threadReady: boolean }) {
+    useChatAgenticTreeRefresh({
+      selection: { selectedSessionId: "session-1" },
+      workspaceId: "workspace-1",
+      setAgenticRunTree: setTree,
+      threadReady,
+      refreshKey: threadReady ? "0:completed" : "0:null",
+    });
+    return null;
+  }
+  await act(async () => {
+    renderer = create(<Harness threadReady={false} />);
+  });
+  expect(api.list).not.toHaveBeenCalled();
+  await act(async () => renderer!.update(<Harness threadReady />));
+  expect(api.list).toHaveBeenCalledOnce();
+  expect(api.tree).toHaveBeenCalledExactlyOnceWith("hydrated-run", { workspaceId: "workspace-1" });
+  expect(setTree).toHaveBeenLastCalledWith({ runId: "hydrated-run" });
 });

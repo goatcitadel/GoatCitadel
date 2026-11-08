@@ -1,13 +1,10 @@
-export type DrawerModule = typeof import("vaul");
-export type DrawerContent = DrawerModule["Drawer"]["Content"];
+export type DrawerContent = typeof import("vaul").Drawer.Content;
+type SheetDrawerRuntime = typeof import("./SheetDrawerRuntime").SheetDrawerRuntime;
 // A scope-neutral code cache only. Public children and their state mount once the SDK is ready.
-let drawerLoad: Promise<DrawerModule> | undefined;
-let loadedDrawer: DrawerModule | undefined;
+let drawerLoad: Promise<SheetDrawerRuntime> | undefined;
+let loadedDrawer: SheetDrawerRuntime | undefined;
 export function loadDrawer() {
-  drawerLoad ??= import("vaul").then((code) => {
-    loadedDrawer = code;
-    return code;
-  });
+  drawerLoad ??= import("./SheetDrawerRuntime").then(({ SheetDrawerRuntime }) => (loadedDrawer = SheetDrawerRuntime));
   return drawerLoad;
 }
 

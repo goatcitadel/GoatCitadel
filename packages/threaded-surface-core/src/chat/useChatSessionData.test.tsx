@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, ChatThreadResponse } from "@goatcitadel/contracts";
 import { useChatSessionData, type ChatHistoryView } from "./useChatSessionData";
 import { runtimeCatalogBootstrapCache, sidebarBootstrapCache } from "./chat-session-data-bootstrap";
-import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { notifyGatewayAccessChanged, setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useChatSessionControls } from "./useChatSessionControls";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -32,6 +32,15 @@ const fetchThreadKnowledgeAttachmentsMock = vi.fn();
 const recordClientDiagnosticMock = vi.fn();
 const recordChatRefreshPhaseMock = vi.fn();
 const assignChatSessionProjectMock = vi.fn();
+const evidenceImport = vi.hoisted(() => ({
+  evaluated: vi.fn(),
+  wait: undefined as Promise<void> | undefined,
+}));
+vi.mock("./chat-session-evidence-code.js", async (original) => {
+  evidenceImport.evaluated();
+  await evidenceImport.wait;
+  return original();
+});
 const assignmentErrors = vi.hoisted(() => ({
   ApiRequestError: class extends Error {
     status: number;
@@ -319,6 +328,53 @@ describe("useChatSessionData", () => {
 
   afterEach(() => {
     vi.useRealTimers();
+  });
+
+  it("keeps core startup independent of evidence code and discards a read across changed Gateway access", async () => {
+    let release!: () => void;
+    evidenceImport.wait = new Promise<void>((resolve) => { release = resolve; });
+    let renderer!: ReactTestRenderer;
+    try {
+      await act(async () => {
+        renderer = create(
+          <Harness
+            workspaceId="workspace-lazy-evidence"
+            initialSelectedSessionId="session-1"
+            secondaryEnabled={false}
+            catalogEnabled={false}
+          />,
+        );
+        await flushEffects();
+      });
+      expect(fetchSettingsMock).toHaveBeenCalled();
+      expect(fetchChatThreadMock).toHaveBeenCalledWith("session-1");
+      expect(evidenceImport.evaluated).not.toHaveBeenCalled();
+      expect(fetchChatProactiveStatusMock).not.toHaveBeenCalled();
+
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = latestHarness!.result.loadSessionSecondaryState("session-1");
+        await vi.waitFor(() => expect(evidenceImport.evaluated).toHaveBeenCalledOnce());
+      });
+      expect(fetchChatProactiveStatusMock).not.toHaveBeenCalled();
+      await act(async () => {
+        notifyGatewayAccessChanged(false);
+        release();
+        await pending;
+      });
+      expect(fetchChatProactiveStatusMock).not.toHaveBeenCalled();
+      expect(latestHarness!.result.secondaryLoading).toBe(false);
+
+      await act(async () => {
+        await latestHarness!.result.loadSessionSecondaryState("session-1");
+      });
+      expect(fetchChatProactiveStatusMock).toHaveBeenCalledExactlyOnceWith("session-1");
+      expect(evidenceImport.evaluated).toHaveBeenCalledOnce();
+    } finally {
+      release();
+      evidenceImport.wait = undefined;
+      await act(async () => renderer?.unmount());
+    }
   });
 
   it("bootstraps sidebar runtime catalogs and selected-session state", async () => {
@@ -782,8 +838,9 @@ describe("useChatSessionData", () => {
     let second!: Promise<boolean>;
     await act(async () => {
       first = latestHarness!.result.openHistoricalWindow("session-1", hit("message-1", 1));
+      await vi.waitFor(() => expect(fetchChatHistoryWindowMock).toHaveBeenCalledTimes(1));
       second = latestHarness!.result.openHistoricalWindow("session-1", hit("message-2", 2));
-      await Promise.resolve();
+      await vi.waitFor(() => expect(fetchChatHistoryWindowMock).toHaveBeenCalledTimes(2));
     });
     await act(async () => {
       resolveSecond(windowFor("message-2", 2));
@@ -802,6 +859,7 @@ describe("useChatSessionData", () => {
     let pending!: Promise<boolean>;
     await act(async () => {
       pending = latestHarness!.result.openHistoricalWindow("session-1", hit("message-3", 3));
+      await vi.waitFor(() => expect(fetchChatHistoryWindowMock).toHaveBeenCalledTimes(3));
       latestHarness?.setSelectedSessionId("session-2");
       await flushEffects();
     });
@@ -1769,9 +1827,10 @@ describe("useChatSessionData", () => {
         );
       else assignChatSessionProjectMock.mockResolvedValueOnce({});
       let pending!: Promise<void>;
+      const readsBeforeAssignment = fetchChatSessionsMock.mock.calls.length;
       await act(async () => {
         pending = latestAssignment!("destination");
-        await flushEffects(8);
+        await vi.waitFor(() => expect(fetchChatSessionsMock.mock.calls.length).toBeGreaterThan(readsBeforeAssignment));
       });
       expect(assignChatSessionProjectMock).toHaveBeenCalledExactlyOnceWith("session-1", "destination", 7);
       expect(typeof resolveRead).toBe("function");
@@ -2372,4 +2431,31 @@ it("rejects a catalog result across an unrendered caller A-B-A and rereads the c
   expect(latestHarness!.result.settings!.llm.providers[0].providerId).toBe("openai");
   await act(async () => renderer.unmount());
   setGatewayCallerScope("");
+});
+
+it("does not read a historical hit under changed Gateway access while loading its code", async () => {
+  fetchChatHistoryWindowMock.mockClear();
+  let renderer!: ReactTestRenderer;
+  await act(async () => {
+    renderer = create(<Harness workspaceId="workspace-history-access" initialSelectedSessionId="session-1" />);
+    await flushEffects();
+  });
+  try {
+    await act(async () => {
+      const opening = latestHarness!.result.openHistoricalWindow("session-1", {
+        workspaceId: "workspace-history-access",
+        sessionId: "session-1",
+        messageId: "message-1",
+        sequence: 1,
+        excerpt: "first message",
+        score: 1,
+      });
+      notifyGatewayAccessChanged(false);
+      await expect(opening).resolves.toBe(false);
+    });
+    expect(fetchChatHistoryWindowMock).not.toHaveBeenCalled();
+    expect(latestHarness?.result.historicalWindowLoading).toBe(false);
+  } finally {
+    await act(async () => renderer.unmount());
+  }
 });

@@ -233,16 +233,24 @@ export async function runUxBudgetChat(environment) {
           await mkdir(screenshotDir, { recursive: true });
           const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-chat-artifact-${variant}.png`);
           await page.screenshot({ path: screenshot, fullPage: false });
-          await inspector.getByRole("tab", { name: "Context" }).click();
-          const recorded = inspector.getByRole("region", { name: "Recorded turn context" });
-          await recorded.getByText("Memory mode").waitFor();
-          await inspector.getByRole("region", { name: "Current context selection" }).waitFor();
-          if (
-            !turn.trace?.memoryMode ||
-            !(await recorded.textContent())?.toLowerCase().includes(turn.trace.memoryMode)
-          ) {
-            throw new Error(`Chat artifact ${variant}: recorded memory mode does not match the selected Gateway turn.`);
-          }
+          const contextTab = inspector.getByRole("tab", { name: "Context", exact: true });
+          await contextTab.click();
+          if (await contextTab.getAttribute("aria-selected") !== "true") throw new Error("Context tab was not selected.");
+          const contextPanel = inspector.getByRole("tabpanel", { name: "Context", exact: true });
+          await contextPanel.waitFor();
+          const recorded = contextPanel.getByRole("region", { name: "Recorded message context", exact: true });
+          // DetailRow is div > dt + dd. Start at the exact label rather than
+          // embedding the inspector ancestor selector inside a relative has.
+          const memoryLabel = recorded.getByText("Memory mode", { exact: true });
+          await memoryLabel.waitFor();
+          if (await memoryLabel.count() !== 1) throw new Error("Recorded context must expose one memory mode row.");
+          const memoryRow = memoryLabel.locator("..");
+          const expectedMemory = { auto: "Automatic", on: "On", off: "Off" }[turn.trace?.memoryMode];
+          if (!expectedMemory) throw new Error("Fixture has no known recorded memory mode.");
+          const memoryValue = memoryRow.locator("dd");
+          await memoryValue.waitFor();
+          if (await memoryValue.innerText() !== expectedMemory) throw new Error("Recorded memory mode differs from the canonical turn snapshot.");
+          await contextPanel.getByRole("region", { name: "Current context selection", exact: true }).waitFor();
           const contextAxe = await auditPageAccessibility(page);
           const contextBlockingAxe = contextAxe.violations.filter(
             (violation) => violation.impact === "serious" || violation.impact === "critical",

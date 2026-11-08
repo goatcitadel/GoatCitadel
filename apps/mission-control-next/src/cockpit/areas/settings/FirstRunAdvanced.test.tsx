@@ -13,6 +13,9 @@ import { demoFixture } from "../../../features/native-routes/settings/demo-boots
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetOnboardingAttemptsForTests } from "../../../features/native-routes/settings/onboarding-completion-state";
 import { __resetDemoReceiptsForTests } from "../../../features/native-routes/settings/demo-bootstrap-state";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 const api = vi.hoisted(() => ({
   fetchSettings: vi.fn(),
   fetchOnboardingState: vi.fn(),

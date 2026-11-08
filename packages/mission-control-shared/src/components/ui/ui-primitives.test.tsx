@@ -1,6 +1,6 @@
 import React from "react";
 import { act, create } from "react-test-renderer";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 
 import { ActionButton } from "../ActionButton";
 import { ChatComposerPlusMenu } from "../ChatComposerPlusMenu";
@@ -45,6 +45,7 @@ import {
   Textarea,
 } from ".";
 import { publishEventStreamStatus, resetEventStreamStatus } from "../../state/event-stream-status-store";
+import { preloadGCModalRuntime } from "./GCModal";
 import {
   Command,
   CommandDialog,
@@ -80,6 +81,13 @@ vi.mock("radix-ui", async () => {
     Popover: namespace(["Root", "Portal", "Trigger", "Content", "Anchor"]),
     Tooltip: namespace(["Provider", "Root", "Portal", "Trigger", "Content", "Arrow"]),
   };
+});
+
+vi.mock("@radix-ui/react-dialog", async () => (await import("radix-ui")).Dialog);
+
+beforeAll(async () => {
+  // These renderer tests assert the ready controls; GCModal.test covers the loading handoff.
+  await preloadGCModalRuntime();
 });
 
 vi.mock("@radix-ui/react-popover", async () => {

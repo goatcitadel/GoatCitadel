@@ -987,6 +987,7 @@ describe("useChatOutboundExecution", () => {
     await act(async () => {
       create(<Harness streamEnabled initialThread={runningThread} />);
     });
+    await act(async () => { await vi.dynamicImportSettled(); });
     expect(resumeChatTurnStreamMock).toHaveBeenCalledWith(
       "session-1",
       "turn-1",
@@ -1047,6 +1048,7 @@ describe("useChatOutboundExecution", () => {
       return secondTail.promise;
     });
     await act(async () => { create(<Harness streamEnabled initialThread={runningThread} />); });
+    await act(async () => { await vi.dynamicImportSettled(); });
     const thinking = (sequence: number, delta: string) => ({ type: "thinking_delta", eventId: "thinking-" + sequence, sequence, sessionId: "session-1", turnId: "turn-1", delta });
     await act(async () => {
       onReplayChunk?.({ type: "message_start", eventId: "start", sequence: 1, sessionId: "session-1", turnId: "turn-1", messageId: "assistant-1", branchKind: "append" });

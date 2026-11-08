@@ -1,5 +1,5 @@
 import { timingSafeEqual } from "node:crypto";
-import { normalizeRemoteWorkerInstallationSubmission } from "@goatcitadel/contracts";
+import { ConflictError, normalizeRemoteWorkerInstallationSubmission } from "@goatcitadel/contracts";
 import { normalizeRemoteWorkerRuntimeCleanupSubmission } from "@goatcitadel/contracts";
 import { types as nodeUtilTypes } from "node:util";
 import { normalizeRemoteWorkerRuntimeInstallSelectionSubmission, normalizeRemoteWorkerRuntimeInstallSubmission, normalizeRemoteWorkerRuntimeOutputSubmission, redactSecretText, normalizeRemoteWorkerRuntimeOutcomeSubmission,
@@ -16,17 +16,58 @@ import { normalizeRemoteWorkerRuntimeInstallSelectionSubmission, normalizeRemote
  * remote worker. They live beside the protocol owner rather than inside it so
  * the owner file stays reviewable.
  */
+export type ExecutionRejectionDiagnostic = Readonly<
+  | { stage: "artifact_admission"; reason: "lease_parent_dispatch_mismatch" | "other" }
+  | { stage: "unclassified"; reason: "unclassified" }
+>;
+const UNCLASSIFIED_REJECTION: ExecutionRejectionDiagnostic = Object.freeze({ stage: "unclassified", reason: "unclassified" });
+
+/** Internal only: never serialize this projection onto the protected wire. */
+function snapshotRejectionDiagnostic(value: unknown): ExecutionRejectionDiagnostic {
+  if (value === null || typeof value !== "object" || nodeUtilTypes.isProxy(value) ||
+    (Object.getPrototypeOf(value) !== Object.prototype && Object.getPrototypeOf(value) !== null)) return UNCLASSIFIED_REJECTION;
+  const fields = Object.getOwnPropertyDescriptors(value);
+  const stage = fields.stage?.value;
+  const reason = fields.reason?.value;
+  if (stage === "artifact_admission" && (reason === "lease_parent_dispatch_mismatch" || reason === "other")) {
+    return Object.freeze({ stage, reason });
+  }
+  return UNCLASSIFIED_REJECTION;
+}
+
+export function classifyArtifactAdmissionRejection(error: unknown): ExecutionRejectionDiagnostic {
+  // The real local AsyncStorage preserves ConflictError. Do not promote a
+  // lookalike object or any other STATE_CONFLICT to the parent-fence reason.
+  if (error !== null && typeof error === "object" && !nodeUtilTypes.isProxy(error) && error instanceof ConflictError) {
+    const fields = Object.getOwnPropertyDescriptors(error);
+    if (fields.code?.value === "STATE_CONFLICT" && fields.message?.value ===
+      "remote worker assignment lease parent dispatch authority conflicts with durable assignment authority.") {
+      return Object.freeze({ stage: "artifact_admission", reason: "lease_parent_dispatch_mismatch" });
+    }
+  }
+  return Object.freeze({ stage: "artifact_admission", reason: "other" });
+}
+
+export function readExecutionRejectionDiagnostic(error: unknown): ExecutionRejectionDiagnostic {
+  if (error === null || typeof error !== "object" || nodeUtilTypes.isProxy(error) ||
+    !(error instanceof RemoteWorkerAssignmentExecutionProtocolError)) return UNCLASSIFIED_REJECTION;
+  return snapshotRejectionDiagnostic(Object.getOwnPropertyDescriptor(error, "diagnostic")?.value);
+}
+
 export class RemoteWorkerAssignmentExecutionProtocolError extends Error {
   public readonly code = "REMOTE_WORKER_ASSIGNMENT_EXECUTION_PROTOCOL_REJECTED";
+  public readonly diagnostic!: ExecutionRejectionDiagnostic;
 
-  public constructor(message: string) {
+  public constructor(message: string, diagnostic?: unknown) {
     super(message);
     this.name = "RemoteWorkerAssignmentExecutionProtocolError";
+    Object.defineProperty(this, "diagnostic", { value: snapshotRejectionDiagnostic(diagnostic),
+      enumerable: true, configurable: false, writable: false });
   }
 }
 
-export function rejected(message: string): RemoteWorkerAssignmentExecutionProtocolError {
-  return new RemoteWorkerAssignmentExecutionProtocolError(message);
+export function rejected(message: string, diagnostic?: ExecutionRejectionDiagnostic): RemoteWorkerAssignmentExecutionProtocolError {
+  return new RemoteWorkerAssignmentExecutionProtocolError(message, diagnostic);
 }
 
 export function exactOwnDataFields(

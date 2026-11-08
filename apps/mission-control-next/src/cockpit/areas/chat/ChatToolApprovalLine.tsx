@@ -4,7 +4,7 @@ import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals
 import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { approvalExpiredUnresolved, approvalOutcomeLabel } from "../inbox/approval-settlement";
-import { presentActor } from "../inbox/inbox-vocabulary";
+import { presentActor } from "../inbox/approval-actor";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 
 /** "Approved by an operator", or "Expired without an operator decision" for an expiry sweep. */

@@ -14,6 +14,9 @@ import { CockpitBoardEditor } from "./CockpitBoardEditor";
 import { fetchHealthSummary } from "@goatcitadel/mission-control-shared/api/system";
 import { __resetBoardMutationsForTests } from "../../../features/native-routes/ops/board-mutation-state";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 vi.mock("@goatcitadel/mission-control-shared/api/ops-saved-boards", () => ({
   createOpsSavedBoard: vi.fn(),

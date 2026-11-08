@@ -88,7 +88,7 @@ function ExternalSources({ workspaceId }: { workspaceId: string }) {
             </li>
           ))}
       </ul>
-      {detail.isFetching ? <p role="status">Reading registered source…</p> : null}
+      {detail.isFetching ? <p aria-busy="true">Reading registered source…</p> : null}
       {detail.error ? <Callout tone="error">{describeApiError(detail.error).summary}</Callout> : null}
       {detail.data && detail.data.source.workspaceId !== workspaceId ? (
         <Callout announce={false} tone="error">

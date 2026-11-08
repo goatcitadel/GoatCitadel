@@ -1,16 +1,14 @@
 import { describeApiErrorText } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { PageHeader } from "@goatcitadel/mission-control-shared/components/PageHeader";
 import { StatusChip } from "@goatcitadel/mission-control-shared/components/StatusChip";
-import { MissionThreadedConfirmations } from "../../MissionThreadedConfirmations";
+import { DeferredMissionThreadedConfirmations } from "../../DeferredMissionThreadedConfirmations";
+import type { ChatConfirmationPlanContext } from "../../MissionThreadedConfirmations";
 import type {
   MissionThreadedControllerHostProps,
   MissionThreadedRenderSurfaceInput,
 } from "../../MissionThreadedControllerHost.types";
 import { isChatErrorAlreadyShownByTurn } from "../chat-error-copy";
 import { ThreadedLoadingState } from "../ThreadedLoadingState";
-import type { useChatChangePlanConfirmations } from "../useChatChangePlanConfirmations";
-import type { useChatChangePlanOAuth } from "../useChatChangePlanOAuth";
-import type { useChatChangePlanOwnerActions } from "../useChatChangePlanOwnerActions";
 import type { useChatChangePlanState } from "../useChatChangePlanState";
 import type { useChatComposerInteractions } from "../useChatComposerInteractions";
 import type { useChatContextActions } from "../useChatContextActions";
@@ -81,19 +79,10 @@ type Input = {
     | "setActiveChangePlan"
     | "setLinkedDefaultChangePlan"
     | "setChangePlanActionError"
+    | "setChangePlanActionPending"
+    | "setChangePlanOAuthFlow"
   >;
-  planConfirmations: Pick<
-    ReturnType<typeof useChatChangePlanConfirmations>,
-    "handleConfirmLinkedModelPlans" | "handleConfirmChangePlan"
-  >;
-  planActions: Pick<
-    ReturnType<typeof useChatChangePlanOwnerActions>,
-    | "handleSubmitChangePlanForm"
-    | "handleSubmitChangePlanSecret"
-    | "handleOpenChangePlanApproval"
-    | "handleReviewChangePlanArtifacts"
-  >;
-  planOAuth: Pick<ReturnType<typeof useChatChangePlanOAuth>, "handleChangePlanOAuth" | "handleChangePlanNativePath">;
+  planContext: ChatConfirmationPlanContext;
   sessionControls: Pick<
     ReturnType<typeof useChatSessionControls>,
     | "sessionDeleteConfirm"
@@ -128,9 +117,7 @@ export function renderChatControllerFrame({
   contextActions,
   composerInteractions,
   changePlanState,
-  planConfirmations,
-  planActions,
-  planOAuth,
+  planContext,
   sessionControls,
 }: Input) {
   const rootClassName = `chat-v11 mode-${surfaceState.messageMode}${lockSurface ? " shell-owned-surface" : ""}`;
@@ -141,7 +128,46 @@ export function renderChatControllerFrame({
     turnStatus: latestSelectedTurn?.trace?.status,
     assistantContent: latestSelectedTurn?.assistantMessage?.content,
   });
-  if (sessionData.loading && !renderWhileLoading) {
+  const loadingFrame = sessionData.loading && !renderWhileLoading;
+  // Keep the same confirmation owner mounted while the frame briefly displays its loading shell.
+  const confirmations = (
+    <DeferredMissionThreadedConfirmations
+      key="chat-confirmations"
+      visible={!loadingFrame}
+      planContext={planContext}
+      forkConfirm={forkConfirm}
+      forkPending={forkPending}
+      setForkConfirm={setForkConfirm}
+      blockHistoricalMutation={blockHistoricalMutation}
+      handleStartNewThreadFromTurn={handleStartNewThreadFromTurn}
+      capabilitySuggestionConfirm={Boolean(contextActions.capabilitySuggestionConfirm)}
+      capabilityConfirmationCopy={contextActions.capabilityConfirmationCopy}
+      capabilitySuggestionPending={contextActions.capabilitySuggestionPending}
+      setCapabilitySuggestionConfirm={contextActions.setCapabilitySuggestionConfirm}
+      handleConfirmCapabilitySuggestion={composerInteractions.handleConfirmCapabilitySuggestion}
+      activeChangePlan={changePlanState.activeChangePlan}
+      linkedDefaultChangePlan={changePlanState.linkedDefaultChangePlan}
+      changePlanActionPending={changePlanState.changePlanActionPending}
+      changePlanActionError={changePlanState.changePlanActionError}
+      changePlanOAuthFlow={changePlanState.changePlanOAuthFlow}
+      turnCount={sessionData.thread?.turns.length ?? 0}
+      setActiveChangePlan={changePlanState.setActiveChangePlan}
+      setLinkedDefaultChangePlan={changePlanState.setLinkedDefaultChangePlan}
+      setChangePlanActionError={changePlanState.setChangePlanActionError}
+      setChangePlanActionPending={changePlanState.setChangePlanActionPending}
+      setChangePlanOAuthFlow={changePlanState.setChangePlanOAuthFlow}
+      sessionDeleteConfirm={sessionControls.sessionDeleteConfirm}
+      sessionControlPending={sessionControls.sessionControlPending}
+      setSessionDeleteConfirm={sessionControls.setSessionDeleteConfirm}
+      handleConfirmDeleteSession={composerInteractions.handleConfirmDeleteSession}
+      archiveWorkspaceConfirmOpen={sessionControls.archiveWorkspaceConfirmOpen}
+      workspaceMissionSessionCount={threadController.workspaceMissionSessionCount}
+      archiveWorkspacePending={sessionControls.archiveWorkspacePending}
+      setArchiveWorkspaceConfirmOpen={sessionControls.setArchiveWorkspaceConfirmOpen}
+      handleConfirmArchiveWorkspace={composerInteractions.handleConfirmArchiveWorkspace}
+    />
+  );
+  if (loadingFrame) {
     return (
       <section className={rootClassName}>
         {!lockSurface && !hidePageHeader ? (
@@ -162,6 +188,7 @@ export function renderChatControllerFrame({
           }
           workspaceName={workspaceName}
         />
+        {confirmations}
       </section>
     );
   }
@@ -208,44 +235,7 @@ export function renderChatControllerFrame({
       {error && !hostErrorAlreadyInThread ? <p className="error">{describeApiErrorText(error).summary}</p> : null}
       {sessionData.isRefreshing ? <p className="status-banner">Refreshing chat context...</p> : null}
       {renderSurface(threadedSurfaceInput)}
-      <MissionThreadedConfirmations
-        forkConfirm={forkConfirm}
-        forkPending={forkPending}
-        setForkConfirm={setForkConfirm}
-        blockHistoricalMutation={blockHistoricalMutation}
-        handleStartNewThreadFromTurn={handleStartNewThreadFromTurn}
-        capabilitySuggestionConfirm={Boolean(contextActions.capabilitySuggestionConfirm)}
-        capabilityConfirmationCopy={contextActions.capabilityConfirmationCopy}
-        capabilitySuggestionPending={contextActions.capabilitySuggestionPending}
-        setCapabilitySuggestionConfirm={contextActions.setCapabilitySuggestionConfirm}
-        handleConfirmCapabilitySuggestion={composerInteractions.handleConfirmCapabilitySuggestion}
-        activeChangePlan={changePlanState.activeChangePlan}
-        linkedDefaultChangePlan={changePlanState.linkedDefaultChangePlan}
-        changePlanActionPending={changePlanState.changePlanActionPending}
-        changePlanActionError={changePlanState.changePlanActionError}
-        changePlanOAuthFlow={changePlanState.changePlanOAuthFlow}
-        turnCount={sessionData.thread?.turns.length ?? 0}
-        setActiveChangePlan={changePlanState.setActiveChangePlan}
-        setLinkedDefaultChangePlan={changePlanState.setLinkedDefaultChangePlan}
-        setChangePlanActionError={changePlanState.setChangePlanActionError}
-        handleConfirmLinkedModelPlans={planConfirmations.handleConfirmLinkedModelPlans}
-        handleConfirmChangePlan={planConfirmations.handleConfirmChangePlan}
-        handleSubmitChangePlanForm={planActions.handleSubmitChangePlanForm}
-        handleSubmitChangePlanSecret={planActions.handleSubmitChangePlanSecret}
-        handleChangePlanOAuth={planOAuth.handleChangePlanOAuth}
-        handleOpenChangePlanApproval={planActions.handleOpenChangePlanApproval}
-        handleReviewChangePlanArtifacts={planActions.handleReviewChangePlanArtifacts}
-        handleChangePlanNativePath={planOAuth.handleChangePlanNativePath}
-        sessionDeleteConfirm={sessionControls.sessionDeleteConfirm}
-        sessionControlPending={sessionControls.sessionControlPending}
-        setSessionDeleteConfirm={sessionControls.setSessionDeleteConfirm}
-        handleConfirmDeleteSession={composerInteractions.handleConfirmDeleteSession}
-        archiveWorkspaceConfirmOpen={sessionControls.archiveWorkspaceConfirmOpen}
-        workspaceMissionSessionCount={threadController.workspaceMissionSessionCount}
-        archiveWorkspacePending={sessionControls.archiveWorkspacePending}
-        setArchiveWorkspaceConfirmOpen={sessionControls.setArchiveWorkspaceConfirmOpen}
-        handleConfirmArchiveWorkspace={composerInteractions.handleConfirmArchiveWorkspace}
-      />
+      {confirmations}
     </section>
   );
 }

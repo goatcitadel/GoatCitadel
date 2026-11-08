@@ -10,6 +10,7 @@ import type {
 } from "@goatcitadel/contracts";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { prepareReadyDialogFixture } from "../../../../test/ready-dialog-fixture";
 import { __resetSettingsApprovalDialogsForTests } from "../../settings/SettingsApprovalDialog";
 import { PluginInstallPanel } from "./PluginInstallPanel";
 import {
@@ -33,6 +34,8 @@ import {
 } from "./plugin-install.test-support";
 import { draftPluginInstallKey, readPluginInstall, setPluginInstall } from "./plugin-install-store";
 import { __resetPluginInstallsForTests } from "./use-plugin-install";
+
+prepareReadyDialogFixture();
 
 const prefs = vi.hoisted(() => ({
   activeCitadelId: "default",

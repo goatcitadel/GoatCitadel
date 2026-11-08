@@ -16,9 +16,8 @@ import {
   type ReactNode,
 } from "react";
 import { registerCockpitSheetBack } from "../app/cockpit-back-guard";
-import { X } from "lucide-react";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
-import { IconButton } from "./IconButton";
+import { useAccessBoundReview } from "@goatcitadel/mission-control-shared/hooks/use-access-bound-review";
 
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import {
@@ -28,11 +27,12 @@ import {
   subscribeGatewayCallerScope,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import { PendingDialog } from "@goatcitadel/mission-control-shared/components/ui/deferred-dialog";
 import { readCockpitHistory, subscribeCockpitHistory } from "../app/cockpit-history";
 import { Dialog } from "./Dialog";
 import { Button } from "./Button";
 
-import { loadDrawer, readLoadedDrawer, type DrawerModule, type DrawerContent } from "./sheet-drawer-code";
+import { loadDrawer, readLoadedDrawer, type DrawerContent } from "./sheet-drawer-code";
 
 type PendingFocus = { owner: SheetOwner; node: HTMLElement; kind?: "close" | "panel" };
 
@@ -80,11 +80,12 @@ export function Sheet({
   const pendingHost = useRef<HTMLElement | null>(null),
     pendingFocus = useRef<PendingFocus | undefined>(undefined);
   const sdkClose = useRef<HTMLButtonElement>(null),
-    drawerCommitted = useRef(Boolean(readLoadedDrawer()));
+    drawerCommitted = useRef(Boolean(readLoadedDrawer())),
+    pendingHandoff = useRef(false);
   const cancelButton = useRef<HTMLButtonElement>(null);
   const activeReview = useRef<ReloadReview | undefined>(undefined),
     returnFocus = useRef<ReloadReview | undefined>(undefined);
-  const [code, setCode] = useState<DrawerModule | undefined>(() => readLoadedDrawer());
+  const [code, setCode] = useState(readLoadedDrawer);
   const [failedOwner, setFailedOwner] = useState<SheetOwner>();
   const [review, setReview] = useState<ReloadReview>();
   const activation = useRef<PendingFocus | undefined>(undefined);
@@ -121,7 +122,11 @@ export function Sheet({
     returnFocus.current = undefined;
     setReview(undefined);
   }, [owner, history, children]);
-  const Drawer = code && !activationPending ? code.Drawer : undefined;
+  const Drawer = activationPending ? undefined : code;
+  pendingHandoff.current = Boolean(Drawer && open);
+  const pendingAccess = useAccessBoundReview(open && !Drawer, () => {
+    if (current()) onOpenChange(false);
+  });
   useLayoutEffect(() => {
     drawerCommitted.current = Boolean(Drawer && open);
   }, [Drawer, open]);
@@ -134,7 +139,7 @@ export function Sheet({
     let active = true;
     void loadDrawer().then(
       (sdk) => {
-        if (active && current()) setCode(sdk);
+        if (active && current()) setCode(() => sdk);
       },
       () => {
         if (active && current()) setFailedOwner(owner);
@@ -288,48 +293,36 @@ export function Sheet({
   return (
     <>
       {Drawer ? (
-        <Drawer.Root open={open} onOpenChange={onOpenChange} direction={side ? "right" : "bottom"}>
-          <Drawer.Portal>
-            <Drawer.Overlay className="fixed inset-0 z-40 bg-scrim" />
-            <Drawer.Content
-              // A sheet has a title and no description; say so rather than point at a missing description.
-              aria-describedby={undefined}
-              onOpenAutoFocus={handoffFocus}
-              onCloseAutoFocus={
-                onCloseAutoFocus ??
-                ((event) => {
-                  if (trigger.current?.isConnected) {
-                    event.preventDefault();
-                    trigger.current.focus();
-                  }
-                })
-              }
-              className={
-                side
-                  ? "fixed inset-y-0 right-0 z-50 h-full w-full max-w-2xl overflow-hidden border-l border-line bg-overlay"
-                  : "cockpit-sheet cockpit-safe-bottom fixed inset-x-0 bottom-0 z-50 overflow-hidden rounded-t-lg border border-line bg-overlay"
-              }
-            >
-              <div className={side ? "h-full overflow-y-auto p-4" : "cockpit-sheet-scroll overflow-y-auto p-4"}>
-                <div className="mb-3 flex items-center justify-between gap-4">
-                  <Drawer.Title className="font-display text-md font-semibold text-fg">{title}</Drawer.Title>
-                  <Drawer.Close asChild>
-                    <IconButton ref={sdkClose} label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
-                  </Drawer.Close>
-                </div>
-                {children}
-              </div>
-            </Drawer.Content>
-          </Drawer.Portal>
-        </Drawer.Root>
-      ) : (
-        <Dialog
+        <Drawer
           open={open}
+          onOpenChange={onOpenChange}
+          onOpenAutoFocus={handoffFocus}
+          onCloseAutoFocus={
+            onCloseAutoFocus ??
+            ((event) => {
+              if (trigger.current?.isConnected) {
+                event.preventDefault();
+                trigger.current.focus();
+              }
+            })
+          }
+          sdkClose={sdkClose}
+          closeLabel={closeLabel}
+          title={title}
+          side={side}
+        >
+          {children}
+        </Drawer>
+      ) : open && pendingAccess ? (
+        <PendingDialog
           title={title}
           closeLabel={closeLabel}
+          className="cockpit-dialog cockpit-pending-dialog fixed inset-x-4 top-4 m-0 mx-auto w-auto max-w-xl border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim sm:top-24"
           description={failed ? "Sheet controls are unavailable." : "Loading sheet controls."}
-          onOpenChange={(value) => {
-            if (current()) onOpenChange(value);
+          handoff={pendingHandoff}
+          keepFocusForHandoff
+          onDismiss={() => {
+            if (current()) onOpenChange(false);
           }}
           onOpenAutoFocus={(event) => {
             event.preventDefault();
@@ -358,14 +351,15 @@ export function Sheet({
               </Button>
             </div>
           ) : (
-            <p role="status" className="min-h-24 text-sm text-fg-muted">
+            <p aria-busy="true" className="min-h-24 text-sm text-fg-muted">
               Loading sheet controls…
             </p>
           )}
-        </Dialog>
-      )}
+        </PendingDialog>
+      ) : null}
       <Dialog
         open={Boolean(review && failed && currentReview(review))}
+        portalContainer={pendingHost.current}
         title="Reload app?"
         onOpenChange={(value) => {
           if (!value) closeReview(review);

@@ -2,7 +2,7 @@ import {
   RESPONSIVE_BREAKPOINTS,
   RESPONSIVE_QUERIES,
 } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
-import { Maximize2, Minimize2, X } from "lucide-react";
+import { X } from "lucide-react";
 import {
   useCallback,
   useContext,
@@ -18,10 +18,12 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
-import { Dialog } from "../ui/Dialog";
-import { Sheet } from "../ui/Sheet";
+import {
+  createDeferredDialogRuntime,
+  PendingDialog,
+  useDeferredDialogRuntime,
+} from "@goatcitadel/mission-control-shared/components/ui/deferred-dialog";
 import { readCockpitHistory, subscribeCockpitHistory } from "./cockpit-history";
-import { InspectorResizeHandle } from "./InspectorResizeHandle";
 import {
   InspectorContext,
   InspectorSourceContext,
@@ -34,6 +36,7 @@ const ESCAPE_OWNERS =
   'input:not([type="checkbox"], [type="radio"], [type="button"], [type="submit"], [type="reset"], [type="range"], [type="color"], [type="file"]), textarea, select, [contenteditable]:not([contenteditable="false"]), [role="menu"], [role="listbox"], [role="combobox"]';
 /** The docked or overlay panel (its header and body), or the body inside the phone sheet or expanded dialog. */
 const INSPECTOR_SURFACE = '[data-inspector-mode], [data-inspector-body="true"]';
+const controlsLoader = createDeferredDialogRuntime(() => import("./inspector-panel-controls"));
 
 export function InspectorProvider({ children }: { children: ReactNode }) {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
@@ -171,6 +174,9 @@ export function InspectorPanel() {
     focusTarget.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   opened.current = Boolean(content);
   const shown = Boolean(content);
+  const { runtime: controls, failed } = useDeferredDialogRuntime(shown, controlsLoader);
+  const handoff = useRef(false);
+  handoff.current = shown && Boolean(controls);
   useEffect(() => {
     if (shown) return;
     setExpanded(false);
@@ -193,50 +199,36 @@ export function InspectorPanel() {
       {content.body}
     </div>
   );
-  if (isPhone)
-    return (
-      <Sheet
-        open
-        onOpenChange={(value) => {
-          if (!value) close();
-        }}
+  if (isPhone || modal || expanded) {
+    const returnFocus = (event: Event) => {
+      event.preventDefault();
+      if (focusTarget.current?.isConnected) focusTarget.current.focus();
+    };
+    return controls ? (
+      <controls.InspectorModal
         title={content.title}
-        closeLabel="Close inspector"
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          if (focusTarget.current?.isConnected) focusTarget.current.focus();
-        }}
+        close={close}
+        phone={isPhone}
+        restore={modal ? undefined : () => setExpanded(false)}
+        returnFocus={returnFocus}
       >
         {body}
-      </Sheet>
-    );
-  if (modal || expanded)
-    return (
-      <Dialog
-        open
+      </controls.InspectorModal>
+    ) : (
+      <PendingDialog
         title={content.title}
-        contentClassName="inset-y-4 flex max-w-5xl flex-col sm:top-4"
         closeLabel="Close inspector"
-        actions={
-          !modal ? (
-            <IconButton
-              label="Restore docked inspector"
-              icon={<Minimize2 className="size-4" aria-hidden="true" />}
-              onClick={() => setExpanded(false)}
-            />
-          ) : undefined
-        }
-        onOpenChange={(value) => {
-          if (!value) close();
-        }}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          if (focusTarget.current?.isConnected) focusTarget.current.focus();
-        }}
+        className="cockpit-dialog cockpit-pending-dialog fixed inset-x-4 top-4 m-0 mx-auto w-auto max-w-xl border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim"
+        onDismiss={close}
+        onCloseAutoFocus={returnFocus}
+        handoff={handoff}
       >
-        {body}
-      </Dialog>
+        <p data-inspector-body="true" role={failed ? "alert" : "status"} className="text-sm text-fg-muted">
+          {failed ? "Inspector controls could not load. Close the inspector to keep using the app." : "Loading inspector…"}
+        </p>
+      </PendingDialog>
     );
+  }
   return (
     <aside
       ref={panel}
@@ -249,20 +241,21 @@ export function InspectorPanel() {
         floating ? "absolute inset-y-0 right-0 z-30 shadow-overlay" : "relative"
       }`}
     >
-      <InspectorResizeHandle width={width} onChange={setWidth} />
+      {controls ? <controls.InspectorResizeHandle width={width} onChange={setWidth} /> : null}
       <header className="flex h-12 items-center justify-between gap-2 border-b border-line-subtle px-3">
         <h2 title={content.title} className="min-w-0 truncate text-base font-medium text-fg">
           {content.title}
         </h2>
         <div className="flex shrink-0 gap-1">
-          <IconButton
-            label="Expand inspector"
-            icon={<Maximize2 className="size-4" aria-hidden="true" />}
-            onClick={() => setExpanded(true)}
-          />
+          {controls ? <controls.InspectorExpandButton onExpand={() => setExpanded(true)} /> : null}
           <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
         </div>
       </header>
+      {failed ? (
+        <p role="status" className="px-3 pt-2 text-sm text-fg-muted">
+          Resize and expand controls could not load. The selected details are still available.
+        </p>
+      ) : null}
       {body}
     </aside>
   );

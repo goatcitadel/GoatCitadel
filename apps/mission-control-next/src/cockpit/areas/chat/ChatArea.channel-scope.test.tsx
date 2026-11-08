@@ -164,7 +164,7 @@ describe("which conversations Chat treats as channel conversations", () => {
     expect(composer).not.toHaveProperty("channelReply");
     expect(messaging.requests.every((enabled) => enabled === false)).toBe(true);
     expect(buttonTexts()).toContain("Retry");
-    expect(buttonTexts()).toContain("Continue");
+    await vi.waitFor(() => expect(buttonTexts()).toContain("Continue"));
   });
 
   it("hides Continue, Retry and the model tools in a channel conversation before the overview loads", async () => {

@@ -102,6 +102,7 @@ describe("failure cards", () => {
     ["provider_billing", "The model provider turned this request down", "no credit left"],
   ] as const)("names a %s failure and says what to do", async (failureClass, title, hint) => {
     await render(<ChatTranscript props={props([failedTurn(failureClass)])} onNewConversation={vi.fn()} />);
+    await vi.waitFor(() => expect(container.querySelector('[aria-label="Response recovery"]')).not.toBeNull());
     const card = container.querySelector('[aria-label="Response recovery"]')!;
     expect(card.getAttribute("data-failure-class")).toBe(failureClass);
     expect(card.textContent).toContain(title);
@@ -114,6 +115,7 @@ describe("failure cards", () => {
     await render(
       <ChatTranscript props={props([failedTurn("context_too_long")])} onNewConversation={onNewConversation} />,
     );
+    await vi.waitFor(() => expect(button("Start a new conversation")).toBeDefined());
     await act(async () => button("Start a new conversation")!.click());
     expect(onNewConversation).toHaveBeenCalledTimes(1);
 
@@ -125,8 +127,10 @@ describe("failure cards", () => {
 
   it("points an account refusal at the model providers", async () => {
     await render(<ChatTranscript props={props([failedTurn("provider_billing")])} />);
-    const link = [...container.querySelectorAll("a")].find((a) => a.textContent === "Open model providers");
-    expect(link?.getAttribute("href")).toContain("/settings/models");
+    await vi.waitFor(() => {
+      const link = [...container.querySelectorAll("a")].find((a) => a.textContent === "Open model providers");
+      expect(link?.getAttribute("href")).toContain("/settings/models");
+    });
   });
 });
 

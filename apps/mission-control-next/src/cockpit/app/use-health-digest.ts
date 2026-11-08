@@ -57,8 +57,11 @@ export function useHealthDigest(workspaceId: string, enabled: boolean, deferOpti
   const scope = healthQueryScope(client, workspaceId, accessRevision, enabled);
   return useQuery({
     queryKey: healthDigestKey(workspaceId, accessRevision, scope[2], deferOptionalSources),
-    queryFn: ({ queryKey }) =>
-      loadSystemHealthDigest(client.getQueryData<SystemHealthSources>(queryKey), { deferOptionalSources }),
+    queryFn: (context) =>
+      loadSystemHealthDigest(client.getQueryData<SystemHealthSources>(context.queryKey), {
+        deferOptionalSources,
+        signal: deferOptionalSources ? undefined : context.signal,
+      }),
     staleTime: 30_000,
     refetchInterval: HEALTH_DIGEST_INTERVAL_MS,
     enabled,
@@ -90,7 +93,8 @@ export function useHealthDigestStatus(
       ...queryKeys.health(workspaceId),
       ...healthQueryScope(client, workspaceId, getGatewayAccessRevision(), enabled),
     ],
-    queryFn: ({ queryKey }) => loadSystemHealthSources(workspaceId, client.getQueryData<SystemHealthSources>(queryKey)),
+    queryFn: ({ queryKey, signal }) =>
+      loadSystemHealthSources(workspaceId, client.getQueryData<SystemHealthSources>(queryKey), signal),
     enabled: false,
   });
   const retry = () => void query.refetch();

@@ -3,16 +3,16 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  ApiRequestError,
   fetchEvidenceReceipt,
-  isApiRequestError,
   verifyEvidenceReceipt,
   type EvidenceReceipt,
 } from "@goatcitadel/mission-control-shared/api/client";
 import { RunSignedReceipt } from "./RunSignedReceipt";
 
-vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
+vi.mock(import("@goatcitadel/mission-control-shared/api/client"), async (importOriginal) => ({
+  ...(await importOriginal()),
   fetchEvidenceReceipt: vi.fn(),
-  isApiRequestError: vi.fn(() => false),
   verifyEvidenceReceipt: vi.fn(),
 }));
 
@@ -54,7 +54,6 @@ beforeEach(() => {
   document.body.appendChild(container);
   root = createRoot(container);
   vi.mocked(fetchEvidenceReceipt).mockResolvedValue(receipt);
-  vi.mocked(isApiRequestError).mockReturnValue(false);
   vi.mocked(verifyEvidenceReceipt).mockResolvedValue({ valid: true, reasons: [] });
 });
 
@@ -130,15 +129,19 @@ describe("Work signed evidence receipt", () => {
     expect(container.textContent).not.toContain("no integrity failures");
   });
 
-  it("explains when the isolated host cannot create a signing key", async () => {
-    vi.mocked(fetchEvidenceReceipt).mockRejectedValue({
-      status: 503,
-      body: {
-        error:
-          "OS keychain is unavailable, so the Evidence Receipt signing key cannot be loaded or created on this host.",
-      },
-    });
-    vi.mocked(isApiRequestError).mockReturnValue(true);
+  it.each([
+    "OS keychain is unavailable, so the Evidence Receipt signing key cannot be loaded or created on this host.",
+    "Evidence Receipt signing has no key store on this host yet, so new receipts cannot be built.",
+  ])("explains when the isolated host cannot create a signing key (%s)", async (error) => {
+    vi.mocked(fetchEvidenceReceipt).mockRejectedValue(
+      new ApiRequestError("API error 503", {
+        kind: "http",
+        method: "POST",
+        path: `/api/v1/runs/${runId}/evidence-receipt`,
+        status: 503,
+        body: { error },
+      }),
+    );
     await act(async () => root.render(<RunSignedReceipt runId={runId} />));
     await act(async () => clickButton("Inspect signed receipt"));
     expect(container.textContent).toContain("OS keychain is unavailable");

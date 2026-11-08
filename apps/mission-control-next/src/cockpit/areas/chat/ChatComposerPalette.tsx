@@ -95,7 +95,7 @@ export function ChatComposerPalette({
             // Focus stays on the combobox that owns the listbox; selection follows aria-activedescendant.
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => choose(index)}
-            className="flex h-12 w-full snap-start items-start justify-between gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[selected=true]:bg-sunken"
+            className="flex h-12 min-w-0 w-full snap-start items-start justify-between gap-2 rounded-md px-2 py-1.5 text-left hover:bg-sunken aria-[selected=true]:bg-sunken"
           >
             <span className="min-w-0">
               <span className="block truncate text-sm font-medium text-fg">{item.command}</span>

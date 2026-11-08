@@ -1,8 +1,58 @@
 import assert from "node:assert/strict";
 import { it } from "node:test";
-import { assertCitadelMetadataAgreement, assertCitadelLifecycleAgreement, assertCitadelClassicRetention, assertCitadelPresenceHeartbeat } from "./cockpit-citadel-directory-proof.mjs";
+import { assertCitadelMetadataAgreement, assertCitadelLifecycleAgreement, assertCitadelClassicRetention, assertCitadelPresenceHeartbeat, assertCitadelNativeGovernanceHref, navigateCitadelProofSettingsPage } from "./cockpit-citadel-directory-proof.mjs";
 const before = { citadelId: "fixture", name: "Original", slug: "fixture", kind: "team", description: "Before", defaultWorkspaceId: "workspace",
   revision: "a".repeat(64), lifecycleStatus: "active", createdAt: "2026-09-30T00:00:00Z", updatedAt: "2026-09-30T00:00:00Z" };
+
+it("requires the exact native same-origin governance destination and carried scope/query/hash", () => {
+  const input = { sourceUrl: "http://127.0.0.1:1234/settings/citadel?keep=yes&citadelId=stale&workspaceId=stale&shell=cockpit&shellScope=visit#workspaces",
+    citadelId: "fixture", workspaceId: "workspace", href: "/library/citadel-overview?keep=yes&citadelId=fixture&workspaceId=workspace&shell=cockpit#workspaces" };
+  assert.equal(assertCitadelNativeGovernanceHref(input), new URL(input.href, input.sourceUrl).href);
+  for (const href of [input.href.replace("fixture", "foreign"), input.href.replace("workspaceId=workspace", "workspaceId=foreign"),
+    input.href.replace("shell=cockpit", "shell=classic"), input.href.replace("keep=yes&", ""), input.href.replace("#workspaces", "#other"),
+    "http://external.invalid" + input.href, input.href.replace("citadel-overview", "other")])
+    assert.throws(() => assertCitadelNativeGovernanceHref({ ...input, href }));
+});
+
+it("uses exact mobile Settings section values and desktop links for the remount", async () => {
+  for (const variant of ["mobile", "desktop"]) for (const section of ["general", "citadel"]) {
+    const seen = [];
+    const page = { getByRole: (role, options) => {
+      if (role === "dialog") {
+        assert.deepEqual(options, { name: "Unsaved changes", exact: true });
+        return { waitFor: () => new Promise(() => {}) };
+      }
+      assert.equal(role, "navigation"); assert.deepEqual(options, { name: "Settings pages", exact: true });
+      return { getByRole: (control, target) => {
+        seen.push({ control, target });
+        return { selectOption: async value => seen.push(value), getAttribute: async () => `/settings/${section}`, click: async () => seen.push("clicked") };
+      } };
+    }, waitForURL: async predicate => assert.equal(predicate(new URL(`http://127.0.0.1/settings/${section}`)), true) };
+    await navigateCitadelProofSettingsPage(page, variant, section);
+    assert.deepEqual(seen, variant === "mobile"
+      ? [{ control: "combobox", target: { name: "Settings pages: choose a section", exact: true } }, `/settings/${section}`]
+      : [{ control: "link", target: { name: section === "general" ? "General" : "Citadel", exact: true } }, "clicked"]);
+  }
+});
+
+it("keeps the retained draft through an actual Settings leave review without save or discard", async () => {
+  const seen = []; let reviewed = false, navigated = false, releaseNavigation;
+  const page = { getByRole: (role, options) => {
+    if (role === "navigation") return { getByRole: () => ({ selectOption: async () => { reviewed = true; } }) };
+    assert.equal(role, "dialog"); assert.deepEqual(options, { name: "Unsaved changes", exact: true });
+    return { waitFor: async ({ state }) => assert.equal(reviewed, state === "visible"),
+      getByRole: (button, target) => {
+        assert.equal(button, "button"); assert.deepEqual(target, { name: "Keep draft and close", exact: true });
+        return { waitFor: async () => {}, isEnabled: async () => true,
+          click: async () => { seen.push(target.name); reviewed = false; navigated = true; releaseNavigation?.(); } };
+      } };
+  }, waitForURL: async predicate => {
+    if (!navigated) await new Promise(resolve => { releaseNavigation = resolve; });
+    assert.equal(predicate(new URL("http://127.0.0.1/settings/general")), true);
+  } };
+  await navigateCitadelProofSettingsPage(page, "mobile", "general");
+  assert.deepEqual(seen, ["Keep draft and close"]);
+});
 const edit = () => { const receipt = { ...before, name: "Renamed", revision: "b".repeat(64), updatedAt: "2026-09-30T00:00:01Z" };
   return { before, receipt, owner: { ...receipt, hasCharter: true }, request: { expectedRevision: before.revision, name: receipt.name, description: receipt.description, slug: receipt.slug, kind: receipt.kind } }; };
 const lifecycle = () => { const receipt = { ...before, revision: "b".repeat(64), lifecycleStatus: "archived", archivedAt: "2026-09-30T00:00:01Z", updatedAt: "2026-09-30T00:00:01Z" };

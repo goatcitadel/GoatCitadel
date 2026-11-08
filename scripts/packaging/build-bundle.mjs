@@ -292,7 +292,7 @@ async function installEmbeddedNodeRuntime({ target: bundleTarget, nodeVersion: r
   const destinationPath = path.join(destinationDir, runtimeFilename);
 
   if (
-    process.platform === targetInfo.platform &&
+    (process.platform === "win32" ? "windows" : process.platform) === targetInfo.platform &&
     process.arch === targetInfo.arch &&
     process.version === normalizedVersion
   ) {

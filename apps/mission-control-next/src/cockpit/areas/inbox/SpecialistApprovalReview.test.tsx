@@ -100,11 +100,19 @@ async function render(value = evidence, record = approval) {
   );
 }
 async function click(name: string) {
-  const button = [...document.querySelectorAll("button")].find(
-    (item) => !item.closest('[aria-hidden="true"]') && item.textContent === name,
-  )!;
-  expect(button).toBeTruthy();
-  await act(async () => button.click());
+  const button = await vi.waitFor(() => {
+    const candidate = [...document.querySelectorAll("button")].find(
+      (item) => !item.closest('[aria-hidden="true"]') && item.textContent === name && !item.disabled,
+    );
+    expect(candidate).toBeTruthy();
+    return candidate!;
+  });
+  await act(async () => {
+    button.click();
+    await vi.dynamicImportSettled();
+  });
+  if (name === "Review approval" || name === "Review nuclear approval")
+    await vi.waitFor(() => expect(document.querySelector('[aria-label="Approval action details"]')).not.toBeNull());
 }
 it.each([
   ["Home", 0],

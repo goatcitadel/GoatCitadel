@@ -24,6 +24,15 @@ import {
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
+// This renderer exercises the controller projection without mounting browser portals.
+vi.mock("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog", () => ({
+  ChatChangePlanActionDialog: () => null,
+}));
+vi.mock("@goatcitadel/mission-control-shared/components/ui/deferred-dialog", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/components/ui/deferred-dialog")>()),
+  PendingDialog: () => null,
+}));
+
 const attachThreadKnowledgeAttachmentMock = vi.fn();
 const createChatGeneratedArtifactMock = vi.fn();
 const createChangePlanMock = vi.fn();
@@ -491,6 +500,8 @@ function installBrowserGlobals(search = "") {
   Object.defineProperty(globalThis, "document", {
     configurable: true,
     value: {
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
       body: {
         appendChild: (node: any) => appended.push(node),
       },

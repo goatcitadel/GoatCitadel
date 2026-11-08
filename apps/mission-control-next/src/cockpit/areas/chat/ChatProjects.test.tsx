@@ -11,6 +11,9 @@ import { __resetSessionDraftsForTests } from "../../../features/native-routes/li
 import { __resetFormDirtyRegistryForTests } from "../../../features/native-routes/library/use-form-dirty";
 import { __resetSessionViewStateForTests } from "../../../hooks/use-session-view-state";
 import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({
   list: vi.fn(),

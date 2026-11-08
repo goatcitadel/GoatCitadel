@@ -3,6 +3,7 @@ import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { RUN_VARIABLE_SCHEMA_VERSION, type RunVariableSchema } from "@goatcitadel/contracts";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useRunVariablePanel } from "./useRunVariablePanel";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -32,7 +33,7 @@ describe("run-variable panel", () => {
       renderer = create(<Harness />);
     });
     await act(async () => {
-      current.openForm({
+      await current.openForm({
         title: "Research topic",
         invocation: { ownerKind: "prompt_pack", ownerId: "pack", ownerRevision: "1", schemaHash: "schema" },
         schema,
@@ -60,7 +61,7 @@ describe("run-variable panel", () => {
       renderer = create(<Harness />);
     });
     await act(async () => {
-      current.openForm({
+      await current.openForm({
         title: "Research topic",
         invocation: { ownerKind: "prompt_pack", ownerId: "pack", ownerRevision: "1", schemaHash: "schema" },
         schema,
@@ -73,5 +74,21 @@ describe("run-variable panel", () => {
     await act(async () => renderer?.update(<Harness sessionId="session-two" />));
     expect(current.runVariablePanel).toBeUndefined();
     expect(current.pendingTemplateInvocation).toBeNull();
+  });
+  it("does not open a template under new Gateway access after loading validation", async () => {
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    await act(async () => {
+      const opening = current.openForm({
+        title: "Research topic",
+        invocation: { ownerKind: "prompt_pack", ownerId: "pack", ownerRevision: "1", schemaHash: "schema" },
+        schema,
+        template: "Research {{topic}}.",
+      });
+      notifyGatewayAccessChanged(false);
+      await opening;
+    });
+    expect(current.runVariablePanel).toBeUndefined();
   });
 });

@@ -8,6 +8,9 @@ import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/
 import { createEmptyProviderEditorDraft } from "../../../features/native-routes/settings/helpers/provider-drafts";
 import { ProviderProfileReview } from "./ProviderProfileReview";
 import { DesktopUpdateSettings } from "./DesktopUpdateSettings";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 const host = vi.hoisted(() => ({ status: null as DesktopUpdateStatus | null, act: vi.fn() }));
 vi.mock("../../../features/desktop-updates/desktop-update-bridge", () => ({ useDesktopUpdates: () => host.status }));
 vi.mock("../../../features/desktop-updates/use-desktop-update-actions", () => ({

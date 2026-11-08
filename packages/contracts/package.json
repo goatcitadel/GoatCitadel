@@ -35,6 +35,14 @@
     "./external-source-chat": {
       "types": "./dist/external-source-chat.d.ts",
       "default": "./dist/external-source-chat.js"
+    },
+    "./session-control": {
+      "types": "./dist/session-control.d.ts",
+      "default": "./dist/session-control.js"
+    },
+    "./session-control-operator-projection": {
+      "types": "./dist/session-control-operator-projection.d.ts",
+      "default": "./dist/session-control-operator-projection.js"
     }
   },
   "repository": {

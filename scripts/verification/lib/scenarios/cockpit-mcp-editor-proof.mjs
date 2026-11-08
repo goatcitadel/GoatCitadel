@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
 import { mkdir } from "node:fs/promises";
 
 export function assertMcpEditorOwnerAgreement({ before, request, receipt, owner, label, category }) {
@@ -25,7 +26,7 @@ export async function runCockpitMcpEditorProof({ context, browser, stack, citade
       title: `Cockpit MCP exact saved configuration ${variant}`, subsystem: "mission-control-ux" }, async () => {
       let stage = "create disabled fixture";
       let browserContext, page;
-      const writes = [], screenshots = [], unexpected = [];
+      const writes = [], presenceWrites = [], screenshots = [], unexpected = [];
       const screenshotDir = path.join(context.artifactRoot, "screenshots");
       try {
         const label = `UX MCP editor ${variant} ${Date.now()}`;
@@ -40,7 +41,9 @@ export async function runCockpitMcpEditorProof({ context, browser, stack, citade
         page = await browserContext.newPage();
         page.on("request", (request) => {
           const pathname = new URL(request.url()).pathname;
-          if (!["POST", "PATCH", "PUT", "DELETE"].includes(request.method()) || !pathname.startsWith("/api/v1/")) return;
+          const kind = classifyCockpitProofWrite(request.method(), pathname);
+          if (kind === "presence") presenceWrites.push({ method: request.method(), pathname });
+          if (kind !== "owner") return;
           if (pathname === serverRoute && request.method() === "PATCH") writes.push(request.postDataJSON());
           else unexpected.push(`${request.method()} ${pathname}`);
         });
@@ -103,14 +106,14 @@ export async function runCockpitMcpEditorProof({ context, browser, stack, citade
         await editor.waitFor({ state: "hidden" });
         assert.equal(await panel.getByRole("button", { name: `Edit ${label} uncertain`, exact: true }).isDisabled(), true);
         assert.deepEqual(unexpected, []); assert.equal(writes.length, 3);
-        return { status: "passed", metrics: { exactOwnerAgreement: true, cancelWrites: 0, staleWritePrevented: true, guardedLeave: true,
+        return { status: "passed", metrics: { notificationPresenceWrites: presenceWrites.length, exactOwnerAgreement: true, cancelWrites: 0, staleWritePrevented: true, guardedLeave: true,
           browserSaves: writes.length, responseLossInjected: true, sharedUnknownLock: true, blockingAxe: 0,
           limitation: "Disabled disposable stdio configuration only. No connection, process launch, OAuth, credentials update or tool invocation." }, artifacts: emptyArtifacts({ screenshots }) };
       } catch (error) {
         if (page && !page.isClosed()) { try { await mkdir(screenshotDir, { recursive: true }); const screenshot = path.join(screenshotDir, `ux-budgets-cockpit-mcp-editor-${variant}-failure.png`);
           await page.screenshot({ path: screenshot, fullPage: false }); screenshots.push(relativeToRun(context, screenshot)); } catch { /* Preserve the original failure. */ } }
         return { status: "failed", error: `${stage}: ${error instanceof Error ? error.stack ?? error.message : String(error)}`,
-          metrics: { failedStage: stage, browserSaves: writes.length }, artifacts: emptyArtifacts({ screenshots }) };
+          metrics: { notificationPresenceWrites: presenceWrites.length, failedStage: stage, browserSaves: writes.length }, artifacts: emptyArtifacts({ screenshots }) };
       } finally { await browserContext?.close(); }
       async function capture(name) {
         await mkdir(screenshotDir, { recursive: true }); await page.addScriptTag({ path: axeSourcePath });

@@ -14,6 +14,9 @@ import { InspectorPanel, InspectorProvider } from "../../../app/inspector";
 import { queryKeys } from "../../../data/query-keys";
 import { ConnectorPanel } from "./ConnectorPanel";
 import { ConnectorsTab } from "./ConnectorsTab";
+import { prepareReadyDialogFixture } from "../../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const prefs = vi.hoisted(() => ({
   activeCitadelId: "default",

@@ -9,6 +9,7 @@ import { requestJson, startVerificationStack, stopVerificationStack } from "./li
 import { createRunContext, finalizeRunContext, releaseRunContext, runScenario, repoRoot } from "./lib/shared.mjs";
 import { auditPageAccessibility } from "./lib/scenarios/accessibility-smoke-lane.mjs";
 import { runCockpitChatComposerProof } from "./lib/scenarios/cockpit-chat-composer-proof.mjs";
+import { composerFirstSessionEnabled,firstSessionImageFixture } from "./lib/scenarios/cockpit-chat-first-session-proof.mjs";
 import { renderingReplyRules, runCockpitChatRenderingProof } from "./lib/scenarios/cockpit-chat-rendering-proof.mjs";
 import { runCockpitChatProjectProof } from "./lib/scenarios/cockpit-chat-project-proof.mjs";
 import { prepareUsabilityRuntime } from "./lib/scenarios/usability-runtime-fixture.mjs";
@@ -18,16 +19,17 @@ import { DETERMINISTIC_LLM_CAPABILITIES, DETERMINISTIC_LLM_KEY_ENV, startDetermi
 // This runner acquires the standard output lock and builds its own snapshot.
 // Run only after other agents release build/browser checkpoint ownership.
 const selected = process.argv.slice(2);
-assert.ok(selected.every((argument) => argument === "--with-rendering" || argument.startsWith("--with-owners=")), "Unsupported composer proof argument");
+assert.ok(selected.every((argument) => argument === "--with-first-session" || argument === "--with-rendering" || argument.startsWith("--with-owners=")), "Unsupported composer proof argument");
+const includeFirstSession=composerFirstSessionEnabled(selected);
 const ownerArguments = selected.filter(argument => argument.startsWith("--with-owners="));
 assert.ok(ownerArguments.length <= 1, "Provide at most one owner proof selection");
 const ownerSelection = ownerArguments[0]?.slice("--with-owners=".length).split(",");
 if (ownerSelection) selectCockpitOwnerProofs(ownerSelection);
 const includeRendering = selected.includes("--with-rendering");
 const context = await createRunContext("ux-budgets", {
-  commandSelection: `${includeRendering ? "cockpit-chat-composer,rendering,projects" : "cockpit-chat-composer"}${ownerSelection ? `;owners:${ownerSelection.join(",")}` : ""}`,
+  commandSelection: `${includeRendering ? "cockpit-chat-composer,rendering,projects" : "cockpit-chat-composer"}${includeFirstSession?";first-session": ""}${ownerSelection ? `;owners:${ownerSelection.join(",")}` : ""}`,
 });
-let primary, alternate, stack, browser;
+let primary, alternate, imageProvider, stack, browser;
 try {
   primary = await startDeterministicLlmStub({ replyText: "COMPOSER_PROOF_OK", promptReplyRules: renderingReplyRules(), expectedAuthorization: "Bearer verification-stub-key" });
   alternate = await startDeterministicLlmStub({ providerId: "verification-composer-alternate", model: "verification-composer-alt",
@@ -40,6 +42,14 @@ try {
   config.llm.providers.push({ providerId: "verification-composer-alternate", label: "Composer alternate (loopback)",
     baseUrl: alternate.baseUrl, apiStyle: "openai-chat-completions", defaultModel: "verification-composer-alt", apiKeyEnv: DETERMINISTIC_LLM_KEY_ENV,
     capabilities: DETERMINISTIC_LLM_CAPABILITIES });
+  const originalActive={providerId:config.llm.activeProviderId,model:config.llm.activeModel};
+  let firstImageFixture;
+  if(includeFirstSession){
+    assert.equal(config.llm.providers.length,2,"First-session slice requires only the two original owned text fixtures");
+    imageProvider=await startDeterministicLlmStub({providerId:"openai",model:"gpt-image-2",expectedAuthorization:"Bearer verification-stub-key"});
+    firstImageFixture=firstSessionImageFixture(imageProvider);config.llm.providers.push(firstImageFixture.provider);
+    assert.deepEqual({providerId:config.llm.activeProviderId,model:config.llm.activeModel},originalActive,"Image fixture must not change original composer model defaults");
+  }
   await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
   await writeFile(path.join(runtimeRoot, "config", "llm-providers.json"), `${JSON.stringify(config.llm, null, 2)}\n`);
   const metadataPath = path.join(runtimeRoot, "config", "llm-model-metadata.json");
@@ -47,6 +57,7 @@ try {
   metadata.entries["verification-composer-alternate/verification-composer-alt"] = {
     contextWindow: 128000, outputTokenLimit: 16000, reasoning: { supportedEfforts: ["none", "low", "medium", "high"] },
   };
+  if(firstImageFixture)metadata.entries[firstImageFixture.metadataKey]=firstImageFixture.metadata;
   await writeFile(metadataPath, `${JSON.stringify(metadata, null, 2)}\n`);
   const secretEnvKeys = await collectVerificationSecretEnvKeys(path.join(repoRoot, "config"));
   stack = await startVerificationStack(context, { runtimeRoot, includeUi: true, gatewayMode: "built", uiMode: "preview",
@@ -56,6 +67,7 @@ try {
   await ensureOnboardingComplete(stack.gatewayUrl, "verification-cockpit-composer");
   browser = await chromium.launch({ headless: true });
   const input = { context, browser, stack,
+    ...(includeFirstSession?{firstSession:{readProviderCounters:()=>({primaryCompletions:primary.completionDispatches(),alternateCompletions:alternate.completionDispatches(),imageCompletions:imageProvider.completionDispatches(),imageGenerations:imageProvider.imageGenerationDispatches()})}}:{}),
     viewports: [{ variant: "desktop", viewport: { width: 1440, height: 1000 } }, { variant: "mobile", viewport: { width: 390, height: 844 } }],
     deps: { requestJson, runScenario, path, auditPageAccessibility,
       assertOk: (response, label) => assert.ok(response.ok, `${label} returned HTTP ${response.status}`),
@@ -95,6 +107,7 @@ try {
   await browser?.close();
   if (stack) await stopVerificationStack(stack);
   await alternate?.close();
+  await imageProvider?.close();
   await primary?.close();
   await releaseRunContext(context);
 }

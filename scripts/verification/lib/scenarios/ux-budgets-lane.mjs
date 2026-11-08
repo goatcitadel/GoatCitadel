@@ -45,6 +45,7 @@ export async function runUxBudgetsLane(context, options = {}, deps) {
     runtimeRoot = await (options.prepareCleanRuntime ?? prepareUsabilityRuntime)(
       `${context.runId}-ux-budgets`,
       stub.baseUrl,
+      { runtimeBasename: "ux" },
     );
     stack = await startVerificationStack(context, {
       runtimeRoot,

@@ -7,12 +7,68 @@ import {
   assertComposerSelectedScope,
   assertComposerTurn,
   assertUploadedAttachment,
+  captureComposerAccessibilityEvidence,
   composerPackMarkdown,
 } from "./cockpit-chat-composer-evidence.mjs";
 import { CLOSE_SHEET, readCurrentConversation, selectConversation } from "./cockpit-conversation-list.mjs";
+import { runCockpitChatFirstSessionProof } from "./cockpit-chat-first-session-proof.mjs";
+import { isStartupReadRequest, STARTUP_READ_BATCH_LIMIT, STARTUP_READ_BATCH_QUERY_LIMIT, STARTUP_READ_BATCH_BODY_LIMIT } from "../../../../packages/contracts/dist/gateway-startup-reads.js";
+
+/** Admit the requested canonical core owner by request position, before UI action. */
+export function matchComposerCoreStateRead(request, sessionId) {
+  if (request.method() !== "GET") return null;
+  const expectedPath = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/core-state`;
+  const includesThread = url => {
+    if (url.pathname !== expectedPath) return false;
+    assert.ok([...url.searchParams.keys()].every(key => key === "includeThread") && url.searchParams.getAll("includeThread").length <= 1, "Ambiguous conversation core-state query");
+    const value = url.searchParams.get("includeThread");
+    assert.ok(value === null || value === "true" || value === "false", "Invalid conversation core-state query");
+    return value !== "false";
+  };
+  const url = new URL(request.url());
+  if (url.pathname !== "/api/v1/startup-reads") return includesThread(url) ? { transport: "direct", index: 0, count: 1 } : null;
+  assert.ok(Buffer.byteLength(url.pathname + url.search, "utf8") <= STARTUP_READ_BATCH_QUERY_LIMIT + 100, "Startup read query exceeds contract bound");
+  assert.ok(url.searchParams.getAll("reads").length === 1 && [...url.searchParams.keys()].every(key => key === "reads"), "Invalid startup read query shape");
+  let rows;
+  try { rows = JSON.parse(url.searchParams.get("reads")); } catch { throw new Error("Invalid conversation startup read JSON"); }
+  assert.ok(Array.isArray(rows) && rows.length > 0 && rows.length <= STARTUP_READ_BATCH_LIMIT && rows.every(isStartupReadRequest), "Invalid startup read membership");
+  const matches = [];
+  rows.forEach((row, index) => { if (includesThread(new URL(row.path, "http://startup-read.invalid"))) matches.push(index); });
+  assert.ok(matches.length <= 1, "Duplicate conversation core-state membership");
+  return matches.length ? { transport: "startup_batch", index: matches[0], count: rows.length } : null;
+}
+
+export async function readComposerCoreStateResult(request, response, { sessionId, workspaceId, status }) {
+  const membership = matchComposerCoreStateRead(request, sessionId);
+  assert.ok(membership, "Requested conversation hydration owner is absent");
+  assert.equal(response.status(), 200, "Conversation core-state transport failed");
+  assert.equal(status?.sessionId, sessionId, "Independent conversation status has foreign identity");
+  assert.equal(status?.workspaceId, workspaceId, "Independent conversation status has foreign workspace");
+  let body;
+  try { body = await response.json(); } catch { throw new Error("Invalid conversation core-state JSON"); }
+  // Same bounded transport envelope checks as the approved Inbox owner proof.
+  if (membership.transport === "startup_batch") {
+    assert.ok(body && typeof body === "object" && !Array.isArray(body) && Object.keys(body).every(key => key === "items") && Array.isArray(body.items) && body.items.length === membership.count, "Startup response does not match original membership");
+    const headers = new Set(["content-type", "cache-control", "etag", "x-goatcitadel-correlation-id"]);
+    assert.ok(body.items.every(row => row && typeof row === "object" && !Array.isArray(row) &&
+      Object.keys(row).every(key => ["status", "bodyText", "headers", "directReadRequired"].includes(key)) &&
+      Number.isInteger(row.status) && row.status >= 200 && row.status <= 599 && typeof row.bodyText === "string" && Buffer.byteLength(row.bodyText, "utf8") <= STARTUP_READ_BATCH_BODY_LIMIT &&
+      row.headers && typeof row.headers === "object" && !Array.isArray(row.headers) && Object.entries(row.headers).every(([key, value]) => headers.has(key) && typeof value === "string" && !/[\r\n]/u.test(value)) &&
+      (row.directReadRequired === undefined || row.directReadRequired === true)), "Invalid startup owner response envelope");
+    const selected = body.items[membership.index];
+    assert.ok(selected.status === 200 && selected.directReadRequired === undefined, "Conversation owner result is not a confirmed snapshot");
+    try { body = JSON.parse(selected.bodyText); } catch { throw new Error("Invalid conversation owner JSON"); }
+  }
+  assert.equal(body?.sessionId, sessionId, "Conversation core-state has foreign identity");
+  assert.equal(body?.thread?.sessionId, sessionId, "Conversation core-state omitted requested thread");
+  assert.ok(Array.isArray(body.thread.turns), "Conversation core-state omitted canonical turns");
+  assert.equal(body?.prefs?.sessionId, sessionId, "Conversation preferences have foreign identity");
+  assert.ok(body.binding === null || body.binding?.sessionId === sessionId, "Conversation binding has foreign identity");
+  return body.thread;
+}
 
 /** Real browser/owner proof. Requires two configured, reachable disposable provider models. */
-export async function runCockpitChatComposerProof({ context, browser, stack, citadelId, viewports, deps }) {
+export async function runCockpitChatComposerProof({ context, browser, stack, citadelId, viewports, deps,firstSession }) {
   const {
     assertOk,
     auditPageAccessibility,
@@ -80,6 +136,8 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
         const theme = variant === "mobile" ? "light" : "dark";
         const browserContext = await browser.newContext({ viewport, colorScheme: theme });
         const screenshots = [];
+        const firstSessionDiagnostics=[];
+        const accessibilityDiagnostics=[];
         let page,
           stage = "setup";
         const evidence = { workspaceId, citadelId: ownerCitadelId, sessionId, templateId: template.testId };
@@ -102,16 +160,16 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           const openSession = async (id) => {
             const threadReady = observePendingWait(
               page.waitForResponse(
-                (response) =>
-                  response.request().method() === "GET" &&
-                  new URL(response.url()).pathname === `/api/v1/chat/sessions/${encodeURIComponent(id)}/thread`,
+                (response) => new URL(response.url()).origin === new URL(stack.gatewayUrl).origin && Boolean(matchComposerCoreStateRead(response.request(), id)),
               ),
             );
             await page.goto(
               buildVerificationUiUrl(stack.uiUrl, `/chat?sessionId=${encodeURIComponent(id)}&shell=cockpit`),
               { waitUntil: "domcontentloaded" },
             );
-            assert.equal((await threadReady).ok(), true, "Conversation owner could not hydrate the requested scope");
+            const response = await threadReady;
+            await readComposerCoreStateResult(response.request(), response, { sessionId: id, workspaceId,
+              status: await read(`/api/v1/chat/sessions/${encodeURIComponent(id)}/status`) });
             await page.getByRole("textbox", { name: "Message", exact: true }).waitFor({ timeout: 30_000 });
             assert.equal(new URL(page.url()).searchParams.get("sessionId"), id);
           };
@@ -119,16 +177,13 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             const documentStarted = await page.evaluate(() => performance.timeOrigin);
             const threadReady = observePendingWait(
               page.waitForResponse(
-                (response) =>
-                  response.request().method() === "GET" &&
-                  new URL(response.url()).pathname ===
-                    `/api/v1/chat/sessions/${encodeURIComponent(target.sessionId)}/thread`,
+                (response) => new URL(response.url()).origin === new URL(stack.gatewayUrl).origin && Boolean(matchComposerCoreStateRead(response.request(), target.sessionId)),
               ),
             );
             await selectComposerConversation(page, target);
             const response = await threadReady;
-            assert.equal(response.ok(), true, "Conversation owner could not hydrate the selected scope");
-            const thread = await response.json();
+            const thread = await readComposerCoreStateResult(response.request(), response, { sessionId: target.sessionId, workspaceId,
+              status: await read(`/api/v1/chat/sessions/${encodeURIComponent(target.sessionId)}/status`) });
             // The rail and the phone sheet share this controlled selection (the current row);
             // the URL must agree so reload/back can restore the same conversation.
             await page.waitForURL((url) => url.searchParams.get("sessionId") === target.sessionId);
@@ -241,7 +296,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               provider.defaultModel,
           );
           assert.ok(target, "Composer model switch needs a second isolated verification-composer provider");
-          const catalog = await read(`/api/v1/llm/models?providerId=${encodeURIComponent(target.providerId)}`);
+          const catalog = await waitForComposerModelCatalog({ page, read, target });
           assert.equal(catalog.source, "live", "Alternate model lacks live owner discovery");
           assert.notEqual(catalog.catalogStatus, "stale", "Alternate model discovery is stale");
           assert.ok(catalog.items?.some((item) => item.id === target.defaultModel));
@@ -253,16 +308,21 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             sessionId,
             before: prefs,
             patch: { providerId: target.providerId, model: target.defaultModel },
-            select: () => page.getByRole("combobox", { name: "Provider", exact: true }).selectOption(target.providerId),
+            select: async () => {
+              const options = await openComposerModelOptions(page);
+              await options.getByRole("combobox", { name: "Provider", exact: true }).selectOption(target.providerId);
+              await closeComposerModelOptions(page, options);
+            },
             checkCancel: true,
           });
-          await revealComposerOptions(page);
+          const confirmedModelOptions = await openComposerModelOptions(page);
           await waitUntil(
             page,
-            async () => (await page.getByRole("combobox", { name: "Model", exact: true }).inputValue()) === prefs.model,
+            async () => (await confirmedModelOptions.getByRole("combobox", { name: "Model", exact: true }).inputValue()) === prefs.model,
             "Composer model did not reconcile the confirmed owner preference",
           );
-          assert.equal(await page.getByRole("combobox", { name: "Model", exact: true }).inputValue(), prefs.model);
+          assert.equal(await confirmedModelOptions.getByRole("combobox", { name: "Model", exact: true }).inputValue(), prefs.model);
+          await closeComposerModelOptions(page, confirmedModelOptions);
           stage = "review and confirm effort";
           await revealComposerOptions(page);
           prefs = await changePreferences({
@@ -273,10 +333,12 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             sessionId,
             before: prefs,
             patch: { thinkingLevel: prefs.thinkingLevel === "extended" ? "standard" : "extended" },
-            select: () =>
-              page
-                .getByRole("combobox", { name: "Effort", exact: true })
-                .selectOption(prefs.thinkingLevel === "extended" ? "standard" : "extended"),
+            select: async () => {
+              const options = await openComposerModelOptions(page);
+              await options.getByRole("combobox", { name: "Effort", exact: true })
+                .selectOption(prefs.thinkingLevel === "extended" ? "standard" : "extended");
+              await closeComposerModelOptions(page, options);
+            },
           });
           evidence.preferences = {
             providerId: prefs.providerId,
@@ -358,9 +420,9 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             (item) => item.id === personalityOwner.defaultPersonalityId,
           );
           assert.ok(defaultPersonality, "Personality owner has no canonical default");
-          await revealComposerOptions(page);
+          const personalityOptions = await openComposerModelOptions(page);
           // The name starts with the visible personality name: "<name> · Open personality settings".
-          await page.getByRole("button", { name: /· Open personality settings$/u }).click();
+          await personalityOptions.getByRole("button", { name: /· Open personality settings$/u }).click();
           await page.waitForURL(/\/settings\/general\?shell=cockpit#work-personality/u);
           const personalityPanel = page.getByRole("region", { name: "Work personality", exact: true });
           await personalityPanel
@@ -390,6 +452,14 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
           assert.equal(sends.length, 1);
           await switchSession(session);
           await capture("completed");
+          if(firstSession){
+            stage="first-session opt-in attachment ownership";
+            const result=await runCockpitChatFirstSessionProof({context,browser,stack,citadelId,variant,viewport,deps,
+              controls:{revealAttachControl,closeComposerOptions},readProviderCounters:firstSession.readProviderCounters});
+            evidence.firstSession={entry:"explicit UI New conversation before first attachment",inventory:result.inventory,notExecuted:result.notExecuted,excluded:result.excluded,cases:result.cases,passed:result.passed,delayedSidebarInterleaving:"unit-only; browser not exercised"};
+            screenshots.push(...result.screenshots);firstSessionDiagnostics.push(...result.diagnostics);
+            if(!result.passed)throw new Error(`First-session opt-in failed: ${result.error??"incomplete cases"}`);
+          }
           const diagnostic = path.join(context.artifactRoot, "diagnostics", `cockpit-chat-composer-${variant}.json`);
           await writeFile(diagnostic, `${JSON.stringify(evidence, null, 2)}\n`);
           return {
@@ -402,13 +472,26 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
               keyboardPrefixes: "/ @ $",
               blockingAxe: 0,
               personalityReturn: evidence.personalityReturn,
+              ...(firstSession?{firstSessionCases:evidence.firstSession.cases.length,firstSessionExplicitCreation:true,delayedSidebarBrowserInterleaving:false}:{}),
             },
-            artifacts: emptyArtifacts({ screenshots, diagnostics: [relativeToRun(context, diagnostic)] }),
+            artifacts: emptyArtifacts({ screenshots, diagnostics: [relativeToRun(context, diagnostic),...firstSessionDiagnostics,...accessibilityDiagnostics] }),
           };
 
           async function capture(label) {
             await page.addScriptTag({ path: axeSourcePath });
             const audit = await auditPageAccessibility(page);
+            try {
+              let observations = [], observationGap = false;
+              try { observations = await measureComposerAccessibilityTargets(page, audit); }
+              catch { observationGap = true; }
+              await mkdir(path.join(context.artifactRoot, "diagnostics"), { recursive: true });
+              const diagnostic = await captureComposerAccessibilityEvidence({ audit, observations, observationGap, variant, phase: label }, {
+                artifactRoot: context.artifactRoot,
+                writeJson: (file, payload) => writeFile(file, JSON.stringify(payload, null, 2) + "\n"),
+              });
+              if (diagnostic.relativePath) accessibilityDiagnostics.push(diagnostic.relativePath);
+              if (!diagnostic.complete) (evidence.accessibilityGaps ??= []).push({ phase: label, gapReason: diagnostic.gapReason, counts: diagnostic.counts });
+            } catch { (evidence.accessibilityGaps ??= []).push({ phase: label, gapReason: "capture_failure" }); }
             assert.deepEqual(
               audit.violations.filter((item) => ["serious", "critical"].includes(item.impact)).map((item) => item.id),
               [],
@@ -463,7 +546,7 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
             status: "failed",
             error: `Composer ${variant} failed at ${stage}: ${error.stack ?? error}`,
             metrics: { failedStage: stage },
-            artifacts: emptyArtifacts({ screenshots, diagnostics: [relativeToRun(context, diagnostic)] }),
+            artifacts: emptyArtifacts({ screenshots, diagnostics: [relativeToRun(context, diagnostic),...firstSessionDiagnostics,...accessibilityDiagnostics] }),
           };
         } finally {
           await browserContext.close();
@@ -473,6 +556,46 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
   }
 }
 
+/** Read only the original audit targets immediately before its unchanged blocking assertion. */
+async function measureComposerAccessibilityTargets(page, audit) {
+  const targets = [];
+  const boundedTarget = (value, depth = 0) => depth <= 8 && (typeof value === "string" ? value.length <= 512 : Array.isArray(value) && value.length <= 8 && value.every(item => boundedTarget(item, depth + 1)));
+  for (const [ruleIndex, rule] of audit.violations.slice(0, 32).entries()) {
+    for (const [nodeIndex, node] of (rule.nodes ?? []).entries()) {
+      if (targets.length >= 128) break;
+      targets.push({ ruleIndex, nodeIndex, target: boundedTarget(node.target) ? node.target : null });
+    }
+    if (targets.length >= 128) break;
+  }
+  if (!targets.length) return [];
+  return page.evaluate(rows => rows.map(({ ruleIndex, nodeIndex, target }) => {
+    const unresolved = { ruleIndex, nodeIndex, resolved: false };
+    try {
+      if (!Array.isArray(target) || target.length !== 1) return unresolved;
+      const chain = typeof target[0] === "string" ? [target[0]] : target[0];
+      if (!Array.isArray(chain) || !chain.length || !chain.every(item => typeof item === "string")) return unresolved;
+      let root = document, element;
+      for (let index = 0; index < chain.length; index++) {
+        const matches = root.querySelectorAll(chain[index]);
+        if (matches.length !== 1) return unresolved;
+        element = matches[0];
+        if (index < chain.length - 1) { root = element.shadowRoot; if (!root) return unresolved; }
+      }
+      const rect = element.getBoundingClientRect();
+      const candidates = element.querySelectorAll('a[href],area[href],button,input,select,textarea,iframe,[tabindex],[contenteditable="true"]');
+      if (candidates.length > 512) return unresolved;
+      const focusableChildCount = [...candidates].filter(child => {
+        const style = getComputedStyle(child);
+        return child.tabIndex >= 0 && !child.disabled && !child.hidden && child.getClientRects().length > 0 && style.visibility !== "hidden" && style.display !== "none";
+      }).length;
+      return { ruleIndex, nodeIndex, resolved: true, tagName: element.tagName.toUpperCase(), role: element.getAttribute("role"),
+        rect: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+        scroll: { scrollWidth: element.scrollWidth, scrollHeight: element.scrollHeight, clientWidth: element.clientWidth, clientHeight: element.clientHeight },
+        tabIndex: element.tabIndex, focusableChildCount };
+    } catch { return unresolved; }
+  }), targets);
+}
+
 /**
  * Phones fold attach, model, mode, media, sources and commands into the modal "Message options" sheet behind the
  * Options button in the phone "Composer controls" row; wider layouts keep the model chip on the draft's row.
@@ -480,6 +603,33 @@ export async function runCockpitChatComposerProof({ context, browser, stack, cit
 export async function revealComposerOptions(page) {
   const toggle = page.locator('[aria-label="Composer controls"]').getByRole("button", { name: "Options", exact: true });
   if ((await toggle.count()) && (await toggle.getAttribute("aria-expanded")) === "false") await toggle.click();
+}
+
+/** Model fields live in the deferred chip popup, not directly in phone Options. */
+export async function openComposerModelOptions(page) {
+  await revealComposerOptions(page);
+  const trigger = page.getByRole("button", { name: /· Model and reasoning options$/u });
+  assert.equal(await trigger.count(), 1, "Expected one current composer model-options owner");
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") await trigger.click();
+  let controls;
+  await waitUntil(page, async () => {
+    controls = await trigger.getAttribute("aria-controls");
+    return (await trigger.getAttribute("aria-expanded")) === "true" && typeof controls === "string" && controls.length > 0;
+  }, "Current model-options popup did not finish opening");
+  assert.match(controls, /^[A-Za-z0-9_:.-]+$/u, "Invalid controlled model-options identity");
+  const popup = page.locator(`[id="${controls}"]`);
+  await popup.waitFor({ state: "visible" });
+  assert.equal(await popup.count(), 1, "Expected exactly the chip's controlled model-options popup");
+  assert.equal(await popup.getByRole("heading", { name: "Model and reasoning", exact: true }).count(), 1);
+  return popup;
+}
+
+export async function closeComposerModelOptions(page, popup) {
+  const done = popup.getByRole("button", { name: "Done", exact: true });
+  assert.equal(await done.count(), 1, "Expected the owned model-options Done control");
+  await done.click();
+  await popup.waitFor({ state: "hidden" });
+  await closeComposerOptions(page);
 }
 
 /**
@@ -595,6 +745,19 @@ async function changePreferences({
   assertComposerPlan({ plan, workspaceId, sessionId, before, patch, after });
   await dialog.waitFor({ state: "hidden" });
   return after;
+}
+
+export async function waitForComposerModelCatalog({ page, read, target, attempts = 80 }) {
+  assert.ok(Number.isInteger(attempts) && attempts >= 1 && attempts <= 80, "Catalog readiness exceeds the existing finite polling budget");
+  let catalog;
+  await waitUntil(page, async () => {
+    // A stale cache hit starts background refresh; subsequent genuine GETs observe it.
+    // Transport exceptions propagate immediately, without a request retry policy.
+    catalog = await read(`/api/v1/llm/models?providerId=${encodeURIComponent(target.providerId)}`);
+    return catalog.source === "live" && catalog.catalogStatus !== "stale" &&
+      catalog.items?.some(item => item.id === target.defaultModel);
+  }, "Alternate owned model catalog never became live, nonstale and available", attempts);
+  return catalog;
 }
 
 async function waitUntil(page, predicate, message, attempts = 80) {

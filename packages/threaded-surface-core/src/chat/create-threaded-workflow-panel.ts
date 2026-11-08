@@ -82,6 +82,8 @@ export function createThreadedWorkflowPanel({
 }: Input): MissionThreadedWorkflowPanel {
   const {
     activeWorkflowTurn,
+    workbenchRuntimeStatus,
+    retryWorkbenchRuntime,
     workbenchState,
     workbenchTree,
     selectedWorkbenchFile,
@@ -155,6 +157,7 @@ export function createThreadedWorkflowPanel({
               selectedTurn,
               projectName: selectedProject?.name ?? undefined,
               needsProjectBinding: codeModeNeedsProjectBinding,
+              workbenchRuntimeStatus,
               workbenchState,
               workbenchTree,
               selectedFile: selectedWorkbenchFile,
@@ -191,7 +194,8 @@ export function createThreadedWorkflowPanel({
                 if (!blockHistoricalMutation()) setWorkbenchDraftContent(nextValue);
               },
               onExpandedPathsChange: (nextPaths) => setWorkbenchExpandedPaths(nextPaths),
-              onRefresh: () => void refreshWorkbench(),
+              onRefresh: () =>
+                void (workbenchRuntimeStatus === "unavailable" ? retryWorkbenchRuntime() : refreshWorkbench()),
               onSaveFile: () => {
                 if (!blockHistoricalMutation()) void saveWorkbenchFile();
               },

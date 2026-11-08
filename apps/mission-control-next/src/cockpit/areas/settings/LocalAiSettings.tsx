@@ -117,7 +117,7 @@ export function LocalAiSettings() {
                 <>
                   Set up llama.cpp for Chat in{" "}
                   <a
-                    className="text-accent hover:underline"
+                    className="text-accent underline"
                     href="/settings/models?shell=cockpit#onboarding"
                     onClick={(event) => {
                       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey)

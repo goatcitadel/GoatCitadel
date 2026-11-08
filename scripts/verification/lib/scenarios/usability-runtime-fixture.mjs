@@ -7,6 +7,9 @@ import { writeDeterministicLlmProviderConfig } from "./deterministic-llm-stub.mj
 /** Fresh-install browser proof uses shipped defaults, never operator config,
  * schedules, credentials, workspace guidance or existing runtime records. */
 export async function prepareUsabilityRuntime(runId, baseUrl, options = {}) {
+  if (options.runtimeBasename !== undefined && options.runtimeBasename !== "ux") {
+    throw new TypeError("Unsupported verification runtime basename.");
+  }
   const sourceRoot = options.sourceRoot ?? repoRoot;
   const tempParent = options.tempParent ?? (process.env.GOATCITADEL_VERIFY_TEMP_ROOT?.trim() || os.tmpdir());
   const example = JSON.parse(await fs.readFile(path.join(sourceRoot, "config", "goatcitadel.example.json"), "utf8"));
@@ -15,7 +18,11 @@ export async function prepareUsabilityRuntime(runId, baseUrl, options = {}) {
   // The stub writer replaces this before the fixture can be returned/launched.
   example.llm = { activeProviderId: "", providers: [] };
   await fs.mkdir(tempParent, { recursive: true });
-  const root = await fs.mkdtemp(path.join(tempParent, `goatcitadel-usability-${sanitizeFilePart(runId)}-`));
+  const prefix = options.runtimeBasename === "ux" ? "goatcitadel-usability-ux-" : `goatcitadel-usability-${sanitizeFilePart(runId)}-`;
+  const root = await fs.mkdtemp(path.join(tempParent, prefix));
+  if (options.runtimeBasename === "ux") {
+    await fs.writeFile(path.join(root, "verification-runtime.json"), `${JSON.stringify({ schemaVersion: 1, runId }, null, 2)}\n`);
+  }
   const config = path.join(root, "config");
   await fs.mkdir(config);
   await fs.mkdir(path.join(root, "data"));

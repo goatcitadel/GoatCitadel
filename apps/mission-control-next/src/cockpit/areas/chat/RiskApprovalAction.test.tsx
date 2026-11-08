@@ -1,12 +1,29 @@
 // @vitest-environment happy-dom
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import type { ChatPendingApprovalState } from "@goatcitadel/mission-control-shared/components/chat/ChatPendingApprovalPanel";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { RiskApprovalAction } from "./RiskApprovalAction";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
 import { refuseNetwork } from "../../../test/refuse-network";
+
+prepareReadyDialogFixture();
+
+const { beforeConfirmationLoad } = vi.hoisted(() => ({
+  beforeConfirmationLoad: vi.fn<() => Promise<void>>(),
+}));
+let confirmationBody: typeof import("./RiskApprovalConfirmationBody");
+
+beforeAll(async () => {
+  confirmationBody = await vi.importActual("./RiskApprovalConfirmationBody");
+});
+
+vi.mock(import("./RiskApprovalConfirmationBody"), async () => {
+  await beforeConfirmationLoad();
+  return confirmationBody;
+});
 
 // The review summary names workspaces from the workspace list.
 vi.mock("@goatcitadel/mission-control-shared/api/workspaces", async (importOriginal) => ({
@@ -39,6 +56,18 @@ const reviewedApproval: ApprovalRequest = {
 const dialogButton = (label: string) =>
   [...document.body.querySelectorAll("button")].find((button) => button.textContent === label)!;
 
+async function openConfirmation(opener?: HTMLButtonElement) {
+  const button = opener ?? (await vi.waitFor(() => {
+    const candidate = container.querySelector<HTMLButtonElement>("button");
+    expect(candidate).not.toBeNull();
+    return candidate!;
+  }));
+  await act(async () => button.click());
+  await vi.waitFor(() =>
+    expect(document.querySelector('[aria-label="Approval action details"]')).not.toBeNull(),
+  );
+}
+
 async function typeConfirmation(value: string) {
   const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
   await act(async () => {
@@ -66,6 +95,53 @@ afterEach(() => {
 });
 
 describe("risk approval action", () => {
+  it("loads confirmation evidence only after opening the review and keeps the same dialog while it loads", async () => {
+    let finishLoad!: () => void;
+    beforeConfirmationLoad.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          finishLoad = resolve;
+        }),
+    );
+    const onApprove = vi.fn();
+    await act(async () =>
+      root.render(
+        <RiskApprovalAction
+          approval={approval("danger")}
+          reviewedApproval={reviewedApproval}
+          pending={false}
+          onApprove={onApprove}
+        />,
+      ),
+    );
+    expect(beforeConfirmationLoad).not.toHaveBeenCalled();
+    expect(document.querySelector('[role="dialog"]')).toBeNull();
+
+    const opener = container.querySelector("button")!;
+    opener.focus();
+    await act(async () => opener.click());
+    try {
+      await vi.waitFor(() => expect(beforeConfirmationLoad).toHaveBeenCalledOnce());
+      const dialog = document.querySelector('[role="dialog"]');
+      expect(dialog?.textContent).toContain("Loading approval details");
+      expect(dialogButton("Approve once")).toBeUndefined();
+      expect(dialog?.contains(document.activeElement)).toBe(true);
+
+      await act(async () => {
+        finishLoad();
+        await vi.dynamicImportSettled();
+      });
+      await vi.waitFor(() => expect(dialog?.textContent).toContain("pnpm test"));
+      expect(document.querySelector('[role="dialog"]')).toBe(dialog);
+      await act(async () => dialogButton("Cancel").click());
+      expect(document.querySelector('[role="dialog"]')).toBeNull();
+      await vi.waitFor(() => expect(document.activeElement).toBe(opener));
+      expect(onApprove).not.toHaveBeenCalled();
+    } finally {
+      finishLoad?.();
+    }
+  });
+
   it.each([
     ["Home", 0],
     ["End", 1200],
@@ -81,7 +157,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     const dialog = document.querySelector<HTMLElement>('[role="dialog"]')!;
     const region = dialog.querySelector<HTMLElement>('[aria-label="Approval action details"]')!;
     Object.defineProperties(region, { scrollHeight: { value: 1600 }, clientHeight: { value: 400 } });
@@ -116,7 +192,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     const region = document.querySelector<HTMLElement>('[aria-label="Approval action details"]')!;
     region.scrollTop = 180;
     region.focus();
@@ -166,7 +242,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     const region = document.querySelector<HTMLElement>('[aria-label="Approval action details"]')!;
     region.focus();
     await act(async () => {
@@ -189,7 +265,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     const region = document.querySelector<HTMLElement>('[role="region"][aria-label="Approval action details"]')!;
     expect(region.classList.contains("wrap-anywhere")).toBe(true);
     expect(region.classList.contains("max-w-full")).toBe(true);
@@ -213,7 +289,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     expect(onApprove).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Confirm danger-level action");
     expect(document.body.textContent).toContain("Action: Write file");
@@ -232,7 +308,7 @@ describe("risk approval action", () => {
     await act(async () =>
       root.render(<RiskApprovalAction approval={approval("danger")} pending={false} onApprove={onApprove} />),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     const confirm = [...document.body.querySelectorAll("button")].find(
       (button) => button.textContent === "Approve once",
     )!;
@@ -289,7 +365,7 @@ describe("risk approval action", () => {
           />,
         ),
       );
-      await act(async () => container.querySelector("button")?.click());
+      await openConfirmation();
 
       expect(document.body.textContent).toContain("Change: Install AWS Knowledge");
       expect(document.body.textContent).toContain("What it does: Allow knowledge-mcp.global.api.aws.");
@@ -314,7 +390,7 @@ describe("risk approval action", () => {
           />,
         ),
       );
-      await act(async () => container.querySelector("button")?.click());
+      await openConfirmation();
 
       expect(document.body.textContent).toContain("current action preview is unavailable");
       expect(approveOnce().disabled).toBe(true);
@@ -334,7 +410,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     expect(document.body.textContent).toContain(command);
     expect(document.body.textContent).toContain(command);
     expect(document.body.querySelector("details[open]")).toBeNull();
@@ -351,7 +427,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     expect(document.body.textContent).toContain("Selector: #delete-record");
     expect(
       [...document.body.querySelectorAll("button")].find((button) => button.textContent === "Approve once")?.disabled,
@@ -383,7 +459,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     expect(document.body.textContent).toContain("Confirm nuclear-level action");
     expect(document.body.textContent).toContain("pnpm test");
     const confirm = () =>
@@ -404,7 +480,7 @@ describe("risk approval action", () => {
     await act(async () =>
       root.render(<RiskApprovalAction approval={approval("nuclear")} pending={false} onApprove={onApprove} />),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
     await act(async () => {
       Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "approve");
@@ -429,7 +505,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     // The evidence is reviewable, so only the typed word can keep Approve once closed.
     expect(document.body.textContent).toContain("pnpm test");
     for (const word of ["yes", "approv"]) {
@@ -452,7 +528,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     await typeConfirmation("  APPROVE ");
     expect(dialogButton("Approve once").disabled).toBe(false);
   });
@@ -485,7 +561,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => container.querySelector("button")?.click());
+    await openConfirmation();
     const input = document.body.querySelector<HTMLInputElement>('[role="dialog"] input')!;
     const hint = document.getElementById(input.getAttribute("aria-describedby") ?? "");
     expect(hint?.textContent).toBe("Approve once stays unavailable until the text matches.");
@@ -504,14 +580,14 @@ describe("risk approval action", () => {
       ),
     );
     const review = container.querySelector("button")!;
-    await act(async () => review.click());
+    await openConfirmation(review);
     await typeConfirmation("approve");
     expect(dialogButton("Approve once").disabled).toBe(false);
     await act(async () => dialogButton("Cancel").click());
     expect(document.body.querySelector('[role="dialog"]')).toBeNull();
     // The same mounted instance reopens it; nothing was re-rendered with a new key.
     expect(review.isConnected).toBe(true);
-    await act(async () => review.click());
+    await openConfirmation(review);
     expect(document.body.querySelector<HTMLInputElement>('[role="dialog"] input')?.value).toBe("");
     expect(dialogButton("Approve once").disabled).toBe(true);
   });
@@ -542,7 +618,7 @@ describe("risk approval action", () => {
     );
     const review = container.querySelector("button")!;
     expect(review.textContent).toBe("Review nuclear approval");
-    await act(async () => review.click());
+    await openConfirmation(review);
     expect(onApprove).not.toHaveBeenCalled();
     expect(document.body.textContent).toContain("Confirm critical-level action");
     expect(document.body.textContent).toContain("pnpm test");
@@ -597,7 +673,7 @@ describe("risk approval action", () => {
       ),
     );
     expect(dialogButton("Approve once")).toBeUndefined();
-    await act(async () => dialogButton("Review nuclear approval").click());
+    await openConfirmation(dialogButton("Review nuclear approval"));
     expect(dialogButton("Approve once").disabled).toBe(true);
     expect(onApprove).not.toHaveBeenCalled();
   });
@@ -636,7 +712,7 @@ describe("risk approval action", () => {
     );
     expect(dialogButton("Review danger approval")).toBeUndefined();
     expect(document.body.textContent).not.toContain("Approving also opens a folder.");
-    await act(async () => dialogButton("Review and open folder").click());
+    await openConfirmation(dialogButton("Review and open folder"));
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
     const details = dialog.querySelector('[aria-label="Approval action details"]')!;
     const consequence = [...dialog.querySelectorAll("p")].find(
@@ -663,7 +739,7 @@ describe("risk approval action", () => {
       ),
     );
     expect(dialogButton("Review and open folder")).toBeUndefined();
-    await act(async () => dialogButton("Review nuclear approval").click());
+    await openConfirmation(dialogButton("Review nuclear approval"));
     expect(dialogButton("Approve and open folder").disabled).toBe(true);
   });
 
@@ -678,7 +754,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => dialogButton("Review danger approval").click());
+    await openConfirmation(dialogButton("Review danger approval"));
     expect(dialogButton("Approve once")).toBeDefined();
     expect(dialogButton("Approve and open folder")).toBeUndefined();
   });
@@ -695,7 +771,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => dialogButton("Review danger approval").click());
+    await openConfirmation(dialogButton("Review danger approval"));
     const dialog = () => document.body.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog().textContent).toContain("Review the exact action before you choose Approve and open folder.");
     expect(dialog().textContent).not.toContain("approving once");
@@ -713,7 +789,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => dialogButton("Review nuclear approval").click());
+    await openConfirmation(dialogButton("Review nuclear approval"));
     expect(dialog().textContent).toContain("Approve and open folder stays unavailable until the text matches.");
     expect(dialog().textContent).not.toContain("Approve once");
   });
@@ -729,7 +805,7 @@ describe("risk approval action", () => {
         />,
       ),
     );
-    await act(async () => dialogButton("Review danger approval").click());
+    await openConfirmation(dialogButton("Review danger approval"));
     const dialog = document.body.querySelector<HTMLElement>('[role="dialog"]')!;
     expect(dialog.textContent).toContain("Review the exact action before approving once.");
     expect(dialog.querySelector('[role="alert"]')!.textContent).toBe(

@@ -93,12 +93,9 @@ it("the real shared decision bar reconciles the actual Chat prompt owner without
     );
     expect(owner.pendingApproval?.approvalId).toBe(pending.approvalId);
     const button = [...host.querySelectorAll("button")].find((item) => item.textContent === "Approve once")!;
-    await act(async () => {
-      button.click();
-      await new Promise((resolve) => setTimeout(resolve, 10));
-    });
+    await act(async () => button.click());
+    await vi.waitFor(() => expect(owner.pendingApproval).toBeNull());
     expect(api.resolveApproval).toHaveBeenCalledExactlyOnceWith(pending.approvalId, "approve");
-    expect(owner.pendingApproval).toBeNull();
     expect(host.textContent).not.toContain("Approval needed");
     expect(reload).toHaveBeenCalledWith(session.sessionId, { background: true, includeThread: true });
     expect(api.approveChatTool).not.toHaveBeenCalled();

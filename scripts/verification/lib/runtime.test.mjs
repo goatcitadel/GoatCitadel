@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createServer } from "node:http";
 import { test } from "node:test";
 
 import {
@@ -9,6 +10,7 @@ import {
   buildVerificationUiCommand,
   buildVerificationWorkspaceRefreshCommands,
   stopVerificationStack,
+  waitForHttp,
   withVerificationUiOrigin,
 } from "./runtime.mjs";
 
@@ -100,7 +102,10 @@ test("a verification Gateway launches without an inherited origin list its lane 
     // What startProcess hands the Gateway process.
     buildVerificationProcessEnv(
       inherited,
-      buildVerificationGatewayEnv({ runtimeRoot: "isolated-root", gatewayPort: 41000, uiUrl, gatewayEnvOmit }, inherited),
+      buildVerificationGatewayEnv(
+        { runtimeRoot: "isolated-root", gatewayPort: 41000, uiUrl, gatewayEnvOmit },
+        inherited,
+      ),
       gatewayEnvOmit,
     );
 
@@ -145,4 +150,86 @@ test("verification dev UI invalidates Vite dependency prebundles while preview s
     /apps\/mission-control-next\/node_modules\/vite\/bin\/vite\.js$/u,
   );
   assert.deepEqual(previewCommand.slice(2), ["preview", "--host", "127.0.0.1", "--port", "4173", "--strictPort"]);
+});
+
+for (const variant of ["omitted", "null", "live-child"]) {
+  test(`verification HTTP readiness accepts an in-process server with ${variant} handle`, async () => {
+    let requests = 0;
+    const server = createServer((_request, response) => {
+      requests += 1;
+      response.writeHead(204).end();
+    });
+    await new Promise((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+    try {
+      const address = server.address();
+      assert(address && typeof address === "object");
+      const url = `http://127.0.0.1:${address.port}/health`;
+      if (variant === "omitted") await waitForHttp(url, "In-process fixture", 2_000);
+      else
+        await waitForHttp(
+          url,
+          "In-process fixture",
+          2_000,
+          variant === "null" ? null : { child: { exitCode: null, signalCode: null } },
+        );
+      assert.equal(requests, 1);
+    } finally {
+      server.closeAllConnections();
+      await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+    }
+  });
+}
+
+test("verification HTTP readiness still rejects owned-child failures before any request", async () => {
+  let requests = 0;
+  const server = createServer((_request, response) => {
+    requests += 1;
+    response.writeHead(204).end();
+  });
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  try {
+    const address = server.address();
+    assert(address && typeof address === "object");
+    const url = `http://127.0.0.1:${address.port}/health`;
+    let logsFlushed = false;
+    await assert.rejects(
+      waitForHttp(url, "Exited fixture", 2_000, {
+        child: { exitCode: 7 },
+        logsFlushed: Promise.resolve().then(() => {
+          logsFlushed = true;
+        }),
+      }),
+      /Exited fixture process exited before becoming ready/u,
+    );
+    assert.equal(logsFlushed, true);
+    logsFlushed = false;
+    await assert.rejects(
+      waitForHttp(url, "Signalled fixture", 2_000, {
+        child: { exitCode: null, signalCode: "SIGTERM" },
+        logsFlushed: Promise.resolve().then(() => {
+          logsFlushed = true;
+        }),
+      }),
+      /Signalled fixture process exited before becoming ready/u,
+    );
+    assert.equal(logsFlushed, true);
+    const spawnError = Object.assign(new Error("Synthetic fixture spawn failure"), { code: "ENOENT" });
+    await assert.rejects(
+      waitForHttp(url, "Unstarted fixture", 2_000, {
+        spawnError,
+        logsFlushed: Promise.resolve(),
+      }),
+      (error) => error === spawnError,
+    );
+    assert.equal(requests, 0);
+  } finally {
+    server.closeAllConnections();
+    await new Promise((resolve, reject) => server.close((error) => (error ? reject(error) : resolve())));
+  }
 });

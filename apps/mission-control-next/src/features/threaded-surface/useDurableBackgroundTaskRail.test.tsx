@@ -139,6 +139,32 @@ describe("useDurableBackgroundTaskRail", () => {
     expect(text(renderer)).toBe("run-b");
   });
 
+  it("refreshes after navigation invalidates a rail whose first snapshot is still pending", async () => {
+    const navigation = new EventTarget();
+    vi.stubGlobal("window", navigation);
+    const first = deferred<DurableBackgroundTaskRailResponse>();
+    mockedFetch.mockReturnValueOnce(first.promise).mockResolvedValue(snapshot("run-a"));
+    let renderer: ReactTestRenderer | undefined;
+    try {
+      await act(async () => {
+        renderer = create(<Harness parentRunId="run-a" />);
+      });
+      expect(text(renderer!)).toBe("loading");
+
+      await act(async () => {
+        navigation.dispatchEvent(new Event("goatcitadel:classic-location"));
+      });
+      expect(mockedFetch).toHaveBeenCalledTimes(2);
+      expect(text(renderer!)).toBe("run-a");
+
+      await act(async () => first.resolve(snapshot("stale-run")));
+      expect(text(renderer!)).toBe("run-a");
+    } finally {
+      await act(async () => renderer?.unmount());
+      vi.unstubAllGlobals();
+    }
+  });
+
   it("surfaces fetch errors without inventing canonical state", async () => {
     mockedFetch.mockRejectedValue(new Error("scope unavailable"));
     let renderer!: ReactTestRenderer;
@@ -275,7 +301,9 @@ describe("background control reviews and retained outcomes", () => {
       owner = useDurableBackgroundTaskRail({ workspaceId: "workspace-a", sessionId: "session-a" });
       return null;
     }
-    await act(async () => { renderer.update(<NoParentCapture />); });
+    await act(async () => {
+      renderer.update(<NoParentCapture />);
+    });
     expect(owner.snapshot).toBeNull();
     expect(owner.review("watcher-review")).toBeNull();
     expect(mockedControl).not.toHaveBeenCalled();

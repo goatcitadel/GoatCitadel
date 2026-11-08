@@ -11,6 +11,9 @@ import { ConnectorRow } from "./connectors/ConnectorRow";
 import { ConnectorServerControls } from "./connectors/ConnectorServerControls";
 import { WhatAsksFirst } from "./connectors/WhatAsksFirst";
 import { SkillRow } from "./skills/SkillRow";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 // The pieces a plugin added, in their own tabs: each says "From <plugin>" with a link to the plugin's panel, and the
 // controls GoatCitadel refuses for them (Remove, what asks first) aren't offered.

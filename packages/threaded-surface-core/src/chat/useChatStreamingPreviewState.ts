@@ -1,19 +1,23 @@
 import type { ChatSessionPrefsRecord, ChatStreamChunk, ChatThreadResponse } from "@goatcitadel/contracts";
 import { useCallback, useEffect, useRef, useState, type MutableRefObject } from "react";
-import { updateThreadFromStreamChunk } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
+import type { updateThreadFromStreamChunk } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 import { recordClientDiagnostic } from "@goatcitadel/mission-control-shared/state/dev-diagnostics-store";
 import {
   getChatStreamingPreview,
   publishChatStreamingPreview,
 } from "@goatcitadel/mission-control-shared/state/chat-streaming-preview-store";
 import type { FinalizedStreamMessageState } from "./chat-page-pure-helpers";
-import {
+import type {
   ChatStreamingPreviewBuffer,
-  isReducedMotionPreferred,
-  type ChatStreamingPreview,
-  type ChatVisualStreamMode,
+  ChatStreamingPreview,
+  ChatVisualStreamMode,
 } from "./chat-streaming-preview";
 import type { ChatThreadCommitter } from "./useChatOutboundExecution.types";
+
+export type ChatPreviewRuntime = Pick<
+  typeof import("./chat-streaming-preview"),
+  "ChatStreamingPreviewBuffer" | "isReducedMotionPreferred"
+>;
 
 interface UseChatStreamingPreviewStateInput {
   selectedSessionId: string | null;
@@ -103,11 +107,11 @@ export function useChatStreamingPreviewState({
     [applyTransitionPreview],
   );
 
-  const getStreamingPreviewBuffer = useCallback(() => {
+  const getStreamingPreviewBuffer = useCallback((runtime: ChatPreviewRuntime) => {
     if (!streamingPreviewBufferRef.current) {
-      streamingPreviewBufferRef.current = new ChatStreamingPreviewBuffer({
+      streamingPreviewBufferRef.current = new runtime.ChatStreamingPreviewBuffer({
         onFlush: handleBufferFlush,
-        isReducedMotion: () => visualStreamModeRef.current === "instant" || isReducedMotionPreferred(),
+        isReducedMotion: () => visualStreamModeRef.current === "instant" || runtime.isReducedMotionPreferred(),
       });
     }
     return streamingPreviewBufferRef.current;
@@ -121,7 +125,7 @@ export function useChatStreamingPreviewState({
   }, []);
 
   const promoteStreamingPreviewToThread = useCallback(
-    (sessionId: string, reason: "abort" | "error") => {
+    (sessionId: string, reason: "abort" | "error", updateThread: typeof updateThreadFromStreamChunk) => {
       const snapshot =
         streamingPreviewBufferRef.current?.getSnapshot({ forceVisible: true }) ?? getChatStreamingPreview(sessionId);
       if (!snapshot || snapshot.sessionId !== sessionId || snapshot.text.trim().length === 0) {
@@ -138,7 +142,7 @@ export function useChatStreamingPreviewState({
         content: snapshot.text,
       };
       commitThreadUpdate((current: ChatThreadResponse | null) =>
-        updateThreadFromStreamChunk(current, partialChunk, null, snapshot.sessionId, prefsRef.current),
+        updateThread(current, partialChunk, null, snapshot.sessionId, prefsRef.current),
       );
       recordClientDiagnostic({
         level: "warn",

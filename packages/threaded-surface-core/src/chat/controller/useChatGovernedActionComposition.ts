@@ -6,9 +6,6 @@ import type {
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 import { type PendingAttachmentDocumentMode } from "../mission-threaded-controller-helpers";
-import { useChatChangePlanConfirmations } from "../useChatChangePlanConfirmations";
-import { useChatChangePlanOAuth } from "../useChatChangePlanOAuth";
-import { useChatChangePlanOwnerActions } from "../useChatChangePlanOwnerActions";
 import { useChatChangePlanState } from "../useChatChangePlanState";
 import { useChatComposerPaletteActions } from "../useChatComposerPaletteActions";
 import { useChatExportActions } from "../useChatExportActions";
@@ -67,10 +64,6 @@ type Input = {
     | "setActiveChangePlan"
     | "setLinkedDefaultChangePlan"
     | "setChangePlanActionError"
-    | "setChangePlanActionPending"
-    | "activeChangePlan"
-    | "changePlanOAuthFlow"
-    | "setChangePlanOAuthFlow"
   >;
   navigation: Pick<ReturnType<typeof useChatSurfaceNavigation>, "handleNavigateSurface">;
   setUiError: ReturnType<typeof useChatScopedErrors>["setUiError"];
@@ -96,7 +89,6 @@ type Input = {
     } | null>
   >;
   submission: Pick<ReturnType<typeof useChatSubmissionComposition>, "providerRouting" | "orchestration">;
-  onOpenApprovals: NonNullable<MissionThreadedControllerHostProps["onOpenApprovals"]>;
   pendingAttachments: ChatAttachmentRecord[];
   pendingAttachmentModes: Record<string, PendingAttachmentDocumentMode>;
   setPendingAttachmentModes: React.Dispatch<React.SetStateAction<Record<string, PendingAttachmentDocumentMode>>>;
@@ -140,7 +132,6 @@ export function useChatGovernedActionComposition({
   setDraft,
   setForkConfirm,
   submission,
-  onOpenApprovals,
   pendingAttachments,
   pendingAttachmentModes,
   setPendingAttachmentModes,
@@ -239,35 +230,6 @@ export function useChatGovernedActionComposition({
   });
   const { recordChangePlanResult } = modelPlans;
 
-  const planConfirmations = useChatChangePlanConfirmations({
-    workspaceId,
-    prefsRef: execution.outbound.prefsRef,
-    setPrefs: session.sessionData.setPrefs,
-    setUiError: setUiError,
-    pushLocalNotice: pushLocalNotice,
-    recordChangePlanResult: recordChangePlanResult,
-    setActiveChangePlan: changePlanState.setActiveChangePlan,
-    setLinkedDefaultChangePlan: changePlanState.setLinkedDefaultChangePlan,
-    setChangePlanActionError: changePlanState.setChangePlanActionError,
-    setChangePlanActionPending: changePlanState.setChangePlanActionPending,
-  });
-  const planActions = useChatChangePlanOwnerActions({
-    workspaceId,
-    recordChangePlanResult: recordChangePlanResult,
-    onOpenApprovals,
-    setActiveChangePlan: changePlanState.setActiveChangePlan,
-    setChangePlanActionError: changePlanState.setChangePlanActionError,
-    setChangePlanActionPending: changePlanState.setChangePlanActionPending,
-  });
-  const planOAuth = useChatChangePlanOAuth({
-    workspaceId,
-    activeChangePlan: changePlanState.activeChangePlan,
-    changePlanOAuthFlow: changePlanState.changePlanOAuthFlow,
-    recordChangePlanResult: recordChangePlanResult,
-    setChangePlanOAuthFlow: changePlanState.setChangePlanOAuthFlow,
-    setChangePlanActionError: changePlanState.setChangePlanActionError,
-    setChangePlanActionPending: changePlanState.setChangePlanActionPending,
-  });
   const knowledgeActions = useChatKnowledgeAttachments({
     pendingAttachments,
     pendingAttachmentModes,
@@ -328,8 +290,5 @@ export function useChatGovernedActionComposition({
     knowledgeRemoval,
     codeLaunch,
     recordChangePlanResult,
-    planConfirmations,
-    planActions,
-    planOAuth,
   };
 }

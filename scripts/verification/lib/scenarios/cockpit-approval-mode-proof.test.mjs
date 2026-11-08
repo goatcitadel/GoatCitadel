@@ -6,7 +6,69 @@ import {
   assertInboxToastOwnerBinding,
   assertInboxChangeBinding,
   assertApprovedDecisionReceipt,
+  createOwnerReadDiagnostic,
+  retainOwnerReadDiagnostic,
+  withOwnerDiagnosticResult,
 } from "./cockpit-approval-mode-proof.mjs";
+
+describe("bounded owner-read diagnostics", () => {
+  it("projects only closed fields and saturates discarded evidence without leaking a secret canary", () => {
+    const probe = createOwnerReadDiagnostic(), canary = "private-poll-secret-canary";
+    probe.record({ kind: "request", owner: "inbox", method: "GET", scope: "expected", queryShape: "workspace_and_other", status: 200,
+      url: canary, headers: { authorization: canary }, body: canary, elapsedMs: 3 });
+    probe.ui({ selectedScope: canary, expectedSectionPresent: false, loadingVisible: true, streamReady: false,
+      heldReadStarted: false, heldSnapshotReady: false, statusCount: 1, alertCount: 0, rawText: canary });
+    for (let index = 0; index < 10_100; index++) probe.record({ kind: canary, owner: canary, method: canary, status: canary });
+    const evidence = probe.snapshot();
+    assert.equal(evidence.events.length, 32);
+    assert.equal(evidence.dropped, 10_000);
+    assert.equal(evidence.counts.other, 10_000);
+    assert.equal(evidence.diagnosticGap, true);
+    assert.equal(evidence.ui.streamReady, false);
+    assert.equal(evidence.ui.heldSnapshotReady, false);
+    assert.ok(!JSON.stringify(evidence).includes(canary));
+    evidence.events.length = 0;
+    assert.equal(probe.snapshot().events.length, 32);
+  });
+  it("redacts before writing and reports unavailable redaction or writer failure without a success outcome", async () => {
+    const order = [], written = [];
+    const snapshot = { diagnosticGap: false, events: [] };
+    assert.deepEqual(await retainOwnerReadDiagnostic(snapshot, "unused", {
+      redact: async () => { order.push("redact"); return "canonical-redacted"; },
+      write: async (_path, payload) => { order.push("write"); written.push(payload); },
+    }), { retained: true, writeFailure: false });
+    assert.deepEqual(order, ["redact", "write"]);
+    assert.equal(written[0].redactedEvidence, "canonical-redacted");
+    await retainOwnerReadDiagnostic(snapshot, "unused", { redact: async () => "Verification diagnostic suppressed: unavailable", write: async (_path, value) => written.push(value) });
+    assert.equal(written[1].diagnosticGap, true);
+    assert.equal(written[1].redactionSuppressed, true);
+    const failed = await retainOwnerReadDiagnostic(snapshot, "unused", { redact: async () => "redacted", write: async () => { throw new Error("private-secret"); } });
+    assert.deepEqual(failed, { retained: false, writeFailure: true });
+    assert.ok(!JSON.stringify(failed).includes("private-secret"));
+    let writes = 0;
+    assert.deepEqual(await retainOwnerReadDiagnostic(snapshot, "unused", { redact: async () => { throw new Error("private-secret"); }, write: async () => writes++ }), failed);
+    assert.equal(writes, 0);
+  });
+  it("reports a writer failure on a successful approval outcome without changing canonical journey success", async () => {
+    const retained = await retainOwnerReadDiagnostic({ diagnosticGap: false, events: [] }, "unused", {
+      redact: async () => "canonical-redacted", write: async () => { throw new Error("private-secret-canary"); },
+    });
+    const ownerMetrics = { canonicalApprovalResolved: true, exactRuleSaveVerified: true, savedRevision: 7 };
+    const artifacts = { screenshots: ["review.png"], diagnostics: [] };
+    const result = withOwnerDiagnosticResult({ status: "passed", metrics: ownerMetrics, artifacts }, retained.writeFailure);
+    assert.equal(result.status, "passed");
+    assert.deepEqual(result.metrics, { ...ownerMetrics, diagnosticWriteFailure: true });
+    assert.equal(result.artifacts, artifacts);
+    assert.equal(ownerMetrics.diagnosticWriteFailure, undefined);
+    assert.ok(!JSON.stringify(result).includes("private-secret-canary"));
+    const original = { status: "failed", error: "Original approval guard failed.", metrics: { heldSnapshotReady: false }, artifacts };
+    const failed = withOwnerDiagnosticResult(original, retained.writeFailure);
+    assert.equal(failed.status, "failed");
+    assert.equal(failed.error, original.error);
+    assert.equal(failed.metrics.heldSnapshotReady, false);
+    assert.equal(failed.metrics.diagnosticWriteFailure, true);
+  });
+});
 
 describe("native approved decision receipt", () => {
   const evidence = () => ({

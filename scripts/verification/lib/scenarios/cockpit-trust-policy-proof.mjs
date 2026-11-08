@@ -1,5 +1,16 @@
 import assert from "node:assert/strict";
 import { mkdir } from "node:fs/promises";
+import { classifyCockpitProofWrite } from "./cockpit-proof-writes.mjs";
+
+export async function assertTrustProofOwnerLink(dialog, capability) {
+  const destination = ({ "capabilities.catalog": ["Open Library / Candidates and mesh", "/library?shell=cockpit#trust-policy"],
+    "skills.lifecycle": ["Open Capabilities / Skills", "/capabilities/skills?shell=cockpit"] })[capability.source];
+  assert.ok(destination, "Unknown Trust record owner source");
+  const [label, href] = destination;
+  const ownerLink = dialog.getByRole("link", { name: label, exact: true });
+  assert.equal(await ownerLink.count(), 1, "Expected one exact selected-record owner link");
+  assert.equal(await ownerLink.getAttribute("href"), href, "Trust owner link left its exact native destination");
+}
 
 const escapeRegExp = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
@@ -51,11 +62,9 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           await installMissionControlNextBrowserState(browserContext, "default", citadelId);
           page = await browserContext.newPage();
           page.on("request", (request) => {
-            if (
-              ["POST", "PUT", "PATCH", "DELETE"].includes(request.method()) &&
-              new URL(request.url()).pathname.startsWith("/api/v1/")
-            )
-              writes.push({ method: request.method(), path: new URL(request.url()).pathname });
+            const pathname = new URL(request.url()).pathname;
+            if (classifyCockpitProofWrite(request.method(), pathname) === "owner")
+              writes.push({ method: request.method(), path: pathname });
           });
           const isSnapshot = (response) =>
             response.request().method() === "GET" &&
@@ -78,7 +87,8 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           // The row button is named by its visible text: the label, then "Capability · <state> · <owner>".
           await panel.getByRole("button", { name: new RegExp(`^${escapeRegExp(label)}\\s*Capability · `) }).click();
           const dialog = page.getByRole("dialog", { name: `Trust record: ${label}`, exact: true });
-          await dialog.waitFor();
+          // The loading dialog already has the title. Wait for the record body before checking its values.
+          await dialog.getByText("Record ID", { exact: true }).waitFor();
           const detail = await dialog.innerText();
           assert.ok(
             detail.includes(`capability:${capability.capabilityId}`),
@@ -89,12 +99,7 @@ export async function runCockpitTrustPolicyProof({ context, browser, stack, cita
           if (capability.reviewWarning) assert.ok(detail.includes(capability.reviewWarning));
           for (const required of capability.requires ?? []) assert.ok(detail.includes(`Requires ${required}`));
           // The owner link opens the native Library page that manages this capability (never the classic view).
-          const ownerLink = dialog.getByRole("link", { name: /^Open Library \/ (?:Capabilities|Skills)$/u });
-          assert.match(
-            (await ownerLink.getAttribute("href")) ?? "",
-            /^\/library(?:\?|$)/u,
-            "Trust owner link left the cockpit Library.",
-          );
+          await assertTrustProofOwnerLink(dialog, capability);
           await page.addScriptTag({ path: axeSourcePath });
           const screenshotDir = path.join(context.artifactRoot, "screenshots");
           await mkdir(screenshotDir, { recursive: true });

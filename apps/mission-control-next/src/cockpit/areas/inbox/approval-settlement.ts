@@ -1,6 +1,6 @@
 import { APPROVAL_EXPIRY_ACTOR_ID, type ApprovalRequest, type ApprovalEffectRecord } from "@goatcitadel/contracts";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
-import { presentActor } from "./inbox-vocabulary";
+import { presentActor } from "./approval-actor";
 
 /** The Gateway sweeps an approval that expired before any operator decision as a rejection by its expiry actor. */
 export function approvalExpiredUnresolved(approval: ApprovalRequest): boolean {

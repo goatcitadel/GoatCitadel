@@ -17,6 +17,9 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 import { __resetApprovalOperationAttemptsForTests } from "../inbox/approval-operation-attempts";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryFileTemplates } from "./LibraryFileTemplates";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({
   fetchFileTemplates: vi.fn(),
   createFileFromTemplate: vi.fn(),

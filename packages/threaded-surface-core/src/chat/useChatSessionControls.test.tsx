@@ -55,6 +55,13 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   updateChatSession: apiMocks.updateChatSession,
 }));
 
+const actionCode = vi.hoisted(() => ({
+  load: undefined as (() => Promise<typeof import("./session-control-action-code")>) | undefined,
+}));
+vi.mock("./load-session-control-action-code", () => ({
+  loadSessionControlActionCode: () => actionCode.load?.() ?? import("./session-control-action-code"),
+}));
+
 const selectedSession = {
   sessionId: "session-1",
   revision: 7,
@@ -176,6 +183,7 @@ function Harness(props: {
 describe("useChatSessionControls", () => {
   beforeEach(() => {
     __resetApprovalOperationAttemptsForTests();
+    actionCode.load = undefined;
     latest = null;
     resetChatSessionCreationForTests();
     Object.values(apiMocks).forEach((mock) => {
@@ -200,6 +208,47 @@ describe("useChatSessionControls", () => {
       target: "channel-1",
       writable: true,
     });
+  });
+
+  it("keeps pin pending while action code loads and refuses a departed view", async () => {
+    let release!: (code: typeof import("./session-control-action-code")) => void;
+    const held = new Promise<typeof import("./session-control-action-code")>((resolve) => {
+      release = resolve;
+    });
+    actionCode.load = vi.fn(() => held);
+    let renderer!: ReactTestRenderer;
+    await act(async () => {
+      renderer = create(<Harness session={selectedSession} viewIdentity="original" />);
+    });
+    expect(actionCode.load).not.toHaveBeenCalled();
+    let pending!: Promise<void>;
+    await act(async () => {
+      pending = latest!.controls.handleTogglePinSession();
+    });
+    expect(latest!.controls.sessionControlPending).toBe("pin");
+    expect(apiMocks.pinChatSession).not.toHaveBeenCalled();
+    await act(async () => renderer.update(<Harness session={selectedSession} viewIdentity="changed" />));
+    await act(async () => renderer.update(<Harness session={selectedSession} viewIdentity="original" />));
+    await act(async () => {
+      release(await import("./session-control-action-code"));
+      await pending;
+    });
+    expect(apiMocks.pinChatSession).not.toHaveBeenCalled();
+    expect(latest!.controls.sessionControlPending).toBeNull();
+    expect(latest!.setError).not.toHaveBeenCalled();
+  });
+
+  it("reports current action code failure without sending a metadata write", async () => {
+    actionCode.load = vi.fn().mockRejectedValue(new Error("Session action code failed to load."));
+    await act(async () => {
+      create(<Harness session={selectedSession} />);
+    });
+    await act(async () => {
+      await latest!.controls.handleRenameSession();
+    });
+    expect(apiMocks.updateChatSession).not.toHaveBeenCalled();
+    expect(latest!.controls.sessionControlPending).toBeNull();
+    expect(latest!.setError).toHaveBeenCalledExactlyOnceWith("Session action code failed to load.");
   });
 
   it("creates and ensures sessions across selected, placeholder, and new-session paths", async () => {

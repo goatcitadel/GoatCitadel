@@ -1,4 +1,11 @@
-import { z } from "zod";
+import * as z from "zod/mini";
+import {
+  SESSION_CONTROL_IDENTIFIER_PATTERN,
+  SESSION_CONTROL_TIMESTAMP_PATTERN,
+  isCanonicalSessionControlTimestamp,
+  isOperatorControlEvent,
+  snapshotSessionControlData,
+} from "./session-control-operator-projection.js";
 
 export const SESSION_CONTROL_OPERATIONS = [
   "read",
@@ -87,63 +94,62 @@ interface SessionControlEventTransitionShape {
 
 const IdentifierSchema = z
   .string()
-  .min(1)
-  .max(256)
-  .regex(/^[A-Za-z0-9._:-]+$/u);
+  .check(z.minLength(1))
+  .check(z.maxLength(256))
+  .check(z.regex(SESSION_CONTROL_IDENTIFIER_PATTERN));
 const TimestampSchema = z
   .string()
-  .regex(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/u)
-  .refine(
-    (value) => {
-      const timestamp = Date.parse(value);
-      return !Number.isNaN(timestamp) && new Date(timestamp).toISOString() === value;
-    },
-    { message: "Timestamp is invalid." },
-  );
-const GenerationSchema = z.number().int().positive().safe();
-const TokenFingerprintSchema = z.string().regex(/^[0-9a-f]{8}$/u);
-const SessionControlTokenHashSha256Schema = z.string().regex(/^[0-9a-f]{64}$/u);
+  .check(z.regex(SESSION_CONTROL_TIMESTAMP_PATTERN))
+  .check(z.refine(isCanonicalSessionControlTimestamp, { message: "Timestamp is invalid." }));
+const GenerationSchema = z.int().check(z.positive());
+const TokenFingerprintSchema = z.string().check(z.regex(/^[0-9a-f]{8}$/u));
+const SessionControlTokenHashSha256Schema = z.string().check(z.regex(/^[0-9a-f]{64}$/u));
 const EventReasonCodeSchema = z.enum(SESSION_CONTROL_EVENT_REASON_CODES);
 
-const ExternalSessionControlCapabilitySetSchema = z.unknown().transform((input, context) => {
-  if (!Array.isArray(input) || input.length < 1 || input.length > 2) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control capability set is invalid." });
-    return z.NEVER;
-  }
-  const values = new Set<ExternalSessionControlCapability>();
-  for (const entry of input) {
-    if (entry !== "send" && entry !== "read") {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control capability set is invalid." });
+const ExternalSessionControlCapabilitySetSchema = z.pipe(
+  z.unknown(),
+  z.transform((input, context) => {
+    if (!Array.isArray(input) || input.length < 1 || input.length > 2) {
+      context.issues.push({ code: "custom", input, message: "Session control capability set is invalid." });
       return z.NEVER;
     }
-    if (values.has(entry)) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control capability set is invalid." });
+    const values = new Set<ExternalSessionControlCapability>();
+    for (const entry of input) {
+      if (entry !== "send" && entry !== "read") {
+        context.issues.push({ code: "custom", input, message: "Session control capability set is invalid." });
+        return z.NEVER;
+      }
+      if (values.has(entry)) {
+        context.issues.push({ code: "custom", input, message: "Session control capability set is invalid." });
+        return z.NEVER;
+      }
+      values.add(entry);
+    }
+    if (!values.has("send")) {
+      context.issues.push({ code: "custom", input, message: "Session control capability set is invalid." });
       return z.NEVER;
     }
-    values.add(entry);
-  }
-  if (!values.has("send")) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control capability set is invalid." });
-    return z.NEVER;
-  }
-  return Object.freeze(values.has("read") ? (["send", "read"] as const) : (["send"] as const));
-});
+    return Object.freeze(values.has("read") ? (["send", "read"] as const) : (["send"] as const));
+  }),
+);
 
-const ProjectedExternalCapabilitySetSchema = z
-  .union([z.tuple([z.literal("send")]), z.tuple([z.literal("send"), z.literal("read")])])
-  .transform((capabilities) =>
+const ProjectedExternalCapabilitySetSchema = z.pipe(
+  z.union([z.tuple([z.literal("send")]), z.tuple([z.literal("send"), z.literal("read")])]),
+  z.transform((capabilities: ["send"] | ["send", "read"]) =>
     capabilities.length === 1 ? Object.freeze(["send"] as const) : Object.freeze(["send", "read"] as const),
-  );
-const EmptyCapabilitySetSchema = z.tuple([]).transform(() => Object.freeze([]) as readonly []);
+  ),
+);
+const EmptyCapabilitySetSchema = z.pipe(
+  z.tuple([]),
+  z.transform(() => Object.freeze([]) as readonly []),
+);
 
-const BoundExternalControllerSummarySchema = z
-  .object({
-    companionSessionId: IdentifierSchema,
-    clientInstanceId: IdentifierSchema,
-    principalPurpose: z.literal("session_control_client"),
-    tokenFingerprint: TokenFingerprintSchema,
-  })
-  .strict();
+const BoundExternalControllerSummarySchema = z.strictObject({
+  companionSessionId: IdentifierSchema,
+  clientInstanceId: IdentifierSchema,
+  principalPurpose: z.literal("session_control_client"),
+  tokenFingerprint: TokenFingerprintSchema,
+});
 
 const ControlProjectionBaseShape = {
   workspaceId: IdentifierSchema,
@@ -154,21 +160,6 @@ const ControlProjectionBaseShape = {
   updatedAt: TimestampSchema,
 } as const;
 
-const OPERATOR_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
-  "session_initialized",
-  "request_created",
-  "request_rejected",
-  "request_expired",
-  "request_cancelled",
-  "identity_revoked",
-  "release",
-  "operator_revoke",
-  "emergency_takeover",
-  "auth_revoked",
-  "session_reactivated",
-  "heartbeat_preempted",
-  "mutation_denied",
-]);
 const EXTERNAL_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
   "request_rejected",
   "request_expired",
@@ -179,34 +170,22 @@ const EXTERNAL_CURRENT_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
   "reconnect",
   "mutation_denied",
 ]);
-const OPERATOR_EXTERNAL_RETURN_EVENT_REASONS = new Set<SessionControlEventReasonCode>([
-  "identity_revoked",
-  "release",
-  "operator_revoke",
-  "emergency_takeover",
-  "auth_revoked",
-]);
-
 const OperatorSessionControlRecordSchema = z
-  .object({
+  .strictObject({
     ...ControlProjectionBaseShape,
     ownerKind: z.literal("operator"),
     leaseState: z.literal("operator_active"),
     capabilities: EmptyCapabilitySetSchema,
   })
-  .strict()
-  .superRefine((control, context) => {
-    if (
-      !OPERATOR_CURRENT_EVENT_REASONS.has(control.lastEventReasonCode) ||
-      (control.lastEventReasonCode === "session_initialized" && control.generation !== 1) ||
-      (OPERATOR_EXTERNAL_RETURN_EVENT_REASONS.has(control.lastEventReasonCode) && control.generation < 3) ||
-      (control.lastEventReasonCode === "session_reactivated" && control.generation < 2)
-    ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Operator control projection is invalid." });
-    }
-  });
+  .check(
+    z.superRefine((control, context) => {
+      if (!isOperatorControlEvent(control.lastEventReasonCode, control.generation)) {
+        context.addIssue({ code: "custom", message: "Operator control projection is invalid." });
+      }
+    }),
+  );
 const ExternalSessionControlRecordSchema = z
-  .object({
+  .strictObject({
     ...ControlProjectionBaseShape,
     ownerKind: z.literal("external_companion"),
     leaseState: z.enum(["external_live", "external_stale"]),
@@ -216,29 +195,30 @@ const ExternalSessionControlRecordSchema = z
     leaseExpiresAt: TimestampSchema,
     reconnectExpiresAt: TimestampSchema,
   })
-  .strict()
-  .superRefine((control, context) => {
-    const heartbeatAt = Date.parse(control.lastHeartbeatAt);
-    const leaseExpiresAt = Date.parse(control.leaseExpiresAt);
-    const reconnectExpiresAt = Date.parse(control.reconnectExpiresAt);
-    const updatedAt = Date.parse(control.updatedAt);
-    const liveReason = ["handoff", "heartbeat", "reconnect"].includes(control.lastEventReasonCode);
-    const reasonMatchesLease =
-      (control.lastEventReasonCode === "lease_stale" && control.leaseState === "external_stale") ||
-      (liveReason && control.leaseState === "external_live") ||
-      (!liveReason && control.lastEventReasonCode !== "lease_stale");
-    if (
-      !EXTERNAL_CURRENT_EVENT_REASONS.has(control.lastEventReasonCode) ||
-      control.generation < 2 ||
-      (control.lastEventReasonCode === "reconnect" && control.generation < 3) ||
-      !reasonMatchesLease ||
-      leaseExpiresAt !== heartbeatAt + SESSION_CONTROL_LIVE_LEASE_SECONDS * 1_000 ||
-      reconnectExpiresAt !== heartbeatAt + SESSION_CONTROL_RECONNECT_WINDOW_SECONDS * 1_000 ||
-      updatedAt < heartbeatAt
-    ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "External control projection is invalid." });
-    }
-  });
+  .check(
+    z.superRefine((control, context) => {
+      const heartbeatAt = Date.parse(control.lastHeartbeatAt);
+      const leaseExpiresAt = Date.parse(control.leaseExpiresAt);
+      const reconnectExpiresAt = Date.parse(control.reconnectExpiresAt);
+      const updatedAt = Date.parse(control.updatedAt);
+      const liveReason = ["handoff", "heartbeat", "reconnect"].includes(control.lastEventReasonCode);
+      const reasonMatchesLease =
+        (control.lastEventReasonCode === "lease_stale" && control.leaseState === "external_stale") ||
+        (liveReason && control.leaseState === "external_live") ||
+        (!liveReason && control.lastEventReasonCode !== "lease_stale");
+      if (
+        !EXTERNAL_CURRENT_EVENT_REASONS.has(control.lastEventReasonCode) ||
+        control.generation < 2 ||
+        (control.lastEventReasonCode === "reconnect" && control.generation < 3) ||
+        !reasonMatchesLease ||
+        leaseExpiresAt !== heartbeatAt + SESSION_CONTROL_LIVE_LEASE_SECONDS * 1_000 ||
+        reconnectExpiresAt !== heartbeatAt + SESSION_CONTROL_RECONNECT_WINDOW_SECONDS * 1_000 ||
+        updatedAt < heartbeatAt
+      ) {
+        context.addIssue({ code: "custom", message: "External control projection is invalid." });
+      }
+    }),
+  );
 const SessionControlRecordSchema = z.union([OperatorSessionControlRecordSchema, ExternalSessionControlRecordSchema]);
 
 const SessionControlRequestBaseShape = {
@@ -255,41 +235,37 @@ const SessionControlRequestBaseShape = {
   createdAt: TimestampSchema,
 } as const;
 const PendingSessionControlRequestRecordSchema = z
-  .object({ ...SessionControlRequestBaseShape, status: z.literal("pending") })
-  .strict()
-  .superRefine(validatePendingRequestChronology);
+  .strictObject({ ...SessionControlRequestBaseShape, status: z.literal("pending") })
+  .check(z.superRefine(validatePendingRequestChronology));
 const RejectedSessionControlRequestRecordSchema = z
-  .object({
+  .strictObject({
     ...SessionControlRequestBaseShape,
     status: z.literal("rejected"),
     decidedAt: TimestampSchema,
     decidedByActorId: IdentifierSchema,
     decisionReasonCode: z.literal("request_rejected"),
   })
-  .strict()
-  .superRefine(validateResolvedRequestChronology);
+  .check(z.superRefine(validateResolvedRequestChronology));
 const ExpiredSessionControlRequestRecordSchema = z
-  .object({
+  .strictObject({
     ...SessionControlRequestBaseShape,
     status: z.literal("expired"),
     decidedAt: TimestampSchema,
     decidedByActorId: IdentifierSchema,
     decisionReasonCode: z.literal("request_expired"),
   })
-  .strict()
-  .superRefine(validateExpiredRequestChronology);
+  .check(z.superRefine(validateExpiredRequestChronology));
 const CancelledSessionControlRequestRecordSchema = z
-  .object({
+  .strictObject({
     ...SessionControlRequestBaseShape,
     status: z.literal("cancelled"),
     decidedAt: TimestampSchema,
     decidedByActorId: IdentifierSchema,
     decisionReasonCode: z.literal("request_cancelled"),
   })
-  .strict()
-  .superRefine(validateResolvedRequestChronology);
+  .check(z.superRefine(validateResolvedRequestChronology));
 const ActivatedSessionControlRequestRecordSchema = z
-  .object({
+  .strictObject({
     ...SessionControlRequestBaseShape,
     status: z.literal("activated"),
     activatedGeneration: GenerationSchema,
@@ -297,16 +273,17 @@ const ActivatedSessionControlRequestRecordSchema = z
     decidedByActorId: IdentifierSchema,
     decisionReasonCode: z.literal("handoff"),
   })
-  .strict()
-  .superRefine((request, context) => {
-    validateResolvedRequestChronology(request, context);
-    if (
-      request.requestedGeneration === Number.MAX_SAFE_INTEGER ||
-      request.activatedGeneration !== request.requestedGeneration + 1
-    ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control request generation is invalid." });
-    }
-  });
+  .check(
+    z.superRefine((request, context) => {
+      validateResolvedRequestChronology(request, context);
+      if (
+        request.requestedGeneration === Number.MAX_SAFE_INTEGER ||
+        request.activatedGeneration !== request.requestedGeneration + 1
+      ) {
+        context.addIssue({ code: "custom", message: "Session control request generation is invalid." });
+      }
+    }),
+  );
 const SessionControlRequestRecordSchema = z.union([
   PendingSessionControlRequestRecordSchema,
   RejectedSessionControlRequestRecordSchema,
@@ -316,15 +293,15 @@ const SessionControlRequestRecordSchema = z.union([
 ]);
 
 const SessionControlEventRecordSchema = z
-  .object({
+  .strictObject({
     eventId: IdentifierSchema,
     workspaceId: IdentifierSchema,
     sessionId: IdentifierSchema,
-    previousGeneration: GenerationSchema.optional(),
+    previousGeneration: z.optional(GenerationSchema),
     nextGeneration: GenerationSchema,
-    previousOwnerKind: z.enum(SESSION_CONTROL_OWNER_KINDS).optional(),
-    nextOwnerKind: z.enum(SESSION_CONTROL_OWNER_KINDS).optional(),
-    previousLeaseState: z.enum(SESSION_CONTROL_LEASE_STATES).optional(),
+    previousOwnerKind: z.optional(z.enum(SESSION_CONTROL_OWNER_KINDS)),
+    nextOwnerKind: z.optional(z.enum(SESSION_CONTROL_OWNER_KINDS)),
+    previousLeaseState: z.optional(z.enum(SESSION_CONTROL_LEASE_STATES)),
     nextLeaseState: z.enum(SESSION_CONTROL_LEASE_STATES),
     reasonCode: EventReasonCodeSchema,
     actorKind: z.enum(["operator", "external_companion", "system"]),
@@ -332,165 +309,164 @@ const SessionControlEventRecordSchema = z
     correlationId: IdentifierSchema,
     createdAt: TimestampSchema,
   })
-  .strict()
-  .superRefine(validateSessionControlEventTransition);
+  .check(z.superRefine(validateSessionControlEventTransition));
 
-const SessionControlRequestInputSchema = z
-  .object({
-    expectedGeneration: GenerationSchema,
-    clientInstanceId: IdentifierSchema,
-    tokenHashSha256: SessionControlTokenHashSha256Schema,
-    capabilities: ExternalSessionControlCapabilitySetSchema,
-    idempotencyKey: IdentifierSchema,
-  })
-  .strict();
-const SessionControlHandoffInputSchema = z
-  .object({
-    requestId: IdentifierSchema,
-    expectedGeneration: GenerationSchema,
-    effectiveCapabilities: ExternalSessionControlCapabilitySetSchema,
-    idempotencyKey: IdentifierSchema,
-  })
-  .strict();
-const SessionControlHeartbeatInputSchema = z
-  .object({ expectedGeneration: GenerationSchema, idempotencyKey: IdentifierSchema })
-  .strict();
-const SessionControlReconnectInputSchema = z
-  .object({
-    expectedGeneration: GenerationSchema,
-    newTokenHashSha256: SessionControlTokenHashSha256Schema,
-    idempotencyKey: IdentifierSchema,
-  })
-  .strict();
-const SessionControlReleaseInputSchema = z
-  .object({ expectedGeneration: GenerationSchema, idempotencyKey: IdentifierSchema })
-  .strict();
+const SessionControlRequestInputSchema = z.strictObject({
+  expectedGeneration: GenerationSchema,
+  clientInstanceId: IdentifierSchema,
+  tokenHashSha256: SessionControlTokenHashSha256Schema,
+  capabilities: ExternalSessionControlCapabilitySetSchema,
+  idempotencyKey: IdentifierSchema,
+});
+const SessionControlHandoffInputSchema = z.strictObject({
+  requestId: IdentifierSchema,
+  expectedGeneration: GenerationSchema,
+  effectiveCapabilities: ExternalSessionControlCapabilitySetSchema,
+  idempotencyKey: IdentifierSchema,
+});
+const SessionControlHeartbeatInputSchema = z.strictObject({
+  expectedGeneration: GenerationSchema,
+  idempotencyKey: IdentifierSchema,
+});
+const SessionControlReconnectInputSchema = z.strictObject({
+  expectedGeneration: GenerationSchema,
+  newTokenHashSha256: SessionControlTokenHashSha256Schema,
+  idempotencyKey: IdentifierSchema,
+});
+const SessionControlReleaseInputSchema = z.strictObject({
+  expectedGeneration: GenerationSchema,
+  idempotencyKey: IdentifierSchema,
+});
 const SessionControlRevokeInputSchema = z.union([
-  z.object({ target: z.literal("request"), requestId: IdentifierSchema, idempotencyKey: IdentifierSchema }).strict(),
-  z
-    .object({
-      target: z.literal("current_controller"),
-      expectedGeneration: GenerationSchema,
-      mode: z.enum(["revoke", "emergency_takeover"]),
-      idempotencyKey: IdentifierSchema,
-    })
-    .strict(),
+  z.strictObject({ target: z.literal("request"), requestId: IdentifierSchema, idempotencyKey: IdentifierSchema }),
+  z.strictObject({
+    target: z.literal("current_controller"),
+    expectedGeneration: GenerationSchema,
+    mode: z.enum(["revoke", "emergency_takeover"]),
+    idempotencyKey: IdentifierSchema,
+  }),
 ]);
 
-const SessionControlRequestResponseSchema = z.object({ request: PendingSessionControlRequestRecordSchema }).strict();
+const SessionControlRequestResponseSchema = z.strictObject({ request: PendingSessionControlRequestRecordSchema });
 const SessionControlHandoffResponseSchema = z
-  .object({ request: ActivatedSessionControlRequestRecordSchema, control: ExternalSessionControlRecordSchema })
-  .strict()
-  .superRefine(validateHandoffResponse);
+  .strictObject({ request: ActivatedSessionControlRequestRecordSchema, control: ExternalSessionControlRecordSchema })
+  .check(z.superRefine(validateHandoffResponse));
 const SessionControlHeartbeatResponseSchema = z
-  .object({ generation: GenerationSchema, control: ExternalSessionControlRecordSchema })
-  .strict()
-  .superRefine((response, context) => {
-    if (response.control.leaseState !== "external_live" || response.control.generation !== response.generation) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control heartbeat response is invalid." });
-    }
-  });
+  .strictObject({ generation: GenerationSchema, control: ExternalSessionControlRecordSchema })
+  .check(
+    z.superRefine((response, context) => {
+      if (response.control.leaseState !== "external_live" || response.control.generation !== response.generation) {
+        context.addIssue({ code: "custom", message: "Session control heartbeat response is invalid." });
+      }
+    }),
+  );
 const SessionControlReconnectResponseSchema = z
-  .object({ supersededGeneration: GenerationSchema, control: ExternalSessionControlRecordSchema })
-  .strict()
-  .superRefine((response, context) => {
-    if (
-      response.control.leaseState !== "external_live" ||
-      response.control.lastEventReasonCode !== "reconnect" ||
-      !isExactGenerationIncrement(response.supersededGeneration, response.control.generation)
-    ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control reconnect response is invalid." });
-    }
-  });
+  .strictObject({ supersededGeneration: GenerationSchema, control: ExternalSessionControlRecordSchema })
+  .check(
+    z.superRefine((response, context) => {
+      if (
+        response.control.leaseState !== "external_live" ||
+        response.control.lastEventReasonCode !== "reconnect" ||
+        !isExactGenerationIncrement(response.supersededGeneration, response.control.generation)
+      ) {
+        context.addIssue({ code: "custom", message: "Session control reconnect response is invalid." });
+      }
+    }),
+  );
 const SessionControlReleaseResponseSchema = z
-  .object({ releasedGeneration: GenerationSchema, control: OperatorSessionControlRecordSchema })
-  .strict()
-  .superRefine((response, context) => {
-    if (
-      response.control.lastEventReasonCode !== "release" ||
-      !isExactGenerationIncrement(response.releasedGeneration, response.control.generation)
-    ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control release response is invalid." });
-    }
-  });
+  .strictObject({ releasedGeneration: GenerationSchema, control: OperatorSessionControlRecordSchema })
+  .check(
+    z.superRefine((response, context) => {
+      if (
+        response.control.lastEventReasonCode !== "release" ||
+        !isExactGenerationIncrement(response.releasedGeneration, response.control.generation)
+      ) {
+        context.addIssue({ code: "custom", message: "Session control release response is invalid." });
+      }
+    }),
+  );
 const SessionControlRevokeResponseSchema = z.union([
-  z.object({ target: z.literal("request"), request: CancelledSessionControlRequestRecordSchema }).strict(),
+  z.strictObject({ target: z.literal("request"), request: CancelledSessionControlRequestRecordSchema }),
   z
-    .object({
+    .strictObject({
       target: z.literal("current_controller"),
       revokedGeneration: GenerationSchema,
       mode: z.enum(["revoke", "emergency_takeover"]),
       control: OperatorSessionControlRecordSchema,
     })
-    .strict()
-    .superRefine((response, context) => {
-      const expectedReason = response.mode === "revoke" ? "operator_revoke" : "emergency_takeover";
-      if (
-        response.control.lastEventReasonCode !== expectedReason ||
-        !isExactGenerationIncrement(response.revokedGeneration, response.control.generation)
-      ) {
-        context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control revoke response is invalid." });
-      }
-    }),
+    .check(
+      z.superRefine((response, context) => {
+        const expectedReason = response.mode === "revoke" ? "operator_revoke" : "emergency_takeover";
+        if (
+          response.control.lastEventReasonCode !== expectedReason ||
+          !isExactGenerationIncrement(response.revokedGeneration, response.control.generation)
+        ) {
+          context.addIssue({ code: "custom", message: "Session control revoke response is invalid." });
+        }
+      }),
+    ),
 ]);
 const OperatorSessionControlDetailResponseSchema = z
-  .object({
+  .strictObject({
     control: OperatorSessionControlRecordSchema,
-    pendingRequests: z
-      .array(PendingSessionControlRequestRecordSchema)
-      .max(SESSION_CONTROL_MAX_LIST_ITEMS)
-      .transform((items) => Object.freeze(items)),
+    pendingRequests: z.pipe(
+      z.array(PendingSessionControlRequestRecordSchema).check(z.maxLength(SESSION_CONTROL_MAX_LIST_ITEMS)),
+      z.transform((items: z.output<typeof PendingSessionControlRequestRecordSchema>[]) => Object.freeze(items)),
+    ),
   })
-  .strict()
-  .superRefine((response, context) => {
-    const requestIds = new Set<string>();
-    const idempotencyKeys = new Set<string>();
-    if (
-      response.pendingRequests.some(
-        (request) =>
-          request.workspaceId !== response.control.workspaceId || request.sessionId !== response.control.sessionId,
-      ) ||
-      response.pendingRequests.some((request) => request.requestedGeneration !== response.control.generation) ||
-      response.pendingRequests.some((request) => {
-        const duplicate = requestIds.has(request.requestId) || idempotencyKeys.has(request.idempotencyKey);
-        requestIds.add(request.requestId);
-        idempotencyKeys.add(request.idempotencyKey);
-        return duplicate;
-      })
-    ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control detail response is invalid." });
-    }
-  });
-const ExternalSessionControlDetailResponseSchema = z
-  .object({
-    control: ExternalSessionControlRecordSchema,
-    pendingRequests: z.tuple([]).transform(() => Object.freeze([]) as readonly []),
-  })
-  .strict();
+  .check(
+    z.superRefine((response, context) => {
+      const requestIds = new Set<string>();
+      const idempotencyKeys = new Set<string>();
+      if (
+        response.pendingRequests.some(
+          (request) =>
+            request.workspaceId !== response.control.workspaceId || request.sessionId !== response.control.sessionId,
+        ) ||
+        response.pendingRequests.some((request) => request.requestedGeneration !== response.control.generation) ||
+        response.pendingRequests.some((request) => {
+          const duplicate = requestIds.has(request.requestId) || idempotencyKeys.has(request.idempotencyKey);
+          requestIds.add(request.requestId);
+          idempotencyKeys.add(request.idempotencyKey);
+          return duplicate;
+        })
+      ) {
+        context.addIssue({ code: "custom", message: "Session control detail response is invalid." });
+      }
+    }),
+  );
+const ExternalSessionControlDetailResponseSchema = z.strictObject({
+  control: ExternalSessionControlRecordSchema,
+  pendingRequests: z.pipe(
+    z.tuple([]),
+    z.transform(() => Object.freeze([]) as readonly []),
+  ),
+});
 const SessionControlDetailResponseSchema = z.union([
   OperatorSessionControlDetailResponseSchema,
   ExternalSessionControlDetailResponseSchema,
 ]);
 const SessionControlListResponseSchema = z
-  .object({
-    items: z
-      .array(SessionControlRecordSchema)
-      .max(SESSION_CONTROL_MAX_LIST_ITEMS)
-      .transform((items) => Object.freeze(items)),
+  .strictObject({
+    items: z.pipe(
+      z.array(SessionControlRecordSchema).check(z.maxLength(SESSION_CONTROL_MAX_LIST_ITEMS)),
+      z.transform((items: z.output<typeof SessionControlRecordSchema>[]) => Object.freeze(items)),
+    ),
   })
-  .strict()
-  .superRefine((response, context) => {
-    const sessionIds = new Set<string>();
-    if (
-      response.items.some((control) => {
-        const duplicate = sessionIds.has(control.sessionId);
-        sessionIds.add(control.sessionId);
-        return duplicate;
-      })
-    ) {
-      context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control list response is invalid." });
-    }
-  });
+  .check(
+    z.superRefine((response, context) => {
+      const sessionIds = new Set<string>();
+      if (
+        response.items.some((control) => {
+          const duplicate = sessionIds.has(control.sessionId);
+          sessionIds.add(control.sessionId);
+          return duplicate;
+        })
+      ) {
+        context.addIssue({ code: "custom", message: "Session control list response is invalid." });
+      }
+    }),
+  );
 
 type DeepReadonly<T> = T extends string | number | boolean | bigint | symbol | null | undefined
   ? T
@@ -647,66 +623,23 @@ export function assertSessionControlRevokeTransition(previousGeneration: number,
   assertIncrementingTransition(previousGeneration, nextGeneration, "Revoke");
 }
 
-function parser<Schema extends z.ZodTypeAny>(schema: Schema, message: string) {
+function parser<Schema extends z.ZodMiniType>(schema: Schema, message: string) {
   return (input: unknown): DeepReadonly<z.output<Schema>> => parseSecretSafe(schema, input, message);
 }
 
-function parseSecretSafe<Schema extends z.ZodTypeAny>(
+function parseSecretSafe<Schema extends z.ZodMiniType>(
   schema: Schema,
   input: unknown,
   message: string,
 ): DeepReadonly<z.output<Schema>> {
   try {
-    const snapshot = snapshotPlainData(input, { nodes: 0 }, 0);
+    const snapshot = snapshotSessionControlData(input);
     const parsed = schema.safeParse(snapshot);
     if (!parsed.success) throw new TypeError(message);
     return deepFreeze(parsed.data);
   } catch {
     throw new TypeError(message);
   }
-}
-
-function snapshotPlainData(value: unknown, state: { nodes: number }, depth: number): unknown {
-  if (value === null || typeof value !== "object") return value;
-  state.nodes += 1;
-  if (depth > 12 || state.nodes > 10_000) throw new TypeError("Untrusted value exceeds structural bounds.");
-
-  const prototype = Object.getPrototypeOf(value);
-  const descriptors = Object.getOwnPropertyDescriptors(value);
-  const keys = Reflect.ownKeys(descriptors);
-  if (Array.isArray(value)) {
-    if (prototype !== Array.prototype || value.length > 1_000) {
-      throw new TypeError("Untrusted array is invalid.");
-    }
-    const expectedKeys = value.length + 1;
-    if (keys.length !== expectedKeys || !keys.includes("length")) throw new TypeError("Untrusted array is invalid.");
-    const snapshot: unknown[] = [];
-    for (let index = 0; index < value.length; index += 1) {
-      const descriptor = descriptors[String(index)];
-      if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-        throw new TypeError("Untrusted array is invalid.");
-      }
-      snapshot.push(snapshotPlainData(descriptor.value, state, depth + 1));
-    }
-    return snapshot;
-  }
-
-  if (prototype !== Object.prototype || keys.length > 64) throw new TypeError("Untrusted object is invalid.");
-  const snapshot = Object.create(null) as Record<string, unknown>;
-  for (const key of keys) {
-    if (typeof key !== "string") throw new TypeError("Untrusted object is invalid.");
-    const descriptor = descriptors[key];
-    if (!descriptor || !("value" in descriptor) || !descriptor.enumerable) {
-      throw new TypeError("Untrusted object is invalid.");
-    }
-    Object.defineProperty(snapshot, key, {
-      value: snapshotPlainData(descriptor.value, state, depth + 1),
-      enumerable: true,
-      configurable: true,
-      writable: true,
-    });
-  }
-  return snapshot;
 }
 
 function deepFreeze<T>(value: T, seen = new WeakSet<object>()): DeepReadonly<T> {
@@ -722,31 +655,31 @@ function deepFreeze<T>(value: T, seen = new WeakSet<object>()): DeepReadonly<T> 
 
 function validatePendingRequestChronology(
   request: { createdAt: string; expiresAt: string },
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   if (Date.parse(request.createdAt) >= Date.parse(request.expiresAt)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control request chronology is invalid." });
+    context.addIssue({ code: "custom", message: "Session control request chronology is invalid." });
   }
 }
 
 function validateResolvedRequestChronology(
   request: { createdAt: string; expiresAt: string; decidedAt: string },
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   validatePendingRequestChronology(request, context);
   const decidedAt = Date.parse(request.decidedAt);
   if (decidedAt < Date.parse(request.createdAt) || decidedAt >= Date.parse(request.expiresAt)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control decision chronology is invalid." });
+    context.addIssue({ code: "custom", message: "Session control decision chronology is invalid." });
   }
 }
 
 function validateExpiredRequestChronology(
   request: { createdAt: string; expiresAt: string; decidedAt: string },
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   validatePendingRequestChronology(request, context);
   if (Date.parse(request.decidedAt) < Date.parse(request.expiresAt)) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control expiry chronology is invalid." });
+    context.addIssue({ code: "custom", message: "Session control expiry chronology is invalid." });
   }
 }
 
@@ -757,7 +690,7 @@ function validateHandoffResponse(
         control: z.infer<typeof ExternalSessionControlRecordSchema>;
       }
     : never,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const { request, control } = response;
   const requested = new Set(request.requestedCapabilities);
@@ -772,13 +705,13 @@ function validateHandoffResponse(
     control.boundExternalController.tokenFingerprint !== request.tokenFingerprint ||
     control.capabilities.some((capability) => !requested.has(capability))
   ) {
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control handoff response is invalid." });
+    context.addIssue({ code: "custom", message: "Session control handoff response is invalid." });
   }
 }
 
 function validateSessionControlEventTransition(
   event: SessionControlEventTransitionShape,
-  context: z.RefinementCtx,
+  context: z.core.$RefinementCtx,
 ): void {
   const sameGeneration = event.previousGeneration !== undefined && event.nextGeneration === event.previousGeneration;
   const nextGeneration =
@@ -922,8 +855,7 @@ function validateSessionControlEventTransition(
     event.nextLeaseState,
   );
   valid &&= previousAuthorityIsCoherent && nextAuthorityIsCoherent;
-  if (!valid)
-    context.addIssue({ code: z.ZodIssueCode.custom, message: "Session control event transition is invalid." });
+  if (!valid) context.addIssue({ code: "custom", message: "Session control event transition is invalid." });
 }
 
 function isSessionControlAuthorityGeneration(

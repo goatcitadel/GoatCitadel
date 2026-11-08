@@ -120,6 +120,29 @@ afterEach(async () => {
 });
 
 describe("native Chat permission profile", () => {
+  it("retains uncertain committed activation across remount and reopening choices cannot review or repeat it", async () => {
+    items = [profile, { ...profile, profileId: "other", label: "Other" }];
+    const recordOwner = api.activatePermissionProfile.getMockImplementation()!;
+    api.activatePermissionProfile.mockImplementationOnce(async input => {
+      await recordOwner(input); // The owner changed; only its acknowledgement is lost.
+      throw new Error("Synthetic lost activation acknowledgement");
+    });
+    await mount("work-a");await select();await click("Review Chat profile selection");await click("Apply reviewed Chat profile");
+    await vi.waitFor(() => expect(text(view.root)).toContain("Permission selection outcome is uncertain."));
+    expect(api.activatePermissionProfile).toHaveBeenCalledTimes(1);
+    const reviews = api.reviewPermissionProfileSelection.mock.calls.length;
+    expect(reviews).toBe(2);
+    await act(async () => view.unmount());view = undefined as unknown as ReactTestRenderer;
+    await mount("work-a", false);
+    expect(text(view.root)).toContain("Permission selection outcome is uncertain.");
+    expect(view.root.findAllByType("button").some(item => text(item) === "Review Chat profile selection")).toBe(false);
+    await click("Change profile");
+    expect(view.root.findAllByProps({ type: "radio" }).find(item => item.props.value === "other")!.props.disabled).toBe(true);
+    expect(button("Review Chat profile selection").props.disabled).toBe(true);
+    expect(api.reviewPermissionProfileSelection).toHaveBeenCalledTimes(reviews);
+    expect(api.activatePermissionProfile).toHaveBeenCalledTimes(1);
+    expect(switchShellMock).not.toHaveBeenCalled();
+  });
   it("keeps full profile, effective-policy, override and grant owners native without an extra policy write", async () => {
     await mount("work-a");
     expect(view.root.findByType(PermissionProfileEditor).props.workspaceId).toBe("work-a");

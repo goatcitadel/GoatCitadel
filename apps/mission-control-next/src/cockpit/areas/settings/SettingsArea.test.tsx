@@ -260,11 +260,36 @@ describe("Settings section tabs", () => {
     expect(window.location.hash).toBe("#permission-profile");
     await vi.waitFor(() => expect(container.textContent).toContain("Permission owner"));
   });
+  it("refuses a controlled hidden capability hash without replacing the document and returns to Blueprint", async () => {
+    await render("/settings/citadel?shell=cockpit#citadel-blueprint");
+    await vi.waitFor(() => expect(container.textContent).toContain("Blueprint owner"));
+    const documentOwner = document.documentElement;
+    const current = window.location.pathname + window.location.search;
+    await act(async () => {
+      window.location.hash = "citadel-capabilities";
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("This capability is hidden from the current release. Technical display preferences do not enable it."));
+    expect(window.location.pathname + window.location.search).toBe(current);
+    expect(document.documentElement).toBe(documentOwner);
+    expect(tab("Citadel capabilities")).toBeUndefined();
+    expect(tab("Workspace capabilities")).toBeUndefined();
+    expect(container.querySelector('[aria-label="citadel capabilities citadel-a retained draft"]')).toBeNull();
+    expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();
+    await act(async () => {
+      window.location.hash = "citadel-blueprint";
+      window.dispatchEvent(new Event("hashchange"));
+    });
+    await vi.waitFor(() => expect(container.textContent).toContain("Blueprint owner"));
+    expect(document.documentElement).toBe(documentOwner);
+    expect(active()).toBe("Export/import · Blueprint");
+  });
   it("withholds hidden capability owners on direct links and routes visible hooks to the active scope", async () => {
     await render("/settings/citadel?shell=cockpit#citadel-capabilities");
     expect(container.querySelector('[aria-label="citadel capabilities citadel-a retained draft"]')).toBeNull();
     expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();
     expect(tab("Workspace capabilities")).toBeUndefined();
+    expect(tab("Citadel capabilities")).toBeUndefined();
     expect(container.textContent).toContain("Settings destination unavailable");
     await render("/settings/citadel?shell=cockpit#workspace-capabilities");
     expect(container.querySelector('[aria-label="workspace capabilities workspace-a retained draft"]')).toBeNull();

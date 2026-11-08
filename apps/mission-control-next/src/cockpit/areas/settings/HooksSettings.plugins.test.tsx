@@ -8,6 +8,9 @@ import { __resetSessionDraftsForTests } from "../../../features/native-routes/li
 import { __resetIntegrationConnectionMutationsForTests } from "../../../features/native-routes/settings/integration-connection-mutation";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { HooksSettings } from "./HooksSettings";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 // Hooks carry no plugin mark yet, so Delete stays on a plugin's hook; GoatCitadel refuses it in its own words, and the
 // plugin it names is linked (D7, D10).

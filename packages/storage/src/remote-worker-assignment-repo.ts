@@ -31,6 +31,7 @@ import {
   REMOTE_WORKER_ASSIGNMENT_SETTLEMENT_SCHEMA_VERSION,
   REMOTE_WORKER_ASSIGNMENT_WORKLOAD_SCHEMA_VERSION,
   REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256,
+  REMOTE_WORKER_CHAT_OUTPUT_PROFILE,
   REMOTE_WORKER_PROTOCOL_VERSION,
   ValidationError,
   assertRemoteWorkerAssignmentControlRecord,
@@ -42,6 +43,9 @@ import {
   assertRemoteWorkerAssignmentRecord,
   assertRemoteWorkerAssignmentSettlementRecord,
   canonicalJsonString,
+  normalizeRemoteWorkerArtifactManifest,
+  remoteWorkerArtifactManifestSha256,
+  type RemoteWorkerArtifactManifest,
   normalizeRemoteWorkerCapabilityBinding,
   remoteWorkerCapabilityBindingForTurn,
   sameRemoteWorkerCapabilityBinding,
@@ -264,6 +268,73 @@ export interface RemoteWorkerAssignmentClaimAuthority {
 export interface RemoteWorkerAssignmentProtectedCommitFence {
   readonly credentialAuthority: RemoteWorkerAssignmentClaimAuthority;
   readonly meshAdmission: RemoteWorkerMeshNodeAuthorityFence;
+}
+
+/** Internal request identity. File hashes describe decoded bytes, never transport lease material. */
+export interface RemoteWorkerArtifactPublicationBinding {
+  readonly idempotencyKey: string;
+  readonly manifest: RemoteWorkerArtifactManifest;
+  readonly files: readonly Readonly<{ logicalPath: string; logicalPathSha256: string; mimeType: string;
+    byteCount: number; blobSha256: string }>[];
+}
+
+/** Server-created, request-local handoff. Never accepted from a worker wire payload. */
+export interface RemoteWorkerChatArtifactAdmission {
+  readonly registryWorkspaceId: string;
+  readonly assignmentId: string;
+  readonly assignmentGeneration: number;
+  readonly uploadId: string;
+  readonly protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence;
+  readonly publicationSha256: string;
+  readonly continuingArtifact: Readonly<{ uploadId: string; leaseRevision: number;
+    parentDispatchAuthority: RemoteWorkerAssignmentDispatchAuthority; durableRunPayloadSha256: string }>;
+}
+
+export interface AdmitRemoteWorkerChatArtifactInput {
+  readonly registryWorkspaceId: string;
+  readonly assignmentId: string;
+  readonly assignmentGeneration: number;
+  readonly leaseTokenSha256: string;
+  readonly expectedLeaseRevision: number;
+  readonly uploadId: string;
+  readonly publication: RemoteWorkerArtifactPublicationBinding;
+}
+
+export interface RemoteWorkerChatArtifactAdmissionResult {
+  readonly records: ResolvedRemoteWorkerAssignmentAuthority;
+  readonly admission: RemoteWorkerChatArtifactAdmission;
+}
+
+export function snapshotRemoteWorkerChatArtifactAdmissionResult(input: RemoteWorkerChatArtifactAdmissionResult): RemoteWorkerChatArtifactAdmissionResult {
+  return immutableArtifactCopy(input);
+}
+
+/** Also used after async transport: a structured clone does not preserve Object.freeze. */
+export function snapshotRemoteWorkerChatArtifactAdmission(input: RemoteWorkerChatArtifactAdmission): RemoteWorkerChatArtifactAdmission {
+  return immutableArtifactCopy(input);
+}
+
+export function snapshotRemoteWorkerArtifactPublication(input: RemoteWorkerArtifactPublicationBinding): RemoteWorkerArtifactPublicationBinding {
+  if (!Array.isArray(input.files) || input.files.length !== 1) throw conflict("remote worker Chat publication file bound");
+  return immutableArtifactCopy({
+    idempotencyKey: identifier(input.idempotencyKey, "idempotencyKey"),
+    manifest: normalizeRemoteWorkerArtifactManifest(input.manifest),
+    files: input.files.map(file => ({ logicalPath: identifier(file.logicalPath, "logicalPath", 4096),
+      logicalPathSha256: digest(file.logicalPathSha256, "logicalPathSha256"),
+      mimeType: identifier(file.mimeType, "mimeType"), byteCount: positiveInteger(file.byteCount, "byteCount"),
+      blobSha256: digest(file.blobSha256, "blobSha256") })),
+  });
+}
+
+function immutableArtifactCopy<T>(input: T): T {
+  const copy = JSON.parse(canonicalJsonString(input)) as T;
+  const freeze = (value: unknown): void => {
+    if (value === null || typeof value !== "object") return;
+    for (const child of Object.values(value)) freeze(child);
+    Object.freeze(value);
+  };
+  freeze(copy);
+  return copy;
 }
 
 export interface RemoteWorkerAssignmentOfferCursor {
@@ -1254,6 +1325,53 @@ export class RemoteWorkerAssignmentRepository {
         authority: { assignment, generation: this.mapGeneration(generation), lease: this.mapLease(lease) },
         workload: this.buildTaskBoundChatWorkload(assignment, run, lockContext.sessionId),
       };
+    });
+  }
+
+  /** Exact admission plus immutable publication custody under one task-bound lock lifetime.
+   * The nested resolver uses savepoints on PostgreSQL; releasing its savepoint
+   * retains the transaction advisory/row locks until this outer transaction ends.
+   */
+  public admitChatArtifactPublication(input: AdmitRemoteWorkerChatArtifactInput,
+    protectedAuthority: RemoteWorkerAssignmentProtectedCommitFence): RemoteWorkerChatArtifactAdmissionResult {
+    const publication = snapshotRemoteWorkerArtifactPublication(input.publication);
+    const fence = normalizeProtectedCommitFence(protectedAuthority);
+    const scope = { registryWorkspaceId: identifier(input.registryWorkspaceId, "registryWorkspaceId"),
+      assignmentId: identifier(input.assignmentId, "assignmentId"), assignmentGeneration: positiveInteger(input.assignmentGeneration, "assignmentGeneration") };
+    const leaseTokenSha256 = digest(input.leaseTokenSha256, "leaseTokenSha256");
+    const expectedLeaseRevision = positiveInteger(input.expectedLeaseRevision, "expectedLeaseRevision");
+    const uploadId = identifier(input.uploadId, "uploadId");
+    return this.db.transaction("immediate", () => {
+      // Do not precede this task-bound lock plan with generation-only locks.
+      const execution = this.resolveActiveChatExecution({ ...scope, leaseTokenSha256 }, fence);
+      const records = execution.authority, manifest = publication.manifest;
+      const upload = new RemoteWorkerArtifactRepository(this.db).getUpload(scope.registryWorkspaceId,
+        scope.assignmentId, scope.assignmentGeneration, uploadId);
+      const entry = manifest.entries[0], file = publication.files[0];
+      if (records.lease.leaseRevision !== expectedLeaseRevision ||
+        records.generation.workerId !== fence.credentialAuthority.workerId ||
+        records.generation.workerGeneration !== fence.credentialAuthority.workerGeneration ||
+        !records.assignment.manifest.requiredCapabilityClasses.includes("artifact_stage") ||
+        canonicalJsonString(manifest.identity) !== canonicalJsonString(upload.identity) ||
+        !["open", "assembling", "committed"].includes(upload.uploadState) || !this.isTimestampFuture(upload.expiresAt) ||
+        upload.identity.assignmentManifestSha256 !== records.assignment.manifestSha256 ||
+        manifest.requiredVerifierProfileSha256 !== REMOTE_WORKER_CHAT_OUTPUT_PROFILE_SHA256 ||
+        manifest.pathJailSha256 !== records.assignment.manifest.pathJailSha256 ||
+        manifest.fileCount !== 1 || manifest.entries.length !== 1 || publication.files.length !== 1 ||
+        manifest.totalBytes > REMOTE_WORKER_CHAT_OUTPUT_PROFILE.maxBytes ||
+        upload.declaredFileCount !== manifest.fileCount || upload.declaredTotalBytes !== manifest.totalBytes ||
+        !entry || !file || entry.logicalPath !== REMOTE_WORKER_CHAT_OUTPUT_PROFILE.logicalPath ||
+        entry.mimeType !== REMOTE_WORKER_CHAT_OUTPUT_PROFILE.mimeType ||
+        file.logicalPath !== entry.logicalPath || file.logicalPathSha256 !== entry.logicalPathSha256 ||
+        file.mimeType !== entry.mimeType || file.byteCount !== entry.byteCount || file.blobSha256 !== entry.blobSha256 ||
+        (upload.committedManifestSha256 !== null && upload.committedManifestSha256 !== remoteWorkerArtifactManifestSha256(manifest)))
+        throw conflict("remote worker artifact publication admission");
+      const admission = snapshotRemoteWorkerChatArtifactAdmission({ ...scope, uploadId: upload.uploadId,
+        protectedAuthority: fence, publicationSha256: remoteWorkerAssignmentCanonicalSha256(publication),
+        continuingArtifact: { uploadId: upload.uploadId, leaseRevision: records.lease.leaseRevision,
+          parentDispatchAuthority: records.lease.parentDispatchAuthority,
+          durableRunPayloadSha256: execution.workload.durableRunPayloadSha256 } });
+      return snapshotRemoteWorkerChatArtifactAdmissionResult({ records, admission });
     });
   }
 

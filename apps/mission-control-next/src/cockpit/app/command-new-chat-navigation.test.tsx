@@ -8,6 +8,9 @@ import { useCockpitRoute } from "./use-cockpit-route";
 import { useCommandNewChat, resetCommandNewChatForTests } from "./use-command-new-chat";
 import { useSessionDraft, __resetSessionDraftsForTests } from "../../features/native-routes/library/session-drafts";
 import { __resetFormDirtyRegistryForTests } from "../../features/native-routes/library/use-form-dirty";
+import { prepareReadyDialogFixture } from "../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({ verify: vi.fn(), create: vi.fn(), read: vi.fn() }));
 const scope = vi.hoisted(() => ({ activeWorkspaceId: "workspace-a", activeCitadelId: "citadel-a" }));

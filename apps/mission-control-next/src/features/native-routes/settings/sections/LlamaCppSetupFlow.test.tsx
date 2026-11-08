@@ -13,6 +13,9 @@ import {
   llamaPlanFixture,
   llamaProjectionFixture,
 } from "../llama-setup.test-support";
+import { prepareReadyDialogFixture } from "../../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture("shared");
 const api = vi.hoisted(() => ({
   fetchLlamaCppSetup: vi.fn(),
   previewLlmModels: vi.fn(),

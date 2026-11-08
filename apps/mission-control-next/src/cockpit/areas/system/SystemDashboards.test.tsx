@@ -9,6 +9,9 @@ import { createCockpitQueryClient } from "../../data/query-client";
 import { SystemDashboards } from "./SystemDashboards";
 import { __resetBoardMutationsForTests } from "../../../features/native-routes/ops/board-mutation-state";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 
 const api = vi.hoisted(() => ({
   fetchOpsSavedBoard: vi.fn(),

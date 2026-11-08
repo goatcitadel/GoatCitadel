@@ -120,7 +120,8 @@ export function HealthOverview() {
   );
   const health = useQuery({
     queryKey: [...queryKeys.health(workspaceId), ...healthQueryScope(client, workspaceId, accessRevision)],
-    queryFn: ({ queryKey }) => loadSystemHealthSources(workspaceId, client.getQueryData<SystemHealthSources>(queryKey)),
+    queryFn: ({ queryKey, signal }) =>
+      loadSystemHealthSources(workspaceId, client.getQueryData<SystemHealthSources>(queryKey), signal),
     refetchInterval: 60_000,
   });
   const inbox = useOperatorInbox(workspaceId);

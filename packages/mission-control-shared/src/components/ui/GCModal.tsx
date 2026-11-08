@@ -1,8 +1,12 @@
 import { useRef, type ReactNode } from "react";
-import { Button } from "./button";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "./dialog";
+import {
+  createDeferredDialogRuntime,
+  PendingDialog,
+  useDeferredDialogRuntime,
+  type DialogFocusHandler,
+} from "./deferred-dialog";
 
-interface GCModalProps {
+export interface GCModalProps {
   className?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -16,70 +20,35 @@ interface GCModalProps {
   confirmDisabled?: boolean;
   dismissDisabled?: boolean;
   onConfirm?: () => void | Promise<void>;
+  onOpenAutoFocus?: DialogFocusHandler;
 }
 
-export function GCModal({
-  className,
-  open,
-  onOpenChange,
-  title,
-  description,
-  children,
-  confirmLabel = "Confirm",
-  cancelLabel = "Cancel",
-  danger = false,
-  confirmPending = false,
-  confirmDisabled = false,
-  dismissDisabled = false,
-  onConfirm,
-}: GCModalProps) {
-  const returnFocusRef = useRef<HTMLElement | null>(null);
+const runtimeLoader = createDeferredDialogRuntime(() =>
+  import("./GCModalRuntime").then(({ GCModalRuntime }) => GCModalRuntime),
+);
+
+/** Warm the shared modal implementation without opening a modal. */
+export function preloadGCModalRuntime() {
+  return runtimeLoader.load();
+}
+
+export function GCModal(props: GCModalProps) {
+  const { runtime: Runtime, failed } = useDeferredDialogRuntime(props.open, runtimeLoader);
+  const handoff = useRef(false);
+  handoff.current = props.open && Boolean(Runtime);
+  if (Runtime) return <Runtime {...props} />;
+  if (!props.open) return null;
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(nextOpen) => {
-        if (!nextOpen && dismissDisabled) {
-          return;
-        }
-        onOpenChange(nextOpen);
-      }}
+    <PendingDialog
+      title={props.title}
+      description={props.description}
+      closeLabel={props.cancelLabel ?? "Cancel"}
+      className="gc-modal-content mc-gc-modal-content fixed inset-0 m-auto w-[calc(100%-2rem)] max-w-xl rounded-lg border border-border/60 bg-popover p-4 text-popover-foreground backdrop:bg-black/40"
+      dismissDisabled={props.dismissDisabled}
+      onDismiss={() => props.onOpenChange(false)}
+      handoff={handoff}
     >
-      <DialogContent
-        onOpenAutoFocus={() => {
-          returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-        }}
-        onCloseAutoFocus={(event) => {
-          const opener = returnFocusRef.current;
-          if (opener?.isConnected && opener !== document.body) {
-            event.preventDefault();
-            opener.focus({ preventScroll: true });
-          }
-        }}
-        className={["gc-modal-content mc-gc-modal-content max-w-xl border-border/60 bg-popover/96", className]
-          .filter(Boolean)
-          .join(" ")}
-      >
-        <DialogHeader>
-          <DialogTitle className="gc-modal-title">{title}</DialogTitle>
-          {description ? <DialogDescription className="gc-modal-description">{description}</DialogDescription> : null}
-        </DialogHeader>
-        {children ? <div className="gc-modal-body">{children}</div> : null}
-        <DialogFooter className="gc-modal-actions bg-transparent p-0 pt-4">
-          <Button type="button" variant="outline" disabled={dismissDisabled} onClick={() => onOpenChange(false)}>
-            {cancelLabel}
-          </Button>
-          {onConfirm ? (
-            <Button
-              type="button"
-              variant={danger ? "destructive" : "default"}
-              disabled={confirmPending || confirmDisabled}
-              onClick={() => void onConfirm()}
-            >
-              {confirmPending ? "Working..." : confirmLabel}
-            </Button>
-          ) : null}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+      {failed ? <p role="alert">Dialog controls could not load. Close the dialog to keep using the app, or reload the app.</p> : <p role="status">Loading dialog controls…</p>}
+    </PendingDialog>
   );
 }

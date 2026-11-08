@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
 import viteConfig, {
   createCockpitBootChunkSelector,
+  createCockpitOutputChunkSelector,
   buildManagedUiHealthPayload,
   buildWorkspaceSourceAliases,
   WORKSPACE_SOURCE_PACKAGES,
@@ -13,6 +14,22 @@ import viteConfig, {
   resolveViteAllowedHosts,
   readDevResetId,
 } from "./vite.config";
+
+it("co-locates only eager application bindings and keeps contracts on their runtime side", () => {
+  const root = "C:/repo/apps/mission-control-next/src/cockpit-entry.tsx";
+  const application = "C:/repo/packages/threaded-surface-core/dist/MissionThreadedControllerHost.js";
+  const contract = "C:/repo/packages/contracts/dist/chat.js";
+  const lazy = "C:/repo/packages/threaded-surface-core/dist/optional.js";
+  const modules = new Map([
+    [root, { isIncluded: true, importedIds: [application, contract] }],
+    ...[application, contract, lazy].map((id) => [id, { isIncluded: true, importedIds: [] }] as const),
+  ]);
+  const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };
+  const select = createCockpitOutputChunkSelector();
+  expect(select(application, graph)).toBe("cockpit-entry");
+  expect(select(contract, graph)).toBe("cockpit-runtime");
+  expect(select(lazy, graph)).toBeUndefined();
+});
 
 describe("mission-control-next vite config", () => {
   it("supplies reset IDs only to the dev server, and ignores missing or malformed markers", () => {
@@ -163,7 +180,7 @@ describe("mission-control-next vite config", () => {
     expect(config.build?.minify).toBe("terser");
     // Keep Vite's module, Safari, source-map and identifier-mangling defaults.
     // An exact options assertion also rejects unsafe compression/property mangling.
-    expect(config.build?.terserOptions).toStrictEqual({ compress: { passes: 2 } });
+    expect(config.build?.terserOptions).toStrictEqual({ maxWorkers: 2, compress: { passes: 2 } });
     expect(config.build?.chunkSizeWarningLimit).toBe(900);
   });
 
@@ -229,7 +246,7 @@ it.each([
   "change-plan",
 ])("keeps %s at its actual lazy destination despite a discarded contract barrel", (name) => {
   const optional = "C:/repo/packages/contracts/dist/" + name + ".js";
-  const required = "C:/repo/packages/contracts/dist/session-control.js";
+  const required = "C:/repo/packages/contracts/dist/session-control-operator-projection.js";
   const modules = new Map([
     ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["barrel"] }],
     ["barrel", { isIncluded: false, importedIds: [optional, required] }],
@@ -244,21 +261,21 @@ it.each([
 });
 
 it.each(["tooltip", "tabs", "switch"])(
-  "leaves lazy-only Radix %s placement to actual imports and keeps mandatory native Dialog ownership",
+  "leaves lazy-only Radix %s placement to actual imports and keeps mandatory Slot ownership",
   (name) => {
     const optional = "C:/repo/node_modules/@radix-ui/react-" + name + "/dist/index.mjs";
-    const dialog = "C:/repo/node_modules/@radix-ui/react-dialog/dist/index.mjs";
+    const slot = "C:/repo/node_modules/@radix-ui/react-slot/dist/index.mjs";
     const modules = new Map([
       ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["radix-barrel"] }],
-      ["radix-barrel", { isIncluded: false, importedIds: [optional, dialog] }],
+      ["radix-barrel", { isIncluded: false, importedIds: [optional, slot] }],
       [optional, { isIncluded: true, importedIds: [] }],
-      [dialog, { isIncluded: true, importedIds: [] }],
+      [slot, { isIncluded: true, importedIds: [] }],
     ]);
     const graph = { getModuleIds: () => modules.keys(), getModuleInfo: (id: string) => modules.get(id) ?? null };
     const select = createCockpitBootChunkSelector();
     expect(select(optional, graph)).toBeUndefined();
     expect(select(optional.replaceAll("/", "\\"), graph)).toBeUndefined();
-    expect(select(dialog, graph)).toBe("cockpit-runtime");
+    expect(select(slot, graph)).toBe("cockpit-runtime");
     expect(createCockpitBootChunkSelector()(optional)).toBeUndefined();
   },
 );
@@ -325,7 +342,7 @@ it.each(["src", "dist"])(
   },
 );
 
-it("automatically places only the exact optional menu/popover SDK leaves and keeps mandatory SDK owners grouped", () => {
+it("automatically places only the known optional overlay SDK leaves and keeps mandatory SDK owners grouped", () => {
   const suffixes = [
     "/node_modules/@radix-ui/react-dropdown-menu/dist/index.mjs",
     "/node_modules/@radix-ui/react-menu/dist/index.mjs",
@@ -336,13 +353,19 @@ it("automatically places only the exact optional menu/popover SDK leaves and kee
     "/node_modules/@floating-ui/react-dom/dist/floating-ui.react-dom.mjs",
     "/node_modules/@floating-ui/utils/dist/floating-ui.utils.dom.mjs",
     "/node_modules/@floating-ui/utils/dist/floating-ui.utils.mjs",
+    "/node_modules/@radix-ui/react-dialog/dist/index.mjs",
+    "/node_modules/@radix-ui/react-focus-scope/dist/index.mjs",
+    "/node_modules/@radix-ui/react-focus-guards/dist/index.mjs",
+    "/node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs",
+    "/node_modules/react-remove-scroll/dist/es2015/UI.js",
+    "/node_modules/react-remove-scroll-bar/dist/es2015/component.js",
+    "/node_modules/aria-hidden/dist/es2015/index.js",
+    "/node_modules/use-callback-ref/dist/es2015/useMergeRef.js",
+    "/node_modules/use-sidecar/dist/es2015/medium.js",
   ];
   const optional = suffixes.map((suffix) => "C:/repo" + suffix);
   const mandatory = [
-    "C:/repo/node_modules/@radix-ui/react-dialog/dist/index.mjs",
     "C:/repo/node_modules/@radix-ui/react-slot/dist/index.mjs",
-    "C:/repo/node_modules/@radix-ui/react-focus-scope/dist/index.mjs",
-    "C:/repo/node_modules/@radix-ui/react-dismissable-layer/dist/index.mjs",
     "C:/repo/node_modules/react-dom/client.js",
   ];
   const unrecognized = [
@@ -351,6 +374,8 @@ it("automatically places only the exact optional menu/popover SDK leaves and kee
     "C:/repo/node_modules/@floating-ui/unknown/dist/index.mjs",
     "C:/repo/node_modules/@floating-ui/utils/dist/floating-ui.utils.extra.mjs",
     "C:/repo/node_modules/@radix-ui/react-menu-custom/dist/index.mjs",
+    "C:/repo/node_modules/@radix-ui/react-dialog/dist/custom.mjs",
+    "C:/repo/node_modules/react-remove-scroll/dist/other/UI.js",
   ];
   const modules = new Map<string, { isIncluded: boolean; importedIds: string[] }>([
     ["C:/repo/src/cockpit-entry.tsx", { isIncluded: true, importedIds: ["discarded-radix-barrel"] }],
@@ -369,9 +394,9 @@ it("automatically places only the exact optional menu/popover SDK leaves and kee
   for (const id of [...mandatory, ...unrecognized]) expect(select(id, graph)).toBe("cockpit-runtime");
 });
 
-it("automatically places only the installed optional Sheet SDK, preserving mandatory dialog and unknown files", () => {
+it("automatically places only the installed optional Sheet SDK, preserving mandatory Slot and unknown files", () => {
   const optional = "C:/repo/node_modules/.pnpm/vaul@1.1.2_peer-hash/node_modules/vaul/dist/index.mjs";
-  const mandatory = "C:/repo/node_modules/@radix-ui/react-dialog/dist/index.mjs";
+  const mandatory = "C:/repo/node_modules/@radix-ui/react-slot/dist/index.mjs";
   const unknown = [
     "C:/repo/node_modules/vaul/dist/index.js",
     "C:/repo/node_modules/vaul/dist/other.mjs",

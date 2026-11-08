@@ -4,6 +4,20 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Dialog } from "./Dialog";
 
+const runtime = vi.hoisted(() => {
+  let release!: () => void;
+  const ready = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return { called: vi.fn(), ready, release };
+});
+
+vi.mock("./DialogRuntime", async (importOriginal) => {
+  runtime.called();
+  await runtime.ready;
+  return importOriginal();
+});
+
 let root: Root;
 let container: HTMLDivElement;
 
@@ -19,14 +33,32 @@ afterEach(() => {
 });
 
 describe("Dialog", () => {
-  it("renders a named dialog and a close control", () => {
-    act(() => {
+  it("loads only when opened and exposes only dismissal while the real controls load", async () => {
+    const onOpenChange = vi.fn();
+    const render = (open: boolean) =>
       root.render(
-        <Dialog open onOpenChange={vi.fn()} title="Command palette">
-          <p>Body</p>
+        <Dialog open={open} onOpenChange={onOpenChange} title="Command palette">
+          <button type="button">Run action</button>
         </Dialog>,
       );
+    await act(async () => render(false));
+    expect(runtime.called).not.toHaveBeenCalled();
+    await act(async () => render(true));
+    await vi.waitFor(() => expect(runtime.called).toHaveBeenCalledOnce());
+    const pending = document.body.querySelector<HTMLDialogElement>('dialog[role="dialog"]');
+    expect(pending?.open).toBe(true);
+    expect(pending?.getAttribute("aria-modal")).toBe("true");
+    expect(pending?.textContent).toContain("Loading dialog controls");
+    expect(pending?.textContent).not.toContain("Run action");
+    act(() => {
+      pending?.querySelector<HTMLButtonElement>('button[aria-label="Close dialog"]')?.click();
     });
+    expect(onOpenChange).toHaveBeenCalledWith(false);
+    await act(async () => render(false));
+    await act(async () => runtime.release());
+    expect(document.body.querySelector('[role="dialog"]')).toBeNull();
+    await act(async () => render(true));
+    await vi.waitFor(() => expect(document.body.querySelector('[role="dialog"]')?.textContent).toContain("Run action"));
     const dialog = document.body.querySelector('[role="dialog"]');
     expect(dialog).not.toBeNull();
     expect(dialog?.getAttribute("aria-modal")).toBe("true");

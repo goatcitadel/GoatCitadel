@@ -10,6 +10,9 @@ import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-in
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryFileUpload } from "./LibraryFileUpload";
 import { formatAbsoluteTime } from "@goatcitadel/mission-control-shared/content/format";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
 vi.mock("@goatcitadel/mission-control-shared/api/operators-agents-files", () => ({
   fetchFilesList: vi.fn(),
   uploadFile: vi.fn(),

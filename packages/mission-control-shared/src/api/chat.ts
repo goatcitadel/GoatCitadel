@@ -13,10 +13,7 @@ import type {
   ChangePlanResponseInput,
   ChangePlanStatus,
   ChatDelegateAcceptRequest,
-  ChatDelegateRequest,
   ChatDelegateResponse,
-  ChatDelegateSuggestRequest,
-  ChatDelegateSuggestResponse,
   ChatDelegatedScopeCandidatesResponse,
   ChatDelegatedScopeExpansionRequest,
   ChatDelegatedScopeExpansionResponse,
@@ -29,10 +26,7 @@ import type {
   ChatSessionCoreStateResponse,
   ChatGoalRequest,
   ChatGoalStatusResponse,
-  ChatHistoryWindowResponse,
-  ChatHistoryContinuationResponse,
   ChatMessageRecord,
-  ChatMessagePageResponse,
   ChatMessagingOverview,
   ChatMode,
   ChatProjectRecord,
@@ -41,13 +35,6 @@ import type {
   ChatSendMessageResponse,
   ChatSideChatRecord,
   ChatSessionBindingRecord,
-  ChatSessionWorkbenchDiffResponse,
-  ChatSessionWorkbenchFileDiffResponse,
-  ChatSessionWorkbenchFileResponse,
-  ChatSessionWorkbenchOutputResponse,
-  ChatSessionWorkbenchRecord,
-  ChatSessionWorkbenchReadOptions,
-  ChatSessionWorkbenchTreeResponse,
   ChatSessionBulkArchiveResult,
   ChatSessionOrigin,
   ChatSessionPrefsPatch,
@@ -62,54 +49,42 @@ import type {
   ChatTimerListResponse,
   ChatTimerMutationResponse,
   CreateChatTimerInput,
-  CreateDocumentPatchProposalRequest,
-  CreateGeneratedArtifactVersionRequest,
-  DocumentPatchProposalListResponse,
-  DocumentPatchProposalRecord,
-  DelegatedFilesystemScopePublicProjection,
-  ChatSpecialistCandidatePatchInput,
-  ChatSpecialistCandidateRecord,
-  ChatSpecialistCandidateSuggestionRecord,
   ChatSteerRequest,
   ChatSteerResponse,
   CrossProjectRecentsResponse,
   RoutingPreflightRequest,
   RoutingPreflightResult,
-  ChatStreamChunk,
   ChatThreadResponse,
   ChatTurnCapabilityProfileEnvelope,
   ChatRoutedContextInspectionEnvelope,
-  ChatUserInputPromptAnswerRequest,
-  ChatUserInputPromptAnswerResponse,
-  ChatSecureConfigurationSubmitRequest,
   LearnedMemoryConflictRecord,
   LearnedMemoryItemRecord,
   LearnedMemoryUpdateInput,
-  OutsideRootWriteGrantChoice,
   ProactivePolicy,
-  ProactiveRunRecord,
   ResearchRunRecord,
   ResearchSourceRecord,
   ResearchSummaryRecord,
   ThreadKnowledgeAttachmentRecord,
   ThreadKnowledgeRetrievalMode,
-  ToolGrantRecord,
 } from "@goatcitadel/contracts";
 export type { ChatChangePlanRecord, ChatProjectImportResult } from "@goatcitadel/contracts";
 export type { ChangePlanRecord } from "@goatcitadel/contracts";
 
-import { createCorrelationId, recordClientDiagnostic } from "../state/dev-diagnostics-store";
 import {
-  buildGatewayHeaders,
   buildGatewayUrl,
-  handleGatewayAuthRejectionResponse,
   readGatewayAuthHeaders,
   request,
 } from "./client-core.js";
-import { consumeSseResponse, iterateSsePayloads, parseSseJson } from "./streaming.js";
+import { normalizeChatSurface, originSurfaceInit, type ChatRequestSurfaceOptions } from "./chat-request-surface.js";
 import { uploadHashHeaders } from "./upload-hash.js";
 import type { OpenAICodexDevicePollResponse, OpenAICodexDeviceStartResponse } from "./platform.js";
 export {
+  fetchChatSessionWorkbench,
+  fetchChatSessionWorkbenchTree,
+  fetchChatSessionWorkbenchFile,
+  fetchChatSessionWorkbenchFileDiff,
+  fetchChatSessionWorkbenchDiff,
+  fetchChatSessionWorkbenchOutput,
   createChatSessionWorkbenchWorktree,
   saveChatSessionWorkbenchFile,
   previewChatSessionWorkbenchFileOperation,
@@ -121,34 +96,63 @@ export {
   revertChatSessionWorkbenchChanges,
 } from "./chat-workbench-operations.js";
 
-export interface ChatRequestSurfaceOptions {
-  originSurface?: ChatMode;
-}
+export {
+  runChatDelegation,
+  runChatResearch,
+  streamChatDelegation,
+  suggestChatDelegation,
+  triggerChatProactive,
+} from "./chat-optional-actions.js";
+export type { ChatDelegationStreamChunk, ChatDelegationStreamScopeControl } from "./chat-optional-actions.js";
 
-function originSurfaceHeader(options?: ChatRequestSurfaceOptions): HeadersInit | undefined {
-  return options?.originSurface
-    ? { "x-goatcitadel-origin-surface": normalizeChatSurface(options.originSurface) }
-    : undefined;
-}
+export {
+  fetchChatGeneratedArtifacts,
+  fetchThreadKnowledgeAttachments,
+  fetchChatProactiveStatus,
+  fetchChatProactiveRuns,
+  fetchChatSpecialistCandidates,
+  fetchChatCommandCatalog,
+} from "./chat-session-evidence.js";
+export type { ChatProactiveStatusResponse } from "./chat-session-evidence.js";
 
-function originSurfaceInit(options?: ChatRequestSurfaceOptions): Pick<RequestInit, "headers"> {
-  const headers = originSurfaceHeader(options);
-  return headers ? { headers } : {};
-}
+export {
+  createChatGeneratedArtifactVersion,
+  listDocumentPatchProposals,
+  fetchDocumentPatchProposal,
+  createDocumentPatchProposal,
+  applyDocumentPatchProposal,
+  rejectDocumentPatchProposal,
+} from "./chat-document-operations.js";
+export type { DocumentPatchProposalResponse } from "./chat-document-operations.js";
+export {
+  answerChatUserInputPrompt,
+  submitChatSecureConfiguration,
+  approveChatTool,
+  denyChatTool,
+  selectChatBranchTurn,
+  createChatSpecialistCandidate,
+  updateChatSpecialistCandidate,
+} from "./chat-operator-actions.js";
+export type { ChatApprovalWriteGrantChoice, ApproveChatToolResult } from "./chat-operator-actions.js";
+export {
+  updateChatSession,
+  deleteChatSession,
+  pinChatSession,
+  unpinChatSession,
+  archiveChatSession,
+  restoreChatSession,
+  assignChatSessionProject,
+} from "./chat-session-mutations.js";
 
-function normalizeChatSurface(_surface?: ChatMode | ChatGeneratedArtifactSourceSurface | null): "chat" {
-  return "chat";
-}
+export { fetchChatHistoryWindow, fetchChatHistoryContinuation, fetchChatMessagePage } from "./chat-history-reads.js";
 
-const DEFAULT_CHAT_HISTORY_MAX_BYTES = 65_536;
-const MIN_CHAT_HISTORY_MAX_BYTES = 1_024;
-const MAX_CHAT_HISTORY_MAX_BYTES = 1_048_576;
-
-function clampChatHistoryMaxBytes(maxBytes?: number): number {
-  const normalized =
-    maxBytes !== undefined && Number.isFinite(maxBytes) ? Math.floor(maxBytes) : DEFAULT_CHAT_HISTORY_MAX_BYTES;
-  return Math.max(MIN_CHAT_HISTORY_MAX_BYTES, Math.min(MAX_CHAT_HISTORY_MAX_BYTES, normalized));
-}
+export type { ChatRequestSurfaceOptions } from "./chat-request-surface.js";
+export {
+  resumeChatTurnStream,
+  streamAgentChatMessage,
+  streamEditChatTurn,
+  streamRetryChatTurn,
+} from "./chat-live-stream.js";
 
 export interface ChatProjectsResponse {
   items: ChatProjectRecord[];
@@ -205,10 +209,6 @@ export type {
 
 export interface ChatGeneratedArtifactResponse {
   item: ChatGeneratedArtifactRecord;
-}
-
-export interface DocumentPatchProposalResponse {
-  item: DocumentPatchProposalRecord;
 }
 
 export interface ChatThreadKnowledgeAttachmentsResponse {
@@ -431,16 +431,6 @@ export async function archiveWorkspaceChatSessions(input?: {
   });
 }
 
-export async function updateChatSession(
-  sessionId: string,
-  input: { expectedRevision: number; title?: string; folderId?: string; folderName?: string; tags?: string[] },
-): Promise<ChatSessionRecord> {
-  return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}`, {
-    method: "PATCH",
-    body: JSON.stringify(input),
-  });
-}
-
 export async function fetchChatSessionStatus(
   sessionId: string,
   signal?: AbortSignal,
@@ -519,55 +509,6 @@ export async function cancelChatTimer(
   );
 }
 
-export async function deleteChatSession(
-  sessionId: string,
-  expectedRevision: number,
-): Promise<{ deleted: boolean; sessionId: string }> {
-  return request<{ deleted: boolean; sessionId: string }>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}?mode=hard&expectedRevision=${encodeURIComponent(String(expectedRevision))}`,
-    { method: "DELETE" },
-  );
-}
-
-export async function pinChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
-  return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/pin`, {
-    method: "POST",
-    body: JSON.stringify({ expectedRevision }),
-  });
-}
-
-export async function unpinChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
-  return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/unpin`, {
-    method: "POST",
-    body: JSON.stringify({ expectedRevision }),
-  });
-}
-
-export async function archiveChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
-  return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/archive`, {
-    method: "POST",
-    body: JSON.stringify({ expectedRevision }),
-  });
-}
-
-export async function restoreChatSession(sessionId: string, expectedRevision: number): Promise<ChatSessionRecord> {
-  return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/restore`, {
-    method: "POST",
-    body: JSON.stringify({ expectedRevision }),
-  });
-}
-
-export async function assignChatSessionProject(
-  sessionId: string,
-  projectId: string | undefined,
-  expectedRevision: number,
-): Promise<ChatSessionRecord> {
-  return request<ChatSessionRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/project`, {
-    method: "POST",
-    body: JSON.stringify({ projectId, expectedRevision }),
-  });
-}
-
 export async function fetchChatSideChat(sessionId: string): Promise<ChatSideChatResponse> {
   return request<ChatSideChatResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/side-chats`);
 }
@@ -608,58 +549,6 @@ export async function fetchChatSessionBinding(sessionId: string): Promise<{ item
   );
 }
 
-export async function fetchChatSessionWorkbench(
-  sessionId: string,
-  options?: ChatSessionWorkbenchReadOptions,
-): Promise<{ state: ChatSessionWorkbenchRecord }> {
-  return request<{ state: ChatSessionWorkbenchRecord }>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench${options?.preview ? "?preview=true" : ""}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchTree(
-  sessionId: string,
-  options?: ChatSessionWorkbenchReadOptions,
-): Promise<ChatSessionWorkbenchTreeResponse> {
-  return request<ChatSessionWorkbenchTreeResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/tree${options?.preview ? "?preview=true" : ""}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchFile(
-  sessionId: string,
-  relativePath: string,
-  options?: ChatSessionWorkbenchReadOptions,
-): Promise<ChatSessionWorkbenchFileResponse> {
-  const query = new URLSearchParams({ path: relativePath });
-  if (options?.preview) query.set("preview", "true");
-  return request<ChatSessionWorkbenchFileResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file?${query.toString()}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchFileDiff(
-  sessionId: string,
-  relativePath: string,
-): Promise<ChatSessionWorkbenchFileDiffResponse> {
-  const query = new URLSearchParams({ path: relativePath });
-  return request<ChatSessionWorkbenchFileDiffResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/file-diff?${query.toString()}`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchDiff(sessionId: string): Promise<ChatSessionWorkbenchDiffResponse> {
-  return request<ChatSessionWorkbenchDiffResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/diff`,
-  );
-}
-
-export async function fetchChatSessionWorkbenchOutput(sessionId: string): Promise<ChatSessionWorkbenchOutputResponse> {
-  return request<ChatSessionWorkbenchOutputResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/workbench/output`,
-  );
-}
-
 export async function fetchChatMessages(
   sessionId: string,
   limit = 200,
@@ -675,97 +564,6 @@ export async function fetchChatMessages(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/messages?${query.toString()}`,
     { cache: "no-store", signal },
   );
-}
-
-export async function fetchChatHistoryWindow(input: {
-  workspaceId: string;
-  sessionId: string;
-  messageId: string;
-  sequence: number;
-  limit?: number;
-  maxBytes?: number;
-}): Promise<ChatHistoryWindowResponse> {
-  const query = new URLSearchParams({
-    workspaceId: input.workspaceId,
-    messageId: input.messageId,
-    sequence: String(input.sequence),
-    limit: String(input.limit ?? 21),
-    maxBytes: String(clampChatHistoryMaxBytes(input.maxBytes)),
-  });
-  return request<ChatHistoryWindowResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/history?${query.toString()}`,
-  );
-}
-
-export async function fetchChatHistoryContinuation(input: {
-  workspaceId: string;
-  sessionId: string;
-  direction: "older" | "newer";
-  cursor: { messageId: string; sequence: number; snapshotMaxSequence: number };
-  limit?: number;
-  maxBytes?: number;
-}): Promise<ChatHistoryContinuationResponse> {
-  const query = new URLSearchParams({
-    workspaceId: input.workspaceId,
-    direction: input.direction,
-    cursor: input.cursor.messageId,
-    cursorSequence: String(input.cursor.sequence),
-    snapshotMaxSequence: String(input.cursor.snapshotMaxSequence),
-    limit: String(input.limit ?? 21),
-    maxBytes: String(clampChatHistoryMaxBytes(input.maxBytes)),
-  });
-  return request<ChatHistoryContinuationResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/history?${query.toString()}`,
-  );
-}
-
-export async function fetchChatMessagePage(input: {
-  workspaceId: string;
-  sessionId: string;
-  limit?: number;
-  cursor?: string;
-  offset?: number;
-  snapshotMaxSequence?: number;
-  snapshotMessageCount?: number;
-}): Promise<ChatMessagePageResponse> {
-  if (input.cursor !== undefined && input.offset !== undefined) {
-    throw new Error("cursor and offset cannot be used together");
-  }
-  const query = new URLSearchParams({
-    workspaceId: input.workspaceId,
-    limit: String(input.limit ?? 200),
-  });
-  if (input.cursor) query.set("cursor", input.cursor);
-  if (input.offset !== undefined) query.set("offset", String(input.offset));
-  if (input.snapshotMaxSequence !== undefined) {
-    query.set("snapshotMaxSequence", String(input.snapshotMaxSequence));
-  }
-  if (input.snapshotMessageCount !== undefined) {
-    query.set("snapshotMessageCount", String(input.snapshotMessageCount));
-  }
-  return request<ChatMessagePageResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(input.sessionId)}/history?${query.toString()}`,
-  );
-}
-
-export async function fetchChatGeneratedArtifacts(input?: {
-  citadelId?: string;
-  sessionId?: string;
-  workspaceId?: string;
-  projectId?: string;
-  sourceSurface?: ChatGeneratedArtifactSourceSurface;
-  kind?: ChatGeneratedArtifactKind;
-  limit?: number;
-}): Promise<ChatGeneratedArtifactsResponse> {
-  const query = new URLSearchParams();
-  if (input?.citadelId) query.set("citadelId", input.citadelId);
-  if (input?.sessionId) query.set("sessionId", input.sessionId);
-  if (input?.workspaceId) query.set("workspaceId", input.workspaceId);
-  if (input?.projectId) query.set("projectId", input.projectId);
-  if (input?.sourceSurface) query.set("sourceSurface", normalizeChatSurface(input.sourceSurface));
-  if (input?.kind) query.set("kind", input.kind);
-  query.set("limit", String(input?.limit ?? 300));
-  return request<ChatGeneratedArtifactsResponse>(`/api/v1/chat/generated-artifacts?${query.toString()}`);
 }
 
 export async function fetchChatGeneratedArtifact(
@@ -847,75 +645,6 @@ export async function createChatGeneratedArtifact(
   );
 }
 
-export async function createChatGeneratedArtifactVersion(
-  artifactId: string,
-  input: CreateGeneratedArtifactVersionRequest,
-): Promise<ChatGeneratedArtifactResponse> {
-  return request<ChatGeneratedArtifactResponse>(
-    `/api/v1/chat/generated-artifacts/${encodeURIComponent(artifactId)}/versions`,
-    { method: "POST", body: JSON.stringify(input) },
-  );
-}
-
-export async function listDocumentPatchProposals(input: {
-  workspaceId: string;
-  sessionId?: string;
-  state?: DocumentPatchProposalRecord["state"];
-}): Promise<DocumentPatchProposalListResponse> {
-  const query = new URLSearchParams({ workspaceId: input.workspaceId });
-  if (input.sessionId) query.set("sessionId", input.sessionId);
-  if (input.state) query.set("state", input.state);
-  return request<DocumentPatchProposalListResponse>(`/api/v1/chat/document-patch-proposals?${query.toString()}`);
-}
-
-/** One document proposal by id, within its workspace. */
-export async function fetchDocumentPatchProposal(
-  proposalId: string,
-  options: { workspaceId: string; signal?: AbortSignal },
-): Promise<DocumentPatchProposalResponse> {
-  return request<DocumentPatchProposalResponse>(
-    `/api/v1/chat/document-patch-proposals/${encodeURIComponent(proposalId)}?workspaceId=${encodeURIComponent(options.workspaceId)}`,
-    options.signal ? { signal: options.signal } : undefined,
-  );
-}
-
-export async function createDocumentPatchProposal(
-  input: CreateDocumentPatchProposalRequest & { sessionId?: string },
-): Promise<DocumentPatchProposalResponse> {
-  return request<DocumentPatchProposalResponse>("/api/v1/chat/document-patch-proposals", {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
-export async function applyDocumentPatchProposal(
-  proposalId: string,
-  workspaceId: string,
-): Promise<DocumentPatchProposalResponse> {
-  return request<DocumentPatchProposalResponse>(
-    `/api/v1/chat/document-patch-proposals/${encodeURIComponent(proposalId)}/apply`,
-    { method: "POST", body: JSON.stringify({ workspaceId }) },
-  );
-}
-
-export async function rejectDocumentPatchProposal(
-  proposalId: string,
-  workspaceId: string,
-): Promise<DocumentPatchProposalResponse> {
-  return request<DocumentPatchProposalResponse>(
-    `/api/v1/chat/document-patch-proposals/${encodeURIComponent(proposalId)}/reject`,
-    { method: "POST", body: JSON.stringify({ workspaceId }) },
-  );
-}
-
-export async function fetchThreadKnowledgeAttachments(
-  sessionId: string,
-): Promise<ChatThreadKnowledgeAttachmentsResponse> {
-  return request<ChatThreadKnowledgeAttachmentsResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/knowledge-attachments`,
-  );
-}
-
 export async function attachThreadKnowledgeAttachment(
   sessionId: string,
   input: {
@@ -958,37 +687,6 @@ export async function fetchChatSessionCoreState(
 
 export async function fetchChatThread(sessionId: string): Promise<ChatThreadResponse> {
   return request<ChatThreadResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/thread`);
-}
-
-export async function answerChatUserInputPrompt(
-  sessionId: string,
-  turnId: string,
-  promptId: string,
-  input: ChatUserInputPromptAnswerRequest,
-): Promise<ChatUserInputPromptAnswerResponse> {
-  return request<ChatUserInputPromptAnswerResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/user-input/${encodeURIComponent(promptId)}/respond`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function submitChatSecureConfiguration(
-  sessionId: string,
-  turnId: string,
-  promptId: string,
-  input: ChatSecureConfigurationSubmitRequest,
-): Promise<ChatUserInputPromptAnswerResponse> {
-  return request<ChatUserInputPromptAnswerResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/user-input/${encodeURIComponent(promptId)}/secure-configuration`,
-    {
-      method: "POST",
-      cache: "no-store",
-      body: JSON.stringify(input),
-    },
-  );
 }
 
 export async function fetchChatPendingApprovals(sessionId: string): Promise<{
@@ -1062,147 +760,6 @@ export async function fetchChatTurnRoutedContext(
   );
 }
 
-export async function streamAgentChatMessage(
-  sessionId: string,
-  input: ChatSendMessageRequest,
-  onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal; originSurface?: ChatMode } = {},
-): Promise<void> {
-  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/agent-send/stream`;
-  const correlationId = createCorrelationId();
-  recordClientDiagnostic({
-    level: "info",
-    category: "chat",
-    event: "stream.start",
-    message: "Agent chat stream started",
-    correlationId,
-    sessionId,
-    route: path,
-  });
-  // Every `stream.start` must have a matching terminal event so the diagnostics
-  // timeline never shows an orphaned start. A user cancel / transport drop throws
-  // an AbortError, and a non-ok response throws after emitting its own
-  // `stream.error`; the try/catch below records the terminal event for the paths
-  // that would otherwise escape (consume-time abort, transport failure) without
-  // double-recording the non-ok case.
-  let terminalRecorded = false;
-  try {
-    const response = await fetch(buildGatewayUrl(path), {
-      method: "POST",
-      signal: options.signal,
-      headers: buildGatewayHeaders(path, "POST", correlationId, {
-        "x-goatcitadel-session-id": sessionId,
-        ...originSurfaceHeader(options),
-      }),
-      body: JSON.stringify(input),
-    });
-    if (!response.ok || !response.body) {
-      const text = await response.text();
-      handleGatewayAuthRejectionResponse(response.status, text, path);
-      recordClientDiagnostic({
-        level: "error",
-        category: "chat",
-        event: "stream.error",
-        message: `Agent chat stream failed (${response.status})`,
-        correlationId,
-        sessionId,
-        route: path,
-        context: { status: response.status, body: text.slice(0, 600) },
-      });
-      terminalRecorded = true;
-      throw new Error(`API error ${response.status}: ${text}`);
-    }
-    await consumeSseResponse(
-      response.body,
-      (chunk) => {
-        if (chunk.type === "error") {
-          recordClientDiagnostic({
-            level: "error",
-            category: "chat",
-            event: "stream.chunk_error",
-            message: "Agent chat stream emitted an error chunk",
-            correlationId,
-            sessionId,
-            route: path,
-            turnId: chunk.turnId,
-          });
-        }
-        onChunk(chunk);
-      },
-      options.signal,
-    );
-    recordClientDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "stream.complete",
-      message: "Agent chat stream completed",
-      correlationId,
-      sessionId,
-      route: path,
-    });
-  } catch (error) {
-    if (!terminalRecorded) {
-      recordStreamTerminalFailure({ error, correlationId, sessionId, route: path });
-    }
-    throw error;
-  }
-}
-
-/**
- * Records the terminal diagnostic for a chat stream that ended without a
- * `stream.complete` — `stream.aborted` for a user cancel / transport drop
- * (AbortError) and `stream.error` for any other failure. Pairs every
- * `stream.start` with a terminal event in the diagnostics timeline.
- */
-function recordStreamTerminalFailure(input: {
-  error: unknown;
-  correlationId: string;
-  sessionId: string;
-  route: string;
-}): void {
-  const { error, correlationId, sessionId, route } = input;
-  if (isStreamAbortError(error)) {
-    recordClientDiagnostic({
-      level: "info",
-      category: "chat",
-      event: "stream.aborted",
-      message: "Agent chat stream aborted before completion",
-      correlationId,
-      sessionId,
-      route,
-    });
-    return;
-  }
-  recordClientDiagnostic({
-    level: "error",
-    category: "chat",
-    event: "stream.error",
-    message: error instanceof Error ? `Agent chat stream errored: ${error.message}` : "Agent chat stream errored",
-    correlationId,
-    sessionId,
-    route,
-  });
-}
-
-function isStreamAbortError(error: unknown): boolean {
-  if (typeof DOMException === "function" && error instanceof DOMException) {
-    return error.name === "AbortError";
-  }
-  return (
-    typeof error === "object" && error !== null && "name" in error && (error as { name?: string }).name === "AbortError"
-  );
-}
-
-export async function selectChatBranchTurn(sessionId: string, turnId: string): Promise<ChatThreadResponse> {
-  return request<ChatThreadResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/select`,
-    {
-      method: "POST",
-      body: JSON.stringify({}),
-    },
-  );
-}
-
 export async function retryChatTurn(
   sessionId: string,
   turnId: string,
@@ -1217,32 +774,6 @@ export async function retryChatTurn(
       body: JSON.stringify(input ?? {}),
     },
   );
-}
-
-export async function streamRetryChatTurn(
-  sessionId: string,
-  turnId: string,
-  input: Partial<ChatSendMessageRequest>,
-  onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal; originSurface?: ChatMode } = {},
-): Promise<void> {
-  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/retry/stream`;
-  const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
-    method: "POST",
-    signal: options.signal,
-    headers: buildGatewayHeaders(path, "POST", correlationId, {
-      "x-goatcitadel-session-id": sessionId,
-      ...originSurfaceHeader(options),
-    }),
-    body: JSON.stringify(input),
-  });
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    handleGatewayAuthRejectionResponse(response.status, text, path);
-    throw new Error(`API error ${response.status}: ${text}`);
-  }
-  await consumeSseResponse(response.body, onChunk, options.signal);
 }
 
 export async function editChatTurn(
@@ -1261,63 +792,6 @@ export async function editChatTurn(
   );
 }
 
-export async function streamEditChatTurn(
-  sessionId: string,
-  turnId: string,
-  input: ChatSendMessageRequest,
-  onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal; originSurface?: ChatMode } = {},
-): Promise<void> {
-  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/edit/stream`;
-  const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
-    method: "POST",
-    signal: options.signal,
-    headers: buildGatewayHeaders(path, "POST", correlationId, {
-      "x-goatcitadel-session-id": sessionId,
-      ...originSurfaceHeader(options),
-    }),
-    body: JSON.stringify(input),
-  });
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    handleGatewayAuthRejectionResponse(response.status, text, path);
-    throw new Error(`API error ${response.status}: ${text}`);
-  }
-  await consumeSseResponse(response.body, onChunk, options.signal);
-}
-
-export async function resumeChatTurnStream(
-  sessionId: string,
-  turnId: string,
-  onChunk: (chunk: ChatStreamChunk) => void,
-  options: { signal?: AbortSignal; sinceEventId?: string; originSurface?: ChatMode } = {},
-): Promise<void> {
-  const query = new URLSearchParams();
-  if (options.sinceEventId) {
-    query.set("sinceEventId", options.sinceEventId);
-  }
-  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}/stream${query.size > 0 ? `?${query.toString()}` : ""}`;
-  const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
-    method: "GET",
-    signal: options.signal,
-    headers: buildGatewayHeaders(path, "GET", correlationId, {
-      Accept: "text/event-stream",
-      "Cache-Control": "no-cache",
-      "x-goatcitadel-session-id": sessionId,
-      ...(options.sinceEventId ? { "Last-Event-ID": options.sinceEventId } : {}),
-      ...originSurfaceHeader(options),
-    }),
-  });
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    handleGatewayAuthRejectionResponse(response.status, text, path);
-    throw new Error(`API error ${response.status}: ${text}`);
-  }
-  await consumeSseResponse(response.body, onChunk, options.signal);
-}
-
 export async function cancelChatTurn(
   sessionId: string,
   turnId: string,
@@ -1330,48 +804,6 @@ export async function cancelChatTurn(
       body: JSON.stringify(cancelledBy ? { cancelledBy } : {}),
     },
   );
-}
-
-/** The folder an outside-root write approval opens; owned by contracts so client and Gateway agree. */
-export type ChatApprovalWriteGrantChoice = OutsideRootWriteGrantChoice;
-
-export interface ApproveChatToolResult {
-  ok: boolean;
-  approvalId: string;
-  allowScope?: "once" | "session" | "workspace";
-  resumed?: boolean;
-  resumedTurnId?: string;
-  resumedRunId?: string;
-  /** The grant minted by a scoped approval (an opened folder for outside-root writes). */
-  grant?: ToolGrantRecord;
-  /** Why a scoped grant could not be minted; the exact approved action still ran once. */
-  grantError?: string;
-}
-
-export async function approveChatTool(
-  sessionId: string,
-  approvalId: string,
-  options?: { allowScope?: "once" | "session" | "workspace"; writeGrant?: ChatApprovalWriteGrantChoice },
-): Promise<ApproveChatToolResult> {
-  return request<ApproveChatToolResult>("/api/v1/chat/tools/approve", {
-    method: "POST",
-    body: JSON.stringify({
-      sessionId,
-      approvalId,
-      ...(options?.allowScope ? { allowScope: options.allowScope } : {}),
-      ...(options?.writeGrant ? { writeGrant: options.writeGrant } : {}),
-    }),
-  });
-}
-
-export async function denyChatTool(
-  sessionId: string,
-  approvalId: string,
-): Promise<{ ok: boolean; approvalId: string }> {
-  return request<{ ok: boolean; approvalId: string }>("/api/v1/chat/tools/deny", {
-    method: "POST",
-    body: JSON.stringify({ sessionId, approvalId }),
-  });
 }
 
 export async function fetchChatToolArtifact(
@@ -1687,21 +1119,6 @@ export async function pollChangePlanProviderOAuth(
   );
 }
 
-export interface ChatProactiveStatusResponse {
-  policy: ProactivePolicy;
-  idleSeconds: number;
-  hasRunningTurn: boolean;
-  pendingSuggestions: number;
-  actionsLastHour: number;
-  lastRun?: ProactiveRunRecord;
-}
-
-export async function fetchChatProactiveStatus(sessionId: string): Promise<ChatProactiveStatusResponse> {
-  return request<ChatProactiveStatusResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/status`,
-  );
-}
-
 export async function updateChatProactivePolicy(
   sessionId: string,
   input: Partial<{
@@ -1715,28 +1132,6 @@ export async function updateChatProactivePolicy(
     method: "PATCH",
     body: JSON.stringify(input),
   });
-}
-
-export async function triggerChatProactive(
-  sessionId: string,
-  input?: {
-    source?: "scheduler" | "manual" | "chat";
-    reason?: string;
-    surface?: ChatMode;
-    permissionProfileId?: string;
-    localOperatorOverrideId?: string;
-  },
-): Promise<ProactiveRunRecord> {
-  return request<ProactiveRunRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/trigger`, {
-    method: "POST",
-    body: JSON.stringify(input ?? {}),
-  });
-}
-
-export async function fetchChatProactiveRuns(sessionId: string, limit = 50): Promise<{ items: ProactiveRunRecord[] }> {
-  return request<{ items: ProactiveRunRecord[] }>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/proactive/runs?limit=${Math.max(1, Math.min(limit, 500))}`,
-  );
 }
 
 export async function fetchChatLearnedMemory(
@@ -1783,58 +1178,6 @@ export async function rebuildChatLearnedMemory(sessionId: string): Promise<{
   });
 }
 
-export async function fetchChatSpecialistCandidates(
-  sessionId: string,
-  limit = 200,
-): Promise<{ items: ChatSpecialistCandidateRecord[] }> {
-  return request<{ items: ChatSpecialistCandidateRecord[] }>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/specialist-candidates?limit=${Math.max(1, Math.min(limit, 500))}`,
-  );
-}
-
-export async function createChatSpecialistCandidate(
-  sessionId: string,
-  input: {
-    turnId?: string;
-    suggestion: ChatSpecialistCandidateSuggestionRecord;
-  },
-): Promise<ChatSpecialistCandidateRecord> {
-  return request<ChatSpecialistCandidateRecord>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/specialist-candidates`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function updateChatSpecialistCandidate(
-  sessionId: string,
-  candidateId: string,
-  input: ChatSpecialistCandidatePatchInput,
-): Promise<ChatSpecialistCandidateRecord> {
-  return request<ChatSpecialistCandidateRecord>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/specialist-candidates/${encodeURIComponent(candidateId)}`,
-    {
-      method: "PATCH",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
-export async function suggestChatDelegation(
-  sessionId: string,
-  input: ChatDelegateSuggestRequest = {},
-): Promise<ChatDelegateSuggestResponse> {
-  return request<ChatDelegateSuggestResponse>(
-    `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/suggest`,
-    {
-      method: "POST",
-      body: JSON.stringify(input),
-    },
-  );
-}
-
 export async function acceptChatDelegation(
   sessionId: string,
   input: ChatDelegateAcceptRequest,
@@ -1843,14 +1186,6 @@ export async function acceptChatDelegation(
     method: "POST",
     body: JSON.stringify(input),
   });
-}
-
-export async function fetchChatCommandCatalog(): Promise<{
-  items: Array<{ command: string; usage: string; description: string }>;
-}> {
-  return request<{ items: Array<{ command: string; usage: string; description: string }> }>(
-    "/api/v1/chat/catalog/commands",
-  );
 }
 
 export async function parseChatCommand(
@@ -1879,26 +1214,6 @@ export async function parseChatCommand(
   });
 }
 
-export async function runChatResearch(
-  sessionId: string,
-  input: {
-    query: string;
-    mode?: "quick" | "deep";
-    providerId?: string;
-    model?: string;
-    policyRunId?: string;
-    policyTaskId?: string;
-    permissionProfileId?: string;
-    localOperatorOverrideId?: string;
-    surface?: ChatMode;
-  },
-): Promise<ResearchSummaryRecord> {
-  return request<ResearchSummaryRecord>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/research/run`, {
-    method: "POST",
-    body: JSON.stringify(input),
-  });
-}
-
 export async function fetchChatResearchRun(
   sessionId: string,
   runId: string,
@@ -1909,77 +1224,6 @@ export async function fetchChatResearchRun(
   return request<{ run: ResearchRunRecord; sources: ResearchSourceRecord[] }>(
     `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/research/${encodeURIComponent(runId)}`,
   );
-}
-
-export async function runChatDelegation(sessionId: string, input: ChatDelegateRequest): Promise<ChatDelegateResponse> {
-  return request<ChatDelegateResponse>(`/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate`, {
-    method: "POST",
-    ...originSurfaceInit({ originSurface: input.surfaceMode }),
-    body: JSON.stringify(input),
-  });
-}
-
-export type ChatDelegationStreamScopeControl = DelegatedFilesystemScopePublicProjection;
-
-export interface ChatDelegationStreamChunk {
-  type: "status" | "step" | "done" | "error";
-  runId?: string;
-  taskId?: string;
-  message?: string;
-  step?: {
-    stepId: string;
-    runId: string;
-    role: string;
-    label?: string;
-    status: string;
-    index: number;
-    startedAt: string;
-    finishedAt?: string;
-    durationMs?: number;
-    summary?: string;
-    output?: string;
-    error?: string;
-    failureGuidance?: string;
-    /** Public delegated-scope projection; canonical host paths stay Gateway-owned. */
-    scopeControl?: ChatDelegationStreamScopeControl;
-  };
-  result?: ChatDelegateResponse;
-  error?: string;
-}
-
-export async function streamChatDelegation(
-  sessionId: string,
-  input: ChatDelegateRequest,
-  onChunk: (chunk: ChatDelegationStreamChunk) => void,
-  options: { signal?: AbortSignal } = {},
-): Promise<void> {
-  const path = `/api/v1/chat/sessions/${encodeURIComponent(sessionId)}/delegate/stream`;
-  const correlationId = createCorrelationId();
-  const response = await fetch(buildGatewayUrl(path), {
-    method: "POST",
-    headers: buildGatewayHeaders(path, "POST", correlationId, {
-      "x-goatcitadel-session-id": sessionId,
-      ...originSurfaceHeader({ originSurface: input.surfaceMode }),
-    }),
-    body: JSON.stringify(input),
-    signal: options.signal,
-  });
-  if (!response.ok || !response.body) {
-    const text = await response.text();
-    handleGatewayAuthRejectionResponse(response.status, text, path);
-    throw new Error(`API error ${response.status}: ${text}`);
-  }
-  let streamError: string | null = null;
-  for await (const dataText of iterateSsePayloads(response.body)) {
-    const chunk = parseSseJson<ChatDelegationStreamChunk>(dataText);
-    onChunk(chunk);
-    if (chunk.type === "error") {
-      streamError = chunk.error || "Streaming request failed.";
-    }
-  }
-  if (streamError) {
-    throw new Error(streamError);
-  }
 }
 
 export async function fetchChatDelegationRun(sessionId: string, runId: string): Promise<ChatDelegationRunDetail> {

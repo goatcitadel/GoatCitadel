@@ -1,7 +1,8 @@
 import React from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, ChatStreamChunk } from "@goatcitadel/contracts";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useBtwSideChatController } from "./useBtwSideChatController";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -10,6 +11,7 @@ const createChatSideChatMock = vi.hoisted(() => vi.fn());
 const fetchChatThreadMock = vi.hoisted(() => vi.fn());
 const preflightChatRouteMock = vi.hoisted(() => vi.fn());
 const streamAgentChatMessageMock = vi.hoisted(() => vi.fn());
+const streamImport = vi.hoisted(() => ({ requested: false, hold: undefined as Promise<void> | undefined }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   createChatSideChat: (...args: unknown[]) => createChatSideChatMock(...args),
@@ -17,6 +19,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   preflightChatRoute: (...args: unknown[]) => preflightChatRouteMock(...args),
   streamAgentChatMessage: (...args: unknown[]) => streamAgentChatMessageMock(...args),
 }));
+vi.mock("./btw-side-chat-stream.js", async (importOriginal) => {
+  streamImport.requested = true;
+  await streamImport.hold;
+  return importOriginal();
+});
 
 type Controller = ReturnType<typeof useBtwSideChatController>;
 
@@ -53,6 +60,11 @@ describe("useBtwSideChatController streaming preview", () => {
   let resolveStream: (() => void) | null = null;
   let rejectStream: ((cause: Error) => void) | null = null;
 
+  beforeAll(async () => {
+    // Compile dependencies before the test controls the runtime's actual import boundary.
+    await vi.importActual("./btw-side-chat-stream.js");
+  });
+
   beforeEach(() => {
     latest = null;
     emitChunk = null;
@@ -82,12 +94,6 @@ describe("useBtwSideChatController streaming preview", () => {
     renderer = undefined;
   });
 
-  async function flushMicrotasks(): Promise<void> {
-    for (let index = 0; index < 20; index += 1) {
-      await Promise.resolve();
-    }
-  }
-
   // The preview buffer batches via real 16ms frame-fallback and 50ms max-delay
   // timers in the node environment; waiting comfortably past both is deterministic.
   function waitForPreviewTimers(): Promise<void> {
@@ -103,7 +109,7 @@ describe("useBtwSideChatController streaming preview", () => {
     let sendPromise: Promise<void> = Promise.resolve();
     await act(async () => {
       sendPromise = latest!.openSideChat("hello");
-      await flushMicrotasks();
+      await vi.waitFor(() => expect(emitChunk).not.toBeNull());
     });
     expect(emitChunk).not.toBeNull();
     await act(async () => {
@@ -119,6 +125,33 @@ describe("useBtwSideChatController streaming preview", () => {
     });
     return { sendPromise };
   }
+
+  it("does not create or send a side chat under changed access while loading stream code", async () => {
+    let release!: () => void;
+    streamImport.hold = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    await act(async () => {
+      renderer = create(<Harness />);
+    });
+    try {
+      let opening!: Promise<void>;
+      act(() => {
+        opening = latest!.openSideChat("hello");
+      });
+      await vi.waitFor(() => expect(streamImport.requested).toBe(true));
+      act(() => notifyGatewayAccessChanged(false));
+      await act(async () => {
+        release();
+        await opening;
+      });
+      expect(createChatSideChatMock).not.toHaveBeenCalled();
+      expect(streamAgentChatMessageMock).not.toHaveBeenCalled();
+    } finally {
+      release();
+      streamImport.hold = undefined;
+    }
+  });
 
   it("buffers deltas outside the thread and flushes the preview at frame cadence", async () => {
     const { sendPromise } = await startStreamingSend();

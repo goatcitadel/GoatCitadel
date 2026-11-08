@@ -54,6 +54,7 @@ afterEach(() => {
 });
 const tick = (ms: number) =>
   act(async () => {
+    await vi.dynamicImportSettled();
     await vi.advanceTimersByTimeAsync(ms);
   });
 const render = () =>

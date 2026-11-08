@@ -201,6 +201,7 @@ describe("CockpitShell", () => {
       );
       expect(paletteCode.evaluated).not.toHaveBeenCalled();
       expect(palette()).toBeNull();
+      await act(async () => { await vi.dynamicImportSettled(); });
       const more = container.querySelector<HTMLButtonElement>('button[aria-label="More areas and settings"]')!;
       more.focus();
       await act(async () => {
@@ -620,6 +621,7 @@ describe("CockpitShell", () => {
       );
       document.dispatchEvent(new KeyboardEvent("keydown", { key: "k", ctrlKey: true, bubbles: true }));
     });
+    await act(async () => { await vi.dynamicImportSettled(); });
     expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);
     expect(document.body.textContent).toContain("Unsaved changes");
     expect(document.querySelector('[aria-label="Command palette"]')).toBeNull();

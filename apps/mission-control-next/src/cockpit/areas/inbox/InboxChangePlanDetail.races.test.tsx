@@ -166,7 +166,8 @@ function button(label: string) {
   return found;
 }
 async function click(label: string) {
-  await act(async () => button(label).click());
+  const control = await vi.waitFor(() => button(label));
+  await act(async () => control.click());
 }
 function deferred<T>() {
   let resolve!: (value: T) => void;

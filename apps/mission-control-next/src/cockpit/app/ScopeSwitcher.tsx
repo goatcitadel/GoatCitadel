@@ -3,13 +3,22 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { useCitadelName } from "../data/use-citadel-name";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { CHECKING_FOR_CHANGES } from "../data/record-view";
 import { readCockpitHistory } from "./cockpit-history";
 import { Compass } from "lucide-react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
-import { Button } from "../ui/Button";
-import { Dialog } from "../ui/Dialog";
-import { useCockpitScope } from "./use-cockpit-scope";
+import {
+  createDeferredDialogRuntime,
+  PendingDialog,
+  useDeferredDialogRuntime,
+} from "@goatcitadel/mission-control-shared/components/ui/deferred-dialog";
+import { useAccessBoundReview } from "@goatcitadel/mission-control-shared/hooks/use-access-bound-review";
+import { useCockpitNavigation } from "./cockpit-navigation-context";
+
+const pickerRuntime = createDeferredDialogRuntime(() =>
+  import("./ScopeSwitcherPicker").then(({ ScopeSwitcherPicker }) => ScopeSwitcherPicker),
+);
+const pickerDescription =
+  "Choose an active Citadel and workspace. This changes your view; it does not move work or grant access. Unsaved changes are reviewed before switching.";
 
 export function ScopeSwitcher({
   destination,
@@ -40,19 +49,32 @@ export function ScopeSwitcher({
   const renderedFocusView = focusView.current;
   const requestedFocus = useRef<{ view: typeof renderedFocusView; opener: HTMLElement | null } | null>(null);
   const [localOpen, setLocalOpen] = useState(false);
-  const open = controlledOpen ?? localOpen;
+  const requestedOpen = controlledOpen ?? localOpen;
   const setOpen = onOpenChange ?? setLocalOpen;
-  const [target, setTarget] = useState({ citadelId: activeCitadelId, workspaceId: activeWorkspaceId });
-  useEffect(() => {
-    if (open) {
-      const requested = new URL(destination ?? window.location.href, window.location.origin).searchParams;
-      setTarget({
-        citadelId: requested.get("citadelId") || activeCitadelId,
-        workspaceId: requested.get("workspaceId") || activeWorkspaceId,
-      });
-    }
-  }, [open, activeCitadelId, activeWorkspaceId, destination]);
-  const owner = useCockpitScope(open, target, () => setOpen(false), destination);
+  const { isTransitionPending } = useCockpitNavigation();
+  const accessCurrent = useAccessBoundReview(requestedOpen, () => setOpen(false));
+  const open = requestedOpen && accessCurrent;
+  const { runtime: Picker, failed } = useDeferredDialogRuntime(open, pickerRuntime);
+  // The owner closes its picker before requesting the reviewed navigation, which can still be pending.
+  const activated = useRef(false);
+  if (open) activated.current = true;
+  const handoff = useRef(false);
+  handoff.current = open && Boolean(Picker);
+  const [busy, setBusy] = useState(false);
+  const onCloseAutoFocus = (event: Event) => {
+    event.preventDefault();
+    if (
+      focusView.current !== renderedFocusView ||
+      getGatewayApiBaseUrl() !== installation ||
+      readCockpitHistory() !== history ||
+      isTransitionPending() ||
+      document.querySelector('[role="dialog"][data-state="open"],[role="alertdialog"][data-state="open"]')
+    )
+      return;
+    const opener = returnFocusRef?.current ?? trigger.current;
+    if (opener?.isConnected) opener.focus();
+  };
+
   // The picker closes before the central leave modal. Its detached Switch button
   // cannot restore focus when consent is cancelled or the accepted preflight fails.
   useEffect(() => {
@@ -67,7 +89,7 @@ export function ScopeSwitcher({
       requestedFocus.current = null;
       return;
     }
-    if (owner.isTransitionPending()) return;
+    if (isTransitionPending()) return;
     const frame = window.requestAnimationFrame(() => {
       if (requestedFocus.current !== requested) return;
       requestedFocus.current = null;
@@ -75,7 +97,7 @@ export function ScopeSwitcher({
         focusView.current !== requested.view ||
         getGatewayApiBaseUrl() !== installation ||
         readCockpitHistory() !== history ||
-        owner.isTransitionPending() ||
+        isTransitionPending() ||
         document.querySelector('[role="dialog"][data-state="open"],[role="alertdialog"][data-state="open"]')
       )
         return;
@@ -96,12 +118,11 @@ export function ScopeSwitcher({
           type="button"
           // WCAG 2.5.3: the name starts with the visible scope name, then says what the button does.
           aria-label={`${scopeName}, change Citadel and workspace`}
-          title={owner.busy ? `${scopeName}. ${busyText}` : `Change Citadel and workspace: ${scopeName}`}
-          aria-busy={owner.busy || undefined}
-          disabled={owner.busy}
+          title={busy ? `${scopeName}. ${busyText}` : `Change Citadel and workspace: ${scopeName}`}
+          aria-busy={busy || undefined}
+          disabled={busy}
           onClick={() => {
-            if (owner.isTransitionPending() || document.querySelector('[role="dialog"][data-state="open"]')) return;
-            setTarget({ citadelId: activeCitadelId, workspaceId: activeWorkspaceId });
+            if (isTransitionPending() || document.querySelector('[role="dialog"][data-state="open"]')) return;
             setOpen(true);
           }}
           className="flex min-h-8 w-full min-w-0 items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm font-medium text-fg hover:bg-sunken"
@@ -110,112 +131,45 @@ export function ScopeSwitcher({
           {!compact ? <span className="min-w-0 truncate">{scopeName}</span> : null}
         </button>
       ) : null}
-      {owner.busy ? (
+      {busy ? (
         <p role="status" className={compact ? "sr-only" : "px-2 text-xs text-fg-muted"}>
           {busyText}
         </p>
       ) : null}
-      {owner.error ? (
-        <p role="alert" className="break-words text-xs text-status-failed">
-          {owner.error}
-        </p>
+      {Picker && activated.current ? (
+        <Picker
+          activeCitadelId={activeCitadelId}
+          activeWorkspaceId={activeWorkspaceId}
+          destination={destination}
+          open={open}
+          setOpen={setOpen}
+          description={pickerDescription}
+          onCloseAutoFocus={onCloseAutoFocus}
+          onBusyChange={setBusy}
+          onSelect={(select) => {
+            requestedFocus.current = { view: renderedFocusView, opener: returnFocusRef?.current ?? trigger.current };
+            if (!select()) requestedFocus.current = null;
+          }}
+        />
+      ) : open ? (
+        <PendingDialog
+          title="Change operating scope"
+          description={pickerDescription}
+          closeLabel="Close dialog"
+          className="cockpit-dialog cockpit-pending-dialog fixed inset-x-4 top-4 m-0 mx-auto w-auto max-w-xl border-line bg-overlay p-4 text-fg shadow-overlay backdrop:bg-scrim sm:top-24"
+          onDismiss={() => setOpen(false)}
+          onCloseAutoFocus={onCloseAutoFocus}
+          handoff={handoff}
+        >
+          {failed ? (
+            <p role="alert">
+              Scope controls could not load. Close the picker to keep using the app, or reload the app.
+            </p>
+          ) : (
+            <p aria-busy="true">Loading scope controls…</p>
+          )}
+        </PendingDialog>
       ) : null}
-      <Dialog
-        open={open}
-        onOpenChange={setOpen}
-        onCloseAutoFocus={(event) => {
-          event.preventDefault();
-          if (
-            focusView.current !== renderedFocusView ||
-            getGatewayApiBaseUrl() !== installation ||
-            readCockpitHistory() !== history ||
-            owner.isTransitionPending() ||
-            document.querySelector('[role="dialog"][data-state="open"],[role="alertdialog"][data-state="open"]')
-          )
-            return;
-          const opener = returnFocusRef?.current ?? trigger.current;
-          if (opener?.isConnected) opener.focus();
-        }}
-        title="Change operating scope"
-        description="Choose an active Citadel and workspace. This changes your view; it does not move work or grant access. Unsaved changes are reviewed before switching."
-      >
-        <div className="space-y-3">
-          <label className="block text-sm text-fg-secondary">
-            Citadel
-            <select
-              name="scope-citadel"
-              value={target.citadelId}
-              onChange={(event) => setTarget({ citadelId: event.target.value, workspaceId: "" })}
-              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-md sm:text-sm text-fg"
-            >
-              <option value="">Choose Citadel</option>
-              {!owner.citadels.some((item) => item.citadelId === target.citadelId) && target.citadelId ? (
-                <option value={target.citadelId} disabled>
-                  Current Citadel - unavailable
-                </option>
-              ) : null}
-              {owner.citadels.map((item) => (
-                <option key={item.citadelId} value={item.citadelId}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="block text-sm text-fg-secondary">
-            Workspace
-            <select
-              name="scope-workspace"
-              value={target.workspaceId}
-              onChange={(event) => setTarget((current) => ({ ...current, workspaceId: event.target.value }))}
-              className="mt-1 min-h-10 w-full rounded-md border border-line-control bg-canvas px-2 text-md sm:text-sm text-fg"
-            >
-              <option value="">Choose workspace</option>
-              {!owner.workspaces.some((item) => item.workspaceId === target.workspaceId) && target.workspaceId ? (
-                <option value={target.workspaceId} disabled>
-                  Current workspace - unavailable
-                </option>
-              ) : null}
-              {owner.workspaces.map((item) => (
-                <option key={item.workspaceId} value={item.workspaceId}>
-                  {item.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          {owner.loading ? (
-            <p role="status" className="text-sm text-fg-muted">
-              Loading active scope choices…
-            </p>
-          ) : owner.checking ? (
-            <p role="status" className="text-sm text-fg-muted">
-              {CHECKING_FOR_CHANGES}
-            </p>
-          ) : null}
-          {owner.directoryError ? (
-            <p role="alert" className="text-sm text-status-failed">
-              {owner.directoryError}
-            </p>
-          ) : null}
-          {owner.citadels.length === 500 || owner.workspaces.length === 500 ? (
-            <p className="text-xs text-fg-muted">Showing up to 500 active records from each directory.</p>
-          ) : null}
-          <Button
-            disabled={
-              !owner.ready ||
-              !target.workspaceId ||
-              !owner.citadels.some((item) => item.citadelId === target.citadelId) ||
-              !owner.workspaces.some((item) => item.workspaceId === target.workspaceId) ||
-              (target.citadelId === activeCitadelId && target.workspaceId === activeWorkspaceId)
-            }
-            onClick={() => {
-              requestedFocus.current = { view: renderedFocusView, opener: returnFocusRef?.current ?? trigger.current };
-              if (!owner.select(target.citadelId, target.workspaceId)) requestedFocus.current = null;
-            }}
-          >
-            Switch scope
-          </Button>
-        </div>
-      </Dialog>
     </>
   );
 }

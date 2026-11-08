@@ -84,6 +84,10 @@ async function click(element: HTMLElement) {
     await new Promise((resolve) => setTimeout(resolve, 0));
   });
 }
+async function openConfirmation(label: string) {
+  await click(button(label));
+  await vi.waitFor(() => expect(dialog()?.querySelector('[aria-label="Approval action details"]')).toBeTruthy());
+}
 async function render(approval: ApprovalRequest, onResolved = vi.fn()) {
   // The re-read finds the record unchanged unless a test says otherwise.
   if (!api.fetchApproval.getMockImplementation()) api.fetchApproval.mockResolvedValue(approval);
@@ -198,7 +202,7 @@ describe("OutsideRootWriteGrantOptions", () => {
     const onResolved = await render(approvalWith(OUTSIDE_ROOT_PREVIEW));
     expect(button("Approve and open folder")).toBeUndefined();
     expect(button("Review danger approval")).toBeUndefined();
-    await click(button("Review and open folder"));
+    await openConfirmation("Review and open folder");
     expect(api.approveChatTool).not.toHaveBeenCalled();
     expect(dialog()?.textContent).toContain("Confirm danger-level action");
     expect(dialog()?.textContent).toContain(
@@ -229,7 +233,7 @@ describe("OutsideRootWriteGrantOptions", () => {
   it("needs the typed confirmation before a nuclear approval opens a folder", async () => {
     api.approveChatTool.mockResolvedValue({ ok: true, approvalId: "approval-1", grant: { grantId: "grant-1" } });
     await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "nuclear" }));
-    await click(button("Review nuclear approval"));
+    await openConfirmation("Review nuclear approval");
     expect(dialogButton("Approve and open folder")!.disabled).toBe(true);
     await typeConfirmation("approv");
     expect(dialogButton("Approve and open folder")!.disabled).toBe(true);
@@ -278,7 +282,7 @@ describe("OutsideRootWriteGrantOptions", () => {
     api.approveChatTool.mockResolvedValue({ ok: true, approvalId: "approval-1", grant: { grantId: "grant-1" } });
     const reviewed = approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "nuclear" });
     await render(reviewed);
-    await click(button("Review nuclear approval"));
+    await openConfirmation("Review nuclear approval");
     await typeConfirmation("approve");
     expect(dialogButton("Approve and open folder")!.disabled).toBe(false);
     const changed = { ...reviewed, preview: { ...OUTSIDE_ROOT_PREVIEW, note: "changed" } } as ApprovalRequest;
@@ -286,7 +290,7 @@ describe("OutsideRootWriteGrantOptions", () => {
     await render(changed);
     // The changed record needs its own review: the open one closed and its typed word is gone.
     await vi.waitFor(() => expect(dialog()).toBeNull());
-    await click(button("Review nuclear approval"));
+    await openConfirmation("Review nuclear approval");
     expect(dialog()!.querySelector<HTMLInputElement>("input")!.value).toBe("");
     expect(dialogButton("Approve and open folder")!.disabled).toBe(true);
     expect(api.approveChatTool).not.toHaveBeenCalled();
@@ -296,12 +300,12 @@ describe("OutsideRootWriteGrantOptions", () => {
     const previousCaller = getGatewayCallerScope();
     try {
       await render(approvalWith(OUTSIDE_ROOT_PREVIEW, "pending", { riskLevel: "nuclear" }));
-      await click(button("Review nuclear approval"));
+      await openConfirmation("Review nuclear approval");
       await typeConfirmation("approve");
       expect(dialogButton("Approve and open folder")!.disabled).toBe(false);
       await act(async () => setGatewayCallerScope("other-caller"));
       await vi.waitFor(() => expect(dialog()).toBeNull());
-      await click(button("Review nuclear approval"));
+      await openConfirmation("Review nuclear approval");
       expect(dialog()!.querySelector<HTMLInputElement>("input")!.value).toBe("");
       expect(api.approveChatTool).not.toHaveBeenCalled();
     } finally {
