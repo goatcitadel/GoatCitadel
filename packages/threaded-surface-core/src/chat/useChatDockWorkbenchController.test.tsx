@@ -163,12 +163,14 @@ describe("useChatDockWorkbenchController", () => {
         await vi.dynamicImportSettled();
       });
 
-      expect(hookMocks.useChatWorkbench).toHaveBeenCalledWith({
-        sessionId: "session-a",
-        workspaceId: "workspace-c",
-        enabled: true,
-        isCurrentOwner: expect.any(Function),
-      });
+      await vi.waitFor(() =>
+        expect(hookMocks.useChatWorkbench).toHaveBeenCalledWith({
+          sessionId: "session-a",
+          workspaceId: "workspace-c",
+          enabled: true,
+          isCurrentOwner: expect.any(Function),
+        }),
+      );
       expect(hookMocks.useChatWorkbench.mock.calls.every(([input]) => input.workspaceId === "workspace-c")).toBe(true);
       expect(latest!.workbenchRuntimeStatus).toBeUndefined();
       expect(latest!.workbenchTree).toEqual(workbenchReturn.workbenchTree);

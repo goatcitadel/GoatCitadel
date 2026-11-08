@@ -10,6 +10,10 @@ import {
   notifyGatewayAccessChanged,
   setGatewayCallerScope,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { prepareReadyDialogFixture } from "../../../test/ready-dialog-fixture";
+
+prepareReadyDialogFixture();
+
 const api = vi.hoisted(() => ({ bulk: vi.fn(), list: vi.fn(), workspaces: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/approvals", () => ({
   resolveApprovalsBulk: api.bulk,
