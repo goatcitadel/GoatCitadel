@@ -52,6 +52,30 @@ async function createReviewedDefaultProfile(gateway: GatewayService) {
 }
 
 describe("GatewayService low-hanging facade delegation", () => {
+  it("routes an approved local managed delete through the exact-revision policy executor", async () => {
+    const gateway = createGatewayHarness();
+    gateway.refreshApprovedPendingToolPolicyContext = vi.fn();
+    gateway.storage = {
+      pendingApprovalActions: {
+        find: vi.fn(async () => ({
+          actionType: "tool.invoke",
+          resolutionStatus: "pending",
+          request: { toolName: "project.files.delete", args: { path: "notes.txt", expectedRevision: "revision-1" } },
+        })),
+      },
+    };
+    const result = { outcome: "executed", result: { deleted: true } };
+    gateway.policyEngine = { executeApprovedAction: vi.fn(async () => result) };
+    gateway.executeApprovedExternalRuntimePendingAction = vi.fn();
+
+    await expect(
+      (GatewayService.prototype as any).executeApprovedPendingAction.call(gateway, "managed-delete"),
+    ).resolves.toBe(result);
+    expect(gateway.refreshApprovedPendingToolPolicyContext).toHaveBeenCalledWith("managed-delete");
+    expect(gateway.policyEngine.executeApprovedAction).toHaveBeenCalledWith("managed-delete", undefined);
+    expect(gateway.executeApprovedExternalRuntimePendingAction).not.toHaveBeenCalled();
+  });
+
   it.each(["fs.read", "channel.send", "mcp.invoke"])(
     "blocks approved worker-owned %s before any local executor runs",
     async (toolName) => {

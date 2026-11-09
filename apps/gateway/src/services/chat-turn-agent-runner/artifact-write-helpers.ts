@@ -658,6 +658,22 @@ export interface ExecutedWorkspaceFileWriteReceipt {
   bytesWritten: number;
 }
 
+export function hasExecutedManagedProjectSave(toolRun: ChatToolRunRecord): boolean {
+  const receipt = toolRun.result;
+  return (
+    toolRun.toolName === "project.files.save" &&
+    toolRun.status === "executed" &&
+    receipt?.kind === "managed_project_file" &&
+    receipt.deleted === false &&
+    typeof receipt.path === "string" &&
+    receipt.path.length > 0 &&
+    typeof receipt.revisionId === "string" &&
+    receipt.revisionId.length > 0 &&
+    typeof receipt.contentSha256 === "string" &&
+    /^[a-f0-9]{64}$/u.test(receipt.contentSha256)
+  );
+}
+
 export function getExecutedWorkspaceFileWriteReceipt(
   toolRun: ChatToolRunRecord,
 ): ExecutedWorkspaceFileWriteReceipt | undefined {

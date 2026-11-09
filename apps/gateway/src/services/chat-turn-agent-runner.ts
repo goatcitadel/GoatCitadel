@@ -229,6 +229,7 @@ import {
   detectPresentationArtifactIntent,
   detectPresentationPdfOutputIntent,
   getExecutedWorkspaceFileWriteReceipt,
+  hasExecutedManagedProjectSave,
   isWriteDestinationTool,
   isWriteJailBlockReason,
   mergePresentationArtifactDeliveryContent,
@@ -645,7 +646,8 @@ const TOOL_SCHEMA_TOKEN_BUDGET = {
 } as const satisfies Record<ChatMode, number>;
 const TOOL_POLICY_PROBE_CONCURRENCY = 8;
 /** Tools that save a file; trying one means the model may claim a file it did not make. */
-const FILE_PRODUCING_TOOL_NAME_PATTERN = /^(?:(?:documents|presentations|artifacts)\.create|fs\.(?:write|patch))$/u;
+const FILE_PRODUCING_TOOL_NAME_PATTERN =
+  /^(?:(?:documents|presentations|artifacts)\.create|fs\.(?:write|patch)|project\.files\.save)$/u;
 
 type PromptLabRunContract = ReturnType<typeof parsePromptLabRunContract>;
 
@@ -6553,6 +6555,7 @@ export class ChatTurnAgentRunner {
       !toolRuns.some(
         (run) =>
           Boolean(getExecutedWorkspaceFileWriteReceipt(run)) ||
+          (intents.documentArtifact && hasExecutedManagedProjectSave(run)) ||
           (/^(?:documents|presentations)\.create$/u.test(run.toolName) &&
             run.status === "executed" &&
             Boolean(run.result?.path || run.result?.artifactId || run.result?.artifact)),

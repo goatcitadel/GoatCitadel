@@ -128,7 +128,14 @@ export async function executeApprovedExternalRuntimePendingAction(
 export function isApprovedExternalRuntimePendingAction(
   pending: PendingApprovalAction | undefined,
 ): pending is PendingApprovalAction {
-  return Boolean(pending && pending.actionType === "tool.invoke" && pending.resolutionStatus === "pending");
+  // Managed deletion is an atomic local policy effect with its own exact-revision
+  // approval claim and recovery receipt. Leave it with the policy executor.
+  return Boolean(
+    pending &&
+    pending.actionType === "tool.invoke" &&
+    pending.resolutionStatus === "pending" &&
+    (pending.request.toolName !== "project.files.delete" || pending.request.externalRuntime === true),
+  );
 }
 
 export function requiresApprovedExternalRuntimeAdapter(pending: PendingApprovalAction): boolean {

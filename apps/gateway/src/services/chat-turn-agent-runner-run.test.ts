@@ -5,6 +5,78 @@ import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-
 import { createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner run", () => {
+  it("preserves the success reply after a managed project file is saved", async () => {
+    const path = "notes.txt";
+    const saved = "Saved notes.txt in the managed workspace.";
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () =>
+        createDefaultToolRegistry()
+          .toCatalog()
+          .filter((tool) => tool.toolName === "project.files.save"),
+      createChatCompletion: vi
+        .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+        .mockResolvedValueOnce({
+          model: "glm-5",
+          choices: [
+            {
+              index: 0,
+              finish_reason: "tool_calls",
+              message: {
+                role: "assistant",
+                content: null,
+                tool_calls: [
+                  {
+                    id: "managed-save",
+                    type: "function",
+                    function: {
+                      name: "project.files.save",
+                      arguments: JSON.stringify({ path, expectedRevision: null, text: "" }),
+                    },
+                  },
+                ],
+              },
+            },
+          ],
+        })
+        .mockResolvedValue({
+          model: "glm-5",
+          choices: [{ index: 0, message: { role: "assistant", content: saved } }],
+        }),
+      evaluateToolAccess: async ({ toolName }) => ({
+        toolName,
+        allowed: toolName !== "fs.write",
+        requiresApproval: false,
+        reasonCodes: [toolName === "fs.write" ? "policy_deny" : "allowed"],
+        riskLevel: "safe",
+      }),
+      invokeTool: async () => ({
+        outcome: "executed",
+        policyReason: "managed save",
+        auditEventId: "managed-save-audit",
+        result: {
+          kind: "managed_project_file",
+          path,
+          revisionId: "revision-1",
+          contentSha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          byteLength: 0,
+          deleted: false,
+        },
+      }),
+    });
+
+    const result = await runner.run({
+      ...turnInput("Create a new plain text file named notes.txt in the managed project workspace and save it now."),
+      toolAutonomy: "safe_auto",
+    });
+
+    expect(result.turnTrace.status).toBe("completed");
+    expect(result.turnTrace.toolRuns).toEqual(
+      expect.arrayContaining([expect.objectContaining({ toolName: "project.files.save", status: "executed" })]),
+    );
+    expect(result.assistantContent).toBe(saved);
+  });
+
   it("delivers managed read text to the active model without retaining it in the tool trace", async () => {
     const text = "private managed file text available to the active reader";
     const requests: ChatCompletionRequest[] = [];
