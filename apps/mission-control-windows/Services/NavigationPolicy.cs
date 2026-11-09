@@ -10,8 +10,8 @@ public static class NavigationPolicy
 {
     /// <summary>
     /// Decides how a WebView2 <c>NewWindowRequested</c> target (window.open / target=_blank)
-    /// should be handled. A popup WebView is never allowed: an allowed loopback target is routed
-    /// to the real browser, anything else is rejected so it cannot escape the navigation allowlist.
+    /// should be handled. Loopback targets and the OpenAI authorization endpoint open in
+    /// the system browser. In-WebView navigation remains local.
     /// </summary>
     public static NewWindowDisposition ClassifyNewWindowTarget(string? target, out Uri uri, out string error)
     {
@@ -25,6 +25,20 @@ public static class NavigationPolicy
 
         if (TryValidateBrowserTarget(target, out uri, out error))
         {
+            return NewWindowDisposition.OpenInBrowser;
+        }
+
+        if (!target.Any(char.IsControl) &&
+            Uri.TryCreate(target.Trim(), UriKind.Absolute, out var authorization) &&
+            authorization.Scheme == Uri.UriSchemeHttps &&
+            authorization.IsDefaultPort &&
+            authorization.Host.Equals("auth.openai.com", StringComparison.OrdinalIgnoreCase) &&
+            authorization.AbsolutePath == "/oauth/authorize" &&
+            string.IsNullOrEmpty(authorization.UserInfo) &&
+            string.IsNullOrEmpty(authorization.Fragment))
+        {
+            uri = authorization;
+            error = "";
             return NewWindowDisposition.OpenInBrowser;
         }
 

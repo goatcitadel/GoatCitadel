@@ -51,7 +51,7 @@ export function useProviderOAuthFlow({
   const [codexOAuthStatus, setCodexOAuthStatus] = useState<OpenAICodexOAuthStatus | null>(null);
   const [codexOAuthStatusError, setCodexOAuthStatusError] = useState<string | null>(null);
   const [codexOAuthFlow, setCodexOAuthFlow] = useState<OpenAICodexDeviceStartResponse | null>(null);
-  const [codexOAuthPlan, setCodexOAuthPlan] = useState<ChangePlanRecord | null>(null);
+  const [codexOAuthPlan, setOAuthPlan] = useState<ChangePlanRecord | null>(null);
   const [codexOAuthPlanDialog, setCodexOAuthPlanDialog] = useState<ChangePlanRecord | null>(null);
   const [legacyBusy, setCodexOAuthBusy] = useState(false);
   const statusRequest = useRef(0);
@@ -60,10 +60,26 @@ export function useProviderOAuthFlow({
   latest.current = { activeWorkspaceId, codexOAuthFlow, codexOAuthPlan, setNotice };
   const { run, mutation } = useProviderOAuthOperation(activeWorkspaceId, setNotice);
   const codexOAuthBusy = legacyBusy || mutation.pending;
-  const codexOAuthConnected = Boolean(codexOAuthStatus?.connected);
+  const codexOAuthPending = Boolean(
+    codexOAuthFlow ||
+    (codexOAuthPlan?.request.kind === "provider_connection" &&
+      codexOAuthPlan.request.credentialAction !== "remove_oauth" &&
+      ["awaiting_input", "staging", "awaiting_confirmation", "applying", "verifying"].includes(codexOAuthPlan.status)),
+  );
+  const codexOAuthConnected = Boolean(codexOAuthStatus?.connected) && !codexOAuthPending;
   const cancelStatusRead = useCallback(() => {
     statusRequest.current++;
   }, []);
+  const setCodexOAuthPlan = useCallback(
+    (plan: ChangePlanRecord | null) => {
+      if (plan?.status === "completed" || plan?.status === "applied") {
+        cancelStatusRead();
+        setCodexOAuthStatus(null);
+      }
+      setOAuthPlan(plan);
+    },
+    [cancelStatusRead],
+  );
   const refreshCodexOAuthStatus = useCallback(async () => {
     const id = ++statusRequest.current;
     try {
@@ -92,7 +108,7 @@ export function useProviderOAuthFlow({
   }, [hasCodexOAuthProvider, refreshCodexOAuthStatus, cancelStatusRead]);
   useEffect(() => {
     setCodexOAuthFlow(null);
-    setCodexOAuthPlan(null);
+    setOAuthPlan(null);
     setCodexOAuthPlanDialog(null);
   }, [activeWorkspaceId]);
 
@@ -137,7 +153,9 @@ export function useProviderOAuthFlow({
                 request: {
                   kind: "provider_connection",
                   providerId: "openai-codex",
-                  ...(codexOAuthConnected ? { credentialAction: "replace_oauth" as const } : {}),
+                  ...(codexOAuthStatus?.connected || codexOAuthStatus?.requiresReauth
+                    ? { credentialAction: "replace_oauth" as const }
+                    : {}),
                 },
               }),
             (value) => assertOAuthPlan(value, context.workspaceId),
@@ -240,13 +258,32 @@ export function useProviderOAuthFlow({
           if (!currentFlow()) return false;
           setCodexOAuthFlow(null);
           clearStoredOpenAICodexOAuthFlow();
-          setCodexOAuthPlan(next);
-          setCodexOAuthPlanDialog(next);
-          owner.setNotice({
-            tone: "success",
-            message:
-              "OpenAI approved the login. Review the exact Change Plan below to promote it into the provider runtime.",
-          });
+          if (next.status === "awaiting_confirmation") {
+            setOAuthPlan(next);
+            setCodexOAuthPlanDialog(next);
+            owner.setNotice({
+              tone: "success",
+              message:
+                "OpenAI approved the login. Review the exact Change Plan below to promote it into the provider runtime.",
+            });
+          } else {
+            setCodexOAuthPlanDialog(null);
+            cancelStatusRead();
+            setCodexOAuthStatus(null);
+            const completed = next.status === "completed" || next.status === "applied";
+            const status = completed ? await refreshCodexOAuthStatus().catch(() => null) : null;
+            if (!isCurrent()) return false;
+            setOAuthPlan(next);
+            const active = status?.connected;
+            owner.setNotice({
+              tone: active ? "success" : "warning",
+              message: active
+                ? "ChatGPT reconnected. The new credential is active."
+                : !completed && next.result?.summary
+                  ? next.result.summary
+                  : "The ChatGPT connection could not be verified. Refresh OAuth status.",
+            });
+          }
           return false;
         }
         if (response.status === "expired" || response.status === "failed") {
@@ -268,7 +305,7 @@ export function useProviderOAuthFlow({
       // A different admitted provider operation may temporarily occupy the owner. Admission still prevents duplicates.
       return result ?? flow.pollAfterMs;
     },
-    [run],
+    [run, cancelStatusRead, refreshCodexOAuthStatus],
   );
   const autoPoll = useCallback(() => poll(false), [poll]);
   useProviderOAuthPolling({
@@ -347,6 +384,7 @@ export function useProviderOAuthFlow({
     codexOAuthBusy,
     setCodexOAuthBusy,
     codexOAuthConnected,
+    codexOAuthPending,
     mutation,
     refreshCodexOAuthStatus,
     handleStartCodexOAuth,

@@ -34,7 +34,23 @@ public sealed class NavigationPolicyTests
     }
 
     [DataTestMethod]
+    [DataRow("https://auth.openai.com/oauth/authorize?response_type=code")]
+    [DataRow("https://auth.openai.com:443/oauth/authorize")]
+    public void RoutesOpenAIAuthorizationOnlyAsAnExternalPopup(string target)
+    {
+        Assert.AreEqual(NewWindowDisposition.OpenInBrowser,
+            NavigationPolicy.ClassifyNewWindowTarget(target, out _, out var error), error);
+        Assert.IsFalse(NavigationPolicy.TryValidateBrowserTarget(target, out _, out _));
+    }
+
+    [DataTestMethod]
     [DataRow("https://example.com")]
+    [DataRow("http://auth.openai.com/oauth/authorize")]
+    [DataRow("https://auth.openai.com:444/oauth/authorize")]
+    [DataRow("https://auth.openai.com.evil.test/oauth/authorize")]
+    [DataRow("https://user@auth.openai.com/oauth/authorize")]
+    [DataRow("https://auth.openai.com/oauth/token")]
+    [DataRow("https://auth.openai.com/oauth/authorize#fragment")]
     [DataRow("//example.com")]
     [DataRow("ops/activity")]
     public void RejectsNonLocalRoutes(string route)

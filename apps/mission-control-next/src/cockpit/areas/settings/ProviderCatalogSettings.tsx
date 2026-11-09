@@ -2,6 +2,7 @@ import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { useRef, useState } from "react";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 import { presentProviderReadiness } from "@goatcitadel/mission-control-shared/content/provider-readiness";
+import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import {
   useProviderModelCatalog,
   type ProviderModelCatalogOption,
@@ -44,7 +45,7 @@ function catalogEvidence(provider: ProviderModelCatalogOption): { label: string;
 }
 
 /** The shared catalog owns discovery, freshness, and credential evidence. */
-export function ProviderCatalogSettings() {
+export function ProviderCatalogSettings({ codexOAuthStatus }: { codexOAuthStatus?: StatusPresentation }) {
   const { navigate } = useCockpitRoute();
   const catalog = useProviderModelCatalog("system");
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -58,6 +59,7 @@ export function ProviderCatalogSettings() {
     catalog.providers.find((item) => item.providerId === catalog.config?.activeProviderId) ??
     catalog.providers[0];
   const ready = Boolean(catalog.config && !catalog.error);
+  const connectionOverride = provider?.providerId === "openai-codex" ? codexOAuthStatus : undefined;
   const activeProvider = catalog.providers.find((item) => item.providerId === catalog.config?.activeProviderId);
 
   async function refreshModels() {
@@ -154,12 +156,13 @@ export function ProviderCatalogSettings() {
                 </Field>
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
-                <StatusBadge status={presentProviderReadiness(provider)} />
+                <StatusBadge status={connectionOverride ?? presentProviderReadiness(provider)} />
                 <span className="break-all text-xs text-fg-muted">{provider.sanitizedEndpointIdentity}</span>
               </div>
               <ProviderConnectionEvidence
                 key={provider.providerId}
                 provider={provider}
+                credentialStatus={connectionOverride?.label}
                 request={
                   catalog.config?.providerConfigs?.find((item) => item.providerId === provider.providerId)?.request
                 }

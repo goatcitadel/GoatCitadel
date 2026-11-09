@@ -1071,13 +1071,13 @@ export class LlmService {
   }
 
   /** @internal Plan-scoped OAuth custody. Public provider projections never expose the account name. */
-  public getOpenAICodexOAuthCredentialStatus(credentialAccount: string): OpenAICodexOAuthStatus {
-    return this.openAICodexOAuth.getStatus(credentialAccount);
+  public getOpenAICodexOAuthCredentialStatus(credentialAccount: string, sameAccountOnly = false): OpenAICodexOAuthStatus {
+    return this.openAICodexOAuth.getStatus(credentialAccount, sameAccountOnly);
   }
 
   /** @internal Exact Change Plan apply seam; the OAuth service owns the credential move. */
-  public promoteOpenAICodexOAuthCredential(credentialAccount: string): OpenAICodexOAuthStatus {
-    const status = this.openAICodexOAuth.promoteCredential(credentialAccount);
+  public promoteOpenAICodexOAuthCredential(credentialAccount: string, sameAccountOnly = false): OpenAICodexOAuthStatus {
+    const status = this.openAICodexOAuth.promoteCredential(credentialAccount, sameAccountOnly);
     this.invalidateOpenAICodexModelCatalog();
     return status;
   }

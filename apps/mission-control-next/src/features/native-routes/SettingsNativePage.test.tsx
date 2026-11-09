@@ -4691,10 +4691,11 @@ describe("SettingsNativePage providers", () => {
 
     const text = collectText(renderer!.root);
     expect(text).toContain("Review the exact Change Plan below to promote it");
-    expect(text).toContain("OAuth missing");
+    expect(text).toContain("OAuth pending activation");
     expect(mocks.completeChangePlanProviderOAuth).toHaveBeenCalledTimes(1);
     expect(mocks.confirmChangePlan).not.toHaveBeenCalled();
     expect(text).not.toContain("OpenAI Codex OAuth connected.");
+    expect(text).not.toMatch(/\bConnected\b/u);
   });
 
   it("scrubs an unbound legacy OAuth pairing after a Settings refresh", async () => {

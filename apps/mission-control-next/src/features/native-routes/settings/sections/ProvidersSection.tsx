@@ -386,10 +386,21 @@ export function ProvidersSection({ activeWorkspaceId, navigate, route }: Setting
               items={providers.map((item) => ({
                 id: item.providerId,
                 title: `${item.label}${hasSessionDraft(`provider:system:${item.providerId}`) || hasSessionDraft(`provider-secret:system:${item.providerId}`) ? " · Unsaved" : ""}`,
-                status: presentProviderReadiness(item),
+                status:
+                  item.providerId === "openai-codex" && !codexOAuthConnected
+                    ? {
+                        label: oauth.codexOAuthPending ? "Pending activation" : "Login unconfirmed",
+                        tone: "waiting",
+                      }
+                    : presentProviderReadiness(item),
                 body: [
                   `${item.models.length} ${item.models.length === 1 ? "model" : "models"}`,
-                  formatProviderCredentialLabel(item.providerId, item.hasApiKey, codexOAuthStatus),
+                  formatProviderCredentialLabel(
+                    item.providerId,
+                    item.hasApiKey,
+                    codexOAuthStatus,
+                    oauth.codexOAuthPending,
+                  ),
                   formatProviderProbeStateLabel(item.modelProbeState),
                 ].join(" · "),
               }))}

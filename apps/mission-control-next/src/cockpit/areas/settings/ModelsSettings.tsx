@@ -14,6 +14,7 @@ import { McpDraftLeave } from "./McpDraftLeave";
 import { getDirtySectionKeys } from "../../../features/native-routes/library/use-form-dirty";
 import { sessionDraftSectionKey } from "../../../features/native-routes/library/session-drafts";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 
 /** The Models settings section: the provider owners plus the shared guided model setup. */
 export function ModelsSettings() {
@@ -21,6 +22,7 @@ export function ModelsSettings() {
   // Kept here, outside the guided card: a failed re-read after a change unmounts the card, and the
   // change's result must stay on screen next to the error.
   const [notice, setNotice] = useState<string | null>(null);
+  const [codexOAuthStatus, setCodexOAuthStatus] = useState<StatusPresentation>();
   const { mode } = useUiPreferences();
   const [expertOpen, setExpertOpen] = useState(mode === "advanced");
   const leave = useDraftLeave();
@@ -74,7 +76,10 @@ export function ModelsSettings() {
           onClick={() =>
             expertOpen
               ? leave.request(
-                  () => setExpertOpen(false),
+                  () => {
+                    setExpertOpen(false);
+                    setCodexOAuthStatus(undefined);
+                  },
                   getDirtySectionKeys().filter(
                     (key) =>
                       /^(provider|provider-secret|provider-endpoint):system:/.test(sessionDraftSectionKey(key)) ||
@@ -91,8 +96,8 @@ export function ModelsSettings() {
         </p>
         {expertOpen ? (
           <div id="expert-provider-controls" className="mt-4 grid gap-4">
-            <ProviderManagementSettings />
-            <ProviderCatalogSettings />
+            <ProviderManagementSettings onCodexOAuthStatusChange={setCodexOAuthStatus} />
+            <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} />
             <ProviderRoutingSettings />
             <ProviderAdviceSettings />
           </div>

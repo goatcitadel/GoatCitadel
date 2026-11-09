@@ -221,14 +221,7 @@ public sealed partial class MainWindow : Window
             {
                 // Never let window.open / target=_blank spawn an off-allowlist popup WebView.
                 args.Handled = true;
-                if (NavigationPolicy.ClassifyNewWindowTarget(args.Uri, out var uri, out var error) == NewWindowDisposition.OpenInBrowser)
-                {
-                    TryAction(() => OpenTargetService.OpenBrowser(uri.ToString()));
-                }
-                else
-                {
-                    ShowToast(error);
-                }
+                TryAction(() => OpenTargetService.OpenBrowserPopup(args.Uri));
             };
             _webViewReady = true;
         }

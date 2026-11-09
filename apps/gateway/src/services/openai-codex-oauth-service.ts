@@ -107,13 +107,17 @@ export class OpenAICodexOAuthService {
     };
   }
 
-  public getStatus(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT): OpenAICodexOAuthStatus {
+  public getStatus(credentialAccount = OPENAI_CODEX_OAUTH_ACCOUNT, sameAccountOnly = false): OpenAICodexOAuthStatus {
     const available = this.secretStore.isAvailable();
     const credential = this.readCredential(credentialAccount);
     return {
       providerId: OPENAI_CODEX_PROVIDER_ID,
       available,
-      connected: Boolean(credential?.accessToken && !credential.requiresReauth),
+      connected: Boolean(
+        credential?.accessToken &&
+        !credential.requiresReauth &&
+        (!sameAccountOnly || this.isSameAccount(credential.accessToken)),
+      ),
       accountLabel: credential?.accountLabel,
       expiresAt: credential?.expiresAt ? new Date(credential.expiresAt).toISOString() : undefined,
       requiresReauth: credential?.requiresReauth,
@@ -243,8 +247,18 @@ export class OpenAICodexOAuthService {
     return this.getStatus(credentialAccount);
   }
 
+  private isSameAccount(accessToken: string): boolean {
+    const activeToken = this.readCredential(OPENAI_CODEX_OAUTH_ACCOUNT)?.accessToken;
+    const active = activeToken && codexAccountIdentity(activeToken);
+    const staged = codexAccountIdentity(accessToken);
+    if (!active || !staged || active.accountId !== staged.accountId) return false;
+    if (active.memberId && staged.memberId) return active.memberId === staged.memberId;
+    if (active.userId && staged.userId) return active.userId === staged.userId;
+    return Boolean(active.subject && active.subject === staged.subject);
+  }
+
   /** Promote an already verified, plan-scoped OAuth credential into the canonical runtime owner. */
-  public promoteCredential(sourceAccount: string): OpenAICodexOAuthStatus {
+  public promoteCredential(sourceAccount: string, sameAccountOnly = false): OpenAICodexOAuthStatus {
     this.assertKeychainAvailable();
     if (sourceAccount === OPENAI_CODEX_OAUTH_ACCOUNT) {
       throw new ConflictError({ message: "OAuth promotion requires a temporary credential owner." });
@@ -252,6 +266,9 @@ export class OpenAICodexOAuthService {
     const credential = this.readCredential(sourceAccount);
     if (!credential?.accessToken || !credential.refreshToken || credential.requiresReauth) {
       throw new Error("The temporary OpenAI Codex OAuth credential is unavailable or requires reauthorization.");
+    }
+    if (sameAccountOnly && !this.isSameAccount(credential.accessToken)) {
+      throw new ConflictError({ message: "The active ChatGPT account changed during reconnect. Start login again." });
     }
     // Write canonical state before removing staging custody. Reconciliation can
     // safely clean the duplicate if the process stops between these operations.
@@ -668,6 +685,24 @@ function resolveCodexAccessTokenExpiry(accessToken: string): number | undefined 
   const payload = decodeCodexJwtPayload(accessToken);
   const exp = normalizeFutureEpochSeconds(payload?.exp);
   return exp ? exp * 1000 : undefined;
+}
+
+function codexAccountIdentity(accessToken: string) {
+  // These access tokens come from the provider's own exchange. Compare stable
+  // account and principal claims, never the editable display label.
+  const payload = decodeCodexJwtPayload(accessToken);
+  const auth = payload?.[OPENAI_CODEX_AUTH_CLAIM];
+  if (!auth || typeof auth !== "object") return undefined;
+  const claims = auth as Record<string, unknown>;
+  const accountId = trimNonEmptyString(claims.chatgpt_account_id);
+  return accountId
+    ? {
+        accountId,
+        memberId: trimNonEmptyString(claims.chatgpt_account_user_id),
+        userId: trimNonEmptyString(claims.chatgpt_user_id) ?? trimNonEmptyString(claims.user_id),
+        subject: trimNonEmptyString(payload?.sub),
+      }
+    : undefined;
 }
 
 function resolveCodexAuthIdentity(accessToken: string): { accountLabel?: string } {

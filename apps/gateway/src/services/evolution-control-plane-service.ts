@@ -401,6 +401,23 @@ export class EvolutionControlPlaneService {
     });
     try {
       const outcome = await adapter.resumeOwnerInput(this.context(current.origin), consumed, receipt);
+      if (
+        outcome.applyVerifiedReconnect &&
+        receipt.actionKind === "oauth" &&
+        receipt.ownerId === "provider_oauth" &&
+        consumed.kind === "provider_connection" &&
+        consumed.risk === "safe"
+      ) {
+        if (isExpired(consumed)) return await this.expire(consumed, actor.actorId);
+        return this.executeApply(
+          actor,
+          adapter,
+          consumed,
+          undefined,
+          { eventType: "verified_oauth_reconnect_apply_started" },
+          outcome.applyVerifiedReconnect,
+        );
+      }
       return await this.persistOutcome(actor, adapter, consumed, outcome);
     } catch (error) {
       return await this.settleAdapterFailure(actor, consumed, error);
@@ -617,6 +634,7 @@ export class EvolutionControlPlaneService {
     plan: ChangePlanRecord,
     actionNonce?: string,
     startEvent: operatorApprovalSkip.ApplyStartEvent = { eventType: "apply_started" },
+    applyVerifiedReconnect?: (plan: ChangePlanRecord) => Promise<EvolutionControlPlaneAdapterOutcome>,
   ): Promise<ChangePlanRecord> {
     const applying =
       plan.status === "applying"
@@ -631,7 +649,9 @@ export class EvolutionControlPlaneService {
           });
     await this.signal("change_plan.applying", applying);
     try {
-      const outcome = await adapter.apply(this.context(plan.origin), applying);
+      const outcome = applyVerifiedReconnect
+        ? await applyVerifiedReconnect(applying)
+        : await adapter.apply(this.context(plan.origin), applying);
       return await this.persistOutcome(actor, adapter, applying, outcome);
     } catch (error) {
       return await this.settleAdapterFailure(actor, applying, error);

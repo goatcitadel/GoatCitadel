@@ -22,13 +22,13 @@ type Credential = { known: boolean; failed: boolean; ready: boolean; meta: strin
  * Credential evidence comes only from its owner: the ChatGPT login for Codex, the secure secret owner otherwise.
  * Callers mount this only while the details are open, so opening the details is what triggers the read.
  */
-function useCredential(provider: ProviderModelCatalogOption): Credential {
+function useCredential(provider: ProviderModelCatalogOption, credentialStatus?: string): Credential {
   const codex = provider.providerId === CODEX_PROVIDER_ID;
   const local = isLikelyLocalProviderBaseUrl(provider.baseUrl);
   const oauth = useQuery({
     queryKey: ["settings", "provider-evidence", "codex-oauth"],
     queryFn: () => fetchOpenAICodexOAuthStatus(),
-    enabled: codex,
+    enabled: codex && !credentialStatus,
   });
   const secret = useQuery({
     queryKey: ["settings", "provider-evidence", "secret", provider.providerId],
@@ -36,6 +36,7 @@ function useCredential(provider: ProviderModelCatalogOption): Credential {
     enabled: !codex,
   });
   if (codex) {
+    if (credentialStatus) return { known: false, failed: false, ready: false, meta: credentialStatus };
     const status = oauth.isError ? undefined : oauth.data;
     if (!status)
       return {
@@ -76,8 +77,16 @@ function useCredential(provider: ProviderModelCatalogOption): Credential {
   return { known, failed: secret.isError, ready, meta };
 }
 
-function Body({ provider, request }: { provider: ProviderModelCatalogOption; request?: LlmProviderConfig["request"] }) {
-  const credential = useCredential(provider);
+function Body({
+  provider,
+  request,
+  credentialStatus,
+}: {
+  provider: ProviderModelCatalogOption;
+  request?: LlmProviderConfig["request"];
+  credentialStatus?: string;
+}) {
+  const credential = useCredential(provider, credentialStatus);
   const local = isLikelyLocalProviderBaseUrl(provider.baseUrl);
   const executed = provider.resolvedApiStyle ?? provider.apiStyle;
   const capabilities = Object.entries(provider.capabilities ?? {})
@@ -139,7 +148,7 @@ function Body({ provider, request }: { provider: ProviderModelCatalogOption; req
             </li>
           ))}
         </ul>
-      ) : (
+      ) : credentialStatus ? null : (
         <p role="status" className="text-sm text-fg-muted">
           {credential.failed
             ? "The readiness checklist needs the credential status, which could not be read."
@@ -157,15 +166,17 @@ function Body({ provider, request }: { provider: ProviderModelCatalogOption; req
 export function ProviderConnectionEvidence({
   provider,
   request,
+  credentialStatus,
 }: {
   provider: ProviderModelCatalogOption;
   request?: LlmProviderConfig["request"];
+  credentialStatus?: string;
 }) {
   const [open, setOpen] = useState(false);
   return (
     <details className="mt-3 border-t border-line-subtle pt-3" onToggle={(event) => setOpen(event.currentTarget.open)}>
       <summary className="min-h-11 cursor-pointer text-sm font-semibold text-fg">Connection details</summary>
-      {open ? <Body provider={provider} request={request} /> : null}
+      {open ? <Body provider={provider} request={request} credentialStatus={credentialStatus} /> : null}
     </details>
   );
 }

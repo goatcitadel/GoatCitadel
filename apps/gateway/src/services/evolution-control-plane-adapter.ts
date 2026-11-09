@@ -99,6 +99,11 @@ export interface EvolutionControlPlaneAdapterOutcome {
   readonly target?: ChangePlanTargetRef;
 }
 
+export interface EvolutionControlPlaneOwnerInputOutcome extends EvolutionControlPlaneAdapterOutcome {
+  /** Server-only continuation for a safe OAuth reconnect whose owner verified the active identity. */
+  readonly applyVerifiedReconnect?: (plan: ChangePlanRecord) => Promise<EvolutionControlPlaneAdapterOutcome>;
+}
+
 export interface EvolutionControlPlaneReconcileOutcome extends EvolutionControlPlaneAdapterOutcome {
   /** True only when owner state proves the approved effect committed. */
   readonly effectObserved: boolean;
@@ -207,7 +212,7 @@ export interface EvolutionControlPlaneAdapter<Request extends ChangePlanRequest 
     context: EvolutionControlPlaneAdapterContext,
     plan: ChangePlanRecord,
     receipt: EvolutionControlPlaneOwnerInputReceipt,
-  ): Promise<EvolutionControlPlaneAdapterOutcome>;
+  ): Promise<EvolutionControlPlaneOwnerInputOutcome>;
 }
 
 export type RegisteredEvolutionControlPlaneAdapter<Request extends ChangePlanRequest = ChangePlanRequest> =
