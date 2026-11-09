@@ -1,4 +1,5 @@
 import type {
+  ChatApprovalAuthority,
   ChatSendMessageRequest,
   ChatStreamChunk,
   ChatStreamChunkDraft,
@@ -21,6 +22,7 @@ export type InspectableChatStreamChunk = ChatStreamChunk | ChatStreamChunkDraft;
  * durable mutation permanently owns the request key.
  */
 export interface ChatStreamMutationLifecycle {
+  markAdmitted?(): Promise<void>;
   commitAlongsideCanonicalWrite?(): void;
   markCommitted(): void;
 }
@@ -108,6 +110,8 @@ export interface ActiveTurnAdmission {
   admittedRequest: FrozenChatTurnExecutionRequest;
   /** Exact server-derived actor authority frozen at admission. */
   requestActor: FrozenChatTurnRequestActor;
+  /** Versioned approval authority stamped by direct local operator admission. */
+  chatApprovalAuthority?: ChatApprovalAuthority;
   /** Exact occurrence authority, present only for a storage-admitted heartbeat. */
   systemHeartbeatOccurrence?: Readonly<SystemHeartbeatOccurrenceTurnAdmission>;
   requestClaim?: TurnAdmissionRequestClaim;
@@ -174,6 +178,7 @@ export interface DurableChatTurnExecutionPayload {
   };
   surfaceDerivation?: ChatTurnSurfaceDerivation;
   requestActor: FrozenChatTurnRequestActor;
+  chatApprovalAuthority?: ChatApprovalAuthority;
   sessionId: string;
   turnId: string;
   userMessageId: string;

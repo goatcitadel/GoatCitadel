@@ -2,12 +2,15 @@
 import { createHash } from "node:crypto";
 import {
   canonicalJsonString,
+  computeEffectiveChatTurnRequestMaterialSha256,
   ConflictError,
   NotFoundError,
   ValidationError,
   GOVERNED_REMEDIATION_RESUME_TEXT,
   readGovernedRemediationResumeReference,
   readChatTurnFeatureReferences,
+  readDurableChatTurnExecutionPayloadAuthority,
+  type ChatApprovalAuthority,
   type ChatTurnFeatureReferences,
   type GovernedRemediationResumeReference,
 } from "@goatcitadel/contracts";
@@ -141,11 +144,14 @@ export interface PreemptHeartbeatAndAdmitOperatorTurnInput {
   materialSha256: string;
   idempotencyKey: string;
   correlationId: string;
+  /** Sampled by the direct local operator admission owner under this session's locks. */
+  chatApprovalAuthority?: ChatApprovalAuthority;
 }
 
 export type PreemptHeartbeatAndAdmitOperatorTurnOutcome =
   | (AdmitSessionMutationOutcome & {
       preemptionDisposition: "not_required" | "preempted" | "replayed";
+      chatApprovalAuthority?: ChatApprovalAuthority;
       controllerGeneration: number;
       controlEventId?: string;
       occurrenceId?: string;
@@ -1032,6 +1038,12 @@ export class SessionMutationAdmissionRepository {
         this.acquireSessionLock(normalized.sessionId);
         const replay = this.findByIdempotency(normalized.idempotencyKey);
         if (replay) {
+          if (this.readRecordedChatApprovalAuthority(replay.admission_id) !== undefined) {
+            throw admissionConflict(
+              "SESSION_MUTATION_ADMISSION_REPLAY_CONFLICT",
+              "An operator Chat approval admission requires the original admission path for replay.",
+            );
+          }
           const requestSha256 = admissionRequestSha256(normalized, replay.session_incarnation_id);
           const admissionId = deriveId("csma", normalized.idempotencyKey, requestSha256);
           if (replay.request_sha256 !== requestSha256 || replay.admission_id !== admissionId) {
@@ -1059,6 +1071,11 @@ export class SessionMutationAdmissionRepository {
     } catch (error) {
       throw normalizeAdmissionWriteError(error);
     }
+  }
+
+  /** Call in the enclosing admission transaction before taking the session row lock. */
+  public lockChatApprovalAdmissionInCurrentTransaction(sessionId: string): void {
+    this.acquireSessionLock(identifier(sessionId, "sessionId"));
   }
 
   public preemptHeartbeatAndAdmitOperatorTurn(
@@ -1126,6 +1143,18 @@ export class SessionMutationAdmissionRepository {
               "Operator admission replay conflicts.",
             );
           }
+          const recorded = this.readRecordedChatApprovalAuthority(replay.admission_id);
+          const proposed = input.chatApprovalAuthority;
+          if (
+            recorded !== undefined ? !proposed || recorded !== canonicalJsonString(proposed) : proposed?.mode === "auto"
+          ) {
+            throw admissionConflict(
+              "SESSION_MUTATION_ADMISSION_REPLAY_CONFLICT",
+              "Operator admission replay conflicts with its frozen Chat approval authority.",
+            );
+          }
+          const frozenApproval =
+            recorded === undefined ? {} : { chatApprovalAuthority: JSON.parse(recorded) as ChatApprovalAuthority };
           this.requireExactTurnBinding(replay);
           const event = this.db
             .prepare(
@@ -1159,6 +1188,7 @@ export class SessionMutationAdmissionRepository {
               );
             }
             return {
+              ...frozenApproval,
               disposition: "replayed",
               preemptionDisposition: "not_required",
               controllerGeneration: replayGeneration,
@@ -1268,6 +1298,7 @@ export class SessionMutationAdmissionRepository {
             );
           }
           return {
+            ...frozenApproval,
             disposition: "replayed",
             preemptionDisposition: "replayed",
             controllerGeneration: replayGeneration,
@@ -1317,6 +1348,7 @@ export class SessionMutationAdmissionRepository {
           const created = this.insertNormalizedAdmission(normalized, sessionIncarnationId);
           return {
             ...created,
+            ...this.recordChatApprovalAuthority(created.admission.admissionId, input.chatApprovalAuthority),
             preemptionDisposition: "not_required",
             controllerGeneration: expectedControllerGeneration,
           };
@@ -1632,6 +1664,7 @@ export class SessionMutationAdmissionRepository {
         );
         return {
           ...operatorAdmission,
+          ...this.recordChatApprovalAuthority(operatorAdmission.admission.admissionId, input.chatApprovalAuthority),
           preemptionDisposition: "preempted",
           controllerGeneration: nextControllerGeneration,
           controlEventId,
@@ -2089,6 +2122,16 @@ export class SessionMutationAdmissionRepository {
       this.requireDurableBinding(identity.admissionId, identity.turnId, durableRunId, true);
       this.requireExactDurableRunPayloadIdentity(admission, this.requireDurableRun(durableRunId, true));
     });
+  }
+
+  /** Discovery only. The caller must verify the payload against the exact admission. */
+  public findDurableRunIdForTurn(sessionId: string, turnId: string): string | undefined {
+    return this.db
+      .prepare(
+        `SELECT durable_run_id FROM chat_turn_mutation_admission_durable_bindings
+         WHERE turn_id = @turnId AND session_id = @sessionId`,
+      )
+      .get<Pick<DurableBindingRow, "durable_run_id">>({ sessionId, turnId })?.durable_run_id;
   }
 
   /**
@@ -6043,6 +6086,14 @@ export class SessionMutationAdmissionRepository {
 
   private requireExactDurableRunPayloadIdentity(admission: AdmissionRow, run: DurableRunFenceRow): void {
     const payload = parseJsonObject(run.payload_json);
+    const approvalAuthority =
+      payload.chatApprovalAuthority === undefined
+        ? undefined
+        : readDurableChatTurnExecutionPayloadAuthority({
+            workflowKey: run.workflow_key,
+            durableRunId: run.run_id,
+            payload,
+          })?.chatApprovalAuthority;
     const effectiveRequest = readJsonObject(payload.request);
     const requestActor = readJsonObject(payload.requestActor);
     const admittedRequest = effectiveRequest
@@ -6050,6 +6101,7 @@ export class SessionMutationAdmissionRepository {
       : undefined;
     const effectiveRequestMaterialSha256 =
       typeof payload.effectiveRequestMaterialSha256 === "string" ? payload.effectiveRequestMaterialSha256 : undefined;
+    const recordedApproval = this.readRecordedChatApprovalAuthority(admission.admission_id);
     if (
       payload.version !== "chat.turn.execute.v2" ||
       payload.admissionId !== admission.admission_id ||
@@ -6065,16 +6117,12 @@ export class SessionMutationAdmissionRepository {
       requestActor.actorKind !== admission.actor_kind ||
       requestActor.actorId !== admission.actor_id ||
       !admittedRequest ||
+      (payload.chatApprovalAuthority !== undefined && approvalAuthority === undefined) ||
+      recordedApproval !== (approvalAuthority ? canonicalJsonString(approvalAuthority) : undefined) ||
       ["signal", "operatorId", "authActorId", "authActorSource"].some((key) => key in effectiveRequest) ||
       sha256(canonicalJsonString({ version: 2, request: admittedRequest })) !== admission.material_sha256 ||
       effectiveRequestMaterialSha256 !==
-        sha256(
-          canonicalJsonString({
-            version: 1,
-            admissionMaterialSha256: admission.material_sha256,
-            request: effectiveRequest,
-          }),
-        )
+        computeEffectiveChatTurnRequestMaterialSha256(admission.material_sha256, effectiveRequest, approvalAuthority)
     ) {
       throw admissionConflict(
         "SESSION_MUTATION_DURABLE_PAYLOAD_IDENTITY_CONFLICT",
@@ -6084,6 +6132,23 @@ export class SessionMutationAdmissionRepository {
     this.requireExactHeartbeatPayloadIdentity(admission, run, payload);
     this.requireExactDurableChatUserInputContinuationSet(admission, run, payload);
     readDurableChatOptionalInputMailbox(payload, run.run_id);
+  }
+
+  private readRecordedChatApprovalAuthority(admissionId: string): string | undefined {
+    return this.db
+      .prepare("SELECT authority_json FROM chat_turn_approval_admissions WHERE admission_id = ?")
+      .get<{ authority_json: string }>(admissionId)?.authority_json;
+  }
+
+  private recordChatApprovalAuthority(
+    admissionId: string,
+    chatApprovalAuthority: ChatApprovalAuthority | undefined,
+  ): { chatApprovalAuthority?: ChatApprovalAuthority } {
+    if (!chatApprovalAuthority) return {};
+    this.db
+      .prepare("INSERT INTO chat_turn_approval_admissions (admission_id, authority_json) VALUES (?, ?)")
+      .run(admissionId, canonicalJsonString(chatApprovalAuthority));
+    return { chatApprovalAuthority };
   }
 
   private requireExactHeartbeatPayloadIdentity(

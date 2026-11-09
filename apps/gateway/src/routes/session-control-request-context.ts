@@ -9,6 +9,7 @@ import {
   type SessionControlConflictCode,
 } from "@goatcitadel/contracts";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import { isDirectLoopbackRequest } from "../plugins/auth.js";
 import {
   createAuthenticatedOperatorAdmissionContext,
   createExternalCompanionAdmissionContext,
@@ -150,6 +151,7 @@ export function resolveAuthenticatedOperatorAdmissionContext(
   return createAuthenticatedOperatorAdmissionContext({
     actorId: request.authActorId,
     authActorSource: request.authActorSource,
+    directLocal: request.authActorSource !== "none" && isDirectLoopbackRequest(request),
   });
 }
 

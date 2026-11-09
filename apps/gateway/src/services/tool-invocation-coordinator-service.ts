@@ -7,6 +7,7 @@ import type { StaticMcpChatDispatchPort } from "./mcp-static-chat-service.js";
 import {
   classifyToolEffectPotential,
   isToolEffectPotentialRecord,
+  projectManagedFileToolArgs,
   type ApprovalRequest,
   type AutonomousActivationGrantEvaluationInput,
   type AutonomousActivationGrantEvaluationResult,
@@ -578,6 +579,11 @@ export interface ToolInvocationCoordinatorHost {
   normalizeToolInvokeRequest(request: ToolInvokeRequest): Promise<ToolInvokeRequest>;
   /** Re-read canonical Chat consent immediately before hooks and dispatch. */
   assertChatToolDispatchAllowed?(request: ToolInvokeRequest): Promise<void>;
+  chatAutoExecution?: {
+    inspect(request: ToolInvokeRequest): Promise<{ kind: string; reason: string } | undefined>;
+    block(request: ToolInvokeRequest, reason: string): Promise<ToolInvokeResult>;
+    blockOpaqueDispatch(request: ToolInvokeRequest): Promise<string | undefined>;
+  };
   resolveNativeMcpChatToolBinding?(
     request: ToolInvokeRequest,
     handle: McpChatTurnContextHandle | undefined,
@@ -948,6 +954,10 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
 
     const normalizedRequest = await this.host.normalizeToolInvokeRequest(request);
     await this.assertChatToolDispatchAllowed(normalizedRequest);
+    const autoPolicy = this.host.chatAutoExecution;
+    const restriction = await autoPolicy?.inspect(normalizedRequest);
+    if (restriction?.kind === "block") return autoPolicy!.block(normalizedRequest, restriction.reason);
+    const isAuto = restriction !== undefined;
     const previousExecutionFence = options.executionFence;
     const previousAuxiliaryFence = options.auxiliaryEffectFence ?? previousExecutionFence;
     options = {
@@ -958,6 +968,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       },
       auxiliaryEffectFence: async () => {
         await this.assertChatToolDispatchAllowed(normalizedRequest);
+        const reason = await autoPolicy?.blockOpaqueDispatch(normalizedRequest);
+        if (reason) throw new ToolExecutionPreconditionError(reason);
         await previousAuxiliaryFence?.();
       },
     };
@@ -1043,42 +1055,43 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       };
     }
 
-    const beforeHook = isCodeModeWrapperInvocation
-      ? { runs: [] }
-      : await this.host.hooksService.runInlineHooks<ToolCallHookPatch>({
-          workspaceId: toolHookWorkspaceId,
-          trigger: "tool.call.before",
-          entityType: "tool_call",
-          entityId: toolHookEntityId,
-          payload: {
-            toolName: normalizedRequest.toolName,
-            args: normalizedRequest.args,
-            agentId: normalizedRequest.agentId,
-            sessionId: normalizedRequest.sessionId,
-            taskId: normalizedRequest.taskId,
-          },
-          parsePatch: (value) => parseToolCallHookPatch(value as Record<string, unknown>),
-          mergePatch: (current, next) => ({
-            ...(current ?? {}),
-            ...next,
-          }),
-          expectedInterposition: admittedToolCallBeforeHookInterposition,
-          beforeExternalDispatch: async () => {
-            if (options.effectPotential?.potential === "none") {
-              if (!options.onEffectPotentialEscalated) {
-                throw new Error("Inline hook dispatch cannot retain an unchangeable no-effect classification.");
+    const beforeHook =
+      isCodeModeWrapperInvocation || isAuto
+        ? { runs: [] }
+        : await this.host.hooksService.runInlineHooks<ToolCallHookPatch>({
+            workspaceId: toolHookWorkspaceId,
+            trigger: "tool.call.before",
+            entityType: "tool_call",
+            entityId: toolHookEntityId,
+            payload: {
+              toolName: normalizedRequest.toolName,
+              args: normalizedRequest.args,
+              agentId: normalizedRequest.agentId,
+              sessionId: normalizedRequest.sessionId,
+              taskId: normalizedRequest.taskId,
+            },
+            parsePatch: (value) => parseToolCallHookPatch(value as Record<string, unknown>),
+            mergePatch: (current, next) => ({
+              ...(current ?? {}),
+              ...next,
+            }),
+            expectedInterposition: admittedToolCallBeforeHookInterposition,
+            beforeExternalDispatch: async () => {
+              if (options.effectPotential?.potential === "none") {
+                if (!options.onEffectPotentialEscalated) {
+                  throw new Error("Inline hook dispatch cannot retain an unchangeable no-effect classification.");
+                }
+                await options.onEffectPotentialEscalated(
+                  classifyToolEffectPotential({
+                    toolName: normalizedRequest.toolName,
+                    trustedBuiltin: false,
+                    sourceKind: "remote",
+                  }),
+                );
               }
-              await options.onEffectPotentialEscalated(
-                classifyToolEffectPotential({
-                  toolName: normalizedRequest.toolName,
-                  trustedBuiltin: false,
-                  sourceKind: "remote",
-                }),
-              );
-            }
-            await (options.auxiliaryEffectFence ?? options.executionFence)?.();
-          },
-        });
+              await (options.auxiliaryEffectFence ?? options.executionFence)?.();
+            },
+          });
     if (beforeHook.blockedBy) {
       return {
         outcome: "blocked",
@@ -1279,7 +1292,7 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         entityId: toolHookEntityId,
         payload: {
           toolName: hookableRequest.toolName,
-          args: hookableRequest.args,
+          args: projectManagedFileToolArgs(hookableRequest.toolName, hookableRequest.args),
           sessionId: hookableRequest.sessionId,
           taskId: hookableRequest.taskId,
           error: errorMessage,
@@ -1390,6 +1403,8 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
         await this.host.scheduleApprovalExplanationById(result.approvalId!);
       });
     }
+
+    if (isAuto) return result;
 
     await this.runPostCommitConsumer("tool.call.after hook enqueue", hookableRequest, async () => {
       await this.host.hooksService.enqueueAfterHooks({
@@ -1527,12 +1542,17 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     options: MeshChatDispatchOptions,
   ): Promise<ToolInvokeResult> {
     await this.assertChatToolDispatchAllowed(request);
+    const autoPolicy = this.host.chatAutoExecution;
+    const refusal = await autoPolicy?.blockOpaqueDispatch(request);
+    if (refusal) return autoPolicy!.block(request, refusal);
     const priorFence = options.executionFence;
     options = {
       ...options,
       executionFence: async () => {
         await this.assertChatToolDispatchAllowed(request);
         await priorFence?.();
+        const reason = await autoPolicy?.blockOpaqueDispatch(request);
+        if (reason) throw new ToolExecutionPreconditionError(reason);
       },
     };
     const result = await dispatchMeshChatTool(
@@ -1895,6 +1915,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
     mcpRequesterTurnContext?: McpChatTurnContextHandle,
     nativeCanonicalToolName?: string,
   ): Promise<McpInvokeResponse> {
+    const request = this.buildMcpPolicyRequest(input);
+    const autoPolicy = this.host.chatAutoExecution;
+    const refusal = await autoPolicy?.blockOpaqueDispatch(request);
+    if (refusal) {
+      const result = await autoPolicy!.block(request, refusal);
+      return { ok: false, error: result.policyReason, policyReason: result.policyReason };
+    }
     return executeMcpRuntime(
       this.host,
       input,
@@ -1903,7 +1930,13 @@ export class ToolInvocationCoordinatorService implements ToolInvocationCoordinat
       autonomousActivation,
       wardEffect,
       markExternalCallStarted,
-      executionFence,
+      autoPolicy
+        ? async () => {
+            await executionFence?.();
+            const reason = await autoPolicy.blockOpaqueDispatch(request);
+            if (reason) throw new ToolExecutionPreconditionError(reason);
+          }
+        : executionFence,
       mcpRequesterTurnContext,
       nativeCanonicalToolName,
     );

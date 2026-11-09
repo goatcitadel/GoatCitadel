@@ -31,7 +31,7 @@ describe("tool group map contract", () => {
         seen.set(toolName, group.id);
       }
     }
-    expect(seen.size).toBe(106);
+    expect(seen.size).toBe(110);
   });
 
   it("keeps mcp.invoke and the session tools in Core", () => {
@@ -55,6 +55,9 @@ describe("tool group map contract", () => {
   it("ignores Core and unknown ids when switching off", () => {
     const switchedOff = toolNamesSwitchedOff(["core", "files", "nope"]);
     expect(switchedOff.get("fs.read")).toBe("files");
+    for (const action of ["list", "read", "save", "delete"]) {
+      expect(switchedOff.get(`project.files.${action}`)).toBe("files");
+    }
     expect(switchedOff.has("session.status")).toBe(false);
     expect(switchedOff.has("mcp.invoke")).toBe(false);
     expect(switchedOff.size).toBe(toolsIn("files").length);

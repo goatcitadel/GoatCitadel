@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { RUN_VARIABLE_SCHEMA_VERSION, hashRunVariableSchema } from "@goatcitadel/contracts";
 import { Storage } from "@goatcitadel/storage";
-import { resolveChatRunVariableRequest } from "./chat-run-variable-service.js";
+import { persistChatRunVariableEvidence, resolveChatRunVariableRequest } from "./chat-run-variable-service.js";
 
 function createFixture() {
   const storage = new Storage({ dbPath: ":memory:", transcriptsDir: "data/transcripts", auditDir: "data/audit" });
@@ -80,5 +80,29 @@ describe("resolveChatRunVariableRequest", () => {
       }),
     ).rejects.toThrow(/does not belong/u);
     fixture.storage.close();
+  });
+
+  it("prepares a conditional send without saving its bindings before admission", async () => {
+    const fixture = createFixture();
+    try {
+      const resolved = await resolveChatRunVariableRequest(fixture.storage, "session-1", {
+        content: "Explain leases.",
+        expectedChatApprovalModeRevision: "a".repeat(64),
+        templateInvocation: {
+          ownerKind: "prompt_pack",
+          ownerId: fixture.pack.packId,
+          ownerRevision: fixture.pack.updatedAt,
+          templateId: fixture.test.testId,
+          schemaHash: hashRunVariableSchema(fixture.schema),
+          values: { topic: "leases" },
+        },
+      });
+      const readSavedBindings = () => fixture.storage.chatSessionRunVariables.get("session-1", "prompt_pack", "pack-1");
+      expect(readSavedBindings()).toBeFalsy();
+      await persistChatRunVariableEvidence(fixture.storage, "session-1", resolved.runVariableEvidence!);
+      expect(readSavedBindings()?.bindings).toEqual({ topic: "leases" });
+    } finally {
+      fixture.storage.close();
+    }
   });
 });

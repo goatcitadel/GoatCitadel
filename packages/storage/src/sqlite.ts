@@ -1,4 +1,6 @@
 import { CHAT_ARTIFACT_RENDER_RECEIPTS_SQLITE_SQL } from "./chat-artifact-render-schema.js";
+import { CHAT_APPROVAL_MODE_SCHEMA_SQL } from "./chat-approval-mode-schema.js";
+import { MANAGED_PROJECT_FILE_SCHEMA_SQL } from "./managed-project-file-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_SQLITE_SQL } from "./approval-execution-linkage-migration.js";
 import { MODEL_COMPARISON_CLAIM_SCHEMA_SQL } from "./model-comparison-claim-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_INDEX_REPAIR_SQLITE_SQL } from "./approval-execution-linkage-index-repair.js";
@@ -7559,6 +7561,16 @@ const SCHEMA_MIGRATION_GROUPS: SqliteMigrationGroup[] = [
         version: 278,
         name: "chat_artifact_render_receipts",
         up: (db) => db.exec(CHAT_ARTIFACT_RENDER_RECEIPTS_SQLITE_SQL),
+      },
+      {
+        version: 279,
+        name: "chat_session_approval_modes",
+        up: (db) => db.exec(CHAT_APPROVAL_MODE_SCHEMA_SQL),
+      },
+      {
+        version: 280,
+        name: "managed_project_file_revisions",
+        up: (db) => db.exec(MANAGED_PROJECT_FILE_SCHEMA_SQL),
       },
     ],
   },

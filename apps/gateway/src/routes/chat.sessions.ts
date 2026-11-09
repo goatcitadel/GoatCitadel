@@ -1,9 +1,15 @@
 /* eslint-disable max-lines -- Chat session route registration stays centralized so revision, fork, timer, variable, and document-editing admission rules remain auditable together. */
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { encodeChatSessionListCursor } from "@goatcitadel/storage";
 import { sendRouteError } from "./_error-handler.js";
 import { markMutationCommitted, markMutationCommittedFromError } from "../plugins/idempotency.js";
+import { resolveAuthenticatedOperatorAdmissionContext } from "./session-control-request-context.js";
+import {
+  managedDownloadSchema,
+  managedListQuerySchema,
+  managedRestoreSchema,
+} from "../services/chat-managed-project-files.js";
 import {
   projectChatGeneratedArtifactForPublic,
   projectChatSessionForPublic,
@@ -13,6 +19,17 @@ import {
 } from "../services/chat-secret-projection.js";
 
 const chatOnlyModeSchema = z.enum(["chat", "cowork", "code"]).transform(() => "chat" as const);
+const chatApprovalModeParamsSchema = z.object({ sessionId: z.string().trim().min(1).max(256) });
+const chatApprovalModeUpdateSchema = z.strictObject({
+  mode: z.enum(["standard", "auto"]),
+  expectedModeRevision: z.string().regex(/^[a-f0-9]{64}$/),
+});
+
+async function requireLocalChatApprovalOperator(request: FastifyRequest, reply: FastifyReply) {
+  if (!resolveAuthenticatedOperatorAdmissionContext(request)?.directLocal) {
+    return reply.code(403).send({ error: "Chat approval mode requires a local operator connection." });
+  }
+}
 
 const listChatSessionsSchema = z
   .object({
@@ -285,6 +302,112 @@ const crossProjectRecentsQuerySchema = z.object({
 });
 
 export function registerChatSessionRoutes(fastify: FastifyInstance): void {
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/approval-mode",
+    { preValidation: requireLocalChatApprovalOperator },
+    async (request, reply) => {
+      const params = chatApprovalModeParamsSchema.safeParse(request.params);
+      if (!params.success) return reply.code(400).send({ error: "Invalid Chat session." });
+      try {
+        return reply.send(await fastify.services.chatSessions.getChatApprovalMode(params.data.sessionId));
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.patch(
+    "/api/v1/chat/sessions/:sessionId/approval-mode",
+    { preValidation: requireLocalChatApprovalOperator },
+    async (request, reply) => {
+      const params = chatApprovalModeParamsSchema.safeParse(request.params);
+      const body = chatApprovalModeUpdateSchema.safeParse(request.body);
+      if (!params.success || !body.success)
+        return reply.code(400).send({ error: "Invalid Chat approval mode update." });
+      try {
+        const mode = await fastify.services.chatSessions.updateChatApprovalMode(params.data.sessionId, body.data);
+        await markMutationCommitted(request);
+        return reply.send(mode);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/managed-files",
+    { preValidation: requireLocalChatApprovalOperator },
+    async (request, reply) => {
+      const params = chatApprovalModeParamsSchema.safeParse(request.params);
+      const input = managedListQuerySchema.safeParse(request.query);
+      if (!params.success || !input.success) return reply.code(400).send({ error: "Invalid managed file list query." });
+      try {
+        return reply
+          .header("Cache-Control", "no-store")
+          .send(
+            await fastify.services.chatSessions.listManagedProjectFiles(
+              params.data.sessionId,
+              request.authActorId,
+              input.data,
+            ),
+          );
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.get(
+    "/api/v1/chat/sessions/:sessionId/managed-files/download",
+    { preValidation: requireLocalChatApprovalOperator },
+    async (request, reply) => {
+      const params = chatApprovalModeParamsSchema.safeParse(request.params);
+      const input = managedDownloadSchema.safeParse(request.query);
+      if (!params.success || !input.success) return reply.code(400).send({ error: "Invalid managed file download." });
+      try {
+        const { path, bytes } = await fastify.services.chatSessions.downloadManagedProjectFile(
+          params.data.sessionId,
+          request.authActorId,
+          input.data,
+        );
+        const name = String(path).split("/").at(-1) ?? "managed-file";
+        const encoded = encodeURIComponent(name).replace(
+          /['()*]/gu,
+          (c) => "%" + c.charCodeAt(0).toString(16).toUpperCase(),
+        );
+        return reply
+          .header("Cache-Control", "no-store")
+          .header("X-Content-Type-Options", "nosniff")
+          .header("Content-Disposition", "attachment; filename=\"managed-file\"; filename*=UTF-8''" + encoded)
+          .type("application/octet-stream")
+          .send(bytes);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/chat/sessions/:sessionId/managed-files/restore",
+    { preValidation: requireLocalChatApprovalOperator },
+    async (request, reply) => {
+      const params = chatApprovalModeParamsSchema.safeParse(request.params);
+      const input = managedRestoreSchema.safeParse(request.body);
+      if (!params.success || !input.success) return reply.code(400).send({ error: "Invalid managed file restore." });
+      try {
+        const receipt = await fastify.services.chatSessions.restoreManagedProjectFile(
+          params.data.sessionId,
+          request.authActorId,
+          input.data,
+        );
+        await markMutationCommitted(request);
+        return reply.header("Cache-Control", "no-store").send(receipt);
+      } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
   fastify.get("/api/v1/chat/generated-artifacts", async (request, reply) => {
     const parsed = generatedArtifactsQuerySchema.safeParse(request.query ?? {});
     if (!parsed.success) {

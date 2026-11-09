@@ -1,7 +1,7 @@
 import { composeChatArtifactRenderDependencies } from "./gateway-route-composition-artifact-renders.js";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { CHAT_ROUTED_CONTEXT_TOOL_NAMES, NotFoundError } from "@goatcitadel/contracts";
+import { CHAT_ROUTED_CONTEXT_TOOL_NAMES, ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { assertWritePathInJail } from "@goatcitadel/policy-engine";
 import { createAgentsRoutePort } from "./agents-route-service.js";
 import * as chatAttachmentService from "./chat-attachment-service.js";
@@ -33,6 +33,7 @@ import * as chatThreadKnowledgeService from "./chat-thread-knowledge-service.js"
 import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { DocumentEditingService } from "./document-editing-service.js";
+import { createManagedProjectFileOperator } from "./chat-managed-project-files.js";
 import { createWorkflowSkillCaptureForGateway } from "./workflow-skill-capture-composition.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
 import { createSessionControlRouteService } from "./session-control-route-service.js";
@@ -173,7 +174,63 @@ export function composeChatRouteDependencies(
     artifactCritiqueTasks,
     artifactCritiqueLog,
   );
+  const chatAutoApprovalEnabled = chatSessionService.isChatAutoApprovalEnabled(gateway.storage);
+  const managedFiles = createManagedProjectFileOperator({
+    storage: gateway.storage,
+    chatAutoApprovalEnabled,
+    checkPolicy: async (sessionId, scope, actorId, toolName, args) => {
+      const { citadelId } = await resolveChatRuntimeScope(gateway, { sessionId, ...scope });
+      await gateway.storage.citadels.getAccessSnapshot(citadelId);
+      const policyContext = await gateway.resolveToolPolicyContext({
+        sessionId,
+        workspaceId: scope.workspaceId,
+        operatorId: actorId,
+        authActorId: actorId,
+        surface: "chat",
+      });
+      const decision = await gateway.policyEngine.inspectAccess({
+        sessionId,
+        workspaceId: scope.workspaceId,
+        citadelId,
+        agentId: "operator",
+        toolName,
+        args,
+        policyContext,
+      });
+      // These explicit operator actions do not spend agent-scoped grants or
+      // satisfy a Ward that requires a separate approval or output redaction.
+      if (
+        !decision.allowed ||
+        decision.matchedGrantId ||
+        decision.wardEffect === "require_approval" ||
+        decision.wardEffect === "require_dry_run" ||
+        decision.wardEffect === "redact"
+      ) {
+        throw new ConflictError({ message: "Current policy does not allow this managed file operation." });
+      }
+    },
+  });
   const chatSessions: GatewayRouteServiceDependencies["chatSessions"] = {
+    listManagedProjectFiles: managedFiles.list,
+    downloadManagedProjectFile: managedFiles.download,
+    restoreManagedProjectFile: managedFiles.restore,
+    getChatApprovalMode: (sessionId) =>
+      chatSessionService.getChatApprovalMode(
+        {
+          storage: gateway.storage,
+          chatAutoApprovalEnabled,
+        },
+        sessionId,
+      ),
+    updateChatApprovalMode: (sessionId, input) =>
+      chatSessionService.updateChatApprovalMode(
+        {
+          storage: gateway.storage,
+          chatAutoApprovalEnabled,
+        },
+        sessionId,
+        input,
+      ),
     archiveChatSession: (sessionId, expectedRevision) =>
       chatSessionService.archiveChatSession(ChatSessionDependencies, sessionId, expectedRevision),
     archiveChatSessionsBulk: async (input) => {

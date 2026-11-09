@@ -139,7 +139,10 @@ export function useChatOutboundExecution(
   ) {
     // A local stream already owns reconciliation while this selection is current.
     // On return, the Gateway thread can identify a running turn for retained replay.
-    if (outboundSelectionRef.current.sessionId !== null || outboundSelectionRef.current.workspaceId !== input.workspaceId) {
+    if (
+      outboundSelectionRef.current.sessionId !== null ||
+      outboundSelectionRef.current.workspaceId !== input.workspaceId
+    ) {
       locallyHandledTurnKeysRef.current.clear();
     }
     outboundSelectionRef.current = {
@@ -605,6 +608,12 @@ export function useChatOutboundExecution(
       };
       let executionStarted = false;
       try {
+        if (requestPrefs.expectedChatApprovalModeRevision === null) {
+          throw new Error("Check the Chat approval mode before sending.");
+        }
+        if (item.action !== "send" && requestPrefs.approvalModeIntent === "auto") {
+          throw new Error("To continue in Auto mode, send a new message.");
+        }
         const code = await loadOutboundExecutionCode();
         assertCurrentCustody();
         const execute = code.createOutboundExecutionHandler({

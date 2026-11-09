@@ -335,6 +335,7 @@ class DelegationDurableLaunchRecoveryRequiredError extends Error {
 }
 
 export interface ChatDelegationServiceHost {
+  assertChatDelegationAllowed?(sessionId: string, parentRunId?: string): Promise<void>;
   cleanupChildResources?(input: { stepId: string; childSessionId: string; childTurnId: string }): Promise<void>;
   storage: {
     chatFanoutInvocations?: {
@@ -1136,6 +1137,8 @@ export class ChatDelegationService {
     options: ChatDelegationRunOptions = {},
   ): Promise<ChatDelegateResponse> {
     const deps = this.deps;
+    const stablePolicyRunId = input.policyRunId?.trim();
+    await deps.assertChatDelegationAllowed?.(sessionId, stablePolicyRunId);
     const objective = input.objective.trim();
     if (objective.startsWith(WORKFLOW_SKILL_CAPTURE_MARKER)) {
       throw new ValidationError({
@@ -1250,7 +1253,6 @@ export class ChatDelegationService {
           executionPlanId: options.executionPlanId,
         });
     let repairStableParentBeforeDispatch = false;
-    const stablePolicyRunId = input.policyRunId?.trim();
     const runId =
       stableParentRun?.runId ??
       (stablePolicyRunId
@@ -1621,6 +1623,7 @@ export class ChatDelegationService {
 
       try {
         await options.preDispatchGuard?.({ stepId: step.stepId, index: step.index, role: step.role });
+        await deps.assertChatDelegationAllowed?.(sessionId, stablePolicyRunId);
         throwIfChatDelegationAborted(options.abortSignal);
         enforceMaxDepth({ depth: childDepth, maxDepth: subagentDefaults.maxDepth });
         const dispatchInput = {
@@ -1988,6 +1991,7 @@ export class ChatDelegationService {
         // can enter the runtime. A revoke or project reassignment therefore
         // never becomes an already-dispatched child.
         await options.preDispatchGuard?.({ stepId: step.stepId, index: step.index, role: step.role });
+        await deps.assertChatDelegationAllowed?.(sessionId, stablePolicyRunId);
         const response = await runWithChildTimeout<ChatSendMessageResponse>({
           timeoutSeconds: childTimeoutSeconds,
           onLateSettle: (event) => {

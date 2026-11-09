@@ -1,4 +1,8 @@
-import { redactStructuredSecrets } from "@goatcitadel/contracts";
+import {
+  projectManagedFileToolArgs,
+  projectManagedFileToolResult,
+  redactStructuredSecrets,
+} from "@goatcitadel/contracts";
 import type {
   EgressDecision,
   InternalToolCallV1,
@@ -61,6 +65,8 @@ export function deriveToolCapabilityPolicy(
   const isNetworkWrite = toolName === "http.post" || toolName === "webhook.send";
   const isMeshInvocation = toolName === "mesh.invoke";
   const mutatesFilesystem =
+    toolName === "project.files.save" ||
+    toolName === "project.files.delete" ||
     toolName === "fs.write" ||
     toolName === "fs.move" ||
     toolName === "fs.delete" ||
@@ -204,7 +210,7 @@ export function buildInternalToolCall(
   return {
     version: "v1",
     toolName: request.toolName,
-    args: sanitizeForModel(request.args),
+    args: sanitizeForModel(projectManagedFileToolArgs(request.toolName, request.args)),
     agentId: request.agentId,
     sessionId: request.sessionId,
     workspaceId: request.workspaceId,
@@ -240,7 +246,7 @@ export function buildInternalToolResult(input: {
     toolName: input.toolName,
     outcome: input.outcome,
     errorKind: input.errorKind,
-    result: input.result ? sanitizeForModel(input.result) : undefined,
+    result: input.result ? sanitizeForModel(projectManagedFileToolResult(input.toolName, input.result)) : undefined,
     leakDetections: [...(input.leakDetections ?? [])],
     egressDecisions: input.egressDecisions,
     completedAt: input.completedAt,

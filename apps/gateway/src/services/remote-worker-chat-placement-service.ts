@@ -49,6 +49,15 @@ export class RemoteWorkerChatPlacementService {
       turnId: payload.turnId,
       durableRunId: run.runId,
     });
+    const mode = await this.dependencies.resolveChatApprovalPlacement?.(run);
+    if (mode === "auto" || payload.chatApprovalAuthority?.mode === "auto") {
+      if (assignment || (placement && placement.executionKind !== "local")) {
+        throw new Error("Auto requires local execution and cannot resume a worker assignment.");
+      }
+      const selected = await storage.chatExecutionPlacements.claimLocal(run);
+      if (selected.executionKind !== "local") throw new Error("Auto could not retain local execution ownership.");
+      return undefined;
+    }
     const registryWorkspaceId =
       !placement && !assignment
         ? await this.selectWorkerRegistry(run, prepared, payload.requestActor.actorId)
@@ -59,6 +68,8 @@ export class RemoteWorkerChatPlacementService {
       const current = await storage.durableRuns.getRun(run.runId);
       if (current.leaseOwnerId !== run.leaseOwnerId || current.attemptCount !== run.attemptCount)
         throw new Error("Chat placement lost its durable execution claim.");
+      if ((await this.dependencies.resolveChatApprovalPlacement?.(current)) === "auto")
+        throw new Error("Auto requires local execution.");
       await new RemoteWorkerChatOfferService({ ...this.dependencies, registryWorkspaceId }).schedule(current);
     }
     const selected = await storage.chatExecutionPlacements.claimLocal(run);
@@ -79,7 +90,10 @@ export class RemoteWorkerChatPlacementService {
     const { storage, enabled } = this.dependencies;
     const profile = prepared.capabilityProfile;
     const placement = prepared.featureAdmission?.references.remotePlacement;
-    const admitted = placement && "version" in placement && placement.version === "chat.remote-placement.admission.v1" ? placement : undefined;
+    const admitted =
+      placement && "version" in placement && placement.version === "chat.remote-placement.admission.v1"
+        ? placement
+        : undefined;
     const tools = admitted?.selectedTools ?? profile?.selection.tools ?? [];
     const request = run.payload?.request as Record<string, unknown> | undefined;
     // Admit the bounded model/tool loop only when every selected tool can enter
@@ -91,12 +105,21 @@ export class RemoteWorkerChatPlacementService {
       (!profile && (!admitted || !this.dependencies.resolveAdmissionAuthority)) ||
       !request ||
       !run.metadata?.remoteWorkerChatContextSha256 ||
-      tools.some((tool) =>
-        !tool.runtimeOwner || !tool.effectPotential ||
-        ("meshPublication" in tool && tool.meshPublication && (!this.dependencies.meshToolExecutionAvailable || !this.dependencies.revalidateMeshTool)) ||
-        (isNativeMcpToolName(tool.canonicalName) &&
-          !admitted && (!(("mcpRequesterResolution" in tool && tool.mcpRequesterResolution) ||
-            ("mcpStaticBinding" in tool && tool.mcpStaticBinding)) || !this.dependencies.revalidateRequesterTool))) ||
+      tools.some(
+        (tool) =>
+          !tool.runtimeOwner ||
+          !tool.effectPotential ||
+          ("meshPublication" in tool &&
+            tool.meshPublication &&
+            (!this.dependencies.meshToolExecutionAvailable || !this.dependencies.revalidateMeshTool)) ||
+          (isNativeMcpToolName(tool.canonicalName) &&
+            !admitted &&
+            (!(
+              ("mcpRequesterResolution" in tool && tool.mcpRequesterResolution) ||
+              ("mcpStaticBinding" in tool && tool.mcpStaticBinding)
+            ) ||
+              !this.dependencies.revalidateRequesterTool)),
+      ) ||
       (profile && profile.selection.subagentPolicy !== "off") ||
       request.modelCouncil ||
       request.parentDelegationStepId ||
@@ -139,9 +162,7 @@ export class RemoteWorkerChatPlacementService {
       const bootstrap = await storage.remoteWorkerAdmissions.getBootstrap(registryWorkspaceId, worker.bootstrapId);
       if (
         !bootstrap.allowedWorkspaceIds.includes(prepared.workspaceId) ||
-        !requiredCapabilities.every((capability) =>
-          bootstrap.capabilityClasses.some((entry) => entry === capability),
-        )
+        !requiredCapabilities.every((capability) => bootstrap.capabilityClasses.some((entry) => entry === capability))
       )
         continue;
       try {

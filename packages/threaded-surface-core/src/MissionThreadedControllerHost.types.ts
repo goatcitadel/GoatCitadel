@@ -3,6 +3,7 @@ import type { ThreadedGatewayStatusSummary, WorkTrustDescriptor } from "./chat/w
 import type { ComponentProps, DragEventHandler, RefObject } from "react";
 import type {
   ChatMode,
+  ChatApprovalMode,
   ChatSessionRecord,
   ChatSessionSearchHitRecord,
   ChatThreadResponse,
@@ -194,6 +195,14 @@ export type MissionThreadedActiveSessionSurfaceProps = MissionControlActiveSessi
 export type MissionThreadedContextDockProps = ChatContextDockPanelsProps;
 
 export interface MissionThreadedControllerHostProps {
+  /** Captures the approval mode displayed by this host before an outbound action is queued. */
+  getChatApprovalModeIntent?: (session: ChatSessionRecord) =>
+    | {
+        mode: ChatApprovalMode;
+        modeRevision: string;
+        uncertain: boolean;
+      }
+    | undefined;
   /** Legacy presentation adapter; native Chat keeps canonical runtime controls without this projection. */
   coworkViewModelFactory: typeof import("./cowork-view-model").deriveCoworkRunViewModel | null;
   workspaceId?: string;

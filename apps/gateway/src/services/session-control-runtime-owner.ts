@@ -1,7 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
+import { ConflictError } from "@goatcitadel/contracts";
 import type { SessionMutationAdmissionRecord, AsyncStorage as Storage } from "@goatcitadel/storage";
 import type { HeartbeatOccurrenceAdmissionRequest, HeartbeatOccurrenceRecord } from "@goatcitadel/storage";
+import { readChatApprovalAdmission } from "./chat-approval-mode-service.js";
 import type {
   ActiveTurnAdmission,
   FrozenChatTurnExecutionRequest,
@@ -214,12 +216,14 @@ export class SessionControlRuntimeOwner {
     requestActor: FrozenChatTurnRequestActor,
     durableClaim: TurnAdmissionDurableClaim,
     systemHeartbeatOccurrence?: Readonly<SystemHeartbeatOccurrenceTurnAdmission>,
+    chatApprovalAuthority?: ActiveTurnAdmission["chatApprovalAuthority"],
   ): ActiveTurnAdmission {
     return {
       identity,
       admittedRequest,
       requestActor,
       durableClaim: Object.freeze({ ...durableClaim }),
+      ...(chatApprovalAuthority ? { chatApprovalAuthority } : {}),
       ...(systemHeartbeatOccurrence
         ? { systemHeartbeatOccurrence: Object.freeze({ ...systemHeartbeatOccurrence }) }
         : {}),
@@ -326,10 +330,38 @@ export class SessionControlRuntimeOwner {
 
 const runtimeOwners = new WeakMap<object, SessionControlRuntimeOwner>();
 
-export function getSessionControlRuntimeOwner(storage: Storage): SessionControlRuntimeOwner {
+export function getSessionControlRuntimeOwner(
+  storage: Storage,
+  autoAdmission?: {
+    isDurableAvailable(): Promise<boolean>;
+    unavailableMessage: string;
+    chatAutoApprovalEnabled?: boolean;
+  },
+): SessionControlRuntimeOwner {
   const existing = runtimeOwners.get(storage);
   if (existing) return existing;
-  const created = new SessionControlRuntimeOwner(new SessionControlService(storage));
+  const chatAutoApprovalEnabled = autoAdmission?.chatAutoApprovalEnabled === true;
+  const created = new SessionControlRuntimeOwner(
+    new SessionControlService(
+      storage,
+      async (sessionId, workspaceId, expectedModeRevision) => {
+        const authority = await readChatApprovalAdmission(
+          { storage, chatAutoApprovalEnabled },
+          sessionId,
+          workspaceId,
+          true,
+          expectedModeRevision,
+        );
+        if (authority?.mode === "auto" && !(await autoAdmission?.isDurableAvailable())) {
+          throw new ConflictError({
+            message: autoAdmission?.unavailableMessage ?? "Auto requires durable Chat execution.",
+          });
+        }
+        return authority;
+      },
+      chatAutoApprovalEnabled,
+    ),
+  );
   runtimeOwners.set(storage, created);
   return created;
 }

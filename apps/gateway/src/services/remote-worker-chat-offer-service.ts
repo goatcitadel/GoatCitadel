@@ -21,6 +21,7 @@ export interface RemoteWorkerChatOfferDependencies extends RemoteWorkerChatAutho
   enabled: boolean;
   registryWorkspaceId: string;
   pathJailSha256: string;
+  resolveChatApprovalPlacement?(run: DurableRunRecord): Promise<"standard" | "auto">;
 }
 
 /** Internal durable-Chat handoff. Offers do not authorize spending or tool
@@ -47,29 +48,37 @@ export class RemoteWorkerChatOfferService {
     });
     if (!authority || !payload || payload.version !== "chat.turn.execute.v2")
       throw new Error("Remote worker scheduling requires an admitted Chat turn.");
+    if (authority.chatApprovalAuthority?.mode === "auto") throw new Error("Auto requires local execution.");
     const request = payload.request as Record<string, unknown> | undefined;
     if (
       !request ||
-      (request.policyTaskId !== undefined &&
-        (typeof request.policyTaskId !== "string" || !request.policyTaskId.trim()))
+      (request.policyTaskId !== undefined && (typeof request.policyTaskId !== "string" || !request.policyTaskId.trim()))
     )
       throw new Error("Remote worker scheduling requires an admitted capability profile and valid optional task.");
     const binding = remoteWorkerCapabilityBindingForTurn(authority);
     if (binding.admissionReference) {
-      await assertRemoteWorkerOfferAdmission(this.dependencies, binding.admissionReference, run, request.policyTaskId as string | undefined);
-    } else await resolveRemoteWorkerChatProfileReference(this.dependencies, {
-      capabilityProfileId: authority.capabilityProfileId!,
-      capabilityProfileSha256: binding.capabilityProfileSha256,
-      executionWorkspaceId: authority.workspaceId,
-      sessionId: authority.sessionId,
-      turnId: authority.turnId,
-      durableRunId: run.runId,
-      taskId: request.policyTaskId as string | undefined,
-    });
+      await assertRemoteWorkerOfferAdmission(
+        this.dependencies,
+        binding.admissionReference,
+        run,
+        request.policyTaskId as string | undefined,
+      );
+    } else
+      await resolveRemoteWorkerChatProfileReference(this.dependencies, {
+        capabilityProfileId: authority.capabilityProfileId!,
+        capabilityProfileSha256: binding.capabilityProfileSha256,
+        executionWorkspaceId: authority.workspaceId,
+        sessionId: authority.sessionId,
+        turnId: authority.turnId,
+        durableRunId: run.runId,
+        taskId: request.policyTaskId as string | undefined,
+      });
     const createdAt = Date.parse(run.createdAt);
     if (!Number.isFinite(createdAt)) throw new Error("Remote worker Chat admission time is unavailable.");
     // Relative to the original admission, so retries cannot extend execution.
     const deadlineAt = new Date(createdAt + 30 * 60_000).toISOString();
+    if ((await this.dependencies.resolveChatApprovalPlacement?.(run)) === "auto")
+      throw new Error("Auto requires local execution.");
     return await this.dependencies.storage.remoteWorkerAssignments.scheduleTaskBoundChatOffer({
       registryWorkspaceId: this.dependencies.registryWorkspaceId,
       executionWorkspaceId: authority.workspaceId,

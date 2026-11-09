@@ -203,6 +203,10 @@ const mobileContextSchema = z.object({
 
 const sendMessageSchema = z.object({
   content: z.string().min(1),
+  expectedChatApprovalModeRevision: z
+    .string()
+    .regex(/^[a-f0-9]{64}$/u)
+    .optional(),
   workspaceSnapshot: workspaceSnapshotRequestSchema.optional(),
   templateInvocation: z
     .object({
@@ -309,11 +313,16 @@ const sendMessageSchema = z.object({
 });
 
 const retryTurnSchema = sendMessageSchema
+  .omit({ expectedChatApprovalModeRevision: true })
   .omit({ templateInvocation: true, workspaceSnapshot: true })
   .partial()
   .extend({ content: z.string().optional() });
 
-const editTurnSchema = sendMessageSchema.omit({ templateInvocation: true, workspaceSnapshot: true });
+const editTurnSchema = sendMessageSchema.omit({
+  expectedChatApprovalModeRevision: true,
+  templateInvocation: true,
+  workspaceSnapshot: true,
+});
 
 function stampChatOperatorContext<TInput extends Partial<ChatSendMessageRequest>>(
   request: FastifyRequest,
@@ -716,7 +725,7 @@ export function registerChatMessageRoutes(fastify: FastifyInstance): void {
             lifecycle,
             ...resolveSendAdmissionArgs(request, externalCompanion),
           ),
-        { trackMutation: true },
+        { trackMutation: true, waitForAdmission: body.data.expectedChatApprovalModeRevision !== undefined },
       );
     },
   );
@@ -1071,6 +1080,9 @@ async function resolveDeskSend(
   // out and keep the unchanged send path.
   return (await fastify.services.integrationWebhooks?.sendOperatorDeskMessage?.(sessionId, {
     content: body.content,
+    ...(body.expectedChatApprovalModeRevision === undefined
+      ? {}
+      : { expectedChatApprovalModeRevision: body.expectedChatApprovalModeRevision }),
     idempotencyKey: request.idempotencyKey,
     providerId: body.providerId,
     model: body.model,

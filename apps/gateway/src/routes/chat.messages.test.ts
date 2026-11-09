@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import Fastify, { type FastifyInstance } from "fastify";
-import { NotFoundError } from "@goatcitadel/contracts";
+import { ConflictError, NotFoundError } from "@goatcitadel/contracts";
+import type { ChatStreamMutationLifecycle } from "../services/chat-turn-types.js";
 import { chatRoutes } from "./chat.js";
 
 describe("chat message routes", () => {
@@ -12,6 +13,75 @@ describe("chat message routes", () => {
     }
     await app.close();
     app = null;
+  });
+
+  it("returns HTTP 409 on a stale approval mode before starting buffered or streaming sends", async () => {
+    const routeDecision = {
+      action: "send",
+      issuedAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 60_000).toISOString(),
+      selectionSource: "manual",
+      fallbackPolicy: "off",
+      fallbackResult: "not_applicable",
+      runtimeReachability: "not_checked",
+      runtimeClass: "cloud",
+      fingerprint: "conditional-send-route",
+    };
+    const stale = "a".repeat(64);
+    const current = "b".repeat(64);
+    const admission = (input: { expectedChatApprovalModeRevision?: string }) => {
+      if (input.expectedChatApprovalModeRevision === stale) {
+        throw new ConflictError({
+          code: "WRITE_CONFLICT",
+          message: "Chat approval mode or project changed.",
+          details: { reason: "chat_approval_mode_changed" },
+        });
+      }
+    };
+    const agentSendChatMessage = vi.fn(async (_id: string, input: Parameters<typeof admission>[0]) => {
+      admission(input);
+      return { turnId: "turn-1" };
+    });
+    const agentSendChatMessageStream = vi.fn(async function* (
+      _id: string,
+      input: Parameters<typeof admission>[0],
+      _signal: AbortSignal,
+      lifecycle: ChatStreamMutationLifecycle,
+    ) {
+      admission(input);
+      await lifecycle.markAdmitted?.();
+      yield { type: "done", turnId: "turn-1" };
+    });
+    app = Fastify();
+    app.decorate("requireOperatorAuth", async () => undefined);
+    app.decorate("services", {
+      chatMessages: {
+        routePreflight: async () => ({ decision: routeDecision }),
+        agentSendChatMessage,
+        agentSendChatMessageStream,
+      },
+    } as never);
+    await app.register(chatRoutes);
+    for (const path of ["agent-send", "agent-send/stream"]) {
+      const send = (revision?: string) =>
+        app!.inject({
+          method: "POST",
+          url: `/api/v1/chat/sessions/sess-1/${path}`,
+          payload: { content: "hello", routeDecision, expectedChatApprovalModeRevision: revision },
+        });
+      expect((await send("invalid")).statusCode).toBe(400);
+      const conflict = await send(stale);
+      expect(conflict.statusCode).toBe(409);
+      expect(conflict.json()).toMatchObject({
+        code: "WRITE_CONFLICT",
+        details: { reason: "chat_approval_mode_changed" },
+      });
+      for (const revision of [current, undefined]) {
+        const accepted = await send(revision);
+        expect(accepted.statusCode).toBe(200);
+        expect(accepted.body).toContain("turn-1");
+      }
+    }
   });
 
   it("lists chat messages with cursor and limit", async () => {

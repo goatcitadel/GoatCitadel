@@ -1,9 +1,66 @@
 import { describe, expect, it, vi } from "vitest";
 import type { ChatCompletionRequest, ChatCompletionResponse } from "@goatcitadel/contracts";
+import { createDefaultToolRegistry } from "@goatcitadel/policy-engine";
 import { ChatTurnAgentRunner, type ChatTurnAgentRunnerInput } from "./chat-turn-agent-runner.js";
 import { createMockStorage } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner run", () => {
+  it("delivers managed read text to the active model without retaining it in the tool trace", async () => {
+    const text = "private managed file text available to the active reader";
+    const requests: ChatCompletionRequest[] = [];
+    const storage = createMockStorage();
+    const runner = new ChatTurnAgentRunner({
+      storage: storage as never,
+      listToolCatalog: () =>
+        createDefaultToolRegistry()
+          .toCatalog()
+          .filter((tool) => tool.toolName === "project.files.read"),
+      createChatCompletion: async (request) => {
+        requests.push(request);
+        if (requests.length === 1) {
+          return {
+            model: "glm-5",
+            choices: [
+              {
+                index: 0,
+                finish_reason: "tool_calls",
+                message: {
+                  role: "assistant",
+                  content: null,
+                  tool_calls: [
+                    {
+                      id: "managed-read",
+                      type: "function",
+                      function: {
+                        name: "project.files.read",
+                        arguments: JSON.stringify({ path: "notes.md" }),
+                      },
+                    },
+                  ],
+                },
+              },
+            ],
+          };
+        }
+        return { model: "glm-5", choices: [{ index: 0, message: { role: "assistant", content: "Read completed." } }] };
+      },
+      invokeTool: async () => ({
+        outcome: "executed",
+        policyReason: "managed read",
+        auditEventId: "managed-read-audit",
+        result: { path: "notes.md", revisionId: "revision", byteLength: Buffer.byteLength(text), text },
+      }),
+    });
+    const result = await runner.run({ ...turnInput("Read notes.md in the project."), toolAutonomy: "safe_auto" });
+    expect(
+      requests.some((request) =>
+        request.messages.some((message) => message.role === "tool" && String(message.content).includes(text)),
+      ),
+    ).toBe(true);
+    expect(result.turnTrace.toolRuns?.[0]?.result).toMatchObject({ path: "notes.md", revisionId: "revision" });
+    expect(JSON.stringify(result.turnTrace)).not.toContain(text);
+  });
+
   it("routes OpenAI Fast mode through the explicit service tier", async () => {
     const requests: ChatCompletionRequest[] = [];
     const orchestrator = new ChatTurnAgentRunner({

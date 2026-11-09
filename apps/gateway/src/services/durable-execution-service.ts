@@ -367,6 +367,7 @@ export type DurableChatTurnWorkflowHost = chatTurnDispatchService.ChatTurnDispat
     | "reconcileAutonomousChatPostCommit"
     | "reconcileGeneralChatPostCommit"
   > & {
+    runInChatApprovalScope?<T>(run: DurableRunRecord, work: () => Promise<T>): Promise<T>;
     resolveRemoteWorkerChatExecution?(
       run: DurableRunRecord,
       prepared: PreparedAgentChatTurn,
@@ -2051,6 +2052,7 @@ export async function executeDurableChatTurnRun(
           durableRunId: run.runId,
         }
       : undefined,
+    payload.chatApprovalAuthority,
   );
   await host.sessionControlRuntimeOwner.assertActiveTurnWrite(turnAdmission);
   const storage = host.storage;
@@ -2206,31 +2208,35 @@ export async function executeDurableChatTurnRun(
   // Placement is chosen before either runner starts and retained across retries.
   // Existing worker ownership always wins over a new local execution attempt.
   const remoteWorkerExecution = await resolveDurableChatWorkerExecution(host, run, prepared);
-  const streamRegistration = await host.registerActiveChatTurnStream(
-    payload.sessionId,
-    payload.turnId,
-    run.runId,
-    continuation ? { continuation: true } : undefined,
-  );
   const dispatchHost = heartbeatIdentity
     ? createSystemHeartbeatDispatchHost(host, run, payload, heartbeatIdentity, turnAdmission)
     : host;
-  await chatTurnDispatchService.executePreparedAgentChatTurnBackground(
-    dispatchHost,
-    payload.sessionId,
-    request,
-    prepared,
-    payload.threadEventType,
-    run.runId,
-    undefined,
-    {
-      streamRegistration,
-      skipMessageStart: true,
-      durableLeaseOwnerId: run.leaseOwnerId,
-      ...(remoteWorkerExecution ? { remoteWorkerExecution } : {}),
-      ...(context?.signal ? { abortSignal: context.signal } : {}),
-    },
-  );
+  const dispatch = async () => {
+    const streamRegistration = await host.registerActiveChatTurnStream(
+      payload.sessionId,
+      payload.turnId,
+      run.runId,
+      continuation ? { continuation: true } : undefined,
+    );
+    await chatTurnDispatchService.executePreparedAgentChatTurnBackground(
+      dispatchHost,
+      payload.sessionId,
+      request,
+      prepared,
+      payload.threadEventType,
+      run.runId,
+      undefined,
+      {
+        streamRegistration,
+        skipMessageStart: true,
+        durableLeaseOwnerId: run.leaseOwnerId,
+        ...(remoteWorkerExecution ? { remoteWorkerExecution } : {}),
+        ...(context?.signal ? { abortSignal: context.signal } : {}),
+      },
+    );
+  };
+  if (host.runInChatApprovalScope) await host.runInChatApprovalScope(run, dispatch);
+  else await dispatch();
   await reconcileDurableChatPostCommit(host, run, payload);
 }
 

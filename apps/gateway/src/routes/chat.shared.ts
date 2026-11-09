@@ -17,6 +17,7 @@ export const CHAT_SSE_HEARTBEAT_INTERVAL_MS = 15_000;
 
 export interface ChatSseReplyOptions {
   trackMutation?: boolean;
+  waitForAdmission?: boolean;
 }
 
 export const sessionParamsSchema = z.object({
@@ -147,6 +148,7 @@ export async function streamSseReply(
   const controller = new AbortController();
   let closed = false;
   let finished = false;
+  let started = false;
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined;
   const stopHeartbeat = () => {
     if (heartbeatTimer) {
@@ -168,16 +170,9 @@ export async function streamSseReply(
     raw.off?.("close", cleanup);
     request.raw.off?.("aborted", cleanup);
   };
-  const mutationLifecycle: ChatStreamMutationLifecycle = {
-    commitAlongsideCanonicalWrite: async () => {
-      await commitMutationIdempotencyAlongsideCanonicalWrite(request);
-    },
-    markCommitted: async () => {
-      await markMutationCommitted(request);
-    },
-  };
-
-  try {
+  const startStream = async (): Promise<void> => {
+    if (started || controller.signal.aborted) return;
+    started = true;
     reply.hijack();
     const corsOrigin = reply.getHeader("Access-Control-Allow-Origin");
     const corsCredentials = reply.getHeader("Access-Control-Allow-Credentials");
@@ -193,8 +188,6 @@ export async function streamSseReply(
     });
     raw.flushHeaders?.();
     await writeSseChunk(raw, ": connected\n\n", controller.signal);
-    raw.on("close", cleanup);
-    request.raw.on("aborted", cleanup);
     heartbeatTimer = setInterval(() => {
       if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
         stopHeartbeat();
@@ -209,6 +202,21 @@ export async function streamSseReply(
         .catch(() => cleanup());
     }, CHAT_SSE_HEARTBEAT_INTERVAL_MS);
     heartbeatTimer.unref?.();
+  };
+  const mutationLifecycle: ChatStreamMutationLifecycle = {
+    ...(options.waitForAdmission ? { markAdmitted: startStream } : {}),
+    commitAlongsideCanonicalWrite: async () => {
+      await commitMutationIdempotencyAlongsideCanonicalWrite(request);
+    },
+    markCommitted: async () => {
+      await markMutationCommitted(request);
+    },
+  };
+
+  try {
+    raw.on("close", cleanup);
+    request.raw.on("aborted", cleanup);
+    if (!options.waitForAdmission) await startStream();
 
     const send = async (payload: unknown): Promise<boolean> => {
       if (closed || raw.destroyed || raw.writableEnded || controller.signal.aborted) {
@@ -233,14 +241,20 @@ export async function streamSseReply(
         if (controller.signal.aborted) {
           break;
         }
+        if (!started) throw new Error("Chat stream emitted before admission.");
         const wrote = await send(chunk);
         if (!wrote) {
           break;
         }
       }
+      if (!started && !controller.signal.aborted) throw new Error("Chat stream completed before admission.");
       finished = !controller.signal.aborted;
     } catch (error) {
       if (!controller.signal.aborted) {
+        if (!started) {
+          sendChatWriteError(reply, error);
+          return;
+        }
         reply.log.error({ err: error, sessionId }, "chat SSE stream failed");
         await send({
           type: "error",
@@ -260,7 +274,7 @@ export async function streamSseReply(
     }
     stopHeartbeat();
     detach();
-    if (!raw.destroyed && !raw.writableEnded) {
+    if (started && !raw.destroyed && !raw.writableEnded) {
       raw.end();
     }
   }

@@ -88,6 +88,7 @@ export interface AuthenticatedOperatorAdmissionContext {
   readonly kind: "authenticated_operator_http";
   readonly actorId: string;
   readonly authActorSource: AuthenticatedOperatorSource;
+  readonly directLocal?: true;
   readonly [AUTHENTICATED_OPERATOR_ADMISSION_CONTEXT]: true;
 }
 
@@ -141,6 +142,7 @@ export class ActiveTurnNotPreemptibleError extends ConflictError {
 export function createAuthenticatedOperatorAdmissionContext(input: {
   actorId: string;
   authActorSource: NonNullable<ChatSendMessageRequest["authActorSource"]>;
+  directLocal?: boolean;
 }): AuthenticatedOperatorAdmissionContext {
   const actorId = input.actorId.trim();
   if (!actorId || !["none", "token", "basic", "loopback"].includes(input.authActorSource)) {
@@ -150,6 +152,7 @@ export function createAuthenticatedOperatorAdmissionContext(input: {
     kind: "authenticated_operator_http" as const,
     actorId,
     authActorSource: input.authActorSource as AuthenticatedOperatorSource,
+    ...(input.directLocal && input.authActorSource !== "none" ? { directLocal: true as const } : {}),
   } as AuthenticatedOperatorAdmissionContext;
   Object.defineProperty(context, AUTHENTICATED_OPERATOR_ADMISSION_CONTEXT, {
     configurable: false,
@@ -304,7 +307,10 @@ export type RecoverSystemHeartbeatOccurrenceOutcome =
   | { disposition: "closed_or_authority_drift"; reason: "closed" | "authority_drift" | "lifecycle_drift" }
   | { disposition: "reclaimed"; admission: ActiveTurnAdmission };
 
-type SessionControlStorage = Pick<Storage, "chatSessionMeta" | "sessionControls" | "sessionMutationAdmissions">;
+type SessionControlStorage = Pick<
+  Storage,
+  "chatSessionMeta" | "sessionControls" | "sessionMutationAdmissions" | "runImmediateTransaction"
+>;
 
 /**
  * The authenticated local operator resolved by the control-plane route. The
@@ -441,7 +447,15 @@ export interface ControlEventStreamPage {
  * after admission; callers must keep passing the frozen turn identity.
  */
 export class SessionControlService {
-  public constructor(private readonly storage: SessionControlStorage) {}
+  public constructor(
+    private readonly storage: SessionControlStorage,
+    private readonly readApprovalAdmission?: (
+      sessionId: string,
+      workspaceId: string,
+      expectedModeRevision?: string,
+    ) => Promise<ActiveTurnAdmission["chatApprovalAuthority"]>,
+    private readonly chatAutoApprovalEnabled = true,
+  ) {}
 
   public async admitOperatorChatTurn(input: AdmitOperatorChatTurnInput): Promise<ActiveTurnAdmission> {
     if (input.authenticatedOperator) {
@@ -476,20 +490,41 @@ export class SessionControlService {
     const requestActor = freezeChatTurnRequestActor(input.request, { actorKind: "operator", actorId });
     const materialSha256 = computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest);
     let outcome: PreemptHeartbeatAndAdmitOperatorTurnOutcome | undefined;
+    const expectedModeRevision = input.request.expectedChatApprovalModeRevision;
+    const readApprovalAdmission =
+      authenticatedOperator.directLocal && (this.chatAutoApprovalEnabled || expectedModeRevision !== undefined)
+        ? this.readApprovalAdmission
+        : undefined;
+    if (expectedModeRevision !== undefined && !readApprovalAdmission) {
+      throw new ConflictError({ message: "The approval mode precondition requires a direct local Chat send." });
+    }
     for (let attempt = 0; attempt < 2; attempt += 1) {
-      const meta = await this.storage.chatSessionMeta.get(input.sessionId);
-      if (!meta) {
-        throw new NotFoundError({ entity: "Chat session", id: input.sessionId });
-      }
-      const observedControl = await this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
-      const control = await this.storage.sessionControls.resolveMutationAuthority({
-        actorKind: "operator",
-        workspaceId: meta.workspaceId,
-        sessionId: input.sessionId,
-        expectedGeneration: observedControl.generation,
-      });
-      try {
-        outcome = await this.storage.sessionMutationAdmissions.preemptHeartbeatAndAdmitOperatorTurn({
+      let observedWorkspaceId: string | undefined;
+      const admit = async () => {
+        if (readApprovalAdmission) {
+          // Preserve the storage owner's advisory-before-row lock order.
+          await this.storage.sessionMutationAdmissions.lockChatApprovalAdmissionInCurrentTransaction(input.sessionId);
+        }
+        const meta = await (readApprovalAdmission
+          ? this.storage.chatSessionMeta.getForUpdate(input.sessionId)
+          : this.storage.chatSessionMeta.get(input.sessionId));
+        if (!meta) {
+          throw new NotFoundError({ entity: "Chat session", id: input.sessionId });
+        }
+        observedWorkspaceId = meta.workspaceId;
+        const observedControl = await this.storage.sessionControls.getControl(meta.workspaceId, input.sessionId);
+        const control = await this.storage.sessionControls.resolveMutationAuthority({
+          actorKind: "operator",
+          workspaceId: meta.workspaceId,
+          sessionId: input.sessionId,
+          expectedGeneration: observedControl.generation,
+        });
+        const chatApprovalAuthority = await readApprovalAdmission?.(
+          meta.sessionId,
+          meta.workspaceId,
+          expectedModeRevision,
+        );
+        return await this.storage.sessionMutationAdmissions.preemptHeartbeatAndAdmitOperatorTurn({
           workspaceId: meta.workspaceId,
           sessionId: input.sessionId,
           turnId: input.turnId,
@@ -501,14 +536,18 @@ export class SessionControlService {
           materialSha256,
           idempotencyKey: input.idempotencyKey,
           correlationId: input.correlationId,
+          ...(chatApprovalAuthority ? { chatApprovalAuthority } : {}),
         });
+      };
+      try {
+        outcome = await (readApprovalAdmission ? this.storage.runImmediateTransaction(admit) : admit());
         break;
       } catch (error) {
-        if (attempt > 0 || !isRetryablePreemptionRace(error)) throw error;
+        if (attempt > 0 || !observedWorkspaceId || !isRetryablePreemptionRace(error)) throw error;
         // A restart/concurrent settlement can invalidate the transaction's
         // candidate after it was selected. Re-read canonical active authority
         // and retry once; the repository remains the only preemption owner.
-        const active = await this.storage.sessionMutationAdmissions.listActive(meta.workspaceId, input.sessionId);
+        const active = await this.storage.sessionMutationAdmissions.listActive(observedWorkspaceId, input.sessionId);
         if (active.length === 1 && !isExactHeartbeatAdmission(active[0]!)) {
           throw new ActiveTurnNotPreemptibleError(active[0]!);
         }
@@ -531,10 +570,16 @@ export class SessionControlService {
     if (outcome.disposition === "not_preemptible") {
       throw new ActiveTurnNotPreemptibleError(outcome.activeAdmission);
     }
-    return activeAdmissionFromRecord(outcome.admission, materialSha256, admittedRequest, requestActor, true);
+    const admitted = activeAdmissionFromRecord(outcome.admission, materialSha256, admittedRequest, requestActor, true);
+    return outcome.chatApprovalAuthority
+      ? { ...admitted, chatApprovalAuthority: outcome.chatApprovalAuthority }
+      : admitted;
   }
 
   public async admitChatTurn(input: AdmitChatTurnInput): Promise<ActiveTurnAdmission> {
+    if (input.request.expectedChatApprovalModeRevision !== undefined) {
+      throw new ConflictError({ message: "The approval mode precondition requires a direct local Chat send." });
+    }
     const meta = await this.storage.chatSessionMeta.get(input.sessionId);
     if (!meta) {
       throw new NotFoundError({ entity: "Chat session", id: input.sessionId });
@@ -1269,6 +1314,9 @@ export function freezeChatTurnExecutionRequest(request: ChatSendMessageRequest):
     operatorId: _operatorId,
     authActorId: _authActorId,
     authActorSource: _authActorSource,
+    expectedChatApprovalModeRevision: _expectedChatApprovalModeRevision,
+    chatAutoBinding: _chatAutoBinding,
+    chatApprovalAuthority: _chatApprovalAuthority,
     // Routed-context refs are request transport, never durable-executable
     // identity: the C1 ward strips them from every durable payload and the
     // resolver freezes their exact identity into the routed-context snapshot
@@ -1277,7 +1325,7 @@ export function freezeChatTurnExecutionRequest(request: ChatSendMessageRequest):
     // request every durable identity re-verification reconstructs.
     contextRefs: _contextRefs,
     ...serializableExecutionRequest
-  } = request;
+  } = request as ChatSendMessageRequest & { chatAutoBinding?: unknown; chatApprovalAuthority?: unknown };
   const normalized = {
     ...serializableExecutionRequest,
     content: serializableExecutionRequest.content.trim(),
@@ -1343,14 +1391,7 @@ export function computeFrozenChatTurnAdmissionMaterialSha256(request: FrozenChat
     .digest("hex");
 }
 
-export function computeEffectiveChatTurnRequestMaterialSha256(
-  admissionMaterialSha256: string,
-  request: FrozenChatTurnExecutionRequest,
-): string {
-  return createHash("sha256")
-    .update(canonicalJsonString({ version: 1, admissionMaterialSha256, request }))
-    .digest("hex");
-}
+export { computeEffectiveChatTurnRequestMaterialSha256 } from "@goatcitadel/contracts";
 
 export function deriveChatTurnSurfaceDerivation(
   admittedRequest: FrozenChatTurnExecutionRequest,

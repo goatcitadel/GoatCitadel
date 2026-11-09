@@ -1,4 +1,5 @@
 import { createChatWorkspaceDesignBrandResolver } from "./chat-turn-feature-runtime.js";
+import { projectManagedFileToolArgs, projectManagedFileToolResult } from "@goatcitadel/contracts";
 import {
   filterFeatureContextToolSchema,
   bindFeatureContextRequest,
@@ -1645,7 +1646,13 @@ export class ChatTurnAgentRunner {
     record: Parameters<Storage["chatToolRuns"]["create"]>[0],
   ): Promise<ChatToolRunRecord> {
     const rootPath = await this.resolveReadOnlyExplorerScopeRoot(input);
-    const authoritativeRecord = rootPath ? projectWorkspaceExplorerPathValue(record, [rootPath]) : record;
+    const projectedRecord = {
+      ...record,
+      ...(record.args ? { args: projectManagedFileToolArgs(record.toolName, record.args) } : {}),
+    };
+    const authoritativeRecord = rootPath
+      ? projectWorkspaceExplorerPathValue(projectedRecord, [rootPath])
+      : projectedRecord;
     return await this.runCanonicalWrite(
       input,
       async () => await this.deps.storage.chatToolRuns.create(authoritativeRecord),
@@ -5193,6 +5200,7 @@ export class ChatTurnAgentRunner {
           type PreExecutedToolCallOutcome = {
             executed?: {
               record: ChatToolRunRecord;
+              activeResult?: Record<string, unknown>;
               approvalExpiresAt?: string;
               chunk?: ChatStreamChunkDraft;
               userInputPrompt?: ChatUserInputPromptRecord;
@@ -5771,11 +5779,12 @@ export class ChatTurnAgentRunner {
                 `Approval-gated tool execution is unavailable for this evaluation (\`${executed.record.toolName}\`). Do not retry the same gated tool call; continue with the completed evidence and state any remaining unknowns explicitly.`)
               : executed.record.failureGuidance;
             const toolResultPayload = {
-              ...(executed.record.result ?? {
-                error:
-                  executed.record.error ??
-                  (executed.record.status === "approval_required" ? "Approval required by policy." : "Tool failed."),
-              }),
+              ...(executed.activeResult ??
+                executed.record.result ?? {
+                  error:
+                    executed.record.error ??
+                    (executed.record.status === "approval_required" ? "Approval required by policy." : "Tool failed."),
+                }),
               ...(executed.record.status === "approval_required" ? { approvalRequired: true } : {}),
               ...(toolFailureGuidance ? { failureGuidance: toolFailureGuidance } : {}),
             };
@@ -7499,6 +7508,7 @@ export class ChatTurnAgentRunner {
     contextBudgetRequest?: ChatCompletionRequest;
   }): Promise<{
     record: ChatToolRunRecord;
+    activeResult?: Record<string, unknown>;
     approvalExpiresAt?: string;
     chunk?: ChatStreamChunkDraft;
     userInputPrompt?: ChatUserInputPromptRecord;
@@ -7525,9 +7535,10 @@ export class ChatTurnAgentRunner {
         res.chunk.toolRun = updated;
       }
     }
-    if (res.record.status === "executed" && res.record.result) {
+    const toolOutput = res.activeResult ?? res.record.result;
+    if (res.record.status === "executed" && toolOutput) {
       try {
-        assertNoToolOutputInjection(res.record.result);
+        assertNoToolOutputInjection(toolOutput);
       } catch (error) {
         const updated = await this.patchToolRun(input.input, res.record.toolRunId, {
           status: "failed",
@@ -7556,6 +7567,7 @@ export class ChatTurnAgentRunner {
           finishedAt: new Date().toISOString(),
         });
         res.record = updated;
+        delete res.activeResult;
         if (res.chunk?.type === "tool_result") {
           res.chunk.toolRun = updated;
         }
@@ -7889,6 +7901,7 @@ export class ChatTurnAgentRunner {
     contextBudgetRequest?: ChatCompletionRequest;
   }): Promise<{
     record: ChatToolRunRecord;
+    activeResult?: Record<string, unknown>;
     approvalExpiresAt?: string;
     chunk?: ChatStreamChunkDraft;
     userInputPrompt?: ChatUserInputPromptRecord;
@@ -8409,7 +8422,7 @@ export class ChatTurnAgentRunner {
         turnId: input.turnId,
         toolRunId: created.toolRunId,
         toolName: preflight.toolName,
-        result: result.result,
+        result: result.result ? projectManagedFileToolResult(preflight.toolName, result.result) : undefined,
         normalizationProfile: input.input.normalizationProfile,
         priorToolRuns: input.priorToolRuns,
       });
@@ -8728,6 +8741,7 @@ export class ChatTurnAgentRunner {
       });
       return {
         record: updated,
+        ...(preflight.toolName === "project.files.read" && result.result ? { activeResult: result.result } : {}),
         chunk: {
           type: "tool_result",
           sessionId: input.input.sessionId,

@@ -32,6 +32,7 @@ import {
   canonicalJsonString,
   isDurableRunTerminal,
   NotFoundError,
+  readDurableChatTurnExecutionPayloadAuthority,
   remoteWorkerAssignmentParentContextSha256,
 } from "@goatcitadel/contracts";
 import {
@@ -494,14 +495,18 @@ export async function beginDurableChatRun(
     }
     let routedContextSnapshot: ChatRoutedContextSnapshotRecord | undefined;
     if (provisionalRoutedContextSnapshot) {
-      if ((!prepared.capabilityProfile && !provisionalRoutedContextSnapshot.admissionBinding) || !deps.routedContextSnapshots) {
+      if (
+        (!prepared.capabilityProfile && !provisionalRoutedContextSnapshot.admissionBinding) ||
+        !deps.routedContextSnapshots
+      ) {
         throw new Error(`Durable Chat turn ${prepared.turnId} has an incomplete routed-context admission bundle.`);
       }
-      routedContextSnapshot = provisionalRoutedContextSnapshot.admissionBinding ? provisionalRoutedContextSnapshot
+      routedContextSnapshot = provisionalRoutedContextSnapshot.admissionBinding
+        ? provisionalRoutedContextSnapshot
         : rebindChatRoutedContextSnapshot(provisionalRoutedContextSnapshot, {
-          profileId: prepared.capabilityProfile!.profileId,
-          profileHash: prepared.capabilityProfile!.hashes.profileHash,
-        });
+            profileId: prepared.capabilityProfile!.profileId,
+            profileHash: prepared.capabilityProfile!.hashes.profileHash,
+          });
       assertPreparedRoutedContextSnapshotBinding(prepared, routedContextSnapshot);
       routedContextSnapshot = await deps.routedContextSnapshots.create(routedContextSnapshot);
       verifyChatRoutedContextSnapshot(routedContextSnapshot);
@@ -646,13 +651,25 @@ function assertPreparedRoutedContextSnapshotBinding(
     const binding = snapshot.admissionBinding;
     const context = prepared.featureAdmission?.references.explicitContext;
     const route = prepared.featureAdmission?.references.providerRoute?.primary;
-    if (profile || !identity || !binding || !context || !route ||
-      snapshot.turnId !== prepared.turnId || snapshot.sessionId !== prepared.session.sessionId ||
-      snapshot.workspaceId !== prepared.workspaceId || binding.admissionId !== identity.admissionId ||
-      binding.sessionIncarnationId !== identity.sessionIncarnationId || binding.materialSha256 !== identity.materialSha256 ||
-      binding.aggregateRevision !== identity.aggregateRevision || binding.controllerGeneration !== identity.controllerGeneration ||
-      context.snapshotId !== snapshot.snapshotId || context.snapshotHash !== snapshot.snapshotHash ||
-      snapshot.budget.effectiveProviderId !== route.providerId || snapshot.budget.effectiveModel !== route.model) {
+    if (
+      profile ||
+      !identity ||
+      !binding ||
+      !context ||
+      !route ||
+      snapshot.turnId !== prepared.turnId ||
+      snapshot.sessionId !== prepared.session.sessionId ||
+      snapshot.workspaceId !== prepared.workspaceId ||
+      binding.admissionId !== identity.admissionId ||
+      binding.sessionIncarnationId !== identity.sessionIncarnationId ||
+      binding.materialSha256 !== identity.materialSha256 ||
+      binding.aggregateRevision !== identity.aggregateRevision ||
+      binding.controllerGeneration !== identity.controllerGeneration ||
+      context.snapshotId !== snapshot.snapshotId ||
+      context.snapshotHash !== snapshot.snapshotHash ||
+      snapshot.budget.effectiveProviderId !== route.providerId ||
+      snapshot.budget.effectiveModel !== route.model
+    ) {
       throw new Error(`Durable Chat turn ${prepared.turnId} has a mismatched admission-bound context snapshot.`);
     }
     return;
@@ -1347,6 +1364,7 @@ type ExactAdmittedV2ChatFinalizePayload = {
   admissionAggregateRevision: number;
   admissionControllerGeneration: number;
   requestActor: Record<string, unknown>;
+  chatApprovalAuthority?: unknown;
   request: Record<string, unknown>;
   sessionId: string;
   turnId: string;
@@ -1482,6 +1500,14 @@ function requireExactAdmittedV2ChatFinalizeContext(
   if (!requestActor || typeof requestActor !== "object" || Array.isArray(requestActor)) {
     throw new Error(`Durable Chat v2 run ${run.runId} has no canonical request actor.`);
   }
+  const approvalAuthority =
+    payload.chatApprovalAuthority === undefined
+      ? undefined
+      : readDurableChatTurnExecutionPayloadAuthority({
+          workflowKey: run.workflowKey,
+          durableRunId: run.runId,
+          payload,
+        })?.chatApprovalAuthority;
   const exactIdentity =
     payload.admissionId === identity.admissionId &&
     payload.sessionIncarnationId === identity.sessionIncarnationId &&
@@ -1504,10 +1530,12 @@ function requireExactAdmittedV2ChatFinalizeContext(
     trace.userMessageId === payload.userMessageId &&
     trace.assistantMessageId === payload.assistantMessageId;
   const exactMaterialBinding =
+    (payload.chatApprovalAuthority === undefined || approvalAuthority !== undefined) &&
     computeFrozenChatTurnAdmissionMaterialSha256(admission.admittedRequest) === payload.admissionMaterialSha256 &&
     computeEffectiveChatTurnRequestMaterialSha256(
       payload.admissionMaterialSha256,
       request as typeof admission.admittedRequest,
+      approvalAuthority,
     ) === payload.effectiveRequestMaterialSha256 &&
     canonicalJsonString(requestActor) === canonicalJsonString(admission.requestActor);
   const durableClaim = admission.durableClaim;

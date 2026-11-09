@@ -1,6 +1,47 @@
 import { canonicalJsonString } from "./canonical-json.js";
 import { sha256Hex } from "./sha256.js";
 
+export type ChatApprovalMode = "standard" | "auto";
+
+export interface ChatAutoBinding {
+  readonly sessionId: string;
+  readonly workspaceId: string;
+  readonly projectId: string;
+  readonly modeRevision: string;
+}
+
+export type ChatApprovalAuthority =
+  | Readonly<{ version: 1; mode: "auto"; binding: ChatAutoBinding }>
+  | Readonly<{ version: 1; mode: "standard"; projectId: string | null; modeRevision: string }>;
+
+export interface ChatApprovalModeState {
+  readonly mode: ChatApprovalMode;
+  readonly modeRevision: string;
+  readonly autoAvailable: boolean;
+  readonly workspaceId: string;
+  readonly projectId: string | null;
+}
+
+export interface ChatApprovalModeUpdate {
+  readonly mode: ChatApprovalMode;
+  readonly expectedModeRevision: string;
+}
+
+export function computeEffectiveChatTurnRequestMaterialSha256(
+  admissionMaterialSha256: string,
+  request: Readonly<Record<string, unknown>>,
+  chatApprovalAuthority?: ChatApprovalAuthority,
+): string {
+  return sha256Hex(
+    canonicalJsonString({
+      version: chatApprovalAuthority ? 2 : 1,
+      admissionMaterialSha256,
+      request,
+      ...(chatApprovalAuthority ? { chatApprovalAuthority } : {}),
+    }),
+  );
+}
+
 export interface DurableChatTurnRequestActorAuthority {
   readonly actorKind: "operator" | "external_companion" | "system";
   readonly actorId: string;
@@ -39,6 +80,7 @@ export interface DurableChatTurnExecutionPayloadAuthority extends Readonly<Recor
   }>;
   readonly surfaceDerivation?: DurableChatTurnSurfaceDerivationAuthority;
   readonly requestActor: DurableChatTurnRequestActorAuthority;
+  readonly chatApprovalAuthority?: ChatApprovalAuthority;
   readonly sessionId: string;
   readonly turnId: string;
   readonly userMessageId: string;
@@ -87,18 +129,32 @@ export function readDurableChatTurnExecutionPayloadAuthority(
     if (!request || ["signal", "operatorId", "authActorId", "authActorSource"].some((key) => key in request)) {
       return undefined;
     }
+    if (
+      payload.chatApprovalAuthority !== undefined &&
+      ("chatApprovalAuthority" in request || "chatAutoBinding" in request)
+    ) {
+      return undefined;
+    }
     if (!readRequestActor(payload.requestActor) || !readSurfaceDerivation(payload.surfaceDerivation)) return undefined;
+    if (
+      !isChatApprovalAuthority(
+        payload.chatApprovalAuthority,
+        payload.requestActor,
+        payload.sessionId,
+        payload.workspaceId,
+      )
+    ) {
+      return undefined;
+    }
     if (!hasExactPolicyRunIdDerivation(input.durableRunId, request, payload.policyRunIdDerivation)) return undefined;
     const admittedRequest = reconstructAdmittedRequest(request, payload.surfaceDerivation);
     if (!admittedRequest) return undefined;
     if (
       sha256Hex(canonicalJsonString({ version: 2, request: admittedRequest })) !== payload.admissionMaterialSha256 ||
-      sha256Hex(
-        canonicalJsonString({
-          version: 1,
-          admissionMaterialSha256: payload.admissionMaterialSha256,
-          request,
-        }),
+      computeEffectiveChatTurnRequestMaterialSha256(
+        payload.admissionMaterialSha256,
+        request,
+        payload.chatApprovalAuthority,
       ) !== payload.effectiveRequestMaterialSha256
     ) {
       return undefined;
@@ -121,6 +177,44 @@ export function readDurableChatTurnExecutionPayloadAuthority(
   } catch {
     return undefined;
   }
+}
+
+function isChatApprovalAuthority(
+  value: unknown,
+  actor: DurableChatTurnRequestActorAuthority,
+  sessionId: string,
+  workspaceId: string,
+): value is ChatApprovalAuthority | undefined {
+  if (value === undefined) return true;
+  if (
+    actor.actorKind !== "operator" ||
+    !actor.authActorId ||
+    actor.authActorId !== actor.actorId ||
+    actor.operatorId !== actor.actorId ||
+    !["token", "basic", "loopback"].includes(actor.authActorSource ?? "")
+  ) {
+    return false;
+  }
+  const authority = record(value);
+  if (!authority || authority.version !== 1) return false;
+  if (authority.mode === "standard") {
+    return (
+      Object.keys(authority).length === 4 &&
+      (authority.projectId === null || nonEmptyString(authority.projectId)) &&
+      sha256(authority.modeRevision)
+    );
+  }
+  const binding = record(authority.binding);
+  return (
+    authority.mode === "auto" &&
+    Object.keys(authority).length === 3 &&
+    !!binding &&
+    Object.keys(binding).length === 4 &&
+    binding.sessionId === sessionId &&
+    binding.workspaceId === workspaceId &&
+    nonEmptyString(binding.projectId) &&
+    sha256(binding.modeRevision)
+  );
 }
 
 function reconstructAdmittedRequest(

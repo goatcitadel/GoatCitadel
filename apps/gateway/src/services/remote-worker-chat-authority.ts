@@ -16,13 +16,21 @@ import { resolveRemoteWorkerLiveAdmissionAuthority } from "./remote-worker-live-
 
 export interface RemoteWorkerChatAuthorityDependencies {
   storage: Pick<AsyncStorage, "chatTurnCapabilityProfiles" | "capabilityCatalogSnapshots" | "skillLifecycle">;
+  assertChatWorkerAllowed?(runId: string): Promise<void>;
   listCallableCapabilities(workspaceId: string): Promise<CapabilityCatalogEntry[]>;
-  resolvePolicyContext(profile: ChatTurnCapabilityProfileRecord, taskId: string | undefined): Promise<ToolPolicyActorContext>;
+  resolvePolicyContext(
+    profile: ChatTurnCapabilityProfileRecord,
+    taskId: string | undefined,
+  ): Promise<ToolPolicyActorContext>;
   /** Gateway-owned native MCP authority for either connection mode; never supplied by a worker request. */
   revalidateRequesterTool?(profile: ChatTurnCapabilityProfileRecord, canonicalName: string): Promise<void>;
   revalidateMeshTool?(profile: ChatTurnCapabilityProfileRecord, canonicalName: string): Promise<void>;
-  resolveAdmissionAuthority?(input: { reference: RemoteWorkerAdmissionReference; durableRunId: string; taskId?: string;
-    assertCurrent(): Promise<void> }): Promise<{ evidence: RemoteWorkerChatEvidence; policy: ToolPolicyActorContext }>;
+  resolveAdmissionAuthority?(input: {
+    reference: RemoteWorkerAdmissionReference;
+    durableRunId: string;
+    taskId?: string;
+    assertCurrent(): Promise<void>;
+  }): Promise<{ evidence: RemoteWorkerChatEvidence; policy: ToolPolicyActorContext }>;
 }
 
 /** Selected execution evidence shared by both authority variants. This is not
@@ -44,15 +52,29 @@ export interface RemoteWorkerChatEvidence {
 export function remoteWorkerEvidenceFromProfile(profile: ChatTurnCapabilityProfileRecord): RemoteWorkerChatEvidence {
   if (!profile.selection.effectiveProviderId || !profile.selection.effectiveModel)
     throw new Error("Remote worker profile lacks its admitted route.");
-  return { binding: { capabilityProfileSha256: profile.hashes.profileHash }, identity: profile.identity,
-    tools: profile.selection.tools, permission: profile.governance.permission,
+  return {
+    binding: { capabilityProfileSha256: profile.hashes.profileHash },
+    identity: profile.identity,
+    tools: profile.selection.tools,
+    permission: profile.governance.permission,
     route: { providerId: profile.selection.effectiveProviderId, model: profile.selection.effectiveModel },
-    contentHash: profile.selection.contentHash, memoryMode: profile.selection.memory.mode, profile,
+    contentHash: profile.selection.contentHash,
+    memoryMode: profile.selection.memory.mode,
+    profile,
     ...(profile.catalog.runtimeInterpositionHash !== undefined && profile.catalog.toolCallBeforeHookCount !== undefined
-      ? { runtimeInterposition: { hash: profile.catalog.runtimeInterpositionHash, count: profile.catalog.toolCallBeforeHookCount } } : {}) };
+      ? {
+          runtimeInterposition: {
+            hash: profile.catalog.runtimeInterpositionHash,
+            count: profile.catalog.toolCallBeforeHookCount,
+          },
+        }
+      : {}),
+  };
 }
 
-export function remoteWorkerChatEvidence(value: RemoteWorkerChatEvidence | ChatTurnCapabilityProfileRecord): RemoteWorkerChatEvidence {
+export function remoteWorkerChatEvidence(
+  value: RemoteWorkerChatEvidence | ChatTurnCapabilityProfileRecord,
+): RemoteWorkerChatEvidence {
   return "binding" in value ? value : remoteWorkerEvidenceFromProfile(value);
 }
 
@@ -61,10 +83,18 @@ export function remoteWorkerChatEvidenceMaterial(evidence: RemoteWorkerChatEvide
   return material;
 }
 
-export async function resolveRemoteWorkerChatAuthority(dependencies: RemoteWorkerChatAuthorityDependencies,
-  execution: RemoteWorkerChatExecution, assertCurrent: () => Promise<void>) {
+export async function resolveRemoteWorkerChatAuthority(
+  dependencies: RemoteWorkerChatAuthorityDependencies,
+  execution: RemoteWorkerChatExecution,
+  assertCurrent: () => Promise<void>,
+) {
+  const runId = execution.authority.assignment.manifest.durableRunId;
+  if (runId) await dependencies.assertChatWorkerAllowed?.(runId);
   if (execution.workload.admissionReference) {
-    return (await resolveRemoteWorkerLiveAdmissionAuthority(dependencies, execution, assertCurrent))!;
+    return (await resolveRemoteWorkerLiveAdmissionAuthority(dependencies, execution, async () => {
+      await assertCurrent();
+      if (runId) await dependencies.assertChatWorkerAllowed?.(runId);
+    }))!;
   }
   const resolved = await resolveRemoteWorkerChatProfile(dependencies, execution);
   return { evidence: remoteWorkerEvidenceFromProfile(resolved.profile), policy: resolved.policy };
@@ -123,8 +153,10 @@ export async function resolveRemoteWorkerChatProfileReference(
       await revalidateRequesterTool(profile, tool.canonicalName);
   }
   const policy = await dependencies.resolvePolicyContext(profile, manifest.taskId);
-  if ((revalidatedRequesterTools.size > 0 || profile.selection.tools.some((tool) => tool.meshPublication)) &&
-    (policy.authActorId !== profile.identity.authActorId || policy.authActorSource !== profile.identity.authActorSource))
+  if (
+    (revalidatedRequesterTools.size > 0 || profile.selection.tools.some((tool) => tool.meshPublication)) &&
+    (policy.authActorId !== profile.identity.authActorId || policy.authActorSource !== profile.identity.authActorSource)
+  )
     throw new Error("Worker requester identity changed during policy resolution.");
   const permissionHash = remoteWorkerInferenceCanonicalSha256(
     policy.permissionProfile ?? {

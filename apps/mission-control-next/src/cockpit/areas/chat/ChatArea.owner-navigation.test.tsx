@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ChatArea } from "./ChatArea";
@@ -39,9 +40,14 @@ vi.mock("../../../shell-preference", () => ({ switchShell: mocks.switchShell }))
 
 let root: Root;
 let container: HTMLDivElement;
+let queryClient: QueryClient;
 async function render() {
   await act(async () => {
-    root.render(<ChatArea />);
+    root.render(
+      <QueryClientProvider client={queryClient}>
+        <ChatArea />
+      </QueryClientProvider>,
+    );
   });
 }
 beforeEach(() => {
@@ -53,6 +59,7 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  queryClient = new QueryClient();
 });
 afterEach(async () => {
   await act(async () => {

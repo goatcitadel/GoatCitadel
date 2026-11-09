@@ -27,6 +27,8 @@ function parseHydratedRequestPrefs(value: unknown): OutboundRequestPrefsSnapshot
       "speedMode",
       "subagentPolicy",
       "fullWebAccess",
+      "approvalModeIntent",
+      "expectedChatApprovalModeRevision",
     ]) ||
     value.mode !== "chat" ||
     !["auto", "off", "quick", "deep"].includes(value.webMode as string) ||
@@ -36,7 +38,14 @@ function parseHydratedRequestPrefs(value: unknown): OutboundRequestPrefsSnapshot
     !["off", "ask_when_useful", "auto_when_useful"].includes(value.subagentPolicy as string) ||
     typeof value.fullWebAccess !== "boolean" ||
     !isSafeIdentifier(value.providerId) ||
-    !isSafeIdentifier(value.model, 512)
+    !isSafeIdentifier(value.model, 512) ||
+    (value.approvalModeIntent !== undefined &&
+      value.approvalModeIntent !== "auto" &&
+      value.approvalModeIntent !== "standard") ||
+    (value.expectedChatApprovalModeRevision !== undefined &&
+      (typeof value.expectedChatApprovalModeRevision !== "string" ||
+        !/^[a-f0-9]{64}$/u.test(value.expectedChatApprovalModeRevision))) ||
+    (value.approvalModeIntent === undefined) !== (value.expectedChatApprovalModeRevision === undefined)
   ) {
     return null;
   }

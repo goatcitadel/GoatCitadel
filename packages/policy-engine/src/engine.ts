@@ -34,6 +34,9 @@ import {
   OUTSIDE_ROOT_WRITE_GRANT_MINT_WINDOW_MS,
   isOutsideRootWriteGrantDuration,
   isOutsideRootWriteTool,
+  isManagedProjectFileTool,
+  projectManagedFileToolArgs,
+  projectManagedFileToolResult,
   resolveWebSearchEngineCandidates,
   splitUtf8HeadTail,
   SWITCHABLE_TOOL_GROUP_IDS,
@@ -170,6 +173,7 @@ interface AccessEvaluation {
 type NativeExecutionReservation = Awaited<
   ReturnType<AsyncStorage["remoteWorkerNativePolicyReservations"]["readForAssignment"]>
 >;
+type ExecutionGrantReservation = Pick<NativeExecutionReservation, "decision" | "grant">;
 
 function toToolAccessEvaluateResponse(toolName: string, evaluation: AccessEvaluation): ToolAccessEvaluateResponse {
   return {
@@ -336,6 +340,12 @@ const MINT_DUPLICATE_SCAN_LIMIT = 100_000;
 const WRITE_ROOT_GRANT_INAPPLICABLE = "write-root grant does not apply to this request";
 
 export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
+  /** Additional Gateway restrictions, evaluated on both fresh and approved execution paths. */
+  resolveExecutionRestriction?: (
+    request: ToolInvokeRequest,
+    stage: "proposal" | "dispatch" | "replay",
+    approvalId?: string,
+  ) => Promise<ToolExecutionRestriction | undefined>;
   /**
    * Canonical approval creation boundary owned by the Gateway runtime. When
    * present, policy-gated tool requests must use it instead of writing approval
@@ -348,6 +358,25 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
     authority?: ApprovalCreateAuthority,
   ) => Promise<ApprovalRequest>;
 }
+
+export type ToolExecutionRestriction =
+  | { kind: "block" | "already_claimed"; reason: string }
+  | { kind: "recovered_managed_delete"; reason: string; result: Record<string, unknown> }
+  | { kind: "review"; reason: string; registration?: Readonly<{ chatAutoDelete: string }> }
+  | { kind: "read_scoped"; reason: string; execute: () => Promise<Record<string, unknown>> }
+  | {
+      kind: "execute_managed_file";
+      reason: string;
+      execute: (reserve: () => Promise<boolean>) => Promise<Record<string, unknown>>;
+    }
+  | {
+      kind: "execute_exact_delete";
+      reason: string;
+      execute: (policy: {
+        reserve(): Promise<boolean>;
+        revalidate(): Promise<boolean>;
+      }) => Promise<Record<string, unknown>>;
+    };
 
 /**
  * Internal runtime boundary supplied by a durable caller. The callback is
@@ -400,6 +429,9 @@ export class ToolExecutionPreconditionError extends Error {
     this.name = "ToolExecutionPreconditionError";
   }
 }
+
+/** A concurrent replay may not settle an approval already owned by another attempt. */
+export class ToolExecutionAlreadyClaimedError extends Error {}
 
 const DEFAULT_APPROVAL_TTL_MS = 15 * 60_000;
 
@@ -687,6 +719,16 @@ export class ToolPolicyEngine {
     return toToolAccessEvaluateResponse(input.toolName, evaluation);
   }
 
+  /** Advisory probe called after Gateway confirms a bound Auto session. */
+  public async inspectManagedProjectFileAccess(input: ToolAccessEvaluateRequest): Promise<ToolAccessEvaluateResponse> {
+    const allowsRoutineAuto = ["project.files.list", "project.files.read", "project.files.save"].includes(
+      input.toolName,
+    );
+    const evaluation = await this.evaluateAccessInternal(input, {}, undefined, false, allowsRoutineAuto);
+    const result = toToolAccessEvaluateResponse(input.toolName, evaluation);
+    return input.toolName === "project.files.delete" && result.allowed ? { ...result, requiresApproval: true } : result;
+  }
+
   public async admitNativeRuntime(
     request: ToolAccessEvaluateRequest,
     input: NativeRuntimePolicyAdmissionInput,
@@ -726,29 +768,58 @@ export class ToolPolicyEngine {
     request: ToolInvokeRequest,
     options: ToolPolicyEvaluateOptions = {},
     approved = false,
+    additionalReview?: string,
+    reserveExecution = true,
+    managedFile = false,
   ) {
     const identity = this.resolveInvocationPolicy(request, options);
     return this.storage.runImmediateTransaction(async () => {
-      const evaluation = await this.evaluateAccessInternal(request, options);
-      await this.storage.toolAccessDecisions.record({
-        toolName: identity.accountingToolName,
-        policyToolName: identity.mappedTarget?.policyToolName,
-        agentId: request.agentId,
-        sessionId: request.sessionId,
-        workspaceId: request.workspaceId,
-        taskId: request.taskId,
-        runId: request.runId,
-        allowed: evaluation.allowed,
-        reasonCodes: evaluation.reasonCodes,
-        matchedGrantId: evaluation.matchedGrantId,
-        requiresApproval: approved ? false : evaluation.requiresApproval,
-        riskLevel: evaluation.riskLevel,
-        permissionProfileId: evaluation.permissionProfileId,
-        localOperatorOverrideId: evaluation.localOperatorOverrideId,
-        countsTowardLimits:
-          evaluation.allowed && (approved || (!evaluation.requiresApproval && request.dryRun !== true)),
-      });
+      const current = await this.evaluateAccessInternal(request, options, undefined, false, managedFile);
+      const evaluation =
+        current.allowed && additionalReview
+          ? {
+              ...current,
+              requiresApproval: true,
+              policyReason: `${current.policyReason}; ${additionalReview}`,
+              reasonCodes: [...current.reasonCodes, "chat_auto_explicit_review"],
+            }
+          : current;
+      await this.recordInvocationAccess(
+        request,
+        identity,
+        evaluation,
+        approved,
+        reserveExecution &&
+          evaluation.allowed &&
+          (approved || (!evaluation.requiresApproval && request.dryRun !== true)),
+      );
       return evaluation;
+    });
+  }
+
+  private async recordInvocationAccess(
+    request: ToolInvokeRequest,
+    identity: ReturnType<ToolPolicyEngine["resolveInvocationPolicy"]>,
+    evaluation: AccessEvaluation,
+    approved: boolean,
+    countsTowardLimits: boolean,
+  ) {
+    return this.storage.toolAccessDecisions.record({
+      toolName: identity.accountingToolName,
+      policyToolName: identity.mappedTarget?.policyToolName,
+      agentId: request.agentId,
+      sessionId: request.sessionId,
+      workspaceId: request.workspaceId,
+      taskId: request.taskId,
+      runId: request.runId,
+      allowed: evaluation.allowed,
+      reasonCodes: evaluation.reasonCodes,
+      matchedGrantId: evaluation.matchedGrantId,
+      requiresApproval: approved ? false : evaluation.requiresApproval,
+      riskLevel: evaluation.riskLevel,
+      permissionProfileId: evaluation.permissionProfileId,
+      localOperatorOverrideId: evaluation.localOperatorOverrideId,
+      countsTowardLimits,
     });
   }
 
@@ -764,9 +835,13 @@ export class ToolPolicyEngine {
     }
     const pendingActionRequest = toPendingApprovalRequestRecord(request);
     assertNoRawRemoteApprovalBearer(pendingActionRequest);
+    const restriction = await this.runtimeHooks.resolveExecutionRestriction?.(request, "proposal");
+    if (restriction?.kind === "block") return this.blockRestrictedExecution(request, restriction.reason);
     // A code_mode.request never rides a re-sent approval reference; it runs only from the operator's decision.
     const directApprovalBypassId =
-      request.toolName === CODE_MODE_REQUEST_TOOL_NAME
+      request.toolName === CODE_MODE_REQUEST_TOOL_NAME ||
+      restriction?.kind === "review" ||
+      isManagedProjectFileTool(request.toolName)
         ? undefined
         : await getVerifiedApprovalBypassId(request, this.storage);
     if (directApprovalBypassId) {
@@ -787,7 +862,25 @@ export class ToolPolicyEngine {
     const startedAt = new Date().toISOString();
     const { capabilityPolicy } = identity;
     const internalCall = buildInternalToolCall(request, capabilityPolicy, startedAt);
-    const evaluation = await this.evaluateInvocationAccess(request, options);
+    const evaluation = await this.evaluateInvocationAccess(
+      request,
+      options,
+      false,
+      restriction?.kind === "review" ? restriction.reason : undefined,
+      restriction?.kind !== "execute_managed_file",
+      restriction?.kind === "execute_managed_file",
+    );
+    if (isManagedProjectFileTool(request.toolName) && evaluation.allowed) {
+      if (evaluation.wardEffect === "redact") {
+        return this.blockRestrictedExecution(request, "A redaction Ward prevents this managed file operation.");
+      }
+      if (evaluation.requiresApproval && request.toolName !== "project.files.delete") {
+        return this.blockRestrictedExecution(
+          request,
+          "Managed file access requiring a separate approval is unavailable.",
+        );
+      }
+    }
 
     if (!evaluation.allowed) {
       const reason = `blocked: ${evaluation.policyReason}`;
@@ -901,6 +994,7 @@ export class ToolPolicyEngine {
               ...(evaluation.outsideRootWrite ? { outsideRootWrite: evaluation.outsideRootWrite } : {}),
               // Only from a minted marker; executeApprovedAction re-mints from it (P2-R4a).
               ...ownDeliveryRegistrationFact(options.ownDelivery),
+              ...(restriction?.kind === "review" ? restriction.registration : {}),
             },
           });
 
@@ -1090,8 +1184,10 @@ export class ToolPolicyEngine {
     return this.executeAllowedRequest(
       executionRequest,
       auditEventId,
-      evaluation.policyReason,
-      evaluation.grantToConsume,
+      restriction?.kind === "read_scoped"
+        ? `${evaluation.policyReason}; ${restriction.reason}`
+        : evaluation.policyReason,
+      restriction?.kind === "execute_managed_file" ? undefined : evaluation.grantToConsume,
       startedAt,
       evaluation.matchedGrantId,
       undefined,
@@ -1139,6 +1235,18 @@ export class ToolPolicyEngine {
         reason: `approval:${approvalId}`,
       },
     };
+    if (request.toolName === "project.files.delete" && options?.externalRuntimeReplay !== true) {
+      const recovered = await this.runtimeHooks.resolveExecutionRestriction?.(approvedRequest, "replay", approvalId);
+      if (recovered?.kind === "recovered_managed_delete") {
+        return this.finishRecoveredManagedDeletion(approvalId, recovered, options?.deferResolution);
+      }
+    }
+    if (isManagedProjectFileTool(request.toolName) && request.toolName !== "project.files.delete") {
+      return this.blockRestrictedExecution(
+        request,
+        "Managed file access requiring a separate approval is unavailable.",
+      );
+    }
     if (!(await hasVerifiedApprovalBypass(approvedRequest, this.storage))) {
       const reason = "pending approval action is expired, resolved, or no longer matches the stored request";
       if (options?.deferResolution !== true) {
@@ -1170,14 +1278,23 @@ export class ToolPolicyEngine {
     }
     const approvedCapabilityPolicy = identity.capabilityPolicy;
     const internalCall = buildInternalToolCall(executionRequest, approvedCapabilityPolicy, startedAt);
+    const restriction = await this.runtimeHooks.resolveExecutionRestriction?.(executionRequest, "replay", approvalId);
+    if (restriction?.kind === "already_claimed") return undefined;
+    if (restriction?.kind === "recovered_managed_delete") {
+      return this.finishRecoveredManagedDeletion(approvalId, restriction, options?.deferResolution);
+    }
     const evaluation = await this.evaluateInvocationAccess(
       executionRequest,
       { ...options, ownDelivery: await this.resolveApprovedOwnDelivery(approvalId, request.toolName, options) },
       true,
+      undefined,
+      restriction?.kind !== "execute_exact_delete" &&
+        restriction?.kind !== "execute_managed_file" &&
+        restriction?.kind !== "block",
     );
 
-    if (!evaluation.allowed) {
-      const reason = `blocked: ${evaluation.policyReason}`;
+    if (!evaluation.allowed || restriction?.kind === "block") {
+      const reason = `blocked: ${evaluation.allowed ? restriction?.reason : evaluation.policyReason}`;
       await this.recordBlocked(
         auditEventId,
         executionRequest,
@@ -1238,18 +1355,28 @@ export class ToolPolicyEngine {
       };
     }
 
-    const result = await this.executeAllowedRequest(
-      executionRequest,
-      auditEventId,
-      `allowed_via_approval:${approvalId}`,
-      evaluation.grantToConsume,
-      startedAt,
-      evaluation.matchedGrantId,
-      approvalId,
-      evaluation,
-      internalCall,
-      { beforeExecute: options?.beforeExecute, externalSideEffect: options?.externalSideEffect },
-    );
+    let result: ToolInvokeResult;
+    try {
+      result = await this.executeAllowedRequest(
+        executionRequest,
+        auditEventId,
+        restriction?.kind === "execute_exact_delete"
+          ? `allowed_via_approval:${approvalId}; ${restriction.reason}`
+          : `allowed_via_approval:${approvalId}`,
+        restriction?.kind === "execute_exact_delete" || restriction?.kind === "execute_managed_file"
+          ? undefined
+          : evaluation.grantToConsume,
+        startedAt,
+        evaluation.matchedGrantId,
+        approvalId,
+        evaluation,
+        internalCall,
+        { beforeExecute: options?.beforeExecute, externalSideEffect: options?.externalSideEffect },
+      );
+    } catch (error) {
+      if (error instanceof ToolExecutionAlreadyClaimedError) return undefined;
+      throw error;
+    }
 
     if (options?.deferResolution !== true) {
       await this.storage.pendingApprovalActions.markResolved(
@@ -1276,6 +1403,32 @@ export class ToolPolicyEngine {
       });
     }
 
+    return result;
+  }
+
+  public async blockRestrictedExecution(request: ToolInvokeRequest, reason: string): Promise<ToolInvokeResult> {
+    const auditEventId = randomUUID();
+    const policyReason = `blocked: ${reason}`;
+    await this.recordBlocked(auditEventId, withoutEngineOwnedApproval(request), policyReason, {
+      reasonCodes: ["chat_auto_execution_boundary"],
+    });
+    return { outcome: "blocked", policyReason, auditEventId };
+  }
+
+  private async finishRecoveredManagedDeletion(
+    approvalId: string,
+    recovered: Extract<ToolExecutionRestriction, { kind: "recovered_managed_delete" }>,
+    deferResolution?: boolean,
+  ): Promise<ToolInvokeResult> {
+    const result = {
+      outcome: "executed" as const,
+      policyReason: recovered.reason,
+      auditEventId: randomUUID(),
+      result: recovered.result,
+    };
+    if (deferResolution !== true) {
+      await this.storage.pendingApprovalActions.markResolved(approvalId, "executed", result);
+    }
     return result;
   }
 
@@ -1346,8 +1499,9 @@ export class ToolPolicyEngine {
   private async evaluateAccessInternal(
     input: ToolAccessEvaluateRequest,
     options: ToolPolicyEvaluateOptions = {},
-    reservation?: NativeExecutionReservation,
+    reservation?: ExecutionGrantReservation,
     nativeInstallation = false,
+    managedFile = false,
   ): Promise<AccessEvaluation> {
     const {
       mappedTarget,
@@ -1526,6 +1680,7 @@ export class ToolPolicyEngine {
       wardRequiresApproval ||
       (!hasAllowGrant &&
         !mcpApprovalReliefApplied &&
+        !managedFile &&
         (policy.approvalMode === "approve_all" || Boolean(toolDef?.requiresApproval)));
     const outsideRootsReadRequiresApproval = await this.requiresApprovalForOutsideRootsRead(
       request,
@@ -1568,6 +1723,7 @@ export class ToolPolicyEngine {
     if (
       policy.approvalMode === "approve_risky" &&
       riskLevel !== "safe" &&
+      !managedFile &&
       !hasAllowGrant &&
       !mcpApprovalReliefApplied
     ) {
@@ -1850,7 +2006,7 @@ export class ToolPolicyEngine {
     request: ToolAccessEvaluateRequest,
     toolDef?: ToolDefinition,
     policyToolName?: string,
-    reservation?: NativeExecutionReservation,
+    reservation?: ExecutionGrantReservation,
   ): Promise<GrantDecision | undefined> {
     const scoped = buildScopeCandidates(request);
     // Scope reads are independent. Resolve them concurrently, then flatten in the
@@ -1935,11 +2091,17 @@ export class ToolPolicyEngine {
     grant: ToolGrantRecord,
     toolDef?: ToolDefinition,
     policyToolName?: string,
-    reservation?: NativeExecutionReservation,
+    reservation?: ExecutionGrantReservation,
   ): Promise<string | undefined> {
     const constraints = grant.constraints;
     if (!constraints) {
       return undefined;
+    }
+    if (
+      isManagedProjectFileTool(request.toolName) &&
+      ((constraints.allowedPaths?.length ?? 0) > 0 || getReferenceRootPaths(constraints).length > 0)
+    ) {
+      return "Host path constraints cannot authorize managed project file operations.";
     }
 
     // A folder grant only ever admits writes outside the write roots that land
@@ -2356,6 +2518,63 @@ export class ToolPolicyEngine {
     return preview;
   }
 
+  private exactDeletionPolicy(
+    request: ToolInvokeRequest,
+    options: ToolPolicyInvokeOptions,
+    initial: AccessEvaluation | undefined,
+    approved = true,
+    managedFile = false,
+  ): { reserve(): Promise<boolean>; revalidate(): Promise<boolean> } {
+    let reservation: ExecutionGrantReservation | undefined;
+    return {
+      reserve: async () => {
+        if (reservation || !initial) return false;
+        if (isManagedProjectFileTool(request.toolName) && request.citadelId) {
+          // This lock joins the managed commit transaction and serializes
+          // Ward changes through the Citadel access owner.
+          await this.storage.citadels.getAccessSnapshot(request.citadelId);
+        }
+        const grantId = initial.matchedGrantId;
+        const grant = grantId ? await this.storage.toolGrants.lockUnrevokedGrantForReservedUse(grantId) : undefined;
+        if (grantId && !grant) return false;
+        const current = await this.evaluateAccessInternal(request, options, undefined, false, managedFile);
+        if (!current.allowed || (!approved && current.requiresApproval) || current.matchedGrantId !== grantId)
+          return false;
+        if (
+          isManagedProjectFileTool(request.toolName) &&
+          (current.wardEffect === "require_dry_run" || current.wardEffect === "redact")
+        ) {
+          return false;
+        }
+        if (grant && !(await this.storage.toolGrants.consumeOne(grant.grantId))) return false;
+        const decision = await this.recordInvocationAccess(
+          request,
+          this.resolveInvocationPolicy(request, options),
+          current,
+          approved,
+          true,
+        );
+        reservation = { decision, grant: grant ? await this.storage.toolGrants.get(grant.grantId) : undefined };
+        return true;
+      },
+      revalidate: async () => {
+        if (!reservation) return false;
+        const reservedGrant = reservation.grant;
+        if (reservedGrant) {
+          const grant = await this.storage.toolGrants.lockUnrevokedGrantForReservedUse(reservedGrant.grantId);
+          if (!isDeepStrictEqual(grant, reservedGrant)) return false;
+        }
+        const current = await this.evaluateAccessInternal(request, options, reservation);
+        return (
+          current.allowed &&
+          current.matchedGrantId === reservedGrant?.grantId &&
+          (!isManagedProjectFileTool(request.toolName) ||
+            (current.wardEffect !== "require_dry_run" && current.wardEffect !== "redact"))
+        );
+      },
+    };
+  }
+
   private async executeAllowedRequest(
     request: ToolInvokeRequest,
     auditEventId: string,
@@ -2455,6 +2674,18 @@ export class ToolPolicyEngine {
       // after cwd/command resolution and immediately before spawn.
       await options.beforeExecute?.();
     }
+    const restriction = await this.runtimeHooks.resolveExecutionRestriction?.(
+      request,
+      approvalId ? "replay" : "dispatch",
+      approvalId,
+    );
+    if (restriction?.kind === "already_claimed") throw new ToolExecutionAlreadyClaimedError(restriction.reason);
+    if (restriction?.kind === "recovered_managed_delete" && approvalId) {
+      return this.finishRecoveredManagedDeletion(approvalId, restriction, true);
+    }
+    if (restriction?.kind === "block" || (restriction?.kind === "review" && !approvalId)) {
+      return this.blockRestrictedExecution(request, restriction.reason);
+    }
     let externalSideEffectStarted = false;
     let externalSideEffectStart: Promise<void> | undefined;
     const markExternalSideEffectStarted = async () => {
@@ -2467,15 +2698,44 @@ export class ToolPolicyEngine {
       })();
       await externalSideEffectStart;
     };
-    let executorRuntimeHooks: ToolExecutorRuntimeHooks = options.externalSideEffect
-      ? {
-          ...this.runtimeHooks,
-          beforeExternalSideEffect: async () => {
-            await this.runtimeHooks.beforeExternalSideEffect?.();
-            await markExternalSideEffectStarted();
-          },
+    const resolveExecutionRestriction = this.runtimeHooks.resolveExecutionRestriction;
+    const assertExecutionCurrent = resolveExecutionRestriction
+      ? async () => {
+          const latest = await resolveExecutionRestriction(request, approvalId ? "replay" : "dispatch", approvalId);
+          if (latest?.kind === "already_claimed") throw new ToolExecutionAlreadyClaimedError(latest.reason);
+          if (latest?.kind === "block" || (latest?.kind === "review" && !approvalId)) {
+            throw new ToolExecutionPreconditionError(latest.reason);
+          }
         }
-      : this.runtimeHooks;
+      : undefined;
+    let executorRuntimeHooks: ToolExecutorRuntimeHooks =
+      options.externalSideEffect || assertExecutionCurrent
+        ? {
+            ...this.runtimeHooks,
+            ...(assertExecutionCurrent ? { assertExecutionCurrent } : {}),
+            beforeExternalSideEffect: async () => {
+              await this.runtimeHooks.beforeExternalSideEffect?.();
+              await assertExecutionCurrent?.();
+              await markExternalSideEffectStarted();
+            },
+          }
+        : this.runtimeHooks;
+    if (restriction?.kind === "execute_exact_delete") {
+      executorRuntimeHooks = {
+        ...executorRuntimeHooks,
+        executeExactChatAutoDelete: () => restriction.execute(this.exactDeletionPolicy(request, options, evaluation)),
+      };
+    }
+    if (restriction?.kind === "read_scoped") {
+      executorRuntimeHooks = { ...executorRuntimeHooks, executeScopedChatAutoRead: restriction.execute };
+    }
+    if (restriction?.kind === "execute_managed_file") {
+      const policy = this.exactDeletionPolicy(request, options, evaluation, Boolean(approvalId), true);
+      executorRuntimeHooks = {
+        ...executorRuntimeHooks,
+        executeManagedChatFile: () => restriction.execute(policy.reserve),
+      };
+    }
     if (hasDeepProcessBoundary && options.beforeExecute) {
       const baseRuntimeHooks = executorRuntimeHooks;
       executorRuntimeHooks = {
@@ -2536,6 +2796,7 @@ export class ToolPolicyEngine {
         options.externalSideEffect.markNotRequired();
       }
       let error: unknown = caughtError;
+      if (error instanceof ToolExecutionAlreadyClaimedError) throw error;
       if (error instanceof ToolBeforeProcessSpawnError) {
         if (error.cancelled) {
           error = new ToolExecutionPreconditionError("tool invocation was cancelled before process spawn");
@@ -2741,8 +3002,10 @@ export class ToolPolicyEngine {
     evaluation?: AccessEvaluation,
   ): Promise<Record<string, unknown>> {
     const now = new Date().toISOString();
-    const sanitizedArgs = sanitizeForModel(request.args);
-    const sanitizedResult = result ? boundAuditResultStrings(sanitizeForModel(result)) : undefined;
+    const sanitizedArgs = sanitizeForModel(projectManagedFileToolArgs(request.toolName, request.args));
+    const sanitizedResult = result
+      ? boundAuditResultStrings(sanitizeForModel(projectManagedFileToolResult(request.toolName, result)))
+      : undefined;
     await this.storage.db
       .prepare(
         `
@@ -3045,6 +3308,7 @@ function isMutationTool(toolDef?: ToolDefinition): boolean {
 
 function isKnownMutatingToolName(toolName: string): boolean {
   return (
+    toolName === "project.files.save" ||
     CAUTION_MUTATING_TOOL_NAMES.has(toolName) ||
     /\.(send|react|unsend)$/u.test(toolName) ||
     toolName === "webhook.send" ||

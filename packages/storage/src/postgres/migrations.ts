@@ -1,4 +1,6 @@
 import { POSTGRES_SCHEMA_CONVERGENCE_V229_SQL } from "./schema-convergence-v229.js";
+import { CHAT_APPROVAL_MODE_SCHEMA_SQL } from "../chat-approval-mode-schema.js";
+import { MANAGED_PROJECT_FILE_SCHEMA_SQL } from "../managed-project-file-schema.js";
 import { CHAT_ARTIFACT_RENDER_RECEIPTS_POSTGRES_SQL } from "../chat-artifact-render-schema.js";
 import { APPROVAL_EXECUTION_LINKAGE_POSTGRES_SQL } from "../approval-execution-linkage-migration.js";
 import { APPROVAL_EXECUTION_LINKAGE_JSON_COMPATIBILITY_POSTGRES_SQL } from "../approval-execution-linkage-postgres-compatibility.js";
@@ -15332,6 +15334,18 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     name: "chat_routed_context_namespace_convergence",
     sql: POSTGRES_SCHEMA_CONVERGENCE_V229_SQL,
     integritySha256: "7d307477ae5f1533c5174020c6bf95d95f7613b9657b56942511be8148ccbadb",
+  },
+  {
+    version: 230,
+    name: "chat_session_approval_modes",
+    sql: CHAT_APPROVAL_MODE_SCHEMA_SQL,
+    integritySha256: "d780c90f177e49600b3464a99a3ae30d5909a3b85b71d633a379836f305ba596",
+  },
+  {
+    version: 231,
+    name: "managed_project_file_revisions",
+    sql: MANAGED_PROJECT_FILE_SCHEMA_SQL,
+    integritySha256: "6398f01c5a09d4089955e775dc16cb420d08cf06639c689f73a11cf951bc1dc2",
   },
 ];
 

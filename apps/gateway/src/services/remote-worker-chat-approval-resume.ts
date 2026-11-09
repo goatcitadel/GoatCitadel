@@ -10,19 +10,31 @@ type ResumeStorage = Pick<AsyncStorage, "approvals" | "durableRuns" | "remoteWor
  * wake retryable until the parent commits its first wait and its finalizers.
  * This read neither grants execution nor replaces the canonical wake checks. */
 export async function shouldDeferRemoteWorkerChatApprovalWake(
-  storage: ResumeStorage & Pick<AsyncStorage,
-    "remoteWorkerEffects" | "chatToolRuns" | "approvalWaitRuns" | "chatInlineApprovals" | "chatTurnTraces">,
+  storage: ResumeStorage &
+    Pick<
+      AsyncStorage,
+      "remoteWorkerEffects" | "chatToolRuns" | "approvalWaitRuns" | "chatInlineApprovals" | "chatTurnTraces"
+    >,
   runId: string,
   approvalId: string,
 ): Promise<boolean> {
   const run = await storage.durableRuns.getRun(runId);
   const payload = readDurableChatTurnExecutionPayloadAuthority({
-    workflowKey: run.workflowKey, durableRunId: run.runId, payload: run.payload,
+    workflowKey: run.workflowKey,
+    durableRunId: run.runId,
+    payload: run.payload,
   });
-  if (!payload || (run.status !== "running" && run.status !== "waiting")) return false;
+  if (
+    !payload ||
+    payload.chatApprovalAuthority?.mode === "auto" ||
+    (run.status !== "running" && run.status !== "waiting")
+  )
+    return false;
   const current = await storage.remoteWorkerAssignments.findTaskBoundChatAssignment({
-    executionWorkspaceId: payload.workspaceId, sessionId: payload.sessionId,
-    turnId: payload.turnId, durableRunId: run.runId,
+    executionWorkspaceId: payload.workspaceId,
+    sessionId: payload.sessionId,
+    turnId: payload.turnId,
+    durableRunId: run.runId,
   });
   if (!current?.generation) return false;
   const waiting = await findRemoteWorkerChatApprovalWait(storage, current, { allowResolvedContinuation: true });
@@ -30,37 +42,50 @@ export async function shouldDeferRemoteWorkerChatApprovalWake(
   if (waiting.summary.approvalId !== approvalId || waiting.approvalStatus === "pending")
     throw new Error("Worker approval wake does not match its resolved request.");
   const resume = await storage.remoteWorkerAssignments.findChatApprovalResume({
-    registryWorkspaceId: current.assignment.registryWorkspaceId, assignmentId: current.assignment.assignmentId,
+    registryWorkspaceId: current.assignment.registryWorkspaceId,
+    assignmentId: current.assignment.assignmentId,
     assignmentGeneration: current.generation.assignmentGeneration,
   });
   // A lost response may leave the resolution effect pending after the exact
   // wake committed. Let the existing durable owner recover its wake proof.
   if (resume?.material.approvalId === approvalId) return false;
-  if (run.status === "running" || run.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined) return true;
+  if (run.status === "running" || run.metadata?.[GENERAL_CHAT_POST_COMMIT_PENDING_METADATA_KEY] !== undefined)
+    return true;
   await readResumeInput(storage, run, approvalId);
   return false;
 }
 
 async function readResumeInput(storage: ResumeStorage, run: DurableRunRecord, approvalId: string) {
   const payload = readDurableChatTurnExecutionPayloadAuthority({
-    workflowKey: run.workflowKey, durableRunId: run.runId, payload: run.payload,
+    workflowKey: run.workflowKey,
+    durableRunId: run.runId,
+    payload: run.payload,
   });
-  if (!payload) return undefined;
+  if (!payload || payload.chatApprovalAuthority?.mode === "auto") return undefined;
   const assignment = await storage.remoteWorkerAssignments.findTaskBoundChatAssignment({
-    executionWorkspaceId: payload.workspaceId, sessionId: payload.sessionId,
-    turnId: payload.turnId, durableRunId: run.runId,
+    executionWorkspaceId: payload.workspaceId,
+    sessionId: payload.sessionId,
+    turnId: payload.turnId,
+    durableRunId: run.runId,
   });
   if (!assignment) return undefined;
   if (run.status !== "waiting" || run.leaseOwnerId || run.leaseExpiresAt)
     throw new Error("Worker approval resume requires its parked durable Chat run.");
   const { authority, waitingCheckpoint } = await verifySettledChatWaitingAuthority(storage, run);
-  if (authority.material.traceStatus !== "waiting_for_approval" ||
+  if (
+    authority.material.traceStatus !== "waiting_for_approval" ||
     authority.material.waitForEvent?.eventKey !== "approval.resolved" ||
-    authority.material.waitForEvent.correlationId !== approvalId)
+    authority.material.waitForEvent.correlationId !== approvalId
+  )
     throw new Error("Worker approval resume does not match its canonical wait.");
-  return { registryWorkspaceId: assignment.assignment.registryWorkspaceId,
-    assignmentId: assignment.assignment.assignmentId, approvalId, expectedParentVersion: run.version,
-    waitingCheckpointId: waitingCheckpoint.checkpointId, waitingRuntimeAuthoritySha256: authority.materialSha256 };
+  return {
+    registryWorkspaceId: assignment.assignment.registryWorkspaceId,
+    assignmentId: assignment.assignment.assignmentId,
+    approvalId,
+    expectedParentVersion: run.version,
+    waitingCheckpointId: waitingCheckpoint.checkpointId,
+    waitingRuntimeAuthoritySha256: authority.materialSha256,
+  };
 }
 
 /** Called under the approval effect's current claim. It only prepares the
@@ -73,9 +98,15 @@ export async function prepareRemoteWorkerChatApprovalHandoff(storage: ResumeStor
   const input = await readResumeInput(storage, run, approvalId);
   if (!input) throw new Error("Worker handoff has no canonical Chat assignment.");
   const material = await storage.remoteWorkerAssignments.prepareChatApprovalResumeHandoff(input);
-  return { reason: "remote_worker_resume_handoff", registryWorkspaceId: material.registryWorkspaceId,
-    assignmentId: material.assignmentId, assignmentGeneration: material.assignmentGeneration,
-    intentId: material.intentId, pendingActionSha256: material.pendingActionSha256, approvalSha256: material.approvalSha256 };
+  return {
+    reason: "remote_worker_resume_handoff",
+    registryWorkspaceId: material.registryWorkspaceId,
+    assignmentId: material.assignmentId,
+    assignmentGeneration: material.assignmentGeneration,
+    intentId: material.intentId,
+    pendingActionSha256: material.pendingActionSha256,
+    approvalSha256: material.approvalSha256,
+  };
 }
 
 /** The caller owns the same transaction as waiting -> queued. Failed admission,
@@ -86,7 +117,9 @@ export async function recordRemoteWorkerChatApprovalWake(
   event: { eventKey: string; correlationId?: string },
 ) {
   const payload = readDurableChatTurnExecutionPayloadAuthority({
-    workflowKey: run.workflowKey, durableRunId: run.runId, payload: run.payload,
+    workflowKey: run.workflowKey,
+    durableRunId: run.runId,
+    payload: run.payload,
   });
   if (!payload) return;
   const input = await readResumeInput(storage, run, event.correlationId ?? "");

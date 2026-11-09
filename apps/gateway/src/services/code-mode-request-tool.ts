@@ -2,6 +2,15 @@ import { createHash } from "node:crypto";
 import { ConflictError, GoatError, PolicyViolationError, type ToolInvokeRequest } from "@goatcitadel/contracts";
 import { CODE_MODE_REQUEST_TOOL_NAME, readCodeModeRequestArgs } from "@goatcitadel/policy-engine";
 import type { ApprovedCodeModeRequest } from "./capability-system-service.js";
+import type { ChatAutoActionPolicy } from "./chat-auto-action-policy.js";
+
+export async function assertChatAutoCodeModeAllowed(
+  policy: Pick<ChatAutoActionPolicy, "blockOpaqueDispatch">,
+  turn: { sessionId?: string; turnId?: string; workspaceId?: string },
+): Promise<void> {
+  const reason = await policy.blockOpaqueDispatch({ ...turn, sessionId: turn.sessionId ?? "" });
+  if (reason) throw new PolicyViolationError({ message: reason });
+}
 
 /**
  * What the turn sees when the operator approved a run while Code Mode (or its sandbox) is switched off. The approval

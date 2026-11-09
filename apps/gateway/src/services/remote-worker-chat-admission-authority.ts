@@ -254,6 +254,7 @@ export async function readRetainedRemoteWorkerChatEvidence(
   const retained = await storage.sessionMutationAdmissions.findFeatureReferences(reference.scope);
   if (
     !payload ||
+    payload.chatApprovalAuthority?.mode === "auto" ||
     !sameRemoteWorkerCapabilityBinding(remoteWorkerCapabilityBindingForTurn(payload), input) ||
     !retained ||
     retained.referenceSha256 !== reference.featureReferenceSha256 ||
@@ -319,6 +320,7 @@ export async function resolveRemoteWorkerAdmissionAuthority(
   });
   if (
     !payload ||
+    payload.chatApprovalAuthority?.mode === "auto" ||
     !sameRemoteWorkerCapabilityBinding(remoteWorkerCapabilityBindingForTurn(payload), { admissionReference: reference })
   )
     throw new Error("Remote Chat admission differs from its durable workload.");

@@ -48,6 +48,7 @@ import {
   patchChatTurnTraceIfStatus,
 } from "./chat-turn-helpers.js";
 import { buildChatTurnRealtimeOptions } from "./chat-turn-realtime.js";
+import { persistChatRunVariableEvidence } from "./chat-run-variable-service.js";
 import {
   enforcePreparedRoutedContextOrchestrationBypass,
   resolvePreparedTurnMode,
@@ -95,7 +96,7 @@ type ChatTurnProactiveTriggerInput = {
 
 type ChatTurnEntryStorage = ChatTurnPrepHost["storage"] &
   chatTurnDispatchService.ChatTurnDispatchHost["storage"] &
-  Pick<Storage, "chatReflectionAttempts" | "chatSessionBindings" | "sessions">;
+  Pick<Storage, "chatReflectionAttempts" | "chatSessionBindings" | "chatSessionRunVariables" | "sessions">;
 
 /**
  * Retry and edit send the operator's words again. In a channel conversation they would go out through the channel as
@@ -388,6 +389,7 @@ export async function agentSendChatMessage(
     try {
       await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
       await options?.assertDispatchOwnership?.();
+      input = await settleConditionalSendInput(host, turnAdmission, admissionHeartbeat, input);
       input = await applySurfaceRoutingPreflight(
         createAdmissionGuardedSurfaceHost(host, turnAdmission, admissionHeartbeat),
         sessionId,
@@ -404,7 +406,9 @@ export async function agentSendChatMessage(
         },
       );
       await assertEntryAdmissionActive(host, turnAdmission, admissionHeartbeat);
-      const requireDurableExecution = Boolean(options?.turnIdentity && input.policyRunId?.trim());
+      const requiresAutoDurability = turnAdmission.chatApprovalAuthority?.mode === "auto";
+      const requireDurableExecution =
+        requiresAutoDurability || Boolean(options?.turnIdentity && input.policyRunId?.trim());
       const binding = await resolveAdmissionFencedChatSessionBinding(
         host,
         turnAdmission,
@@ -621,6 +625,25 @@ async function assertEntryAdmissionActive(
   await host.sessionControlRuntimeOwner.assertActiveTurnWrite(admission);
 }
 
+async function settleConditionalSendInput(
+  host: ChatTurnEntryHost,
+  admission: ActiveTurnAdmission,
+  heartbeat: import("./session-control-runtime-owner.js").TurnAdmissionHeartbeatHandle,
+  input: ChatSendMessageRequest,
+): Promise<ChatSendMessageRequest> {
+  const { expectedChatApprovalModeRevision, ...executionInput } = input;
+  if (expectedChatApprovalModeRevision === undefined) return input;
+  const evidence = executionInput.runVariableEvidence;
+  if (evidence) {
+    await host.storage.runImmediateTransaction(async () => {
+      await assertEntryAdmissionActive(host, admission, heartbeat);
+      await persistChatRunVariableEvidence(host.storage, admission.identity.sessionId, evidence);
+      await assertEntryAdmissionActive(host, admission, heartbeat);
+    });
+  }
+  return executionInput;
+}
+
 function assertWaitingResponseHasDurableOwner(admission: ActiveTurnAdmission, response: ChatSendMessageResponse): void {
   const waiting = Boolean(
     response.trace &&
@@ -698,6 +721,9 @@ async function resolveAdmissionFencedChatSessionBinding(
     const persisted = await host.storage.chatSessionBindings.get(sessionId);
     if (!persisted || !sameChatSessionBindingIdentity(resolved, persisted)) {
       throw new Error(`Chat session binding ${sessionId} changed during admitted turn routing.`);
+    }
+    if (admission.chatApprovalAuthority?.mode === "auto" && persisted.transport !== "llm") {
+      throw new ConflictError({ message: "Auto requires a local LLM Chat binding." });
     }
     await assertEntryAdmissionActive(host, admission, heartbeat);
     return persisted;
@@ -1358,6 +1384,8 @@ export async function* agentSendChatMessageStream(
       let completedNormally = false;
       let terminalStatus: ChatTurnTraceRecord["status"] | undefined;
       try {
+        await options?.mutationLifecycle?.markAdmitted?.();
+        input = await settleConditionalSendInput(host, turnAdmission, heartbeat, input);
         input = await applySurfaceRoutingPreflight(
           createAdmissionGuardedSurfaceHost(host, turnAdmission, heartbeat),
           sessionId,

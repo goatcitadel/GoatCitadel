@@ -53,6 +53,14 @@ import { preserveChatSessionSecretsForPublicUpdate } from "./chat-secret-project
 import type { HooksService } from "./hooks-service.js";
 import { runtimeLifecycleHookDispatcher } from "./runtime-lifecycle-hook-dispatcher.js";
 
+export {
+  isChatAutoApprovalEnabled,
+  getChatApprovalMode,
+  readChatApprovalAdmission,
+  updateChatApprovalMode,
+  withCurrentChatApprovalAuthority,
+} from "./chat-approval-mode-service.js";
+
 const log = logger.child("chat-session-service");
 const MISSING_CHAT_SESSION_META_WORKSPACE_ID = "__legacy_unknown__";
 

@@ -1,11 +1,7 @@
-import type { ChatSendMessageRequest } from "@goatcitadel/contracts";
+import { computeEffectiveChatTurnRequestMaterialSha256, type ChatSendMessageRequest } from "@goatcitadel/contracts";
 import type { DurableChatTurnExecutionPayload } from "../chat-turn-types.js";
 import type { PreparedAgentChatTurn } from "../chat-turn-prep-service.js";
-import {
-  computeEffectiveChatTurnRequestMaterialSha256,
-  deriveChatTurnSurfaceDerivation,
-  freezeChatTurnExecutionRequest,
-} from "../session-control-service.js";
+import { deriveChatTurnSurfaceDerivation, freezeChatTurnExecutionRequest } from "../session-control-service.js";
 
 /**
  * Builds the frozen durable Chat turn execution payload from a prepared, admitted turn.
@@ -31,6 +27,7 @@ export function createDurableChatTurnPayload(
     throw new Error(`Durable Chat turn ${prepared.turnId} has no durable run identity for policy derivation.`);
   }
   const surfaceDerivation = deriveChatTurnSurfaceDerivation(prepared.turnAdmission.admittedRequest, durableRequest);
+  const { chatApprovalAuthority } = prepared.turnAdmission;
   return {
     version: "chat.turn.execute.v2",
     admissionId: admission.admissionId,
@@ -42,6 +39,7 @@ export function createDurableChatTurnPayload(
     effectiveRequestMaterialSha256: computeEffectiveChatTurnRequestMaterialSha256(
       admission.materialSha256,
       durableRequest,
+      chatApprovalAuthority,
     ),
     ...(!durableRequest.policyRunId
       ? {
@@ -53,6 +51,7 @@ export function createDurableChatTurnPayload(
         }
       : {}),
     ...(surfaceDerivation ? { surfaceDerivation } : {}),
+    ...(chatApprovalAuthority ? { chatApprovalAuthority } : {}),
     requestActor: prepared.turnAdmission.requestActor,
     sessionId: prepared.session.sessionId,
     turnId: prepared.turnId,

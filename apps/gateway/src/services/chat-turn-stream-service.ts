@@ -143,6 +143,7 @@ export interface ChatTurnStreamHost
   resolvePreparedTurnOrchestration(
     prepared: PreparedAgentChatTurn,
   ): Promise<PreparedChatExecutionPlanResolution | undefined>;
+  assertDelegationExecutionAllowed?(turn: { sessionId: string; turnId: string; workspaceId?: string }): Promise<void>;
   createChatCompletion(
     request: ChatCompletionRequest,
     attribution?: ModelUsageAttributionContext,
@@ -1063,6 +1064,12 @@ export async function executeDelegatedPlanStep(
     canonicalWriteFence?: ChatTurnCanonicalWriteFence;
   },
 ): Promise<OrchestrationStepExecutionResult> {
+  const parentScope = {
+    sessionId: prepared.session.sessionId,
+    turnId: prepared.turnId,
+    workspaceId: prepared.workspaceId,
+  };
+  await host.assertDelegationExecutionAllowed?.(parentScope);
   const startedAt = new Date().toISOString();
   const delegatedRole = input.step.delegatedRole ?? input.step.role;
   const orchestrationTaskId = `chat-orchestration:${prepared.turnId}`;
@@ -1220,6 +1227,7 @@ export async function executeDelegatedPlanStep(
       policyContext: inheritedPolicyContext,
     });
     const sendOptions = input.signal ? { abortSignal: input.signal } : undefined;
+    await host.assertDelegationExecutionAllowed?.(parentScope);
     // S1: stream the terminal synthesizer child's live token deltas straight to
     // the parent SSE (default-on, gated by the caller). Falls back to a buffered
     // send only when the stream throws before the first delta, so the persisted

@@ -2102,6 +2102,8 @@ export interface ChatDelegateAcceptRequest {
 
 export interface ChatSendMessageRequest {
   content: string;
+  /** Optional admission precondition from the session's displayed approval mode. */
+  expectedChatApprovalModeRevision?: string;
   parts?: ChatInputPart[];
   /** Structured Gateway-resolved refs. Raw file paths, URLs, git refs, and shell expressions are not accepted. */
   contextRefs?: import("./routed-context.js").ChatRoutedContextRef[];

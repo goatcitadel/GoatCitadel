@@ -10,7 +10,7 @@ import {
   type LocalDelegationAuthorityStorage,
 } from "./chat-local-delegation-authority.js";
 import { randomUUID } from "node:crypto";
-import { CHAT_TURN_ACTIVE_STATUSES, NotFoundError } from "@goatcitadel/contracts";
+import { CHAT_TURN_ACTIVE_STATUSES, ConflictError, NotFoundError } from "@goatcitadel/contracts";
 import { isAuthoritativeModelUsageAccountingError } from "@goatcitadel/gateway-core";
 /* eslint-disable max-lines -- Chat dispatch keeps provider, durable, integration, and ownership boundaries co-located for auditability. */
 import type {
@@ -97,7 +97,12 @@ export class IntegrationDeliveryPostCommitError extends Error {
   }
 }
 
-export async function isDurableExecutionEnabled(host: ChatTurnDispatchHost): Promise<boolean> {
+export const CHAT_AUTO_DURABLE_REQUIRED =
+  "Auto requires durable Chat execution. Enable durable execution or use Standard.";
+
+export async function isDurableExecutionEnabled(
+  host: Pick<ChatTurnDispatchHost, "config" | "isFeatureEnabled">,
+): Promise<boolean> {
   return (
     host.config.assistant.durable.enabled &&
     host.config.assistant.durable.executionEnabled &&
@@ -112,7 +117,9 @@ export async function shouldUseDurableExecution(
   requireDurableExecution = false,
 ): Promise<boolean> {
   const carriesRoutedContext = chatTurnCarriesRoutedContext(prepared, input);
+  const requiresAutoDurability = prepared.turnAdmission?.chatApprovalAuthority?.mode === "auto";
   if (!(await isDurableExecutionEnabled(host))) {
+    if (requiresAutoDurability) throw new ConflictError({ message: CHAT_AUTO_DURABLE_REQUIRED });
     if (carriesRoutedContext) {
       throw new Error("Routed Chat context requires durable execution to be enabled.");
     }
@@ -121,7 +128,7 @@ export async function shouldUseDurableExecution(
     }
     return false;
   }
-  if (requireDurableExecution) {
+  if (requireDurableExecution || requiresAutoDurability) {
     return true;
   }
   if (carriesRoutedContext) {
@@ -374,6 +381,9 @@ export async function executePreparedAgentChatTurnBackground(
     remoteWorkerExecution?: import("./remote-worker-chat-execution-service.js").RemoteWorkerChatExecution;
   },
 ): Promise<void> {
+  if (prepared.turnAdmission?.chatApprovalAuthority?.mode === "auto" && !durableRunId) {
+    throw new ConflictError({ message: CHAT_AUTO_DURABLE_REQUIRED });
+  }
   let preserveForDurableRecovery = false;
   let authoritativeAccountingFault: Error | undefined;
   let authoritativeAccountingFinalTrace: ChatTurnTraceRecord | undefined;
@@ -1035,6 +1045,7 @@ export async function sendPreparedIntegrationChatTurn(
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
 ): Promise<ChatSendMessageResponse> {
+  assertIntegrationTurnSupportsApprovalMode(prepared);
   assertIntegrationTurnHasNoRoutedContext(prepared, input);
   const startedAt = new Date().toISOString();
   const storage = host.storage;
@@ -1413,6 +1424,7 @@ export async function* streamPreparedIntegrationChatTurn(
   threadEventType: "chat_thread_turn_appended" | "chat_thread_turn_retried" | "chat_thread_turn_edited",
   options?: { abortSignal?: AbortSignal; mutationLifecycle?: ChatStreamMutationLifecycle },
 ): AsyncGenerator<ChatStreamChunkDraft> {
+  assertIntegrationTurnSupportsApprovalMode(prepared);
   assertIntegrationTurnHasNoRoutedContext(prepared, input);
   yield {
     type: "message_start",
@@ -1462,4 +1474,10 @@ export async function* streamPreparedIntegrationChatTurn(
     turnId: prepared.turnId,
     messageId: prepared.assistantMessageId,
   };
+}
+
+function assertIntegrationTurnSupportsApprovalMode(prepared: PreparedAgentChatTurn): void {
+  if (prepared.turnAdmission?.chatApprovalAuthority?.mode === "auto") {
+    throw new ConflictError({ message: "Auto requires a local LLM Chat binding." });
+  }
 }

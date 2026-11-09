@@ -246,6 +246,11 @@ export interface CapabilitySystemServiceOptions {
   listLoadedSkills: () => LoadedSkill[];
   readSkillStates: () => Promise<Map<string, SkillStateRecord>>;
   invokeTool: (request: ToolInvokeRequest) => Promise<ToolInvokeResult>;
+  assertChatAutoCodeModeAllowed?: (scope: {
+    sessionId?: string;
+    turnId?: string;
+    workspaceId?: string;
+  }) => Promise<void>;
   createApproval: (input: ApprovalCreateInput) => Promise<ApprovalRequest>;
   resolveApproval: (approvalId: string, input: ApprovalResolveInput) => Promise<ApprovalResolveResult>;
   publishRealtime: (eventType: string, source: string, payload: Record<string, unknown>) => Promise<void>;
@@ -1980,6 +1985,7 @@ export class CapabilitySystemService {
     /** Server-internal only (never from a route body): binds a replay to the run it replays. */
     internal: { replayOf?: CodeModeAiderReplayLink } = {},
   ): Promise<CodeModeRunRecord> {
+    await this.options.assertChatAutoCodeModeAllowed?.(request);
     await this.requireCodeModeEnabled();
     const source = request.source.trim();
     if (!source) {
@@ -2630,6 +2636,7 @@ export class CapabilitySystemService {
     request: ApprovedCodeModeRequest,
     signal?: AbortSignal,
   ): Promise<ApprovedCodeModeResult> {
+    await this.options.assertChatAutoCodeModeAllowed?.(request);
     const startedAtMs = Date.now();
     const storage = this.options.storage;
     const runId = codeModeRequestRunId(request.approvalId);
@@ -2662,6 +2669,7 @@ export class CapabilitySystemService {
     if (existing.codeHash !== request.approvedSourceSha256 || existing.approvalId !== approval.approvalId) {
       throw new ConflictError({ message: `Code Mode run ${runId} is bound to different approved code.` });
     }
+    await this.options.assertChatAutoCodeModeAllowed?.(existing);
     if (existing.status === "running") {
       // A stale claim means the gateway lost this run's owner: one that never dispatched is released and runs now if
       // Code Mode can run; one that crossed the dispatch boundary is marked interrupted (failed) and needs manual
@@ -3111,6 +3119,7 @@ export class CapabilitySystemService {
       });
       throw new NotFoundError({ entity: "code mode run", id: runId });
     }
+    await this.options.assertChatAutoCodeModeAllowed?.(existing);
     if (existing.status === "running") {
       const recovered = await recoverStaleCodeModeExecutionClaim(
         this.options.storage.codeModeRuns,
@@ -3527,8 +3536,10 @@ export class CapabilitySystemService {
       const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
       const compiledSource = transpileGuestSource(finalRun.language, source);
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
+      const assertLaunchAllowed = async () => this.options.assertChatAutoCodeModeAllowed?.(finalRun);
       const beforeExecutionDispatch = async () => {
         throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
+        await assertLaunchAllowed();
         await this.requireCodeModeEnabled("executing");
         const boundaryCrossedAt = new Date().toISOString();
         const boundaryRun = await storage.codeModeRuns.markExecutionBoundaryCrossed({
@@ -3573,6 +3584,7 @@ export class CapabilitySystemService {
               frozenAiderExecution: inputBinding.aiderExecution,
               aiderWorkspacePin: inputBinding.aiderWorkspacePin,
               sessionId: finalRun.sessionId,
+              assertLaunchAllowed,
               beforeExecutionDispatch,
               onExecutionDispatchFailed,
               signal,
@@ -3588,6 +3600,7 @@ export class CapabilitySystemService {
               policyContext: wrapperPolicyContext,
               workspaceId: finalRun.workspaceId,
               parentSessionId: finalRun.sessionId,
+              assertLaunchAllowed,
               approvedReads: readFrozenCodeModeRequestReads(policySnapshot),
               beforeExecutionDispatch,
               onExecutionDispatchFailed,
@@ -4665,6 +4678,7 @@ export class CapabilitySystemService {
     parentSessionId?: string;
     /** A Chat request run's approved reads; every helper call must name one of these. Unset for other runs. */
     approvedReads?: readonly string[];
+    assertLaunchAllowed: () => Promise<void>;
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -4682,6 +4696,7 @@ export class CapabilitySystemService {
     frozenAiderExecution?: FrozenCodeModeAiderExecution;
     aiderWorkspacePin?: CodeModeAiderWorkspacePin;
     sessionId?: string;
+    assertLaunchAllowed: () => Promise<void>;
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -4746,6 +4761,7 @@ export class CapabilitySystemService {
             runId: input.runId,
           })
         : undefined;
+      await input.assertLaunchAllowed();
       const execution = await backendRunner.executeAiderAdapter({
         runId: input.runId,
         runTempRoot,
@@ -4805,6 +4821,7 @@ export class CapabilitySystemService {
     parentSessionId?: string;
     /** A Chat request run's approved reads; every helper call must name one of these. Unset for other runs. */
     approvedReads?: readonly string[];
+    assertLaunchAllowed: () => Promise<void>;
     beforeExecutionDispatch: () => Promise<void>;
     onExecutionDispatchFailed: () => Promise<void>;
     signal?: AbortSignal;
@@ -4854,6 +4871,7 @@ export class CapabilitySystemService {
     const launchTransport = preparedSandbox.launch.transport;
     let child: ReturnType<typeof spawn>;
     try {
+      await input.assertLaunchAllowed();
       child = (this.options.spawnCodeModeChild ?? spawn)(
         preparedSandbox.launch.executable,
         preparedSandbox.launch.args,

@@ -663,6 +663,9 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
                   ...externalContextOptIn,
                   ...templateInvocationOptIn,
                   ...workspaceSnapshotOptIn,
+                  ...(typeof requestPrefs.expectedChatApprovalModeRevision === "string"
+                    ? { expectedChatApprovalModeRevision: requestPrefs.expectedChatApprovalModeRevision }
+                    : {}),
                   ...outboundPrefs,
                   mode: effectiveMode,
                   providerId: routeExecutionProviderId,
@@ -757,6 +760,9 @@ export function createOutboundExecutionHandler(owner: OutboundExecutionCodeOwner
                     ...externalContextOptIn,
                     ...templateInvocationOptIn,
                     ...workspaceSnapshotOptIn,
+                    ...(typeof requestPrefs.expectedChatApprovalModeRevision === "string"
+                      ? { expectedChatApprovalModeRevision: requestPrefs.expectedChatApprovalModeRevision }
+                      : {}),
                     ...outboundPrefs,
                     mode: effectiveMode,
                     providerId: routeExecutionProviderId,

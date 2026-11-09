@@ -80,7 +80,7 @@ export interface OperatorDeskRequestExtras {
 
 /** One desk send as the chat route hands it over. */
 export type OperatorDeskSendInput = Pick<OperatorDeskTurnInput, "content" | "idempotencyKey" | "providerId" | "model"> &
-  OperatorDeskRequestExtras;
+  OperatorDeskRequestExtras & { expectedChatApprovalModeRevision?: string };
 
 /** The accepted desk question, with the turn the inbound worker answers it under. */
 export type OperatorDeskTurnResponse = ChatSendMessageResponse & { turnId: string };

@@ -151,6 +151,8 @@ export { ChatSessionRunVariableRepository } from "./chat-session-run-variable-re
 import { DocumentPatchProposalRepository } from "./document-patch-proposal-repo.js";
 export { DocumentPatchProposalRepository } from "./document-patch-proposal-repo.js";
 import { ChatProjectRepository } from "./chat-project-repo.js";
+import { ManagedProjectFileRepository } from "./managed-project-file-repo.js";
+export * from "./managed-project-file-repo.js";
 import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 import { ChatSessionMetaRepository } from "./chat-session-meta-repo.js";
 import { ChatSessionLifecycleRepository } from "./chat-session-lifecycle-repo.js";
@@ -438,6 +440,7 @@ export class Storage {
   public readonly chatTimers: ChatTimerRepository;
   public readonly chatSessionRunVariables: ChatSessionRunVariableRepository;
   public readonly chatProjects: ChatProjectRepository;
+  public readonly managedProjectFiles: ManagedProjectFileRepository;
   public readonly chatSessionRevisions: ChatSessionRevisionRepository;
   public readonly chatSessionMeta: ChatSessionMetaRepository;
   public readonly chatSessionLifecycles: ChatSessionLifecycleRepository;
@@ -633,6 +636,7 @@ export class Storage {
     this.chatTimers = new ChatTimerRepository(this.db);
     this.chatSessionRunVariables = new ChatSessionRunVariableRepository(this.db);
     this.chatProjects = new ChatProjectRepository(this.db);
+    this.managedProjectFiles = new ManagedProjectFileRepository(this.db);
     this.chatSessionRevisions = new ChatSessionRevisionRepository(this.db);
     this.chatSessionLifecycles = new ChatSessionLifecycleRepository(this.db);
     this.chatSessionMeta = new ChatSessionMetaRepository(this.db);

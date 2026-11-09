@@ -74,6 +74,55 @@ const APPROVAL_TEST_POST_COMMIT_ELIGIBILITY = {
 };
 
 describe("approval-resolution-effects-service", () => {
+  it.each(["tool.invoke", "code_mode.run"] as const)(
+    "terminalizes refused Auto replay for %s without dispatch",
+    async (actionType) => {
+      const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
+      try {
+        const approvalId = `auto-refused-${actionType}`;
+        storage.approvals.createDeterministicDetachedWithTtlDuration(
+          { approvalId, kind: actionType, riskLevel: "danger", payload: {}, preview: {} },
+          60_000,
+        );
+        storage.approvals.resolve(approvalId, { decision: "approve", resolvedBy: "operator" });
+        storage.pendingApprovalActions.upsertPending({ approvalId, actionType, request: {} });
+        const effect = storage.approvalEffects.upsert({
+          approvalId,
+          effectKind: "pending_action_execute",
+          targetKind: "pending_action",
+          targetId: approvalId,
+          payload: { actionType },
+        });
+        const deps = createApprovalEffectDeps();
+        const checkChatAutoApprovalReplay = vi.fn(async () => ({
+          outcome: "blocked" as const,
+          policyReason: "Auto blocks opaque execution.",
+          auditEventId: "auto-blocked",
+        }));
+        const processor = new ApprovalEffectsService(
+          { storage: createSqliteAsyncStorage(storage), publishRealtime: vi.fn() } as unknown as ServiceContext,
+          { ...deps, checkChatAutoApprovalReplay },
+        ) as unknown as { workerId: string; handlePendingActionExecute(effect: ApprovalEffectRecord): Promise<void> };
+        const claim = storage.approvalEffects.claimNextPendingEffect(
+          processor.workerId,
+          new Date().toISOString(),
+          new Date(Date.now() + 60_000).toISOString(),
+        )!;
+        await processor.handlePendingActionExecute(claim);
+        expect(checkChatAutoApprovalReplay).toHaveBeenCalledWith(approvalId, actionType);
+        expect(deps.executeApprovedPendingAction).not.toHaveBeenCalled();
+        expect(deps.executeCodeModePendingApproval).not.toHaveBeenCalled();
+        expect(storage.pendingApprovalActions.get(approvalId)).toMatchObject({
+          resolutionStatus: "failed",
+          result: { outcome: "blocked", auditEventId: "auto-blocked" },
+        });
+        expect(storage.approvalEffects.get(effect.effectId)?.status).not.toBe("pending");
+      } finally {
+        storage.close();
+      }
+    },
+  );
+
   it("yields fanout execution to durable Chat without changing its pending action or replaying the effect after restart", async () => {
     const storage = new Storage({ dbPath: ":memory:", transcriptsDir: ".", auditDir: "." });
     try {
@@ -444,11 +493,12 @@ describe("approval-resolution-effects-service", () => {
     };
     let parked = false;
     let transactionActive = false;
-    const traceReadFailure = "readError" in scenario
-      ? scenario.readError === "missing"
-        ? new NotFoundError({ entity: "Chat turn", id: effect.targetId })
-        : new Error("SQLITE_BUSY: transient trace read failure")
-      : undefined;
+    const traceReadFailure =
+      "readError" in scenario
+        ? scenario.readError === "missing"
+          ? new NotFoundError({ entity: "Chat turn", id: effect.targetId })
+          : new Error("SQLITE_BUSY: transient trace read failure")
+        : undefined;
     let failTraceRead = Boolean(traceReadFailure);
     const getTrace = vi.fn(() => {
       if (failTraceRead) throw traceReadFailure;

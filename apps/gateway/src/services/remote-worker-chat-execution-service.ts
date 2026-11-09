@@ -18,12 +18,19 @@ import {
 import type { AsyncStorage, RemoteWorkerAssignmentAggregate } from "@goatcitadel/storage";
 import type { PreparedAgentChatTurn } from "./chat-turn-prep-service.js";
 import { RemoteWorkerArtifactStore } from "./remote-worker-artifact-store.js";
-import { readCanonicalWorkerChatOutput, type RemoteWorkerChatSequenceContext } from "./remote-worker-chat-output-service.js";
+import {
+  readCanonicalWorkerChatOutput,
+  type RemoteWorkerChatSequenceContext,
+} from "./remote-worker-chat-output-service.js";
 import { readRetainedRemoteWorkerChatEvidence } from "./remote-worker-chat-admission-authority.js";
 import { readCanonicalDurableChatTerminalOutput } from "./chat-durable-run-service.js";
 import { retainRemoteWorkerChatApprovalWait } from "./remote-worker-chat-approval-wait.js";
-import { normalizeRemoteWorkerNativeContinuation, appendRemoteWorkerNativeChatContext, remoteWorkerNativeChatContextSha256,
-  type RemoteWorkerNativeChatContext } from "@goatcitadel/contracts";
+import {
+  normalizeRemoteWorkerNativeContinuation,
+  appendRemoteWorkerNativeChatContext,
+  remoteWorkerNativeChatContextSha256,
+  type RemoteWorkerNativeChatContext,
+} from "@goatcitadel/contracts";
 import {
   hashChatTurnRuntimeAuthorityValue,
   verifyCheckpointAnchoredChatTurnRuntimeAuthority,
@@ -90,10 +97,19 @@ export class RemoteWorkerChatExecutionService {
             if (!run.leaseOwnerId) throw new Error("Worker Chat resume has no parent dispatch owner.");
             // The previous fence has ended: the repository acquires session and
             // worker roots before the parent row, preserving native lock order.
-            resume = await storage.remoteWorkerAssignments.bindChatApprovalResumeDispatch({ ...ref,
-              durableRunId: run.runId, leaseOwnerId: run.leaseOwnerId, attemptCount: run.attemptCount });
-            if (!resume) parentRecovery = await storage.remoteWorkerAssignments.bindChatParentRecoveryDispatch({ ...ref,
-              durableRunId: run.runId, leaseOwnerId: run.leaseOwnerId, attemptCount: run.attemptCount });
+            resume = await storage.remoteWorkerAssignments.bindChatApprovalResumeDispatch({
+              ...ref,
+              durableRunId: run.runId,
+              leaseOwnerId: run.leaseOwnerId,
+              attemptCount: run.attemptCount,
+            });
+            if (!resume)
+              parentRecovery = await storage.remoteWorkerAssignments.bindChatParentRecoveryDispatch({
+                ...ref,
+                durableRunId: run.runId,
+                leaseOwnerId: run.leaseOwnerId,
+                attemptCount: run.attemptCount,
+              });
             resumeInspected = true;
           }
           if (current.settlement) {
@@ -115,21 +131,23 @@ export class RemoteWorkerChatExecutionService {
             };
             return;
           }
-          if (
-            Date.parse(manifest.deadlineAt) <= Date.now() ||
-            current.control
-          )
+          if (Date.parse(manifest.deadlineAt) <= Date.now() || current.control)
             throw new Error("Worker Chat assignment requires reconciliation before execution can continue.");
-          const approval = await canonicalWriteFence(async () =>
-            await retainRemoteWorkerChatApprovalWait(storage, await readCurrent(), {
-              resumedApprovalId: resume?.material.approvalId,
-            }));
+          const approval = await canonicalWriteFence(
+            async () =>
+              await retainRemoteWorkerChatApprovalWait(storage, await readCurrent(), {
+                resumedApprovalId: resume?.material.approvalId,
+              }),
+          );
           if (approval) {
             yield { type: "approval_required", sessionId: scope.sessionId, turnId: scope.turnId, approval };
             return;
           }
           const leaseHandoff = resume?.recovery?.material ?? resume?.material ?? parentRecovery?.material;
-          const renewingWorkerLease = (resume?.binding || parentRecovery) && current.lease && leaseHandoff &&
+          const renewingWorkerLease =
+            (resume?.binding || parentRecovery) &&
+            current.lease &&
+            leaseHandoff &&
             current.lease.leaseRevision === leaseHandoff.priorLeaseRevision &&
             current.lease.requestSha256 === leaseHandoff.priorLeaseRequestSha256;
           if (current.lease && Date.parse(current.lease.expiresAt) <= Date.now() && !renewingWorkerLease)
@@ -281,6 +299,7 @@ export class RemoteWorkerChatExecutionService {
     });
     if (
       !admitted ||
+      admitted.chatApprovalAuthority?.mode === "auto" ||
       admitted.workspaceId !== scope.executionWorkspaceId ||
       admitted.sessionId !== scope.sessionId ||
       admitted.turnId !== scope.turnId ||
@@ -291,7 +310,8 @@ export class RemoteWorkerChatExecutionService {
     if (
       manifest.durableRunId !== run.runId ||
       !sameRemoteWorkerCapabilityBinding(manifest, remoteWorkerCapabilityBindingForTurn(admitted)) ||
-      (manifest.admissionReference ? manifest.admissionReference.featureReferenceSha256 !== prepared.featureAdmission?.referenceSha256
+      (manifest.admissionReference
+        ? manifest.admissionReference.featureReferenceSha256 !== prepared.featureAdmission?.referenceSha256
         : manifest.capabilityProfileSha256 !== prepared.capabilityProfile?.hashes.profileHash) ||
       manifest.contextSnapshotSha256 !== run.metadata?.remoteWorkerChatContextSha256
     )
@@ -335,8 +355,11 @@ export class RemoteWorkerChatExecutionService {
       throw new Error("Worker Chat completion lacks its verified output manifest.");
     const evidence = await readRetainedRemoteWorkerChatEvidence(this.storage, assignment.manifest);
     const context = await this.storage.remoteWorkerChatContexts.findForRun(assignment.manifest.durableRunId);
-    if (context && (context.contextSha256 !== assignment.manifest.contextSnapshotSha256 ||
-        !sameRemoteWorkerCapabilityBinding(context, evidence.binding)))
+    if (
+      context &&
+      (context.contextSha256 !== assignment.manifest.contextSnapshotSha256 ||
+        !sameRemoteWorkerCapabilityBinding(context, evidence.binding))
+    )
       throw new Error("Worker Chat completion lost its admitted context or capability profile.");
     // Older text-only assignments did not retain a complete history snapshot.
     // Iterative tool workflows always require that immutable context.
@@ -344,23 +367,40 @@ export class RemoteWorkerChatExecutionService {
     let nativeContext: RemoteWorkerNativeChatContext | undefined;
     if (nativeResume?.material.schemaVersion === "goatcitadel.remote-worker-native-runtime-resume.v1") {
       const approval = await this.storage.approvals.get(nativeResume.material.approvalId);
-      const continuation = normalizeRemoteWorkerNativeContinuation({ schemaVersion: "goatcitadel.remote-worker-native-continuation.v1",
-        assignmentGeneration: ref.assignmentGeneration, resumeSha256: nativeResume.materialSha256,
-        approvalId: approval.approvalId, approvalSha256: nativeResume.material.approvalSha256,
-        nativeRuntimeBindingSha256: nativeResume.material.nativeRuntimeBindingSha256, decision: approval.status });
-      const retained = await this.storage.remoteWorkerRuntimeResults.readChatContextForParent({ ...ref,
-        durableRunId: assignment.manifest.durableRunId, continuation });
+      const continuation = normalizeRemoteWorkerNativeContinuation({
+        schemaVersion: "goatcitadel.remote-worker-native-continuation.v1",
+        assignmentGeneration: ref.assignmentGeneration,
+        resumeSha256: nativeResume.materialSha256,
+        approvalId: approval.approvalId,
+        approvalSha256: nativeResume.material.approvalSha256,
+        nativeRuntimeBindingSha256: nativeResume.material.nativeRuntimeBindingSha256,
+        decision: approval.status,
+      });
+      const retained = await this.storage.remoteWorkerRuntimeResults.readChatContextForParent({
+        ...ref,
+        durableRunId: assignment.manifest.durableRunId,
+        continuation,
+      });
       signal.throwIfAborted();
       if (!retained || !context) throw new Error("Native Chat completion lacks its retained continuation context.");
       nativeContext = retained;
     }
-    const sequence: RemoteWorkerChatSequenceContext | undefined = context ? {
-      evidence, baseMessages: nativeContext ? appendRemoteWorkerNativeChatContext(remoteWorkerChatInferenceMessages(context), nativeContext)
-        : remoteWorkerChatInferenceMessages(context), contextSha256: context.contextSha256,
-      ...(nativeContext ? { continuationSha256: remoteWorkerNativeChatContextSha256(nativeContext), nativeContext } : {}),
-      taskId: assignment.manifest.taskId, workerId: generation.workerId,
-      workerGeneration: generation.workerGeneration, toolStorage: this.storage,
-    } : undefined;
+    const sequence: RemoteWorkerChatSequenceContext | undefined = context
+      ? {
+          evidence,
+          baseMessages: nativeContext
+            ? appendRemoteWorkerNativeChatContext(remoteWorkerChatInferenceMessages(context), nativeContext)
+            : remoteWorkerChatInferenceMessages(context),
+          contextSha256: context.contextSha256,
+          ...(nativeContext
+            ? { continuationSha256: remoteWorkerNativeChatContextSha256(nativeContext), nativeContext }
+            : {}),
+          taskId: assignment.manifest.taskId,
+          workerId: generation.workerId,
+          workerGeneration: generation.workerGeneration,
+          toolStorage: this.storage,
+        }
+      : undefined;
     const { record, text, steps, toolIntentIds } = await readCanonicalWorkerChatOutput(
       this.storage.remoteWorkerInference,
       ref,
@@ -388,7 +428,12 @@ export class RemoteWorkerChatExecutionService {
       createHash("sha256").update(bytes).digest("hex") !== settlement.resultSha256
     )
       throw new Error("Worker Chat artifact differs from its settled response.");
-    const usage = await readRemoteWorkerChatUsage(this.storage, ref, { record, steps, toolIntentIds }, Boolean(nativeContext));
+    const usage = await readRemoteWorkerChatUsage(
+      this.storage,
+      ref,
+      { record, steps, toolIntentIds },
+      Boolean(nativeContext),
+    );
     return { text, usage, settlement };
   }
 }
@@ -411,18 +456,27 @@ function summarizeUsage(events: ModelUsageEventRecord[]): ChatStreamUsageRecord 
 export async function readRemoteWorkerChatUsage(
   storage: Pick<AsyncStorage, "modelUsageEvents" | "remoteWorkerBudgets">,
   ref: { registryWorkspaceId: string; assignmentId: string; assignmentGeneration: number },
-  { record, steps, toolIntentIds }: Pick<Awaited<ReturnType<typeof readCanonicalWorkerChatOutput>>, "record" | "steps" | "toolIntentIds">,
+  {
+    record,
+    steps,
+    toolIntentIds,
+  }: Pick<Awaited<ReturnType<typeof readCanonicalWorkerChatOutput>>, "record" | "steps" | "toolIntentIds">,
   includeAssignmentHistory: boolean,
 ): Promise<ModelUsageEventRecord[]> {
   const usage: ModelUsageEventRecord[] = [];
   for (const step of steps) {
     const reservation = await storage.remoteWorkerBudgets.getReservationForOperation(
-      step.record.operationId, step.record.dispatchGeneration,
+      step.record.operationId,
+      step.record.dispatchGeneration,
     );
     if (!reservation) throw new Error("Worker Chat completion lost its spending reservation.");
     for (const id of step.usageEventIds) {
       const event = await storage.modelUsageEvents.findByEventId(id);
-      if (!event || event.operationId !== step.record.operationId || event.dispatchGeneration !== step.record.dispatchGeneration)
+      if (
+        !event ||
+        event.operationId !== step.record.operationId ||
+        event.dispatchGeneration !== step.record.dispatchGeneration
+      )
         throw new Error("Worker Chat completion lost its canonical usage event.");
       usage.push(event);
     }
@@ -438,10 +492,15 @@ export async function readRemoteWorkerChatUsage(
     // spending scope. Retain earlier attempts, including unresolved dispatches.
     const seen = new Set(usage.map((event) => event.eventId));
     const assignmentUsage = await storage.modelUsageEvents.listRemoteWorkerAssignment(
-      ref.registryWorkspaceId, ref.assignmentId, ref.assignmentGeneration,
+      ref.registryWorkspaceId,
+      ref.assignmentId,
+      ref.assignmentGeneration,
     );
     for (const event of assignmentUsage) {
-      if (!seen.has(event.eventId)) { usage.push(event); seen.add(event.eventId); }
+      if (!seen.has(event.eventId)) {
+        usage.push(event);
+        seen.add(event.eventId);
+      }
     }
   }
   if (

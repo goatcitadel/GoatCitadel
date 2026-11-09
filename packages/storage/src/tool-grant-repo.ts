@@ -24,6 +24,7 @@ export class ToolGrantRepository {
   private readonly createStmt;
   private readonly getStmt;
   private readonly findActiveStmt;
+  private readonly lockReservedUseStmt;
   private readonly revokeStmt;
   private readonly consumeStmt;
   private readonly databaseTtlWindowStmt;
@@ -67,6 +68,11 @@ export class ToolGrantRepository {
         AND (expires_at IS NULL OR ${expiryIsActive})
         AND (uses_remaining IS NULL OR uses_remaining > 0)
       LIMIT 1
+    `);
+    this.lockReservedUseStmt = db.prepare(`
+      SELECT * FROM tool_grants
+      WHERE grant_id = ? AND revoked_at IS NULL AND (expires_at IS NULL OR ${expiryIsActive})
+      ${db.dialect === "postgres" ? "FOR UPDATE" : ""}
     `);
     this.revokeStmt = db.prepare(`
       UPDATE tool_grants
@@ -177,6 +183,13 @@ export class ToolGrantRepository {
 
   public findActive(grantId: string): ToolGrantRecord | undefined {
     const row = this.findActiveStmt.get(grantId);
+    assertToolGrantRow(row);
+    return row ? mapRow(row) : undefined;
+  }
+
+  /** In a caller-owned transaction. Includes a spent grant for one exact retained use. */
+  public lockUnrevokedGrantForReservedUse(grantId: string): ToolGrantRecord | undefined {
+    const row = this.lockReservedUseStmt.get(grantId);
     assertToolGrantRow(row);
     return row ? mapRow(row) : undefined;
   }

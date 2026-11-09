@@ -28,8 +28,8 @@ describe("sqlite schema migrations", () => {
     assert.deepEqual(
       { ...rows.at(-1) },
       {
-        version: 278,
-        name: "chat_artifact_render_receipts",
+        version: 280,
+        name: "managed_project_file_revisions",
       },
     );
     db.close();

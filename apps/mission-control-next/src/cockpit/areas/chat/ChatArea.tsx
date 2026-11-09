@@ -5,7 +5,6 @@ import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/cl
 import { fetchOnboardingState } from "@goatcitadel/mission-control-shared/api/client";
 import {
   MissionThreadedControllerHost,
-  type MissionThreadedActiveSessionSurfaceProps,
   type MissionThreadedRenderSurfaceInput,
 } from "@goatcitadel/threaded-surface-core";
 import { ChatConversationsSheet } from "./ChatConversationsSheet";
@@ -14,6 +13,8 @@ import { ChatTranscript } from "./ChatTranscript";
 import { ChatNoticeText } from "./ChatNoticeText";
 import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
+import { ChatManagedFilesSlot, useChatApprovalModeIntent } from "./chat-managed-files-surface";
+import { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
@@ -36,27 +37,7 @@ import { useOptionalStableHandler, useStableHandler } from "../../../features/th
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
 
-export function buildEditorTurnId(active: MissionThreadedActiveSessionSurfaceProps | null): string | undefined {
-  const selectedPath = active?.thread?.turns.filter((turn) => turn.branch.isSelectedPath) ?? [];
-  return selectedPath.find((turn) => turn.turnId === active?.selectedTurnId)?.turnId ?? selectedPath.at(-1)?.turnId;
-}
-
-/** An ordinary turn opens the inspector on Message; only a turn with an attached run opens on Run. */
-export function inspectorTabFor(
-  active: MissionThreadedActiveSessionSurfaceProps | null,
-  turnId: string | null,
-): ChatInspectorTab {
-  const target = turnId ?? active?.selectedTurnId ?? buildEditorTurnId(active);
-  return target && active?.delegationRun?.attachedTurnId === target ? "run" : "turn";
-}
-
-/** Only the one canonical artifact URL publication may complete this read. */
-export function artifactInspectorHistoryMatches(origin: string, target: string, current: string) {
-  if (current === origin) return true;
-  const separator = origin.indexOf(":");
-  const generation = Number(origin.slice(0, separator));
-  return separator > 0 && Number.isSafeInteger(generation) && current === `${generation + 1}:${target}`;
-}
+export { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 
 export function ChatArea({
   onVisibleSessionChange,
@@ -66,6 +47,7 @@ export function ChatArea({
   gatewayUnavailable?: boolean;
 }) {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
+  const getChatApprovalModeIntent = useChatApprovalModeIntent(activeWorkspaceId ?? "default");
   // `search` is the page the views show: while a Back move is held, the live URL names its target.
   const { navigate, search } = useCockpitRoute();
 
@@ -76,6 +58,7 @@ export function ChatArea({
       <MissionThreadedControllerHost
         coworkViewModelFactory={null}
         workspaceId={activeWorkspaceId ?? "default"}
+        getChatApprovalModeIntent={getChatApprovalModeIntent}
         surface="chat"
         lockSurface
         hidePageHeader
@@ -394,6 +377,15 @@ export function ChatAreaView({
         )}
         {active?.sessionStatusPanel ? (
           <DeferredSessionStatusPanel key={selectedSessionId} hidden={buildOpen} panel={active.sessionStatusPanel} />
+        ) : null}
+        {!buildOpen && !gatewayUnavailable ? (
+          <ChatManagedFilesSlot
+            active={active}
+            selectedSessionId={selectedSessionId}
+            session={session}
+            workspaceId={activeWorkspaceId ?? "default"}
+            latestTurnId={latestTurnId}
+          />
         ) : null}
         {composerProps && !buildOpen ? (
           <ChatTextComposer

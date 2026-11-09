@@ -121,6 +121,28 @@ describe("chat turn dispatch durable ownership", () => {
     ).resolves.toBe(false);
   });
 
+  it.each(["streamed", "buffered"] as const)("routes %s Auto quick-web through the durable owner", async (kind) => {
+    const run = { runId: "auto-quick-web" } as DurableRunRecord;
+    const host = createHost({ beginDurableChatRun: vi.fn(() => run) });
+    const prepared = {
+      ...createPrepared("chat", { normalizationProfile: "quick_web" }),
+      turnAdmission: { chatApprovalAuthority: { mode: "auto" } },
+    } as Parameters<typeof launchPreparedAgentChatTurnStream>[3];
+    const input = { content: "look this up" };
+    if (kind === "streamed") {
+      await expect(
+        launchPreparedAgentChatTurnStream(host, "session-1", input, prepared, "chat_thread_turn_appended"),
+      ).resolves.toBe(run.runId);
+    } else {
+      await consumePreparedAgentChatTurn(host, "session-1", input, prepared, "chat_thread_turn_appended");
+    }
+    expect(host.beginDurableChatRun).toHaveBeenCalledOnce();
+    expect(host.registerActiveChatTurnStream).toHaveBeenCalledWith("session-1", "turn-1", run.runId, {
+      reservation: true,
+    });
+    expect(host.backgroundTasks.size).toBe(0);
+  });
+
   it("forces routed quick-web turns through durable admission", async () => {
     const durableRun = { runId: "run-routed-quick-web" } as DurableRunRecord;
     const host = createHost({ beginDurableChatRun: vi.fn(() => durableRun) });

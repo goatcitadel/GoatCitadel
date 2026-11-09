@@ -371,6 +371,40 @@ describe("agentSendChatMessage", () => {
     );
   });
 
+  it("skips pre-bind orchestration for a fresh stamped Auto send", async () => {
+    const host = createHost({});
+    const admit = vi.mocked(host.sessionControlRuntimeOwner.admitOperatorChatTurn);
+    const admitStandard = admit.getMockImplementation()!;
+    admit.mockImplementationOnce(async (input) => ({
+      ...(await admitStandard(input)),
+      chatApprovalAuthority: {
+        version: 1,
+        mode: "auto",
+        binding: {
+          sessionId: input.sessionId,
+          workspaceId: "default",
+          projectId: "project-1",
+          modeRevision: "fixture",
+        },
+      },
+    }));
+    vi.mocked(host.resolvePreparedTurnOrchestration).mockRejectedValueOnce(new Error("Auto is not bound yet"));
+    await expect(agentSendChatMessage(host, "session-1", { content: "Read the project" })).resolves.toMatchObject({
+      transport: "llm",
+    });
+    expect(host.resolvePreparedTurnOrchestration).not.toHaveBeenCalled();
+    expect(host.turnRuntime.run).not.toHaveBeenCalled();
+    expect(dispatchMocks.consumePreparedAgentChatTurn).toHaveBeenCalledWith(
+      host,
+      "session-1",
+      expect.anything(),
+      expect.anything(),
+      "chat_thread_turn_appended",
+      undefined,
+      expect.objectContaining({ requireDurableExecution: true }),
+    );
+  });
+
   it("returns the canonical deterministic turn without preparing or redispatching it", async () => {
     const host = createHost({});
     const trace = createTrace({

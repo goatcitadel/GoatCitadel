@@ -33,6 +33,7 @@ export interface ConfirmedDelegationProposal {
 
 export interface ConfirmedDelegationHost {
   storage: Storage;
+  assertDelegationExecutionAllowed?(turn: { sessionId: string; turnId: string; workspaceId?: string }): Promise<void>;
   runDelegation(
     sessionId: string,
     request: ChatDelegateRequest,
@@ -277,6 +278,7 @@ export async function resolveConfirmedDelegation(
       stableRunKey: proposal.promptId,
       requireChildWatchers: true,
       preDispatchGuard: async () => {
+        await host.assertDelegationExecutionAllowed?.(input);
         await assertChatTurnToolUseOpen(storage, input.sessionId, input.turnId);
         const latest = await readChatTurnControl(storage, input.sessionId, input.turnId);
         if (latest.delegationProposal?.bindingHash !== frozenProposal.bindingHash || latest.delegationProposal.declined)

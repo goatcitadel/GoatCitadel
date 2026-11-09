@@ -392,7 +392,7 @@ for (const mode of ["sync", "async"] as const) {
 
 test("PG229 converges to existing PG204/SQLite257 authority without manifest probe drift", () => {
   const before = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS.filter((m) => m.version <= 228));
-  const after = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS);
+  const after = buildCanonicalPostgresSchemaShapeManifest(POSTGRES_MIGRATIONS.filter((m) => m.version <= 229));
   assert.deepEqual(after, before); // No shape change: only exact damaged installations converge.
-  assert.equal(POSTGRES_MIGRATIONS.at(-1)?.version, 229);
+  assert.equal(POSTGRES_MIGRATIONS.find((m) => m.version === 229)?.name, "chat_routed_context_namespace_convergence");
 });

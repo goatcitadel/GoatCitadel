@@ -1,5 +1,6 @@
 import type { DatabaseClient } from "./db.js";
 import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
+import { writeChatApprovalModeWithinAggregate } from "./chat-session-prefs-repo.js";
 
 export interface ChatSessionProjectRecord {
   sessionId: string;
@@ -69,6 +70,7 @@ export class ChatSessionProjectRepository {
           return { value: current, changed: false };
         }
         this.upsertStmt.run({ sessionId, projectId, assignedAt: now });
+        writeChatApprovalModeWithinAggregate(this.db, sessionId, "standard", projectId, null);
         const row = toChatSessionProjectRow(this.getStmt.get(sessionId));
         if (!row) {
           throw new Error(`Chat session project assignment for ${sessionId} was not persisted`);
@@ -92,6 +94,7 @@ export class ChatSessionProjectRepository {
         return { value: false, changed: false };
       }
       this.deleteStmt.run(sessionId);
+      writeChatApprovalModeWithinAggregate(this.db, sessionId, "standard", null, null);
       return { value: true, changed: true };
     });
     return { unassigned: result.value, revision: result.revision };

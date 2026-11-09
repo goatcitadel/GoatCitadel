@@ -69,6 +69,9 @@ export interface OutboundQueueItem {
 
 export interface OutboundRequestPrefsSnapshot {
   readonly mode: "chat";
+  readonly approvalModeIntent?: "standard" | "auto";
+  /** Null means the displayed Auto mode could not be refreshed. This snapshot must not be dispatched. */
+  readonly expectedChatApprovalModeRevision?: string | null;
   readonly providerId?: string;
   readonly model?: string;
   readonly webMode: ChatSessionPrefsRecord["webMode"];
@@ -157,7 +160,12 @@ export function useChatSurfaceOrchestration(input: {
     editHydrationAttemptRef.current += 1;
     setEditingTurnId(value);
   }, []);
-  useEffect(() => () => { editHydrationAttemptRef.current += 1; }, [input.selectedSessionId]);
+  useEffect(
+    () => () => {
+      editHydrationAttemptRef.current += 1;
+    },
+    [input.selectedSessionId],
+  );
 
   // The controller intentionally supplies this as a render-current callback.
   // Keep the callback in a ref so the public queue setter remains stable for
@@ -187,11 +195,19 @@ export function useChatSurfaceOrchestration(input: {
     if (!draftContent) {
       return;
     }
+    const requestPrefs = input.captureOutboundRequestPrefs();
+    if (requestPrefs.expectedChatApprovalModeRevision === null) {
+      input.pushLocalNoticeRef.current?.("Check the Chat approval mode before sending.", "warning");
+      return;
+    }
+    if (action === "edit" && requestPrefs.approvalModeIntent === "auto") {
+      input.pushLocalNoticeRef.current?.("To change this message in Auto mode, send a new message.", "warning");
+      return;
+    }
     editHydrationAttemptRef.current += 1;
     const content =
       action === "send" ? resolveOutboundContentWithContext(draftContent, input.outboundContext) : draftContent;
     const modelCouncil = input.consumeModelCouncilArming?.();
-    const requestPrefs = input.captureOutboundRequestPrefs();
     // Freeze the explicit external-source selection with the item (send only):
     // the selection itself is cleared later by the execution success path.
     const externalContextRefs = action === "send" ? (input.captureOutboundExternalContextRefs?.() ?? []) : [];
@@ -230,8 +246,12 @@ export function useChatSurfaceOrchestration(input: {
 
   const handleRetryTurn = useCallback(
     async (turnId: string) => {
-      const modelCouncil = input.consumeModelCouncilArming?.();
       const requestPrefs = input.captureOutboundRequestPrefs();
+      if (requestPrefs.approvalModeIntent === "auto") {
+        input.pushLocalNoticeRef.current?.("To try this request again in Auto mode, send a new message.", "warning");
+        return;
+      }
+      const modelCouncil = input.consumeModelCouncilArming?.();
       const nextItem: OutboundQueueItem = {
         id: createQueueItemId(),
         action: "retry",
@@ -334,15 +354,18 @@ export function useChatSurfaceOrchestration(input: {
         // Transcript files are summaries; hydrate their existing records so the
         // composer shows the exact original set and removal stays deliberate.
         const sourceAttachments = turn.userMessage.attachments ?? [];
-        const attachments = sourceAttachments.length > 0
-          ? await Promise.all(sourceAttachments.map(async ({ attachmentId }) => {
-              const attachment = await fetchChatAttachment(attachmentId);
-              if (attachment.attachmentId !== attachmentId) {
-                throw new Error("The saved file did not match the requested attachment.");
-              }
-              return attachment;
-            }))
-          : [];
+        const attachments =
+          sourceAttachments.length > 0
+            ? await Promise.all(
+                sourceAttachments.map(async ({ attachmentId }) => {
+                  const attachment = await fetchChatAttachment(attachmentId);
+                  if (attachment.attachmentId !== attachmentId) {
+                    throw new Error("The saved file did not match the requested attachment.");
+                  }
+                  return attachment;
+                }),
+              )
+            : [];
         if (!isCurrent()) return;
         setEditingTurnId(turnId);
         input.setDraft(turn.userMessage.content);

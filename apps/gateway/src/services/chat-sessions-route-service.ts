@@ -19,6 +19,10 @@ export const chatSessionsRouteMethods = [
   "exportChatSessionWorkbenchPatch",
   "forkChatSessionFromTurn",
   "getChatGeneratedArtifact",
+  "getChatApprovalMode",
+  "listManagedProjectFiles",
+  "downloadManagedProjectFile",
+  "restoreManagedProjectFile",
   "getChatSessionBinding",
   "getChatSessionStatus",
   "getChatSessionWorkbench",
@@ -51,6 +55,7 @@ export const chatSessionsRouteMethods = [
   "setChatSessionBinding",
   "unpinChatSession",
   "updateChatSession",
+  "updateChatApprovalMode",
   "cancelChatTimer",
 ] as const;
 

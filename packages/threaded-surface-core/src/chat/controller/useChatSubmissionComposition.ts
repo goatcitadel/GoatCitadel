@@ -23,6 +23,7 @@ import { useChatSessionComposition } from "./useChatSessionComposition";
 import { useChatSessionSelection } from "./useChatSessionSelection";
 
 type Input = {
+  getChatApprovalModeIntent?: MissionThreadedControllerHostProps["getChatApprovalModeIntent"];
   draft: string;
   pendingAttachments: ChatAttachmentRecord[];
   session: Pick<
@@ -71,6 +72,7 @@ type Input = {
 
 /** Composes queue admission, routing, preflight and local commands; preserves render-time preference publication. */
 export function useChatSubmissionComposition({
+  getChatApprovalModeIntent,
   draft,
   pendingAttachments,
   session,
@@ -124,7 +126,21 @@ export function useChatSubmissionComposition({
     setError: setUiError,
     onOutboundContextConsumed: session.conversationContext.handleOutboundContextConsumed,
     consumeModelCouncilArming: oneShotContext.consumeModelCouncilArming,
-    captureOutboundRequestPrefs: () => coordination.outboundRequestPrefsSnapshotRef.current,
+    captureOutboundRequestPrefs: () => {
+      const prefs = coordination.outboundRequestPrefsSnapshotRef.current;
+      const selected = session.threadController.selectedSession;
+      const intent =
+        selected && selected.sessionId === selection.selectedSessionId
+          ? getChatApprovalModeIntent?.(selected)
+          : undefined;
+      return intent
+        ? {
+            ...prefs,
+            approvalModeIntent: intent.mode,
+            expectedChatApprovalModeRevision: intent.uncertain ? null : intent.modeRevision,
+          }
+        : prefs;
+    },
     captureOutboundExternalContextRefs: () => [
       ...captureOutboundExternalContextRefs(),
       ...session.documentContext.pendingDocumentContextRefs.map((ref) => ({ ...ref })),

@@ -140,6 +140,13 @@ export function setShellOutputRetentionBytesForTesting(
 export type { ChannelEnvSecretRequest, ChannelEnvSecretResolution };
 
 export interface ToolExecutorRuntimeHooks {
+  /** Provided only for a verified, one-use approval by the policy engine. */
+  executeExactChatAutoDelete?: () => Promise<Record<string, unknown>>;
+  /** A Gateway-verified reader that enforces project containment at every actual open. */
+  executeScopedChatAutoRead?: () => Promise<Record<string, unknown>>;
+  executeManagedChatFile?: () => Promise<Record<string, unknown>>;
+  /** Revalidate after executor preparation and again after the ordinary spawn preconditions. */
+  assertExecutionCurrent?: () => Promise<void>;
   /**
    * Gateway-owned, session-scoped read of a chat attachment's stored bytes for the document helpers: the window
    * the call needs, with `totalBytes` set when only that window was read.
@@ -373,6 +380,26 @@ export async function executeTool(
     config,
     await resolveExecutionWriteAdmission(request, config, storage, runtimeHooks.resolveOutsideRootWriteEligibility),
   );
+  await runtimeHooks.assertExecutionCurrent?.();
+
+  if (runtimeHooks.executeExactChatAutoDelete) {
+    if (!["fs.delete", "project.files.delete"].includes(request.toolName) || !request.approvedByApprovalId) {
+      throw new Error("Exact deletion requires its own approved filesystem invocation.");
+    }
+    return finalizeToolResult(await runtimeHooks.executeExactChatAutoDelete());
+  }
+
+  if (request.toolName.startsWith("project.files.")) {
+    if (request.toolName === "project.files.delete" || !runtimeHooks.executeManagedChatFile) {
+      throw new Error("Managed file operations require their bound Auto execution.");
+    }
+    return finalizeToolResult(await runtimeHooks.executeManagedChatFile());
+  }
+
+  if (runtimeHooks.executeScopedChatAutoRead) {
+    await assertReadPathAllowedForRequest(required(request.args.path, "path"), request, config, storage);
+    return finalizeToolResult(await runtimeHooks.executeScopedChatAutoRead());
+  }
 
   // browser.errand is not one of the in-memory browser tools: the Gateway runs it in its own window.
   if (request.toolName === BROWSER_ERRAND_TOOL_NAME) {
@@ -1255,6 +1282,7 @@ async function assertBeforeProcessSpawn(
   }
   try {
     await runtimeHooks.beforeProcessSpawn?.({ toolName, ...(cwd ? { cwd } : {}) });
+    await runtimeHooks.assertExecutionCurrent?.();
   } catch (error) {
     throw new ToolBeforeProcessSpawnError(error, false);
   }

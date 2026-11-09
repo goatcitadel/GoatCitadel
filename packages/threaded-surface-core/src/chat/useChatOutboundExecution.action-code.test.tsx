@@ -730,6 +730,8 @@ describe("outbound action code loading", () => {
   it("keeps the immutable queue request snapshot after preferences change during code loading", async () => {
     const queuedPrefs = {
       mode: "chat",
+      approvalModeIntent: "auto",
+      expectedChatApprovalModeRevision: "a".repeat(64),
       providerId: "queued-provider",
       model: "queued-model",
       webMode: "off",
@@ -764,9 +766,42 @@ describe("outbound action code loading", () => {
         model: "queued-model",
         memoryMode: "off",
         webMode: "off",
+        expectedChatApprovalModeRevision: "a".repeat(64),
       }),
       { originSurface: "chat" },
     );
+  });
+
+  it("binds a streamed send to its captured approval mode without retrying a rejected submission", async () => {
+    await mount({ streamEnabled: true });
+    const stale = new Error("Chat approval mode or project changed. Reload the session and try again.");
+    streamAgentChatMessageMock.mockRejectedValueOnce(stale);
+    const { attempt } = await begin({
+      ...item(),
+      requestPrefs: {
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        speedMode: "standard",
+        subagentPolicy: "off",
+        fullWebAccess: false,
+        approvalModeIntent: "auto",
+        expectedChatApprovalModeRevision: "b".repeat(64),
+      },
+    });
+    await act(async () => {
+      await attempt;
+    });
+    expect(streamAgentChatMessageMock).toHaveBeenCalledOnce();
+    expect(streamAgentChatMessageMock).toHaveBeenCalledWith(
+      "session-1",
+      expect.objectContaining({ expectedChatApprovalModeRevision: "b".repeat(64) }),
+      expect.any(Function),
+      expect.any(Object),
+    );
+    expect(resumeChatTurnStreamMock).not.toHaveBeenCalled();
+    expect(latest!.getSnapshot().error).toContain("approval mode or project changed");
   });
 
   it("retains canonical uncertain-send recovery after the real action code loads", async () => {

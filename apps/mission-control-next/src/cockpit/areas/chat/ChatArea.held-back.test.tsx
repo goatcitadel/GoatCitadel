@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { act } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createRoot, type Root } from "react-dom/client";
 import type { Window as HappyDomWindow } from "happy-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -26,6 +27,7 @@ vi.mock("../../../shell-preference", async (importOriginal) => ({
 
 let root: Root;
 let container: HTMLDivElement;
+let queryClient: QueryClient;
 let draft: ReturnType<typeof useSessionDraft<{ text: string }>>;
 function DraftProbe() {
   draft = useSessionDraft("held-back-draft", { text: "" }, 1, { label: "Conversation draft" });
@@ -35,10 +37,12 @@ async function render() {
   // A new element each time, so the whole tree renders again.
   await act(async () =>
     root.render(
-      <CockpitNavigationProvider>
-        <ChatArea />
-        <DraftProbe />
-      </CockpitNavigationProvider>,
+      <QueryClientProvider client={queryClient}>
+        <CockpitNavigationProvider>
+          <ChatArea />
+          <DraftProbe />
+        </CockpitNavigationProvider>
+      </QueryClientProvider>,
     ),
   );
 }
@@ -56,6 +60,7 @@ beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
   root = createRoot(container);
+  queryClient = new QueryClient();
 });
 afterEach(async () => {
   await act(async () => root.unmount());

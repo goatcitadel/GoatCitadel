@@ -35,6 +35,7 @@ export interface ChatProjectUpdateInput {
 
 export class ChatProjectRepository {
   private readonly getStmt;
+  private readonly getForUpdateStmt;
   private readonly insertStmt;
   private readonly updateStmt;
   private readonly archiveStmt;
@@ -44,6 +45,9 @@ export class ChatProjectRepository {
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare("SELECT * FROM chat_projects WHERE project_id = ?");
+    this.getForUpdateStmt = db.prepare(
+      `SELECT * FROM chat_projects WHERE project_id = ?${db.dialect === "postgres" ? " FOR UPDATE" : ""}`,
+    );
     this.insertStmt = db.prepare(`
       INSERT INTO chat_projects (
         project_id, workspace_id, name, description, workspace_path, color,
@@ -132,6 +136,11 @@ export class ChatProjectRepository {
     return row ? mapRow(row) : undefined;
   }
 
+  public findForUpdate(projectId: string): ChatProjectRecord | undefined {
+    const row = toChatProjectRow(this.getForUpdateStmt.get(projectId));
+    return row ? mapRow(row) : undefined;
+  }
+
   public create(input: ChatProjectCreateInput, now = new Date().toISOString()): ChatProjectRecord {
     const projectId = randomUUID();
     this.insertStmt.run({
@@ -160,7 +169,7 @@ export class ChatProjectRepository {
   ): ChatProjectRecord {
     validateExpectedRevision(expectedRevision);
     return this.db.transaction("immediate", () => {
-      const current = this.get(projectId);
+      const current = this.findForUpdate(projectId) ?? this.get(projectId);
       assertExpectedRevision("chat_project", projectId, expectedRevision, current.revision);
       const next = {
         workspaceId:
@@ -174,6 +183,9 @@ export class ChatProjectRepository {
           input.workspacePath !== undefined ? sanitizeWorkspacePath(input.workspacePath) : current.workspacePath,
         color: input.color !== undefined ? sanitizeOptional(input.color) : (current.color ?? null),
       };
+      if (next.workspaceId !== (current.workspaceId ?? "default")) {
+        this.assertNoManagedFileHistory(current);
+      }
       if (
         next.workspaceId === (current.workspaceId ?? "default") &&
         next.name === current.name &&
@@ -266,14 +278,26 @@ export class ChatProjectRepository {
   public hardDeleteWithRevision(projectId: string, expectedRevision: number): boolean {
     validateExpectedRevision(expectedRevision);
     return this.db.transaction("immediate", () => {
-      const current = this.get(projectId);
+      const current = this.findForUpdate(projectId) ?? this.get(projectId);
       assertExpectedRevision("chat_project", projectId, expectedRevision, current.revision);
+      this.assertNoManagedFileHistory(current);
       const result = this.deleteStmt.run({ projectId, expectedRevision });
       if (result.changes === 0) {
         this.throwCasMiss(projectId, expectedRevision);
       }
       return true;
     });
+  }
+
+  private assertNoManagedFileHistory(project: ChatProjectRecord): void {
+    const retained = this.db
+      .prepare(
+        `
+      SELECT 1 FROM managed_project_file_revisions WHERE workspace_id = ? AND project_id = ? LIMIT 1
+    `,
+      )
+      .get(project.workspaceId ?? "default", project.projectId);
+    if (retained) throw new ConflictError({ message: "This project has retained managed file history." });
   }
 
   private assertNoopRevision(projectId: string, expectedRevision: number): ChatProjectRecord {

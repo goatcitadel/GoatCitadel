@@ -192,26 +192,7 @@ export const authPlugin = fp(async (fastify) => {
     }
 
     const remoteAddress = request.raw.socket.remoteAddress ?? request.ip;
-    // SECURITY (codex finding #19): Treat a request as loopback only when
-    // it carries NO proxy provenance at all — neither `X-Forwarded-For`,
-    // `Forwarded`, nor `X-Real-IP`. A reverse proxy that bridges remote clients to a
-    // 127.0.0.1-bound gateway can strip proxy headers (intentionally or by
-    // misconfig), in which case `request.raw.socket.remoteAddress === 127.0.0.1`
-    // and a remote attacker would otherwise satisfy `loopbackRequest`. We
-    // also defer to `request.ips` when Fastify's `trustProxy` is configured;
-    // if `ips.length > 1` the request travelled through a proxy. Defence in
-    // depth — we still treat the bypass as an exception rather than a rule.
-    //
-    // Check header *presence*, not just truthiness — a proxy that emits an
-    // empty `X-Forwarded-For: ` header still indicates the request crossed
-    // a proxy boundary, even though `Boolean("") === false`.
-    const proxyHopCount = Array.isArray(request.ips) ? request.ips.length : 0;
-    const hasProxyProvenance =
-      "x-forwarded-for" in request.headers ||
-      "forwarded" in request.headers ||
-      "x-real-ip" in request.headers ||
-      proxyHopCount > 1;
-    const loopbackRequest = !hasProxyProvenance && isLoopbackAddress(remoteAddress);
+    const loopbackRequest = isDirectLoopbackRequest(request);
     if (auth.allowLoopbackBypass && loopbackRequest) {
       setAuthActor(request, `loopback:${normalizeActorSuffix(remoteAddress)}`, "loopback");
       return;
@@ -506,6 +487,16 @@ function isAsciiWhitespaceCode(code: number): boolean {
 function isLoopbackAddress(ip: string): boolean {
   const normalized = ip.replace("::ffff:", "");
   return normalized === "127.0.0.1" || normalized === "::1";
+}
+
+/** Reject any proxy provenance, including empty forwarding headers and trusted proxy hops. */
+export function isDirectLoopbackRequest(request: FastifyRequest): boolean {
+  const proxyHopCount = Array.isArray(request.ips) ? request.ips.length : 0;
+  return (
+    proxyHopCount <= 1 &&
+    !("x-forwarded-for" in request.headers || "forwarded" in request.headers || "x-real-ip" in request.headers) &&
+    isLoopbackAddress(request.raw.socket.remoteAddress ?? request.ip)
+  );
 }
 
 function isRemoteApprovalCreateRequest(request: FastifyRequest): boolean {

@@ -127,6 +127,7 @@ export type {
 
 const STREAM_PREF_KEY = "goatcitadel.chat.agent.stream.enabled";
 export function MissionThreadedControllerHost({
+  getChatApprovalModeIntent,
   workspaceId = "default",
   workspaceName = workspaceId,
   approvalsCount = 0,
@@ -278,6 +279,7 @@ export function MissionThreadedControllerHost({
     setActiveGeneratedArtifact,
   });
   const submission = useChatSubmissionComposition({
+    getChatApprovalModeIntent,
     draft,
     pendingAttachments,
     session,

@@ -47,6 +47,7 @@ import {
   CAPABILITY_LIFECYCLE_APPROVAL_KIND,
   CAPABILITY_LIFECYCLE_EFFECT_KIND,
   CAPABILITY_LIFECYCLE_EFFECT_TARGET_KIND,
+  readDurableChatTurnExecutionPayloadAuthority,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_APPROVAL_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_KIND,
   EXTERNAL_SOURCE_KNOWLEDGE_SNAPSHOT_EFFECT_TARGET_KIND,
@@ -270,6 +271,14 @@ async function requireExactApprovalChatParentAuthority(
       : {};
   const request = payload.request;
   const requestActor = payload.requestActor;
+  const approvalAuthority =
+    payload.chatApprovalAuthority === undefined
+      ? undefined
+      : readDurableChatTurnExecutionPayloadAuthority({
+          workflowKey: run.workflowKey,
+          durableRunId: run.runId,
+          payload,
+        })?.chatApprovalAuthority;
   if (
     run.workflowKey !== "chat.turn.execute" ||
     run.status !== "waiting" ||
@@ -314,9 +323,13 @@ async function requireExactApprovalChatParentAuthority(
     admission.controllerGeneration !== payload.admissionControllerGeneration ||
     admission.actorKind !== (requestActor as Record<string, unknown>).actorKind ||
     admission.actorId !== (requestActor as Record<string, unknown>).actorId ||
+    (payload.chatApprovalAuthority !== undefined && approvalAuthority === undefined) ||
     computeFrozenChatTurnAdmissionMaterialSha256(admittedRequest) !== payload.admissionMaterialSha256 ||
-    computeEffectiveChatTurnRequestMaterialSha256(payload.admissionMaterialSha256, request as never) !==
-      payload.effectiveRequestMaterialSha256
+    computeEffectiveChatTurnRequestMaterialSha256(
+      payload.admissionMaterialSha256,
+      request as never,
+      approvalAuthority,
+    ) !== payload.effectiveRequestMaterialSha256
   ) {
     throw new Error(`Durable run ${run.runId} approval parent drifted from its mutation admission.`);
   }
@@ -429,6 +442,8 @@ export interface ApprovalEffectsServiceDeps
   findProactiveDurableRunIdsForApproval(approvalId: string): Promise<string[]>;
   executeCodeModePendingApproval(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
   executeApprovedPendingAction(approvalId: string, signal?: AbortSignal): Promise<ToolInvokeResult | undefined>;
+  checkChatAutoApprovalReplay?(approvalId: string, actionType: string): Promise<ToolInvokeResult | undefined>;
+  runOutsideChatExecutionScope?<T>(work: () => T): T;
   prepareRemoteWorkerApprovalHandoff?(approvalId: string): Promise<Record<string, unknown>>;
   shouldDeferRemoteWorkerApprovalWake?(runId: string, approvalId: string): Promise<boolean>;
   executeApprovedSkillHubLifecycleOperation?(
@@ -635,24 +650,26 @@ export class ApprovalEffectsService {
       return;
     }
     const backgroundTasks = this.deps.backgroundTasks;
-    const task = runWithIsolatedRequestAttribution({}, () =>
-      Promise.resolve().then(async () => {
-        try {
-          do {
-            this.workerRequested = false;
-            await this.drainPendingEffects();
-          } while (this.workerRequested && !this.workerStopped);
-        } catch (error) {
-          this.publishWorkerFailure("action", error);
-        } finally {
-          this.workerActive = false;
-          if (this.actionWorkerTask === task) {
-            this.actionWorkerTask = undefined;
+    const launch = () =>
+      runWithIsolatedRequestAttribution({}, () =>
+        Promise.resolve().then(async () => {
+          try {
+            do {
+              this.workerRequested = false;
+              await this.drainPendingEffects();
+            } while (this.workerRequested && !this.workerStopped);
+          } catch (error) {
+            this.publishWorkerFailure("action", error);
+          } finally {
+            this.workerActive = false;
+            if (this.actionWorkerTask === task) {
+              this.actionWorkerTask = undefined;
+            }
+            reservation?.release();
           }
-          reservation?.release();
-        }
-      }),
-    );
+        }),
+      );
+    const task = this.deps.runOutsideChatExecutionScope ? this.deps.runOutsideChatExecutionScope(launch) : launch();
     this.actionWorkerTask = task;
     trackBackgroundTask(backgroundTasks, task);
   }
@@ -673,21 +690,23 @@ export class ApprovalEffectsService {
       return;
     }
     const backgroundTasks = this.deps.backgroundTasks;
-    const task = runWithIsolatedRequestAttribution({}, () =>
-      Promise.resolve().then(async () => {
-        try {
-          do {
-            this.observabilityWorkerRequested = false;
-            await this.drainPendingObservabilityEffects();
-          } while (this.observabilityWorkerRequested && !this.workerStopped);
-        } catch (error) {
-          this.publishWorkerFailure("observability", error);
-        } finally {
-          this.observabilityWorkerActive = false;
-          reservation?.release();
-        }
-      }),
-    );
+    const launch = () =>
+      runWithIsolatedRequestAttribution({}, () =>
+        Promise.resolve().then(async () => {
+          try {
+            do {
+              this.observabilityWorkerRequested = false;
+              await this.drainPendingObservabilityEffects();
+            } while (this.observabilityWorkerRequested && !this.workerStopped);
+          } catch (error) {
+            this.publishWorkerFailure("observability", error);
+          } finally {
+            this.observabilityWorkerActive = false;
+            reservation?.release();
+          }
+        }),
+      );
+    const task = this.deps.runOutsideChatExecutionScope ? this.deps.runOutsideChatExecutionScope(launch) : launch();
     trackBackgroundTask(backgroundTasks, task);
   }
 
@@ -3033,7 +3052,9 @@ export class ApprovalEffectsService {
     if (!pendingAction || pendingAction.resolutionStatus === "executed") {
       const completionPendingAction = pendingAction;
       if (!pendingAction && effect.payload.actionType === "code_mode.run") {
-        const recoveredAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
+        const recoveredAction =
+          (await this.deps.checkChatAutoApprovalReplay?.(effect.approvalId, "code_mode.run")) ??
+          (await this.deps.executeCodeModePendingApproval(effect.approvalId, signal));
         if (!(await this.isEffectStillClaimed(effect.effectId))) {
           return;
         }
@@ -3116,10 +3137,10 @@ export class ApprovalEffectsService {
       return;
     }
 
-    let executedAction: ToolInvokeResult | undefined;
-    if (isCodeModePendingActionType(pendingAction.actionType)) {
+    let executedAction = await this.deps.checkChatAutoApprovalReplay?.(effect.approvalId, pendingAction.actionType);
+    if (!executedAction && isCodeModePendingActionType(pendingAction.actionType)) {
       executedAction = await this.deps.executeCodeModePendingApproval(effect.approvalId, signal);
-    } else {
+    } else if (!executedAction) {
       try {
         executedAction = await this.deps.executeApprovedPendingAction(effect.approvalId, signal);
       } catch (error) {

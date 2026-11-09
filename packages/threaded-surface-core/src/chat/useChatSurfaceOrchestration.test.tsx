@@ -305,7 +305,9 @@ describe("useChatSurfaceOrchestration", () => {
     act(() => latest!.setRequestPrefs(anthropicPrefs));
     expect(latest!.snapshot().queuedOutbound[0]).toMatchObject({ requestPrefs: DEFAULT_REQUEST_PREFS });
 
-    await act(async () => { await latest!.controller.handleBeginEditTurn("turn-1"); });
+    await act(async () => {
+      await latest!.controller.handleBeginEditTurn("turn-1");
+    });
     await act(async () => latest!.controller.handleSend());
     expect(latest!.snapshot().queuedOutbound[1]).toMatchObject({
       action: "edit",
@@ -372,9 +374,31 @@ describe("useChatSurfaceOrchestration", () => {
     act(() => renderer.unmount());
   });
 
+  it("retains the visible approval mode in the queued item and refuses an uncertain Auto send", async () => {
+    const observed = {
+      ...DEFAULT_REQUEST_PREFS,
+      approvalModeIntent: "auto" as const,
+      expectedChatApprovalModeRevision: "a".repeat(64),
+    };
+    const renderer = mountHarness({ initialDraft: "Queued Auto", initialRequestPrefs: observed, canBegin: false });
+    await act(async () => latest!.controller.handleSend());
+    act(() => {
+      latest!.setRequestPrefs({ ...observed, expectedChatApprovalModeRevision: null });
+      latest!.setDraft("Uncertain Auto");
+    });
+    await act(async () => latest!.controller.handleSend());
+    expect(latest!.snapshot().queuedOutbound).toHaveLength(1);
+    expect(latest!.snapshot().queuedOutbound[0]?.requestPrefs).toEqual(observed);
+    expect(latest!.snapshot().draft).toBe("Uncertain Auto");
+    expect(latest!.pushNotice).toHaveBeenCalledWith("Check the Chat approval mode before sending.", "warning");
+    act(() => renderer.unmount());
+  });
+
   it("requires fresh Council arming for every retry and edit", async () => {
     mountHarness({ initialDraft: "", initialCouncilArmed: true, canBegin: false });
-    await act(async () => { await latest!.controller.handleBeginEditTurn("turn-1"); });
+    await act(async () => {
+      await latest!.controller.handleBeginEditTurn("turn-1");
+    });
     await act(async () => latest!.controller.handleSend());
     expect(latest!.snapshot().queuedOutbound[0]).toMatchObject({
       action: "edit",
@@ -395,7 +419,9 @@ describe("useChatSurfaceOrchestration", () => {
 
   it("supports edit and retry queue flows", async () => {
     mountHarness({ initialDraft: "", canBegin: false });
-    await act(async () => { await latest!.controller.handleBeginEditTurn("turn-1"); });
+    await act(async () => {
+      await latest!.controller.handleBeginEditTurn("turn-1");
+    });
     expect(latest!.snapshot().editingTurnId).toBe("turn-1");
     expect(latest!.snapshot().draft).toBe("Original prompt");
     expect(latest!.composerFocus).toHaveBeenCalled();
@@ -522,7 +548,9 @@ describe("useChatSurfaceOrchestration", () => {
     });
     expect(latest!.abortActiveChatStream).not.toHaveBeenCalled();
 
-    await act(async () => { await latest!.controller.handleBeginEditTurn("missing-turn"); });
+    await act(async () => {
+      await latest!.controller.handleBeginEditTurn("missing-turn");
+    });
     expect(latest!.snapshot().editingTurnId).toBeNull();
   });
 
@@ -667,7 +695,9 @@ describe("useChatSurfaceOrchestration", () => {
       { kind: "external_attachment" as const, ref: "attachment-1" },
     ]);
     mountHarness({ captureOutboundExternalContextRefs });
-    await act(async () => { await latest!.controller.handleBeginEditTurn("turn-1"); });
+    await act(async () => {
+      await latest!.controller.handleBeginEditTurn("turn-1");
+    });
     await act(async () => {
       await latest!.controller.handleSend();
     });
@@ -697,54 +727,108 @@ describe("useChatSurfaceOrchestration", () => {
 
 describe("editing attached prompts", () => {
   const sourceFile = { attachmentId: "source-pdf", fileName: "source.pdf", mimeType: "application/pdf", sizeBytes: 42 };
-  const sourceRecord = { ...sourceFile, sessionId: "session-1", sha256: "fixture-hash", storageRelPath: "source.pdf", extractStatus: "ready", createdAt: "2026-11-02T00:00:00.000Z" };
-  it.each([{ initialAttachments: [] }, { initialAttachments: [{ attachmentId: "unrelated" }] }])("hydrates original files instead of the current composer set $initialAttachments", async ({ initialAttachments }) => {
-    apiMocks.fetchChatAttachment.mockResolvedValue(sourceRecord);
-    const renderer = mountHarness({ initialAttachments, sourceAttachments: [sourceFile] });
-    await act(async () => { await latest!.controller.handleBeginEditTurn("turn-1"); });
-    expect(latest!.snapshot().pendingAttachments).toEqual([sourceRecord]);
-    await act(async () => latest!.controller.handleSend());
-    expect(latest!.executeOutbound.mock.calls[0]?.[0]).toMatchObject({ action: "edit", attachments: [sourceRecord] });
-    act(() => renderer.unmount());
-  });
+  const sourceRecord = {
+    ...sourceFile,
+    sessionId: "session-1",
+    sha256: "fixture-hash",
+    storageRelPath: "source.pdf",
+    extractStatus: "ready",
+    createdAt: "2026-11-02T00:00:00.000Z",
+  };
+  it.each([{ initialAttachments: [] }, { initialAttachments: [{ attachmentId: "unrelated" }] }])(
+    "hydrates original files instead of the current composer set $initialAttachments",
+    async ({ initialAttachments }) => {
+      apiMocks.fetchChatAttachment.mockResolvedValue(sourceRecord);
+      const renderer = mountHarness({ initialAttachments, sourceAttachments: [sourceFile] });
+      await act(async () => {
+        await latest!.controller.handleBeginEditTurn("turn-1");
+      });
+      expect(latest!.snapshot().pendingAttachments).toEqual([sourceRecord]);
+      await act(async () => latest!.controller.handleSend());
+      expect(latest!.executeOutbound.mock.calls[0]?.[0]).toMatchObject({ action: "edit", attachments: [sourceRecord] });
+      act(() => renderer.unmount());
+    },
+  );
   it("allows removing the original file deliberately before resend", async () => {
     apiMocks.fetchChatAttachment.mockResolvedValue(sourceRecord);
     const renderer = mountHarness({ sourceAttachments: [sourceFile] });
-    await act(async () => { await latest!.controller.handleBeginEditTurn("turn-1"); });
+    await act(async () => {
+      await latest!.controller.handleBeginEditTurn("turn-1");
+    });
     expect(latest!.snapshot().pendingAttachments).toEqual([sourceRecord]);
     act(() => latest!.setAttachments([]));
     await act(async () => latest!.controller.handleSend());
     expect(latest!.executeOutbound.mock.calls[0]?.[0]).toMatchObject({ action: "edit", attachments: [] });
     act(() => renderer.unmount());
   });
-  it.each(["draft", "session"] as const)("does not overwrite the composer after its %s changes during metadata hydration", async (change) => {
-    let resolveMetadata!: (value: typeof sourceRecord) => void;
-    apiMocks.fetchChatAttachment.mockReturnValue(new Promise((resolve) => { resolveMetadata = resolve; }));
-    const renderer = mountHarness({ initialDraft: "Unsent draft", sourceAttachments: [sourceFile] });
-    let editing: Promise<void>;
-    act(() => { editing = Promise.resolve(latest!.controller.handleBeginEditTurn("turn-1")); });
-    if (change === "draft") act(() => latest!.setDraft("Newer draft"));
-    else act(() => renderer.update(<Harness initialDraft="Unsent draft" selectedSessionId="session-2" sourceAttachments={[sourceFile]} />));
-    await act(async () => { resolveMetadata(sourceRecord); await editing!; });
-    expect(latest!.snapshot()).toMatchObject({ editingTurnId: null, draft: change === "draft" ? "Newer draft" : "Unsent draft", pendingAttachments: [] });
-    act(() => renderer.unmount());
-  });
+  it.each(["draft", "session"] as const)(
+    "does not overwrite the composer after its %s changes during metadata hydration",
+    async (change) => {
+      let resolveMetadata!: (value: typeof sourceRecord) => void;
+      apiMocks.fetchChatAttachment.mockReturnValue(
+        new Promise((resolve) => {
+          resolveMetadata = resolve;
+        }),
+      );
+      const renderer = mountHarness({ initialDraft: "Unsent draft", sourceAttachments: [sourceFile] });
+      let editing: Promise<void>;
+      act(() => {
+        editing = Promise.resolve(latest!.controller.handleBeginEditTurn("turn-1"));
+      });
+      if (change === "draft") act(() => latest!.setDraft("Newer draft"));
+      else
+        act(() =>
+          renderer.update(
+            <Harness initialDraft="Unsent draft" selectedSessionId="session-2" sourceAttachments={[sourceFile]} />,
+          ),
+        );
+      await act(async () => {
+        resolveMetadata(sourceRecord);
+        await editing!;
+      });
+      expect(latest!.snapshot()).toMatchObject({
+        editingTurnId: null,
+        draft: change === "draft" ? "Newer draft" : "Unsent draft",
+        pendingAttachments: [],
+      });
+      act(() => renderer.unmount());
+    },
+  );
   it("cancels pending edit hydration through the public edit setter", async () => {
     let resolveMetadata!: (value: typeof sourceRecord) => void;
-    apiMocks.fetchChatAttachment.mockReturnValue(new Promise((resolve) => { resolveMetadata = resolve; }));
+    apiMocks.fetchChatAttachment.mockReturnValue(
+      new Promise((resolve) => {
+        resolveMetadata = resolve;
+      }),
+    );
     const renderer = mountHarness({ initialDraft: "Unsent draft", sourceAttachments: [sourceFile] });
     let editing!: Promise<void>;
-    act(() => { editing = latest!.controller.handleBeginEditTurn("turn-1"); });
+    act(() => {
+      editing = latest!.controller.handleBeginEditTurn("turn-1");
+    });
     act(() => latest!.controller.setEditingTurnId(null));
-    await act(async () => { resolveMetadata(sourceRecord); await editing; });
+    await act(async () => {
+      resolveMetadata(sourceRecord);
+      await editing;
+    });
     expect(latest!.snapshot()).toMatchObject({ editingTurnId: null, draft: "Unsent draft", pendingAttachments: [] });
     act(() => renderer.unmount());
   });
   it("leaves the composer intact when original metadata is unavailable", async () => {
     apiMocks.fetchChatAttachment.mockRejectedValue(new Error("File unavailable"));
-    const renderer = mountHarness({ initialDraft: "Unsent draft", initialAttachments: [{ attachmentId: "unrelated" }], sourceAttachments: [sourceFile] });
-    await act(async () => { await latest!.controller.handleBeginEditTurn("turn-1"); });
-    expect(latest!.snapshot()).toMatchObject({ editingTurnId: null, draft: "Unsent draft", pendingAttachments: [{ attachmentId: "unrelated" }] });
+    const renderer = mountHarness({
+      initialDraft: "Unsent draft",
+      initialAttachments: [{ attachmentId: "unrelated" }],
+      sourceAttachments: [sourceFile],
+    });
+    await act(async () => {
+      await latest!.controller.handleBeginEditTurn("turn-1");
+    });
+    expect(latest!.snapshot()).toMatchObject({
+      editingTurnId: null,
+      draft: "Unsent draft",
+      pendingAttachments: [{ attachmentId: "unrelated" }],
+    });
     expect(latest!.setError).toHaveBeenCalledWith(expect.stringContaining("File unavailable"));
     act(() => renderer.unmount());
   });

@@ -5,9 +5,9 @@
     "sqlite": {
       "path": "packages/storage/src/sqlite.ts",
       "registryName": "SCHEMA_MIGRATION_GROUPS",
-      "expectedCount": 278,
+      "expectedCount": 280,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 278,
+      "expectedLastVersion": 280,
       "migrations": [
         {
           "version": 1,
@@ -1954,15 +1954,29 @@
           "groupName": "canonical",
           "definitionSha256": "16815d21075df15586c87bfc99ca857847fb525266481ee6dece12f1c0f6f3fe",
           "implementationSha256": "c91b59ee9c010e48dcc5dc54b49ed532a6531ee78c43b0b973e4eb24e612bb82"
+        },
+        {
+          "version": 279,
+          "name": "chat_session_approval_modes",
+          "groupName": "canonical",
+          "definitionSha256": "0af1f64615045116d07649fd82f76b914f9174d6835d61c72929d81110715ea8",
+          "implementationSha256": "434705b52fa900ce19a75bf41f0a7632be1b9185450e55e4cb590245a316e5f5"
+        },
+        {
+          "version": 280,
+          "name": "managed_project_file_revisions",
+          "groupName": "canonical",
+          "definitionSha256": "f4c68ebb497de2f600b5fb164c249abc9b691dbaf864b85b1d2e2d8db3f998b9",
+          "implementationSha256": "651d15aaaad076035b7699ccb922b8b778d0b15867c16a600b649e5dbd9d0dbe"
         }
       ]
     },
     "postgres": {
       "path": "packages/storage/src/postgres/migrations.ts",
       "registryName": "POSTGRES_MIGRATIONS",
-      "expectedCount": 229,
+      "expectedCount": 231,
       "expectedFirstVersion": 1,
-      "expectedLastVersion": 229,
+      "expectedLastVersion": 231,
       "migrations": [
         {
           "version": 1,
@@ -3346,6 +3360,18 @@
           "name": "chat_routed_context_namespace_convergence",
           "definitionSha256": "236fad9fe1e1992278d1be25481ec7f70e39920c3684a91fe1d8ae0614438f01",
           "runtimeIntegritySha256": "7d307477ae5f1533c5174020c6bf95d95f7613b9657b56942511be8148ccbadb"
+        },
+        {
+          "version": 230,
+          "name": "chat_session_approval_modes",
+          "definitionSha256": "55b3fe9babb6179cf10e2b50b6ea4c12f756af6bd885a3d0a35268e79a04b3cb",
+          "runtimeIntegritySha256": "d780c90f177e49600b3464a99a3ae30d5909a3b85b71d633a379836f305ba596"
+        },
+        {
+          "version": 231,
+          "name": "managed_project_file_revisions",
+          "definitionSha256": "01c65726897d039eea1d617fe8d9059786b18f74f1bf3728be56480ba3490f76",
+          "runtimeIntegritySha256": "6398f01c5a09d4089955e775dc16cb420d08cf06639c689f73a11cf951bc1dc2"
         }
       ]
     }

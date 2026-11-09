@@ -1,7 +1,9 @@
+import { randomUUID } from "node:crypto";
 import type { DatabaseClient } from "./db.js";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { ChatSessionRevisionRepository } from "./chat-session-revision-repo.js";
 import type {
+  ChatApprovalMode,
   ChatCodeAutoApplyPosture,
   ChatMode,
   ChatMemoryMode,
@@ -75,6 +77,41 @@ export interface RevisionedChatSessionPrefsRecord extends ChatSessionPrefsRecord
   revision: number;
 }
 
+export interface StoredChatApprovalMode {
+  readonly mode: ChatApprovalMode;
+  readonly modeRevision: string;
+  readonly workspaceId: string;
+  readonly projectId: string | null;
+  readonly projectRevision: number | null;
+  readonly lastChangeAggregateRevision: number;
+}
+
+/** Called only by owners holding the session aggregate revision fence. */
+export function writeChatApprovalModeWithinAggregate(
+  db: DatabaseClient,
+  sessionId: string,
+  mode: ChatApprovalMode,
+  projectId: string | null,
+  projectRevision: number | null,
+): void {
+  db.prepare(
+    `
+    INSERT INTO chat_session_approval_modes (
+      session_id, mode, mode_revision, workspace_id, project_id, project_revision, last_change_aggregate_revision
+    )
+    SELECT session_id, @mode, @modeRevision, workspace_id, @projectId, CAST(@projectRevision AS INTEGER), revision + 1
+    FROM chat_session_meta WHERE session_id = @sessionId
+    ON CONFLICT(session_id) DO UPDATE SET
+      mode = excluded.mode,
+      mode_revision = excluded.mode_revision,
+      workspace_id = excluded.workspace_id,
+      project_id = excluded.project_id,
+      project_revision = excluded.project_revision,
+      last_change_aggregate_revision = excluded.last_change_aggregate_revision
+  `,
+  ).run({ sessionId, mode, modeRevision: randomUUID(), projectId, projectRevision });
+}
+
 export interface ChatSessionModelDefaults {
   readonly providerId?: string;
   readonly model?: string;
@@ -108,10 +145,12 @@ const DEFAULT_PREFS: Omit<ChatSessionPrefsRecord, "sessionId" | "revision" | "cr
 export class ChatSessionPrefsRepository {
   private readonly getStmt;
   private readonly upsertStmt;
+  private readonly getApprovalModeStmt;
   private readonly revisions;
 
   public constructor(private readonly db: DatabaseClient) {
     this.revisions = new ChatSessionRevisionRepository(db);
+    this.getApprovalModeStmt = db.prepare("SELECT * FROM chat_session_approval_modes WHERE session_id = ?");
     this.getStmt = db.prepare(`
       SELECT prefs.*, meta.revision AS aggregate_revision
       FROM chat_session_prefs AS prefs
@@ -156,6 +195,49 @@ export class ChatSessionPrefsRepository {
         code_auto_apply = excluded.code_auto_apply,
         updated_at = excluded.updated_at
     `);
+  }
+
+  public getApprovalMode(sessionId: string): StoredChatApprovalMode | undefined {
+    const row = this.getApprovalModeStmt.get(sessionId);
+    if (row === undefined) return undefined;
+    if (
+      !isRecord(row) ||
+      (row.mode !== "standard" && row.mode !== "auto") ||
+      typeof row.mode_revision !== "string" ||
+      !row.mode_revision ||
+      typeof row.workspace_id !== "string" ||
+      !row.workspace_id ||
+      (row.project_id !== null && (typeof row.project_id !== "string" || !row.project_id)) ||
+      (row.project_revision !== null &&
+        (typeof row.project_revision !== "number" || !Number.isSafeInteger(row.project_revision))) ||
+      typeof row.last_change_aggregate_revision !== "number" ||
+      !Number.isSafeInteger(row.last_change_aggregate_revision) ||
+      row.last_change_aggregate_revision < 2 ||
+      (row.mode === "auto" && (row.project_id === null || row.project_revision === null))
+    ) {
+      throw new TypeError("Unexpected Chat approval mode row shape");
+    }
+    return {
+      mode: row.mode,
+      modeRevision: row.mode_revision,
+      workspaceId: row.workspace_id,
+      projectId: row.project_id,
+      projectRevision: row.project_revision,
+      lastChangeAggregateRevision: row.last_change_aggregate_revision,
+    };
+  }
+
+  public updateApprovalMode(
+    sessionId: string,
+    expectedAggregateRevision: number,
+    mode: ChatApprovalMode,
+    projectId: string | null,
+    projectRevision: number | null,
+  ): void {
+    this.revisions.runWithRevision(sessionId, expectedAggregateRevision, () => {
+      writeChatApprovalModeWithinAggregate(this.db, sessionId, mode, projectId, projectRevision);
+      return { changed: true, value: undefined };
+    });
   }
 
   public get(sessionId: string): RevisionedChatSessionPrefsRecord | undefined {

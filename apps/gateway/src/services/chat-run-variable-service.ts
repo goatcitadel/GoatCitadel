@@ -5,6 +5,7 @@ import {
   validateRunVariableBindings,
   type ChatSendMessageRequest,
   type RunTemplateInvocation,
+  type RunVariableEvidence,
   type RunVariableSchema,
 } from "@goatcitadel/contracts";
 import type { AsyncStorage as Storage } from "@goatcitadel/storage";
@@ -27,15 +28,26 @@ export async function resolveChatRunVariableRequest(
   if (input.content !== resolvedInput) throw new TypeError("Resolved template preview is stale or forged.");
 
   const evidence = buildRunVariableEvidence(invocation, owner.schema, resolvedInput);
+  // Conditional sends persist only after the canonical mode check admits the turn.
+  if (input.expectedChatApprovalModeRevision === undefined) {
+    await persistChatRunVariableEvidence(storage, sessionId, evidence);
+  }
+  return { ...input, content: resolvedInput, runVariableEvidence: evidence };
+}
+
+export async function persistChatRunVariableEvidence(
+  storage: Pick<Storage, "chatSessionRunVariables">,
+  sessionId: string,
+  evidence: RunVariableEvidence,
+): Promise<void> {
   await storage.chatSessionRunVariables.upsert({
     sessionId,
-    ownerKind: invocation.ownerKind,
-    ownerId: invocation.ownerId,
-    ownerRevision: invocation.ownerRevision,
-    schemaHash: invocation.schemaHash,
+    ownerKind: evidence.ownerKind,
+    ownerId: evidence.ownerId,
+    ownerRevision: evidence.ownerRevision,
+    schemaHash: evidence.schemaHash,
     bindings: evidence.bindings,
   });
-  return { ...input, content: resolvedInput, runVariableEvidence: evidence };
 }
 
 async function resolveOwner(
