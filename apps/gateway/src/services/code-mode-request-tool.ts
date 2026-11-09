@@ -136,3 +136,12 @@ export function codeModeRequestToolFailure(error: unknown): { status: "failed"; 
   }
   return reason === "sandbox_unsupported" ? { status: "failed", error: CODE_MODE_UNSUPPORTED_TOOL_ERROR } : undefined;
 }
+
+export async function runChatCodeModeRequest<T>(
+  policy: Parameters<typeof assertChatAutoCodeModeAllowed>[0],
+  request: ToolInvokeRequest,
+  run: () => Promise<T>,
+): Promise<T> {
+  await assertChatAutoCodeModeAllowed(policy, request);
+  return run();
+}

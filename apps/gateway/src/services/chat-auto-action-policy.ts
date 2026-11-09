@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -11,12 +11,19 @@ import {
   type ChatAutoBinding,
   type DurableRunRecord,
   type ToolInvokeRequest,
+  type ToolInvokeResult,
 } from "@goatcitadel/contracts";
 import { ToolExecutionAlreadyClaimedError, type ToolExecutionRestriction } from "@goatcitadel/policy-engine";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { withCurrentChatApprovalAuthority, type ChatApprovalModeDependencies } from "./chat-approval-mode-service.js";
 import { assertChatTurnToolUseOpen } from "./chat-turn-control.js";
-import { executeManagedProjectFile, managedDeleteSchema, managedFileEffectId } from "./chat-managed-project-files.js";
+import {
+  executeManagedProjectFile,
+  inspectManagedProjectFileAvailability,
+  managedDeleteSchema,
+  managedFileEffectId,
+} from "./chat-managed-project-files.js";
+import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 
 export interface ResolvedAutoAction {
@@ -382,6 +389,52 @@ export class ChatAutoActionPolicy {
     return { ...projected, replayed: true };
   }
 
+  createInvocationGuard(block: (request: ToolInvokeRequest, reason: string) => Promise<ToolInvokeResult>) {
+    return {
+      inspect: (request: ToolInvokeRequest) => this.inspect(request, "proposal"),
+      block,
+      blockOpaqueDispatch: (request: ToolInvokeRequest) => this.blockOpaqueDispatch(request),
+    };
+  }
+
+  async checkApprovalReplay(
+    approvalId: string,
+    actionType: string,
+    block: (request: ToolInvokeRequest, reason: string) => Promise<ToolInvokeResult>,
+  ): Promise<ToolInvokeResult | undefined> {
+    const { storage } = this.deps;
+    const approval = await storage.approvals.get(approvalId);
+    const pending = await storage.pendingApprovalActions.find(approvalId);
+    const request =
+      pending?.actionType === "tool.invoke" && actionType === "tool.invoke"
+        ? {
+            ...toToolInvokeRequest(pending.request),
+            ...(approval.linkage?.turnId && !pending.request.turnId ? { turnId: approval.linkage.turnId } : {}),
+          }
+        : {
+            toolName: actionType,
+            args: {},
+            agentId: "system",
+            sessionId: approval.linkage?.sessionId ?? "",
+            turnId: approval.linkage?.turnId,
+            workspaceId: approval.linkage?.workspaceId,
+          };
+    if (!request.sessionId) return undefined;
+    const restriction = await this.inspect(request, "replay", approvalId);
+    if (restriction?.kind === "recovered_managed_delete") {
+      return {
+        outcome: "executed",
+        policyReason: restriction.reason,
+        auditEventId: randomUUID(),
+        result: restriction.result,
+      };
+    }
+    if (restriction?.kind === "block" || restriction?.kind === "already_claimed") {
+      return block(request, restriction.reason);
+    }
+    return undefined;
+  }
+
   async assertPlacementCurrent(run: DurableRunRecord): Promise<"standard" | "auto"> {
     const payload = readDurableChatTurnExecutionPayloadAuthority({
       workflowKey: run.workflowKey,
@@ -418,11 +471,57 @@ export class ChatAutoActionPolicy {
     );
   }
 
+  async assertDelegationAllowed(
+    sessionId: string,
+    parentRunId: string | undefined,
+    findRun: (runId: string) => Promise<DurableRunRecord | undefined>,
+  ): Promise<void> {
+    await this.assertNoDelegatedExecution({ sessionId });
+    const parent = parentRunId ? await findRun(parentRunId) : undefined;
+    if (
+      parent?.workflowKey === "chat.turn.execute" &&
+      parent.payload.sessionId === sessionId &&
+      (await this.assertPlacementCurrent(parent)) === "auto"
+    ) {
+      throw new ConflictError({ message: "Auto keeps this turn local and blocks delegated execution." });
+    }
+  }
+
+  async assertFanoutAllowed(runId: string, assertParentOpen: () => Promise<void>): Promise<void> {
+    await assertParentOpen();
+    await this.assertStandardRun(runId, "Auto keeps this turn local and blocks delegated execution.");
+  }
+
+  async assertStandardRun(runId: string, autoConflictMessage: string): Promise<void> {
+    const run = await this.deps.storage.durableRuns.getRun(runId);
+    if ((await this.assertPlacementCurrent(run)) === "auto") {
+      throw new ConflictError({ message: autoConflictMessage });
+    }
+  }
+
+  async planDelegation<T>(turn: Turn, plan: () => Promise<T>): Promise<T | undefined> {
+    const mode = await this.mode(turn);
+    if (mode === "stale") throw new ConflictError({ message: staleTurn });
+    return mode === "standard" ? plan() : undefined;
+  }
+
   async assertNoDelegatedExecution(turn: Turn): Promise<void> {
     const mode = await this.mode(turn);
     if (mode === "stale") throw new ConflictError({ message: staleTurn });
     if (mode === "auto")
       throw new ConflictError({ message: "Auto keeps this turn local and blocks delegated execution." });
+  }
+
+  inspectManagedAvailability(
+    request: Parameters<typeof inspectManagedProjectFileAvailability>[1],
+    inspectPolicy: Parameters<typeof inspectManagedProjectFileAvailability>[2],
+  ) {
+    return inspectManagedProjectFileAvailability(this.deps, request, inspectPolicy);
+  }
+
+  async assertOpaqueDispatchAllowed(turn: Turn): Promise<void> {
+    const reason = await this.blockOpaqueDispatch(turn);
+    if (reason) throw new ConflictError({ message: reason });
   }
 
   async blockOpaqueDispatch(turn: Turn): Promise<string | undefined> {

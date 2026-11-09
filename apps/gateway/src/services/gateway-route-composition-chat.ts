@@ -58,8 +58,9 @@ export function composeChatRouteDependencies(
   | "chatSupport"
   | "chatTools"
 > {
+  const { storage } = gateway;
   const agents = createAgentsRoutePort({
-    storage: gateway.storage,
+    storage,
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
     getSession: (sessionId) => gateway.getSession(sessionId),
     getChatSessionPrefs: (sessionId) => gateway.getChatSessionPrefs(sessionId),
@@ -70,14 +71,14 @@ export function composeChatRouteDependencies(
   });
   const chatAttachmentHost: chatAttachmentService.ChatAttachmentHost = {
     config: gateway.config,
-    storage: gateway.storage,
+    storage,
     getSession: (sessionId) => gateway.getSession(sessionId),
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
     publishRealtime: (eventType, source, payload) => gateway.publishRealtime(eventType, source, payload),
     createMediaJob: (input) => gateway.mediaVoiceService.createMediaJob(input),
   };
   const ChatSessionDependencies: chatSessionService.ChatSessionDependencies = {
-    storage: gateway.storage,
+    storage,
     operatorSummaryCache: gateway.operatorSummaryCache,
     hooksService: gateway.hooksService,
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
@@ -135,27 +136,27 @@ export function composeChatRouteDependencies(
     listChatSessions: (query) => chatSessionService.listChatSessions(ChatSessionDependencies, query),
   };
   const ChatGeneratedArtifactDependencies: chatGeneratedArtifactService.ChatGeneratedArtifactDependencies = {
-    storage: gateway.storage,
+    storage,
     requireChatSession: async (sessionId) => await gateway.requireChatSession(sessionId),
   };
   let documentEditing: DocumentEditingService | undefined;
   const getDocumentEditing = (): DocumentEditingService => {
     documentEditing ??= new DocumentEditingService({
-      storage: gateway.storage,
+      storage,
       requireChatSession: async (sessionId) => await gateway.requireChatSession(sessionId),
     });
     return documentEditing;
   };
   const ChatWorkbenchDependencies: chatWorkbenchService.ChatWorkbenchDependencies = {
     config: gateway.config,
-    storage: gateway.storage,
+    storage,
     requireChatSession: async (sessionId) => await gateway.requireChatSession(sessionId),
     listCodeModeRuns: (options) => gateway.capabilitySystemService.listCodeModeRuns(options),
     publishRealtime: (channel, topic, payload, options) => gateway.publishRealtime(channel, topic, payload, options),
   };
   const chatMessageRouteRuntimeHost = gateway.chatMessageRouteRuntimeHost;
   const chatHistoryHost: chatHistoryService.ChatHistoryServiceDependencies = {
-    storage: gateway.storage,
+    storage,
     ensureChatMessageProjection: (sessionId) => gateway.ensureChatMessageProjection(sessionId),
   };
   const ChatThreadKnowledgeDependencies = createChatThreadKnowledgeDependenciesForGateway(gateway);
@@ -174,13 +175,13 @@ export function composeChatRouteDependencies(
     artifactCritiqueTasks,
     artifactCritiqueLog,
   );
-  const chatAutoApprovalEnabled = chatSessionService.isChatAutoApprovalEnabled(gateway.storage);
+  const chatAutoApprovalEnabled = chatSessionService.isChatAutoApprovalEnabled(storage);
   const managedFiles = createManagedProjectFileOperator({
-    storage: gateway.storage,
+    storage,
     chatAutoApprovalEnabled,
     checkPolicy: async (sessionId, scope, actorId, toolName, args) => {
       const { citadelId } = await resolveChatRuntimeScope(gateway, { sessionId, ...scope });
-      await gateway.storage.citadels.getAccessSnapshot(citadelId);
+      await storage.citadels.getAccessSnapshot(citadelId);
       const policyContext = await gateway.resolveToolPolicyContext({
         sessionId,
         workspaceId: scope.workspaceId,
@@ -217,7 +218,7 @@ export function composeChatRouteDependencies(
     getChatApprovalMode: (sessionId) =>
       chatSessionService.getChatApprovalMode(
         {
-          storage: gateway.storage,
+          storage,
           chatAutoApprovalEnabled,
         },
         sessionId,
@@ -225,7 +226,7 @@ export function composeChatRouteDependencies(
     updateChatApprovalMode: (sessionId, input) =>
       chatSessionService.updateChatApprovalMode(
         {
-          storage: gateway.storage,
+          storage,
           chatAutoApprovalEnabled,
         },
         sessionId,

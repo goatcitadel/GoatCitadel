@@ -79,6 +79,7 @@ vi.mock("./chat-message-route-runtime.js", () => ({
 }));
 
 vi.mock("./chat-session-service.js", () => ({
+  isChatAutoApprovalEnabled: vi.fn(() => false),
   archiveChatSession: vi.fn((_deps, sessionId) => ({ op: "archive", sessionId })),
   archiveChatSessionsBulk: vi.fn((_deps, input) => ({ op: "archiveBulk", input })),
   assignChatSessionProject: vi.fn((_deps, sessionId, projectId) => ({ op: "assignProject", sessionId, projectId })),

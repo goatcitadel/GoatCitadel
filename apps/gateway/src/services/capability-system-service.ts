@@ -595,6 +595,12 @@ export class CapabilitySystemService {
     return this.resolveSandboxMetadata(await this.readEffectiveSandboxConfig());
   }
 
+  private async assertChatAutoCodeModeAllowed(
+    scope: Parameters<NonNullable<CapabilitySystemServiceOptions["assertChatAutoCodeModeAllowed"]>>[0],
+  ): Promise<void> {
+    await this.options.assertChatAutoCodeModeAllowed?.(scope);
+  }
+
   public async getCodeModeReadiness(): Promise<CodeModeReadiness> {
     const { flags, config } = await this.readCodeModeSwitches();
     const enabled = flags.codeModeV1Enabled === true;
@@ -694,11 +700,12 @@ export class CapabilitySystemService {
   }
 
   private async resolveSkillLifecycle(skill: LoadedSkill): Promise<SkillLifecycleRecord> {
-    const existing = await this.options.storage.skillLifecycle.find(skill.skillId);
+    const { skillLifecycle } = this.options.storage;
+    const existing = await skillLifecycle.find(skill.skillId);
     const projected = buildSkillLifecycleRecord(skill, existing?.createdAt);
     if (skill.source !== "extra") {
       if (!existing) {
-        return await this.options.storage.skillLifecycle.upsert(projected);
+        return await skillLifecycle.upsert(projected);
       }
       // Revocation is durable deny-wins truth for shipped skills too. Filesystem drift must never
       // rewrite a revoked row into a candidate, which the release-bound re-trust below could later
@@ -733,7 +740,7 @@ export class CapabilitySystemService {
       if (skillLifecycleProjectionMatches(existing, projected)) {
         return existing;
       }
-      return await this.options.storage.skillLifecycle.upsert(projected);
+      return await skillLifecycle.upsert(projected);
     }
     // Revocation is durable deny-wins truth. Filesystem discovery or editable
     // source metadata must never hydrate a revoked imported skill back into a
@@ -757,7 +764,7 @@ export class CapabilitySystemService {
     if (existing && skillLifecycleProjectionMatches(existing, projected)) {
       return existing;
     }
-    return await this.options.storage.skillLifecycle.upsert(projected);
+    return await skillLifecycle.upsert(projected);
   }
 
   public async listCatalog(
@@ -1985,7 +1992,7 @@ export class CapabilitySystemService {
     /** Server-internal only (never from a route body): binds a replay to the run it replays. */
     internal: { replayOf?: CodeModeAiderReplayLink } = {},
   ): Promise<CodeModeRunRecord> {
-    await this.options.assertChatAutoCodeModeAllowed?.(request);
+    await this.assertChatAutoCodeModeAllowed(request);
     await this.requireCodeModeEnabled();
     const source = request.source.trim();
     if (!source) {
@@ -2636,7 +2643,7 @@ export class CapabilitySystemService {
     request: ApprovedCodeModeRequest,
     signal?: AbortSignal,
   ): Promise<ApprovedCodeModeResult> {
-    await this.options.assertChatAutoCodeModeAllowed?.(request);
+    await this.assertChatAutoCodeModeAllowed(request);
     const startedAtMs = Date.now();
     const storage = this.options.storage;
     const runId = codeModeRequestRunId(request.approvalId);
@@ -2669,7 +2676,7 @@ export class CapabilitySystemService {
     if (existing.codeHash !== request.approvedSourceSha256 || existing.approvalId !== approval.approvalId) {
       throw new ConflictError({ message: `Code Mode run ${runId} is bound to different approved code.` });
     }
-    await this.options.assertChatAutoCodeModeAllowed?.(existing);
+    await this.assertChatAutoCodeModeAllowed(existing);
     if (existing.status === "running") {
       // A stale claim means the gateway lost this run's owner: one that never dispatched is released and runs now if
       // Code Mode can run; one that crossed the dispatch boundary is marked interrupted (failed) and needs manual
@@ -3119,7 +3126,7 @@ export class CapabilitySystemService {
       });
       throw new NotFoundError({ entity: "code mode run", id: runId });
     }
-    await this.options.assertChatAutoCodeModeAllowed?.(existing);
+    await this.assertChatAutoCodeModeAllowed(existing);
     if (existing.status === "running") {
       const recovered = await recoverStaleCodeModeExecutionClaim(
         this.options.storage.codeModeRuns,
@@ -3536,7 +3543,7 @@ export class CapabilitySystemService {
       const wrapperPolicyContext = buildCodeModeWrapperPolicyContext(runPolicyContext, finalRun);
       const compiledSource = transpileGuestSource(finalRun.language, source);
       throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution started.`);
-      const assertLaunchAllowed = async () => this.options.assertChatAutoCodeModeAllowed?.(finalRun);
+      const assertLaunchAllowed = async () => this.assertChatAutoCodeModeAllowed(finalRun);
       const beforeExecutionDispatch = async () => {
         throwIfCapabilitySystemAborted(signal, `Code mode run ${runId} was aborted before execution dispatch.`);
         await assertLaunchAllowed();

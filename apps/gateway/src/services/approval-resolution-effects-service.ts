@@ -669,7 +669,7 @@ export class ApprovalEffectsService {
           }
         }),
       );
-    const task = this.deps.runOutsideChatExecutionScope ? this.deps.runOutsideChatExecutionScope(launch) : launch();
+    const task = this.launchOutsideChatScope(launch);
     this.actionWorkerTask = task;
     trackBackgroundTask(backgroundTasks, task);
   }
@@ -706,7 +706,7 @@ export class ApprovalEffectsService {
           }
         }),
       );
-    const task = this.deps.runOutsideChatExecutionScope ? this.deps.runOutsideChatExecutionScope(launch) : launch();
+    const task = this.launchOutsideChatScope(launch);
     trackBackgroundTask(backgroundTasks, task);
   }
 
@@ -3047,8 +3047,13 @@ export class ApprovalEffectsService {
     });
   }
 
+  private launchOutsideChatScope<T>(launch: () => T): T {
+    return this.deps.runOutsideChatExecutionScope ? this.deps.runOutsideChatExecutionScope(launch) : launch();
+  }
+
   private async handlePendingActionExecute(effect: ApprovalEffectRecord, signal?: AbortSignal): Promise<void> {
-    const pendingAction = await this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
+    const { storage } = this.ctx;
+    const pendingAction = await storage.pendingApprovalActions.find(effect.approvalId);
     if (!pendingAction || pendingAction.resolutionStatus === "executed") {
       const completionPendingAction = pendingAction;
       if (!pendingAction && effect.payload.actionType === "code_mode.run") {
@@ -3059,13 +3064,13 @@ export class ApprovalEffectsService {
           return;
         }
         if (recoveredAction?.outcome === "executed") {
-          await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+          await storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
             result: toolInvokeResultToRecord(recoveredAction, "code_mode.run"),
           });
           return;
         }
         const failureRecord = toolInvokeResultToRecord(recoveredAction, "code_mode.run");
-        await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+        await storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
           lastError: recoveredAction?.policyReason ?? "Code Mode pending action could not be recovered.",
           result: failureRecord,
         });
@@ -3075,16 +3080,12 @@ export class ApprovalEffectsService {
         const storedExecutionFailure = readStoredApprovedActionExecutionFailure(pendingAction.result, pendingAction);
         let materializationAction = pendingAction;
         if (storedExecutionFailure && pendingAction.result) {
-          materializationAction = await runClaimedApprovalEffectTransaction(
-            this.ctx.storage,
-            effect,
-            this.workerId,
-            () =>
-              this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
-                effect.approvalId,
-                pendingAction.result!,
-                pendingAction.result!,
-              ),
+          materializationAction = await runClaimedApprovalEffectTransaction(storage, effect, this.workerId, () =>
+            storage.pendingApprovalActions.reclassifyExecutedAsFailed(
+              effect.approvalId,
+              pendingAction.result!,
+              pendingAction.result!,
+            ),
           );
         }
         const materialized = storedExecutionFailure
@@ -3104,7 +3105,7 @@ export class ApprovalEffectsService {
         }
         return;
       }
-      await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+      await storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: completionPendingAction?.actionType,
           resolutionStatus: completionPendingAction?.resolutionStatus ?? "missing",
@@ -3128,7 +3129,7 @@ export class ApprovalEffectsService {
         }
         return;
       }
-      await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+      await storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: pendingAction.actionType,
           resolutionStatus: pendingAction.resolutionStatus,
@@ -3146,7 +3147,7 @@ export class ApprovalEffectsService {
       } catch (error) {
         if (await yieldFanoutApprovalEffect(this.ctx, error, effect, this.workerId, pendingAction.actionType)) return;
         if (error instanceof RequesterMcpApprovalResumeRequiredError) {
-          await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+          await storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
             result: {
               reason: "requester_mcp_resume_required",
               actionType: pendingAction.actionType,
@@ -3159,10 +3160,10 @@ export class ApprovalEffectsService {
         let handoffError: unknown = error;
         if (this.deps.prepareRemoteWorkerApprovalHandoff) {
           try {
-            await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, async () => {
+            await runClaimedApprovalEffectTransaction(storage, effect, this.workerId, async () => {
               const result = await this.deps.prepareRemoteWorkerApprovalHandoff!(effect.approvalId);
               if (
-                !(await this.ctx.storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
+                !(await storage.approvalEffects.skipEffect(effect.effectId, this.workerId, effect.version, {
                   result,
                 }))
               )
@@ -3187,7 +3188,7 @@ export class ApprovalEffectsService {
       return;
     }
 
-    const refreshedPendingAction = await this.ctx.storage.pendingApprovalActions.find(effect.approvalId);
+    const refreshedPendingAction = await storage.pendingApprovalActions.find(effect.approvalId);
     if (
       refreshedPendingAction &&
       refreshedPendingAction.resolutionStatus &&
@@ -3202,16 +3203,12 @@ export class ApprovalEffectsService {
         let materializationAction = refreshedPendingAction;
         if (storedExecutionFailure && refreshedPendingAction.result) {
           const actionRecord = toolInvokeResultToRecord(executedAction, refreshedPendingAction.actionType);
-          materializationAction = await runClaimedApprovalEffectTransaction(
-            this.ctx.storage,
-            effect,
-            this.workerId,
-            () =>
-              this.ctx.storage.pendingApprovalActions.reclassifyExecutedAsFailed(
-                effect.approvalId,
-                refreshedPendingAction.result!,
-                actionRecord,
-              ),
+          materializationAction = await runClaimedApprovalEffectTransaction(storage, effect, this.workerId, () =>
+            storage.pendingApprovalActions.reclassifyExecutedAsFailed(
+              effect.approvalId,
+              refreshedPendingAction.result!,
+              actionRecord,
+            ),
           );
         }
         const materialized = storedExecutionFailure
@@ -3249,7 +3246,7 @@ export class ApprovalEffectsService {
           return;
         }
       }
-      await this.ctx.storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
+      await storage.approvalEffects.completeEffect(effect.effectId, this.workerId, effect.version, {
         result: {
           actionType: completionPendingAction.actionType,
           resolutionStatus: completionPendingAction.resolutionStatus,
@@ -3315,8 +3312,8 @@ export class ApprovalEffectsService {
     if (executedAction?.outcome === "executed" && !executionFailure) {
       const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
       if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-        await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
-          this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "executed", actionRecord),
+        await runClaimedApprovalEffectTransaction(storage, effect, this.workerId, () =>
+          storage.pendingApprovalActions.markResolved(effect.approvalId, "executed", actionRecord),
         );
       }
       if (!(await this.materializeExecutedChatApprovalOrDefer(effect, pendingAction, actionRecord))) {
@@ -3328,8 +3325,8 @@ export class ApprovalEffectsService {
     if (executedAction && executionFailure) {
       const actionRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
       if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-        await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
-          this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", actionRecord),
+        await runClaimedApprovalEffectTransaction(storage, effect, this.workerId, () =>
+          storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", actionRecord),
         );
       }
       if (!(await this.materializeFailedChatApprovalOrDefer(effect, pendingAction, actionRecord, executionFailure))) {
@@ -3340,11 +3337,11 @@ export class ApprovalEffectsService {
 
     const failureRecord = toolInvokeResultToRecord(executedAction, pendingAction.actionType);
     if (!refreshedPendingAction || refreshedPendingAction.resolutionStatus === "pending") {
-      await runClaimedApprovalEffectTransaction(this.ctx.storage, effect, this.workerId, () =>
-        this.ctx.storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", failureRecord),
+      await runClaimedApprovalEffectTransaction(storage, effect, this.workerId, () =>
+        storage.pendingApprovalActions.markResolved(effect.approvalId, "failed", failureRecord),
       );
     }
-    await this.ctx.storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
+    await storage.approvalEffects.failEffect(effect.effectId, this.workerId, effect.version, {
       lastError: executedAction?.policyReason ?? "Approved action could not execute.",
       result: failureRecord,
     });

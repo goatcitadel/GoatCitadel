@@ -89,11 +89,14 @@ export async function resolveRemoteWorkerChatAuthority(
   assertCurrent: () => Promise<void>,
 ) {
   const runId = execution.authority.assignment.manifest.durableRunId;
-  if (runId) await dependencies.assertChatWorkerAllowed?.(runId);
+  const assertChatWorkerAllowed = async () => {
+    if (runId) await dependencies.assertChatWorkerAllowed?.(runId);
+  };
+  await assertChatWorkerAllowed();
   if (execution.workload.admissionReference) {
     return (await resolveRemoteWorkerLiveAdmissionAuthority(dependencies, execution, async () => {
       await assertCurrent();
-      if (runId) await dependencies.assertChatWorkerAllowed?.(runId);
+      await assertChatWorkerAllowed();
     }))!;
   }
   const resolved = await resolveRemoteWorkerChatProfile(dependencies, execution);
@@ -134,9 +137,9 @@ export async function resolveRemoteWorkerChatProfileReference(
     throw new Error("Worker capability profile is bound to another execution.");
   const revalidatedRequesterTools = new Set<string>();
   const revalidateRequesterTool = async (current: ChatTurnCapabilityProfileRecord, canonicalName: string) => {
-    if (!dependencies.revalidateRequesterTool)
-      throw new Error("Worker requester-scoped MCP requires its current Gateway authority.");
-    await dependencies.revalidateRequesterTool(current, canonicalName);
+    const revalidate = dependencies.revalidateRequesterTool?.bind(dependencies);
+    if (!revalidate) throw new Error("Worker requester-scoped MCP requires its current Gateway authority.");
+    await revalidate(current, canonicalName);
     revalidatedRequesterTools.add(canonicalName);
   };
   await assertChatCapabilityBindingsCurrent(

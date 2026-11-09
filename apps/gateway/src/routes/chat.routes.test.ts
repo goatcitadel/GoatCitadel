@@ -738,6 +738,7 @@ describe("chat routes additional coverage", () => {
         kind: "authenticated_operator_http",
         actorId: "operator-test",
         authActorSource: "loopback",
+        directLocal: true,
       },
     );
   });
@@ -827,6 +828,7 @@ describe("chat routes additional coverage", () => {
       kind: "authenticated_operator_http",
       actorId: "operator-test",
       authActorSource: "loopback",
+      directLocal: true,
     };
     expect(agentSendChatMessage.mock.calls[0]?.at(-1)).toEqual(trustedContext);
     expect(agentSendChatMessageStream.mock.calls[0]?.at(-1)).toEqual(trustedContext);
@@ -1064,6 +1066,7 @@ describe("chat routes additional coverage", () => {
         kind: "authenticated_operator_http",
         actorId: "operator-test",
         authActorSource: "loopback",
+        directLocal: true,
       },
     );
   });
@@ -1124,6 +1127,7 @@ describe("chat routes additional coverage", () => {
         kind: "authenticated_operator_http",
         actorId: "operator-test",
         authActorSource: "loopback",
+        directLocal: true,
       },
     );
   });
