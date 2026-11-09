@@ -24,6 +24,8 @@ Default local install home is under your user home directory:
 
 The packaged Windows `.exe` installer also installs the native WinUI 3 / Windows App SDK Mission Control desktop host. Start Menu and desktop shortcuts open the desktop host by default; the host starts the same gateway and web Mission Control runtime behind the scenes, hosts Mission Control Next in WebView2, and keeps the runtime warm while the app is open. The PowerShell source bootstrap below installs command launchers for a repo checkout; it does not create packaged desktop shortcuts.
 
+On the first managed launch of a fresh Windows installation, the launcher saves the loopback ports it will use. It uses free alternatives when the default Gateway or Mission Control port is occupied. Existing profiles keep their port settings, and the launcher verifies that each managed endpoint belongs to its own runtime.
+
 Packaged Windows desktop smoke should cover the native host, not only the browser fallback:
 
 - the Start Menu shortcut opens one WinUI window and loads Mission Control after gateway/UI readiness

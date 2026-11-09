@@ -24,7 +24,10 @@ import {
   safeEndpointOrigin,
 } from "../scripts/lib/managed-runtime-ownership.mjs";
 import { resolveUiTarget } from "../scripts/lib/ui-target.mjs";
-import { readInstalledRuntimeSettings } from "../scripts/lib/installed-runtime-settings.mjs";
+import {
+  initializeInstalledRuntimeSettings,
+  readInstalledRuntimeSettings,
+} from "../scripts/lib/installed-runtime-settings.mjs";
 
 const defaultRepoUrl = process.env.GOATCITADEL_REPO_URL || "https://github.com/goatcitadel/GoatCitadel.git";
 const preferredBaseDir = resolvePreferredBaseDir();
@@ -105,9 +108,7 @@ const runtimeStateDir = path.join(baseDir, "runtime");
 const runtimeLogDir = path.join(runtimeStateDir, "logs");
 const gatewayPidPath = path.join(runtimeStateDir, "gateway.pid");
 const uiPidPath = path.join(runtimeStateDir, "ui.pid");
-const managedPorts = readInstalledRuntimeSettings(baseDir);
-const defaultGatewayUrl = `http://127.0.0.1:${managedPorts.gatewayPort}`;
-const defaultUiUrl = `http://127.0.0.1:${managedPorts.uiPort}`;
+const defaultGatewayUrl = `http://127.0.0.1:${readInstalledRuntimeSettings(baseDir).gatewayPort}`;
 const rest = installArgs.passthrough;
 const taskTitle = resolveTaskTitle(command);
 const verboseEnv = installArgs.verbose ? { GOATCITADEL_VERBOSE: "1" } : {};
@@ -584,15 +585,24 @@ function doctor(extraArgs = []) {
 
 async function launchGoatCitadel(extraArgs = []) {
   const launchOptions = parseLaunchOptions(extraArgs);
-  const endpoints = resolveLauncherRuntimeEndpoints();
 
   const result = await withJsonCleanStdout(launchOptions.json, async () => {
     ensureLaunchRuntimeDirectories();
+    const packaged = isPackagedInstall();
+    if (packaged && fs.existsSync(path.join(packagedRuntimeRoot, ".daily-profile-pending-review"))) {
+      throw new Error("Daily profile migration is awaiting review. Verify the backup, schema, credentials and copied unfinished runs in daily-migration-review.json before removing .daily-profile-pending-review. Your development instance is unchanged.");
+    }
+    if (
+      packaged &&
+      process.platform === "win32" &&
+      !process.env.GOATCITADEL_GATEWAY_URL?.trim() &&
+      !process.env.GOATCITADEL_MISSION_CONTROL_URL?.trim()
+    ) {
+      await initializeInstalledRuntimeSettings(baseDir);
+    }
+    const endpoints = resolveLauncherRuntimeEndpoints();
 
-    if (isPackagedInstall()) {
-      if (fs.existsSync(path.join(packagedRuntimeRoot, ".daily-profile-pending-review"))) {
-        throw new Error("Daily profile migration is awaiting review. Verify the backup, schema, credentials and copied unfinished runs in daily-migration-review.json before removing .daily-profile-pending-review. Your development instance is unchanged.");
-      }
+    if (packaged) {
       seedPackagedRuntimeRoot();
       const nodeExecutable = resolvePackagedNodeExecutable();
       await ensureGatewayReady({
@@ -674,6 +684,9 @@ function ensureLaunchRuntimeDirectories() {
 }
 
 function resolveLauncherRuntimeEndpoints() {
+  const { gatewayPort, uiPort } = readInstalledRuntimeSettings(baseDir);
+  const defaultGatewayUrl = `http://127.0.0.1:${gatewayPort}`;
+  const defaultUiUrl = `http://127.0.0.1:${uiPort}`;
   return {
     gateway: {
       service: "gateway",
