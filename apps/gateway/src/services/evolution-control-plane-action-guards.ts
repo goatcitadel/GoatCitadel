@@ -1,4 +1,4 @@
-import { ConflictError, type ChangePlanRecord, type ChangePlanRequiredAction } from "@goatcitadel/contracts";
+import { ConflictError, ValidationError, type ChangePlanRecord, type ChangePlanRequiredAction } from "@goatcitadel/contracts";
 import type { EvolutionControlPlaneOwnerInputReceipt } from "./evolution-control-plane-adapter.js";
 
 // Which action a Change Plan awaits, checked against the caller's nonce before the control plane acts on it.
@@ -74,4 +74,30 @@ export function awaitsApplyConfirmation(
 
 export function isOwnerInputActionKind(value: string): value is EvolutionControlPlaneOwnerInputReceipt["actionKind"] {
   return value === "secure_input" || value === "oauth" || value === "native_path_picker";
+}
+
+export function requireIdentifier(value: string, label: string): string {
+  const normalized = value.trim();
+  if (!normalized || normalized.length > 256 || /[\r\n\0]/u.test(normalized)) {
+    throw new ValidationError({ message: `Change Plan ${label} is invalid.` });
+  }
+  return normalized;
+}
+
+export function validateOwnerInputReceipt(receipt: EvolutionControlPlaneOwnerInputReceipt): void {
+  requireIdentifier(receipt.actionId, "ownerInput.actionId");
+  requireIdentifier(receipt.ownerId, "ownerInput.ownerId");
+  requireIdentifier(receipt.ownerResourceId, "ownerInput.ownerResourceId");
+  if (
+    receipt.ownerRevision !== undefined &&
+    (!Number.isSafeInteger(receipt.ownerRevision) || receipt.ownerRevision < 1)
+  ) {
+    throw new ValidationError({ message: "Change Plan owner input revision is invalid." });
+  }
+  if (
+    receipt.evidenceRefs &&
+    (receipt.evidenceRefs.length > 64 || receipt.evidenceRefs.some((ref) => !ref.trim() || ref.length > 512))
+  ) {
+    throw new ValidationError({ message: "Change Plan owner input evidence references are invalid." });
+  }
 }
