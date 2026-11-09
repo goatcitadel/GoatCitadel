@@ -20,6 +20,7 @@ import {
 } from "./evolution-control-plane-adapter.js";
 import { EvolutionControlPlaneService } from "./evolution-control-plane-service.js";
 import { eventFor as operatorApprovalSkipEventFor } from "./evolution-control-plane-operator-approval-skip.js";
+import { ProviderConnectionChangePlanAdapter } from "./provider-connection-change-plan-adapter.js";
 
 const SAVE = { operatorSettingsSave: true } as const;
 const files: string[] = [];
@@ -196,6 +197,7 @@ class TestAdapter implements EvolutionControlPlaneAdapter<ChangePlanRuntimeConfi
 function fixture(
   mode: TestAdapter["mode"] = "confirmation",
   extra: Pick<ConstructorParameters<typeof EvolutionControlPlaneService>[0], "allowsOperatorApprovalSkip"> = {},
+  providerAdapter?: ProviderConnectionChangePlanAdapter,
 ) {
   const dbPath = path.join(fs.mkdtempSync(path.join(os.tmpdir(), "goatcitadel-evolution-service-")), "test.db");
   files.push(dbPath);
@@ -220,7 +222,7 @@ function fixture(
   const getApprovalDisposition = vi.fn(async () => approvalDisposition);
   const service = new EvolutionControlPlaneService({
     repository,
-    adapters: new EvolutionControlPlaneAdapterRegistry([adapter]),
+    adapters: new EvolutionControlPlaneAdapterRegistry([adapter, ...(providerAdapter ? [providerAdapter] : [])]),
     getApprovalDisposition,
     createApproval,
     ...extra,
@@ -248,6 +250,55 @@ const request: ChangePlanRuntimeConfigurationRequest = {
 };
 
 describe("EvolutionControlPlaneService", () => {
+  it.each([true, false])(
+    "applies OAuth reconnect without confirmation only when the account matches (%s)",
+    async (sameAccount) => {
+      const promote = vi.fn(async (planId: string, _providerId: string, revision: number) => {
+        expect((await f.service.get(settingsActor, planId)).status).toBe("applying");
+        return { revision, evidenceRefs: ["fixture:oauth-promoted"] };
+      });
+      const providerAdapter = new ProviderConnectionChangePlanAdapter({
+        getSettings: vi.fn().mockResolvedValue({
+          revision: 5,
+          llm: { providers: [{ providerId: "openai-codex", label: "OpenAI Codex", authMode: "codex-oauth" }] },
+        }),
+        updateSettings: vi.fn(),
+        hasTemporarySecret: vi.fn(() => false),
+        hasTemporaryOAuthCredential: vi.fn((_planId, _providerId, sameAccountOnly) => !sameAccountOnly || sameAccount),
+        promoteTemporarySecret: vi.fn(),
+        promoteTemporaryOAuthCredential: promote,
+        removeProviderApiKey: vi.fn(),
+        getProviderApiKeyStatus: vi.fn(() => ({ hasSecret: false, source: "none" })),
+        discardTemporarySecret: vi.fn(),
+        verifyProvider: vi.fn(async () => ({ evidenceRefs: ["fixture:catalog-live"] })),
+      });
+      const settingsActor = { workspaceId: "default", actorId: "operator-1", surface: "settings" as const };
+      const f = fixture("confirmation", {}, providerAdapter);
+      const plan = await f.service.create({
+        actor: settingsActor,
+        request: { kind: "provider_connection", providerId: "openai-codex", credentialAction: "replace_oauth" },
+      });
+      const action = plan.requiredAction;
+      if (action?.kind !== "oauth" || !action.actionNonce) throw new Error("Expected an OAuth action");
+      const settled = await f.service.resumeOwnerInput(settingsActor, plan.planId, plan.revision, action.actionNonce, {
+        actionId: action.actionId,
+        actionKind: "oauth",
+        ownerId: "provider_oauth",
+        ownerResourceId: "openai-codex",
+      });
+      if (sameAccount) {
+        expect(settled.status).toBe("completed");
+        expect(settled.requiredAction).toBeUndefined();
+        expect(promote).toHaveBeenCalledExactlyOnceWith(plan.planId, "openai-codex", 5, true);
+      } else {
+        expect(settled.status).toBe("awaiting_confirmation");
+        expect(settled.requiredAction?.kind).toBe("confirmation");
+        expect(promote).not.toHaveBeenCalled();
+      }
+      expect(f.createApproval).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects a stale cancellation nonce before adapter discard or any plan transition", async () => {
     const f = fixture();
     const plan = await f.service.create({ actor, request });

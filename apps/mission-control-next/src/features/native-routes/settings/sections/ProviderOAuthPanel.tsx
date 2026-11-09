@@ -133,15 +133,17 @@ export function ProviderOAuthPanel({
           { label: "Provider", value: hasCodexOAuthProvider ? "Ready" : "Missing" },
           {
             label: "Login",
-            value: !codexOAuthStatus
-              ? "Unavailable"
-              : codexOAuthConnected
-                ? "Connected"
-                : codexOAuthStatus?.requiresReauth
-                  ? "Reauth"
-                  : codexOAuthFlow
-                    ? "Waiting"
-                    : "Not started",
+            value: oauth.codexOAuthPending
+              ? "Pending activation"
+              : !codexOAuthStatus
+                ? "Unavailable"
+                : codexOAuthConnected
+                  ? "Connected"
+                  : codexOAuthStatus?.requiresReauth
+                    ? "Reauth"
+                    : codexOAuthFlow
+                      ? "Waiting"
+                      : "Not started",
           },
         ]}
       />
@@ -252,7 +254,7 @@ export function ProviderOAuthPanel({
             disabled={locked}
           >
             <KeyRound size={16} />
-            {codexOAuthConnected ? "Reconnect ChatGPT" : "Start ChatGPT login"}
+            {hasCodexOAuthCredential ? "Reconnect ChatGPT" : "Start ChatGPT login"}
           </NativeButton>
         )}
         {codexOAuthFlow ? (

@@ -93,6 +93,66 @@ describe("OpenAICodexOAuthService", () => {
     });
   });
 
+  it.each([
+    { name: "the same account and subject", accountId: "account-1", subject: "user-1", matches: true },
+    { name: "another account", accountId: "account-2", subject: "user-1", matches: false },
+    { name: "another member of the account", accountId: "account-1", subject: "user-2", matches: false },
+    { name: "an unknown subject", accountId: "account-1", subject: undefined, matches: false },
+    {
+      name: "the same member using a different sign-in method",
+      accountId: "account-1",
+      subject: "different-idp-user",
+      memberIds: ["member-1", "member-1"],
+      matches: true,
+    },
+    {
+      name: "a conflicting membership claim despite an equal subject",
+      accountId: "account-1",
+      subject: "user-1",
+      memberIds: ["member-1", "member-2"],
+      matches: false,
+    },
+  ])("guards automatic promotion for $name", async ({ accountId, subject, memberIds = [], matches }) => {
+    const store = createMemorySecretStore();
+    const active = "provider:openai-codex:oauth";
+    const staged = "evolution:provider-oauth:fixture:openai-codex";
+    const token = (id: string, sub: string | undefined, memberId?: string) =>
+      createJwt({ sub, "https://api.openai.com/auth": { chatgpt_account_id: id, chatgpt_account_user_id: memberId } });
+    const oldCredential = {
+      accessToken: token("account-1", "user-1", memberIds[0]),
+      refreshToken: "old-refresh",
+      accountLabel: "same-display-label",
+      updatedAt: 1,
+      requiresReauth: true,
+    };
+    const newCredential = {
+      ...oldCredential,
+      accessToken: token(accountId, subject, memberIds[1]),
+      refreshToken: "new-refresh",
+      updatedAt: 2,
+      requiresReauth: false,
+    };
+    store.setSecret(active, JSON.stringify(oldCredential));
+    store.setSecret(staged, JSON.stringify(newCredential));
+    service = new OpenAICodexOAuthService(store);
+    expect(service.getStatus(staged, true).connected).toBe(matches);
+    if (!matches) {
+      expect(() => service!.promoteCredential(staged, true)).toThrow(/account changed/);
+      expect(store.getSecret(active)).toBe(JSON.stringify(oldCredential));
+      expect(store.getSecret(staged)).toBe(JSON.stringify(newCredential));
+      return;
+    }
+
+    // A disconnect after the first check must win over the staged reconnect.
+    service.deleteCredential();
+    expect(() => service!.promoteCredential(staged, true)).toThrow(/account changed/);
+    expect(service.getStatus().connected).toBe(false);
+    store.setSecret(active, JSON.stringify(oldCredential));
+    expect(service.promoteCredential(staged, true).connected).toBe(true);
+    expect(await service.resolveAccessToken()).toBe(newCredential.accessToken);
+    expect(store.getSecret(staged)).toBeUndefined();
+  });
+
   it("keeps plan-bound OAuth credentials staged until exact promotion", async () => {
     const port = await getFreePort();
     const secretStore = createMemorySecretStore();

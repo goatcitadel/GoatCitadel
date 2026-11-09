@@ -1,7 +1,8 @@
-import { useId, useState } from "react";
+import { useEffect, useId, useState } from "react";
 import { ChatChangePlanActionDialog } from "@goatcitadel/mission-control-shared/components/chat/ChatChangePlanActionDialog";
 import { useProviderModelCatalog } from "@goatcitadel/mission-control-shared/hooks/useProviderModelCatalog";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
+import type { StatusPresentation } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useProviderProfileEditor } from "../../../features/native-routes/settings/sections/use-provider-profile-editor";
 import { useProviderCredentials } from "../../../features/native-routes/settings/sections/use-provider-credentials";
 import { useProviderOAuthFlow } from "../../../features/native-routes/settings/sections/use-provider-oauth-flow";
@@ -23,7 +24,11 @@ import { ProviderDraftLeave } from "./ProviderDraftLeave";
 import { ProviderOAuthSettings } from "./ProviderOAuthSettings";
 import { useProviderCodexSetup } from "../../../features/native-routes/settings/sections/use-provider-codex-setup";
 
-export function ProviderManagementSettings() {
+export function ProviderManagementSettings({
+  onCodexOAuthStatusChange,
+}: {
+  onCodexOAuthStatusChange?: (status: StatusPresentation | undefined) => void;
+}) {
   const addReasonId = useId();
   const editReasonId = useId();
   const catalog = useProviderModelCatalog("system");
@@ -70,6 +75,13 @@ export function ProviderManagementSettings() {
     hasCodexOAuthProvider: catalog.providers.some((item) => item.providerId === "openai-codex"),
     setNotice,
   });
+  useEffect(() => {
+    onCodexOAuthStatusChange?.(
+      oauth.codexOAuthConnected
+        ? undefined
+        : { label: oauth.codexOAuthPending ? "Pending activation" : "Login unconfirmed", tone: "waiting" },
+    );
+  }, [oauth.codexOAuthConnected, oauth.codexOAuthPending, onCodexOAuthStatusChange]);
   const plan = oauth.codexOAuthPlanDialog,
     setPlan = oauth.setCodexOAuthPlanDialog;
   const setup = useProviderCodexSetup({

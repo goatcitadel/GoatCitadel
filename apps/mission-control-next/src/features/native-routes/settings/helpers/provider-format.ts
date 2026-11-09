@@ -90,12 +90,14 @@ export function formatProviderCredentialLabel(
   providerId: string,
   hasApiKey: boolean | undefined,
   codexOAuthStatus: OpenAICodexOAuthStatus | null,
+  codexOAuthPending = false,
 ): string {
   if (providerId === "llamacpp") return "Keyless · check endpoint";
   if (providerId === "claude-code") {
     return hasApiKey ? "OAuth token ready" : "OAuth token missing";
   }
   if (providerId === "openai-codex") {
+    if (codexOAuthPending) return "OAuth pending activation";
     if (codexOAuthStatus?.connected) {
       return "OAuth connected";
     }

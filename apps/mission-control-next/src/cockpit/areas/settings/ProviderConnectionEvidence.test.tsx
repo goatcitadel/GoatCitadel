@@ -113,6 +113,18 @@ describe("cockpit provider connection details", () => {
     expect(checklist.textContent).toContain("Ready");
   });
 
+  it("keeps connection details available while a replacement credential awaits activation", async () => {
+    await render({
+      provider: { ...provider, providerId: "openai-codex", label: "OpenAI Codex" },
+      credentialStatus: "Pending activation",
+    });
+    await open();
+    expect(container.textContent).toContain("Configured API");
+    expect(container.textContent).toContain("Credential: Pending activation");
+    expect(container.querySelector('[aria-label="OpenAI Codex readiness checklist"]')).toBeNull();
+    expect(api.fetchOpenAICodexOAuthStatus).not.toHaveBeenCalled();
+  });
+
   it("treats a local endpoint without a key as ready and labels it local", async () => {
     api.fetchProviderSecretStatus.mockResolvedValue({ providerId: "provider-a", hasSecret: false, source: "none" });
     await render({ provider: { ...provider, baseUrl: "http://127.0.0.1:8080/v1", resolvedApiStyle: undefined } });

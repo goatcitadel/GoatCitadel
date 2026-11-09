@@ -6,9 +6,11 @@ import {
 } from "./evolution-control-plane-approval-reconciliation.js";
 import {
   isOwnerInputActionKind,
+  requireIdentifier,
   requireArtifactReviewAction,
   requireOwnerInputAction,
   requirePendingAction,
+  validateOwnerInputReceipt,
 } from "./evolution-control-plane-action-guards.js";
 import { validatePublicValues } from "./evolution-control-plane-public-form.js";
 import * as operatorApprovalSkip from "./evolution-control-plane-operator-approval-skip.js";
@@ -401,6 +403,23 @@ export class EvolutionControlPlaneService {
     });
     try {
       const outcome = await adapter.resumeOwnerInput(this.context(current.origin), consumed, receipt);
+      if (
+        outcome.applyVerifiedReconnect &&
+        receipt.actionKind === "oauth" &&
+        receipt.ownerId === "provider_oauth" &&
+        consumed.kind === "provider_connection" &&
+        consumed.risk === "safe"
+      ) {
+        if (isExpired(consumed)) return await this.expire(consumed, actor.actorId);
+        return this.executeApply(
+          actor,
+          adapter,
+          consumed,
+          undefined,
+          { eventType: "verified_oauth_reconnect_apply_started" },
+          outcome.applyVerifiedReconnect,
+        );
+      }
       return await this.persistOutcome(actor, adapter, consumed, outcome);
     } catch (error) {
       return await this.settleAdapterFailure(actor, consumed, error);
@@ -617,6 +636,7 @@ export class EvolutionControlPlaneService {
     plan: ChangePlanRecord,
     actionNonce?: string,
     startEvent: operatorApprovalSkip.ApplyStartEvent = { eventType: "apply_started" },
+    applyVerifiedReconnect?: (plan: ChangePlanRecord) => Promise<EvolutionControlPlaneAdapterOutcome>,
   ): Promise<ChangePlanRecord> {
     const applying =
       plan.status === "applying"
@@ -631,7 +651,9 @@ export class EvolutionControlPlaneService {
           });
     await this.signal("change_plan.applying", applying);
     try {
-      const outcome = await adapter.apply(this.context(plan.origin), applying);
+      const outcome = applyVerifiedReconnect
+        ? await applyVerifiedReconnect(applying)
+        : await adapter.apply(this.context(plan.origin), applying);
       return await this.persistOutcome(actor, adapter, applying, outcome);
     } catch (error) {
       return await this.settleAdapterFailure(actor, applying, error);
@@ -1022,24 +1044,6 @@ function requireRevision(plan: ChangePlanRecord, expectedRevision: number): void
   }
 }
 
-function validateOwnerInputReceipt(receipt: EvolutionControlPlaneOwnerInputReceipt): void {
-  requireIdentifier(receipt.actionId, "ownerInput.actionId");
-  requireIdentifier(receipt.ownerId, "ownerInput.ownerId");
-  requireIdentifier(receipt.ownerResourceId, "ownerInput.ownerResourceId");
-  if (
-    receipt.ownerRevision !== undefined &&
-    (!Number.isSafeInteger(receipt.ownerRevision) || receipt.ownerRevision < 1)
-  ) {
-    throw new ValidationError({ message: "Change Plan owner input revision is invalid." });
-  }
-  if (
-    receipt.evidenceRefs &&
-    (receipt.evidenceRefs.length > 64 || receipt.evidenceRefs.some((ref) => !ref.trim() || ref.length > 512))
-  ) {
-    throw new ValidationError({ message: "Change Plan owner input evidence references are invalid." });
-  }
-}
-
 function validatePreparedAction(
   status: EvolutionControlPlaneAdapterOutcome["status"] | "manual_required",
   action: ChangePlanRequiredAction | undefined,
@@ -1071,14 +1075,6 @@ function isExpired(plan: ChangePlanRecord): boolean {
 function defaultExpiry(status: ChangePlanStatus): string | undefined {
   if (!["draft", "awaiting_input", "awaiting_confirmation", "awaiting_approval"].includes(status)) return undefined;
   return new Date(Date.now() + 15 * 60 * 1_000).toISOString();
-}
-
-function requireIdentifier(value: string, label: string): string {
-  const normalized = value.trim();
-  if (!normalized || normalized.length > 256 || /[\r\n\0]/u.test(normalized)) {
-    throw new ValidationError({ message: `Change Plan ${label} is invalid.` });
-  }
-  return normalized;
 }
 
 function safeErrorSummary(error: unknown): string {

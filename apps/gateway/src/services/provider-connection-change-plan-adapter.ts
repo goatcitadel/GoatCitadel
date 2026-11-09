@@ -15,6 +15,7 @@ import type {
   EvolutionControlPlaneAdapter,
   EvolutionControlPlaneAdapterContext,
   EvolutionControlPlaneAdapterOutcome,
+  EvolutionControlPlaneOwnerInputOutcome,
   EvolutionControlPlaneOwnerInputReceipt,
 } from "./evolution-control-plane-adapter.js";
 
@@ -23,7 +24,11 @@ export interface ProviderConnectionChangePlanAdapterDependencies {
   readonly getProviderConfig?: (providerId: string) => LlmProviderConfig | undefined;
   readonly updateSettings: (input: UpdateSettingsInput) => Promise<RuntimeSettings>;
   readonly hasTemporarySecret: (planId: string, providerId: string) => boolean | Promise<boolean>;
-  readonly hasTemporaryOAuthCredential?: (planId: string, providerId: string) => boolean | Promise<boolean>;
+  readonly hasTemporaryOAuthCredential?: (
+    planId: string,
+    providerId: string,
+    sameAccountOnly?: boolean,
+  ) => boolean | Promise<boolean>;
   readonly promoteTemporarySecret: (
     planId: string,
     providerId: string,
@@ -35,6 +40,7 @@ export interface ProviderConnectionChangePlanAdapterDependencies {
     planId: string,
     providerId: string,
     expectedRevision: number,
+    sameAccountOnly?: boolean,
   ) => Promise<{ revision: number; evidenceRefs: readonly string[] }>;
   readonly removeProviderApiKey: (
     providerId: string,
@@ -137,7 +143,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
             : replacing
               ? `Replace the ${label} API key through the Gateway's dedicated secure credential flow.`
               : replacingOAuth
-                ? `Stage a replacement ${label} OAuth credential without changing the active connection until exact confirmation.`
+                ? `Reconnect ${label}. A different or unverified account requires confirmation before it replaces the active connection.`
                 : ready
                   ? `${label} is already configured. Verify its live model catalog before keeping this connection.`
                   : `Connect ${label} through the Gateway's dedicated ${oauth ? "OAuth" : "secure credential"} flow.`,
@@ -171,8 +177,9 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
     context: EvolutionControlPlaneAdapterContext,
     plan: ChangePlanRecord,
     receipt: EvolutionControlPlaneOwnerInputReceipt,
-  ): Promise<EvolutionControlPlaneAdapterOutcome> {
+  ): Promise<EvolutionControlPlaneOwnerInputOutcome> {
     const request = requireRequest(plan);
+    const hasTemporaryOAuth = this.deps.hasTemporaryOAuthCredential;
     if (receipt.ownerResourceId !== request.providerId) {
       throw new ConflictError({ message: "Provider connection owner receipt does not match this Change Plan." });
     }
@@ -187,7 +194,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
       if (receipt.ownerId !== "provider_oauth") {
         throw new ConflictError({ message: "Provider OAuth receipt owner is invalid." });
       }
-      if (!(await this.deps.hasTemporaryOAuthCredential?.(plan.planId, request.providerId))) {
+      if (!(await hasTemporaryOAuth?.(plan.planId, request.providerId))) {
         throw new SemanticValidationError(
           "The temporary provider OAuth credential is unavailable. Authorize it again.",
         );
@@ -199,6 +206,14 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
     const provider = requireProvider(settings, request.providerId);
     assertRevision(plan, settings.revision);
     this.assertCommittedProfile(plan, provider);
+    const promoteOAuth = this.deps.promoteTemporaryOAuthCredential;
+    const sameAccountReconnect =
+      receipt.actionKind === "oauth" &&
+      request.providerId === "openai-codex" &&
+      request.credentialAction === "replace_oauth" &&
+      !request.profile &&
+      isOAuthProvider(provider) &&
+      (await hasTemporaryOAuth?.(plan.planId, request.providerId, true));
     return {
       status: "awaiting_confirmation",
       evidenceRefs: receipt.evidenceRefs,
@@ -207,6 +222,18 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
         confirmationText: `Promote the verified ${provider.label} connection. ${isOAuthProvider(provider) ? "Keep only its dedicated OAuth owner reference." : credentialStorageDescription(request)}`,
       }),
       result: { summary: `${provider.label} input was verified and is ready for final confirmation.` },
+      ...(sameAccountReconnect && promoteOAuth
+        ? {
+            applyVerifiedReconnect: async (applying: ChangePlanRecord) => {
+              const promoted = await promoteOAuth(applying.planId, request.providerId, settings.revision, true);
+              return {
+                status: "verifying",
+                evidenceRefs: promoted.evidenceRefs,
+                result: { summary: `${provider.label} was reconnected.`, appliedRevision: promoted.revision },
+              };
+            },
+          }
+        : {}),
     };
   }
 
@@ -315,11 +342,12 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
         },
       };
     }
-    if (hasTemporaryOAuthCredential && !this.deps.promoteTemporaryOAuthCredential) {
+    const promoteOAuth = this.deps.promoteTemporaryOAuthCredential;
+    if (hasTemporaryOAuthCredential && !promoteOAuth) {
       throw new SemanticValidationError("The provider OAuth promotion owner is unavailable.");
     }
     const promoted = hasTemporaryOAuthCredential
-      ? await this.deps.promoteTemporaryOAuthCredential!(plan.planId, request.providerId, settings.revision)
+      ? await promoteOAuth!(plan.planId, request.providerId, settings.revision)
       : hasTemporarySecret
         ? await this.deps.promoteTemporarySecret(
             plan.planId,
@@ -463,6 +491,20 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
             result: { summary: "OAuth removal could not be proven after restart.", failureCode: "ambiguous_recovery" },
           };
     }
+    const unproven = {
+      effectObserved: false,
+      status: "manual_required" as const,
+      result: {
+        summary:
+          "The provider connection could not be proven after restart; the Gateway did not replay credential promotion.",
+        failureCode: "ambiguous_recovery",
+      },
+    };
+    if (request.credentialAction === "replace_oauth" && plan.status !== "verifying") {
+      // The previous credential can still pass the live catalog check. Only the
+      // transition to verifying proves the replacement write returned.
+      return unproven;
+    }
     try {
       const verification = await this.verifyAndRetireTemporaryCredentials(plan.planId, request.providerId);
       return {
@@ -472,15 +514,7 @@ export class ProviderConnectionChangePlanAdapter implements EvolutionControlPlan
         result: plan.result ?? { summary: "Owner state proves the provider connection is active." },
       };
     } catch {
-      return {
-        effectObserved: false,
-        status: "manual_required" as const,
-        result: {
-          summary:
-            "The provider connection could not be proven after restart; the Gateway did not replay credential promotion.",
-          failureCode: "ambiguous_recovery",
-        },
-      };
+      return unproven;
     }
   }
 

@@ -48,7 +48,7 @@ export function ProviderTrustPanel({
     setPendingDeleteSecret,
     handleSaveSecret,
   } = credentials;
-  const { codexOAuthStatus, codexOAuthConnected, codexOAuthFlow, setCodexOAuthPlanDialog } = oauth;
+  const { codexOAuthStatus, codexOAuthConnected, codexOAuthPending, setCodexOAuthPlanDialog } = oauth;
   const selectedProviderIsCodexOAuth = selectedProvider?.providerId === "openai-codex";
   const selectedProviderIsGoogleAdc = selectedProvider?.authMode === "google-adc";
   const selectedProviderIsGoogleServiceAccount = selectedProvider?.authMode === "google-service-account";
@@ -102,8 +102,13 @@ export function ProviderTrustPanel({
         <>
           <p>
             {selectedProvider.defaultModel || "Default model unavailable"} ·{" "}
-            {formatProviderCredentialLabel(selectedProvider.providerId, selectedProvider.hasApiKey, codexOAuthStatus)} ·{" "}
-            {formatProviderProbeStateLabel(selectedProvider.modelProbeState)}
+            {formatProviderCredentialLabel(
+              selectedProvider.providerId,
+              selectedProvider.hasApiKey,
+              codexOAuthStatus,
+              codexOAuthPending,
+            )}{" "}
+            · {formatProviderProbeStateLabel(selectedProvider.modelProbeState)}
           </p>
           <ProviderConnectionDiagnostics
             selectedProvider={selectedProvider}
@@ -120,7 +125,7 @@ export function ProviderTrustPanel({
                   tone: codexOAuthConnected ? "success" : "info",
                   message: codexOAuthConnected
                     ? `OpenAI Codex OAuth connected${codexOAuthStatus?.accountLabel ? ` as ${codexOAuthStatus.accountLabel}` : ""}.`
-                    : codexOAuthFlow
+                    : codexOAuthPending
                       ? "ChatGPT login is currently in progress in the setup card above."
                       : "No API key goes here. ChatGPT login is managed by the setup card above.",
                 }}

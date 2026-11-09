@@ -30,11 +30,11 @@ const provider: ProviderModelCatalogOption = {
 let catalog: ReturnType<typeof useProviderModelCatalog>;
 let root: Root;
 let container: HTMLDivElement;
-const render = () =>
+const render = (codexOAuthStatus?: Parameters<typeof ProviderCatalogSettings>[0]["codexOAuthStatus"]) =>
   act(async () =>
     root.render(
       <CockpitNavigationProvider>
-        <ProviderCatalogSettings />
+        <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} />
       </CockpitNavigationProvider>,
     ),
   );
@@ -68,6 +68,16 @@ afterEach(() => {
 });
 
 describe("cockpit provider catalog", () => {
+  it("does not present an earlier live probe as a connected login during activation", async () => {
+    catalog.providers = [{ ...provider, providerId: "openai-codex", label: "OpenAI Codex" }];
+    await render({ label: "Pending activation", tone: "waiting" });
+    expect(container.textContent).toContain("Pending activation");
+    expect(container.textContent).not.toContain("Connected");
+    await render({ label: "Login unconfirmed", tone: "waiting" });
+    expect(container.textContent).not.toContain("Connected");
+    await render();
+    expect(container.textContent).toContain("Connected");
+  });
   it("opens native provider management without reloading the document", async () => {
     window.history.replaceState(null, "", "/settings/models?shell=cockpit#provider-catalog");
     const assign = vi.spyOn(window.location, "assign").mockImplementation(() => undefined);

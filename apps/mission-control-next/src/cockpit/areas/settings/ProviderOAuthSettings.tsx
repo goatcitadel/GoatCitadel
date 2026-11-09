@@ -28,16 +28,20 @@ export function ProviderOAuthSettings({
       <h4 className="text-md font-semibold text-fg">ChatGPT OAuth</h4>
       <p className="text-sm text-fg-secondary">
         Provider profile: {configured ? "Configured" : "Not configured"}. Login:{" "}
-        {status
-          ? status.connected
-            ? "Connected"
-            : status.requiresReauth
-              ? "Reauthorization required"
-              : "Not connected"
-          : "Unavailable"}
+        {oauth.codexOAuthPending
+          ? "Pending activation"
+          : status
+            ? status.connected
+              ? "Connected"
+              : status.requiresReauth
+                ? "Reauthorization required"
+                : "Not connected"
+            : "Unavailable"}
         .
       </p>
-      {status?.accountLabel ? <p className="text-sm text-fg-secondary">Account: {status.accountLabel}</p> : null}
+      {!oauth.codexOAuthPending && status?.accountLabel ? (
+        <p className="text-sm text-fg-secondary">Account: {status.accountLabel}</p>
+      ) : null}
       {oauth.codexOAuthStatusError ? (
         <p role="alert" className="text-sm text-status-failed">
           OAuth status unavailable: {oauth.codexOAuthStatusError}
@@ -54,7 +58,7 @@ export function ProviderOAuthSettings({
           </Button>
         ) : (
           <Button disabled={locked || !status?.available} onClick={() => void oauth.handleStartCodexOAuth(true)}>
-            {status?.connected ? "Reconnect ChatGPT" : "Start ChatGPT login"}
+            {status?.connected || status?.requiresReauth ? "Reconnect ChatGPT" : "Start ChatGPT login"}
           </Button>
         )}
         <Button disabled={locked} onClick={() => void oauth.refreshCodexOAuthStatus().catch(() => undefined)}>

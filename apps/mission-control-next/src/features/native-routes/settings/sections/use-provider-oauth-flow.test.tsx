@@ -111,6 +111,50 @@ afterEach(() => {
 });
 
 describe("shared provider OAuth lifecycle", () => {
+  it("keeps the previous login out of Connected until reconnect completes and canonical status refreshes", async () => {
+    const reconnect: ChangePlanRecord = {
+      ...plan,
+      request: { kind: "provider_connection", providerId: "openai-codex", credentialAction: "replace_oauth" },
+    };
+    const active = { providerId: "openai-codex", available: true, connected: true, accountLabel: "previous" };
+    api.fetchOpenAICodexOAuthStatus.mockResolvedValue(active);
+    api.createChangePlan.mockResolvedValue(reconnect);
+    api.completeChangePlanProviderOAuth.mockResolvedValue({
+      ...reconnect,
+      status: "completed",
+      phase: "terminal",
+      revision: 4,
+      requiredAction: undefined,
+    });
+    await render();
+    expect(owner.codexOAuthConnected).toBe(true);
+    await act(async () => {
+      await owner.handleStartCodexOAuth();
+    });
+    expect(owner.codexOAuthPending).toBe(true);
+    expect(owner.codexOAuthConnected).toBe(false);
+    expect(api.createChangePlan).toHaveBeenCalledWith(expect.objectContaining({ request: reconnect.request }));
+
+    const refreshed = deferred<typeof active>();
+    api.fetchOpenAICodexOAuthStatus.mockReturnValue(refreshed.promise);
+    api.pollChangePlanProviderOAuth.mockResolvedValue({ ...pending, status: "connected" });
+    let poll!: Promise<void>;
+    await act(async () => {
+      poll = owner.handlePollCodexOAuth();
+    });
+    expect(api.completeChangePlanProviderOAuth).toHaveBeenCalledOnce();
+    expect(owner.codexOAuthPlanDialog).toBeNull();
+    expect(owner.codexOAuthConnected).toBe(false);
+    await act(async () => {
+      refreshed.resolve({ ...active, accountLabel: "refreshed" });
+      await poll;
+    });
+    expect(owner.codexOAuthConnected).toBe(true);
+    expect(owner.codexOAuthStatus?.accountLabel).toBe("refreshed");
+    expect(owner.codexOAuthPlan?.status).toBe("completed");
+    expect(owner.codexOAuthPlanDialog).toBeNull();
+  });
+
   it.each(["supplied", "list", "session"])("withholds OAuth dispatch for a foreign %s plan", async (source) => {
     const foreign = {
       ...plan,

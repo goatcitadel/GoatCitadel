@@ -14,6 +14,16 @@ public static class OpenTargetService
         OpenShellTarget(uri.ToString());
     }
 
+    public static void OpenBrowserPopup(string target)
+    {
+        if (NavigationPolicy.ClassifyNewWindowTarget(target, out var uri, out var error) != NewWindowDisposition.OpenInBrowser)
+        {
+            throw new InvalidOperationException(error);
+        }
+
+        OpenShellTarget(uri.AbsoluteUri);
+    }
+
     public static void OpenExistingPath(string path)
     {
         if (string.IsNullOrWhiteSpace(path) || path.Any(char.IsControl) || !Path.Exists(path))

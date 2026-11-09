@@ -35,11 +35,14 @@ export function ProviderConnectionDiagnostics({
   selectedProvider: ProviderCatalog["providers"][number];
   selectedProviderConfig?: LlmProviderConfig;
   secretState: ReturnType<typeof useProviderCredentials>["secretState"];
-  oauth: Pick<ReturnType<typeof useProviderOAuthFlow>, "codexOAuthStatus" | "codexOAuthConnected">;
+  oauth: Pick<
+    ReturnType<typeof useProviderOAuthFlow>,
+    "codexOAuthStatus" | "codexOAuthConnected" | "codexOAuthPending"
+  >;
   handleRefreshModels: (providerId: string) => Promise<void>;
   openView: (view: string | null) => void;
 }) {
-  const { codexOAuthStatus, codexOAuthConnected } = oauth;
+  const { codexOAuthStatus, codexOAuthConnected, codexOAuthPending } = oauth;
   const availableModels = selectedProvider.models ?? [];
   const selectedProviderIsLocal = isLikelyLocalProviderBaseUrl(selectedProvider?.baseUrl);
   const selectedProviderIsCodexOAuth = selectedProvider?.providerId === "openai-codex";
@@ -73,11 +76,13 @@ export function ProviderConnectionDiagnostics({
     : false;
   const selectedProviderCredentialMeta = selectedProvider
     ? selectedProviderIsCodexOAuth
-      ? codexOAuthConnected
-        ? (codexOAuthStatus?.accountLabel ?? "OAuth connected")
-        : codexOAuthStatus?.requiresReauth
-          ? "OAuth requires reauth"
-          : "OAuth not connected"
+      ? codexOAuthPending
+        ? "OAuth pending activation"
+        : codexOAuthConnected
+          ? (codexOAuthStatus?.accountLabel ?? "OAuth connected")
+          : codexOAuthStatus?.requiresReauth
+            ? "OAuth requires reauth"
+            : "OAuth not connected"
       : selectedProviderIsLocal && !(secretState.data?.hasSecret || selectedProvider.hasApiKey)
         ? "Local endpoint, no key required"
         : selectedProviderIsGoogleAdc
@@ -131,11 +136,13 @@ export function ProviderConnectionDiagnostics({
                     ? "Service account"
                     : "API key",
             value: selectedProviderIsCodexOAuth
-              ? codexOAuthStatus?.connected
-                ? "Connected"
-                : codexOAuthStatus?.requiresReauth
-                  ? "Reauth"
-                  : "Missing"
+              ? codexOAuthPending
+                ? "Pending activation"
+                : codexOAuthConnected
+                  ? "Connected"
+                  : codexOAuthStatus?.requiresReauth
+                    ? "Reauth"
+                    : "Missing"
               : selectedProviderIsGoogleAdc
                 ? selectedProvider.hasApiKey
                   ? "Configured"

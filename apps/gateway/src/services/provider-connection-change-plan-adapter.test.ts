@@ -135,6 +135,37 @@ describe("ProviderConnectionChangePlanAdapter", () => {
     expect(promoteTemporarySecret).not.toHaveBeenCalled();
   });
 
+  it("does not use the old credential's catalog as proof of an interrupted OAuth replacement", async () => {
+    const verifyProvider = vi.fn(async () => ({ evidenceRefs: ["provider-catalog:openai-codex:live"] }));
+    const discardTemporaryOAuthCredential = vi.fn();
+    const adapter = new ProviderConnectionChangePlanAdapter({
+      getSettings: vi.fn(),
+      updateSettings: vi.fn(),
+      hasTemporarySecret: vi.fn(),
+      promoteTemporarySecret: vi.fn(),
+      removeProviderApiKey: vi.fn(),
+      getProviderApiKeyStatus: vi.fn(),
+      discardTemporarySecret: vi.fn(),
+      discardTemporaryOAuthCredential,
+      verifyProvider,
+    });
+    const plan = {
+      planId: "plan-oauth",
+      status: "applying",
+      request: { kind: "provider_connection", providerId: "openai-codex", credentialAction: "replace_oauth" },
+    } as ChangePlanRecord;
+    await expect(adapter.reconcile(context, plan)).resolves.toMatchObject({
+      status: "manual_required",
+      effectObserved: false,
+    });
+    expect(verifyProvider).not.toHaveBeenCalled();
+    expect(discardTemporaryOAuthCredential).not.toHaveBeenCalled();
+    await expect(adapter.reconcile(context, { ...plan, status: "verifying" })).resolves.toMatchObject({
+      status: "completed",
+      effectObserved: true,
+    });
+  });
+
   it("confirms a new secret-free profile before asking the dedicated credential owner", async () => {
     let settings = { ...runtimeSettings(), llm: { providers: [] } } as any;
     const updateSettings = vi.fn(async () => {

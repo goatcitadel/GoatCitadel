@@ -3444,12 +3444,10 @@ export class GatewayService {
           this.llmService.exportConfigFile().providers.find((provider) => provider.providerId === providerId),
         updateSettings: (input) => this.updateSettings(input),
         hasTemporarySecret: (planId, providerId) => this.hasTemporaryProviderSecret(planId, providerId),
-        hasTemporaryOAuthCredential: (planId, providerId) =>
-          this.hasTemporaryProviderOAuthCredential(planId, providerId),
+        hasTemporaryOAuthCredential: (...args) => this.hasTemporaryProviderOAuthCredential(...args),
         promoteTemporarySecret: (planId, providerId, expectedRevision, storage, envVar) =>
           this.promoteTemporaryProviderSecret(planId, providerId, expectedRevision, storage, envVar),
-        promoteTemporaryOAuthCredential: (planId, providerId, expectedRevision) =>
-          this.promoteTemporaryProviderOAuthCredential(planId, providerId, expectedRevision),
+        promoteTemporaryOAuthCredential: (...args) => this.promoteTemporaryProviderOAuthCredential(...args),
         removeProviderApiKey: async (providerId, expectedRevision, storage) => {
           const result = await this.deleteProviderSecret({ providerId, expectedRevision, storage });
           return {
@@ -7041,9 +7039,9 @@ export class GatewayService {
     this.providerSecretStaging.clear(providerTemporarySecretAccount(planId, providerId));
   }
 
-  private hasTemporaryProviderOAuthCredential(planId: string, providerId: string): boolean {
-    return this.llmService.getOpenAICodexOAuthCredentialStatus(providerTemporaryOAuthAccount(planId, providerId))
-      .connected;
+  private hasTemporaryProviderOAuthCredential(planId: string, providerId: string, sameAccountOnly = false): boolean {
+    const account = providerTemporaryOAuthAccount(planId, providerId);
+    return this.llmService.getOpenAICodexOAuthCredentialStatus(account, sameAccountOnly).connected;
   }
 
   private verifyTemporaryProviderOAuthCredential(planId: string, providerId: string): readonly string[] {
@@ -7064,6 +7062,7 @@ export class GatewayService {
     planId: string,
     providerId: string,
     expectedRevision: number,
+    sameAccountOnly?: boolean,
   ): Promise<{ revision: number; evidenceRefs: readonly string[] }> {
     const settings = await this.getSettings();
     if (settings.revision !== expectedRevision) {
@@ -7077,7 +7076,8 @@ export class GatewayService {
     if (!provider || provider.authMode !== "codex-oauth") {
       throw new ValidationError({ message: "The approved OpenAI Codex OAuth provider profile is unavailable." });
     }
-    const status = this.llmService.promoteOpenAICodexOAuthCredential(providerTemporaryOAuthAccount(planId, providerId));
+    const account = providerTemporaryOAuthAccount(planId, providerId);
+    const status = this.llmService.promoteOpenAICodexOAuthCredential(account, sameAccountOnly);
     if (!status.connected) {
       throw new ValidationError({ message: "The OAuth credential owner did not confirm canonical promotion." });
     }
