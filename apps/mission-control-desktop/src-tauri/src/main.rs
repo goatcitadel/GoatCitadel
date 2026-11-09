@@ -1,4 +1,6 @@
 mod launcher_process;
+mod runtime_queue;
+use runtime_queue::RuntimeQueue;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
@@ -25,6 +27,7 @@ use windows_sys::Win32::UI::{Shell::ShellExecuteW, WindowsAndMessaging::SW_SHOWN
 
 #[derive(Default)]
 struct DesktopState {
+    runtime: RuntimeQueue,
     watcher_stop: Mutex<Option<Arc<AtomicBool>>>,
     last_runtime: Mutex<Option<DesktopLaunchResult>>,
 }
@@ -167,43 +170,33 @@ async fn launch_runtime(
     app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<DesktopLaunchResult, String> {
-    let output = run_launcher_async(["launch", "--no-open", "--json", "--wait"]).await?;
-    let result: DesktopLaunchResult = serde_json::from_str(&output)
-        .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))?;
-    {
-        let mut last_runtime = state
-            .last_runtime
-            .lock()
-            .map_err(|_| "Desktop runtime state is unavailable.".to_string())?;
-        *last_runtime = Some(result.clone());
-    }
-    start_approval_watcher(app, state, result.clone())?;
-    Ok(result)
+    state
+        .runtime
+        .run(move || launch_managed_runtime(&app))
+        .await
 }
 
 #[tauri::command]
 async fn read_runtime_status(
+    app: AppHandle,
     state: State<'_, DesktopState>,
 ) -> Result<DesktopRuntimeStatus, String> {
-    let output = run_launcher_async(["status", "--json"]).await?;
-    let result: DesktopRuntimeStatus = serde_json::from_str(&output)
-        .map_err(|error| format!("Launcher returned invalid JSON: {error}. Output: {output}"))?;
-    {
-        let mut last_runtime = state
-            .last_runtime
-            .lock()
-            .map_err(|_| "Desktop runtime state is unavailable.".to_string())?;
-        *last_runtime = Some(result.clone());
-    }
-    Ok(result)
+    state
+        .runtime
+        .run(move || {
+            let result = read_launcher_runtime(["status", "--json"])?;
+            cache_runtime(&app.state::<DesktopState>(), Some(result.clone()))?;
+            Ok(result)
+        })
+        .await
 }
 
 #[tauri::command]
-async fn stop_runtime(state: State<'_, DesktopState>) -> Result<Value, String> {
-    let output = run_launcher_async(["stop", "--json"]).await?;
-    let result = parse_stop_result(&output)?;
-    stop_approval_watcher(&state)?;
-    Ok(result)
+async fn stop_runtime(app: AppHandle, state: State<'_, DesktopState>) -> Result<Value, String> {
+    state
+        .runtime
+        .run(move || stop_managed_runtime(&app))
+        .await
 }
 
 #[tauri::command]
@@ -277,37 +270,19 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
                 let _ = app.emit("desktop://runtime-status-requested", ());
             }
             "restart" => {
-                let handle = app.clone();
-                let _ = app.emit("desktop://runtime-stopping", ());
-                thread::spawn(move || {
-                    if let Err(error) = stop_runtime_for_tray(&handle) {
-                        let _ = handle.emit("desktop://runtime-stop-failed", json!({ "message": error }));
-                        return;
-                    }
-                    match run_launcher(["launch", "--no-open", "--json", "--wait"])
-                        .and_then(|output| serde_json::from_str::<DesktopLaunchResult>(&output)
-                            .map_err(|error| format!("Launcher returned invalid runtime status: {error}"))) {
-                        Ok(result) => {
-                            if let Some(state) = handle.try_state::<DesktopState>() {
-                                if let Ok(mut last_runtime) = state.last_runtime.lock() {
-                                    *last_runtime = Some(result.clone());
-                                }
-                                let _ = start_approval_watcher(handle.clone(), state, result);
-                            }
-                            let _ = handle.emit("desktop://runtime-restarted", ());
-                        }
-                        Err(error) => {
-                            let _ = handle.emit("desktop://runtime-stop-failed", json!({ "message": format!("Runtime could not restart: {error}") }));
-                        }
-                    }
+                queue_tray_runtime_operation(app, |handle| {
+                    stop_managed_runtime(handle)?;
+                    launch_managed_runtime(handle)
+                        .map_err(|error| format!("Runtime could not restart: {error}"))?;
+                    let _ = handle.emit("desktop://runtime-restarted", ());
+                    Ok(())
                 });
             }
             "stop" => {
-                let handle = app.clone();
-                let _ = app.emit("desktop://runtime-stopping", ());
-                thread::spawn(move || match stop_runtime_for_tray(&handle) {
-                    Ok(result) => { let _ = handle.emit("desktop://runtime-stopped", result); }
-                    Err(error) => { let _ = handle.emit("desktop://runtime-stop-failed", json!({ "message": error })); }
+                queue_tray_runtime_operation(app, |handle| {
+                    let result = stop_managed_runtime(handle)?;
+                    let _ = handle.emit("desktop://runtime-stopped", result);
+                    Ok(())
                 });
             }
             "logs" => {
@@ -323,6 +298,26 @@ fn install_tray(app: &AppHandle) -> tauri::Result<()> {
         })
         .build(app)?;
     Ok(())
+}
+
+fn queue_tray_runtime_operation(
+    app: &AppHandle,
+    operation: impl FnOnce(&AppHandle) -> Result<(), String> + Send + 'static,
+) {
+    let handle = app.clone();
+    let _ = app.emit("desktop://runtime-stopping", ());
+    let queued = app.state::<DesktopState>().runtime.enqueue(move || {
+        if let Err(error) = operation(&handle) {
+            emit_runtime_stop_failure(&handle, error);
+        }
+    });
+    if let Err(error) = queued {
+        emit_runtime_stop_failure(app, error);
+    }
+}
+
+fn emit_runtime_stop_failure(app: &AppHandle, error: String) {
+    let _ = app.emit("desktop://runtime-stop-failed", json!({ "message": error }));
 }
 
 fn show_main_window(app: &AppHandle) -> tauri::Result<()> {
@@ -355,18 +350,37 @@ fn parse_stop_result(output: &str) -> Result<Value, String> {
     Ok(result)
 }
 
-fn stop_runtime_for_tray(app: &AppHandle) -> Result<Value, String> {
+fn stop_managed_runtime(app: &AppHandle) -> Result<Value, String> {
     let result = parse_stop_result(&run_launcher(["stop", "--json"])?)?;
-    if let Some(state) = app.try_state::<DesktopState>() {
-        stop_approval_watcher(&state)?;
-        if let Ok(stopped) = serde_json::from_value::<DesktopLaunchResult>(result.clone()) {
-            let mut last_runtime = state.last_runtime.lock()
-                .map_err(|_| "Desktop runtime state is unavailable.".to_string())?;
-            *last_runtime = Some(stopped);
-        }
-    }
+    let state = app.state::<DesktopState>();
+    stop_approval_watcher(&state)?;
+    cache_runtime(&state, serde_json::from_value(result.clone()).ok())?;
     Ok(result)
 }
+
+fn launch_managed_runtime(app: &AppHandle) -> Result<DesktopLaunchResult, String> {
+    let result = read_launcher_runtime(["launch", "--no-open", "--json", "--wait"])?;
+    let state = app.state::<DesktopState>();
+    cache_runtime(&state, Some(result.clone()))?;
+    start_approval_watcher(app.clone(), state, result.clone())?;
+    Ok(result)
+}
+
+fn cache_runtime(state: &DesktopState, runtime: Option<DesktopLaunchResult>) -> Result<(), String> {
+    let mut last_runtime = state
+        .last_runtime
+        .lock()
+        .map_err(|_| "Desktop runtime state is unavailable.".to_string())?;
+    *last_runtime = runtime;
+    Ok(())
+}
+
+fn read_launcher_runtime<const N: usize>(args: [&str; N]) -> Result<DesktopLaunchResult, String> {
+    let output = run_launcher(args)?;
+    serde_json::from_str(&output)
+        .map_err(|error| format!("Launcher returned invalid runtime status: {error}"))
+}
+
 fn read_last_runtime(app: &AppHandle) -> Option<DesktopLaunchResult> {
     let state = app.try_state::<DesktopState>()?;
     let last_runtime = state.last_runtime.lock().ok()?.clone();
@@ -724,12 +738,6 @@ fn run_launcher<const N: usize>(args: [&str; N]) -> Result<String, String> {
         });
     }
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
-}
-
-async fn run_launcher_async<const N: usize>(args: [&'static str; N]) -> Result<String, String> {
-    tauri::async_runtime::spawn_blocking(move || run_launcher(args))
-        .await
-        .map_err(|error| format!("GoatCitadel launcher task failed: {error}"))?
 }
 
 fn resolve_launcher() -> Result<LauncherInvocation, String> {
