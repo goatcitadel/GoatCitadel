@@ -191,11 +191,13 @@ function parseArgs(argv) {
 function renderIdentityManifest({ publisher: packagePublisher, version: packageVersion }) {
   return `<?xml version="1.0" encoding="utf-8"?>
 <Package
-  IgnorableNamespaces="uap uap10 rescap"
+  IgnorableNamespaces="uap uap10 rescap desktop com"
   xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
   xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
   xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
-  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities">
+  xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
+  xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
+  xmlns:com="http://schemas.microsoft.com/appx/manifest/com/windows10">
   <Identity
     Name="${escapeXml(PACKAGE_NAME)}"
     Publisher="${escapeXml(packagePublisher)}"
@@ -231,6 +233,16 @@ function renderIdentityManifest({ publisher: packagePublisher, version: packageV
         Square150x150Logo="Assets\\Square150x150Logo.png"
         Square44x44Logo="Assets\\Square44x44Logo.png" />
       <Extensions>
+        <desktop:Extension Category="windows.toastNotificationActivation">
+          <desktop:ToastNotificationActivation ToastActivatorCLSID="E70D6528-D15E-420A-BF83-D18D268E3BAE" />
+        </desktop:Extension>
+        <com:Extension Category="windows.comServer">
+          <com:ComServer>
+            <com:ExeServer Executable="app\\desktop\\GoatCitadel-Mission-Control-Windows.exe" Arguments="----AppNotificationActivated:" DisplayName="GoatCitadel Mission Control">
+              <com:Class Id="E70D6528-D15E-420A-BF83-D18D268E3BAE" DisplayName="GoatCitadel Mission Control" />
+            </com:ExeServer>
+          </com:ComServer>
+        </com:Extension>
         <uap:Extension Category="windows.protocol">
           <uap:Protocol Name="goatcitadel" />
         </uap:Extension>

@@ -141,6 +141,17 @@ test("Windows host manifests declare matching external-location package identity
   assert.match(packageManifest, /<uap10:AllowExternalContent>true<\/uap10:AllowExternalContent>/);
   assert.match(packageManifest, /Executable="app\\desktop\\GoatCitadel-Mission-Control-Windows\.exe"/);
   assert.match(packageManifest, /<uap:Protocol Name="goatcitadel" \/>/);
+  const msixBuilder = fs.readFileSync(path.join(repoRoot, "scripts", "packaging", "build-windows-msix.mjs"), "utf8");
+  const activator = packageManifest.match(/ToastActivatorCLSID="([0-9A-F-]{36})"/u)?.[1];
+  assert.ok(activator, "Expected a packaged notification activator");
+  for (const manifest of [packageManifest, msixBuilder.replaceAll("\\\\", "\\")]) {
+    assert.ok(manifest.includes('<desktop:Extension Category="windows.toastNotificationActivation">'));
+    assert.ok(manifest.includes(`ToastActivatorCLSID="${activator}"`));
+    assert.ok(manifest.includes('<com:Extension Category="windows.comServer">'));
+    assert.ok(manifest.includes('Arguments="----AppNotificationActivated:"'));
+    assert.ok(manifest.includes(`<com:Class Id="${activator}"`));
+    assert.match(manifest, /<com:ExeServer Executable="app\\desktop\\GoatCitadel-Mission-Control-Windows\.exe"/u);
+  }
   assert.match(hostBuilder, /GOATCITADEL_WINDOWS_MSIX_PUBLISHER/);
   assert.match(hostBuilder, /-p:ApplicationManifest=/);
   assert.match(releaseWorkflow, /GOATCITADEL_WINDOWS_MSIX_PUBLISHER/);
