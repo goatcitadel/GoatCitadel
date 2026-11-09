@@ -27,7 +27,8 @@ async function settle() {
   await act(async () => (window as unknown as HappyDomWindow).happyDOM.waitUntilComplete());
 }
 async function click(name: string) {
-  expect(button(name), name).toBeTruthy();
+  // The pending dialog can expose its title before its action buttons load.
+  await vi.waitFor(() => expect(button(name), name).toBeTruthy());
   await act(async () => button(name).click());
   await settle();
   if (name === "Open sheet" || name === "Open nested sheet") {
