@@ -451,9 +451,12 @@ export async function runPostgresMigrations(
         // mid-run must fail as the identity violation before shape
         // validation inspects what would be the wrong schema.
         await client.assertMigrationSchemaIdentity(tx, migrationSchema);
-        if (applied.size + newlyApplied.length + 1 === migrations.length) {
-          await assertCanonicalPostgresSchemaShape(tx, migrationSchema, migrations);
-        }
+        const shapeCheckpoint = resolveAtomicSchemaShapeCheckpoint(
+          migrations,
+          migration,
+          applied.size + newlyApplied.length + 1 === migrations.length,
+        );
+        if (shapeCheckpoint) await assertCanonicalPostgresSchemaShape(tx, migrationSchema, shapeCheckpoint);
       }, pinnedClient);
       newlyApplied.push(migration.version);
     }
@@ -465,10 +468,34 @@ export async function runPostgresMigrations(
   });
 }
 
+const ROUTED_CONTEXT_CONVERGENCE_VERSION = 229;
+const routedContextConvergenceLineage = POSTGRES_MIGRATIONS.filter(
+  (migration) => migration.version <= ROUTED_CONTEXT_CONVERGENCE_VERSION,
+);
+
+function resolveAtomicSchemaShapeCheckpoint(
+  migrations: readonly PostgresMigration[],
+  migration: PostgresMigration,
+  isFinal: boolean,
+): readonly PostgresMigration[] | undefined {
+  if (isFinal) return migrations;
+  // This convergence may repair a damaged constraint. Validate the full v229
+  // shape before committing that repair, even when newer migrations follow.
+  if (
+    migration.version === ROUTED_CONTEXT_CONVERGENCE_VERSION &&
+    migrations.length === POSTGRES_MIGRATIONS.length &&
+    migrations.every((entry) => isCanonicalMigration(entry, entry.version, entry.name))
+  ) {
+    return routedContextConvergenceLineage;
+  }
+  return undefined;
+}
+
 /**
  * Shape validation is only defined over a lineage that fully describes its
  * own schema. That holds for the complete canonical registry (production
- * startup) and for ad-hoc lineages that begin at genesis (they carry every
+ * startup), the pinned v229 convergence checkpoint, and for ad-hoc lineages
+ * that begin at genesis (they carry every
  * CREATE they expect). It does NOT hold for canonical PREFIXES or slices:
  * history-repair and ledger-bridge flows re-run a truncated span of the
  * canonical registry against ledgers whose earlier rows were bridged rather
@@ -479,7 +506,7 @@ function shouldValidateCanonicalPostgresSchemaShape(migrations: readonly Postgre
   if (migrations.length === 0 || migrations[0]!.version !== 1) {
     return false;
   }
-  if (migrations === POSTGRES_MIGRATIONS) {
+  if (migrations === POSTGRES_MIGRATIONS || migrations === routedContextConvergenceLineage) {
     return true;
   }
   const entirelyCanonical = migrations.every((migration) =>
@@ -616,10 +643,19 @@ export function buildCanonicalPostgresSchemaShapeManifest(
     // Migration 204 replaces the historical v2-only check inside dynamic DDL.
     // The new named v3 authority-union check remains in the parsed manifest.
     // Do not reintroduce the old check from migration 140's postconditions.
-    manifest = { ...manifest, tables: manifest.tables.map((table) => table.name === "chat_routed_context_snapshots"
-      ? { ...table, constraints: table.constraints.filter((constraint) =>
-          constraint.name !== "chat_routed_context_snapshots_schema_version_v2_check") }
-      : table) };
+    manifest = {
+      ...manifest,
+      tables: manifest.tables.map((table) =>
+        table.name === "chat_routed_context_snapshots"
+          ? {
+              ...table,
+              constraints: table.constraints.filter(
+                (constraint) => constraint.name !== "chat_routed_context_snapshots_schema_version_v2_check",
+              ),
+            }
+          : table,
+      ),
+    };
   }
   return manifest;
 }
@@ -782,7 +818,10 @@ function buildCanonicalForeignKey(
   };
 }
 
-function buildGovernedRemediationBootstrapManifest(includeParentReservations = false, includeParentResolutions = false): PostgresSchemaShapeManifest {
+function buildGovernedRemediationBootstrapManifest(
+  includeParentReservations = false,
+  includeParentResolutions = false,
+): PostgresSchemaShapeManifest {
   const authority = POSTGRES_MIGRATIONS.find(
     (migration) =>
       migration.version === GOVERNED_REMEDIATION_AUTHORITY_VERSION &&
@@ -804,7 +843,8 @@ function buildGovernedRemediationBootstrapManifest(includeParentReservations = f
     throw new Error("Postgres remediation bootstrap compatibility is missing canonical parent resolution authority.");
   }
   const complete = buildPostgresSchemaShapeManifest([
-    authority, ...(includeParentReservations ? [parentReservations!] : []),
+    authority,
+    ...(includeParentReservations ? [parentReservations!] : []),
     ...(includeParentResolutions ? [parentResolutions!] : []),
   ]);
   const tableNames = new Set<string>([
@@ -889,25 +929,35 @@ function buildBootstrapRowsSql(
   return `/* ${marker} */ SELECT EXISTS (${rowSources}) AS has_rows`;
 }
 
-function buildGovernedRemediationBootstrapRowsSql(migrationSchema: PostgresMigrationSchemaIdentity, includeParentReservations = false, includeParentResolutions = false): string {
+function buildGovernedRemediationBootstrapRowsSql(
+  migrationSchema: PostgresMigrationSchemaIdentity,
+  includeParentReservations = false,
+  includeParentResolutions = false,
+): string {
   return buildBootstrapRowsSql(
     migrationSchema,
-    [...GOVERNED_REMEDIATION_BOOTSTRAP_TABLES,
+    [
+      ...GOVERNED_REMEDIATION_BOOTSTRAP_TABLES,
       ...(includeParentReservations ? [GOVERNED_REMEDIATION_PARENT_RESERVATION_TABLE] : []),
-      ...(includeParentResolutions ? [GOVERNED_REMEDIATION_PARENT_RESOLUTION_TABLE] : [])],
+      ...(includeParentResolutions ? [GOVERNED_REMEDIATION_PARENT_RESOLUTION_TABLE] : []),
+    ],
     "goatcitadel_governed_remediation_bootstrap_rows",
   );
 }
 
-function buildGovernedRemediationBootstrapDropSql(migrationSchema: PostgresMigrationSchemaIdentity, includeParentReservations = false, includeParentResolutions = false): string {
+function buildGovernedRemediationBootstrapDropSql(
+  migrationSchema: PostgresMigrationSchemaIdentity,
+  includeParentReservations = false,
+  includeParentResolutions = false,
+): string {
   const schema = quotePostgresIdentifier(migrationSchema.name);
   return [
     ...(includeParentResolutions ? [GOVERNED_REMEDIATION_PARENT_RESOLUTION_TABLE] : []),
     ...(includeParentReservations ? [GOVERNED_REMEDIATION_PARENT_RESERVATION_TABLE] : []),
     ...GOVERNED_REMEDIATION_BOOTSTRAP_DROP_ORDER,
-  ].map(
-    (table) => `DROP TABLE ${schema}.${quotePostgresIdentifier(table)}`,
-  ).join(";\n");
+  ]
+    .map((table) => `DROP TABLE ${schema}.${quotePostgresIdentifier(table)}`)
+    .join(";\n");
 }
 
 function buildRemoteWorkerMeshBootstrapRowsSql(migrationSchema: PostgresMigrationSchemaIdentity): string {
@@ -1043,9 +1093,12 @@ async function prepareGovernedRemediationBootstrapForFoundation(
     parent_resolution_table_exists: boolean;
   }>(POSTGRES_GOVERNED_REMEDIATION_BOOTSTRAP_PREFLIGHT_SQL.replaceAll("@schemaOid", "$1"), [migrationSchema.oid]);
   const lockedState = lockedPreflight.rows[0];
-  if (!lockedState?.state_table_exists || lockedState.legacy_approval_column_exists
-    || (lockedState.parent_reservation_table_exists === true) !== includeParentReservations
-    || (lockedState.parent_resolution_table_exists === true) !== includeParentResolutions) {
+  if (
+    !lockedState?.state_table_exists ||
+    lockedState.legacy_approval_column_exists ||
+    (lockedState.parent_reservation_table_exists === true) !== includeParentReservations ||
+    (lockedState.parent_resolution_table_exists === true) !== includeParentResolutions
+  ) {
     throw new Error(
       "Postgres governed-remediation bootstrap classification changed while acquiring its replacement lock; refusing automatic replacement.",
     );
@@ -1058,13 +1111,17 @@ async function prepareGovernedRemediationBootstrapForFoundation(
       { cause: error },
     );
   }
-  const rows = await tx.query<{ has_rows: boolean }>(buildGovernedRemediationBootstrapRowsSql(migrationSchema, includeParentReservations, includeParentResolutions));
+  const rows = await tx.query<{ has_rows: boolean }>(
+    buildGovernedRemediationBootstrapRowsSql(migrationSchema, includeParentReservations, includeParentResolutions),
+  );
   if (rows.rows[0]?.has_rows !== false) {
     throw new Error(
       "Postgres governed-remediation bootstrap relations contain rows; refusing to replace authority-bearing state.",
     );
   }
-  await tx.query(buildGovernedRemediationBootstrapDropSql(migrationSchema, includeParentReservations, includeParentResolutions));
+  await tx.query(
+    buildGovernedRemediationBootstrapDropSql(migrationSchema, includeParentReservations, includeParentResolutions),
+  );
 }
 
 async function prepareRemoteWorkerMeshBootstrapForAuthority(
@@ -1312,7 +1369,8 @@ function approvalExecutionLinkageV209Statements(migration: PostgresMigration): r
   ) {
     return [migration.sql];
   }
-  const backfill = "\nINSERT INTO approval_execution_linkages(approval_id, workspace_id, run_id, durable_run_id, session_id, created_at)";
+  const backfill =
+    "\nINSERT INTO approval_execution_linkages(approval_id, workspace_id, run_id, durable_run_id, session_id, created_at)";
   const boundary = migration.sql.indexOf(backfill);
   if (boundary < 0 || boundary !== migration.sql.lastIndexOf(backfill)) {
     throw new Error("Postgres migration 209 approval execution linkage backfill boundary changed.");
@@ -1700,9 +1758,12 @@ function applyPostgresMigrationsSyncLocked(
         db.dialect === "postgres" && requiresPostgresHistoryRepairLedgerBridge(migrationsTable, migration);
       configurePostgresMigrationTransactionSync(db, migrationSchema, migrationsTable, bridgeRequired);
       const bridgeActive = executePostgresAtomicMigrationSync(db, migrationSchema, migrationsTable, migration);
-      if (applied.size + newlyAppliedCount + 1 === migrations.length) {
-        assertCanonicalPostgresSchemaShapeSync(db, migrationSchema, migrations);
-      }
+      const shapeCheckpoint = resolveAtomicSchemaShapeCheckpoint(
+        migrations,
+        migration,
+        applied.size + newlyAppliedCount + 1 === migrations.length,
+      );
+      if (shapeCheckpoint) assertCanonicalPostgresSchemaShapeSync(db, migrationSchema, shapeCheckpoint);
       markMigrationAppliedSync(db, migrationLedger, migration);
       if (compatibility.requiresHistoryRepairValidation && isPostgresHistoryRepairMigration(migration)) {
         assertStrictPostgresLedgerSync(db, migrationLedger, migrations);
@@ -1801,9 +1862,12 @@ function prepareGovernedRemediationBootstrapForFoundationSync(
     parent_reservation_table_exists: boolean;
     parent_resolution_table_exists: boolean;
   }>({ schemaOid: migrationSchema.oid });
-  if (!lockedState?.state_table_exists || lockedState.legacy_approval_column_exists
-    || (lockedState.parent_reservation_table_exists === true) !== includeParentReservations
-    || (lockedState.parent_resolution_table_exists === true) !== includeParentResolutions) {
+  if (
+    !lockedState?.state_table_exists ||
+    lockedState.legacy_approval_column_exists ||
+    (lockedState.parent_reservation_table_exists === true) !== includeParentReservations ||
+    (lockedState.parent_resolution_table_exists === true) !== includeParentResolutions
+  ) {
     throw new Error(
       "Postgres governed-remediation bootstrap classification changed while acquiring its replacement lock; refusing automatic replacement.",
     );
@@ -1816,13 +1880,19 @@ function prepareGovernedRemediationBootstrapForFoundationSync(
       { cause: error },
     );
   }
-  const rows = db.prepare(buildGovernedRemediationBootstrapRowsSql(migrationSchema, includeParentReservations, includeParentResolutions)).get<{ has_rows: boolean }>();
+  const rows = db
+    .prepare(
+      buildGovernedRemediationBootstrapRowsSql(migrationSchema, includeParentReservations, includeParentResolutions),
+    )
+    .get<{ has_rows: boolean }>();
   if (rows?.has_rows !== false) {
     throw new Error(
       "Postgres governed-remediation bootstrap relations contain rows; refusing to replace authority-bearing state.",
     );
   }
-  db.exec(buildGovernedRemediationBootstrapDropSql(migrationSchema, includeParentReservations, includeParentResolutions));
+  db.exec(
+    buildGovernedRemediationBootstrapDropSql(migrationSchema, includeParentReservations, includeParentResolutions),
+  );
 }
 
 function prepareRemoteWorkerMeshBootstrapForAuthoritySync(
@@ -2105,9 +2175,8 @@ function executePostgresAtomicMigrationSync(
     prepareRemoteWorkerMeshBootstrapForAuthoritySync(db, migrationSchema, migration);
     prepareMobilePushBootstrapForAuthoritySync(db, migrationSchema, migration);
     prepareMobileApprovalKeyBootstrapForAuthoritySync(db, migrationSchema, migration);
-    const statements = db.dialect === "postgres"
-      ? postgresAtomicMigrationStatements(migration, migrationSchema)
-      : [migration.sql];
+    const statements =
+      db.dialect === "postgres" ? postgresAtomicMigrationStatements(migration, migrationSchema) : [migration.sql];
     for (const sql of statements) {
       db.exec(sql);
     }

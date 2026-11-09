@@ -351,7 +351,7 @@ export function ChatAreaView({
         {buildOpen && codePanel ? (
           <Suspense
             fallback={
-              <p role="status" className="p-4 text-sm text-fg-muted">
+              <p aria-busy="true" className="p-4 text-sm text-fg-muted">
                 Loading code workbench…
               </p>
             }

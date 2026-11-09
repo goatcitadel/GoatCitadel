@@ -21,6 +21,23 @@ internal static class ActivationRequestResolver
             ? ActivationDelivery.ForRoute(route)
             : ActivationDelivery.ForDiagnostic(RejectedActivationMessage);
 
+    internal static ActivationDelivery ResolveNotificationArguments(string arguments)
+    {
+        string? route = null;
+        foreach (var pair in arguments.Split('&', StringSplitOptions.RemoveEmptyEntries))
+        {
+            var parts = pair.Split('=', 2);
+            if (string.Equals(Uri.UnescapeDataString(parts[0]), "route", StringComparison.OrdinalIgnoreCase))
+            {
+                route = parts.Length == 2 ? Uri.UnescapeDataString(parts[1]) : null;
+            }
+        }
+
+        return route is not null && NavigationPolicy.IsAllowedLocalRoute(route)
+            ? ActivationDelivery.ForRoute(route)
+            : ActivationDelivery.None;
+    }
+
     internal static ActivationDelivery ResolveLaunchArguments(params string?[] commandLines)
     {
         foreach (var commandLine in commandLines)

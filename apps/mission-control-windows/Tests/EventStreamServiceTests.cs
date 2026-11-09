@@ -1,4 +1,6 @@
+using System.Net;
 using GoatCitadel.MissionControl.Windows.Services;
+using GoatCitadel.MissionControl.Windows.Models;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
 
 namespace GoatCitadel.MissionControl.Windows.Tests;
@@ -6,6 +8,61 @@ namespace GoatCitadel.MissionControl.Windows.Tests;
 [TestClass]
 public sealed class EventStreamServiceTests
 {
+    [DataTestMethod]
+    [DataRow(true)]
+    [DataRow(false)]
+    public async Task RetriesAuthenticationBeforeReportingAnError(bool refreshedTokenAccepted)
+    {
+        using var stop = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        const string gatewayUrl = "http://127.0.0.1:8787";
+        static DesktopRuntimeStatus Runtime(string url, string token) => new()
+        {
+            Status = "ready",
+            Readiness = new RuntimeReadiness { Gateway = true, Ui = true },
+            GatewayUrl = url,
+            DesktopEventStream = new DesktopEventStreamCredential { Token = token },
+        };
+        var requests = new List<string?>();
+        var notifications = new List<string>();
+        var errors = new List<string>();
+        var service = new EventStreamService(
+            _ => Task.FromResult(Runtime(gatewayUrl, "replacement")),
+            () => new HttpClient(new TestEventHandler(request =>
+            {
+                requests.Add(request.Headers.Authorization?.Parameter);
+                if (requests.Count == 1 || !refreshedTokenAccepted)
+                {
+                    return new HttpResponseMessage(HttpStatusCode.Unauthorized);
+                }
+                return new HttpResponseMessage(HttpStatusCode.OK)
+                {
+                    Content = new StringContent("data: {\"eventType\":\"approval_created\",\"payload\":{\"approvalId\":\"fixture\"}}\n\n"),
+                };
+            })));
+        service.ApprovalCreated += payload => { notifications.Add(payload.ApprovalId); stop.Cancel(); };
+        service.WatcherError += (code, _) => { errors.Add(code); stop.Cancel(); };
+
+        await service.RunAsync(Runtime(gatewayUrl, "rejected"), stop.Token);
+
+        CollectionAssert.AreEqual(new[] { "rejected", "replacement" }, requests);
+        if (refreshedTokenAccepted)
+        {
+            CollectionAssert.AreEqual(new[] { "fixture" }, notifications);
+            Assert.AreEqual(0, errors.Count);
+        }
+        else
+        {
+            Assert.AreEqual(0, notifications.Count);
+            CollectionAssert.AreEqual(new[] { "desktop_sse_auth_failed" }, errors);
+        }
+    }
+
+    private sealed class TestEventHandler(Func<HttpRequestMessage, HttpResponseMessage> respond) : HttpMessageHandler
+    {
+        protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken) =>
+            Task.FromResult(respond(request));
+    }
+
     [TestMethod]
     public void WaitingAttentionPreservesCanonicalApprovalLink()
     {

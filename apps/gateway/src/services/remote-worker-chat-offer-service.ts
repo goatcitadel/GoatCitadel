@@ -31,7 +31,8 @@ export class RemoteWorkerChatOfferService {
 
   async schedule(claim: RemoteWorkerChatDispatchClaim) {
     if (!this.dependencies.enabled) throw new Error("Remote worker assignment runtime is not activated.");
-    const run = await this.dependencies.storage.durableRuns.getRun(claim.runId);
+    const { storage } = this.dependencies;
+    const run = await storage.durableRuns.getRun(claim.runId);
     if (
       run.status !== "running" ||
       !run.leaseOwnerId ||
@@ -79,7 +80,7 @@ export class RemoteWorkerChatOfferService {
     const deadlineAt = new Date(createdAt + 30 * 60_000).toISOString();
     if ((await this.dependencies.resolveChatApprovalPlacement?.(run)) === "auto")
       throw new Error("Auto requires local execution.");
-    return await this.dependencies.storage.remoteWorkerAssignments.scheduleTaskBoundChatOffer({
+    return await storage.remoteWorkerAssignments.scheduleTaskBoundChatOffer({
       registryWorkspaceId: this.dependencies.registryWorkspaceId,
       executionWorkspaceId: authority.workspaceId,
       sessionId: authority.sessionId,

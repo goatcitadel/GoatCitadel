@@ -69,8 +69,18 @@ public sealed partial class MainWindow : Window
     public void ShowAndFocus()
     {
         _appWindow?.Show();
+        if (_appWindow?.Presenter is OverlappedPresenter { State: OverlappedPresenterState.Minimized } presenter)
+        {
+            presenter.Restore();
+        }
         Activate();
+        // WinUI Activate alone can leave a window behind the current foreground app.
+        _ = SetForegroundWindow(WinRT.Interop.WindowNative.GetWindowHandle(this));
     }
+
+    [DllImport("user32.dll", ExactSpelling = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static extern bool SetForegroundWindow(nint window);
 
     internal void ShowActivationDiagnostic(string diagnostic) => ShowToast(diagnostic);
 
@@ -568,7 +578,9 @@ public sealed partial class MainWindow : Window
 
     private void EnsureEventStream(DesktopRuntimeStatus result)
     {
-        var nextKey = EventStreamKey(result);
+        // Status polls mint short-lived tokens. An already authenticated stream
+        // should stay open until it ends or the Gateway changes.
+        var nextKey = result.GatewayUrl.TrimEnd('/');
         if (_eventStreamCts is not null && string.Equals(_eventStreamKey, nextKey, StringComparison.Ordinal))
         {
             return;
@@ -577,9 +589,6 @@ public sealed partial class MainWindow : Window
         StartEventStream(result);
         _eventStreamKey = nextKey;
     }
-
-    private static string EventStreamKey(DesktopRuntimeStatus result) =>
-        $"{result.GatewayUrl.TrimEnd('/')}|{result.DesktopEventStream?.Token}|{result.DesktopEventStream?.Error}";
 
     private void StartRuntimeStatusPolling()
     {

@@ -6,6 +6,30 @@ namespace GoatCitadel.MissionControl.Windows.Tests;
 [TestClass]
 public sealed class ActivationServiceTests
 {
+    [TestMethod]
+    public void NotificationActivationRetainsTheApprovalAndWorkspaceDuringStartup()
+    {
+        const string route = "/inbox?approvalId=ap-cold&workspaceId=default";
+        var queue = new ActivationDeliveryQueue();
+        var routes = new List<string>();
+        queue.Enqueue(ActivationRequestResolver.ResolveNotificationArguments(
+            $"route={Uri.EscapeDataString(route)}"));
+        queue.Register(routes.Add, _ => Assert.Fail("Expected a local approval route."));
+        queue.FlushPending();
+        queue.FlushPending();
+
+        CollectionAssert.AreEqual(new[] { route }, routes);
+    }
+
+    [DataTestMethod]
+    [DataRow("route=https%3A%2F%2Fexample.com")]
+    [DataRow("route=%2F%2Fevil.example%2Finbox")]
+    [DataRow("action=unsupported")]
+    public void NotificationActivationIgnoresUnsafeOrMissingRoutes(string arguments)
+    {
+        Assert.AreEqual(ActivationDelivery.None, ActivationRequestResolver.ResolveNotificationArguments(arguments));
+    }
+
     [DataTestMethod]
     [DataRow("goatcitadel://bad?route=/ops/activity")]
     [DataRow("https://external.example/private?token=do-not-leak")]

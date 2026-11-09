@@ -12,12 +12,19 @@ public sealed class EventStreamService
     private static readonly TimeSpan CleanCloseBaseDelay = TimeSpan.FromSeconds(1);
     private static readonly TimeSpan CleanCloseMaxDelay = TimeSpan.FromSeconds(30);
 
-    private readonly RuntimeStatusService _runtimeStatusService;
+    private readonly Func<CancellationToken, Task<DesktopRuntimeStatus>> _readRuntimeStatus;
     private readonly Func<HttpClient> _clientFactory;
 
     public EventStreamService(RuntimeStatusService runtimeStatusService, Func<HttpClient>? clientFactory = null)
+        : this(runtimeStatusService.ReadStatusAsync, clientFactory)
     {
-        _runtimeStatusService = runtimeStatusService;
+    }
+
+    internal EventStreamService(
+        Func<CancellationToken, Task<DesktopRuntimeStatus>> readRuntimeStatus,
+        Func<HttpClient>? clientFactory = null)
+    {
+        _readRuntimeStatus = readRuntimeStatus;
         _clientFactory = clientFactory ?? (() => new HttpClient
         {
             Timeout = TimeSpan.FromSeconds(75),
@@ -37,13 +44,10 @@ public sealed class EventStreamService
 
         var gatewayUrl = runtime.GatewayUrl;
         var token = runtime.DesktopEventStream?.Token;
-        if (!string.IsNullOrWhiteSpace(runtime.DesktopEventStream?.Error))
-        {
-            WatcherError?.Invoke("desktop_sse_token_unavailable", runtime.DesktopEventStream.Error);
-        }
-
         using var client = _clientFactory();
         var shortStreamCount = 0;
+        var retriedAuthentication = false;
+        var reportedAuthenticationFailure = false;
         while (!cancellationToken.IsCancellationRequested)
         {
             try
@@ -58,16 +62,32 @@ public sealed class EventStreamService
                 {
                     if ((int)response.StatusCode is 401 or 403)
                     {
-                        token = await RefreshDesktopEventStreamTokenAsync(gatewayUrl, cancellationToken);
-                        WatcherError?.Invoke(
-                            "desktop_sse_auth_failed",
-                            "Desktop approval notifications could not authenticate to the gateway event stream.");
+                        var credential = await RefreshDesktopEventStreamCredentialAsync(gatewayUrl, cancellationToken);
+                        if (credential is not null)
+                        {
+                            token = credential.Token;
+                            if (!retriedAuthentication)
+                            {
+                                retriedAuthentication = true;
+                                continue;
+                            }
+                        }
+
+                        if (!reportedAuthenticationFailure)
+                        {
+                            reportedAuthenticationFailure = true;
+                            WatcherError?.Invoke(
+                                "desktop_sse_auth_failed",
+                                "Desktop approval notifications could not authenticate to the gateway event stream.");
+                        }
                     }
 
                     await DelayOrCancel(TimeSpan.FromSeconds(10), cancellationToken);
                     continue;
                 }
 
+                retriedAuthentication = false;
+                reportedAuthenticationFailure = false;
                 var streamOpenedAt = Stopwatch.GetTimestamp();
                 await ReadSseAsync(response, cancellationToken);
                 if (cancellationToken.IsCancellationRequested)
@@ -298,12 +318,17 @@ public sealed class EventStreamService
         }
     }
 
-    private async Task<string?> RefreshDesktopEventStreamTokenAsync(string gatewayUrl, CancellationToken cancellationToken)
+    private async Task<DesktopEventStreamCredential?> RefreshDesktopEventStreamCredentialAsync(
+        string gatewayUrl, CancellationToken cancellationToken)
     {
-        var status = await _runtimeStatusService.ReadStatusAsync(cancellationToken);
-        return TrimTrailingSlash(status.GatewayUrl) == TrimTrailingSlash(gatewayUrl)
-            ? status.DesktopEventStream?.Token
-            : null;
+        var status = await _readRuntimeStatus(cancellationToken);
+        var credential = status.DesktopEventStream;
+        return status.IsReady &&
+            TrimTrailingSlash(status.GatewayUrl) == TrimTrailingSlash(gatewayUrl) &&
+            credential is not null &&
+            (!string.IsNullOrWhiteSpace(credential.Token) || credential.AuthMode == "none")
+                ? credential
+                : null;
     }
 
     private static JsonObject? ParseObject(string data)

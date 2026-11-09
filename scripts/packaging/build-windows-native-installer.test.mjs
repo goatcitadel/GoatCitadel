@@ -25,6 +25,25 @@ function uninstallRunSection(iss) {
   return section;
 }
 
+test("Start-menu shortcut carries the unpackaged notification sender and activator", () => {
+  const iss = renderSample();
+  const host = fs.readFileSync(
+    new URL("../../apps/mission-control-windows/Services/NotificationService.cs", import.meta.url),
+    "utf8",
+  );
+  for (const [name, constant] of [
+    ["MyToastAppId", "InstalledAppId"],
+    ["MyToastActivator", "InstalledActivator"],
+  ]) {
+    const value = host.match(new RegExp(`const string ${constant} = "([^"]+)"`, "u"))?.[1];
+    assert.ok(value, `Expected native host constant ${constant}`);
+    assert.ok(iss.includes(`#define ${name} "${value.replace(/[{}]/gu, "")}"`));
+  }
+  assert.match(iss, /^Name: "\{autoprograms\}.*AppUserModelID: "\{#MyToastAppId\}"; AppUserModelToastActivatorCLSID: "\{#MyToastActivator\}"$/mu);
+  assert.match(iss, /ValueName: "CustomActivator"; ValueData: "\{\{\{#MyToastActivator\}\}"; Flags: uninsdeletekey/u);
+  assert.match(iss, /CLSID\\\{\{\{#MyToastActivator\}\}\\LocalServer32.*MyDesktopExe.*----AppNotificationActivated:.*uninsdeletekey/u);
+});
+
 test("uninstaller payload deletes are guarded by the install marker at uninstall time", () => {
   const iss = renderSample();
   assert.match(iss, /function GoatCitadelInstallMarkerExists\(\): Boolean;/);

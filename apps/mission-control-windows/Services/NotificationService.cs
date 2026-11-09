@@ -1,11 +1,14 @@
 using System.Runtime.InteropServices;
 using GoatCitadel.MissionControl.Windows.Models;
 using Microsoft.Windows.AppNotifications;
+using Microsoft.Win32;
 
 namespace GoatCitadel.MissionControl.Windows.Services;
 
 public sealed class NotificationService : IDisposable
 {
+    private const string InstalledAppId = "GoatCitadel.MissionControl";
+    private const string InstalledActivator = "{CB0511D2-B348-4602-A08F-AEBC71B07A42}";
     private readonly Action<string> _routeHandler;
     private readonly Action<string> _fallbackToast;
     private bool _registered;
@@ -20,6 +23,7 @@ public sealed class NotificationService : IDisposable
     {
         try
         {
+            UseInstalledSenderIdentity();
             if (!AppNotificationManager.IsSupported())
             {
                 _fallbackToast("Windows app notifications are not available for this host.");
@@ -44,6 +48,22 @@ public sealed class NotificationService : IDisposable
             _fallbackToast($"Windows notification registration failed: {error.Message}");
         }
     }
+
+    private static void UseInstalledSenderIdentity()
+    {
+        using var server = Registry.CurrentUser.OpenSubKey(
+            $@"Software\Classes\CLSID\{InstalledActivator}\LocalServer32");
+        var executable = Environment.ProcessPath;
+        // Let unpackaged development copies retain their path-scoped SDK identity.
+        if (executable is not null && string.Equals(server?.GetValue(null) as string,
+            $"\"{executable}\" ----AppNotificationActivated:", StringComparison.OrdinalIgnoreCase))
+        {
+            Marshal.ThrowExceptionForHR(SetCurrentProcessExplicitAppUserModelID(InstalledAppId));
+        }
+    }
+
+    [DllImport("shell32.dll", ExactSpelling = true, CharSet = CharSet.Unicode)]
+    private static extern int SetCurrentProcessExplicitAppUserModelID(string appId);
 
     public void ShowApproval(ApprovalNotificationPayload payload)
     {
@@ -131,30 +151,10 @@ public sealed class NotificationService : IDisposable
 
     private void OnNotificationInvoked(AppNotificationManager sender, AppNotificationActivatedEventArgs args)
     {
-        var values = ParseLaunchArguments(args.Argument);
-        if (values.TryGetValue("route", out var route) && NavigationPolicy.IsAllowedLocalRoute(route))
+        if (ActivationRequestResolver.ResolveNotificationArguments(args.Argument).Route is { } route)
         {
             _routeHandler(route);
         }
-    }
-
-    private static Dictionary<string, string> ParseLaunchArguments(string raw)
-    {
-        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var pair in raw.Split('&', StringSplitOptions.RemoveEmptyEntries).Select(ParseLaunchArgumentPair))
-        {
-            result[pair.Key] = pair.Value;
-        }
-
-        return result;
-    }
-
-    private static KeyValuePair<string, string> ParseLaunchArgumentPair(string pair)
-    {
-        var parts = pair.Split('=', 2);
-        var key = Uri.UnescapeDataString(parts[0]);
-        var value = parts.Length > 1 ? Uri.UnescapeDataString(parts[1]) : "";
-        return new KeyValuePair<string, string>(key, value);
     }
 
     private static string EscapeXml(string value) =>

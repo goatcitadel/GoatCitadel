@@ -15,7 +15,9 @@ import * as approvalRemoteTokenService from "./approval-remote-token-service.js"
 import { RemoteWorkerApprovalResumeRequiredError } from "./remote-worker-approved-action-guard.js";
 
 function createGatewayFacadeHarness(): GatewayService {
-  return Object.create(GatewayService.prototype) as GatewayService;
+  return Object.assign(Object.create(GatewayService.prototype), {
+    chatAutoActions: { checkApprovalReplay: vi.fn(async () => undefined) },
+  }) as GatewayService;
 }
 
 describe("GatewayService approvals facade delegation", () => {
@@ -56,9 +58,9 @@ describe("GatewayService approvals facade delegation", () => {
     gateway.policyEngine = { executeApprovedAction: vi.fn() };
 
     await expect(gateway.executeApprovedPendingAction("local-approval")).resolves.toBeUndefined();
-    expect(gateway.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith(
-      "local-approval", "failed", { reason: "policy unavailable" },
-    );
+    expect(gateway.storage.pendingApprovalActions.markResolved).toHaveBeenCalledWith("local-approval", "failed", {
+      reason: "policy unavailable",
+    });
     expect(gateway.storage.approvalEvents.append).toHaveBeenCalledOnce();
     expect(gateway.policyEngine.executeApprovedAction).not.toHaveBeenCalled();
   });

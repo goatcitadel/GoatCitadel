@@ -1,4 +1,5 @@
 using Microsoft.Windows.AppLifecycle;
+using Microsoft.Windows.AppNotifications;
 using Windows.ApplicationModel.Activation;
 
 namespace GoatCitadel.MissionControl.Windows.Services;
@@ -42,6 +43,12 @@ public static class ActivationService
 
     private static ActivationDelivery ResolveActivation(AppActivationArguments args)
     {
+        if (args.Kind == ExtendedActivationKind.AppNotification &&
+            args.Data is AppNotificationActivatedEventArgs notification)
+        {
+            return ActivationRequestResolver.ResolveNotificationArguments(notification.Argument);
+        }
+
         if (args.Kind != ExtendedActivationKind.Protocol)
         {
             return ResolveLaunchActivation(args);

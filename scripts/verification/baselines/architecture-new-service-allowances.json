@@ -1713,10 +1713,10 @@
     {
       "planStep": "C0",
       "path": "apps/gateway/src/services/chat-confirmed-delegation-service.ts",
-      "maxDependencyMemberAccesses": 16,
-      "maxHostCallbacks": 6,
-      "reason": "Operator-approved scope exception (2026-09-22) for C0 gate reconciliation of the chat-delegation change 5a1b7b244, whose existing-owner regressions are fixed by consolidation in the same change. Owns durable delegation confirmation: proposal sealing, exact-plan resume, terminal child reconciliation and waiting-plan catch-up, each rechecking Chat turn control and parent durable-run authority before acting. Storage is read once per operation. No original baseline-owner limit changes.",
-      "evidence": "Measured 16 dependency accesses and 6 host callbacks after consolidation (33/16 before). Focused delegation, durable execution, Chat turn stream/dispatch and approval suites pass on refactor/delegation-owner-extraction; architecture metrics pass with these caps."
+      "maxDependencyMemberAccesses": 17,
+      "maxHostCallbacks": 7,
+      "reason": "Operator-approved scope exception (2026-09-22) for C0 gate reconciliation of the chat-delegation change 5a1b7b244, whose existing-owner regressions are fixed by consolidation in the same change. Owns durable delegation confirmation: proposal sealing, exact-plan resume, terminal child reconciliation and waiting-plan catch-up, each rechecking Chat turn control and parent durable-run authority before acting. Storage is read once per operation. No original baseline-owner limit changes. Auto mode adds one current-authority check at the confirmed child dispatch boundary.",
+      "evidence": "Measured 16 dependency accesses and 6 host callbacks after consolidation (33/16 before). Focused delegation, durable execution, Chat turn stream/dispatch and approval suites pass on refactor/delegation-owner-extraction; architecture metrics pass with these caps. Auto mode follow-up measures 7 host callbacks and 17 dependency accesses, including the new pre-dispatch check."
     },
     {
       "planStep": "C0",
@@ -1868,7 +1868,7 @@
       "maxHostCallbacks": 29,
       "maxDependencyMemberAccesses": 29,
       "reason": "Reviewed new explicit-context admission and dispatch guard owner. Verifies canonical durable identity, immutable admitted bytes and source visibility under the existing live write fence. Current source revalidation and admission-bound replay validation move verbatim from the source resolver and durable executor into this same owner. Historical frozen-profile replay remains in the durable executor; no new storage, transaction or execution owner is introduced. Original baseline and existing-owner limits remain unchanged.",
-      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway fa\u00e7ade methods become private. No original cap changes."
+      "evidence": "architecture-guard-tests.log passes175 tests with13 skips; durable-context-guard-tests.log passes147 tests. Context composition also moves here through a typed internal preparation port, keeping historical callback hosts compatible. context-preparation-tests.log passes89 with13 skips, and the actual owned-port path passes within9 current cases/13 historical skips in context-preparation-port-tests.log. Gateway typecheck passes; owner measures29/29, preparation returns to55/58 and two Gateway façade methods become private. No original cap changes."
     },
     {
       "planStep": "C1",
@@ -2813,6 +2813,38 @@
       "maxDependencyMemberAccesses": 4,
       "reason": "Operator-approved scope exception (2026-11-02) for browser errands PR 2 (errands and approvals away from the PC), absent from the pinned baseline inventory. The errand code lives in its own browser-errands folder outside GatewayService, which stays under its 13132-line limit; the existing owners PR 2 touches (approval-remote-action-service.ts, inbound-channel-event-service.ts, the Discord runtime and bridge, mobile-push-service.ts, settings-auth-service.ts) are at or below their original caps. Original baseline, inventory and existing-owner caps are unchanged. This file sends plain channel notices for an errand: the sign-in or bot-check pause notice and, for an errand started from a private conversation, its final screenshot.",
       "evidence": "2026-11-02: errand-channel-notices.test.ts and browser-errand-service-notices.test.ts cover channel and PC timing, cancellation on hand-back, no notice after an errand ended or the Gateway shut down, private-only screenshots and the bot-check copy; repository counters measure 0 host callbacks and 4 dependency accesses (cap 4)."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-approval-mode-service.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 11,
+      "reason": "Reads and validates session mode, local actor and project bindings, and applies revision-checked mode updates.",
+      "evidence": "Repository counters measure 0 host callbacks and 11 dependency accesses. chat-auto-action-policy.test.ts and gateway/chat-auto-binding.test.ts exercise the authority and invalidation paths."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-auto-action-policy.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 16,
+      "reason": "Owns Auto tool classification, durable turn and replay authority, deletion approval, and local execution fences.",
+      "evidence": "Repository counters measure 0 host callbacks and 16 dependency accesses. chat-auto-action-policy.test.ts and gateway/chat-auto-binding.test.ts cover the proposal, commit, replay and dispatch boundaries."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/chat-managed-project-files.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 8,
+      "reason": "Owns managed file operations, project and actor checks, and the operator download and restore endpoints.",
+      "evidence": "Repository counters measure 0 host callbacks and 8 dependency accesses. gateway/chat-auto-binding.test.ts exercises the managed workspace on the real Gateway and managed-project-file-repo.test.ts covers revisions and exact restore."
+    },
+    {
+      "planStep": "C0",
+      "path": "apps/gateway/src/services/gateway/channel-desk-send.ts",
+      "maxHostCallbacks": 0,
+      "maxDependencyMemberAccesses": 4,
+      "reason": "Resolves the stored channel binding and retains the direct-local-Chat approval mode precondition before channel send.",
+      "evidence": "Repository counters measure 0 host callbacks and 4 dependency accesses. The channel desk send tests cover channel routing, and gateway/chat-auto-binding.test.ts covers the Auto binding."
     }
   ]
 }
