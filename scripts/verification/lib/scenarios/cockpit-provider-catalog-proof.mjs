@@ -82,8 +82,8 @@ export async function requireFreshProviderCatalog(readOwner, pause = (ms) => new
 }
 
 /** Refresh may join an owner read still in flight. Settled earlier reads do not qualify. */
-export function selectProviderCatalogRead(pendingAtClick, startedDuringAction) {
-  const request = startedDuringAction.at(-1) ?? pendingAtClick.at(-1);
+export function selectProviderCatalogRead(pendingAtActivation, startedDuringAction) {
+  const request = startedDuringAction.at(-1) ?? pendingAtActivation.at(-1);
   assert.ok(request, "Model refresh has no new or in-flight owner request.");
   return request;
 }
@@ -100,11 +100,6 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
       { id: `ux-budgets.cockpit-provider-catalog.${variant}`, lane: "ux-budgets",
         title: `Cockpit provider catalog ${variant}`, subsystem: "mission-control-ux" },
       async () => {
-        await requireFreshProviderCatalog(async () => {
-          const response = await requestJson(stack.gatewayUrl, `/api/v1/llm/models?providerId=${encodeURIComponent(providerId)}`);
-          assertOk(response, `read ${variant} live catalog fixture`);
-          return response.body;
-        });
         const before = await requestJson(stack.gatewayUrl, "/api/v1/llm/config");
         assertOk(before, `read ${variant} provider owner`);
         const browserContext = await browser.newContext({ viewport, colorScheme: variant === "mobile" ? "light" : "dark" });
@@ -142,21 +137,31 @@ export async function runCockpitProviderCatalogProof({ context, browser, stack, 
           const select = panel.getByRole("combobox", { name: "Inspect provider", exact: true });
           await select.waitFor();
           await select.selectOption(providerId);
-          const pendingAtClick = [...pendingCatalogReads];
+          const refreshModels = panel.getByRole("button", { name: "Refresh models", exact: true })
+            .and(panel.locator("button:enabled"));
+          // Focus the native control before recording its action window. This avoids
+          // racing pointer coordinates against the shell's initial scroll restoration.
+          await refreshModels.focus();
+          await requireFreshProviderCatalog(async () => {
+            const response = await requestJson(stack.gatewayUrl, `/api/v1/llm/models?providerId=${encodeURIComponent(providerId)}`);
+            assertOk(response, `read ${variant} live catalog fixture before refresh`);
+            return response.body;
+          });
+          const pendingAtActivation = [...pendingCatalogReads];
           const actionStart = catalogReads.length;
-          const refreshModels = panel.getByRole("button", { name: "Refresh models", exact: true });
-          const arrival = pendingAtClick.length === 0
+          const arrival = pendingAtActivation.length === 0
             ? page.waitForRequest((request) => Boolean(matchProviderCatalogRead(request, providerId)))
             : Promise.resolve();
-          await Promise.all([arrival, refreshModels.click()]);
-          await panel.getByRole("heading", { name: "Live catalog", exact: true }).waitFor();
-          await panel.locator('[aria-busy="false"]').waitFor();
-          const modelRequest = selectProviderCatalogRead(pendingAtClick, catalogReads.slice(actionStart));
+          await Promise.all([arrival, refreshModels.press("Enter")]);
+          const modelRequest = selectProviderCatalogRead(pendingAtActivation, catalogReads.slice(actionStart));
           const modelCatalog = await readProviderCatalogResult(
             await modelRequest.response(),
             matchProviderCatalogRead(modelRequest, providerId),
           );
+          assert.equal(modelCatalog?.source, "live", "Provider refresh returned fallback evidence.");
+          assert.notEqual(modelCatalog?.catalogStatus, "stale", "Provider refresh returned stale evidence.");
           await panel.getByRole("heading", { name: "Live catalog", exact: true }).waitFor();
+          await panel.locator('[aria-busy="false"]').waitFor();
           await panel.getByRole("list", { name: "Discovered models" }).waitFor();
           const rendered = {
             providerIds: await select.locator("option").evaluateAll((items) => items.map((item) => item.value)),

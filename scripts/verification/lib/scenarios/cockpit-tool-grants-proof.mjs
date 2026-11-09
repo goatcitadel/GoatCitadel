@@ -119,19 +119,21 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
           const defaultExpiry = await panel.getByLabel("Expires at", { exact: true }).inputValue();
           assert.equal(await panel.getByLabel("Grant type", { exact: true }).inputValue(), "ttl");
           await panel.getByRole("button", { name: "Review new grant", exact: true }).click();
-          let dialog = page.getByRole("dialog", { name: "Review new tool grant", exact: true });
-          await dialog.waitFor();
-          assert.ok((await dialog.innerText()).includes(workspace.workspaceId));
+          const dialog = page.getByRole("dialog", { name: "Review new tool grant", exact: true });
+          const createReviewedGrant = dialog.getByRole("button", { name: "Create reviewed grant", exact: true });
+          // The loading dialog has the same accessible title as the real review.
+          await dialog.getByText(workspace.workspaceId, { exact: true }).waitFor();
+          await createReviewedGrant.waitFor();
           await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
+          await dialog.waitFor({ state: "hidden" });
           await traffic.assertPageBackground(page, workspace.workspaceId);
           assert.deepEqual(writes, [], "Cancelled grant review wrote to an owner");
           await panel.getByRole("button", { name: "Review new grant", exact: true }).click();
-          dialog = page.getByRole("dialog", { name: "Review new tool grant", exact: true });
           const createResponse = page.waitForResponse(
             (response) =>
               response.request().method() === "POST" && new URL(response.url()).pathname === "/api/v1/tools/grants",
           );
-          await dialog.getByRole("button", { name: "Create reviewed grant", exact: true }).click();
+          await createReviewedGrant.click();
           const created = await createResponse;
           assert.equal(created.status(), 201);
           const receipt = await created.json();
@@ -210,14 +212,19 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
           );
           await revoke.getByRole("button", { name: "Confirm revocation", exact: true }).click();
           assert.equal((await revokeResponse).status(), 200);
+          await revoke.waitFor({ state: "hidden" });
           await panel.getByText("Tool grant revoked.", { exact: true }).waitFor();
           const revoked = (await read("/api/v1/tools/grants?limit=400")).items.find(
             (item) => item.grantId === receipt.grantId,
           );
           assert.ok(revoked?.revokedAt && revoked.revokedBy === receipt.createdBy);
+          // The success notice is set before the settings query refreshes.
+          // Wait for the refreshed row and enabled editor before the next review.
+          const revokedRow = panel.getByRole("listitem").filter({ hasText: describeToolGrant(receipt) });
+          await revokedRow.getByText(/· revoked /u).waitFor();
+          await panel.getByText("Reading tool records…", { exact: true }).waitFor({ state: "hidden" });
           await panel.getByLabel("Tool pattern", { exact: true }).fill(`verification.tool.${token}.lost`);
           await panel.getByLabel("Decision", { exact: true }).selectOption("deny");
-          await panel.getByRole("button", { name: "Review new grant", exact: true }).click();
           let lostReceipt;
           await page.route("**/api/v1/tools/grants", async (route) => {
             if (route.request().method() !== "POST") return route.continue();
@@ -226,10 +233,8 @@ export async function runCockpitToolGrantsProof({ context, browser, stack, citad
             lostReceipt = await response.json();
             await route.abort("failed");
           });
-          await page
-            .getByRole("dialog", { name: "Review new tool grant", exact: true })
-            .getByRole("button", { name: "Create reviewed grant", exact: true })
-            .click();
+          await panel.getByRole("button", { name: "Review new grant", exact: true }).click();
+          await createReviewedGrant.click();
           await panel.getByText(/Grant write outcome is unconfirmed\./).waitFor();
           assert.equal(await panel.getByRole("button", { name: "Review new grant", exact: true }).isDisabled(), true);
           assertReviewedToolGrant(

@@ -134,18 +134,22 @@ export async function runCockpitCitadelDirectoryProof({ context, browser, stack,
         await page.goto(buildVerificationUiUrl(stack.uiUrl, "/settings/citadel?shell=cockpit#workspace-directory"), { waitUntil: "domcontentloaded" });
         await page.waitForSelector('[data-cockpit-ready="true"]', { timeout: 30_000 });
         panel = page.getByRole("region", { name: "Citadel directory", exact: true });
-        await panel.getByRole("button", { name: "New Citadel", exact: true }).waitFor();
+        const newCitadel = panel.getByRole("button", { name: "New Citadel", exact: true })
+          .and(panel.locator("button:enabled"));
+        await newCitadel.waitFor();
         const selection = () => page.evaluate(() => ({ citadel: window.localStorage.getItem("goatcitadel.ui.citadel_id.v1"), workspace: window.localStorage.getItem("goatcitadel.ui.workspace_id.v1") }));
         const originalSelection = await selection(); assert.equal(originalSelection.citadel, citadelId);
         const editor = panel.getByRole("region", { name: "Citadel metadata editor", exact: true });
         stage = "draft and retain new Citadel without a write";
-        await panel.getByRole("button", { name: "New Citadel", exact: true }).click();
+        // Native keyboard activation avoids moving pointer coordinates while the
+        // mobile shell settles its initial directory scroll position.
+        await newCitadel.press("Enter");
         await editor.getByLabel("New Citadel name", { exact: true }).fill(name);
         await editor.getByLabel("Citadel slug", { exact: true }).fill(slug);
         await editor.getByLabel("Citadel kind", { exact: true }).selectOption("team");
         await editor.getByLabel("Citadel description", { exact: true }).fill(description);
         await editor.getByRole("button", { name: "Close Citadel editor and keep draft", exact: true }).click();
-        assert.deepEqual(writes, []); await panel.getByRole("button", { name: "New Citadel", exact: true }).click();
+        assert.deepEqual(writes, []); await newCitadel.press("Enter");
         assert.equal(await editor.getByLabel("New Citadel name", { exact: true }).inputValue(), name); await capture("create-draft");
         stage = "create exact directory record";
         const creation = page.waitForResponse(response => response.request().method() === "POST" && new URL(response.url()).pathname === "/api/v1/citadels");
