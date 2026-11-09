@@ -13,6 +13,7 @@ function createGatewayHarness() {
       features: { documentEditingV1Enabled: false },
     },
   };
+  gateway.chatAutoActions = { checkApprovalReplay: vi.fn(async () => undefined) };
   gateway.runtimeDecisionRecorder = { record: vi.fn() };
   return gateway;
 }
@@ -737,6 +738,7 @@ describe("GatewayService low-hanging facade delegation", () => {
       evaluateAccess: vi.fn((input: unknown) => ({ input, allowed: true })),
     };
     gateway.storage = {
+      db: { dialect: "sqlite" },
       chatSessionMeta: {
         get: vi.fn(() => ({ workspaceId: "workspace-meta" })),
       },

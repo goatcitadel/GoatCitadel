@@ -755,10 +755,9 @@ import { remoteWorkerAssignmentRuntimeActivated } from "./remote-worker-assignme
 import { RemoteWorkerChatExecutionService } from "./remote-worker-chat-execution-service.js";
 import { RemoteWorkerChatPlacementService } from "./remote-worker-chat-placement-service.js";
 import { ChatAutoActionPolicy } from "./chat-auto-action-policy.js";
-import { inspectManagedProjectFileAvailability } from "./chat-managed-project-files.js";
 import { isManagedProjectFileTool } from "@goatcitadel/contracts";
 import { isChatAutoApprovalEnabled } from "./chat-approval-mode-service.js";
-import { assertChatAutoCodeModeAllowed } from "./code-mode-request-tool.js";
+import { assertChatAutoCodeModeAllowed, runChatCodeModeRequest } from "./code-mode-request-tool.js";
 import {
   assertLocalApprovedActionOwner,
   RemoteWorkerApprovalResumeRequiredError,
@@ -928,10 +927,10 @@ import {
 } from "./channel-secret-resolution.js";
 import {
   recordInboundChannelMessage,
-  routeOperatorDeskSend,
   type OperatorDeskSendInput,
   type OperatorDeskSendResult,
 } from "./channel-desk-turn.js";
+import { sendOperatorDeskMessage } from "./gateway/channel-desk-send.js";
 import {
   enqueueApprovalRemoteTokenConnectorDelivery,
   type ApprovalRemoteTokenDeliveryOverride,
@@ -1514,10 +1513,10 @@ export class GatewayService {
       acquireLocalEmbeddingLease: (request) => this.acquireLocalEmbeddingLease(request),
       prepareEmbeddingUsageDispatch: (input) => this.llmService.prepareScopedModelUsageDispatch(input),
       requestChangePlan: async (request, intent) => await this.requestChangePlanFromTool(request, intent),
-      runCodeModeRequest: async (request) => {
-        await assertChatAutoCodeModeAllowed(this.chatAutoActions, request);
-        return this.capabilitySystemService.runCodeModeRequestTool(request);
-      },
+      runCodeModeRequest: (request) =>
+        runChatCodeModeRequest(this.chatAutoActions, request, () =>
+          this.capabilitySystemService.runCodeModeRequestTool(request),
+        ),
       // Model-callable `schedule.manage` (P1-F2). The cron mutation is impure, so
       // the pure policy-engine executor delegates it back here. The approval gate
       // and deny-wins still fire first in `engine.invoke`; this hook only runs
@@ -1943,13 +1942,8 @@ export class GatewayService {
           );
         }
       },
-      resolveConfirmedDelegation: async (input) => {
-        const mode = await this.chatAutoActions.mode(input);
-        if (mode === "auto") return undefined;
-        if (mode === "stale")
-          throw new ConflictError({ message: "Chat approval mode or project changed. Start a new turn." });
-        return this.chatTurnControl.resolveConfirmedDelegation(input);
-      },
+      resolveConfirmedDelegation: (input) =>
+        this.chatAutoActions.planDelegation(input, () => this.chatTurnControl.resolveConfirmedDelegation(input)),
       storage: this.storage,
       listToolCatalog: () => this.listToolCatalog(),
       getModelOutputTokenLimit: (providerId, model) => this.llmService.getModelOutputTokenLimit(providerId, model),
@@ -2374,7 +2368,8 @@ export class GatewayService {
         await this.executeCodeModePendingApproval(approvalId, signal),
       executeApprovedPendingAction: async (approvalId, signal) =>
         await this.executeApprovedPendingAction(approvalId, signal),
-      checkChatAutoApprovalReplay: (approvalId, actionType) => this.checkChatAutoApprovalReplay(approvalId, actionType),
+      checkChatAutoApprovalReplay: (approvalId, actionType) =>
+        this.chatAutoActions.checkApprovalReplay(approvalId, actionType, this.blockRestrictedChatExecution),
       runOutsideChatExecutionScope: (work) => this.chatAutoActions.runOutsideChatExecutionScope(work),
       prepareRemoteWorkerApprovalHandoff: async (approvalId) => {
         if (!remoteWorkerAssignmentRuntimeActivated()) throw new Error("Remote-worker execution is not active.");
@@ -2554,17 +2549,10 @@ export class GatewayService {
     );
     this.chatDelegationService = new ChatDelegationService({
       storage: this.storage,
-      assertChatDelegationAllowed: async (sessionId, parentRunId) => {
-        await this.chatAutoActions.assertNoDelegatedExecution({ sessionId });
-        const parent = parentRunId ? await this.findDurableRunMaybe(parentRunId) : undefined;
-        if (
-          parent?.workflowKey === "chat.turn.execute" &&
-          parent.payload.sessionId === sessionId &&
-          (await this.chatAutoActions.assertPlacementCurrent(parent)) === "auto"
-        ) {
-          throw new ConflictError({ message: "Auto keeps this turn local and blocks delegated execution." });
-        }
-      },
+      assertChatDelegationAllowed: (sessionId, parentRunId) =>
+        this.chatAutoActions.assertDelegationAllowed(sessionId, parentRunId, (runId) =>
+          this.findDurableRunMaybe(runId),
+        ),
       cleanupChildResources: async ({ stepId, childSessionId, childTurnId }) => {
         const resources = await cleanupDelegatedChildResources(
           this.storage,
@@ -2681,13 +2669,10 @@ export class GatewayService {
     });
     this.durableFanout = new ChatDurableFanoutService({
       storage: this.storage,
-      assertParentToolUseOpen: async (parentRunId, sessionId) => {
-        await this.chatTurnControl.assertParentToolUseOpen(parentRunId, sessionId);
-        const parent = await this.storage.durableRuns.getRun(parentRunId);
-        if ((await this.chatAutoActions.assertPlacementCurrent(parent)) === "auto") {
-          throw new ConflictError({ message: "Auto keeps this turn local and blocks delegated execution." });
-        }
-      },
+      assertParentToolUseOpen: (parentRunId, sessionId) =>
+        this.chatAutoActions.assertFanoutAllowed(parentRunId, () =>
+          this.chatTurnControl.assertParentToolUseOpen(parentRunId, sessionId),
+        ),
       capabilitySystem: this.capabilitySystemService,
       runChatDelegation: this.chatDelegationService.runChatDelegation.bind(this.chatDelegationService),
       materializeTerminalDelegatedChild: this.chatDelegationService.materializeTerminalDurableChild.bind(
@@ -2791,11 +2776,7 @@ export class GatewayService {
     });
     this.toolInvocationCoordinator = new ToolInvocationCoordinatorService({
       assertChatToolDispatchAllowed: (request) => this.chatTurnControl.assertToolDispatchAllowed(request),
-      chatAutoExecution: {
-        inspect: (request) => this.chatAutoActions.inspect(request, "proposal"),
-        block: (request, reason) => this.policyEngine.blockRestrictedExecution(request, reason),
-        blockOpaqueDispatch: (request) => this.chatAutoActions.blockOpaqueDispatch(request),
-      },
+      chatAutoExecution: this.chatAutoActions.createInvocationGuard(this.blockRestrictedChatExecution),
       approvalInbox: this.storage.approvalInbox,
       assertMcpServerInScope: async (request) => await this.assertMcpServerInCapabilityScope(request),
       durableTasks: {
@@ -3463,12 +3444,10 @@ export class GatewayService {
           this.llmService.exportConfigFile().providers.find((provider) => provider.providerId === providerId),
         updateSettings: (input) => this.updateSettings(input),
         hasTemporarySecret: (planId, providerId) => this.hasTemporaryProviderSecret(planId, providerId),
-        hasTemporaryOAuthCredential: (planId, providerId, sameAccountOnly) =>
-          this.hasTemporaryProviderOAuthCredential(planId, providerId, sameAccountOnly),
+        hasTemporaryOAuthCredential: (...args) => this.hasTemporaryProviderOAuthCredential(...args),
         promoteTemporarySecret: (planId, providerId, expectedRevision, storage, envVar) =>
           this.promoteTemporaryProviderSecret(planId, providerId, expectedRevision, storage, envVar),
-        promoteTemporaryOAuthCredential: (planId, providerId, expectedRevision, sameAccountOnly) =>
-          this.promoteTemporaryProviderOAuthCredential(planId, providerId, expectedRevision, sameAccountOnly),
+        promoteTemporaryOAuthCredential: (...args) => this.promoteTemporaryProviderOAuthCredential(...args),
         removeProviderApiKey: async (providerId, expectedRevision, storage) => {
           const result = await this.deleteProviderSecret({ providerId, expectedRevision, storage });
           return {
@@ -4921,30 +4900,12 @@ export class GatewayService {
     return await chatSessionService.setChatSessionBinding(this.buildChatSessionDependencies(), input);
   }
 
-  /**
-   * A desk send into a channel conversation: in the operator's own conversation it becomes a durable desk question
-   * (answered like a message from the phone); a blocked channel refuses it; anything else keeps the verbatim path.
-   */
   public async sendOperatorDeskMessage(
     sessionId: string,
     input: OperatorDeskSendInput,
   ): Promise<OperatorDeskSendResult> {
-    const binding = await this.storage.chatSessionBindings.get(sessionId);
-    if (binding?.transport !== "integration" || !binding.connectionId) {
-      return { mode: "post" };
-    }
-    if (input.expectedChatApprovalModeRevision !== undefined) {
-      throw new ConflictError({ message: "The approval mode precondition requires a direct local Chat send." });
-    }
-    const connection = await this.storage.integrationConnections.get(binding.connectionId).catch((error: unknown) => {
-      if (error instanceof NotFoundError) return undefined;
-      throw error;
-    });
-    const session = await this.storage.sessions.getBySessionId(sessionId);
-    const lastInboundAt = await this.storage.chatMessages.latestChannelMessageAt(sessionId);
-    return await routeOperatorDeskSend(
-      { sessionId, sessionKey: session.sessionKey, binding, connection, ...input, lastInboundAt },
-      (acceptance) => this.inboundChannelEventService.acceptOperatorDeskEvent(acceptance),
+    return sendOperatorDeskMessage(this.storage, sessionId, input, (event) =>
+      this.inboundChannelEventService.acceptOperatorDeskEvent(event),
     );
   }
 
@@ -7079,10 +7040,8 @@ export class GatewayService {
   }
 
   private hasTemporaryProviderOAuthCredential(planId: string, providerId: string, sameAccountOnly = false): boolean {
-    return this.llmService.getOpenAICodexOAuthCredentialStatus(
-      providerTemporaryOAuthAccount(planId, providerId),
-      sameAccountOnly,
-    ).connected;
+    const account = providerTemporaryOAuthAccount(planId, providerId);
+    return this.llmService.getOpenAICodexOAuthCredentialStatus(account, sameAccountOnly).connected;
   }
 
   private verifyTemporaryProviderOAuthCredential(planId: string, providerId: string): readonly string[] {
@@ -7117,10 +7076,8 @@ export class GatewayService {
     if (!provider || provider.authMode !== "codex-oauth") {
       throw new ValidationError({ message: "The approved OpenAI Codex OAuth provider profile is unavailable." });
     }
-    const status = this.llmService.promoteOpenAICodexOAuthCredential(
-      providerTemporaryOAuthAccount(planId, providerId),
-      sameAccountOnly,
-    );
+    const account = providerTemporaryOAuthAccount(planId, providerId);
+    const status = this.llmService.promoteOpenAICodexOAuthCredential(account, sameAccountOnly);
     if (!status.connected) {
       throw new ValidationError({ message: "The OAuth credential owner did not confirm canonical promotion." });
     }
@@ -8175,15 +8132,10 @@ export class GatewayService {
   public async resolvePreparedTurnOrchestration(
     prepared: chatTurnPrepService.PreparedAgentChatTurn,
   ): Promise<PreparedChatExecutionPlanResolution | undefined> {
-    const mode = await this.chatAutoActions.mode({
-      sessionId: prepared.session.sessionId,
-      turnId: prepared.turnId,
-      workspaceId: prepared.workspaceId,
-    });
-    if (mode === "stale")
-      throw new ConflictError({ message: "Chat approval mode or project changed. Start a new turn." });
-    if (mode === "auto") return undefined;
-    return chatTurnPrepService.resolvePreparedTurnOrchestration(this, prepared);
+    const { session, turnId, workspaceId } = prepared;
+    return this.chatAutoActions.planDelegation({ sessionId: session.sessionId, turnId, workspaceId }, () =>
+      chatTurnPrepService.resolvePreparedTurnOrchestration(this, prepared),
+    );
   }
 
   private async applyApprovedSpecialistsToPlan(
@@ -9305,12 +9257,8 @@ export class GatewayService {
   private remoteWorkerChatAuthorityDependencies(): RemoteWorkerChatAuthorityDependencies {
     return {
       storage: this.storage,
-      assertChatWorkerAllowed: async (runId) => {
-        const run = await this.storage.durableRuns.getRun(runId);
-        if ((await this.chatAutoActions.assertPlacementCurrent(run)) === "auto") {
-          throw new ConflictError({ message: "Auto requires local execution." });
-        }
-      },
+      assertChatWorkerAllowed: (runId) =>
+        this.chatAutoActions.assertStandardRun(runId, "Auto requires local execution."),
       resolveAdmissionAuthority: (input) =>
         resolveRemoteWorkerAdmissionAuthority(
           createRemoteWorkerChatAdmissionAuthorityHost({
@@ -9380,7 +9328,11 @@ export class GatewayService {
     approvalId: string,
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
-    const refused = await this.checkChatAutoApprovalReplay(approvalId, "tool.invoke");
+    const refused = await this.chatAutoActions.checkApprovalReplay(
+      approvalId,
+      "tool.invoke",
+      this.blockRestrictedChatExecution,
+    );
     if (refused) return refused;
     try {
       await this.refreshApprovedPendingToolPolicyContext(approvalId);
@@ -9509,8 +9461,7 @@ export class GatewayService {
             ...options,
             executionFence: async () => {
               await this.chatTurnControl.assertToolDispatchAllowed(approvedRequest);
-              const reason = await this.chatAutoActions.blockOpaqueDispatch(approvedRequest);
-              if (reason) throw new ConflictError({ message: reason });
+              await this.chatAutoActions.assertOpaqueDispatchAllowed(approvedRequest);
             },
             mcpRequesterTurnContext,
             ...(isNativeMcpToolName(approvedRequest.toolName)
@@ -9716,10 +9667,8 @@ export class GatewayService {
   ): Promise<ToolAccessEvaluateResponse> {
     const request = await this.prepareToolAccessEvaluation(input);
     if (isManagedProjectFileTool(request.toolName)) {
-      return inspectManagedProjectFileAvailability(
-        { storage: this.storage, chatAutoApprovalEnabled: isChatAutoApprovalEnabled(this.storage) },
-        request,
-        () => this.policyEngine.inspectManagedProjectFileAccess(request),
+      return this.chatAutoActions.inspectManagedAvailability(request, () =>
+        this.policyEngine.inspectManagedProjectFileAccess(request),
       );
     }
     if (options.meshCatalogPolicyBinding) {
@@ -10772,46 +10721,17 @@ export class GatewayService {
     approvalId: string,
     signal?: AbortSignal,
   ): Promise<ToolInvokeResult | undefined> {
-    const refused = await this.checkChatAutoApprovalReplay(approvalId, "code_mode.run");
+    const refused = await this.chatAutoActions.checkApprovalReplay(
+      approvalId,
+      "code_mode.run",
+      this.blockRestrictedChatExecution,
+    );
     if (refused) return refused;
     return this.capabilitySystemService.executeApprovedCodeModeRun(approvalId, signal);
   }
 
-  private async checkChatAutoApprovalReplay(
-    approvalId: string,
-    actionType: string,
-  ): Promise<ToolInvokeResult | undefined> {
-    const approval = await this.storage.approvals.get(approvalId);
-    const pending = await this.storage.pendingApprovalActions.find(approvalId);
-    const request =
-      pending?.actionType === "tool.invoke" && actionType === "tool.invoke"
-        ? {
-            ...toToolInvokeRequest(pending.request),
-            ...(approval.linkage?.turnId && !pending.request.turnId ? { turnId: approval.linkage.turnId } : {}),
-          }
-        : {
-            toolName: actionType,
-            args: {},
-            agentId: "system",
-            sessionId: approval.linkage?.sessionId ?? "",
-            turnId: approval.linkage?.turnId,
-            workspaceId: approval.linkage?.workspaceId,
-          };
-    if (!request.sessionId) return undefined;
-    const restriction = await this.chatAutoActions.inspect(request, "replay", approvalId);
-    if (restriction?.kind === "recovered_managed_delete") {
-      return {
-        outcome: "executed",
-        policyReason: restriction.reason,
-        auditEventId: randomUUID(),
-        result: restriction.result,
-      };
-    }
-    if (restriction?.kind === "block" || restriction?.kind === "already_claimed") {
-      return this.policyEngine.blockRestrictedExecution(request, restriction.reason);
-    }
-    return undefined;
-  }
+  private readonly blockRestrictedChatExecution = (request: ToolInvokeRequest, reason: string) =>
+    this.policyEngine.blockRestrictedExecution(request, reason);
 
   public async getSkillActivationPolicy(): Promise<SkillActivationPolicy> {
     return await this.skillStateService.getActivationPolicy();

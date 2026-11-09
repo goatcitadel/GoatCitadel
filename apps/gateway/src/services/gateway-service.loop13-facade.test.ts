@@ -167,6 +167,10 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
   };
   const gateway = Object.create(GatewayService.prototype) as GatewayService & Record<string, any>;
   Object.assign(gateway, {
+    chatAutoActions: {
+      checkApprovalReplay: vi.fn(async () => undefined),
+      planDelegation: vi.fn(async (_turn, plan: () => Promise<unknown>) => plan()),
+    },
     runtimeDecisionRecorder: { record: vi.fn() },
     secretStore: {
       setSecret: vi.fn((account: string, value: string) => secretStoreValues.set(account, value)),
@@ -236,6 +240,7 @@ function createGatewayHarness(overrides: Record<string, unknown> = {}) {
     operatorSummaryCache: { invalidate: vi.fn() },
     routeCompositionPort: { kind: "existing-port" },
     storage: {
+      db: { dialect: "sqlite" },
       chatGeneratedArtifacts: { listBySession: vi.fn(() => []) },
       chatMessages: { list: vi.fn(() => []), upsertMany: vi.fn() },
       chatProjects: { find: vi.fn(() => ({ projectId: "project-1", workspaceId: "workspace-a" })) },
@@ -441,7 +446,10 @@ describe("GatewayService Loop 13 chat facade forwarding", () => {
       }),
     ).resolves.toMatchObject({ sessionId: "session-1", turnId: "turn-prepared" });
     await expect(
-      GatewayService.prototype.resolvePreparedTurnOrchestration.call(gateway, { turnId: "turn-prepared" } as never),
+      GatewayService.prototype.resolvePreparedTurnOrchestration.call(gateway, {
+        session: { sessionId: "session-1" },
+        turnId: "turn-prepared",
+      } as never),
     ).resolves.toMatchObject({ resolved: true });
     expect(
       GatewayService.prototype.buildChatOrchestrationSummary.call(gateway, {

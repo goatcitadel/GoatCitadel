@@ -622,6 +622,7 @@ export async function executePreparedModeOrchestration(
   });
 
   let currentSteps: OrchestrationStepExecutionResult[] = [];
+  const storage = host.storage;
   const initialSummary = host.buildChatOrchestrationSummary({
     runId,
     objective: prepared.content,
@@ -650,7 +651,7 @@ export async function executePreparedModeOrchestration(
       advisoryOnly: true,
     });
     await canonicalWriteFence(async () => {
-      await host.storage.chatDelegationRuns.patch(runId, {
+      await storage.chatDelegationRuns.patch(runId, {
         status: "completed",
         visibility: advisorySummary.visibility,
         workflowTemplate: advisorySummary.workflowTemplate,
@@ -661,7 +662,7 @@ export async function executePreparedModeOrchestration(
         trace: runTrace,
         finishedAt: new Date().toISOString(),
       });
-      await host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+      await storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
         status: "ready",
         summary: orchestration.executionPlanDraft.summary,
         finishedAt: new Date().toISOString(),
@@ -804,7 +805,7 @@ export async function executePreparedModeOrchestration(
       onStepResult: async (step, allSteps) => {
         currentSteps = [...allSteps];
         const childToolRuns = step.childTurnId
-          ? ((await host.storage.chatToolRuns.listByTurnIds([step.childTurnId])).get(step.childTurnId) ?? [])
+          ? ((await storage.chatToolRuns.listByTurnIds([step.childTurnId])).get(step.childTurnId) ?? [])
           : [];
         await recordStepRuntimeDecisions(
           host,
@@ -866,7 +867,7 @@ export async function executePreparedModeOrchestration(
           },
         });
         await canonicalWriteFence(async () => {
-          await host.storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
+          await storage.chatDelegationSteps.patch(persistedStepIds.get(step.stepId) ?? step.stepId, {
             status: step.status,
             providerId: step.providerId,
             model: step.model,
@@ -884,9 +885,9 @@ export async function executePreparedModeOrchestration(
             ...(step.finishedAt ? { finishedAt: step.finishedAt } : {}),
             ...(typeof step.durationMs === "number" ? { durationMs: step.durationMs } : {}),
           });
-          await host.storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
+          await storage.chatExecutionPlans.patch(persistedExecutionPlan.planId, {
             steps: mergeExecutionPlanStepStatuses(
-              (await host.storage.chatExecutionPlans.get(persistedExecutionPlan.planId)).steps,
+              (await storage.chatExecutionPlans.get(persistedExecutionPlan.planId)).steps,
               allSteps,
             ),
           });
@@ -1069,7 +1070,8 @@ export async function executeDelegatedPlanStep(
     turnId: prepared.turnId,
     workspaceId: prepared.workspaceId,
   };
-  await host.assertDelegationExecutionAllowed?.(parentScope);
+  const assertDelegationAllowed = () => host.assertDelegationExecutionAllowed?.(parentScope);
+  await assertDelegationAllowed();
   const startedAt = new Date().toISOString();
   const delegatedRole = input.step.delegatedRole ?? input.step.role;
   const orchestrationTaskId = `chat-orchestration:${prepared.turnId}`;
@@ -1227,7 +1229,7 @@ export async function executeDelegatedPlanStep(
       policyContext: inheritedPolicyContext,
     });
     const sendOptions = input.signal ? { abortSignal: input.signal } : undefined;
-    await host.assertDelegationExecutionAllowed?.(parentScope);
+    await assertDelegationAllowed();
     // S1: stream the terminal synthesizer child's live token deltas straight to
     // the parent SSE (default-on, gated by the caller). Falls back to a buffered
     // send only when the stream throws before the first delta, so the persisted

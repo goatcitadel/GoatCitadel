@@ -571,7 +571,7 @@ describe("gateway service host guard", () => {
       /const approval = authority \? await this\.approvalRuntime\.createApproval\(input, onCreated, authority\) : await this\.approvalRuntime\.createApproval\(input, onCreated\)/,
     );
     expect(gatewayService).toMatch(
-      /new CapabilitySystemService\(\{[\s\S]{0,800}resolveApproval: async \(approvalId, input\) => await this\.resolveApproval\(approvalId, input\)/,
+      /new CapabilitySystemService\(\{[\s\S]{0,1000}resolveApproval: async \(approvalId, input\) => await this\.resolveApproval\(approvalId, input\)/,
     );
   }, 15_000);
 
