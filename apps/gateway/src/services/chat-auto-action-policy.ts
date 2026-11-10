@@ -13,7 +13,11 @@ import {
   type ToolInvokeRequest,
   type ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import { ToolExecutionAlreadyClaimedError, type ToolExecutionRestriction } from "@goatcitadel/policy-engine";
+import {
+  ToolExecutionAlreadyClaimedError,
+  type ToolExecutionRestriction,
+  type ToolPolicyEngine,
+} from "@goatcitadel/policy-engine";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { withCurrentChatApprovalAuthority, type ChatApprovalModeDependencies } from "./chat-approval-mode-service.js";
 import { assertChatTurnToolUseOpen } from "./chat-turn-control.js";
@@ -24,7 +28,11 @@ import {
   managedFileEffectId,
 } from "./chat-managed-project-files.js";
 import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
-import type { captureGovernedFileEntry, overwriteGovernedFileEntry } from "./governed-file-windows-handle-port.js";
+import {
+  captureGovernedFileEntry,
+  isGovernedFileHandlePortAvailable,
+  overwriteGovernedFileEntry,
+} from "./governed-file-windows-handle-port.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 
 export interface ResolvedAutoAction {
@@ -100,6 +108,24 @@ interface ScopedReadTarget {
   readonly path: string;
 }
 
+interface ReviewedFileOverwrite {
+  inspectAccess: (request: ToolInvokeRequest) => Promise<boolean>;
+  capture: typeof captureGovernedFileEntry;
+  execute: typeof overwriteGovernedFileEntry;
+}
+
+function windowsOverwrite(policy?: Pick<ToolPolicyEngine, "inspectAccess">): ReviewedFileOverwrite | undefined {
+  if (!policy || !isGovernedFileHandlePortAvailable()) return undefined;
+  return {
+    inspectAccess: async (request) => {
+      const access = await policy.inspectAccess(request);
+      return access.allowed && access.wardEffect !== "require_dry_run" && access.wardEffect !== "redact";
+    },
+    capture: captureGovernedFileEntry,
+    execute: overwriteGovernedFileEntry,
+  };
+}
+
 interface ChatAutoActionPolicyDependencies extends ChatApprovalModeDependencies {
   storage: Storage;
   rootDir: string;
@@ -108,11 +134,7 @@ interface ChatAutoActionPolicyDependencies extends ChatApprovalModeDependencies 
   deleteExactTarget?: (target: ExactDeleteTarget) => Record<string, unknown>;
   /** The adapter pins the project root and checks containment and read policy at every actual open, including traversal. */
   readScopedTarget?: (request: ToolInvokeRequest, target: ScopedReadTarget) => Promise<Record<string, unknown>>;
-  overwrite?: {
-    inspectAccess: (request: ToolInvokeRequest) => Promise<boolean>;
-    capture: typeof captureGovernedFileEntry;
-    execute: typeof overwriteGovernedFileEntry;
-  };
+  overwrite?: ReviewedFileOverwrite;
 }
 
 const blockedExecution = "Auto blocks execution whose effects the Gateway cannot verify.";
@@ -153,6 +175,7 @@ export class ChatAutoActionPolicy {
     request: ToolInvokeRequest,
     stage: "proposal" | "dispatch" | "replay",
     approvalId?: string,
+    policy?: Pick<ToolPolicyEngine, "inspectAccess">,
   ): Promise<ToolExecutionRestriction | undefined> {
     const ambient = this.executionScope.getStore();
     if (ambient && !sameTurnScope(request, ambient)) {
@@ -201,10 +224,11 @@ export class ChatAutoActionPolicy {
         if (action === "delete" && stage === "replay" && approvalId && (await this.hasDeletionClaim(approvalId))) {
           return { restriction: { kind: "already_claimed", reason: deletionAlreadyClaimed } as const };
         }
-        const project = await this.deps.storage.chatProjects.find(binding.projectId);
+        const { storage, rootDir, workspaceDir } = this.deps;
+        const project = await storage.chatProjects.find(binding.projectId);
         const root = resolveProjectRootForToolContext({
-          repoRoot: this.deps.rootDir,
-          workspaceRoot: path.resolve(this.deps.rootDir, this.deps.workspaceDir),
+          repoRoot: rootDir,
+          workspaceRoot: path.resolve(rootDir, workspaceDir),
           projectWorkspacePath: project?.workspacePath,
         });
         if (action === "read_only") {
@@ -228,8 +252,11 @@ export class ChatAutoActionPolicy {
         if (!targets.every((target) => withinProject(root, target, false))) {
           return { restriction: block("Auto file actions must target the active project.") };
         }
-        if (action === "edit" && request.toolName === "fs.write" && root && this.deps.overwrite) {
-          return { restriction: await this.inspectOverwrite(request, binding, root, stage, approvalId) };
+        if (action === "edit" && request.toolName === "fs.write" && root) {
+          const overwrite = this.deps.overwrite ?? windowsOverwrite(policy);
+          if (overwrite) {
+            return { restriction: await this.inspectOverwrite(overwrite, request, binding, root, stage, approvalId) };
+          }
         }
         if (action !== "delete") {
           return { restriction: block("Auto requires a verified project file writer for this save.") };
@@ -273,16 +300,15 @@ export class ChatAutoActionPolicy {
   }
 
   private async inspectOverwrite(
+    overwrite: ReviewedFileOverwrite,
     request: ToolInvokeRequest,
     binding: ChatAutoBinding,
     root: string,
     stage: "proposal" | "dispatch" | "replay",
     approvalId?: string,
   ): Promise<ToolExecutionRestriction> {
-    const { overwrite, storage } = this.deps;
     const { path: destination, content } = request.args;
     if (
-      !overwrite ||
       !request.turnId ||
       !request.toolRunId ||
       typeof destination !== "string" ||
@@ -320,54 +346,16 @@ export class ChatAutoActionPolicy {
     return {
       kind: "execute_exact_file_mutation",
       reason: "Auto verified the exact overwrite approval.",
-      execute: async (policy) => {
-        const claimed = await this.withTurnAuthority(
-          request,
-          async (current) => {
-            if (await this.hasExactClaim(approvalId, "chatAutoOverwriteClaim")) {
-              throw new ToolExecutionAlreadyClaimedError(overwriteAlreadyClaimed);
-            }
-            if (
-              !current ||
-              request.signal?.aborted ||
-              fileMutationBinding(current, request, target) !== digest ||
-              !(await this.matchesExactApproval(approvalId, request, digest, true, "chatAutoOverwrite")) ||
-              !(await policy.reserve())
-            )
-              return false;
-            await storage.approvalEvents.append({
-              approvalId,
-              actorId: "system",
-              eventType: "replayed",
-              payload: { chatAutoOverwriteClaim: true },
-            });
-            return true;
-          },
-          true,
-        );
-        if (!claimed) throw new ConflictError({ message: "The overwrite policy or approval changed." });
-        const result = await this.withTurnAuthority(
-          request,
-          async (current) => {
-            if (
-              !current ||
-              request.signal?.aborted ||
-              fileMutationBinding(current, request, target) !== digest ||
-              !(await this.matchesExactApproval(approvalId, request, digest, true, "chatAutoOverwrite")) ||
-              !(await policy.revalidate())
-            )
-              return undefined;
-            await assertChatTurnToolUseOpen(storage, request.sessionId, request.turnId);
-            request.signal?.throwIfAborted();
+      execute: (policy) =>
+        this.executeReviewedFileMutation(request, approvalId, digest, policy, {
+          operation: "overwrite",
+          matches: (current) => fileMutationBinding(current, request, target) === digest,
+          execute: async () => {
             const bytes = Buffer.from(content, "utf8");
             const contentSha256 = await overwrite.execute({ ...capture, content: null }, bytes);
             return { path: destination, bytesWritten: bytes.length, contentSha256 };
           },
-          true,
-        );
-        if (!result) throw new ConflictError({ message: "The overwrite policy or approval changed." });
-        return result;
-      },
+        }),
     };
   }
 
@@ -747,19 +735,47 @@ export class ChatAutoActionPolicy {
     digest: string,
     policy: { reserve(): Promise<boolean>; revalidate(): Promise<boolean> },
   ): Promise<Record<string, unknown>> {
-    const { storage, deleteExactTarget } = this.deps;
+    const { deleteExactTarget } = this.deps;
     if (!deleteExactTarget) throw new ConflictError({ message: noExactDeletion });
-    const matches = (binding?: ChatAutoBinding) => {
-      const current = readExactDeleteTarget(request.args.path);
-      return binding && current && fileMutationBinding(binding, request, current) === digest;
-    };
-    // Persist consumption before the file transition. A crash after claim never replays the deletion.
+    return this.executeReviewedFileMutation(request, approvalId, digest, policy, {
+      operation: "deletion",
+      matches: (binding) => {
+        const current = readExactDeleteTarget(request.args.path);
+        return Boolean(current && fileMutationBinding(binding, request, current) === digest);
+      },
+      execute: () => deleteExactTarget(target),
+    });
+  }
+
+  private async executeReviewedFileMutation(
+    request: ToolInvokeRequest,
+    approvalId: string,
+    digest: string,
+    policy: { reserve(): Promise<boolean>; revalidate(): Promise<boolean> },
+    mutation: {
+      operation: "deletion" | "overwrite";
+      matches: (binding: ChatAutoBinding) => boolean;
+      execute: () => Promise<Record<string, unknown>> | Record<string, unknown>;
+    },
+  ): Promise<Record<string, unknown>> {
+    const { storage } = this.deps;
+    const deleting = mutation.operation === "deletion";
+    const key = deleting ? "chatAutoDelete" : "chatAutoOverwrite";
+    const claimKey = deleting ? "chatAutoDeleteClaim" : "chatAutoOverwriteClaim";
+    const conflict = (changed: "approval" | "policy") =>
+      new ConflictError({
+        message: `The ${mutation.operation} ${changed} or target changed. Request a new approval.`,
+      });
+    // Persist consumption before an external file transition so an interrupted attempt never replays.
     const claimed = await this.withTurnAuthority(request, async (binding) => {
-      if (await this.hasDeletionClaim(approvalId)) throw new ToolExecutionAlreadyClaimedError(deletionAlreadyClaimed);
+      if (await this.hasExactClaim(approvalId, claimKey)) {
+        throw new ToolExecutionAlreadyClaimedError(deleting ? deletionAlreadyClaimed : overwriteAlreadyClaimed);
+      }
       if (
         request.signal?.aborted ||
-        !matches(binding) ||
-        !(await this.matchesExactApproval(approvalId, request, digest)) ||
+        !binding ||
+        !mutation.matches(binding) ||
+        !(await this.matchesExactApproval(approvalId, request, digest, true, key)) ||
         !(await policy.reserve())
       )
         return false;
@@ -767,25 +783,25 @@ export class ChatAutoActionPolicy {
         approvalId,
         actorId: "system",
         eventType: "replayed",
-        payload: { chatAutoDeleteClaim: true },
+        payload: { [claimKey]: true },
       });
       return true;
     });
-    if (!claimed)
-      throw new ConflictError({ message: "The deletion approval or target changed. Request a new approval." });
+    if (!claimed) throw conflict("approval");
     const result = await this.withTurnAuthority(request, async (binding) => {
       if (
         request.signal?.aborted ||
-        !matches(binding) ||
+        !binding ||
+        !mutation.matches(binding) ||
         !(await policy.revalidate()) ||
-        !(await this.matchesExactApproval(approvalId, request, digest))
+        !(await this.matchesExactApproval(approvalId, request, digest, true, key))
       )
         return undefined;
       await assertChatTurnToolUseOpen(storage, request.sessionId, request.turnId);
       request.signal?.throwIfAborted();
-      return deleteExactTarget(target);
+      return mutation.execute();
     });
-    if (!result) throw new ConflictError({ message: "The deletion policy or target changed. Request a new approval." });
+    if (!result) throw conflict("policy");
     return result;
   }
 }

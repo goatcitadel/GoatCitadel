@@ -755,11 +755,6 @@ import { remoteWorkerAssignmentRuntimeActivated } from "./remote-worker-assignme
 import { RemoteWorkerChatExecutionService } from "./remote-worker-chat-execution-service.js";
 import { RemoteWorkerChatPlacementService } from "./remote-worker-chat-placement-service.js";
 import { ChatAutoActionPolicy } from "./chat-auto-action-policy.js";
-import {
-  captureGovernedFileEntry,
-  isGovernedFileHandlePortAvailable,
-  overwriteGovernedFileEntry,
-} from "./governed-file-windows-handle-port.js";
 import { isManagedProjectFileTool } from "@goatcitadel/contracts";
 import { isChatAutoApprovalEnabled } from "./chat-approval-mode-service.js";
 import { assertChatAutoCodeModeAllowed, runChatCodeModeRequest } from "./code-mode-request-tool.js";
@@ -1486,22 +1481,10 @@ export class GatewayService {
       rootDir: config.rootDir,
       workspaceDir: config.assistant.workspaceDir,
       chatAutoApprovalEnabled: isChatAutoApprovalEnabled(this.storage),
-      ...(isGovernedFileHandlePortAvailable()
-        ? {
-            overwrite: {
-              inspectAccess: async (request) => {
-                const access = await this.policyEngine.inspectAccess(request);
-                return access.allowed && access.wardEffect !== "require_dry_run" && access.wardEffect !== "redact";
-              },
-              capture: captureGovernedFileEntry,
-              execute: overwriteGovernedFileEntry,
-            },
-          }
-        : {}),
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       resolveExecutionRestriction: (request, stage, approvalId) =>
-        this.chatAutoActions.inspect(request, stage, approvalId),
+        this.chatAutoActions.inspect(request, stage, approvalId, this.policyEngine),
       // Tool-policy approval creation must enter the canonical lifecycle. A
       // direct policy-engine storage write would omit the durable wait run and
       // retryable approval observability envelope.
