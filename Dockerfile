@@ -36,6 +36,16 @@ ENV MISSION_CONTROL_PORT=4173
 
 WORKDIR /app
 
+# The Compose database is PostgreSQL 16. The Gateway needs the matching client
+# to create backups without access to the Docker socket.
+COPY --from=postgres:16-bookworm /usr/local/share/keyrings/postgres.gpg.asc /usr/local/share/keyrings/postgres.gpg.asc
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates \
+  && printf '%s\n' 'deb [signed-by=/usr/local/share/keyrings/postgres.gpg.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' > /etc/apt/sources.list.d/pgdg.list \
+  && apt-get update \
+  && apt-get install -y --no-install-recommends postgresql-client-16 \
+  && rm -rf /var/lib/apt/lists/*
+
 RUN groupadd --gid "${GOATCITADEL_GID}" goatcitadel \
   && useradd --uid "${GOATCITADEL_UID}" --gid goatcitadel --create-home --home-dir /home/goatcitadel --shell /usr/sbin/nologin goatcitadel
 
