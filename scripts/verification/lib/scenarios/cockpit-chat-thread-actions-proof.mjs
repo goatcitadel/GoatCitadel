@@ -69,7 +69,9 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   const providersBefore = providerSnapshot(providerStub);
   await clickTurnAction(await turnById(page, sourceTurn.turnId, sourceTurn.userMessage.content), "New conversation from here");
   const dialog = page.getByRole("dialog", { name: "Start a new conversation from this message?", exact: true });
-  await dialogBounds(dialog, viewport, ["Create conversation", "Cancel"]);
+  // The deferred loading dialog has the same title but no create action.
+  const review = dialog.filter({ has: page.getByRole("button", { name: "Create conversation", exact: true }) });
+  await dialogBounds(review, viewport, ["Create conversation", "Cancel"]);
   assert.ok((await dialog.innerText()).includes("read-only provenance, not replayed"));
   await capture("fork-review");
   assert.equal(forkWrites().length, 0);
@@ -82,7 +84,7 @@ async function threadActions({ api, page, scope, writes, capture, viewport, prov
   assert.deepEqual(await api(threadRoute), initial);
   assert.equal(forkWrites().length, 0, "Cancel created a fork.");
   await clickTurnAction(await turnById(page, sourceTurn.turnId, sourceTurn.userMessage.content), "New conversation from here");
-  await dialogBounds(dialog, viewport, ["Create conversation", "Cancel"]);
+  await dialogBounds(review, viewport, ["Create conversation", "Cancel"]);
   const responsePromise = page.waitForResponse(
     (response) => response.request().method() === "POST" && pathOf(response.url()) === forkRoute,
   );
