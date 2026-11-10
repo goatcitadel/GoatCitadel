@@ -26,7 +26,7 @@ import {
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { hasVerifiedApprovalBypass } from "./approval-bypass.js";
 import { assertReadPathAllowed, assertWritePathInJail, resolveReadPathAccess } from "./sandbox/path-jail.js";
-import { toolReadableWriteRoots, withExecutionWriteAdmission } from "./sandbox/tool-write-gate.js";
+import { assertToolWritePath, toolReadableWriteRoots, withExecutionWriteAdmission } from "./sandbox/tool-write-gate.js";
 import { resolveExecutionWriteAdmission } from "./tool-executor/outside-root-write-admission.js";
 import { assertHostAllowed, fetchAllowlistedOnce, redactUrlForError } from "./sandbox/network-guard.js";
 import {
@@ -141,7 +141,7 @@ export type { ChannelEnvSecretRequest, ChannelEnvSecretResolution };
 
 export interface ToolExecutorRuntimeHooks {
   /** Provided only for a verified, one-use approval by the policy engine. */
-  executeExactChatAutoDelete?: () => Promise<Record<string, unknown>>;
+  executeExactChatAutoFileMutation?: () => Promise<Record<string, unknown>>;
   /** A Gateway-verified reader that enforces project containment at every actual open. */
   executeScopedChatAutoRead?: () => Promise<Record<string, unknown>>;
   executeManagedChatFile?: () => Promise<Record<string, unknown>>;
@@ -382,11 +382,17 @@ export async function executeTool(
   );
   await runtimeHooks.assertExecutionCurrent?.();
 
-  if (runtimeHooks.executeExactChatAutoDelete) {
-    if (!["fs.delete", "project.files.delete"].includes(request.toolName) || !request.approvedByApprovalId) {
-      throw new Error("Exact deletion requires its own approved filesystem invocation.");
+  if (runtimeHooks.executeExactChatAutoFileMutation) {
+    if (
+      !["fs.write", "fs.delete", "project.files.delete"].includes(request.toolName) ||
+      !request.approvedByApprovalId
+    ) {
+      throw new Error("Exact file mutation requires its own approved filesystem invocation.");
     }
-    return finalizeToolResult(await runtimeHooks.executeExactChatAutoDelete());
+    if (request.toolName === "fs.write") {
+      assertToolWritePath(required(request.args.path, "path"), writeConfig.sandbox);
+    }
+    return finalizeToolResult(await runtimeHooks.executeExactChatAutoFileMutation());
   }
 
   if (request.toolName.startsWith("project.files.")) {

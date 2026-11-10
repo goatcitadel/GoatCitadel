@@ -7,6 +7,7 @@ import {
   GovernedFileHandlePortUncertainError,
   captureGovernedFileEntry,
   governedFileHandlePortDiagnostics,
+  overwriteGovernedFileEntry,
   publishGovernedFileEntry,
   removeGovernedFileEntry,
   restoreGovernedFileEntry,
@@ -264,6 +265,24 @@ describe.runIf(process.platform === "win32")("governed file handle port live Win
     expect(restored.publishedSha256).toBe(capture.sha256);
     await expect(readFile(entryPath)).resolves.toEqual(original);
   }, 180_000);
+
+  it("overwrites only the captured identity and truncates through the existing handle", async () => {
+    const root = await scratch("goat-governed-port-overwrite-");
+    const entry = join(root, "target.txt");
+    const original = Buffer.from("\uFEFForiginal café\r\n");
+    await writeFile(entry, original);
+    const stale = await captureGovernedFileEntry(root, "target.txt");
+    await rename(entry, join(root, "original.txt"));
+    await writeFile(entry, original);
+    await expect(overwriteGovernedFileEntry(stale, Buffer.from("short"))).rejects.toMatchObject({
+      reason: "entry_identity_changed",
+    });
+    await expect(readFile(entry)).resolves.toEqual(original);
+    const current = await captureGovernedFileEntry(root, "target.txt");
+    await expect(overwriteGovernedFileEntry(current, Buffer.from("short"))).resolves.toBe(sha256("short"));
+    await expect(readFile(entry, "utf8")).resolves.toBe("short");
+    await expect(readFile(join(root, "original.txt"))).resolves.toEqual(original);
+  }, 90_000);
 
   it("creates an absent entry and removes it again under the same CAS discipline", async () => {
     const root = await scratch("goat-governed-port-create-");

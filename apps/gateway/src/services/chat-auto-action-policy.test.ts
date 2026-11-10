@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { lstatSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -20,6 +21,7 @@ import {
 } from "./chat-managed-project-files.js";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { createDurableChatTurnPayload } from "./gateway/durable-chat-turn-payload.js";
+import type { GovernedFileCaptureEvidence } from "./governed-file-windows-handle-port.js";
 import {
   RemoteWorkerChatPlacementService,
   type RemoteWorkerChatPlacementDependencies,
@@ -84,6 +86,7 @@ async function setup(
   options: {
     adapter?: boolean;
     readScopedTarget?: NonNullable<ConstructorParameters<typeof ChatAutoActionPolicy>[0]["readScopedTarget"]>;
+    overwrite?: ConstructorParameters<typeof ChatAutoActionPolicy>[0]["overwrite"];
     approvalMode?: "approve_all" | "bypass";
   } = {},
 ) {
@@ -201,6 +204,7 @@ async function setup(
     workspaceDir: ".",
     ...(options.adapter ? { deleteExactTarget } : {}),
     readScopedTarget: options.readScopedTarget,
+    overwrite: options.overwrite,
   });
   const beforeProcessSpawn = vi.fn();
   const runCodeModeRequest = vi.fn();
@@ -255,6 +259,70 @@ async function setup(
 }
 
 describe("Chat Auto durable execution boundary", () => {
+  it.each(["reject", "approve", "changed"] as const)(
+    "binds an unrestorable overwrite to the exact revision and respects %s",
+    async (decision) => {
+      const identity = {
+        volumeSerial: "0".repeat(16),
+        fileId: "1".repeat(32),
+        sizeBytes: 0,
+        linkCount: 1,
+        attributes: 0,
+        reparseTag: 0,
+        lastWriteTime: "0",
+        changeTime: "0",
+      };
+      const capture = vi.fn(async (rootPath: string, relativePath: string) => {
+        const content = readFileSync(join(rootPath, relativePath));
+        return {
+          rootPath,
+          relativePath,
+          parent: identity,
+          entry: { ...identity, sizeBytes: content.length },
+          present: true,
+          content,
+          sha256: createHash("sha256").update(content).digest("hex"),
+        };
+      });
+      const execute = vi.fn(async (target: GovernedFileCaptureEvidence, bytes: Buffer) => {
+        writeFileSync(join(target.rootPath, target.relativePath), bytes);
+        return createHash("sha256").update(bytes).digest("hex");
+      });
+      const { engine, raw, invoke, file, approve } = await setup({
+        overwrite: { inspectAccess: async () => true, capture, execute },
+      });
+      const original = Buffer.from("\uFEFForiginal café\r\n  \r\n");
+      writeFileSync(file, original);
+      const result = await engine.invoke(invoke("fs.write", { path: file, content: "replacement\n" }));
+      expect(result).toMatchObject({
+        outcome: "approval_required",
+        policyReason: expect.stringContaining("cannot restore"),
+      });
+      const approvalId = result.approvalId!;
+      expect(readFileSync(file)).toEqual(original);
+      expect(execute).not.toHaveBeenCalled();
+      if (decision === "reject") {
+        raw.approvals.resolve(approvalId, { decision: "reject", resolvedBy: operatorId });
+        expect(await engine.executeApprovedAction(approvalId)).toBeUndefined();
+        expect(readFileSync(file)).toEqual(original);
+        expect(execute).not.toHaveBeenCalled();
+        return;
+      }
+      approve(approvalId);
+      if (decision === "changed") {
+        writeFileSync(file, "newer revision");
+        expect(await engine.executeApprovedAction(approvalId)).toMatchObject({ outcome: "blocked" });
+        expect(readFileSync(file, "utf8")).toBe("newer revision");
+        expect(execute).not.toHaveBeenCalled();
+        return;
+      }
+      expect(await engine.executeApprovedAction(approvalId)).toMatchObject({ outcome: "executed" });
+      expect(readFileSync(file, "utf8")).toBe("replacement\n");
+      expect(await engine.executeApprovedAction(approvalId)).toBeUndefined();
+      expect(execute).toHaveBeenCalledOnce();
+    },
+  );
+
   it("creates and edits managed bytes without a default approval, then restores the exact saved edit once", async () => {
     const { storage, engine, invoke, projectId, project } = await setup({ approvalMode: "approve_all" });
     const path = "notes.md";

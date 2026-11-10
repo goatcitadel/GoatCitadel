@@ -362,7 +362,11 @@ export interface ToolPolicyEngineRuntimeHooks extends ToolExecutorRuntimeHooks {
 export type ToolExecutionRestriction =
   | { kind: "block" | "already_claimed"; reason: string }
   | { kind: "recovered_managed_delete"; reason: string; result: Record<string, unknown> }
-  | { kind: "review"; reason: string; registration?: Readonly<{ chatAutoDelete: string }> }
+  | {
+      kind: "review";
+      reason: string;
+      registration?: Readonly<{ chatAutoDelete: string } | { chatAutoOverwrite: string }>;
+    }
   | { kind: "read_scoped"; reason: string; execute: () => Promise<Record<string, unknown>> }
   | {
       kind: "execute_managed_file";
@@ -370,7 +374,7 @@ export type ToolExecutionRestriction =
       execute: (reserve: () => Promise<boolean>) => Promise<Record<string, unknown>>;
     }
   | {
-      kind: "execute_exact_delete";
+      kind: "execute_exact_file_mutation";
       reason: string;
       execute: (policy: {
         reserve(): Promise<boolean>;
@@ -1288,7 +1292,7 @@ export class ToolPolicyEngine {
       { ...options, ownDelivery: await this.resolveApprovedOwnDelivery(approvalId, request.toolName, options) },
       true,
       undefined,
-      restriction?.kind !== "execute_exact_delete" &&
+      restriction?.kind !== "execute_exact_file_mutation" &&
         restriction?.kind !== "execute_managed_file" &&
         restriction?.kind !== "block",
     );
@@ -1360,10 +1364,10 @@ export class ToolPolicyEngine {
       result = await this.executeAllowedRequest(
         executionRequest,
         auditEventId,
-        restriction?.kind === "execute_exact_delete"
+        restriction?.kind === "execute_exact_file_mutation"
           ? `allowed_via_approval:${approvalId}; ${restriction.reason}`
           : `allowed_via_approval:${approvalId}`,
-        restriction?.kind === "execute_exact_delete" || restriction?.kind === "execute_managed_file"
+        restriction?.kind === "execute_exact_file_mutation" || restriction?.kind === "execute_managed_file"
           ? undefined
           : evaluation.grantToConsume,
         startedAt,
@@ -2518,7 +2522,7 @@ export class ToolPolicyEngine {
     return preview;
   }
 
-  private exactDeletionPolicy(
+  private exactFileMutationPolicy(
     request: ToolInvokeRequest,
     options: ToolPolicyInvokeOptions,
     initial: AccessEvaluation | undefined,
@@ -2526,12 +2530,12 @@ export class ToolPolicyEngine {
     managedFile = false,
   ): { reserve(): Promise<boolean>; revalidate(): Promise<boolean> } {
     let reservation: ExecutionGrantReservation | undefined;
+    const scopedWrite = isManagedProjectFileTool(request.toolName) || request.toolName === "fs.write";
     return {
       reserve: async () => {
         if (reservation || !initial) return false;
-        if (isManagedProjectFileTool(request.toolName) && request.citadelId) {
-          // This lock joins the managed commit transaction and serializes
-          // Ward changes through the Citadel access owner.
+        if (scopedWrite && request.citadelId) {
+          // Serialize scoped writes against Ward changes through the Citadel access owner.
           await this.storage.citadels.getAccessSnapshot(request.citadelId);
         }
         const grantId = initial.matchedGrantId;
@@ -2540,10 +2544,7 @@ export class ToolPolicyEngine {
         const current = await this.evaluateAccessInternal(request, options, undefined, false, managedFile);
         if (!current.allowed || (!approved && current.requiresApproval) || current.matchedGrantId !== grantId)
           return false;
-        if (
-          isManagedProjectFileTool(request.toolName) &&
-          (current.wardEffect === "require_dry_run" || current.wardEffect === "redact")
-        ) {
+        if (scopedWrite && (current.wardEffect === "require_dry_run" || current.wardEffect === "redact")) {
           return false;
         }
         if (grant && !(await this.storage.toolGrants.consumeOne(grant.grantId))) return false;
@@ -2559,6 +2560,7 @@ export class ToolPolicyEngine {
       },
       revalidate: async () => {
         if (!reservation) return false;
+        if (scopedWrite && request.citadelId) await this.storage.citadels.getAccessSnapshot(request.citadelId);
         const reservedGrant = reservation.grant;
         if (reservedGrant) {
           const grant = await this.storage.toolGrants.lockUnrevokedGrantForReservedUse(reservedGrant.grantId);
@@ -2568,8 +2570,7 @@ export class ToolPolicyEngine {
         return (
           current.allowed &&
           current.matchedGrantId === reservedGrant?.grantId &&
-          (!isManagedProjectFileTool(request.toolName) ||
-            (current.wardEffect !== "require_dry_run" && current.wardEffect !== "redact"))
+          (!scopedWrite || (current.wardEffect !== "require_dry_run" && current.wardEffect !== "redact"))
         );
       },
     };
@@ -2720,17 +2721,18 @@ export class ToolPolicyEngine {
             },
           }
         : this.runtimeHooks;
-    if (restriction?.kind === "execute_exact_delete") {
+    if (restriction?.kind === "execute_exact_file_mutation") {
       executorRuntimeHooks = {
         ...executorRuntimeHooks,
-        executeExactChatAutoDelete: () => restriction.execute(this.exactDeletionPolicy(request, options, evaluation)),
+        executeExactChatAutoFileMutation: () =>
+          restriction.execute(this.exactFileMutationPolicy(request, options, evaluation)),
       };
     }
     if (restriction?.kind === "read_scoped") {
       executorRuntimeHooks = { ...executorRuntimeHooks, executeScopedChatAutoRead: restriction.execute };
     }
     if (restriction?.kind === "execute_managed_file") {
-      const policy = this.exactDeletionPolicy(request, options, evaluation, Boolean(approvalId), true);
+      const policy = this.exactFileMutationPolicy(request, options, evaluation, Boolean(approvalId), true);
       executorRuntimeHooks = {
         ...executorRuntimeHooks,
         executeManagedChatFile: () => restriction.execute(policy.reserve),

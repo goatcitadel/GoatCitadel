@@ -12,7 +12,11 @@ Auto owns file paths and revisions within a managed project workspace. The origi
 - Delete requires the existing explicit approval flow. Bind the approval to the file and its exact current revision. Record a tombstone and consume the approval with the same durable effect. Rename and move need explicit approval when they remove a source path.
 - Chat identifies the managed workspace and shows save and restore results. Publishing needs its own operator action against the original checkout. Verify any destination write independently and present conflicts for review. The managed store gives no new access to host paths, processes, or external tools.
 
-The managed implementation is available for local authenticated project Chat on SQLite and requires durable Chat execution. Existing installations must allow the desired managed tools in `config/tool-policy.json` under `tools.allow`. The four tools are `project.files.list`, `project.files.read`, `project.files.save`, and `project.files.delete`. Download is the explicit publishing handoff. Apply downloaded files to the original checkout separately. The sections below record the original checkout approach and its acceptance cases. The managed implementation applies the corresponding guarantees to logical paths and stored bytes.
+The managed implementation is available for local authenticated project Chat on SQLite and requires durable Chat execution. Existing installations must allow the desired managed tools in `config/tool-policy.json` under `tools.allow`. The four tools are `project.files.list`, `project.files.read`, `project.files.save`, and `project.files.delete`. Use Download for the manual publishing handoff.
+
+On Windows, a policy-allowed `fs.write` to a verified existing regular file in the original project asks for explicit approval. Auto binds the approval to the target and its current bytes. Rejecting leaves the file untouched. Approval permits one overwrite through a native handle after the Gateway rechecks the target and current policy. This overwrite has no managed restore receipt. Unsupported targets and other direct write methods remain blocked.
+
+The sections below record the original checkout approach and its acceptance cases. The managed implementation applies the corresponding guarantees to logical paths and stored bytes.
 
 ## Intent
 

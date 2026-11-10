@@ -24,6 +24,7 @@ import {
   managedFileEffectId,
 } from "./chat-managed-project-files.js";
 import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
+import type { captureGovernedFileEntry, overwriteGovernedFileEntry } from "./governed-file-windows-handle-port.js";
 import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 
 export interface ResolvedAutoAction {
@@ -107,6 +108,11 @@ interface ChatAutoActionPolicyDependencies extends ChatApprovalModeDependencies 
   deleteExactTarget?: (target: ExactDeleteTarget) => Record<string, unknown>;
   /** The adapter pins the project root and checks containment and read policy at every actual open, including traversal. */
   readScopedTarget?: (request: ToolInvokeRequest, target: ScopedReadTarget) => Promise<Record<string, unknown>>;
+  overwrite?: {
+    inspectAccess: (request: ToolInvokeRequest) => Promise<boolean>;
+    capture: typeof captureGovernedFileEntry;
+    execute: typeof overwriteGovernedFileEntry;
+  };
 }
 
 const blockedExecution = "Auto blocks execution whose effects the Gateway cannot verify.";
@@ -114,6 +120,9 @@ const staleTurn = "Chat approval mode or project changed. Start a new turn.";
 const noExactDeletion = "This deletion needs a verified exact-target executor. No file was removed.";
 const deletionReview = "Auto requires approval for this deletion.";
 const deletionAlreadyClaimed = "This deletion was already attempted. Check the target before asking again.";
+const overwriteReview = "Auto requires approval to overwrite this file because it cannot restore the previous version.";
+const overwriteAlreadyClaimed = "This overwrite was already attempted. Check the target before asking again.";
+const noExactOverwrite = "Auto could not verify an existing file for this overwrite. No file was changed.";
 
 export class ChatAutoActionPolicy {
   private readonly executionScope = new AsyncLocalStorage<Turn>();
@@ -219,6 +228,9 @@ export class ChatAutoActionPolicy {
         if (!targets.every((target) => withinProject(root, target, false))) {
           return { restriction: block("Auto file actions must target the active project.") };
         }
+        if (action === "edit" && request.toolName === "fs.write" && root && this.deps.overwrite) {
+          return { restriction: await this.inspectOverwrite(request, binding, root, stage, approvalId) };
+        }
         if (action !== "delete") {
           return { restriction: block("Auto requires a verified project file writer for this save.") };
         }
@@ -235,20 +247,20 @@ export class ChatAutoActionPolicy {
             restriction: {
               kind: "review",
               reason: deletionReview,
-              registration: { chatAutoDelete: deletionBinding(binding, request, target) },
+              registration: { chatAutoDelete: fileMutationBinding(binding, request, target) },
             } as const,
           };
         }
         if (!approvalId) return { restriction: block(noExactDeletion) };
-        const digest = deletionBinding(binding, request, target);
-        if (!(await this.matchesDeletionApproval(approvalId, request, digest))) {
+        const digest = fileMutationBinding(binding, request, target);
+        if (!(await this.matchesExactApproval(approvalId, request, digest))) {
           return {
             restriction: block("This approval does not match the current deletion target or has already been used."),
           };
         }
         return {
           restriction: {
-            kind: "execute_exact_delete",
+            kind: "execute_exact_file_mutation",
             reason: "Auto verified the exact deletion approval.",
             execute: (policy: { reserve(): Promise<boolean>; revalidate(): Promise<boolean> }) =>
               this.executeExactDelete(request, approvalId, target, digest, policy),
@@ -258,6 +270,105 @@ export class ChatAutoActionPolicy {
       stage === "replay",
     );
     return current ? current.restriction : block(staleTurn);
+  }
+
+  private async inspectOverwrite(
+    request: ToolInvokeRequest,
+    binding: ChatAutoBinding,
+    root: string,
+    stage: "proposal" | "dispatch" | "replay",
+    approvalId?: string,
+  ): Promise<ToolExecutionRestriction> {
+    const { overwrite, storage } = this.deps;
+    const { path: destination, content } = request.args;
+    if (
+      !overwrite ||
+      !request.turnId ||
+      !request.toolRunId ||
+      typeof destination !== "string" ||
+      path.resolve(destination) !== destination ||
+      typeof content !== "string" ||
+      Buffer.byteLength(content) > 1024 * 1024 ||
+      !(await overwrite.inspectAccess(request))
+    )
+      return block(noExactOverwrite);
+    if (stage === "replay" && approvalId && (await this.hasExactClaim(approvalId, "chatAutoOverwriteClaim"))) {
+      return { kind: "already_claimed", reason: overwriteAlreadyClaimed };
+    }
+
+    // Only the hash and identities bind the review. Original bytes are never retained as a restore revision.
+    const capture = await overwrite
+      .capture(root, path.relative(root, destination).split(path.sep).join("/"), {
+        signal: request.signal,
+      })
+      .catch(() => undefined);
+    if (!capture?.present || !capture.entry || !capture.sha256) return block(noExactOverwrite);
+    const target = {
+      rootPath: capture.rootPath,
+      relativePath: capture.relativePath,
+      parent: { volumeSerial: capture.parent.volumeSerial, fileId: capture.parent.fileId },
+      entry: capture.entry,
+      sha256: capture.sha256,
+    };
+    const digest = fileMutationBinding(binding, request, target);
+    if (stage !== "replay") {
+      return { kind: "review", reason: overwriteReview, registration: { chatAutoOverwrite: digest } };
+    }
+    if (!approvalId || !(await this.matchesExactApproval(approvalId, request, digest, true, "chatAutoOverwrite"))) {
+      return block("The overwrite approval or file revision changed. Request a new approval.");
+    }
+    return {
+      kind: "execute_exact_file_mutation",
+      reason: "Auto verified the exact overwrite approval.",
+      execute: async (policy) => {
+        const claimed = await this.withTurnAuthority(
+          request,
+          async (current) => {
+            if (await this.hasExactClaim(approvalId, "chatAutoOverwriteClaim")) {
+              throw new ToolExecutionAlreadyClaimedError(overwriteAlreadyClaimed);
+            }
+            if (
+              !current ||
+              request.signal?.aborted ||
+              fileMutationBinding(current, request, target) !== digest ||
+              !(await this.matchesExactApproval(approvalId, request, digest, true, "chatAutoOverwrite")) ||
+              !(await policy.reserve())
+            )
+              return false;
+            await storage.approvalEvents.append({
+              approvalId,
+              actorId: "system",
+              eventType: "replayed",
+              payload: { chatAutoOverwriteClaim: true },
+            });
+            return true;
+          },
+          true,
+        );
+        if (!claimed) throw new ConflictError({ message: "The overwrite policy or approval changed." });
+        const result = await this.withTurnAuthority(
+          request,
+          async (current) => {
+            if (
+              !current ||
+              request.signal?.aborted ||
+              fileMutationBinding(current, request, target) !== digest ||
+              !(await this.matchesExactApproval(approvalId, request, digest, true, "chatAutoOverwrite")) ||
+              !(await policy.revalidate())
+            )
+              return undefined;
+            await assertChatTurnToolUseOpen(storage, request.sessionId, request.turnId);
+            request.signal?.throwIfAborted();
+            const bytes = Buffer.from(content, "utf8");
+            const contentSha256 = await overwrite.execute({ ...capture, content: null }, bytes);
+            return { path: destination, bytesWritten: bytes.length, contentSha256 };
+          },
+          true,
+        );
+        if (!result) throw new ConflictError({ message: "The overwrite policy or approval changed." });
+        return result;
+      },
+    };
   }
 
   private async inspectManagedFile(
@@ -311,15 +422,15 @@ export class ChatAutoActionPolicy {
     if (!file || file.deleted || file.revisionId !== input.expectedRevision) {
       return block("The managed file or revision changed. Read it again before requesting deletion.");
     }
-    const digest = deletionBinding(binding, request, { path: file.path, identitySha256: file.revisionId });
+    const digest = fileMutationBinding(binding, request, { path: file.path, identitySha256: file.revisionId });
     if (stage !== "replay") {
       return { kind: "review", reason: deletionReview, registration: { chatAutoDelete: digest } };
     }
-    if (!approvalId || !(await this.matchesDeletionApproval(approvalId, request, digest))) {
+    if (!approvalId || !(await this.matchesExactApproval(approvalId, request, digest))) {
       return block("This approval does not match the current managed file revision.");
     }
     return {
-      kind: "execute_exact_delete",
+      kind: "execute_exact_file_mutation",
       reason: "Auto verified this exact managed file deletion.",
       execute: async (policy) => {
         const result = await this.withTurnAuthority(
@@ -332,7 +443,7 @@ export class ChatAutoActionPolicy {
             }
             if (
               !current ||
-              !(await this.matchesDeletionApproval(approvalId, request, digest)) ||
+              !(await this.matchesExactApproval(approvalId, request, digest)) ||
               !(await policy.reserve())
             ) {
               return undefined;
@@ -373,7 +484,7 @@ export class ChatAutoActionPolicy {
       !receipt ||
       typeof receipt !== "object" ||
       Array.isArray(receipt) ||
-      !(await this.matchesDeletionApproval(approvalId, request, digest, false))
+      !(await this.matchesExactApproval(approvalId, request, digest, false))
     )
       return undefined;
     const projected = projectManagedFileToolResult(request.toolName, receipt as Record<string, unknown>);
@@ -574,15 +685,25 @@ export class ChatAutoActionPolicy {
   }
 
   private async hasDeletionClaim(approvalId: string): Promise<boolean> {
-    const events = await this.deps.storage.approvalEvents.listByApprovalId(approvalId);
-    return events.some((event) => event.eventType === "replayed" && event.payload.chatAutoDeleteClaim === true);
+    return this.hasExactClaim(approvalId, "chatAutoDeleteClaim");
   }
 
-  private async matchesDeletionApproval(
+  private async hasExactClaim(
+    approvalId: string,
+    key: "chatAutoDeleteClaim" | "chatAutoOverwriteClaim",
+  ): Promise<boolean> {
+    const events = await this.deps.storage.approvalEvents.listByApprovalId(approvalId);
+    return events.some(
+      (event) => event.eventType === "replayed" && event.actorId === "system" && event.payload[key] === true,
+    );
+  }
+
+  private async matchesExactApproval(
     approvalId: string,
     request: ToolInvokeRequest,
     digest: string,
     fresh = true,
+    key: "chatAutoDelete" | "chatAutoOverwrite" = "chatAutoDelete",
   ): Promise<boolean> {
     const { storage } = this.deps;
     const approval = await storage.approvals.get(approvalId);
@@ -608,9 +729,7 @@ export class ChatAutoActionPolicy {
       return false;
     const events = await storage.approvalEvents.listByApprovalId(approvalId);
     return (
-      events.some(
-        (event) => event.eventType === "pending_action_registered" && event.payload.chatAutoDelete === digest,
-      ) &&
+      events.some((event) => event.eventType === "pending_action_registered" && event.payload[key] === digest) &&
       events.some(
         (event) =>
           event.eventType === "resolved" &&
@@ -632,7 +751,7 @@ export class ChatAutoActionPolicy {
     if (!deleteExactTarget) throw new ConflictError({ message: noExactDeletion });
     const matches = (binding?: ChatAutoBinding) => {
       const current = readExactDeleteTarget(request.args.path);
-      return binding && current && deletionBinding(binding, request, current) === digest;
+      return binding && current && fileMutationBinding(binding, request, current) === digest;
     };
     // Persist consumption before the file transition. A crash after claim never replays the deletion.
     const claimed = await this.withTurnAuthority(request, async (binding) => {
@@ -640,7 +759,7 @@ export class ChatAutoActionPolicy {
       if (
         request.signal?.aborted ||
         !matches(binding) ||
-        !(await this.matchesDeletionApproval(approvalId, request, digest)) ||
+        !(await this.matchesExactApproval(approvalId, request, digest)) ||
         !(await policy.reserve())
       )
         return false;
@@ -659,7 +778,7 @@ export class ChatAutoActionPolicy {
         request.signal?.aborted ||
         !matches(binding) ||
         !(await policy.revalidate()) ||
-        !(await this.matchesDeletionApproval(approvalId, request, digest))
+        !(await this.matchesExactApproval(approvalId, request, digest))
       )
         return undefined;
       await assertChatTurnToolUseOpen(storage, request.sessionId, request.turnId);
@@ -730,7 +849,7 @@ function fileIdentity(stat: fs.BigIntStats): string {
   return createHash("sha256").update(fields.join(":"), "utf8").digest("hex");
 }
 
-function deletionBinding(binding: ChatAutoBinding, request: ToolInvokeRequest, target: ExactDeleteTarget): string {
+function fileMutationBinding(binding: ChatAutoBinding, request: ToolInvokeRequest, target: object): string {
   const { toolName, args, turnId, toolRunId, agentId } = request;
   return createHash("sha256")
     .update(canonicalJsonString({ binding, toolName, args, turnId, toolRunId, agentId, target }), "utf8")

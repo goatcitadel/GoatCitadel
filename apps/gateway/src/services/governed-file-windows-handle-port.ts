@@ -173,6 +173,42 @@ export async function captureGovernedFileEntry(
   return parseCaptureResponse(raw, root, relative);
 }
 
+/** Overwrite the approved existing entry through its pinned handle, without replacing the directory entry. */
+export async function overwriteGovernedFileEntry(
+  target: GovernedFileCaptureEvidence,
+  content: Buffer,
+): Promise<string> {
+  if (!target.present || !target.entry || !target.sha256 || content.byteLength > MAX_ENTRY_BYTES) {
+    throw invalid("overwrite requires a bounded existing file");
+  }
+  const rootPath = canonicalLocalDrivePath(target.rootPath);
+  const relativePath = canonicalEntryRelativePath(target.relativePath);
+  const parent = canonicalIdentity(target.parent);
+  const entry = canonicalIdentity(target.entry);
+  const raw = await invokeFixedHelper(
+    Object.freeze({
+      schemaVersion: SCHEMA_VERSION,
+      operation: "overwrite",
+      rootPath,
+      relativePath,
+      maxBytes: MAX_ENTRY_BYTES,
+      expectedParentVolumeSerial: parent.volumeSerial,
+      expectedParentFileId: parent.fileId,
+      expectedEntryVolumeSerial: entry.volumeSerial,
+      expectedEntryFileId: entry.fileId,
+      expectedChangeTime: target.entry.changeTime,
+      expectedPriorSha256: canonicalHex(target.sha256, 64, "expected prior SHA-256"),
+      contentBase64: content.toString("base64"),
+    }),
+    {},
+  );
+  const witness = statusEnvelope(raw, "overwrite", ["rootPath", "relativePath", "sha256"]);
+  if (witness.rootPath !== rootPath || witness.relativePath !== relativePath || witness.sha256 !== sha256Of(content)) {
+    throw new GovernedFileHandlePortUncertainError("overwrite witness did not match");
+  }
+  return witness.sha256;
+}
+
 export async function publishGovernedFileEntry(
   input: {
     readonly rootPath: string;

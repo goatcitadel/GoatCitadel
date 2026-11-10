@@ -85,6 +85,7 @@ public static class GoatGovernedFileMutation {
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool WriteFile(
     SafeFileHandle h, byte[] buffer, uint bytesToWrite, out uint bytesWritten, IntPtr overlapped);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool FlushFileBuffers(SafeFileHandle h);
+  [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetEndOfFile(SafeFileHandle h);
   [DllImport("kernel32.dll", SetLastError=true)] static extern bool SetFilePointerEx(
     SafeFileHandle h, long distance, out long newPointer, uint moveMethod);
 
@@ -92,14 +93,14 @@ public static class GoatGovernedFileMutation {
 
   public sealed class ParentWalk : IDisposable {
     public readonly List<SafeFileHandle> Handles = new List<SafeFileHandle>();
-    public ParentWalk(string root, string parentRelative, bool wantWrite) {
+    public ParentWalk(string root, string parentRelative, bool wantWrite, bool pinNames = false) {
       AssertNativeFixedVolume(root);
       string volume = @"\\?\" + root.Substring(0, 3);
-      // Directory handles keep full sharing: a directory's share mode never
-      // guards entry mutations, but a restrictive one blocks the kernel's own
-      // internal target-directory open during rename-by-handle.
+      // Rename-by-handle needs full directory sharing. In-place overwrite
+      // does not rename and can deny moves of each pinned ancestor.
+      uint share = FILE_SHARE_READ | FILE_SHARE_WRITE | (pinNames ? 0u : FILE_SHARE_DELETE);
       SafeFileHandle current = CreateFileW(volume, FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE,
-        FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, IntPtr.Zero, OPEN_EXISTING,
+        share, IntPtr.Zero, OPEN_EXISTING,
         FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT, IntPtr.Zero);
       if (current.IsInvalid) throw new Win32Exception(Marshal.GetLastWin32Error());
       Handles.Add(current);
@@ -110,7 +111,7 @@ public static class GoatGovernedFileMutation {
         bool final = index == all.Count - 1;
         uint access = FILE_READ_ATTRIBUTES | READ_CONTROL | SYNCHRONIZE | FILE_LIST_DIRECTORY | FILE_TRAVERSE;
         if (final && wantWrite) access |= FILE_ADD_FILE;
-        current = OpenRelativeDirectory(current, all[index], access);
+        current = OpenRelativeDirectory(current, all[index], access, share);
         Handles.Add(current);
         var tag = Query<FILE_ATTRIBUTE_TAG_INFO>(current, FileAttributeTagInfo);
         if (tag.ReparseTag != 0) throw new Refusal("reparse_refused");
@@ -141,11 +142,11 @@ public static class GoatGovernedFileMutation {
     return handle;
   }
 
-  static SafeFileHandle OpenRelativeDirectory(SafeFileHandle parent, string name, uint access) {
+  static SafeFileHandle OpenRelativeDirectory(SafeFileHandle parent, string name, uint access, uint share) {
     int status;
     SafeFileHandle handle = TryOpenRelativeWithShare(parent, name, access, FILE_OPEN,
       FILE_SYNCHRONOUS_IO_NONALERT | FILE_OPEN_REPARSE_POINT | FILE_DIRECTORY_FILE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, out status);
+      share, out status);
     if (handle == null) {
       if (status == STATUS_FILE_IS_A_DIRECTORY || status == STATUS_NOT_A_DIRECTORY) throw new Refusal("entry_kind_invalid");
       throw new IOException("relative handle open failed");
@@ -165,6 +166,14 @@ public static class GoatGovernedFileMutation {
     // still-held write handle, so it shares everything.
     return TryOpenRelativeWithShare(parent, name, EntryReadAccess(), FILE_OPEN, EntryOptions(),
       FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, out status);
+  }
+
+  public static SafeFileHandle OpenOverwriteEntry(SafeFileHandle parent, string name) {
+    int status;
+    var entry = TryOpenRelativeWithShare(parent, name, EntryReadAccess() | FILE_WRITE_DATA,
+      FILE_OPEN, EntryOptions(), FILE_SHARE_READ, out status);
+    if (entry == null) throw new Refusal("entry_identity_changed");
+    return entry;
   }
 
   static SafeFileHandle TryOpenRelativeWithShare(SafeFileHandle parent, string name, uint access, uint disposition, uint options, uint share, out int status) {
@@ -259,7 +268,7 @@ public static class GoatGovernedFileMutation {
     } finally { Array.Clear(buf, 0, buf.Length); output.Dispose(); }
   }
 
-  public static void WriteAll(SafeFileHandle h, byte[] content) {
+  public static void WriteAll(SafeFileHandle h, byte[] content, bool truncate = false) {
     long position;
     if (!SetFilePointerEx(h, 0, out position, 0)) throw new Win32Exception(Marshal.GetLastWin32Error());
     int offset = 0;
@@ -273,6 +282,7 @@ public static class GoatGovernedFileMutation {
       if (!ok || written != chunk) throw new IOException("write failed");
       offset += chunk;
     }
+    if (truncate && !SetEndOfFile(h)) throw new IOException("truncate failed");
     if (!FlushFileBuffers(h)) throw new IOException("flush failed");
   }
 
@@ -383,6 +393,36 @@ try {
           [Array]::Clear($content,0,$content.Length)
         } finally { $entry.Dispose() }
       }
+    } finally { $walk.Dispose() }
+  } elseif($operation -eq 'overwrite'){
+    $newContent=[Convert]::FromBase64String([string]$request.contentBase64)
+    if($newContent.Length -gt $maxBytes){throw 'content'}
+    $walk=[GoatGovernedFileMutation+ParentWalk]::new([string]$request.rootPath,$parentRelative,$false,$true)
+    try {
+      $parent=[GoatGovernedFileMutation]::Observe($walk.Parent)
+      [GoatGovernedFileMutation]::AssertIdentity($parent,[string]$request.expectedParentVolumeSerial,[string]$request.expectedParentFileId,'parent_identity_changed')
+      $entry=[GoatGovernedFileMutation]::OpenOverwriteEntry($walk.Parent,$entryName)
+      try {
+        [GoatGovernedFileMutation]::AssertPlainRegularEntry($entry)
+        $before=[GoatGovernedFileMutation]::Observe($entry)
+        [GoatGovernedFileMutation]::AssertIdentity($before,[string]$request.expectedEntryVolumeSerial,[string]$request.expectedEntryFileId,'entry_identity_changed')
+        $prior=[GoatGovernedFileMutation]::ReadAll($entry,$maxBytes)
+        $priorSha=[GoatGovernedFileMutation]::Sha256Hex($prior)
+        [Array]::Clear($prior,0,$prior.Length)
+        if($priorSha -cne [string]$request.expectedPriorSha256 -or [string]$before['changeTime'] -cne [string]$request.expectedChangeTime){throw [GoatGovernedFileMutation+Refusal]::new('precondition_drift')}
+        [GoatGovernedFileMutation]::AssertPlainRegularEntry($entry)
+        try {
+          [GoatGovernedFileMutation]::WriteAll($entry,$newContent,$true)
+          $observed=[GoatGovernedFileMutation]::ReadAll($entry,$maxBytes)
+          $writtenSha=[GoatGovernedFileMutation]::Sha256Hex($observed)
+          [Array]::Clear($observed,0,$observed.Length)
+          [GoatGovernedFileMutation]::AssertPlainRegularEntry($entry)
+          if($writtenSha -cne [GoatGovernedFileMutation]::Sha256Hex($newContent)){throw 'overwrite witness mismatch'}
+          Frame @{schemaVersion='${SCHEMA_VERSION}';operation='overwrite';status='ok';rootPath=$request.rootPath;relativePath=$request.relativePath;sha256=$writtenSha}
+        } catch {
+          Frame @{schemaVersion='${SCHEMA_VERSION}';operation='overwrite';status='uncertain';reason='overwrite_write_or_witness_failed'}
+        }
+      } finally { $entry.Dispose() }
     } finally { $walk.Dispose() }
   } elseif($operation -eq 'publish'){
     $newContent=[Convert]::FromBase64String([string]$request.contentBase64)
