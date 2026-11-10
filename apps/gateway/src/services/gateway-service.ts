@@ -754,7 +754,7 @@ import type { RemoteWorkerChatAuthorityDependencies } from "./remote-worker-chat
 import { remoteWorkerAssignmentRuntimeActivated } from "./remote-worker-assignment-runtime-composition.js";
 import { RemoteWorkerChatExecutionService } from "./remote-worker-chat-execution-service.js";
 import { RemoteWorkerChatPlacementService } from "./remote-worker-chat-placement-service.js";
-import { ChatAutoActionPolicy } from "./chat-auto-action-policy.js";
+import { ChatAutoActionPolicy, createWindowsAutoOverwrite } from "./chat-auto-action-policy.js";
 import { isManagedProjectFileTool } from "@goatcitadel/contracts";
 import { isChatAutoApprovalEnabled } from "./chat-approval-mode-service.js";
 import { assertChatAutoCodeModeAllowed, runChatCodeModeRequest } from "./code-mode-request-tool.js";
@@ -812,7 +812,8 @@ import {
 } from "./gateway/runtime-settings-guards.js";
 import {
   executeApprovedExternalRuntimePendingAction as executeApprovedExternalRuntimePendingActionWithPort,
-  isApprovedExternalRuntimePendingAction,
+  isApprovedExternalRuntimePendingAction as needsExternalReplay,
+  isAutoOverwrite,
   readAuthActorSource,
   readPermissionSurfaceValue,
   toToolInvokeRequest,
@@ -1481,13 +1482,12 @@ export class GatewayService {
       rootDir: config.rootDir,
       workspaceDir: config.assistant.workspaceDir,
       chatAutoApprovalEnabled: isChatAutoApprovalEnabled(this.storage),
+      overwrite: createWindowsAutoOverwrite((request) => this.policyEngine.inspectAccess(request)),
     });
     this.policyEngine = new ToolPolicyEngine(config.toolPolicy, this.storage, undefined, {
       resolveExecutionRestriction: (request, stage, approvalId) =>
-        this.chatAutoActions.inspect(request, stage, approvalId, this.policyEngine),
-      // Tool-policy approval creation must enter the canonical lifecycle. A
-      // direct policy-engine storage write would omit the durable wait run and
-      // retryable approval observability envelope.
+        this.chatAutoActions.inspect(request, stage, approvalId),
+      // Canonical approval creation registers the durable wait run and retryable observability envelope.
       createApproval: async (input, onCreated, authority) => await this.createApproval(input, onCreated, authority),
       assertBrowserSessionAccess: (check) => this.browserSessionRuntimeService.assertAccess(check),
       resolveOutsideRootWriteEligibility: (request) => isOutsideRootWriteEligible(request, { storage: this.storage }),
@@ -9359,7 +9359,7 @@ export class GatewayService {
     if (pending?.actionType === "integration.dry_run_commit") {
       return await this.executeApprovedIntegrationDryRunCommit(approvalId, pending);
     }
-    if (isApprovedExternalRuntimePendingAction(pending)) {
+    if (needsExternalReplay(pending) && !(await isAutoOverwrite(this.storage.approvalEvents, pending))) {
       return await this.executeApprovedExternalRuntimePendingAction(approvalId, pending, signal);
     }
     return this.policyEngine.executeApprovedAction(approvalId, signal);

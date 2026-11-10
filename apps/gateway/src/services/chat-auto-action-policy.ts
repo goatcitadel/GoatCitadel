@@ -10,14 +10,11 @@ import {
   readDurableChatTurnExecutionPayloadAuthority,
   type ChatAutoBinding,
   type DurableRunRecord,
+  type ToolAccessEvaluateResponse,
   type ToolInvokeRequest,
   type ToolInvokeResult,
 } from "@goatcitadel/contracts";
-import {
-  ToolExecutionAlreadyClaimedError,
-  type ToolExecutionRestriction,
-  type ToolPolicyEngine,
-} from "@goatcitadel/policy-engine";
+import { ToolExecutionAlreadyClaimedError, type ToolExecutionRestriction } from "@goatcitadel/policy-engine";
 import type { AsyncStorage } from "@goatcitadel/storage";
 import { withCurrentChatApprovalAuthority, type ChatApprovalModeDependencies } from "./chat-approval-mode-service.js";
 import { assertChatTurnToolUseOpen } from "./chat-turn-control.js";
@@ -27,7 +24,7 @@ import {
   managedDeleteSchema,
   managedFileEffectId,
 } from "./chat-managed-project-files.js";
-import { toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
+import { isAutoOverwrite, toToolInvokeRequest } from "./gateway/external-runtime-approval-adapter.js";
 import {
   captureGovernedFileEntry,
   isGovernedFileHandlePortAvailable,
@@ -114,11 +111,13 @@ interface ReviewedFileOverwrite {
   execute: typeof overwriteGovernedFileEntry;
 }
 
-function windowsOverwrite(policy?: Pick<ToolPolicyEngine, "inspectAccess">): ReviewedFileOverwrite | undefined {
-  if (!policy || !isGovernedFileHandlePortAvailable()) return undefined;
+export function createWindowsAutoOverwrite(
+  inspect: (request: ToolInvokeRequest) => Promise<ToolAccessEvaluateResponse>,
+): ReviewedFileOverwrite | undefined {
+  if (!isGovernedFileHandlePortAvailable()) return undefined;
   return {
     inspectAccess: async (request) => {
-      const access = await policy.inspectAccess(request);
+      const access = await inspect(request);
       return access.allowed && access.wardEffect !== "require_dry_run" && access.wardEffect !== "redact";
     },
     capture: captureGovernedFileEntry,
@@ -175,7 +174,6 @@ export class ChatAutoActionPolicy {
     request: ToolInvokeRequest,
     stage: "proposal" | "dispatch" | "replay",
     approvalId?: string,
-    policy?: Pick<ToolPolicyEngine, "inspectAccess">,
   ): Promise<ToolExecutionRestriction | undefined> {
     const ambient = this.executionScope.getStore();
     if (ambient && !sameTurnScope(request, ambient)) {
@@ -195,7 +193,14 @@ export class ChatAutoActionPolicy {
     const current = await this.withTurnAuthority(
       request,
       async (binding) => {
+        const { storage, rootDir, workspaceDir } = this.deps;
         if (!binding) {
+          if (stage === "replay" && approvalId && request.toolName === "fs.write") {
+            const pending = await storage.pendingApprovalActions.find(approvalId);
+            if (pending && (await isAutoOverwrite(storage.approvalEvents, pending))) {
+              return { restriction: block(staleTurn) };
+            }
+          }
           return {
             restriction: isManagedProjectFileTool(request.toolName)
               ? block("Managed project files require a bound Auto session.")
@@ -224,7 +229,6 @@ export class ChatAutoActionPolicy {
         if (action === "delete" && stage === "replay" && approvalId && (await this.hasDeletionClaim(approvalId))) {
           return { restriction: { kind: "already_claimed", reason: deletionAlreadyClaimed } as const };
         }
-        const { storage, rootDir, workspaceDir } = this.deps;
         const project = await storage.chatProjects.find(binding.projectId);
         const root = resolveProjectRootForToolContext({
           repoRoot: rootDir,
@@ -253,7 +257,7 @@ export class ChatAutoActionPolicy {
           return { restriction: block("Auto file actions must target the active project.") };
         }
         if (action === "edit" && request.toolName === "fs.write" && root) {
-          const overwrite = this.deps.overwrite ?? windowsOverwrite(policy);
+          const { overwrite } = this.deps;
           if (overwrite) {
             return { restriction: await this.inspectOverwrite(overwrite, request, binding, root, stage, approvalId) };
           }

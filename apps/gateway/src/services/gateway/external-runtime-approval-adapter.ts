@@ -14,6 +14,7 @@ import {
   type McpToolPolicyBinding,
   type MeshToolPolicyBinding,
 } from "@goatcitadel/policy-engine";
+import type { AsyncStorage } from "@goatcitadel/storage";
 import { isNativeMcpToolName, type NativeMcpChatToolBinding } from "./native-mcp-chat-binding.js";
 import { isMeshChatToolName, type MeshChatToolBinding } from "./mesh-chat-binding.js";
 import { resolveApprovedExternalRuntimeTarget } from "./approved-external-runtime-target.js";
@@ -73,6 +74,7 @@ export async function executeApprovedExternalRuntimePendingAction(
   signal?: AbortSignal,
 ): Promise<ToolInvokeResult> {
   const storedRequest = toToolInvokeRequest(pending.request, signal);
+  const executeApprovedAction = port.executeApprovedAction.bind(port);
   return executeApprovedExternalRuntimeSideEffect({
     storage: port.storage,
     approvalId,
@@ -80,7 +82,7 @@ export async function executeApprovedExternalRuntimePendingAction(
     trackToolDispatch: true,
     execute: async (markExternalCallStarted, markToolDispatchStarted) => {
       if (!requiresApprovedExternalRuntimeAdapter(pending)) {
-        const result = await port.executeApprovedAction(approvalId, signal, {
+        const result = await executeApprovedAction(approvalId, signal, {
           deferResolution: true,
           beforeExecute: markToolDispatchStarted,
           externalSideEffect: {
@@ -95,7 +97,7 @@ export async function executeApprovedExternalRuntimePendingAction(
 
       const target = await resolveApprovedExternalRuntimeTarget(port, storedRequest);
       const { nativeBinding, meshBinding } = target;
-      const policyResult = await port.executeApprovedAction(approvalId, signal, {
+      const policyResult = await executeApprovedAction(approvalId, signal, {
         deferResolution: true,
         externalRuntimeReplay: true,
         ...(nativeBinding ? { mcpToolBinding: nativeBinding.policyBinding } : {}),
@@ -135,6 +137,29 @@ export function isApprovedExternalRuntimePendingAction(
     pending.actionType === "tool.invoke" &&
     pending.resolutionStatus === "pending" &&
     (pending.request.toolName !== "project.files.delete" || pending.request.externalRuntime === true),
+  );
+}
+
+/** Route only an engine-registered Auto overwrite to the local exact-file executor. */
+export async function isAutoOverwrite(
+  approvalEvents: AsyncStorage["approvalEvents"],
+  pending: PendingApprovalAction,
+): Promise<boolean> {
+  if (
+    pending.actionType !== "tool.invoke" ||
+    pending.request.toolName !== "fs.write" ||
+    pending.request.externalRuntime === true
+  )
+    return false;
+  const events = await approvalEvents.listByApprovalId(pending.approvalId);
+  return events.some(
+    ({ eventType, payload }) =>
+      eventType === "pending_action_registered" &&
+      payload.actionType === "tool.invoke" &&
+      payload.toolName === "fs.write" &&
+      payload.sessionId === pending.request.sessionId &&
+      typeof payload.chatAutoOverwrite === "string" &&
+      /^[a-f0-9]{64}$/u.test(payload.chatAutoOverwrite),
   );
 }
 

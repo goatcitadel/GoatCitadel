@@ -21,6 +21,7 @@ import {
 } from "./chat-managed-project-files.js";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { createDurableChatTurnPayload } from "./gateway/durable-chat-turn-payload.js";
+import { isAutoOverwrite } from "./gateway/external-runtime-approval-adapter.js";
 import type { GovernedFileCaptureEvidence } from "./governed-file-windows-handle-port.js";
 import {
   RemoteWorkerChatPlacementService,
@@ -259,7 +260,7 @@ async function setup(
 }
 
 describe("Chat Auto durable execution boundary", () => {
-  it.each(["reject", "approve", "changed"] as const)(
+  it.each(["reject", "approve", "changed", "missing Auto turn"] as const)(
     "binds an unrestorable overwrite to the exact revision and respects %s",
     async (decision) => {
       const identity = {
@@ -288,17 +289,28 @@ describe("Chat Auto durable execution boundary", () => {
         writeFileSync(join(target.rootPath, target.relativePath), bytes);
         return createHash("sha256").update(bytes).digest("hex");
       });
-      const { engine, raw, invoke, file, approve } = await setup({
+      const { auto, engine, raw, storage, invoke, file, approve, setMode } = await setup({
         overwrite: { inspectAccess: async () => true, capture, execute },
       });
       const original = Buffer.from("\uFEFForiginal café\r\n  \r\n");
       writeFileSync(file, original);
-      const result = await engine.invoke(invoke("fs.write", { path: file, content: "replacement\n" }));
+      const request = invoke("fs.write", { path: file, content: "replacement\n" });
+      const block = vi.fn();
+      expect(await auto.createInvocationGuard(block).inspect(request)).toMatchObject({ kind: "review" });
+      const result = await engine.invoke(request);
       expect(result).toMatchObject({
         outcome: "approval_required",
         policyReason: expect.stringContaining("cannot restore"),
       });
       const approvalId = result.approvalId!;
+      const pending = raw.pendingApprovalActions.find(approvalId)!;
+      expect(await isAutoOverwrite(storage.approvalEvents, pending)).toBe(true);
+      expect(
+        await isAutoOverwrite(storage.approvalEvents, {
+          ...pending,
+          request: { ...pending.request, externalRuntime: true },
+        }),
+      ).toBe(false);
       expect(readFileSync(file)).toEqual(original);
       expect(execute).not.toHaveBeenCalled();
       if (decision === "reject") {
@@ -309,6 +321,14 @@ describe("Chat Auto durable execution boundary", () => {
         return;
       }
       approve(approvalId);
+      if (decision === "missing Auto turn") {
+        await setMode("standard");
+        vi.spyOn(raw.sessionMutationAdmissions, "findDurableRunIdForTurn").mockReturnValue(undefined);
+        expect(await engine.executeApprovedAction(approvalId)).toMatchObject({ outcome: "blocked" });
+        expect(readFileSync(file)).toEqual(original);
+        expect(execute).not.toHaveBeenCalled();
+        return;
+      }
       if (decision === "changed") {
         writeFileSync(file, "newer revision");
         expect(await engine.executeApprovedAction(approvalId)).toMatchObject({ outcome: "blocked" });
@@ -316,6 +336,8 @@ describe("Chat Auto durable execution boundary", () => {
         expect(execute).not.toHaveBeenCalled();
         return;
       }
+      expect(await auto.checkApprovalReplay(approvalId, "tool.invoke", block)).toBeUndefined();
+      expect(block).not.toHaveBeenCalled();
       expect(await engine.executeApprovedAction(approvalId)).toMatchObject({ outcome: "executed" });
       expect(readFileSync(file, "utf8")).toBe("replacement\n");
       expect(await engine.executeApprovedAction(approvalId)).toBeUndefined();
