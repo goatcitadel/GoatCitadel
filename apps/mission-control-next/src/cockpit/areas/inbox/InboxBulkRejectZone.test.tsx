@@ -86,8 +86,11 @@ it("refreshes every approval read, the Inbox included, after a bulk rejection an
   await render();
   const invalidate = vi.spyOn(client, "invalidateQueries");
   await act(async () => button("Review installation-wide rejection").click());
-  await settle();
-  const input = document.querySelector<HTMLInputElement>('[role="dialog"] input')!;
+  const input = await vi.waitFor(() => {
+    const confirmation = document.querySelector<HTMLInputElement>('[role="dialog"] input');
+    expect(confirmation).not.toBeNull();
+    return confirmation!;
+  });
   await act(async () => {
     Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")!.set!.call(input, "reject all");
     input.dispatchEvent(new Event("input", { bubbles: true }));
