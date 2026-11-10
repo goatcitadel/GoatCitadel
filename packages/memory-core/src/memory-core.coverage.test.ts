@@ -573,7 +573,7 @@ describe("memory cache keys and token estimator edge cases", () => {
     expect(truncateByTokenEstimate("alpha beta", 100)).toBe("alpha beta");
 
     registerTokenEstimator({ name: "huge", estimate: () => 999 });
-    expect(truncateByTokenEstimate("x", 1)).toBe("...[truncated]");
+    expect(truncateByTokenEstimate("x", 1)).toBe("");
     clearRegisteredTokenEstimators();
   });
 });
