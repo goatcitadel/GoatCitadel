@@ -364,6 +364,59 @@ describe("useChatWorkbench", () => {
     expect(latest!.hasDirtyWorkbenchDraft).toBe(false);
   });
 
+  it("discards a refresh's stale tree and blocks old-path reads during a rename", async () => {
+    await act(async () => {
+      create(<Harness />);
+      await flushAsyncEffects();
+    });
+    const oldPath = "src/index.ts";
+    const newPath = "src/renamed.ts";
+    const oldTree = deferred<typeof workbenchTree>();
+    const renamed = deferred<Awaited<ReturnType<typeof apiMocks.runChatSessionWorkbenchFileOperation>>>();
+    apiMocks.fetchChatSessionWorkbenchTree.mockImplementationOnce(() => oldTree.promise);
+    apiMocks.runChatSessionWorkbenchFileOperation.mockImplementationOnce(() => renamed.promise);
+    apiMocks.fetchChatSessionWorkbenchFile.mockClear();
+    apiMocks.fetchChatSessionWorkbenchFileDiff.mockClear();
+
+    let refresh!: Promise<void>;
+    await act(async () => { refresh = latest!.refreshWorkbench(); });
+    await vi.waitFor(() => expect(apiMocks.fetchChatSessionWorkbenchTree).toHaveBeenCalledTimes(2));
+
+    let operation!: Promise<boolean>;
+    await act(async () => {
+      operation = latest!.runWorkbenchFileOperation({
+        operation: "rename", path: oldPath, targetPath: newPath, expectedRevision: "a".repeat(64),
+      });
+    });
+    await vi.waitFor(() => expect(apiMocks.runChatSessionWorkbenchFileOperation).toHaveBeenCalledOnce());
+    await act(async () => {
+      oldTree.resolve(workbenchTree);
+      await refresh;
+      await expect(latest!.openWorkbenchFile(oldPath)).resolves.toBe(false);
+      expect(apiMocks.fetchChatSessionWorkbenchFile).not.toHaveBeenCalled();
+      expect(apiMocks.fetchChatSessionWorkbenchFileDiff).not.toHaveBeenCalled();
+
+      renamed.resolve({
+        state: { ...workbenchState, activeFilePath: newPath },
+        operation: "rename",
+        path: oldPath,
+        targetPath: newPath,
+        changedFiles: [newPath],
+        tree: {
+          ...workbenchTree,
+          changedFiles: [newPath],
+          items: workbenchTree.items.map((item) => item.path === oldPath ? { ...item, path: newPath } : item),
+        },
+        output: workbenchOutput,
+      });
+      await expect(operation).resolves.toBe(true);
+    });
+    expect(apiMocks.fetchChatSessionWorkbenchFile).toHaveBeenCalledExactlyOnceWith("session-1", newPath);
+    expect(apiMocks.fetchChatSessionWorkbenchFileDiff).toHaveBeenCalledExactlyOnceWith("session-1", newPath);
+    expect(latest!.selectedWorkbenchFile?.path).toBe(newPath);
+    expect(latest!.workbenchLoading).toBe(false);
+  });
+
   it("runs worktree, validation, patch, export, and revert operations through the session workbench", async () => {
     await act(async () => {
       create(<Harness />);
