@@ -3,7 +3,7 @@ import { ChatAttachmentActions } from "@goatcitadel/mission-control-shared/compo
 import { ChatComposerPlusMenu } from "@goatcitadel/mission-control-shared/components/ChatComposerPlusMenu";
 import { ConfirmModal } from "@goatcitadel/mission-control-shared/components/ConfirmModal";
 import { ChatQueueBar } from "@goatcitadel/mission-control-shared/components/chat/ChatQueueBar";
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import { ContextStrip } from "../native-routes/primitives";
 import { useAutoGrowTextarea } from "./useAutoGrowTextarea";
 import { OPEN_CHAT_COMPOSER_PALETTE_EVENT } from "../../app/composer-palette-events";
@@ -96,7 +96,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
   const commandSuggestionsActiveDescendant = activeCommandSuggestion
     ? commandSuggestionOptionId(activeCommandSuggestion.key)
     : undefined;
-  useEffect(() => {
+  useLayoutEffect(() => {
     const palette = props.composerPalette;
     if (!palette?.enabled || typeof window === "undefined") return;
     const eventTarget = window;
@@ -396,6 +396,7 @@ export function ThreadedComposer({ props }: { props: MissionThreadedActiveSessio
           rows={1}
           role="combobox"
           aria-label="Message composer"
+          aria-keyshortcuts={props.composerPalette?.enabled ? "Control+K Meta+K" : undefined}
           aria-autocomplete="list"
           aria-expanded={composerPaletteVisible}
           aria-controls={composerPaletteVisible ? commandSuggestionsListboxId : undefined}

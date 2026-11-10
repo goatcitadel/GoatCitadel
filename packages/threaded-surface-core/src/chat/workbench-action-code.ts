@@ -256,14 +256,8 @@ export function createWorkbenchActionCode(owner: WorkbenchActionOwner) {
           return false;
         }
 
-        const nextDiff = await fetchChatSessionWorkbenchDiff(requestSessionId);
-        if (!isCurrentSession(requestSessionId)) {
-          return false;
-        }
-
         setState(response.state);
         setTree(response.tree);
-        setDiff(nextDiff);
         setOutput(response.output);
         setPersistedExpandedPaths(
           deriveDefaultExpandedPaths(
@@ -272,6 +266,22 @@ export function createWorkbenchActionCode(owner: WorkbenchActionOwner) {
             readWorkbenchUiState(requestSessionId).expandedPaths,
           ),
         );
+
+        const previousPath = selectedFileRef.current?.path;
+        const affectedSelection = previousPath &&
+          (previousPath === response.path || previousPath.startsWith(`${response.path}/`));
+        const movesPath = input.operation === "rename" || input.operation === "move";
+        if (affectedSelection && (movesPath || input.operation === "delete")) {
+          selectedFileRef.current = null;
+          draftContentRef.current = "";
+          setSelectedFile(null);
+          setSelectedFileDiff(null);
+          setDraftContent("");
+        }
+
+        const nextDiff = await fetchChatSessionWorkbenchDiff(requestSessionId);
+        if (!isCurrentSession(requestSessionId)) return false;
+        setDiff(nextDiff);
 
         const candidatePathAfterOperation =
           input.operation === "create_file" || input.operation === "duplicate" || input.operation === "rename"
@@ -291,15 +301,6 @@ export function createWorkbenchActionCode(owner: WorkbenchActionOwner) {
             return false;
           }
           applySelectedFileState(nextFile, nextFileDiff, { preserveDraft: false });
-        } else if (
-          input.operation === "delete" &&
-          selectedFileRef.current &&
-          (selectedFileRef.current.path === response.path ||
-            selectedFileRef.current.path.startsWith(`${response.path}/`))
-        ) {
-          setSelectedFile(null);
-          setSelectedFileDiff(null);
-          setDraftContent("");
         }
 
         setError(null);

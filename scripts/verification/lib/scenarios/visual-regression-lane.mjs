@@ -431,7 +431,8 @@ export async function prepareVisualScenarioState(page, route) {
   if (route?.visualState !== "composer-palette") {
     return;
   }
-  await page.keyboard.press("Control+K");
+  const composer = page.locator('textarea[aria-label="Message composer"][aria-keyshortcuts~="Control+K"]');
+  await composer.press("Control+K", { timeout: 15000 });
   await page.locator(".mc-next-command-popover.palette-sheet").waitFor({ state: "visible", timeout: 15000 });
   await page
     .getByRole("searchbox", { name: "Search commands and context" })

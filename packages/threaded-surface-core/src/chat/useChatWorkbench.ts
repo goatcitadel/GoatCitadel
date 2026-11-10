@@ -246,6 +246,11 @@ export function useChatWorkbench(input: {
   }, []);
   const savingRef = useRef(false);
   const fileReadRef = useRef(0);
+  const pathWriteRef = useRef<{ view: typeof actionView; lifetime: number; pending: boolean } | null>(null);
+  const isPathWritePending = useCallback(() => {
+    const write = pathWriteRef.current;
+    return Boolean(write?.pending && write.lifetime === actionLifetimeRef.current && isCurrentAction(write.view));
+  }, [isCurrentAction]);
   const draftVersion = useWorkbenchDraftVersion();
   const selectedFileRef = useRef<ChatSessionWorkbenchFileResponse | null>(null);
   const draftContentRef = useRef("");
@@ -359,7 +364,9 @@ export function useChatWorkbench(input: {
     }
   }, [actionView, isCurrentAction]);
   const makeReadOwner = useCallback((view: typeof actionView, lifetime: number, loadingToken?: object): WorkbenchReadOwner => {
-    const current = () => isCurrentAction(view) && actionLifetimeRef.current === lifetime;
+    const pathWrite = pathWriteRef.current;
+    const current = () => isCurrentAction(view) && actionLifetimeRef.current === lifetime &&
+      pathWriteRef.current === pathWrite && !isPathWritePending();
     return {
       requireCurrent: () => { if (!current()) throw new Error("The workbench read owner changed."); },
       isCurrentSession: candidate => current() && isCurrentSession(candidate),
@@ -369,24 +376,24 @@ export function useChatWorkbench(input: {
       setPersistedExpandedPaths, deriveDefaultExpandedPaths, readWorkbenchUiState,
       describeWorkbenchActionError, applySelectedFileState,
     };
-  }, [applySelectedFileState, isCurrentAction, isCurrentSession, setPersistedExpandedPaths]);
+  }, [applySelectedFileState, isCurrentAction, isCurrentSession, isPathWritePending, setPersistedExpandedPaths]);
   const loadWorkbenchFileSelection = useCallback(async (
     requestSessionId: string, relativePath: string, options: { preserveDraft?: boolean } = {},
   ): Promise<ChatSessionWorkbenchFileResponse | null> => {
     const view = actionViewRef.current;
     const lifetime = actionLifetimeRef.current;
-    if (!isCurrentSession(requestSessionId) || !isCurrentAction(view)) return null;
+    if (!isCurrentSession(requestSessionId) || !isCurrentAction(view) || isPathWritePending()) return null;
     const readId = ++fileReadRef.current;
     const readOwner = makeReadOwner(view, lifetime);
     readOwner.fileReadGeneration = readId;
     const code = await loadWorkbenchReadCode();
     if (!readOwner.isCurrentSession(requestSessionId) || readId !== fileReadRef.current) return null;
     return code.createWorkbenchReadCode(readOwner).loadFileSelection(requestSessionId, relativePath, options);
-  }, [isCurrentAction, isCurrentSession, makeReadOwner]);
+  }, [isCurrentAction, isCurrentSession, isPathWritePending, makeReadOwner]);
   const refresh = useCallback(async () => {
     // Read attempts capture the live action view without changing the enabled subscription cadence.
     const view = actionViewRef.current;
-    if (!enabled || !sessionId || !isCurrentSession(sessionId) || !isCurrentAction(view)) return;
+    if (!enabled || !sessionId || !isCurrentSession(sessionId) || !isCurrentAction(view) || isPathWritePending()) return;
     const lifetime = actionLifetimeRef.current;
     const token = { view, lifetime };
     readLoadingAttemptRef.current = token;
@@ -404,22 +411,24 @@ export function useChatWorkbench(input: {
         if (readOwner.isCurrentSession(sessionId)) setLoading(false);
       }
     }
-  }, [enabled, isCurrentAction, isCurrentSession, makeReadOwner, sessionId]);
+  }, [enabled, isCurrentAction, isCurrentSession, isPathWritePending, makeReadOwner, sessionId]);
 
   const loadFile = useCallback(
     async (relativePath: string) => {
       const view = actionViewRef.current;
-      if (!sessionId || !isCurrentSession(sessionId) || !isCurrentAction(view)) {
+      if (!sessionId || !isCurrentSession(sessionId) || !isCurrentAction(view) || isPathWritePending()) {
         return false;
       }
       const requestSessionId = sessionId;
       const lifetime = actionLifetimeRef.current;
-      const current = () => isCurrentSession(requestSessionId) && isCurrentAction(view) && actionLifetimeRef.current === lifetime;
+      const pathWrite = pathWriteRef.current;
+      const current = () => isCurrentSession(requestSessionId) && isCurrentAction(view) &&
+        actionLifetimeRef.current === lifetime && pathWriteRef.current === pathWrite;
       const attempt = claimAction(view, false);
       setBusy(true);
       try {
-        await loadWorkbenchFileSelection(requestSessionId, relativePath);
-        if (!current()) {
+        const file = await loadWorkbenchFileSelection(requestSessionId, relativePath);
+        if (!file || !current()) {
           return false;
         }
         setError(null);
@@ -448,7 +457,7 @@ export function useChatWorkbench(input: {
         }
       }
     },
-    [claimAction, isCurrentAction, isCurrentSession, loadWorkbenchFileSelection, sessionId],
+    [claimAction, isCurrentAction, isCurrentSession, isPathWritePending, loadWorkbenchFileSelection, sessionId],
   );
 
   const runOptionalAction = useCallback(
@@ -563,7 +572,7 @@ export function useChatWorkbench(input: {
 
   const runFileOperation = useCallback(
     async (input: ChatSessionWorkbenchFileOperationRequest) => {
-      if (!isCurrentAction(actionView)) return false;
+      if (!isCurrentAction(actionView) || isPathWritePending()) return false;
 
       if (!sessionId) {
         return false;
@@ -571,15 +580,24 @@ export function useChatWorkbench(input: {
       const requestSessionId = sessionId;
       setBusy(true);
       const attempt = claimAction(actionView, false);
-      return runOptionalAction(
-        attempt,
-        (actions, admittedInput) => actions.runFileOperation({ requestSessionId, input: admittedInput }),
-        false,
-        "Unable to update the workbench file tree.",
-        input,
-      );
+      // A refresh that started from the old tree must never dispatch file reads after the write.
+      const write = { view: attempt.view, lifetime: attempt.lifetime, pending: true };
+      pathWriteRef.current = write;
+      readLoadingAttemptRef.current = null;
+      setLoading(false);
+      try {
+        return await runOptionalAction(
+          attempt,
+          (actions, admittedInput) => actions.runFileOperation({ requestSessionId, input: admittedInput }),
+          false,
+          "Unable to update the workbench file tree.",
+          input,
+        );
+      } finally {
+        write.pending = false;
+      }
     },
-    [sessionId, actionView, isCurrentAction, claimAction, runOptionalAction],
+    [sessionId, actionView, isCurrentAction, isPathWritePending, claimAction, runOptionalAction],
   );
 
   const createWorktree = useCallback(

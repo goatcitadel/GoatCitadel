@@ -184,17 +184,15 @@ test("visual trace-retention probe forces one successful comparison to retain fa
 test("composer palette visual state opens through the keyboard contract", async () => {
   const calls = [];
   const visibleTarget = {
+    async press(key, options) {
+      calls.push([key, options]);
+    },
     async waitFor(options) {
       calls.push(options);
     },
   };
   await prepareVisualScenarioState(
     {
-      keyboard: {
-        async press(value) {
-          calls.push(value);
-        },
-      },
       locator(value) {
         calls.push(value);
         return visibleTarget;
@@ -207,9 +205,10 @@ test("composer palette visual state opens through the keyboard contract", async 
     { visualState: "composer-palette" },
   );
 
-  assert.equal(calls[0], "Control+K");
-  assert.equal(calls[1], ".mc-next-command-popover.palette-sheet");
-  assert.deepEqual(calls[3], ["searchbox", { name: "Search commands and context" }]);
+  assert.equal(calls[0], 'textarea[aria-label="Message composer"][aria-keyshortcuts~="Control+K"]');
+  assert.deepEqual(calls[1], ["Control+K", { timeout: 15000 }]);
+  assert.equal(calls[2], ".mc-next-command-popover.palette-sheet");
+  assert.deepEqual(calls[4], ["searchbox", { name: "Search commands and context" }]);
 });
 
 test("Code Mode card states wait on the card's own control", async () => {
