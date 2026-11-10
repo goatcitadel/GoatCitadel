@@ -57,9 +57,11 @@ internal static class ActivationRequestResolver
 internal sealed class ActivationDeliveryQueue
 {
     private readonly object gate = new();
-    private readonly List<ActivationDelivery> pending = new();
+    private readonly Queue<ActivationDelivery> pending = new();
     private Action<string>? routeHandler;
     private Action<string>? diagnosticHandler;
+    private bool deliveryEnabled;
+    private bool draining;
 
     internal void Register(Action<string> routeAction, Action<string> diagnosticAction)
     {
@@ -67,6 +69,8 @@ internal sealed class ActivationDeliveryQueue
         {
             routeHandler = routeAction;
             diagnosticHandler = diagnosticAction;
+            // A startup backlog belongs to the explicit flush after window activation.
+            deliveryEnabled |= pending.Count == 0;
         }
     }
 
@@ -77,27 +81,21 @@ internal sealed class ActivationDeliveryQueue
             return;
         }
 
-        Action<string>? handler;
-        string payload;
         lock (gate)
         {
-            handler = delivery.Route is not null ? routeHandler : diagnosticHandler;
-            payload = delivery.Route ?? delivery.Diagnostic!;
-            if (handler is null)
+            pending.Enqueue(delivery);
+            if (!deliveryEnabled || draining)
             {
-                pending.Add(delivery);
                 return;
             }
+            draining = true;
         }
 
-        handler(payload);
+        Drain();
     }
 
     internal void FlushPending()
     {
-        List<ActivationDelivery> deliveries;
-        Action<string>? registeredRouteHandler;
-        Action<string>? registeredDiagnosticHandler;
         lock (gate)
         {
             if (routeHandler is null || diagnosticHandler is null)
@@ -105,22 +103,47 @@ internal sealed class ActivationDeliveryQueue
                 return;
             }
 
-            deliveries = pending.ToList();
-            pending.Clear();
-            registeredRouteHandler = routeHandler;
-            registeredDiagnosticHandler = diagnosticHandler;
+            deliveryEnabled = true;
+            if (draining)
+            {
+                return;
+            }
+            draining = true;
         }
 
-        foreach (var delivery in deliveries)
+        Drain();
+    }
+
+    private void Drain()
+    {
+        try
         {
-            if (delivery.Route is not null)
+            while (true)
             {
-                registeredRouteHandler(delivery.Route);
+                ActivationDelivery delivery;
+                Action<string> handler;
+                lock (gate)
+                {
+                    if (!pending.TryDequeue(out delivery))
+                    {
+                        draining = false;
+                        return;
+                    }
+                    handler = delivery.Route is not null ? routeHandler! : diagnosticHandler!;
+                }
+
+                // A callback can enqueue more work. Keep it outside the lock and
+                // let the same drainer deliver any new arrivals in order.
+                handler(delivery.Route ?? delivery.Diagnostic!);
             }
-            else if (delivery.Diagnostic is not null)
+        }
+        catch
+        {
+            lock (gate)
             {
-                registeredDiagnosticHandler(delivery.Diagnostic);
+                draining = false;
             }
+            throw;
         }
     }
 }

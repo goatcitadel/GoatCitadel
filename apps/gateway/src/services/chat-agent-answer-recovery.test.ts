@@ -146,6 +146,20 @@ describe("collectFailedFileMutations", () => {
     expect(failures).toEqual([{ toolName: "fs.write", path: "/a.txt", error: "transient" }]);
   });
 
+  it("reports a failed write after an earlier success to the same path", () => {
+    const failures = collectFailedFileMutations([
+      toolRun({ toolRunId: "r1", toolName: "fs.write", status: "executed", args: { path: "/a.txt" } }),
+      toolRun({
+        toolRunId: "r2",
+        toolName: "fs.write",
+        status: "failed",
+        args: { path: "/a.txt" },
+        error: "disk full",
+      }),
+    ]);
+    expect(failures).toEqual([{ toolName: "fs.write", path: "/a.txt", error: "disk full" }]);
+  });
+
   it("reports blocked file mutations with a policy message and resolves move target paths", () => {
     const failures = collectFailedFileMutations([
       toolRun({ toolName: "fs.move", status: "blocked", args: { path: "/a.txt", targetPath: "/b.txt" } }),

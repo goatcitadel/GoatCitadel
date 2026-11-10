@@ -62,7 +62,12 @@ export function shouldUseQuickWebProfile(input: ResolveChatTurnExecutionProfileI
   if (request.memoryMode === "on" || request.useMemory === true) {
     return false;
   }
-  if (request.thinkingLevel === "extended" || request.thinkingLevel === "deep") {
+  if (
+    request.thinkingLevel === "extended" ||
+    request.thinkingLevel === "deep" ||
+    request.thinkingLevel === "max" ||
+    request.thinkingLevel === "ultra"
+  ) {
     return false;
   }
   if (request.subagentPolicy && request.subagentPolicy !== "off" && request.subagentPolicy !== "ask_when_useful") {

@@ -73,19 +73,18 @@ export function truncateByTokenEstimate(input: string, maxTokens: number, option
     return input;
   }
 
-  const suffix = "\n...[truncated]";
-  const suffixBudget = estimateTokensFromText(suffix, options);
-  const targetBudget = Math.max(1, maxTokens - suffixBudget);
+  const marker = "...[truncated]";
+  const suffix = estimateTokensFromText(marker, options) <= maxTokens ? marker : "";
 
   let low = 0;
   let high = input.length;
-  let best = "";
+  let best = suffix;
 
   while (low <= high) {
     const mid = Math.floor((low + high) / 2);
-    const candidate = input.slice(0, mid);
-    const estimated = estimateTokensFromText(candidate, options);
-    if (estimated <= targetBudget) {
+    const prefix = input.slice(0, mid).trimEnd();
+    const candidate = prefix && suffix ? `${prefix}\n${suffix}` : prefix || suffix;
+    if (estimateTokensFromText(candidate, options) <= maxTokens) {
       best = candidate;
       low = mid + 1;
     } else {
@@ -93,11 +92,7 @@ export function truncateByTokenEstimate(input: string, maxTokens: number, option
     }
   }
 
-  const trimmed = best.trimEnd();
-  if (!trimmed) {
-    return suffix.trimStart();
-  }
-  return `${trimmed}${suffix}`;
+  return best;
 }
 
 function heuristicEstimateTokens(input: string): number {

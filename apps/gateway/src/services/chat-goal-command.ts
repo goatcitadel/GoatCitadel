@@ -141,28 +141,31 @@ export async function handleGoalCommand(
       message: "A /goal loop is already running for this session. Wait for it to finish before starting another.",
     };
   }
-  if (parsedGoal.action === "resume") {
-    const learnedMemory = await deps.listChatSessionLearnedMemory(sessionId, 200);
-    const paused = listGoalMemoryItems(learnedMemory.items).find((item) => item.status === "disabled");
-    if (!paused) {
-      return { ok: false, message: "No paused session goal found to resume." };
-    }
-    await deps.updateChatSessionLearnedMemory(sessionId, paused.itemId, { status: "active" });
-    const storedGoal = parseStoredGoalMemory(paused.content);
-    objective = storedGoal.objective;
-    loopOptions = storedGoal.options ?? { ...LEGACY_RESUME_GOAL_OPTIONS, surfaceMode: parsedGoal.options.surfaceMode };
-    shouldPersistGoalMemory = false;
-  }
-  if (!objective) {
-    return {
-      ok: false,
-      message:
-        "Usage: /goal Complete [objective] without stopping until [verifiable end state]. Optional: --max-iterations 3 --budget-usd 3",
-    };
-  }
-
   activeGoalLoopSessionIds.add(sessionId);
   try {
+    if (parsedGoal.action === "resume") {
+      const learnedMemory = await deps.listChatSessionLearnedMemory(sessionId, 200);
+      const paused = listGoalMemoryItems(learnedMemory.items).find((item) => item.status === "disabled");
+      if (!paused) {
+        return { ok: false, message: "No paused session goal found to resume." };
+      }
+      await deps.updateChatSessionLearnedMemory(sessionId, paused.itemId, { status: "active" });
+      const storedGoal = parseStoredGoalMemory(paused.content);
+      objective = storedGoal.objective;
+      loopOptions = storedGoal.options ?? {
+        ...LEGACY_RESUME_GOAL_OPTIONS,
+        surfaceMode: parsedGoal.options.surfaceMode,
+      };
+      shouldPersistGoalMemory = false;
+    }
+    if (!objective) {
+      return {
+        ok: false,
+        message:
+          "Usage: /goal Complete [objective] without stopping until [verifiable end state]. Optional: --max-iterations 3 --budget-usd 3",
+      };
+    }
+
     const loop = await runGoalLoop(deps, sessionId, objective, loopOptions, {
       persistGoalMemory: shouldPersistGoalMemory,
       policyContext,

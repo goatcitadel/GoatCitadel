@@ -29,8 +29,9 @@ describe("chat turn execution profile", () => {
     expect(shouldUseQuickWebProfile({ request: { content: "look up sushi etiquette", webMode: "deep" } })).toBe(false);
     expect(shouldUseQuickWebProfile({ request: { content: "look up sushi etiquette", mode: "cowork" } })).toBe(false);
     expect(shouldUseQuickWebProfile({ request: { content: "look up sushi etiquette", memoryMode: "on" } })).toBe(false);
-    expect(shouldUseQuickWebProfile({ request: { content: "look up sushi etiquette", thinkingLevel: "deep" } })).toBe(
-      false,
-    );
+    for (const thinkingLevel of ["extended", "deep", "max", "ultra"] as const) {
+      const request = { content: "look up sushi etiquette", thinkingLevel };
+      expect(resolveChatNormalizationProfile({ request })).toBe("live");
+    }
   });
 });

@@ -416,11 +416,11 @@ export class DurableRunRepository {
     this.upsertRetryWithDatabaseClockStmt = db.prepare(
       db.dialect === "postgres"
         ? `
-          WITH database_clock AS MATERIALIZED (
-            SELECT clock_timestamp() AS now_instant
-          )
           INSERT INTO durable_retries (
             retry_id, run_id, attempt_no, reason, next_retry_at, created_at
+          )
+          WITH database_clock AS MATERIALIZED (
+            SELECT clock_timestamp() AS now_instant
           )
           SELECT
             @retryId,

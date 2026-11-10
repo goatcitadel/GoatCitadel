@@ -54,4 +54,11 @@ describe("token estimator", () => {
     expect(truncated).toContain("[truncated]");
     expect(estimateTokensFromText(truncated)).toBeLessThanOrEqual(6);
   });
+
+  it("stays within budgets too small for the truncation marker", () => {
+    const input = "alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu";
+    for (const budget of [1, 2, 3]) {
+      expect(estimateTokensFromText(truncateByTokenEstimate(input, budget))).toBeLessThanOrEqual(budget);
+    }
+  });
 });
