@@ -12,7 +12,8 @@ import type { AsyncStorage } from "@goatcitadel/storage";
 
 /** Both storage backends retain the revision and approval effects used by Auto. */
 export function isChatAutoApprovalEnabled(storage: Pick<AsyncStorage, "db">): boolean {
-  return storage.db.dialect === "sqlite" || storage.db.dialect === "postgres";
+  const { dialect } = storage.db;
+  return dialect === "sqlite" || dialect === "postgres";
 }
 
 export interface ChatApprovalModeDependencies {
