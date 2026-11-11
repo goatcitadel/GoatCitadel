@@ -7176,8 +7176,9 @@ export class GatewayService {
     sessionId: string,
     input: ChatDelegateRequest,
     callbacks?: ChatDelegationProgressCallbacks,
+    options?: ChatDelegationRunOptions,
   ): Promise<ChatDelegateResponse> {
-    return this.chatDelegationService.runChatDelegation(sessionId, input, callbacks);
+    return this.chatDelegationService.runChatDelegation(sessionId, input, callbacks, options);
   }
 
   /** @internal Route/read-model recovery for a persisted Workspace Explorer. */

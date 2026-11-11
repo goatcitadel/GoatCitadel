@@ -795,6 +795,52 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 }
 
 describe("GatewayService.runChatDelegation", () => {
+  it("cancels a timed-out goal before dispatch when child preparation is still pending", async () => {
+    vi.useFakeTimers();
+    const { gateway, service } = createDelegationHarness();
+    const preparing = Promise.withResolvers<void>();
+    const releasePreparation = Promise.withResolvers<void>();
+    const authorize = vi
+      .fn(async () => undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce(undefined)
+      .mockImplementationOnce(async () => {
+        preparing.resolve();
+        await releasePreparation.promise;
+        return undefined;
+      });
+    Object.assign(gateway, { chatDelegationService: service, assertChatDelegationAllowed: authorize });
+    const delegation = vi.spyOn(service, "runChatDelegation");
+
+    try {
+      const goal = gateway.parseChatCommand("sess-1", "/goal Finish the fixture --max-iterations 1");
+      await Promise.race([
+        preparing.promise,
+        goal.then(() => {
+          throw new Error("Goal returned before reaching child preparation.");
+        }),
+      ]);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      await expect(goal).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining("Cancellation requested"),
+      });
+      await expect(gateway.parseChatCommand("sess-1", "/goal Another fixture")).resolves.toMatchObject({
+        ok: false,
+        message: expect.stringContaining("already running"),
+      });
+
+      releasePreparation.resolve();
+      const settled = await delegation.mock.results[0]!.value;
+      expect(gateway.agentSendChatMessage).not.toHaveBeenCalled();
+      expect(settled.steps.map((step) => step.status)).toEqual(["cancelled", "skipped"]);
+    } finally {
+      releasePreparation.resolve();
+      await Promise.allSettled(delegation.mock.results.map(({ value }) => value));
+      vi.useRealTimers();
+    }
+  });
+
   it("uses a real child session runtime and persists truthful lineage for sequential delegation", async () => {
     const { gateway, service } = createDelegationHarness();
 

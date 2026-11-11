@@ -8,7 +8,6 @@
  */
 
 import type {
-  ChatMode,
   ChatDelegateResponse,
   ChatChangePlanCreateInput,
   ChatChangePlanRecord,
@@ -33,7 +32,7 @@ import type {
 import type { SkillLearningHistoryPage, SkillLearningResult } from "./skill-learning-service.js";
 import { getPersonalityPreset, normalizePersonalityId } from "./channel-personalities.js";
 import { parseDelegateCommand, parsePipelineCommand, parseSlashCommand } from "./chat-command-helpers.js";
-import { handleGoalCommand } from "./chat-goal-command.js";
+import { handleGoalCommand, type ChatGoalCommandDependencies } from "./chat-goal-command.js";
 import { parseChatModelCommandTarget } from "./chat-model-command.js";
 import { normalizePromptTestCode, clampPromptScore } from "./prompt-pack-service.js";
 
@@ -188,27 +187,7 @@ export interface ChatCommandDependencies {
     options?: { resolvedBy?: string },
   ): Promise<unknown>;
   runChatDelegation(
-    sessionId: string,
-    input: {
-      objective: string;
-      roles: string[];
-      mode: "sequential";
-      surfaceMode?: ChatMode;
-      policyRunId?: string;
-      policyTaskId?: string;
-      operatorId?: string;
-      authActorId?: string;
-      authActorSource?: ToolPolicyActorContext["authActorSource"];
-      permissionProfileId?: string;
-      localOperatorOverrideId?: string;
-      surface?: ToolPolicyActorContext["surface"];
-      steps?: Array<{
-        stepId: string;
-        index: number;
-        role: string;
-        dependsOnStepIds?: string[];
-      }>;
-    },
+    ...args: Parameters<ChatGoalCommandDependencies["runChatDelegation"]>
   ): Promise<ChatDelegateResponse>;
   runChatResearch(
     sessionId: string,

@@ -156,6 +156,8 @@ describe("chat goal command", () => {
         mode: "sequential",
         surfaceMode: "code",
       }),
+      undefined,
+      { abortSignal: expect.any(AbortSignal) },
     );
   });
 
@@ -177,6 +179,8 @@ describe("chat goal command", () => {
         roles: ["coder", "qa"],
         objective: expect.stringContaining("Verify the release evidence handoff."),
       }),
+      undefined,
+      { abortSignal: expect.any(AbortSignal) },
     );
 
     await expect(parseChatCommand(createDeps(), "session-1", "/subgoal pause")).resolves.toMatchObject({
@@ -317,6 +321,8 @@ describe("chat goal command", () => {
       expect.objectContaining({
         surfaceMode: "cowork",
       }),
+      undefined,
+      { abortSignal: expect.any(AbortSignal) },
     );
   });
 
