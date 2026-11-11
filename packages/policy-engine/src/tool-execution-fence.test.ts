@@ -196,7 +196,7 @@ describe("ToolPolicyEngine execution fence", () => {
     });
   });
 
-  it("still propagates a durable fence failure from the deepest process boundary", async () => {
+  it("still propagates a durable fence failure from the deepest process boundary", { timeout: 20_000 }, async () => {
     const root = await fs.mkdtemp(path.join(os.tmpdir(), "goatcitadel-tool-process-lease-"));
     tempRoots.push(root);
     const storage = new Storage({

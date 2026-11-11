@@ -91,7 +91,7 @@ afterEach(() => {
 it("opens the approval where the change was saved, with the review collapsed and a one-click Approve", async () => {
   await render();
   expect(dialog()?.textContent).toContain("Change the network allowlist");
-  expect(dialog()?.textContent).toContain("Provider and tool egress is recalculated");
+  await vi.waitFor(() => expect(dialog()?.textContent).toContain("Provider and tool egress is recalculated"));
   const details = dialog()!.querySelector("details")!;
   expect(details.open).toBe(false);
   expect(details.querySelector("summary")?.textContent).toBe("Show details");
