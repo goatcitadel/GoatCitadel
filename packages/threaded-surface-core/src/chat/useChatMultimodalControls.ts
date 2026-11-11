@@ -401,10 +401,10 @@ export function useChatMultimodalControls(input: {
     ticket.base === JSON.stringify([currentInputRef.current.workspaceId ?? currentInputRef.current.selectedSession?.workspaceId,
         getGatewayApiBaseUrl(), getGatewayAccessRevision(), getGatewayCallerScopeRevision(), activeProviderId,
         primaryImageRoute, googleFallbackImageRoute]), [activeProviderId, googleFallbackImageRoute, primaryImageRoute]);
-  const currentImage = useCallback((ticket: ImageTicket) => {
+  const isCurrentImageOwner = useCallback((ticket: ImageTicket) => {
     const revision = currentInputRef.current.selectionRevisionRef?.current ?? imageRevision;
     return mountedRef.current && imageTicketRef.current === ticket && !ticket.revoked &&
-      ticket.generation === imageOwnerRef.current.generation && currentInputRef.current.draft === ticket.draft &&
+      ticket.generation === imageOwnerRef.current.generation &&
       hasCurrentImageBase(ticket) &&
       (revision === ticket.revision + (ticket.destination ? 1 : 0) ||
         Boolean(ticket.destination && !ticket.selectionSeen && revision === ticket.revision));
@@ -737,14 +737,15 @@ export function useChatMultimodalControls(input: {
         confirmationOpen: true, revoked: false };
       imageTicketRef.current = ticket;
       imagePublicationRef.current = ticket;
-      const isCurrent = () => currentImage(ticket);
+      const isReceiptCurrent = () => isCurrentImageOwner(ticket);
+      const isCurrent = () => isReceiptCurrent() && currentInputRef.current.draft === ticket.draft;
       setImageBusy(true);
       setError(null);
       try {
         const code = await loadImageCode();
         if (!isCurrent()) return false;
         return await code.runImageGeneration({ mode, prompt, primaryImageRoute, googleFallbackImageRoute,
-          latestImageAttachment, options, isCurrent, uploadAttachments, setError, pushLocalNotice,
+          latestImageAttachment, options, isCurrent, isReceiptCurrent, uploadAttachments, setError, pushLocalNotice,
           onCreatedSession: (created) => {
             if (!ticket.confirmationOpen) return false;
             if (!isCurrent() || ticket.destination || ticket.selectedId !== null ||
@@ -773,7 +774,7 @@ export function useChatMultimodalControls(input: {
         }
       }
     },
-    [activeProviderId, currentImage, hasCurrentImageBase, draft, imageGeneration, imageRevision, imageBase, imageWorkspace, input.selectionRevisionRef,
+    [activeProviderId, isCurrentImageOwner, hasCurrentImageBase, draft, imageGeneration, imageRevision, imageBase, imageWorkspace, input.selectionRevisionRef,
       input.selectedSession, selectedSessionId, activeThreadSessionId, googleFallbackImageRoute,
       latestImageAttachment, primaryImageRoute, pushLocalNotice, setDraft, setError, uploadAttachments],
   );

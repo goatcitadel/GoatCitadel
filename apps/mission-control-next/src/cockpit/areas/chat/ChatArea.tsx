@@ -15,7 +15,6 @@ import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
 import { ChatManagedFilesSlot, useChatApprovalModeIntent } from "./chat-managed-files-surface";
 import { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
-import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
@@ -30,9 +29,14 @@ import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { useSelectedChannelConversation } from "./use-channel-conversation";
 import { useChannelComposerProps } from "./use-channel-composer";
 import { isChannelConversation } from "./channel-conversation-scope";
-import { DeferredBtwSideChatPanel, DeferredChatTimerPanel, DeferredSessionStatusPanel } from "./DeferredChatLeaves";
+import {
+  DeferredBtwSideChatPanel,
+  DeferredChatInspector,
+  DeferredChatTimerPanel,
+  DeferredProjectAssignmentReview,
+  DeferredSessionStatusPanel,
+} from "./DeferredChatLeaves";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
-import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
@@ -172,7 +176,7 @@ export function ChatAreaView({
     open({
       source: "chat",
       title: "Conversation",
-      body: <ChatInspector input={input} targetTurnId={pending.turnId} initialTab="files" />,
+      body: <DeferredChatInspector input={input} targetTurnId={pending.turnId} initialTab="files" />,
     });
   }, [
     input,
@@ -207,7 +211,7 @@ export function ChatAreaView({
       source: "chat",
       title: "Conversation",
       body: (
-        <ChatInspector
+        <DeferredChatInspector
           input={input}
           targetTurnId={inspectorTurnId.current}
           initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
@@ -277,7 +281,7 @@ export function ChatAreaView({
         source: "chat",
         title: "Conversation",
         body: (
-          <ChatInspector
+          <DeferredChatInspector
             input={input}
             targetTurnId={inspectorTurnId.current}
             initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
@@ -331,7 +335,7 @@ export function ChatAreaView({
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
         />
-        {active ? <ProjectAssignmentReview active={active} /> : null}
+        {active ? <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} /> : null}
         {onboarding.data && !onboarding.isError && !onboarding.data.completed && !buildOpen ? (
           <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />
         ) : null}
