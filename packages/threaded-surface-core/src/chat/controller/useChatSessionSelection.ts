@@ -1,5 +1,5 @@
 import type { ChatMode } from "@goatcitadel/contracts";
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import type { MissionThreadedControllerHostProps } from "../../MissionThreadedControllerHost.types";
 
 type Input = {
@@ -15,17 +15,16 @@ export function useChatSessionSelection({ initialModeOverride }: Input) {
   const [selectedSessionId, setSelectedSessionIdState] = useState<string | null>(null);
   const selectedSessionRevisionRef = useRef(0);
   const selectedSessionIntentRef = useRef(selectedSessionId);
-  useLayoutEffect(() => {
-    selectedSessionIntentRef.current = selectedSessionId;
-  }, [selectedSessionId]);
   const [, setSelectedSessionRevision] = useState(0);
   const setSelectedSessionId = useCallback<React.Dispatch<React.SetStateAction<string | null>>>((next) => {
-    if (typeof next === "function" || next !== selectedSessionIntentRef.current) {
-      selectedSessionRevisionRef.current += 1;
-      setSelectedSessionRevision(selectedSessionRevisionRef.current);
-    }
-    if (typeof next !== "function") selectedSessionIntentRef.current = next;
-    setSelectedSessionIdState(next);
+    // Reconciliation can return the already selected session while a receipt is pending.
+    const current = selectedSessionIntentRef.current;
+    const nextId = typeof next === "function" ? next(current) : next;
+    if (nextId === current) return;
+    selectedSessionIntentRef.current = nextId;
+    selectedSessionRevisionRef.current += 1;
+    setSelectedSessionRevision(selectedSessionRevisionRef.current);
+    setSelectedSessionIdState(nextId);
   }, []);
   // Async work captures the error setter from the session in which it started.
   // Keep the current selection in a ref so a late rejection cannot attach its

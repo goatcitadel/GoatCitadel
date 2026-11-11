@@ -11,6 +11,7 @@ export interface ImageGenerationCodeInput {
   latestImageAttachment: ChatAttachmentRecord | null;
   options?: ImageGenerationOptions;
   isCurrent: () => boolean;
+  isReceiptCurrent: () => boolean;
   uploadAttachments: (files: File[], options?: UploadAttachmentOptions) => Promise<boolean>;
   onCreatedSession?: UploadAttachmentOptions["onCreatedSession"];
   clearDraft: () => void;
@@ -55,7 +56,7 @@ function shouldRetryImageGenerationWithGoogleFallback(error: string): boolean {
 
 export async function runImageGeneration(input: ImageGenerationCodeInput): Promise<boolean> {
   const { mode, prompt, primaryImageRoute, googleFallbackImageRoute, latestImageAttachment, options,
-    isCurrent, uploadAttachments, onCreatedSession, clearDraft, setError, pushLocalNotice } = input;
+    isCurrent, isReceiptCurrent, uploadAttachments, onCreatedSession, clearDraft, setError, pushLocalNotice } = input;
   try {
     if (!primaryImageRoute) {
       throw new Error("Image generation is unavailable on the current routes.");
@@ -118,7 +119,7 @@ export async function runImageGeneration(input: ImageGenerationCodeInput): Promi
     );
     if (!isCurrent()) return false;
     const uploadConfirmed = await uploadAttachments([file], { onCreatedSession });
-    if (uploadConfirmed !== true || !isCurrent()) return false;
+    if (uploadConfirmed !== true || !isReceiptCurrent()) return false;
     if (options?.clearDraftOnSuccess) {
       clearDraft();
     }

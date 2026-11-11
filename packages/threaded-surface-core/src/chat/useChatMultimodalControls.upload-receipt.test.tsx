@@ -212,8 +212,11 @@ describe("real composer upload receipts consumed by media and send intent", () =
     await act(async () => { pending = latest.media.handleGenerateImage({ clearDraftOnSuccess: true }); });
     await vi.waitFor(() => expect(transport.uploadChatAttachment).toHaveBeenCalledTimes(1));
     await act(async () => latest.setDraft("replacement text"));
-    await act(async () => { gate.resolve(attachment); await pending; });
+    let completed = false;
+    await act(async () => { gate.resolve(attachment); completed = await pending; });
+    expect(completed).toBe(true);
     expect(latest.pending).toEqual([attachment]); expect(latest.draft).toBe("replacement text");
+    expect(notice).toHaveBeenCalledWith("Generated image added to the draft attachments.", "success");
     assertIdle();
     expect(transport.generateLlmImage).toHaveBeenCalledTimes(1);
     expect(transport.uploadChatAttachment).toHaveBeenCalledTimes(1);

@@ -1,4 +1,4 @@
-import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState, type ComponentProps } from "react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useQuery } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -15,7 +15,6 @@ import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTextComposer } from "./ChatTextComposer";
 import { ChatManagedFilesSlot, useChatApprovalModeIntent } from "./chat-managed-files-surface";
 import { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
-import { ChatInspector } from "./ChatInspector";
 import { chatSelectionHref } from "./chat-selection-evidence";
 import type { ChatInspectorTab } from "./chat-inspector-evidence";
 import { readCockpitHistory } from "../../app/cockpit-history";
@@ -30,12 +29,28 @@ import { useChatOwnerNavigation } from "./use-chat-owner-navigation";
 import { useSelectedChannelConversation } from "./use-channel-conversation";
 import { useChannelComposerProps } from "./use-channel-composer";
 import { isChannelConversation } from "./channel-conversation-scope";
-import { DeferredBtwSideChatPanel, DeferredChatTimerPanel, DeferredSessionStatusPanel } from "./DeferredChatLeaves";
+import {
+  DeferredBtwSideChatPanel,
+  DeferredChatLeaf,
+  DeferredChatTimerPanel,
+  DeferredSessionStatusPanel,
+} from "./DeferredChatLeaves";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
-import { ProjectAssignmentReview } from "./ProjectAssignmentReview";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
+const LazyChatInspector = lazy(async () => ({ default: (await import("./ChatInspector")).ChatInspector }));
+const LazyProjectAssignmentReview = lazy(async () => ({
+  default: (await import("./ProjectAssignmentReview")).ProjectAssignmentReview,
+}));
+
+function ChatInspector(props: ComponentProps<typeof LazyChatInspector>) {
+  return (
+    <DeferredChatLeaf label="Conversation details" identity={props.input.sessionRail.selectedSessionId ?? ""}>
+      <LazyChatInspector {...props} />
+    </DeferredChatLeaf>
+  );
+}
 
 export { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 
@@ -120,6 +135,8 @@ export function ChatAreaView({
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const { activeSessionSurfaceProps: active, btwSideChatProps: btw } = input;
   const selectedSessionId = input.sessionRail.selectedSessionId ?? undefined;
+  const routeParams = new URLSearchParams(search);
+  const assignmentProjectId = routeParams.get("assignProjectId");
   const inspectorIdentity = JSON.stringify([
     getGatewayApiBaseUrl(),
     activeCitadelId,
@@ -331,7 +348,11 @@ export function ChatAreaView({
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
         />
-        {active ? <ProjectAssignmentReview active={active} /> : null}
+        {active && assignmentProjectId && active.selectedSessionId === routeParams.get("sessionId") ? (
+          <DeferredChatLeaf label="Project assignment" identity={inspectorIdentity}>
+            <LazyProjectAssignmentReview active={active} />
+          </DeferredChatLeaf>
+        ) : null}
         {onboarding.data && !onboarding.isError && !onboarding.data.completed && !buildOpen ? (
           <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />
         ) : null}

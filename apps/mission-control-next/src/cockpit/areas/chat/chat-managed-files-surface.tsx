@@ -1,8 +1,13 @@
+import { lazy } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import type { ChatApprovalModeState, ChatSessionRecord } from "@goatcitadel/contracts";
 import { chatApprovalModeQueryKey } from "@goatcitadel/mission-control-shared/api/chat-managed-files";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { ChatManagedFiles } from "./ChatManagedFiles";
+import { DeferredChatLeaf } from "./DeferredChatLeaves";
+
+const LazyChatManagedFiles = lazy(async () => ({
+  default: (await import("./ChatManagedFiles")).ChatManagedFiles,
+}));
 
 export function useChatApprovalModeIntent(workspaceId: string) {
   const queryClient = useQueryClient();
@@ -45,15 +50,21 @@ export function ChatManagedFilesSlot({
   )
     return null;
   return (
-    <ChatManagedFiles
-      sessionId={selectedSessionId}
-      workspaceId={workspaceId}
-      projectId={session.projectId}
-      projectName={session.projectName}
-      turnId={latestTurnId}
-      turnActive={active.sending || active.hasActiveStream}
-      canMutate={!active.historicalReadOnly}
-      sendError={active.streamError}
-    />
+    <DeferredChatLeaf
+      label="Managed project files"
+      identity={JSON.stringify([workspaceId, selectedSessionId, session.projectId])}
+      loadingVisible={false}
+    >
+      <LazyChatManagedFiles
+        sessionId={selectedSessionId}
+        workspaceId={workspaceId}
+        projectId={session.projectId}
+        projectName={session.projectName}
+        turnId={latestTurnId}
+        turnActive={active.sending || active.hasActiveStream}
+        canMutate={!active.historicalReadOnly}
+        sendError={active.streamError}
+      />
+    </DeferredChatLeaf>
   );
 }

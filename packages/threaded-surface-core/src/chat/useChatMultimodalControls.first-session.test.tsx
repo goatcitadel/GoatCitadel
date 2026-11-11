@@ -378,6 +378,24 @@ describe("real first-session creation ownership through uploads and media", () =
     expect(transport.createChatSession).not.toHaveBeenCalled(); expect(transport.fetchChatSessionStatus).not.toHaveBeenCalled();
   });
 
+  it("keeps a confirmed image upload through unchanged sidebar selection reconciliation", async () => {
+    const uploaded = deferred<ChatAttachmentRecord>();
+    transport.uploadChatAttachment.mockReturnValue(uploaded.promise);
+    await act(async () => { renderer = create(<Harness />); });
+    await act(async () => latest.select(session.sessionId));
+    await act(async () => { latest.adoptRecord(); latest.hydrateThread(session.sessionId); });
+    let pending!: Promise<boolean>;
+    await act(async () => { pending = latest.media.handleGenerateImage(); });
+    await vi.waitFor(() => expect(transport.uploadChatAttachment).toHaveBeenCalledTimes(1));
+    await act(async () => latest.select((current) => current));
+    let completed = false;
+    await act(async () => { uploaded.resolve(attachment); completed = await pending; });
+    expect(completed).toBe(true);
+    expect(latest.pending).toEqual([attachment]);
+    expect(latest.draft).toBe(prompt);
+    assertIdle();
+  });
+
   it("never revives a confirmed thread observation after it was lost", async () => {
     const uploaded = deferred<ChatAttachmentRecord>();
     transport.uploadChatAttachment.mockReturnValue(uploaded.promise);
@@ -448,9 +466,12 @@ describe("real first-session creation ownership through uploads and media", () =
     await act(async () => sidebarGate.resolve(undefined));
     await vi.waitFor(() => expect(transport.uploadChatAttachment).toHaveBeenCalledTimes(1));
     await act(async () => latest.setDraft("replacement authored during upload"));
-    await act(async () => { uploaded.resolve(attachment); await pending; });
+    let completed = false;
+    await act(async () => { uploaded.resolve(attachment); completed = await pending; });
+    expect(completed).toBe(true);
     expect(latest.pending).toEqual([attachment]); expect(latest.draft).toBe("replacement authored during upload");
-    assertNoImageSuccess(); assertIdle();
+    expect(notice).toHaveBeenCalledWith("Generated image added to the draft attachments.", "success");
+    assertIdle();
     expect(transport.generateLlmImage).toHaveBeenCalledTimes(1); expect(transport.uploadChatAttachment).toHaveBeenCalledTimes(1);
   });
 
