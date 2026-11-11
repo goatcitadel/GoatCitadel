@@ -28,10 +28,12 @@ export class StreamIdleTimeoutError extends Error {
 
 export interface StreamIdleWatchdogOptions {
   idleTimeoutMs: number;
+  /** Optional time for provider startup, applied only before the first chunk. */
+  firstChunkTimeoutMs?: number;
   /** Called once when the idle bound trips, before the error is thrown. */
   onTrip?: (idleTimeoutMs: number) => void;
   /** Aborts the underlying provider request so the connection is released. */
-  abort?: () => void;
+  abort?: (idleTimeoutMs: number) => void;
 }
 
 export function resolveStreamIdleTimeoutMs(configured: number | undefined): number {
@@ -47,6 +49,7 @@ export async function* withStreamIdleWatchdog<T>(
 ): AsyncGenerator<T> {
   const iterator = source[Symbol.asyncIterator]();
   let idleTimedOut = false;
+  let idleTimeoutMs = options.firstChunkTimeoutMs ?? options.idleTimeoutMs;
   try {
     while (true) {
       let timer: NodeJS.Timeout | undefined;
@@ -54,21 +57,21 @@ export async function* withStreamIdleWatchdog<T>(
         timer = setTimeout(() => {
           idleTimedOut = true;
           try {
-            options.abort?.();
+            options.abort?.(idleTimeoutMs);
           } catch (abortError) {
             // A throwing abort callback is treated as an unacknowledged
             // dispatch below. The watchdog must remain bounded either way.
             void abortError;
           }
           try {
-            options.onTrip?.(options.idleTimeoutMs);
+            options.onTrip?.(idleTimeoutMs);
           } catch (diagnosticError) {
             // Diagnostics must not replace the canonical timeout/accounting
             // result from the provider iterator.
             void diagnosticError;
           }
-          reject(new StreamIdleTimeoutError(options.idleTimeoutMs));
-        }, options.idleTimeoutMs);
+          reject(new StreamIdleTimeoutError(idleTimeoutMs));
+        }, idleTimeoutMs);
         // The watchdog is part of the accepted provider operation and must
         // remain a referenced handle. Unref'ing it lets a worker/process with
         // an otherwise handle-free stalled iterator exit before the canonical
@@ -122,6 +125,7 @@ export async function* withStreamIdleWatchdog<T>(
       if (next.done) {
         return;
       }
+      idleTimeoutMs = options.idleTimeoutMs;
       yield next.value;
     }
   } finally {

@@ -32,10 +32,11 @@ describe("withStreamIdleWatchdog", () => {
       });
     })();
     const abort = vi.fn(() => releaseHang?.());
-    await expect(collect(withStreamIdleWatchdog(source, { idleTimeoutMs: 50, abort }))).rejects.toBeInstanceOf(
-      StreamIdleTimeoutError,
-    );
+    await expect(
+      collect(withStreamIdleWatchdog(source, { idleTimeoutMs: 50, firstChunkTimeoutMs: 500, abort })),
+    ).rejects.toThrow("Provider stream produced no data for 50ms");
     expect(abort).toHaveBeenCalledTimes(1);
+    expect(abort).toHaveBeenCalledWith(50);
   });
 
   it.each([

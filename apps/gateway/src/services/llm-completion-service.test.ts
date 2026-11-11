@@ -1973,6 +1973,64 @@ describe("createChatCompletion", () => {
 });
 
 describe("createChatCompletionStream idle watchdog", () => {
+  it.each([
+    {
+      name: "loopback Ollama",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      configuredTimeout: undefined,
+      allowsColdStart: true,
+    },
+    {
+      name: "remote Ollama",
+      baseUrl: "https://ollama.example.com/v1",
+      configuredTimeout: undefined,
+      allowsColdStart: false,
+    },
+    {
+      name: "an explicit loopback timeout",
+      baseUrl: "http://127.0.0.1:11434/v1",
+      configuredTimeout: 5_000,
+      allowsColdStart: false,
+    },
+  ])("handles first-chunk time for $name", async ({ baseUrl, configuredTimeout, allowsColdStart }) => {
+    vi.useFakeTimers();
+    try {
+      const host = createHost(async function* (request) {
+        await new Promise<void>((resolve, reject) => {
+          const timer = setTimeout(resolve, 210_000);
+          request.signal?.addEventListener(
+            "abort",
+            () => {
+              clearTimeout(timer);
+              reject(request.signal?.reason);
+            },
+            { once: true },
+          );
+        });
+        yield { choices: [{ delta: { content: "ready" } }] };
+      }, []);
+      vi.mocked(host.llmService.getRuntimeConfig).mockReturnValue({
+        activeProviderId: "ollama",
+        activeModel: "local-model",
+        providers: [{ providerId: "ollama", baseUrl, defaultModel: "local-model" }],
+      } as ReturnType<LlmCompletionHost["llmService"]["getRuntimeConfig"]>);
+      (host.config.assistant as { streamIdleTimeoutMs?: number }).streamIdleTimeoutMs = configuredTimeout;
+      const pending = collectStream(createChatCompletionStream(host, { ...createRequest(), timeoutMs: 250_000 }));
+      await vi.advanceTimersByTimeAsync(600_000);
+      const result = await pending;
+      if (allowsColdStart) {
+        expect(result.error).toBeUndefined();
+        expect(result.chunks).toContainEqual({ choices: [{ delta: { content: "ready" } }] });
+        expect(host.llmService.chatCompletionsStream).toHaveBeenCalledTimes(1);
+      } else {
+        expect(result.error).toBeDefined();
+        expect(result.chunks).toHaveLength(0);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("aborts a stream that hangs after emitting and throws the idle error after salvage diagnostics", async () => {
     vi.useFakeTimers();
     try {
@@ -2037,38 +2095,57 @@ describe("createChatCompletionStream idle watchdog", () => {
 });
 
 describe("admitted Chat provider fallback", () => {
-  it.each(["stream", "completion"] as const)("uses an admitted backup once for Claude quota exhaustion in %s", async (kind) => {
-    const calls: string[] = [];
-    const quota = new ClaudeCliError("claude_cli_usage_limited", claudeCliUserMessage("claude_cli_usage_limited"));
-    const host = kind === "stream"
-      ? createHost(async function* (request) {
-          calls.push(request.providerId!);
-          if (request.providerId === "primary") throw quota;
-          yield { model: "backup-model", choices: [{ delta: { content: "recovered" } }] };
-        })
-      : createCompletionHost({ completion: async (request) => {
-          calls.push(request.providerId!);
-          if (request.providerId === "primary") throw quota;
-          return { model: "backup-model", choices: [{ message: { role: "assistant", content: "recovered" } }] };
-        } });
-    const f = authorizeTestRequest(host);
-    if (kind === "stream") {
-      expect((await collectStream(createChatCompletionStream(host, f.request))).error).toBeUndefined();
-    } else {
-      await expect(createChatCompletion(host, f.request)).resolves.toBeDefined();
-    }
-    expect(calls).toEqual(["primary", "backup"]);
-    expect(f.revalidate).toHaveBeenCalledTimes(1);
-    expect(f.guard).toHaveBeenCalledTimes(1);
-  });
+  it.each(["stream", "completion"] as const)(
+    "uses an admitted backup once for Claude quota exhaustion in %s",
+    async (kind) => {
+      const calls: string[] = [];
+      const quota = new ClaudeCliError("claude_cli_usage_limited", claudeCliUserMessage("claude_cli_usage_limited"));
+      const host =
+        kind === "stream"
+          ? createHost(async function* (request) {
+              calls.push(request.providerId!);
+              if (request.providerId === "primary") throw quota;
+              yield { model: "backup-model", choices: [{ delta: { content: "recovered" } }] };
+            })
+          : createCompletionHost({
+              completion: async (request) => {
+                calls.push(request.providerId!);
+                if (request.providerId === "primary") throw quota;
+                return { model: "backup-model", choices: [{ message: { role: "assistant", content: "recovered" } }] };
+              },
+            });
+      const f = authorizeTestRequest(host);
+      if (kind === "stream") {
+        expect((await collectStream(createChatCompletionStream(host, f.request))).error).toBeUndefined();
+      } else {
+        await expect(createChatCompletion(host, f.request)).resolves.toBeDefined();
+      }
+      expect(calls).toEqual(["primary", "backup"]);
+      expect(f.revalidate).toHaveBeenCalledTimes(1);
+      expect(f.guard).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it.each(["stream", "completion"] as const)("keeps fallback off for Claude quota exhaustion in %s", async (kind) => {
     const calls: string[] = [];
     const quota = new ClaudeCliError("claude_cli_usage_limited", claudeCliUserMessage("claude_cli_usage_limited"));
-    const host = kind === "stream"
-      ? createHost(async function* (request) { calls.push(request.providerId!); yield await Promise.reject(quota); })
-      : createCompletionHost({ completion: async (request) => { calls.push(request.providerId!); throw quota; } });
-    const request = markChatProviderFallbackRequired({ ...createRequest(), providerId: "primary", model: "primary-model" });
+    const host =
+      kind === "stream"
+        ? createHost(async function* (request) {
+            calls.push(request.providerId!);
+            yield await Promise.reject(quota);
+          })
+        : createCompletionHost({
+            completion: async (request) => {
+              calls.push(request.providerId!);
+              throw quota;
+            },
+          });
+    const request = markChatProviderFallbackRequired({
+      ...createRequest(),
+      providerId: "primary",
+      model: "primary-model",
+    });
     if (kind === "stream") {
       expect((await collectStream(createChatCompletionStream(host, request))).error).toBeDefined();
     } else {

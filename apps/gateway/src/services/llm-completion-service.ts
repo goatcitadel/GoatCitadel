@@ -22,7 +22,11 @@ import {
   readAuthorizedChatProviderFallback,
 } from "./chat-provider-fallback-authority.js";
 import { shouldAllowCrossProviderFallback } from "./chat-session-utils.js";
-import { filterWardAdmittedFallbackTargets, readCitadelWardDispatchReason } from "./chat-route-local-ward.js";
+import {
+  filterWardAdmittedFallbackTargets,
+  isLoopbackUrl,
+  readCitadelWardDispatchReason,
+} from "./chat-route-local-ward.js";
 import { ChatTurnCancelledError, isChatTurnCancelledError } from "./chat-turn-helpers.js";
 import {
   CHAT_COMPLETION_TRANSIENT_RETRY_LIMIT,
@@ -71,6 +75,7 @@ export type { LlmCompletionHost } from "./llm-completion-host.js";
 const TOOL_PROTOCOL_RETRY_NORMALIZED = 1;
 // Retry with minimal provider reasoning metadata to reduce tool-call compatibility friction.
 const TOOL_PROTOCOL_RETRY_MINIMAL_THINKING = 2;
+const OLLAMA_LOOPBACK_FIRST_CHUNK_TIMEOUT_MS = 270_000;
 
 export async function createChatCompletion(
   host: LlmCompletionHost,
@@ -665,7 +670,8 @@ export async function* createChatCompletionStream(
   const completionStartedAt = Date.now();
   const completionDeadline = createChatCompletionDeadline(request.timeoutMs);
   const idleWatchdogDisabled = host.config.assistant.features?.streamIdleWatchdogV1Disabled === true;
-  const idleTimeoutMs = resolveStreamIdleTimeoutMs(host.config.assistant.streamIdleTimeoutMs);
+  const configuredIdleTimeoutMs = host.config.assistant.streamIdleTimeoutMs;
+  const idleTimeoutMs = resolveStreamIdleTimeoutMs(configuredIdleTimeoutMs);
   const chatHookWorkspaceId = await host.resolveChatCompletionHookWorkspaceId(request);
   const chatHookEntityId = request.memory?.sessionId?.trim() || randomUUID();
   const memoryInput = request.memory;
@@ -762,6 +768,8 @@ export async function* createChatCompletionStream(
   const primaryProviderId = withContext.providerId ?? runtime.activeProviderId;
   const primaryProvider = runtime.providers.find((item) => item.providerId === primaryProviderId);
   const primaryModel = withContext.model ?? primaryProvider?.defaultModel ?? runtime.activeModel;
+  const allowLoopbackOllamaStartup =
+    configuredIdleTimeoutMs === undefined && primaryProviderId === "ollama" && isLoopbackUrl(primaryProvider?.baseUrl);
   const primaryApiStyle = host.llmService.resolveExecutionApiStyle(primaryProviderId, primaryModel);
   const usageAttribution = createCompletionUsageAttribution({
     input: attributionInput,
@@ -857,7 +865,14 @@ export async function* createChatCompletionStream(
           ? providerStream
           : withStreamIdleWatchdog(providerStream, {
               idleTimeoutMs,
-              abort: () => idleAbort.abort(new StreamIdleTimeoutError(idleTimeoutMs)),
+              // The first request can spend minutes loading a local model before it emits anything.
+              // Keep the absolute request deadline and the normal idle bound after the first chunk.
+              ...(allowLoopbackOllamaStartup && index === 0 && transientRetryIndex === 0
+                ? {
+                    firstChunkTimeoutMs: Math.min(attemptTimeoutMs ?? Infinity, OLLAMA_LOOPBACK_FIRST_CHUNK_TIMEOUT_MS),
+                  }
+                : {}),
+              abort: (timeoutMs) => idleAbort.abort(new StreamIdleTimeoutError(timeoutMs)),
               onTrip: (elapsedMs) => {
                 host.recordDevDiagnostic({
                   level: "warn",
