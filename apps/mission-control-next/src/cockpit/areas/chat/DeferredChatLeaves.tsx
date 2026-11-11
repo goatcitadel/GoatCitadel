@@ -24,6 +24,32 @@ const timerLoader = createDeferredDialogRuntime(() =>
 const SessionControl = lazy(async () => ({
   default: (await import("../../../features/threaded-surface/SessionControlBanner")).SessionControlBanner,
 }));
+const ChatInspector = lazy(async () => ({ default: (await import("./ChatInspector")).ChatInspector }));
+const ProjectAssignmentReview = lazy(async () => ({
+  default: (await import("./ProjectAssignmentReview")).ProjectAssignmentReview,
+}));
+
+export function DeferredChatInspector(props: ComponentProps<typeof ChatInspector>) {
+  return (
+    <DeferredChatLeaf label="Conversation details" identity={props.input.sessionRail.selectedSessionId ?? ""}>
+      <ChatInspector {...props} />
+    </DeferredChatLeaf>
+  );
+}
+
+export function DeferredProjectAssignmentReview({
+  active,
+  search,
+  identity,
+}: ComponentProps<typeof ProjectAssignmentReview> & { search: string; identity: string }) {
+  const params = new URLSearchParams(search);
+  if (!params.get("assignProjectId") || active.selectedSessionId !== params.get("sessionId")) return null;
+  return (
+    <DeferredChatLeaf label="Project assignment" identity={identity}>
+      <ProjectAssignmentReview active={active} />
+    </DeferredChatLeaf>
+  );
+}
 
 export function DeferredSessionControlBanner(props: ComponentProps<typeof SessionControlBanner>) {
   if (!props.model.externalControlActive) return null;

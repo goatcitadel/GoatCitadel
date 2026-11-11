@@ -1,4 +1,4 @@
-import { lazy, Suspense, useContext, useEffect, useRef, useState, type ComponentProps } from "react";
+import { lazy, Suspense, useContext, useEffect, useRef, useState } from "react";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useQuery } from "@tanstack/react-query";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
@@ -31,26 +31,15 @@ import { useChannelComposerProps } from "./use-channel-composer";
 import { isChannelConversation } from "./channel-conversation-scope";
 import {
   DeferredBtwSideChatPanel,
-  DeferredChatLeaf,
+  DeferredChatInspector,
   DeferredChatTimerPanel,
+  DeferredProjectAssignmentReview,
   DeferredSessionStatusPanel,
 } from "./DeferredChatLeaves";
 import "../../../features/threaded-surface/styles/btw-side-chat.css";
 import { useOptionalStableHandler, useStableHandler } from "../../../features/threaded-surface/useStableHandler";
 
 const LazyChatBuildEditor = lazy(async () => ({ default: (await import("./ChatBuildEditor")).ChatBuildEditor }));
-const LazyChatInspector = lazy(async () => ({ default: (await import("./ChatInspector")).ChatInspector }));
-const LazyProjectAssignmentReview = lazy(async () => ({
-  default: (await import("./ProjectAssignmentReview")).ProjectAssignmentReview,
-}));
-
-function ChatInspector(props: ComponentProps<typeof LazyChatInspector>) {
-  return (
-    <DeferredChatLeaf label="Conversation details" identity={props.input.sessionRail.selectedSessionId ?? ""}>
-      <LazyChatInspector {...props} />
-    </DeferredChatLeaf>
-  );
-}
 
 export { artifactInspectorHistoryMatches, buildEditorTurnId, inspectorTabFor } from "./chat-area-inspector-target";
 
@@ -135,8 +124,6 @@ export function ChatAreaView({
   const [conversationsOpen, setConversationsOpen] = useState(false);
   const { activeSessionSurfaceProps: active, btwSideChatProps: btw } = input;
   const selectedSessionId = input.sessionRail.selectedSessionId ?? undefined;
-  const routeParams = new URLSearchParams(search);
-  const assignmentProjectId = routeParams.get("assignProjectId");
   const inspectorIdentity = JSON.stringify([
     getGatewayApiBaseUrl(),
     activeCitadelId,
@@ -189,7 +176,7 @@ export function ChatAreaView({
     open({
       source: "chat",
       title: "Conversation",
-      body: <ChatInspector input={input} targetTurnId={pending.turnId} initialTab="files" />,
+      body: <DeferredChatInspector input={input} targetTurnId={pending.turnId} initialTab="files" />,
     });
   }, [
     input,
@@ -224,7 +211,7 @@ export function ChatAreaView({
       source: "chat",
       title: "Conversation",
       body: (
-        <ChatInspector
+        <DeferredChatInspector
           input={input}
           targetTurnId={inspectorTurnId.current}
           initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
@@ -294,7 +281,7 @@ export function ChatAreaView({
         source: "chat",
         title: "Conversation",
         body: (
-          <ChatInspector
+          <DeferredChatInspector
             input={input}
             targetTurnId={inspectorTurnId.current}
             initialTab={inspectorTab.current ?? inspectorTabFor(active, inspectorTurnId.current)}
@@ -348,11 +335,7 @@ export function ChatAreaView({
           onInspect={() => (inspectorContent?.source === "chat" ? close() : openInspector())}
           onFork={active && latestTurnId ? () => active.onStartNewThreadFromTurn(latestTurnId) : undefined}
         />
-        {active && assignmentProjectId && active.selectedSessionId === routeParams.get("sessionId") ? (
-          <DeferredChatLeaf label="Project assignment" identity={inspectorIdentity}>
-            <LazyProjectAssignmentReview active={active} />
-          </DeferredChatLeaf>
-        ) : null}
+        {active ? <DeferredProjectAssignmentReview active={active} search={search} identity={inspectorIdentity} /> : null}
         {onboarding.data && !onboarding.isError && !onboarding.data.completed && !buildOpen ? (
           <ChatSetupBanner onReturnToSetup={() => navigate("/settings/first-run")} />
         ) : null}
