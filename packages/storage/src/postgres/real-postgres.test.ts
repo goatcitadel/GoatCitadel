@@ -4494,6 +4494,15 @@ test(
       assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, pausedSecondId), [queuedId]);
       assert.deepEqual(durableRuns.listUnstartedOrchestrationRunIds(1, queuedId), []);
 
+      const waitingFirstId = `h-waiting-${suffix}`;
+      const waitingSecondId = `j-waiting-${suffix}`;
+      durableRuns.createRun({ runId: waitingFirstId, workflowKey: "orchestration.plan.execute", status: "waiting" });
+      durableRuns.createRun({ runId: `i-other-${suffix}`, workflowKey: "chat.turn.execute", status: "waiting" });
+      durableRuns.createRun({ runId: waitingSecondId, workflowKey: "orchestration.plan.execute", status: "waiting" });
+      assert.deepEqual(durableRuns.listWaitingOrchestrationRunIds(1), [waitingFirstId]);
+      assert.deepEqual(durableRuns.listWaitingOrchestrationRunIds(1, waitingFirstId), [waitingSecondId]);
+      assert.deepEqual(durableRuns.listWaitingOrchestrationRunIds(1, waitingSecondId), []);
+
       const mutationIdempotency = new MutationIdempotencyRepository(syncClient);
       const mutationIdentity = {
         method: "POST",

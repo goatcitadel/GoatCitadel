@@ -67,7 +67,34 @@ describe("mcp-durable-tasks", () => {
     expect(tasks).toHaveLength(1);
     expect(tasks[0]).toMatchObject({ taskId: "run-1", workflowKey: "approval.wait", status: "running" });
     expect(tasks[0]).not.toHaveProperty("payload");
-    expect(deps.listRuns).toHaveBeenCalledWith(200);
+    expect(deps.listRuns).toHaveBeenCalledWith({ workspaceId: DEFAULT_WORKSPACE_ID, limit: 10 });
+  });
+
+  it("fills the requested workspace page even when 200 newer tasks belong to other workspaces", async () => {
+    const workspaceRuns = [createRun({ runId: "older-local-1" }), createRun({ runId: "older-local-2" })];
+    const otherRuns = Array.from({ length: 200 }, (_, index) =>
+      createRun({ runId: `newer-other-${index}`, payload: { workspaceId: "workspace-2" } }),
+    );
+    const listRuns = vi.fn(async (query?: number | { workspaceId: string; limit: number }) => {
+      if (typeof query === "number" || query === undefined) {
+        return [...otherRuns, ...workspaceRuns].slice(0, query);
+      }
+      return (query.workspaceId === DEFAULT_WORKSPACE_ID ? workspaceRuns : otherRuns).slice(0, query.limit);
+    });
+
+    const result = await handleInternalMcpDurableTasksInvoke(
+      server(),
+      {
+        serverId: "durable-tasks",
+        toolName: MCP_DURABLE_TASKS_LIST_TOOL_NAME,
+        workspaceId: DEFAULT_WORKSPACE_ID,
+        arguments: { limit: 1 },
+      },
+      { listRuns, getRun: vi.fn(), cancelRun: vi.fn() },
+    );
+
+    expect(result).toMatchObject({ ok: true, output: { tasks: [{ taskId: "older-local-1" }] } });
+    expect(listRuns).toHaveBeenCalledWith({ workspaceId: DEFAULT_WORKSPACE_ID, limit: 1 });
   });
 
   it("gets a task and reports not-found cleanly", async () => {

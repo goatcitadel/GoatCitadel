@@ -28,7 +28,7 @@ export interface McpDurableTaskView {
 }
 
 export interface McpDurableTasksPort {
-  listRuns: (limit?: number) => Promise<DurableRunRecord[]>;
+  listRuns: (query: { workspaceId: string; limit: number }) => Promise<DurableRunRecord[]>;
   getRun: (runId: string) => Promise<DurableRunRecord | undefined>;
   cancelRun: (runId: string) => Promise<DurableRunRecord>;
 }
@@ -113,7 +113,7 @@ export async function handleInternalMcpDurableTasksInvoke(
     switch (input.toolName) {
       case MCP_DURABLE_TASKS_LIST_TOOL_NAME: {
         const limit = parseLimit(input.arguments?.limit) ?? 50;
-        const tasks = (await deps.listRuns(200))
+        const tasks = (await deps.listRuns({ workspaceId: scope.workspaceId, limit }))
           .filter((run) => durableRunMatchesScope(run, scope))
           .slice(0, limit)
           .map(toDurableTaskView);

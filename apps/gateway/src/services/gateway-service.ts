@@ -2780,7 +2780,7 @@ export class GatewayService {
       approvalInbox: this.storage.approvalInbox,
       assertMcpServerInScope: async (request) => await this.assertMcpServerInCapabilityScope(request),
       durableTasks: {
-        listRuns: async (limit) => await this.storage.durableRuns.listRuns(limit),
+        listRuns: async ({ workspaceId, limit }) => await this.storage.durableRuns.listMcpTaskRuns(workspaceId, limit),
         getRun: async (runId) => {
           try {
             return await this.storage.durableRuns.getRun(runId);

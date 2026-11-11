@@ -81,7 +81,7 @@ export async function prepareOrchestrationChildRecovery(
 export interface OrchestrationPhaseChildWakeHost {
   readonly storage: {
     orchestration: Pick<OrchestrationLifecycleHost["storage"]["orchestration"], "getRun">;
-    durableRuns: Pick<Storage["durableRuns"], "listRunIdsByStatus">;
+    durableRuns: Pick<Storage["durableRuns"], "listWaitingOrchestrationRunIds">;
     durableChildWatchers: Pick<Storage["durableChildWatchers"], "getByPair">;
     chatTurnTraces: Pick<Storage["chatTurnTraces"], "get">;
   };
@@ -121,22 +121,29 @@ export async function wakeOrchestrationPhaseParent(
  */
 export async function reconcileWaitingOrchestrationPhases(host: OrchestrationPhaseChildWakeHost): Promise<void> {
   const failures: unknown[] = [];
-  for (const runId of await host.storage.durableRuns.listRunIdsByStatus("waiting")) {
-    try {
-      const parent = await getDurableRunIfAvailable(host, runId);
-      const childRunId = parent ? readPhaseChildWaitCorrelation(parent) : undefined;
-      const payload = parent && childRunId ? parseOrchestrationWorkflowPayload(parent) : undefined;
-      if (!parent || !childRunId || !payload) {
-        continue;
+  const pageSize = 200;
+  let afterRunId: string | undefined;
+  for (;;) {
+    const runIds = await host.storage.durableRuns.listWaitingOrchestrationRunIds(pageSize, afterRunId);
+    for (const runId of runIds) {
+      try {
+        const parent = await getDurableRunIfAvailable(host, runId);
+        const childRunId = parent ? readPhaseChildWaitCorrelation(parent) : undefined;
+        const payload = parent && childRunId ? parseOrchestrationWorkflowPayload(parent) : undefined;
+        if (!parent || !childRunId || !payload) {
+          continue;
+        }
+        const run = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
+        if (run) {
+          await wakeParkedOrchestrationPhase(host, parent, run, childRunId);
+        }
+      } catch (error) {
+        // One unreadable parent must not starve the others; report after the scan.
+        failures.push(error);
       }
-      const run = await getOrchestrationRunIfAvailable(host, payload.orchestrationRunId);
-      if (run) {
-        await wakeParkedOrchestrationPhase(host, parent, run, childRunId);
-      }
-    } catch (error) {
-      // One unreadable parent must not starve the others; report after the scan.
-      failures.push(error);
     }
+    if (runIds.length < pageSize) break;
+    afterRunId = runIds.at(-1);
   }
   if (failures.length > 0) {
     throw new AggregateError(failures, "Orchestration phase wake reconciliation could not check every parked run.");

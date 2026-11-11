@@ -58,4 +58,22 @@ export function verifyDurableRunHistory(db: DatabaseClient): void {
   for (const limit of [0, -1, 501, 1.5, Number.NaN]) {
     assert.throws(() => repo.listRunHistory({ workspaceId: "alpha", limit }), ValidationError);
   }
+
+  const scoped = "mcp-alpha";
+  const foreign = "mcp-beta";
+  const older = "2026-09-28T00:00:00.000Z";
+  const createMcpRun = (runId: string, payload: Record<string, unknown>, metadata?: Record<string, unknown>) =>
+    repo.createRun({ runId, workflowKey: "chat.turn.execute", payload, metadata, now: older });
+  for (let index = 0; index < 200; index++) {
+    create(`mcp-newer-foreign-${index}`, { workspaceId: foreign });
+  }
+  createMcpRun("mcp-d", { workspaceId: foreign }, { workspaceId: `\u00a0\t${scoped}\r\n` });
+  createMcpRun("mcp-c", { workspaceId: scoped }, { workspaceId: "\t \n" });
+  createMcpRun("mcp-b", { policyContext: { workspaceId: scoped } }, { policyContext: { workspaceId: foreign } });
+  createMcpRun("mcp-a", { policyContext: [] }, { policyContext: { workspaceId: scoped } });
+  create("mcp-foreign-winner", { workspaceId: scoped }, { workspaceId: foreign });
+  create("mcp-masked-metadata", { policyContext: {} }, { policyContext: { workspaceId: scoped } });
+  assert.deepEqual(repo.listMcpTaskRuns(scoped, 2).map((run) => run.runId), ["mcp-d", "mcp-c"]);
+  assert.deepEqual(repo.listMcpTaskRuns(scoped, 200).map((run) => run.runId), ["mcp-d", "mcp-c", "mcp-b", "mcp-a"]);
+  assert.throws(() => repo.listMcpTaskRuns(scoped, 201), RangeError);
 }
