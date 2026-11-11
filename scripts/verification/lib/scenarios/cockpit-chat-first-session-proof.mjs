@@ -71,7 +71,7 @@ export function createFirstSessionReceiptGate({phase,timeoutMs=15000}){
  let capturedResolve,capturedReject,releaseResolve,releaseReject,admitted=false,disposed=false;
  const captured=new Promise((resolve,reject)=>{capturedResolve=resolve;capturedReject=reject;});void captured.catch(()=>undefined);
  const released=new Promise((resolve,reject)=>{releaseResolve=resolve;releaseReject=reject;});void released.catch(()=>undefined);
- const timer=setTimeout(()=>{const error=new Error("First-session owned receipt gate deadline");capturedReject(error);releaseReject(error);},timeoutMs);
+ const timer=setTimeout(()=>{const error=new Error(`First-session ${phase} deadline while ${admitted?"held":"awaiting receipt"}`);capturedReject(error);releaseReject(error);},timeoutMs);
  return {captured,async hold(response){assert.ok(!admitted&&!disposed,"Receipt gate may admit once; duplicate admission refused");admitted=true;capturedResolve(response);await released;return response;},release(){clearTimeout(timer);releaseResolve();},async dispose(){disposed=true;clearTimeout(timer);if(!admitted)capturedReject(new Error("First-session gate disposed before receipt"));releaseResolve();}};
 }
 
@@ -89,7 +89,7 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
  for(const caseName of CASES){
   const token=randomUUID().slice(0,8),report={caseName,variant,stage:"empty workspace",delayedSidebarInterleaving:"unit-only; browser not exercised"};
   let browserContext,page,creatorGate,uploadGate,apiHandler;
-  const routeTasks=new Set();
+  const routeTasks=new Set();let routeFailure;
   try{
    const api=async(route,init)=>{const response=await requestJson(stack.gatewayUrl,route,init);assertOk(response,route);return response.body;};
    const workspace=await api("/api/v1/workspaces",{method:"POST",body:{name:`First attachment ${variant} ${caseName} ${token}`,...(citadelId?{citadelId}:{})}});
@@ -124,6 +124,9 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
    apiHandler=route=>{
     const task=(async()=>{
      const request=route.request(),url=new URL(request.url()),method=request.method();
+     if(method==="POST"&&/\/chat\/sessions\/[^/]+\/(?:agent-send|send)(?:\/stream)?$/u.test(url.pathname)){
+      return route.abort("blockedbyclient");
+     }
      if(method==="POST"&&url.pathname==="/api/v1/chat/sessions"){
       const input=request.postDataJSON();assert.equal(input.workspaceId,workspaceId);
       const response=await route.fetch({maxRetries:0,maxRedirects:0,timeout:15000});assert.equal(response.status(),201);
@@ -146,11 +149,19 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
       return route.fulfill({response});
      }
      return route.fallback();
-    })();routeTasks.add(task);void task.finally(()=>routeTasks.delete(task)).catch(()=>undefined);return task;
+    })().catch(async error=>{routeFailure??=error;await route.abort().catch(()=>undefined);});
+    routeTasks.add(task);void task.finally(()=>routeTasks.delete(task));return task;
    };
    await page.route("**/api/v1/**",apiHandler);
-   await page.goto(deps.buildVerificationUiUrl(stack.uiUrl,"/chat?shell=cockpit"),{waitUntil:"domcontentloaded"});
+   const leaveWhileCreating=caseName==="pending-creator-shell-navigation";
+   const areas=page.getByRole("navigation",{name:variant==="mobile"?"Areas on small screens":"Areas",exact:true});
+   const libraryUrl=url=>url.pathname==="/library";
+   await page.goto(deps.buildVerificationUiUrl(stack.uiUrl,leaveWhileCreating?"/library?shell=cockpit":"/chat?shell=cockpit"),{waitUntil:"domcontentloaded"});
    await page.waitForSelector('[data-cockpit-ready="true"]',{timeout:30000});
+   if(leaveWhileCreating){
+    await areas.getByRole("link",{name:"Chat",exact:true}).click();
+    await page.waitForURL(url=>url.pathname==="/chat");
+   }
    const draft=page.getByRole("textbox",{name:"Message",exact:true});
    await page.getByText("Choose a conversation",{exact:true}).waitFor();
    assert.equal(await draft.count(),0,"Canonical empty Chat must not be relabelled as a null-owner composer");
@@ -164,9 +175,13 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
    assert.equal(stats.images,0);assert.equal(await draft.count(),0,"No typing or media controls are reachable while explicit creation is pending");
    report.entry="empty Chat -> explicit UI New conversation -> independently confirmed selected owner";
    report.stage="held independent creator confirmation";
-   if(caseName==="pending-creator-shell-navigation"){
-    const areas=page.getByRole("navigation",{name:variant==="mobile"?"Areas on small screens":"Areas",exact:true});
-    await nativeNavigation(()=>areas.getByRole("link",{name:"Library",exact:true}).click(),url=>url.pathname==="/library");
+   if(leaveWhileCreating){
+    // An in-app link shares the pending creation's single-transition guard. Browser Back can still leave the owner.
+    await areas.getByRole("link",{name:"Library",exact:true}).click();
+    assert.equal(new URL(page.url()).pathname,"/chat");
+    report.stage="browser Back while creation confirmation is held";
+    await page.goBack();
+    await page.waitForURL(libraryUrl);
     sidebarObservationArmed=true;creatorGate.release();await(await creatorReply).finished();await settleFrames();
     assert.equal(new URL(page.url()).pathname,"/library");assert.equal(stats.uploads,0);assert.equal(stats.sends,0);
     const owner=await api(`/api/v1/chat/sessions/${encodeURIComponent(created.sessionId)}/status`);assertFirstSessionCreatedOwner(owner,workspaceId);
@@ -213,9 +228,13 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
       await renameCurrent(other.sessionId,otherTitle);assert.equal(await page.locator('[aria-label="Attached files"]').count(),0);
       await selectExact(ownTitle,created.sessionId);await chip(record).waitFor();
       if(caseName==="uploader-conversation-switch"){
-       heldUploadNumber=2;uploadGate=createFirstSessionReceiptGate({phase:"upload-receipt"});await draft.fill(imagePrompt);
+       await draft.fill(imagePrompt);
+       heldUploadNumber=2;
+       uploadGate=createFirstSessionReceiptGate({phase:"upload-receipt"});
        const secondReply=observed(page.waitForResponse(response=>response.request().method()==="POST"&&new URL(response.url()).pathname==="/api/v1/chat/attachments"));
-       await page.getByRole("button",{name:"Send",exact:true}).click();await uploadGate.captured;
+       // The first attachment makes Send a Chat turn. Explicit image creation keeps it in the draft.
+       await clickFirstSessionCreateImage(page,controls);
+       await uploadGate.captured;
        await selectExact(otherTitle,other.sessionId);const foreignDraft=`Other owner kept text ${token}`;await draft.fill(foreignDraft);uploadGate.release();const staleReply=await secondReply;assert.equal(staleReply.status(),201);await staleReply.finished();await settleFrames();
        assert.equal(new URL(page.url()).searchParams.get("sessionId"),other.sessionId);assert.equal(await draft.inputValue(),foreignDraft);assert.equal(await page.locator('[aria-label="Attached files"]').count(),0);
        await checkStored(stored[1]);await selectExact(ownTitle,created.sessionId);await chip(record).waitFor();assert.equal(await chip(stored[1]).count(),0,"Stale second receipt must not be adopted");report.oldOwnerStoredWithoutLateAdoption=true;
@@ -232,6 +251,7 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
    assert.equal(stats.images,expectedImages);assert.equal(stats.uploads,expectedUploads);assert.equal(stats.creates.length,expectedCreates);assert.equal(stats.sends,0);assert.equal(stats.foreignRequests,0);assert.equal(stats.observationGap,false);
    assert.equal(stats.renames,expectedCreates===2?2:0);
    for(const id of stats.creates){const owner=await api(`/api/v1/chat/sessions/${encodeURIComponent(id)}/status`);assertFirstSessionCreatedOwner(owner,workspaceId);const thread=await api(`/api/v1/chat/sessions/${encodeURIComponent(id)}/thread`);assert.equal(thread.sessionId,id);assert.deepEqual(thread.turns,[]);}
+   if(routeFailure)throw routeFailure;
    report.providerDelta={imageGenerations:expectedImages,completionDispatches:0};report.status="passed";
    await captureCase();cases.push(report);
 
@@ -245,15 +265,22 @@ export async function runCockpitChatFirstSessionProof({context,browser,stack,cit
    async function waitPersisted(record){await page.waitForFunction(({attachmentId,workspaceId,sessionId})=>Object.keys(window.localStorage).filter(key=>key.startsWith("goatcitadel.chat.attachments.")).some(key=>{try{const rows=JSON.parse(window.localStorage.getItem(key));return Array.isArray(rows)&&rows.some(row=>row.attachmentId===attachmentId&&row.workspaceId===workspaceId&&row.sessionId===sessionId);}catch{return false;}}),{attachmentId:record.attachmentId,workspaceId,sessionId:created.sessionId},{timeout:15000});}
    async function settleFrames(){await page.evaluate(()=>new Promise(resolve=>globalThis.requestAnimationFrame(()=>globalThis.requestAnimationFrame(resolve))));}
    async function nativeNavigation(trigger,predicate){const prior=page.url();await trigger();const dialog=page.getByRole("dialog",{name:"Unsaved changes",exact:true});const outcome=await Promise.race([observed(page.waitForURL(predicate)).then(()=>"destination"),observed(dialog.waitFor({state:"visible"})).then(()=>"review")]);if(outcome==="review"){assert.equal(page.url(),prior);assert.equal(await dialog.count(),1);await dialog.getByRole("button",{name:"Keep draft and close",exact:true}).click();await dialog.waitFor({state:"hidden"});}await page.waitForURL(predicate);}
+   async function assertCanonicalTitle(id,title){
+    const query=new URLSearchParams({workspaceId,scope:"all",view:"all",limit:"200"});
+    const {items}=await api(`/api/v1/chat/sessions?${query}`);
+    const owners=items.filter(item=>item.sessionId===id);assert.equal(owners.length,1);
+    assert.equal(assertFirstSessionCreatedOwner(owners[0],workspaceId).title,title);
+   }
    async function renameCurrent(id,title){
     await page.getByRole("button",{name:"Rename conversation",exact:true}).click();await page.getByRole("textbox",{name:"Conversation title",exact:true}).fill(title);
     const response=observed(page.waitForResponse(value=>value.request().method()==="PATCH"&&new URL(value.url()).pathname===`/api/v1/chat/sessions/${encodeURIComponent(id)}`));
-    const save=page.getByRole("button",{name:"Save",exact:true});assert.equal(await save.count(),1);await save.click();assert.equal((await response).status(),200);assert.equal((await api(`/api/v1/chat/sessions/${encodeURIComponent(id)}/status`)).title,title);await page.getByRole("heading",{name:title,exact:true}).waitFor();
+    const save=page.getByRole("button",{name:"Save",exact:true});assert.equal(await save.count(),1);await save.click();assert.equal((await response).status(),200);await assertCanonicalTitle(id,title);await page.getByRole("heading",{name:title,exact:true}).waitFor();
    }
-   async function selectExact(title,id){await controls.closeComposerOptions(page);const list=await openConversationList(page);const row=conversationNavigation(list).getByRole("button",{name:new RegExp("^"+escapeRegex(title),"u")});assert.equal(await row.count(),1,"Synthetic conversation label must identify exactly one canonical owner");await nativeNavigation(()=>row.click(),url=>url.searchParams.get("sessionId")===id);await closeConversationList(page);assert.equal((await api(`/api/v1/chat/sessions/${encodeURIComponent(id)}/status`)).title,title);}
+   async function selectExact(title,id){await controls.closeComposerOptions(page);const list=await openConversationList(page);const row=conversationNavigation(list).getByRole("button",{name:new RegExp("^"+escapeRegex(title),"u")});await row.waitFor({state:"visible"});assert.equal(await row.count(),1,"Synthetic conversation label must identify exactly one canonical owner");await nativeNavigation(()=>row.click(),url=>url.searchParams.get("sessionId")===id);await closeConversationList(page);await assertCanonicalTitle(id,title);}
    async function captureCase(){const directory=path.join(context.artifactRoot,"screenshots");await mkdir(directory,{recursive:true});const file=path.join(directory,`cockpit-first-session-${variant}-${caseName}.png`);await page.screenshot({path:file,fullPage:false});screenshots.push(relativeToRun(context,file));}
   }catch(error){
-   report.status="failed";report.error=error instanceof Error?error.message.slice(0,1000):"First-session fixture failed";
+   const failure=routeFailure??error;
+   report.status="failed";report.error=failure instanceof Error?failure.message.slice(0,1000):"First-session fixture failed";
    if(page&&!page.isClosed()){try{const directory=path.join(context.artifactRoot,"screenshots");await mkdir(directory,{recursive:true});const file=path.join(directory,`cockpit-first-session-${variant}-${caseName}-failure.png`);await page.screenshot({path:file,fullPage:false});screenshots.push(relativeToRun(context,file));}catch{/* Preserve original case outcome. */}}
    cases.push(report);
   }finally{
