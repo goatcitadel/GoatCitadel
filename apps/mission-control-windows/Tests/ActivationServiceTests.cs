@@ -139,6 +139,27 @@ public sealed class ActivationServiceTests
     }
 
     [TestMethod]
+    public void ArrivalsAfterRegistrationAndDuringFlushPreserveQueueOrder()
+    {
+        var queue = new ActivationDeliveryQueue();
+        var delivered = new List<string>();
+
+        queue.Enqueue(ActivationDelivery.ForRoute("/ops/activity"));
+        queue.Register(route =>
+        {
+            delivered.Add(route);
+            if (route == "/ops/activity")
+            {
+                queue.Enqueue(ActivationDelivery.ForRoute("/library"));
+            }
+        }, _ => Assert.Fail("Unexpected activation diagnostic."));
+        queue.Enqueue(ActivationDelivery.ForRoute("/chat"));
+        queue.FlushPending();
+
+        CollectionAssert.AreEqual(new[] { "/ops/activity", "/chat", "/library" }, delivered);
+    }
+
+    [TestMethod]
     public void ColdStartRouteWaitsUntilRuntimeDeliverySucceeds()
     {
         var queue = new DeferredRouteDeliveryQueue();

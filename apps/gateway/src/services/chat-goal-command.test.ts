@@ -88,6 +88,28 @@ describe("handleGoalCommand", () => {
     );
   });
 
+  it("admits only one concurrent resume of the same paused goal", async () => {
+    const deps = fakeDeps();
+    deps.listChatSessionLearnedMemory.mockReturnValue({
+      items: [goalMemory("paused-1", "Goal: Finish coverage", "disabled")],
+      conflicts: [],
+    } as never);
+    deps.runChatDelegation.mockResolvedValue({
+      runId: "run-1",
+      steps: [qaStep("GOAL_STATUS: pass\nGOAL_REASON: green")],
+    });
+
+    const [first, second] = await Promise.all([
+      handleGoalCommand(deps, "session-1", ["resume"]),
+      handleGoalCommand(deps, "session-1", ["resume"]),
+    ]);
+
+    expect(first.ok).toBe(true);
+    expect(second).toEqual({ ok: false, message: expect.stringContaining("already running") });
+    expect(deps.updateChatSessionLearnedMemory).toHaveBeenCalledTimes(1);
+    expect(deps.runChatDelegation).toHaveBeenCalledTimes(1);
+  });
+
   it("runs a goal loop until pass, budget, blocked, or iteration cap", async () => {
     const deps = fakeDeps();
     deps.getSession.mockReturnValue({ costUsdTotal: 0.25 });

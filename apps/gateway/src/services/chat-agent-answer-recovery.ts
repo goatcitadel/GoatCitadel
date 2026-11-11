@@ -154,36 +154,30 @@ function readMutationPath(run: ChatToolRunRecord): string | undefined {
  * superseded). Immutable: never mutates the input array.
  */
 export function collectFailedFileMutations(toolRuns: readonly ChatToolRunRecord[]): FailedFileMutation[] {
-  const fileMutations = toolRuns.filter((run) => FILE_MUTATION_TOOL_NAMES.has(run.toolName));
-  const succeededPaths = new Set<string>();
-  for (const run of fileMutations) {
-    if (run.status === "executed") {
-      const path = readMutationPath(run);
-      if (path) {
-        succeededPaths.add(path);
-      }
-    }
-  }
-
+  const laterSucceededPaths = new Set<string>();
   const failures: FailedFileMutation[] = [];
-  for (const run of fileMutations) {
-    if (run.status !== "failed" && run.status !== "blocked") {
+  for (const run of [...toolRuns].reverse()) {
+    if (!FILE_MUTATION_TOOL_NAMES.has(run.toolName)) {
       continue;
     }
     const path = readMutationPath(run);
-    if (path && succeededPaths.has(path)) {
+    if (run.status === "executed" && path) {
+      laterSucceededPaths.add(path);
+    }
+    if (run.status !== "failed" && run.status !== "blocked") {
+      continue;
+    }
+    if (path && laterSucceededPaths.has(path)) {
       // A later successful write to the same path recovered this failure.
       continue;
     }
     failures.push({
       toolName: run.toolName,
       ...(path ? { path } : {}),
-      error:
-        run.error?.trim() ||
-        (run.status === "blocked" ? "Tool call was blocked by policy." : "Tool call failed."),
+      error: run.error?.trim() || (run.status === "blocked" ? "Tool call was blocked by policy." : "Tool call failed."),
     });
   }
-  return failures;
+  return failures.reverse();
 }
 
 /**
