@@ -85,6 +85,8 @@ describe("handleGoalCommand", () => {
     expect(deps.runChatDelegation).toHaveBeenCalledWith(
       "session-1",
       expect.objectContaining({ surfaceMode: "chat", roles: ["coder", "qa"], mode: "sequential" }),
+      undefined,
+      { abortSignal: expect.any(AbortSignal) },
     );
   });
 
@@ -108,6 +110,38 @@ describe("handleGoalCommand", () => {
     expect(second).toEqual({ ok: false, message: expect.stringContaining("already running") });
     expect(deps.updateChatSessionLearnedMemory).toHaveBeenCalledTimes(1);
     expect(deps.runChatDelegation).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the session claimed after the deadline until the delegation owner settles", async () => {
+    vi.useFakeTimers();
+    const deps = fakeDeps();
+    const held = Promise.withResolvers<never>();
+    const passed = { runId: "next-run", steps: [qaStep("GOAL_STATUS: pass")] };
+    deps.runChatDelegation.mockReturnValueOnce(held.promise).mockResolvedValue(passed);
+    try {
+      const timed = handleGoalCommand(deps, "timeout-test", ["First objective"]);
+      await vi.advanceTimersByTimeAsync(5 * 60 * 1000);
+      const timeout = await timed;
+      expect(timeout.ok).toBe(false);
+
+      await expect(handleGoalCommand(deps, "timeout-test", ["Second objective"])).resolves.toEqual({
+        ok: false,
+        message: expect.stringContaining("already running"),
+      });
+      expect(deps.runChatDelegation).toHaveBeenCalledTimes(1);
+      expect(deps.runChatDelegation.mock.calls[0]?.[3]?.abortSignal?.aborted).toBe(true);
+      expect(timeout.message).toContain("Cancellation requested");
+      expect(timeout.message).not.toContain("not-started");
+
+      held.reject(new Error("Delegation owner settled cancellation."));
+      await vi.advanceTimersByTimeAsync(0);
+      await expect(handleGoalCommand(deps, "timeout-test", ["Second objective"])).resolves.toMatchObject({ ok: true });
+      expect(deps.runChatDelegation).toHaveBeenCalledTimes(2);
+    } finally {
+      held.reject(new Error("Test cleanup."));
+      await vi.advanceTimersByTimeAsync(0);
+      vi.useRealTimers();
+    }
   });
 
   it("runs a goal loop until pass, budget, blocked, or iteration cap", async () => {

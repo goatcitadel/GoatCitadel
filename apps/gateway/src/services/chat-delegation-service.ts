@@ -2004,12 +2004,15 @@ export class ChatDelegationService {
             }
             scheduleLateSettleRecord?.(event);
           },
-          run: async (signal) =>
-            deps.agentSendChatMessage(agentSessionId, delegatedRequest, {
-              // Explorer transport disconnects are observation-only. The
-              // server-owned timeout still bounds execution, while standard
-              // delegation keeps its existing caller-cancellation behavior.
-              abortSignal: composeChatDelegationAbortSignal(signal, explorerProfile ? undefined : options.abortSignal),
+          run: async (signal) => {
+            // Explorer transport disconnects are observation-only. Standard delegation can be cancelled during child preparation.
+            const abortSignal = composeChatDelegationAbortSignal(
+              signal,
+              explorerProfile ? undefined : options.abortSignal,
+            );
+            throwIfChatDelegationAborted(abortSignal);
+            return deps.agentSendChatMessage(agentSessionId, delegatedRequest, {
+              abortSignal,
               turnIdentity,
               returnAfterDurableAdmission: options.requireChildWatchers === true,
               assertDispatchOwnership: async () =>
@@ -2034,7 +2037,8 @@ export class ChatDelegationService {
                   await callbacks?.onStep?.(bound);
                 }
               },
-            }),
+            });
+          },
         });
         const responseTurnId = response.turnId?.trim();
         if (!responseTurnId) {

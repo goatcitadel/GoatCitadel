@@ -49,6 +49,8 @@ export interface ChatGoalCommandDependencies {
         dependsOnStepIds?: string[];
       }>;
     },
+    callbacks?: undefined,
+    options?: { abortSignal?: AbortSignal },
   ): Promise<{ runId: string; taskId?: string; steps: ChatDelegationStepRecord[]; stitchedOutput?: string }>;
   updateChatSessionLearnedMemory(
     sessionId: string,
@@ -73,7 +75,7 @@ interface ParsedGoalCommand {
 
 interface GoalLoopIteration {
   iteration: number;
-  runId: string;
+  runId?: string;
   taskId?: string;
   verdict: "pass" | "fail" | "unknown" | "blocked";
   reason?: string;
@@ -89,6 +91,7 @@ interface GoalLoopResult {
   maxIterations: number;
   budgetUsd: number;
   latestOutput?: string;
+  pendingDelegation?: Promise<unknown>;
 }
 
 const GOAL_LOOP_ITERATION_TIMEOUT_MS = 5 * 60 * 1000;
@@ -98,6 +101,14 @@ const LEGACY_RESUME_GOAL_OPTIONS: GoalLoopOptions = {
   surfaceMode: "code",
 };
 const activeGoalLoopSessionIds = new Set<string>();
+
+class GoalLoopIterationTimeout extends Error {
+  constructor(readonly settlement: Promise<unknown>) {
+    super(
+      "Goal iteration timed out. Cancellation requested. Wait for the delegation to finish before starting another goal.",
+    );
+  }
+}
 
 export async function handleGoalCommand(
   deps: ChatGoalCommandDependencies,
@@ -142,6 +153,10 @@ export async function handleGoalCommand(
     };
   }
   activeGoalLoopSessionIds.add(sessionId);
+  const release = () => {
+    activeGoalLoopSessionIds.delete(sessionId);
+  };
+  let pendingDelegation: Promise<unknown> | undefined;
   try {
     if (parsedGoal.action === "resume") {
       const learnedMemory = await deps.listChatSessionLearnedMemory(sessionId, 200);
@@ -170,12 +185,17 @@ export async function handleGoalCommand(
       persistGoalMemory: shouldPersistGoalMemory,
       policyContext,
     });
+    pendingDelegation = loop.pendingDelegation;
     return {
       ok: loop.ok,
       message: formatGoalLoopResult(loop),
     };
   } finally {
-    activeGoalLoopSessionIds.delete(sessionId);
+    if (pendingDelegation) {
+      void pendingDelegation.then(release, release);
+    } else {
+      release();
+    }
   }
 }
 
@@ -207,42 +227,47 @@ async function runGoalLoop(
     const iteration = index + 1;
     let response: Awaited<ReturnType<ChatGoalCommandDependencies["runChatDelegation"]>>;
     try {
-      response = await withGoalLoopTimeout(
-        deps.runChatDelegation(sessionId, {
-          objective: buildGoalIterationObjective({
-            objective,
-            iteration,
-            maxIterations: options.maxIterations,
-            previousVerifierOutput: latestOutput,
-          }),
-          roles: ["coder", "qa"],
-          mode: "sequential",
-          surfaceMode: options.surfaceMode,
-          policyRunId: runtimeOptions.policyContext?.policyRunId,
-          policyTaskId: runtimeOptions.policyContext?.policyTaskId,
-          operatorId: runtimeOptions.policyContext?.operatorId,
-          authActorId: runtimeOptions.policyContext?.authActorId,
-          authActorSource: runtimeOptions.policyContext?.authActorSource,
-          permissionProfileId: runtimeOptions.policyContext?.permissionProfileId,
-          localOperatorOverrideId: runtimeOptions.policyContext?.localOperatorOverrideId,
-          surface: runtimeOptions.policyContext?.surface,
-          steps: [
-            {
-              stepId: `goal-${iteration}-implement`,
-              index: 0,
-              role: "coder",
-            },
-            {
-              stepId: `goal-${iteration}-verify`,
-              index: 1,
-              role: "qa",
-              dependsOnStepIds: [`goal-${iteration}-implement`],
-            },
-          ],
-        }),
+      response = await withGoalLoopTimeout((abortSignal) =>
+        deps.runChatDelegation(
+          sessionId,
+          {
+            objective: buildGoalIterationObjective({
+              objective,
+              iteration,
+              maxIterations: options.maxIterations,
+              previousVerifierOutput: latestOutput,
+            }),
+            roles: ["coder", "qa"],
+            mode: "sequential",
+            surfaceMode: options.surfaceMode,
+            policyRunId: runtimeOptions.policyContext?.policyRunId,
+            policyTaskId: runtimeOptions.policyContext?.policyTaskId,
+            operatorId: runtimeOptions.policyContext?.operatorId,
+            authActorId: runtimeOptions.policyContext?.authActorId,
+            authActorSource: runtimeOptions.policyContext?.authActorSource,
+            permissionProfileId: runtimeOptions.policyContext?.permissionProfileId,
+            localOperatorOverrideId: runtimeOptions.policyContext?.localOperatorOverrideId,
+            surface: runtimeOptions.policyContext?.surface,
+            steps: [
+              {
+                stepId: `goal-${iteration}-implement`,
+                index: 0,
+                role: "coder",
+              },
+              {
+                stepId: `goal-${iteration}-verify`,
+                index: 1,
+                role: "qa",
+                dependsOnStepIds: [`goal-${iteration}-implement`],
+              },
+            ],
+          },
+          undefined,
+          { abortSignal },
+        ),
       );
     } catch (error) {
-      return buildLoopResult(
+      const result = buildLoopResult(
         false,
         objective,
         "blocked",
@@ -250,7 +275,6 @@ async function runGoalLoop(
           ...iterations,
           {
             iteration,
-            runId: "not-started",
             verdict: "blocked",
             reason: (error as Error).message,
             costUsd: 0,
@@ -260,6 +284,10 @@ async function runGoalLoop(
         options,
         latestOutput,
       );
+      if (error instanceof GoalLoopIterationTimeout) {
+        result.pendingDelegation = error.settlement;
+      }
+      return result;
     }
 
     const iterationCostUsd = await estimateDelegationRunCostUsd(deps, response.steps, seenChildSessions);
@@ -447,18 +475,21 @@ function formatGoalLoopResult(result: GoalLoopResult): string {
   const lines = [
     `${status}: ${result.objective}`,
     `Iterations: ${result.iterations.length}/${result.maxIterations}`,
-    `Estimated cost: $${result.totalCostUsd.toFixed(4)} / $${result.budgetUsd.toFixed(2)}`,
+    result.pendingDelegation
+      ? `Estimated cost so far: $${result.totalCostUsd.toFixed(4)} / $${result.budgetUsd.toFixed(2)}. The timed-out iteration's cost is unknown.`
+      : `Estimated cost: $${result.totalCostUsd.toFixed(4)} / $${result.budgetUsd.toFixed(2)}`,
     "",
     "Runs:",
     ...result.iterations.map((iteration) => {
       const reason = iteration.reason ? ` - ${iteration.reason}` : "";
-      return `- ${iteration.iteration}: ${iteration.verdict} (${iteration.runId})${reason}`;
+      const run = iteration.runId ? ` (${iteration.runId})` : "";
+      return `- ${iteration.iteration}: ${iteration.verdict}${run}${reason}`;
     }),
   ];
   if (result.latestOutput) {
     lines.push("", "Latest verifier output:", result.latestOutput.slice(0, 1200));
   }
-  if (result.stopReason !== "goal_hit") {
+  if (result.stopReason !== "goal_hit" && !result.pendingDelegation) {
     lines.push("", "Use /goal resume to continue the latest paused goal, or /goal clear to clear stored goals.");
   }
   return lines.join("\n");
@@ -523,10 +554,16 @@ function parseGoalOptionsLine(line: string): GoalLoopOptions | undefined {
   };
 }
 
-async function withGoalLoopTimeout<T>(promise: Promise<T>): Promise<T> {
+async function withGoalLoopTimeout<T>(start: (signal: AbortSignal) => Promise<T>): Promise<T> {
+  const controller = new AbortController();
+  const promise = start(controller.signal);
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const timeout = new Promise<never>((_, reject) => {
-    timeoutId = setTimeout(() => reject(new Error("Goal-loop iteration timeout")), GOAL_LOOP_ITERATION_TIMEOUT_MS);
+    timeoutId = setTimeout(() => {
+      const error = new GoalLoopIterationTimeout(promise);
+      reject(error);
+      controller.abort(new Error("Goal iteration timed out."));
+    }, GOAL_LOOP_ITERATION_TIMEOUT_MS);
   });
   try {
     return await Promise.race([promise, timeout]);
