@@ -9,6 +9,65 @@ import {
 } from "./chat-turn-agent-runner-test-fixtures.js";
 
 describe("ChatTurnAgentRunner live-chat and harness boundary behavior", () => {
+  it.each(["using shell_exec", "using the shell tool"])(
+    "finishes a sustained script request %s when policy denies shell",
+    async (shellRequest) => {
+      const content = `Run delete-fixture.ps1 in the project folder ${shellRequest}.`;
+      const createChatCompletion = vi.fn<() => Promise<ChatCompletionResponse>>().mockResolvedValue({
+        model: "gemma",
+        choices: [
+          {
+            index: 0,
+            finish_reason: "stop",
+            message: { role: "assistant", content: "The shell tool is unavailable." },
+          },
+        ],
+      });
+      const invokeTool = vi.fn<() => Promise<ToolInvokeResult>>();
+      const runner = new ChatTurnAgentRunner({
+        storage: Object.assign(createMockStorage() as object, {
+          durableRuns: {
+            getLatestCheckpointByKind: () => undefined,
+            createCheckpoint: (checkpoint: { createdAt: string }) => checkpoint,
+          },
+        }) as never,
+        listToolCatalog: () => createToolCatalog(["fs.stat", "shell.exec"]),
+        evaluateToolAccess: async ({ toolName }) => ({
+          allowed: toolName !== "shell.exec",
+          requiresApproval: false,
+          reasonCodes: toolName === "shell.exec" ? ["policy_denied"] : [],
+        }),
+        createChatCompletion,
+        invokeTool,
+      });
+
+      const result = await runner.run({
+        sessionId: "sess-blocked-script",
+        turnId: randomUUID(),
+        userMessageId: "msg-blocked-script",
+        policyRunId: "durable-blocked-script",
+        content,
+        mode: "chat",
+        providerId: "ollama",
+        model: "gemma",
+        webMode: "off",
+        memoryMode: "off",
+        retrievalMode: "standard",
+        thinkingLevel: "standard",
+        toolAutonomy: "safe_auto",
+        historyMessages: [{ role: "user", content }],
+      });
+
+      expect(result.turnTrace.routing.executionBudget?.profile).toBe("sustained_local_coding");
+      expect(result.turnTrace.status).toBe("completed");
+      expect(result.turnTrace.failure?.failureClass).toBe("tool_blocked");
+      expect(result.assistantContent).toContain("Shell execution is blocked");
+      expect(createChatCompletion).toHaveBeenCalledTimes(1);
+      expect(invokeTool).not.toHaveBeenCalled();
+      expect(result.requiresApproval).toBeUndefined();
+    },
+  );
+
   it("passes model output through verbatim without forced repo prefetch on harness turns", async () => {
     const wrappedPrompt = [
       "## Prompt Lab Run Contract",

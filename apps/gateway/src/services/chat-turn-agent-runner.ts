@@ -2723,6 +2723,7 @@ export class ChatTurnAgentRunner {
     if (codingState) await persistCodingProgress(codingState.nextAction);
     let finalStatus: ChatTurnTraceRecord["status"] = "completed";
     let finalFailure: ChatTurnFailureRecord | undefined;
+    let codingShellBlocked = false;
     // The "a repair pass is required" record, so a repair that completes the answer can clear exactly it.
     let incompleteAnswerFailure: ChatTurnFailureRecord | undefined;
     let completionState: NonNullable<ChatTurnTraceRecord["completion"]> = {
@@ -5096,6 +5097,23 @@ export class ChatTurnAgentRunner {
             if (codingState && finalStatus === "completed" && completionOutcome.status === "complete") {
               const unmet = evaluateCodingCompletion(codingState, toolRuns, assistantContent);
               if (unmet.length > 0) {
+                if (
+                  toolSchema.policyDecisions.some(
+                    (decision) => decision.toolName === "shell.exec" && !decision.allowed,
+                  ) &&
+                  (codingState.acceptance.requiredCommands.length > 0 ||
+                    (/^\s*(?:please\s+)?(?:run|execute)\b/iu.test(executionIntentContent) &&
+                      (detectExplicitToolMentions(executionIntentContent, ["shell.exec"]).has("shell.exec") ||
+                        /\b(?:using|with)\s+(?:the\s+)?shell\s+tool\b/iu.test(executionIntentContent)))) &&
+                  !toolRuns.some((run) => run.toolName === "shell.exec" && run.status === "executed")
+                ) {
+                  // A fresh model call cannot obtain evidence from a denied tool.
+                  codingShellBlocked = true;
+                  assistantContent =
+                    "Shell execution is blocked by the current tool policy. The requested command did not run.";
+                  finalFailure = buildChatTurnFailureRecord("tool_blocked", assistantContent);
+                  break;
+                }
                 conversationMessages.push({ role: "assistant", content: assistantContent });
                 conversationMessages.push({
                   role: "system",
@@ -6493,7 +6511,9 @@ export class ChatTurnAgentRunner {
           ? approvalPayload
             ? "Waiting for approval."
             : "Waiting for operator input."
-          : "Checking completion against tool receipts.",
+          : codingShellBlocked
+            ? "Stopped because tool policy blocks shell execution."
+            : "Checking completion against tool receipts.",
       );
       if (
         finalStatus === "completed" &&
@@ -6507,7 +6527,7 @@ export class ChatTurnAgentRunner {
           "Sustained coding budget was exhausted before a verified final answer.",
         );
       }
-      if (finalStatus === "completed") {
+      if (finalStatus === "completed" && !codingShellBlocked) {
         const unmet = evaluateCodingCompletion(codingState, toolRuns, assistantContent);
         if (unmet.length > 0) {
           finalStatus = "partial";
