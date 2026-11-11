@@ -224,6 +224,9 @@ jobs:
       - name: Run real Postgres Gateway Inbox projection lane
         run: pnpm --filter @goatcitadel/gateway test:postgres:inbox
 
+      - name: Run real Postgres Chat turn control and Auto file effects
+        run: pnpm --filter @goatcitadel/gateway exec vitest run src/services/chat-turn-control.real-postgres.test.ts
+
   bundled-postgres-restart:
     name: Bundled Postgres stopped-container restart
     runs-on: ubuntu-24.04

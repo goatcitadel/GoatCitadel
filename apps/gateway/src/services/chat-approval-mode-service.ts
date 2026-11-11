@@ -10,9 +10,9 @@ import {
 } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 
-/** The managed file effect and recovery paths are verified on SQLite. */
+/** Both storage backends retain the revision and approval effects used by Auto. */
 export function isChatAutoApprovalEnabled(storage: Pick<AsyncStorage, "db">): boolean {
-  return storage.db.dialect === "sqlite";
+  return storage.db.dialect === "sqlite" || storage.db.dialect === "postgres";
 }
 
 export interface ChatApprovalModeDependencies {

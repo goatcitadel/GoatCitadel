@@ -12,6 +12,13 @@ import {
   type AsyncStorage,
 } from "@goatcitadel/storage";
 import { claimArtifactRetry, closeChatTurnToolUse, readChatTurnControl } from "./chat-turn-control.js";
+import {
+  getChatApprovalMode,
+  isChatAutoApprovalEnabled,
+  readChatApprovalAdmission,
+  updateChatApprovalMode,
+  withCurrentChatApprovalAuthority,
+} from "./chat-approval-mode-service.js";
 import { preserveCancelledChatTurnOutput } from "./chat-turn-interruption-recovery-service.js";
 import { commitDurableWakeTransition } from "./durable-wake-transition-service.js";
 import {
@@ -91,6 +98,85 @@ describe.skipIf(!url)("Chat turn control on isolated real PostgreSQL", { timeout
     });
     return { turnId, sessionId, runId: run.runId };
   }
+
+  it("admits project Auto mode and retains exact, revision-bound file effects across PostgreSQL workers", async () => {
+    const sessionId = randomUUID();
+    const workspaceId = "default";
+    const deps = { storage, chatAutoApprovalEnabled: isChatAutoApprovalEnabled(storage) };
+    const other = { storage: second, chatAutoApprovalEnabled: isChatAutoApprovalEnabled(second) };
+    await storage.sessions.upsert({
+      sessionId,
+      sessionKey: `mission:operator:${sessionId}`,
+      channel: "mission",
+      account: "operator",
+      kind: "dm",
+      timestamp: new Date().toISOString(),
+    });
+    await storage.chatSessionMeta.ensure(sessionId, undefined, workspaceId);
+    const { projectId } = await storage.chatProjects.create({
+      workspaceId,
+      name: "Auto PostgreSQL proof",
+      workspacePath: "auto-pg",
+    });
+    await storage.chatSessionProjects.assign(sessionId, projectId);
+    const standard = await getChatApprovalMode(deps, sessionId);
+    expect(standard.autoAvailable).toBe(true);
+    const auto = await updateChatApprovalMode(deps, sessionId, {
+      mode: "auto",
+      expectedModeRevision: standard.modeRevision,
+    });
+    await expect(getChatApprovalMode(other, sessionId)).resolves.toEqual(auto);
+    await expect(readChatApprovalAdmission(other, sessionId, workspaceId, false)).resolves.toBeUndefined();
+    const authority = await readChatApprovalAdmission(other, sessionId, workspaceId, true, auto.modeRevision);
+    expect(authority).toMatchObject({ mode: "auto", binding: { sessionId, workspaceId, projectId } });
+    const turn = {
+      sessionId,
+      workspaceId,
+      admissionAggregateRevision: (await storage.chatSessionMeta.get(sessionId))!.revision,
+      chatApprovalAuthority: authority,
+    };
+    const target = { workspaceId, projectId, path: "proof.txt" };
+    const original = Buffer.from([0xef, 0xbb, 0xbf, 0x61, 0x0d, 0x0a, 0xff]);
+    const created = await withCurrentChatApprovalAuthority(deps, turn, async () =>
+      storage.managedProjectFiles.save({
+        ...target,
+        expectedRevision: null,
+        effectId: randomUUID(),
+        contentBase64: original.toString("base64"),
+      }),
+    );
+    if (created.status !== "current") throw new Error("Auto authority did not survive admission");
+    const saved = await second.managedProjectFiles.save({
+      ...target,
+      expectedRevision: created.value.revisionId,
+      effectId: randomUUID(),
+      contentBase64: Buffer.from("replacement").toString("base64"),
+    });
+    const deleteEffect = {
+      ...target,
+      expectedRevision: saved.revisionId,
+      effectId: randomUUID(),
+    };
+    const restored = await storage.managedProjectFiles.restore({ ...deleteEffect, effectId: randomUUID() });
+    await expect(second.managedProjectFiles.delete(deleteEffect)).rejects.toThrow(/managed file changed/i);
+    expect((await second.managedProjectFiles.read(target))?.contentBase64).toBe(original.toString("base64"));
+
+    const exactDelete = { ...deleteEffect, expectedRevision: restored.revisionId };
+    const results = await Promise.all([
+      storage.managedProjectFiles.delete(exactDelete),
+      second.managedProjectFiles.delete(exactDelete),
+    ]);
+    expect(results.map((result) => result.replayed).sort()).toEqual([false, true]);
+    expect(results[0].revisionId).toBe(results[1].revisionId);
+    const recreated = await second.managedProjectFiles.save({
+      ...target,
+      expectedRevision: null,
+      effectId: randomUUID(),
+      contentBase64: Buffer.from("new bytes").toString("base64"),
+    });
+    await expect(storage.managedProjectFiles.delete(exactDelete)).resolves.toMatchObject({ replayed: true });
+    expect((await storage.managedProjectFiles.read(target))?.revisionId).toBe(recreated.revisionId);
+  });
   it("admits one retry across independent workers and preserves it across reconnect", async () => {
     const { sessionId, turnId, runId } = await seed();
     const claims = await Promise.all([
