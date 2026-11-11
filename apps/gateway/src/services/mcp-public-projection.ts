@@ -199,14 +199,13 @@ function reconcileMcpArgvForPublicUpdate(raw: string[], projected: string[], inc
     const anchorIndex = index - 1;
     const rawAnchor = raw[anchorIndex];
     if (
-      anchorIndex >= 0 &&
-      rawAnchor !== undefined &&
-      SECRET_ARG_FLAG_PATTERN.test(rawAnchor) &&
-      !rawAnchor.includes("=") &&
-      projected[anchorIndex] === rawAnchor &&
-      incoming[anchorIndex] === rawAnchor &&
       projectedEntry === MARKER &&
-      normalizedPublicEntry === MARKER
+      ((rawAnchor !== undefined &&
+        SECRET_ARG_FLAG_PATTERN.test(rawAnchor) &&
+        !rawAnchor.includes("=") &&
+        projected[anchorIndex] === rawAnchor &&
+        incoming[anchorIndex] === rawAnchor) ||
+        hasStableMaskedAuthorizationAnchor(raw, projected, incoming, index))
     ) {
       reconciled[index] = rawEntry;
       continue;
@@ -216,6 +215,46 @@ function reconcileMcpArgvForPublicUpdate(raw: string[], projected: string[], inc
   }
 
   return reconciled;
+}
+
+function hasStableMaskedAuthorizationAnchor(
+  raw: string[],
+  projected: string[],
+  incoming: string[],
+  credentialIndex: number,
+): boolean {
+  const schemeIndex = credentialIndex - 1;
+  const scheme = raw[schemeIndex];
+  const publicScheme = projected[schemeIndex];
+  const incomingScheme = incoming[schemeIndex];
+  if (
+    scheme === undefined ||
+    incomingScheme === undefined ||
+    normalizeMcpRedactionMarkers(incomingScheme) !== publicScheme ||
+    !hasFollowingArgvCredential(raw, schemeIndex)
+  ) {
+    return false;
+  }
+
+  const equalsIndex = scheme.indexOf("=");
+  if (equalsIndex >= 0) {
+    return (
+      isAuthorizationArgFlag(scheme.slice(0, equalsIndex)) &&
+      isAuthorizationScheme(scheme.slice(equalsIndex + 1)) &&
+      publicScheme === `${scheme.slice(0, equalsIndex + 1)}${MARKER}`
+    );
+  }
+
+  const flagIndex = schemeIndex - 1;
+  const flag = raw[flagIndex];
+  return (
+    isAuthorizationScheme(scheme) &&
+    publicScheme === MARKER &&
+    flag !== undefined &&
+    isAuthorizationArgFlag(flag) &&
+    projected[flagIndex] === flag &&
+    incoming[flagIndex] === flag
+  );
 }
 
 function containsMcpRedactionMarker(value: string): boolean {

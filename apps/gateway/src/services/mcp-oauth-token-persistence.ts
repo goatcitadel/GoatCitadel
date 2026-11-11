@@ -1,6 +1,8 @@
 import { randomUUID } from "node:crypto";
 import type { McpAuthStateRecord } from "./mcp-server-admin-service.js";
 
+const INVALID_TOKEN_EXPIRY = "MCP OAuth token endpoint returned an invalid expiry.";
+
 export interface TokenResponse {
   access_token?: string;
   refresh_token?: string;
@@ -32,7 +34,9 @@ export async function persistMcpOAuthTokenResponse(
   previous: McpAuthStateRecord,
   discardUnpublishedAccounts: (accounts: Set<string>) => void,
 ): Promise<McpAuthStateRecord> {
-  const now = new Date().toISOString();
+  const nowMs = Date.now();
+  const tokenExpiresAt = resolveTokenExpiresAt(response, nowMs);
+  const now = new Date(nowMs).toISOString();
   const version = `${deps.stageCredentials && deps.secretStore.supportsCredentialWriteReceipts?.() ? "receipt-v1:" : ""}${randomUUID()}`;
   const accessAccount = `${accessTokenAccount(serverId)}:${version}`;
   const refreshAccount = `${refreshTokenAccount(serverId)}:${version}`;
@@ -63,7 +67,7 @@ export async function persistMcpOAuthTokenResponse(
     ...previous,
     accessTokenRef: tokenRefFromAccount(accessAccount),
     refreshTokenRef: refreshToken ? tokenRefFromAccount(refreshAccount) : previous.refreshTokenRef,
-    tokenExpiresAt: resolveTokenExpiresAt(response),
+    tokenExpiresAt,
     scopes: normalizeScopes(response.scope) ?? previous.scopes,
     resourceIndicator: `mcp://${serverId}`,
     updatedAt: now,
@@ -72,14 +76,20 @@ export async function persistMcpOAuthTokenResponse(
   };
 }
 
-function resolveTokenExpiresAt(response: TokenResponse): string | undefined {
-  if (response.expires_at?.trim()) {
-    return response.expires_at.trim();
+function resolveTokenExpiresAt(response: TokenResponse, nowMs: number): string | undefined {
+  const expiresAt = response.expires_at ?? "";
+  if (typeof expiresAt !== "string") throw new Error(INVALID_TOKEN_EXPIRY);
+  const timestamp = expiresAt.trim();
+  if (timestamp) {
+    if (!Number.isFinite(Date.parse(timestamp))) throw new Error(INVALID_TOKEN_EXPIRY);
+    return timestamp;
   }
-  if (typeof response.expires_in === "number" && Number.isFinite(response.expires_in)) {
-    return new Date(Date.now() + response.expires_in * 1000).toISOString();
-  }
-  return undefined;
+  const expiresIn = response.expires_in;
+  if (expiresIn === undefined || expiresIn === null) return undefined;
+  if (typeof expiresIn !== "number" || !Number.isFinite(expiresIn)) throw new Error(INVALID_TOKEN_EXPIRY);
+  const expiry = new Date(nowMs + expiresIn * 1000);
+  if (!Number.isFinite(expiry.getTime())) throw new Error(INVALID_TOKEN_EXPIRY);
+  return expiry.toISOString();
 }
 
 function normalizeScopes(scope?: string): string[] | undefined {

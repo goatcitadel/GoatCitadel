@@ -16,6 +16,7 @@ import { loadAndSanitize, type QuarantineEntry } from "./load-and-sanitize.js";
 import { parseJsonObject } from "./state-validators.js";
 import { synchronizeRemoteWorkerChatTaskStatus } from "./remote-worker-chat-task-repo.js";
 import { listDurableRunHistoryRows } from "./durable-run-history-query.js";
+import { listDurableMcpTaskRunRows } from "./durable-run-mcp-list-query.js";
 import {
   toCountRow,
   toDurableCheckpointRows,
@@ -55,6 +56,7 @@ export class DurableRunRepository {
   private readonly listRunsStmt;
   private readonly listRunIdsByStatusStmt;
   private readonly listUnstartedOrchestrationRunIdsStmt;
+  private readonly listWaitingOrchestrationRunIdsStmt;
   private readonly listPendingLinkedFinalizationRunIdsStmt;
   private readonly listPendingAutonomousChatPostCommitRunIdsStmt;
   private readonly listPendingGeneralChatPostCommitRunIdsStmt;
@@ -325,6 +327,15 @@ export class DurableRunRepository {
       WHERE status IN ('queued', 'paused')
         AND workflow_key = 'orchestration.plan.execute'
         AND (${optionalAfterRunId} IS NULL OR run_id > @afterRunId)
+      ORDER BY run_id ASC
+      LIMIT @limit
+    `);
+    this.listWaitingOrchestrationRunIdsStmt = db.prepare(`
+      SELECT run_id
+      FROM durable_runs
+      WHERE status = 'waiting'
+        AND workflow_key = 'orchestration.plan.execute'
+        AND (${optionalAfterRunId} IS NULL OR run_id > ${optionalAfterRunId})
       ORDER BY run_id ASC
       LIMIT @limit
     `);
@@ -895,6 +906,13 @@ export class DurableRunRepository {
     return { items: rows.map((row) => this.mapRunRow(row)), ...(nextCursor ? { nextCursor } : {}) };
   }
 
+  public listMcpTaskRuns(workspaceId: string, limit: number): DurableRunRecord[] {
+    if (!Number.isInteger(limit) || limit < 1 || limit > 200) {
+      throw new RangeError("MCP durable task limit must be an integer from 1 through 200.");
+    }
+    return listDurableMcpTaskRunRows(this.db, workspaceId, limit).map((row) => this.mapRunRow(row));
+  }
+
   public listRunIdsByStatus(status: DurableRunStatus, limit = 500): string[] {
     const safeLimit = Math.max(1, Math.min(5_000, Math.floor(limit)));
     const rows = this.listRunIdsByStatusStmt.all(status, safeLimit) as Array<{ run_id: string }>;
@@ -905,6 +923,15 @@ export class DurableRunRepository {
   public listUnstartedOrchestrationRunIds(limit = 200, afterRunId?: string): string[] {
     const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
     const rows = this.listUnstartedOrchestrationRunIdsStmt.all({
+      afterRunId: afterRunId ?? null,
+      limit: safeLimit,
+    }) as Array<{ run_id: string }>;
+    return rows.map((row) => row.run_id);
+  }
+
+  public listWaitingOrchestrationRunIds(limit = 200, afterRunId?: string): string[] {
+    const safeLimit = Math.max(1, Math.min(1_000, Math.floor(limit)));
+    const rows = this.listWaitingOrchestrationRunIdsStmt.all({
       afterRunId: afterRunId ?? null,
       limit: safeLimit,
     }) as Array<{ run_id: string }>;

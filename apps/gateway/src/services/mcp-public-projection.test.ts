@@ -125,6 +125,40 @@ describe("MCP public projection", () => {
     });
   });
 
+  it.each([
+    { label: "separate scheme", authorizationArgs: ["--authorization", "Bearer", "fixture-value"] },
+    { label: "inline scheme", authorizationArgs: ["--authorization=Bearer", "fixture-value"] },
+  ])("keeps an unrelated argv edit with a masked $label", ({ authorizationArgs }) => {
+    const current = {
+      serverId: "server-fixture",
+      label: "Fixture server",
+      transport: "stdio",
+      command: "node",
+      args: ["server.mjs", ...authorizationArgs, "--port", "3000"],
+      authType: "none",
+      enabled: true,
+      status: "disconnected",
+      category: "development",
+      trustTier: "restricted",
+      costTier: "free",
+      policy: {
+        requireFirstToolApproval: true,
+        redactionMode: "strict",
+        allowedToolPatterns: ["*"],
+        blockedToolPatterns: [],
+      },
+      createdAt: "2026-07-09T12:00:00.000Z",
+      updatedAt: "2026-07-09T12:00:00.000Z",
+    } satisfies McpServerRecord;
+    const projected = projectMcpPublicValue(current);
+    const args = projected.args.map((entry) => (entry === "3000" ? "4000" : entry));
+
+    const updated = preserveMcpServerSecretsForPublicUpdate(current, { args });
+
+    expect(updated.args).toEqual(["server.mjs", ...authorizationArgs, "--port", "4000"]);
+    expect(projectMcpPublicValue({ ...current, args: updated.args }).args).toEqual(args);
+  });
+
   it("restores projected MCP argv and URL credentials on routine public updates", () => {
     const current = {
       serverId: "server-secret",

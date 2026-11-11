@@ -692,6 +692,19 @@ describe("DurableRunRepository", () => {
     assert.deepEqual(repo.listUnstartedOrchestrationRunIds(2, "durable-queued"), []);
   });
 
+  it("pages only waiting orchestration runs by a stable cursor", () => {
+    const repo = createRepo();
+    for (const runId of ["wait-a", "wait-b", "wait-c"]) {
+      repo.createRun({ runId, workflowKey: "orchestration.plan.execute", status: "waiting" });
+    }
+    repo.createRun({ runId: "wait-a-other", workflowKey: "chat.turn.execute", status: "waiting" });
+    repo.createRun({ runId: "wait-a-paused", workflowKey: "orchestration.plan.execute", status: "paused" });
+
+    assert.deepEqual(repo.listWaitingOrchestrationRunIds(2), ["wait-a", "wait-b"]);
+    assert.deepEqual(repo.listWaitingOrchestrationRunIds(2, "wait-b"), ["wait-c"]);
+    assert.deepEqual(repo.listWaitingOrchestrationRunIds(2, "wait-c"), []);
+  });
+
   it("lists only failed runs with pending linked-state finalization", () => {
     const repo = createRepo();
     const pending = repo.createRun({

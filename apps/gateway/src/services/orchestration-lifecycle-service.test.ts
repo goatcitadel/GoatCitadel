@@ -2947,7 +2947,7 @@ describe("orchestration phase child parking", () => {
           }),
         },
         durableRuns: {
-          listRunIdsByStatus: vi.fn(async () => options.waitingRunIds ?? [parent.runId]),
+          listWaitingOrchestrationRunIds: vi.fn(async () => options.waitingRunIds ?? [parent.runId]),
         },
         durableChildWatchers: {
           getByPair: vi.fn(async (parentRunId: string, childRunId: string) =>
@@ -3082,6 +3082,32 @@ describe("orchestration phase child parking", () => {
       "durable-run-1",
       expect.objectContaining({ eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: CHILD_RUN_ID }),
     );
+  });
+
+  it("catches up a settled child beyond the first page of waiting parents", async () => {
+    const foreign = Array.from({ length: 500 }, (_, index) => `chat-wait-${index}`);
+    const earlier = Array.from({ length: 200 }, (_, index) => `earlier-${String(index).padStart(3, "0")}`);
+    const parent = buildParkedParent({ runId: "z-parked-parent" });
+    const run = buildParkedRun({ durableRunId: parent.runId });
+    const { host, wakeDurableRun } = createWakeHost({ parent, run });
+    const candidates = [...earlier, parent.runId];
+    const listWaitingOrchestrationRunIds = vi.fn(async (limit: number, after?: string) =>
+      candidates.filter((runId) => after === undefined || runId > after).slice(0, limit),
+    );
+    Object.assign(host.storage.durableRuns, {
+      listRunIdsByStatus: vi.fn(async (_status: string, limit = 500) =>
+        [...foreign, ...candidates].slice(0, limit),
+      ),
+      listWaitingOrchestrationRunIds,
+    });
+
+    await reconcileWaitingOrchestrationPhases(host);
+
+    expect(wakeDurableRun).toHaveBeenCalledExactlyOnceWith(
+      parent.runId,
+      expect.objectContaining({ eventKey: ORCHESTRATION_PHASE_CHILD_WAKE_EVENT, correlationId: CHILD_RUN_ID }),
+    );
+    expect(listWaitingOrchestrationRunIds).toHaveBeenNthCalledWith(2, 200, earlier.at(-1));
   });
 
   it("harvests a woken phase from the child's canonical records and flags unreported cost", async () => {
