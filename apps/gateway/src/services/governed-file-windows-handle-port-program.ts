@@ -425,7 +425,8 @@ try {
       } finally { $entry.Dispose() }
     } finally { $walk.Dispose() }
   } elseif($operation -eq 'publish'){
-    $newContent=[Convert]::FromBase64String([string]$request.contentBase64)
+    if($request.contentBase64 -isnot [string]){throw 'content'}
+    $newContent=[Convert]::FromBase64String($request.contentBase64)
     if($newContent.Length -gt $maxBytes){throw 'content'}
     $expectPresent=[bool]$request.expectedPriorPresent
     $walk=[GoatGovernedFileMutation+ParentWalk]::new([string]$request.rootPath,$parentRelative,$true)

@@ -7,15 +7,24 @@ import type {
   ChatStreamChunk,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
-import { fetchChatThread, preflightChatRoute, streamAgentChatMessage } from "@goatcitadel/mission-control-shared/api/client";
+import {
+  createChatSideChat,
+  fetchChatThread,
+  preflightChatRoute,
+  streamAgentChatMessage,
+} from "@goatcitadel/mission-control-shared/api/client";
 import {
   isThreadMutatingStreamChunk,
   updateThreadFromStreamChunk,
   type PendingStreamTurnSeed,
 } from "@goatcitadel/mission-control-shared/components/chat/chat-thread-reducer";
 import type { Dispatch, SetStateAction } from "react";
-import { ChatStreamingPreviewBuffer, isReducedMotionPreferred, type ChatStreamingPreview } from "./chat-streaming-preview";
-import type { useBtwSideChatController } from "./useBtwSideChatController";
+import {
+  ChatStreamingPreviewBuffer,
+  isReducedMotionPreferred,
+  type ChatStreamingPreview,
+} from "./chat-streaming-preview";
+import type { FirstParentHandoff, SideChatScope, useBtwSideChatController } from "./useBtwSideChatController";
 import type { ChatPreviewRuntime } from "./useChatStreamingPreviewState";
 
 const previewRuntime = { ChatStreamingPreviewBuffer, isReducedMotionPreferred };
@@ -24,6 +33,111 @@ type SideChatInput = Pick<
   Parameters<typeof useBtwSideChatController>[0],
   "currentSurface" | "fullWebAccess" | "prefs" | "selectedModel" | "selectedProviderId" | "selectedTurnId"
 >;
+
+export function startBtwSideChat({
+  isCurrent,
+  ensureSession,
+  selectedSessionId,
+  selectedSessionIntentRef,
+  workspaceId,
+  scope,
+  installation,
+  access,
+  caller,
+  firstParentRef,
+  ...view
+}: Omit<Parameters<typeof ensureBtwSideChat>[0], "current" | "resolveParent"> & {
+  isCurrent: (handoff?: FirstParentHandoff) => boolean;
+  ensureSession: Parameters<typeof useBtwSideChatController>[0]["ensureSession"];
+  selectedSessionId: string | null;
+  selectedSessionIntentRef: { current: string | null };
+  workspaceId: string;
+  scope: SideChatScope;
+  installation: string;
+  access: number;
+  caller: number;
+  firstParentRef: { current: FirstParentHandoff | null };
+}) {
+  let handoff: FirstParentHandoff | undefined;
+  const current = () => isCurrent(handoff);
+  const resolveParent = async () => {
+    // Only this open can follow the verified creation before it selects the parent.
+    const parent = await ensureSession((created) => {
+      if (
+        handoff ||
+        selectedSessionId !== null ||
+        !isCurrent() ||
+        created.workspaceId !== workspaceId ||
+        !created.sessionId.trim()
+      )
+        return;
+      handoff = {
+        origin: scope,
+        parentId: created.sessionId,
+        parentIdentity: JSON.stringify([installation, access, caller, workspaceId, created.sessionId]),
+      };
+      firstParentRef.current = handoff;
+    });
+    if (
+      !current() ||
+      parent.sessionId !== selectedSessionIntentRef.current ||
+      (handoff && parent.workspaceId !== workspaceId)
+    ) {
+      throw new Error("Side chat scope changed. Reopen it in the current conversation.");
+    }
+    return parent;
+  };
+  return { current, open: () => ensureBtwSideChat({ ...view, current, resolveParent }) };
+}
+
+async function ensureBtwSideChat({
+  current,
+  resolveParent,
+  record,
+  childSession,
+  input,
+  setRecord,
+  setChildSession,
+  setThread,
+  setLoading,
+  setError,
+}: {
+  current: () => boolean;
+  resolveParent: () => Promise<ChatSessionRecord>;
+  record: ChatSideChatRecord | null;
+  childSession: ChatSessionRecord | null;
+  input: Pick<SideChatInput, "currentSurface" | "selectedTurnId">;
+  setRecord: (record: ChatSideChatRecord) => void;
+  setChildSession: (session: ChatSessionRecord) => void;
+  setThread: (thread: ChatThreadResponse) => void;
+  setLoading: (loading: boolean) => void;
+  setError: (error: string | null) => void;
+}) {
+  if (!current()) throw new Error("Side chat scope changed. Reopen it in the current conversation.");
+  const parent = await resolveParent();
+  if (!current()) throw new Error("Side chat scope changed. Reopen it in the current conversation.");
+  if (record?.parentSessionId === parent.sessionId && childSession) {
+    return { item: record, childSession };
+  }
+  setLoading(true);
+  try {
+    const created = await createChatSideChat(
+      parent.sessionId,
+      { createdFromSurface: input.currentSurface, sourceTurnId: input.selectedTurnId ?? undefined },
+      { originSurface: input.currentSurface },
+    );
+    if (!current()) throw new Error("Side chat scope changed.");
+    setRecord(created.item);
+    setChildSession(created.childSession);
+    const nextThread = await fetchChatThread(created.childSession.sessionId);
+    if (!current()) throw new Error("Side chat scope changed.");
+    setThread(nextThread);
+    setError(null);
+    return created;
+  } finally {
+    if (current()) setLoading(false);
+  }
+}
 
 export function createInterruptedBtwReplyProjection(snapshot: ChatStreamingPreview) {
   const partialChunk: ChatStreamChunk = {

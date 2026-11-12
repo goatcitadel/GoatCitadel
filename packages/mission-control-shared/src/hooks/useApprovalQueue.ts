@@ -202,6 +202,8 @@ export function useApprovalQueue(options: UseApprovalQueueOptions = {}) {
   );
 
   const applyResolvedApprovalResult = useCallback((result: ApprovalResolveResponse) => {
+    // A list read started before this receipt may still contain the pending approval.
+    loadSequenceRef.current += 1;
     setReplayById((current) => ({ ...current, [result.approval.approvalId]: result.replay }));
     setData((current) =>
       current

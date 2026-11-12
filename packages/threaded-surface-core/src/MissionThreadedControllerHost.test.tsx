@@ -2838,25 +2838,39 @@ describe("MissionThreadedControllerHost", () => {
   it("executes command refresh branches and clears diagnostics without a thread", async () => {
     mockSurfaceMode = "cowork";
     await renderHost({ lockSurface: true, surface: "cowork" });
+    await selectDefaultSession();
     const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
     const sessionData = useChatSessionDataMock.mock.results.at(-1)?.value as any;
 
     parseChatCommandMock.mockResolvedValueOnce({
       ok: true,
       command: "/project",
-      prefs: { ...prefs, memoryMode: "workspace" },
-      session: { sessionId: "session-2" },
+      message: "Session assigned to project Mission.",
     });
     await act(async () => {
       await outboundInput.operations.handleCommandExecution("session-1", "/project Mission");
       await flushEffects();
     });
-    expect(sessionData.setPrefs).toHaveBeenCalledWith(expect.objectContaining({ memoryMode: "workspace" }));
     expect(sessionData.loadSidebar).toHaveBeenCalled();
+
+    const newPrefs = { ...prefs, sessionId: "session-2", memoryMode: "workspace" };
+    parseChatCommandMock.mockResolvedValueOnce({
+      ok: true,
+      command: "/new",
+      prefs: newPrefs,
+      session: { sessionId: "session-2" },
+    });
+    await act(async () => {
+      await outboundInput.operations.handleCommandExecution("session-1", "/new Next conversation");
+      await flushEffects();
+    });
+    expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-2");
+    expect(sessionData.setPrefs).toHaveBeenCalledWith(newPrefs);
+    const nextOutbound = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
 
     parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/skill" });
     await act(async () => {
-      await outboundInput.operations.handleCommandExecution("session-1", "/skill enable skill-1");
+      await nextOutbound.operations.handleCommandExecution("session-2", "/skill enable skill-1");
       await flushEffects();
     });
     expect(fetchSkillsMock).toHaveBeenCalled();
@@ -2866,7 +2880,7 @@ describe("MissionThreadedControllerHost", () => {
 
     parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/mcp" });
     await act(async () => {
-      await outboundInput.operations.handleCommandExecution("session-1", "/mcp connect server-1");
+      await nextOutbound.operations.handleCommandExecution("session-2", "/mcp connect server-1");
       await flushEffects();
     });
     expect(fetchMcpServersMock).toHaveBeenCalled();
@@ -2877,14 +2891,14 @@ describe("MissionThreadedControllerHost", () => {
 
     parseChatCommandMock.mockResolvedValueOnce({ ok: true, command: "/goal", message: "Goal paused." });
     await act(async () => {
-      await outboundInput.operations.handleCommandExecution("session-1", "/goal pause");
+      await nextOutbound.operations.handleCommandExecution("session-2", "/goal pause");
       await flushEffects();
     });
-    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-1", "/goal pause", { surface: "chat" });
+    expect(parseChatCommandMock).toHaveBeenLastCalledWith("session-2", "/goal pause", { surface: "chat" });
 
     parseChatCommandMock.mockClear();
     await act(async () => {
-      await outboundInput.operations.handleCommandExecution("session-1", "/queue followup run focused tests");
+      await nextOutbound.operations.handleCommandExecution("session-2", "/queue followup run focused tests");
       await flushEffects();
     });
     expect(parseChatCommandMock).not.toHaveBeenCalled();
@@ -2894,7 +2908,7 @@ describe("MissionThreadedControllerHost", () => {
       await flushEffects(4);
     });
     expect(parseChatCommandMock).not.toHaveBeenCalled();
-    // The project command changed selection. Its captured old callback must not
+    // The new command changed selection. Its captured old callback must not
     // create a child in the newly selected scope; invoke the current owner next.
     expect(createChatSideChatMock).not.toHaveBeenCalled();
     await selectDefaultSession();
@@ -3258,8 +3272,50 @@ describe("MissionThreadedControllerHost", () => {
     });
   });
 
+  it.each(["stay", "switch", "switch back in the same batch"] as const)(
+    "publishes held /plan preferences only to its original selection (%s)",
+    async (selection) => {
+      await renderHost();
+      await selectDefaultSession();
+      expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe("session-1");
+      const outbound = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as {
+        operations: { handleCommandExecution: (sessionId: string, commandText: string) => Promise<void> };
+      };
+      const setPrefs = useChatSessionDataMock.mock.results.at(-1)?.value.setPrefs;
+      const response = { ok: true, command: "/plan", prefs: { ...prefs, planningMode: "advisory" } };
+      let resolveResponse!: (value: typeof response) => void;
+      parseChatCommandMock.mockReturnValueOnce(new Promise<typeof response>((resolve) => { resolveResponse = resolve; }));
+      let pending!: Promise<void>;
+      await act(async () => { pending = outbound.operations.handleCommandExecution("session-1", "/plan on"); });
+      expect(parseChatCommandMock).toHaveBeenCalledWith("session-1", "/plan on", { surface: "chat" });
+      if (selection !== "stay") {
+        await act(async () => {
+          if (selection === "switch back in the same batch") {
+            // The rail handler reads the selected ID from its render. Exercise
+            // both intents on the synchronous selection owner within one batch.
+            const { setSelectedSessionId } = useChatSessionControlsMock.mock.calls.at(-1)?.[0] as {
+              setSelectedSessionId: (sessionId: string) => void;
+            };
+            setSelectedSessionId("session-2");
+            setSelectedSessionId("session-1");
+          } else {
+            latestSurfaceInput?.sessionRail.onSelectSession("session-2");
+          }
+          await flushEffects();
+        });
+        expect(latestSurfaceInput?.sessionRail.selectedSessionId).toBe(selection === "switch" ? "session-2" : "session-1");
+      }
+      setPrefs.mockClear();
+      await act(async () => { resolveResponse(response); await pending; });
+      if (selection === "stay") expect(setPrefs).toHaveBeenCalledExactlyOnceWith(response.prefs);
+      else expect(setPrefs).not.toHaveBeenCalled();
+      expect(updateChatSessionPrefsMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("covers command, diagnostics, route prefs, and empty-session surface variants", async () => {
     await renderHost();
+    await selectDefaultSession();
     const outboundInput = useChatOutboundExecutionMock.mock.calls.at(-1)?.[0] as any;
     const sessionData = useChatSessionDataMock.mock.results.at(-1)?.value as any;
     parseChatCommandMock.mockResolvedValueOnce({

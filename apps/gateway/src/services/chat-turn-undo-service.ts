@@ -23,7 +23,7 @@ export interface ChatTurnUndoDependencies {
     Storage,
     "chatMessages" | "chatSessionBranchState" | "chatSessionMeta" | "chatTurnTraces" | "runImmediateTransaction"
   >;
-  getSession(sessionId: string): unknown;
+  getSession(sessionId: string): Promise<unknown>;
   loadChatTurnSessionState(sessionId: string): Promise<ChatTurnSessionState>;
   publishRealtime(
     channel: string,
@@ -50,7 +50,7 @@ export async function undoChatTurns(
   options: { operatorId?: string } = {},
 ): Promise<ChatTurnUndoResult> {
   // Validate that the session exists before taking the write lease.
-  deps.getSession(sessionId);
+  await deps.getSession(sessionId);
   const safeCount = Math.max(1, Math.min(20, Math.floor(count)));
   return deps.withChatTurnWriteLease(sessionId, "chat.undo", async () => {
     // Re-validate the session lifecycle INSIDE the lease. The pre-lease
@@ -66,11 +66,12 @@ export async function undoChatTurns(
     }
 
     const state = await deps.loadChatTurnSessionState(sessionId);
-    if (!state.activeLeafTurnId) {
+    const { activeLeafTurnId } = state;
+    if (!activeLeafTurnId) {
       return emptyUndoResult(safeCount);
     }
 
-    const selectedPathTurnIds = buildSelectedPathTurnIds(state.turnLineageById, state.activeLeafTurnId);
+    const selectedPathTurnIds = buildSelectedPathTurnIds(state.turnLineageById, activeLeafTurnId);
     const removedTurnIds = selectedPathTurnIds.slice(-safeCount);
     const removedTraces = removedTurnIds
       .map((turnId) => state.tracesById.get(turnId))
@@ -80,7 +81,7 @@ export async function undoChatTurns(
       // as "undo nothing" while preserving the active leaf for diagnostics.
       return {
         ...emptyUndoResult(safeCount),
-        activeLeafTurnId: state.activeLeafTurnId,
+        activeLeafTurnId,
       };
     }
 
@@ -102,12 +103,15 @@ export async function undoChatTurns(
     ]);
     const now = new Date().toISOString();
     const mutation = await deps.storage.runImmediateTransaction(async () => {
+      // Claim the observed branch before deleting. The claim rolls back with
+      // the deletions if the transaction fails.
+      if (!(await deps.storage.chatSessionBranchState.clearIfCurrent(sessionId, activeLeafTurnId))) {
+        throw new ConflictError({ message: "The selected branch changed. Review the current branch before undoing." });
+      }
       const removedMessageCount = await deps.storage.chatMessages.deleteByMessageIds(sessionId, removedMessageIds);
       const removedTraceCount = await deps.storage.chatTurnTraces.deleteByTurnIds(sessionId, removedTurnIds);
       if (nextActiveLeafTurnId) {
         await deps.storage.chatSessionBranchState.setActiveLeaf(sessionId, nextActiveLeafTurnId, now);
-      } else {
-        await deps.storage.chatSessionBranchState.clear(sessionId);
       }
       return { removedMessageCount, removedTraceCount };
     });

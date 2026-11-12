@@ -1,7 +1,69 @@
 import { describe, expect, it } from "vitest";
+import type { ChatCitationRecord, ChatStreamChunk } from "@goatcitadel/contracts";
 import { toChatStreamChunk } from "./chat-stream-codecs.js";
 
+const memoryCitation = {
+  citationId: "memory-1",
+  url: "memory://memory-1",
+  sourceType: "memory",
+  provenance: {
+    relationScope: "self",
+    freshness: "recent",
+    selectionReason: "Hybrid ranking selected this memory.",
+    retrievalStrategy: "hybrid_rank",
+  },
+} satisfies ChatCitationRecord;
+
 describe("chat stream codecs", () => {
+  it("replays a hybrid-ranked memory citation and still rejects an unknown retrieval strategy", () => {
+    const chunk = {
+      type: "citation",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      eventId: "event-memory-1",
+      sequence: 6,
+      citation: memoryCitation,
+    } satisfies ChatStreamChunk;
+
+    expect(toChatStreamChunk(chunk)).toEqual(chunk);
+    expect(
+      toChatStreamChunk({
+        ...chunk,
+        citation: {
+          ...memoryCitation,
+          provenance: { ...memoryCitation.provenance, retrievalStrategy: "unknown" },
+        },
+      }),
+    ).toBeUndefined();
+  });
+
+  it("replays a retained trace that cites hybrid-ranked memory", () => {
+    const chunk = {
+      type: "trace_update",
+      sessionId: "session-1",
+      turnId: "turn-1",
+      eventId: "event-trace-1",
+      sequence: 7,
+      trace: {
+        sessionId: "session-1",
+        turnId: "turn-1",
+        userMessageId: "message-1",
+        branchKind: "append",
+        status: "completed",
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "on",
+        thinkingLevel: "off",
+        startedAt: "2026-07-13T08:00:00.000Z",
+        toolRuns: [],
+        citations: [memoryCitation],
+        routing: {},
+      },
+    } satisfies ChatStreamChunk;
+
+    expect(toChatStreamChunk(chunk)).toEqual(chunk);
+  });
+
   it("retains background delivery and rejects required or secure prompts disguised as optional", () => {
     const prompt = {
       promptId: "prompt-1",

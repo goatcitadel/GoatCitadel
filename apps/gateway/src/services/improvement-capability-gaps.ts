@@ -213,6 +213,7 @@ export function normalizeRecoveryOptions(values: string[] | undefined): Capabili
     "retry_once",
     "replay_failed_turn",
     "patch_config",
+    "create_capability_proposal",
   ]);
   return [
     ...new Set(

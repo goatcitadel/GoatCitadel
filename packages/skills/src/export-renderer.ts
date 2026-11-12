@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { ValidationError } from "@goatcitadel/contracts";
 import type {
   LoadedSkill,
   SkillExportPreviewResponse,
@@ -48,7 +49,18 @@ export function renderSkillExportPreview(
 ): SkillExportPreviewResponse {
   const target = requireSupportedTarget(request.target);
   const selected = selectSkills(request.skillIds, allSkills);
-  const files = selected.map((skill) => renderSkillFile(skill, target));
+  const namesByPath = new Map<string, string>();
+  const files = selected.map((skill) => {
+    const file = renderSkillFile(skill, target);
+    const other = namesByPath.get(file.relativePath);
+    if (other !== undefined) {
+      throw new ValidationError({
+        message: `Skills "${other}" and "${skill.name}" both export to ${file.relativePath}. Export them separately or rename one.`,
+      });
+    }
+    namesByPath.set(file.relativePath, skill.name);
+    return file;
+  });
   return {
     target,
     generatedAt: new Date().toISOString(),
@@ -59,6 +71,11 @@ export function renderSkillExportPreview(
 
 function renderSkillFile(skill: LoadedSkill, target: SkillExportTarget): SkillExportRenderedFile {
   const safeName = slugify(skill.name);
+  if (!safeName) {
+    throw new ValidationError({
+      message: `Skill "${skill.name}" has no valid relative export path. Use a name with Latin letters or digits.`,
+    });
+  }
   const content = renderSkillMarkdown(skill, target);
   return {
     relativePath: `${safeName}/SKILL.md`,

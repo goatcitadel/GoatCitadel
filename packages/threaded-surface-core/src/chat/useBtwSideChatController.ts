@@ -13,15 +13,19 @@ import type {
   ChatSideChatRecord,
   ChatThreadResponse,
 } from "@goatcitadel/contracts";
-import {
-  createChatSideChat,
-  fetchChatThread,
-} from "@goatcitadel/mission-control-shared/api/client";
 import type { ChatStreamingPreviewBuffer, ChatStreamingPreview } from "./chat-streaming-preview";
 import type { ChatPreviewRuntime } from "./useChatStreamingPreviewState";
+import type { useChatSessionSelection } from "./controller/useChatSessionSelection";
 
 type SideChatStream = typeof import("./btw-side-chat-stream.js");
 let sideChatStream: Promise<SideChatStream> | undefined;
+
+export type SideChatScope = { identity: string; revision: number; panel: object };
+export type FirstParentHandoff = {
+  origin: SideChatScope;
+  parentId: string;
+  parentIdentity: string;
+};
 
 function loadSideChatStream() {
   return (sideChatStream ??= import("./btw-side-chat-stream.js").catch((error: unknown) => {
@@ -51,13 +55,17 @@ export function useBtwSideChatController(input: {
   workspaceId: string;
   selectedSession: ChatSessionRecord | null;
   selectedSessionId: string | null;
+  selection: Pick<
+    ReturnType<typeof useChatSessionSelection>,
+    "selectedSessionIntentRef" | "selectedSessionRevisionRef"
+  >;
   selectedTurnId: string | null;
   currentSurface: ChatMode;
   prefs: ChatSessionPrefsRecord | null;
   selectedProviderId?: string;
   selectedModel?: string;
   fullWebAccess: boolean;
-  ensureSession: () => Promise<ChatSessionRecord>;
+  ensureSession: (onResolved?: (session: ChatSessionRecord) => void) => Promise<ChatSessionRecord>;
   pushLocalNotice: (message: string, tone?: "success" | "warning" | "neutral") => void;
   setUiError: (message: string | null) => void;
 }): {
@@ -71,19 +79,46 @@ export function useBtwSideChatController(input: {
     getGatewayCallerScopeRevision,
   );
   const installation = getGatewayApiBaseUrl();
-  const identity = JSON.stringify([installation, access, caller, input.workspaceId, input.selectedSessionId]);
-  const scopeRef = useRef({ identity });
-  if (scopeRef.current.identity !== identity) scopeRef.current = { identity };
+  const { selectedSessionIntentRef, selectedSessionRevisionRef } = input.selection;
+  const { ensureSession, selectedSessionId, workspaceId } = input;
+  const identity = JSON.stringify([installation, access, caller, workspaceId, selectedSessionId]);
+  const revision = selectedSessionRevisionRef.current;
+  const scopeRef = useRef<SideChatScope>({ identity, revision, panel: {} });
+  const firstParentRef = useRef<FirstParentHandoff | null>(null);
+  if (scopeRef.current.identity !== identity || scopeRef.current.revision !== revision) {
+    const previous = scopeRef.current;
+    const handoff = firstParentRef.current;
+    const adoptsOwnParent =
+      handoff?.origin === previous && handoff.parentIdentity === identity && revision === previous.revision + 1;
+    const next = { identity, revision, panel: adoptsOwnParent ? previous.panel : {} };
+    scopeRef.current = next;
+    if (!adoptsOwnParent) firstParentRef.current = null;
+  }
   const scope = scopeRef.current;
+  const panelScope = scope.panel;
   const mounted = useRef(true);
-  const current = useCallback(
-    () =>
-      mounted.current &&
-      scopeRef.current === scope &&
-      installation === getGatewayApiBaseUrl() &&
-      access === getGatewayAccessRevision() &&
-      caller === getGatewayCallerScopeRevision(),
-    [scope, installation, access, caller],
+  const isCurrent = useCallback(
+    (handoff?: FirstParentHandoff) => {
+      if (
+        !mounted.current ||
+        installation !== getGatewayApiBaseUrl() ||
+        access !== getGatewayAccessRevision() ||
+        caller !== getGatewayCallerScopeRevision()
+      )
+        return false;
+      const liveScope = scopeRef.current;
+      const liveRevision = selectedSessionRevisionRef.current;
+      const intendedSession = selectedSessionIntentRef.current;
+      if (liveScope === scope && liveRevision === scope.revision && intendedSession === selectedSessionId) return true;
+      return (
+        handoff !== undefined &&
+        firstParentRef.current === handoff &&
+        liveScope.panel === scope.panel &&
+        liveRevision === scope.revision + 1 &&
+        intendedSession === handoff.parentId
+      );
+    },
+    [scope, installation, access, caller, selectedSessionId, selectedSessionIntentRef, selectedSessionRevisionRef],
   );
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState("");
@@ -98,15 +133,17 @@ export function useBtwSideChatController(input: {
   const sendingRef = useRef(false);
   const streamingPreviewBufferRef = useRef<ChatStreamingPreviewBuffer | null>(null);
 
-  const getStreamingPreviewBuffer = useCallback((runtime: ChatPreviewRuntime) => {
+  const getStreamingPreviewBuffer = useCallback((runtime: ChatPreviewRuntime, current: () => boolean) => {
     if (!streamingPreviewBufferRef.current) {
       streamingPreviewBufferRef.current = new runtime.ChatStreamingPreviewBuffer({
-        onFlush: (preview) => { if (current()) setStreamingPreview(preview); },
+        onFlush: (preview) => {
+          if (current()) setStreamingPreview(preview);
+        },
         isReducedMotion: runtime.isReducedMotionPreferred,
       });
     }
     return streamingPreviewBufferRef.current;
-  }, [current]);
+  }, []);
 
   const clearStreamingPreview = useCallback((options: { allowSettlingFinalText?: boolean } = {}) => {
     if (options.allowSettlingFinalText && streamingPreviewBufferRef.current?.isSettlingFinalText()) {
@@ -151,48 +188,57 @@ export function useBtwSideChatController(input: {
     setSending(false);
     sendingRef.current = false;
     threadRef.current = null;
-  }, [identity]);
+  }, [panelScope]);
 
   useEffect(() => {
     mounted.current = true;
-    return () => { mounted.current = false; streamingPreviewBufferRef.current?.dispose(); };
+    return () => {
+      mounted.current = false;
+      streamingPreviewBufferRef.current?.dispose();
+    };
   }, []);
 
-  const ensureSideChat = useCallback(async (): Promise<{
-    item: ChatSideChatRecord;
-    childSession: ChatSessionRecord;
-  }> => {
-    const parent = await input.ensureSession();
-    if (!current()) throw new Error("Side chat scope changed. Reopen it in the current conversation.");
-    if (record?.parentSessionId === parent.sessionId && childSession) {
-      return { item: record, childSession };
-    }
-    setLoading(true);
-    try {
-      const created = await createChatSideChat(
-        parent.sessionId,
-        {
-          createdFromSurface: input.currentSurface,
-          sourceTurnId: input.selectedTurnId ?? undefined,
-        },
-        { originSurface: input.currentSurface },
-      );
-      if (!current()) throw new Error("Side chat scope changed.");
-      setRecord(created.item);
-      setChildSession(created.childSession);
-      const nextThread = await fetchChatThread(created.childSession.sessionId);
-      if (!current()) throw new Error("Side chat scope changed.");
-      setThread(nextThread);
-      setError(null);
-      return created;
-    } finally {
-      if (current()) setLoading(false);
-    }
-  }, [childSession, input, record, current]);
+  const startOpen = useCallback(
+    (code: SideChatStream) =>
+      code.startBtwSideChat({
+        isCurrent,
+        ensureSession,
+        selectedSessionId,
+        selectedSessionIntentRef,
+        workspaceId,
+        scope,
+        installation,
+        access,
+        caller,
+        firstParentRef,
+        record,
+        childSession,
+        input,
+        setRecord,
+        setChildSession,
+        setThread,
+        setLoading,
+        setError,
+      }),
+    [
+      isCurrent,
+      ensureSession,
+      selectedSessionId,
+      selectedSessionIntentRef,
+      workspaceId,
+      scope,
+      installation,
+      access,
+      caller,
+      record,
+      childSession,
+      input,
+    ],
+  );
 
   const sendMessage = useCallback(
     async (messageOverride?: string) => {
-      if (!current()) return;
+      if (!isCurrent()) return;
       const message = (messageOverride ?? draft).trim();
       setOpen(true);
       if (!message) {
@@ -204,12 +250,14 @@ export function useBtwSideChatController(input: {
         return;
       }
       sendingRef.current = true;
-      let sideChat: Awaited<ReturnType<typeof ensureSideChat>>;
+      let current = isCurrent;
+      let sideChat: Awaited<ReturnType<ReturnType<typeof startOpen>["open"]>>;
       let code: SideChatStream;
       try {
         code = await loadSideChatStream();
-        if (!current()) return;
-        sideChat = await ensureSideChat();
+        const attempt = startOpen(code);
+        current = attempt.current;
+        sideChat = await attempt.open();
       } catch (cause) {
         if (!current()) return;
         sendingRef.current = false;
@@ -226,7 +274,7 @@ export function useBtwSideChatController(input: {
       try {
         await code.streamBtwSideChatTurn({
           current,
-          getStreamingPreviewBuffer,
+          getStreamingPreviewBuffer: (runtime) => getStreamingPreviewBuffer(runtime, current),
           input,
           message,
           parentTurnId: threadRef.current?.activeLeafTurnId,
@@ -248,24 +296,30 @@ export function useBtwSideChatController(input: {
         }
       }
     },
-    [clearStreamingPreview, current, draft, ensureSideChat, getStreamingPreviewBuffer, input, promoteStreamingPreviewToThread],
+    [
+      clearStreamingPreview,
+      isCurrent,
+      draft,
+      getStreamingPreviewBuffer,
+      input,
+      promoteStreamingPreviewToThread,
+      startOpen,
+    ],
   );
 
   const openSideChat = useCallback(
     async (message?: string) => {
-      if (!current()) return;
-      setOpen(true);
-      if (message?.trim() && sendingRef.current) {
-        setDraft(message.trim());
-        input.pushLocalNotice("Side chat is still responding.", "warning");
-        return;
-      }
+      if (!isCurrent()) return;
       if (message?.trim()) {
         await sendMessage(message);
         return;
       }
+      setOpen(true);
+      let current = isCurrent;
       try {
-        await ensureSideChat();
+        const attempt = startOpen(await loadSideChatStream());
+        current = attempt.current;
+        await attempt.open();
       } catch (cause) {
         if (!current()) return;
         const nextError = cause instanceof Error ? cause.message : "Failed to open side chat.";
@@ -273,7 +327,7 @@ export function useBtwSideChatController(input: {
         input.setUiError(nextError);
       }
     },
-    [ensureSideChat, input, sendMessage, current],
+    [input, sendMessage, isCurrent, startOpen],
   );
 
   const panelProps: MissionThreadedBtwSideChatProps = {

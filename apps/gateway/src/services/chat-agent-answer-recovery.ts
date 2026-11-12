@@ -146,29 +146,33 @@ function readMutationPath(run: ChatToolRunRecord): string | undefined {
 
 /**
  * Given the turn's tool runs (in execution order), return the file-mutating
- * runs that FAILED and were not superseded by a later successful write to the
- * same path. A later successful mutation of the same path means the failure was
- * recovered, so it should not be reported as a lost mutation.
+ * runs that failed and were not superseded by a later success of the same
+ * tool on the same path. Copy and move also require the same source.
  *
  * Failures with no resolvable path are always reported (they cannot be proven
  * superseded). Immutable: never mutates the input array.
  */
 export function collectFailedFileMutations(toolRuns: readonly ChatToolRunRecord[]): FailedFileMutation[] {
-  const laterSucceededPaths = new Set<string>();
+  const laterSucceededMutations = new Set<string>();
   const failures: FailedFileMutation[] = [];
   for (const run of [...toolRuns].reverse()) {
     if (!FILE_MUTATION_TOOL_NAMES.has(run.toolName)) {
       continue;
     }
     const path = readMutationPath(run);
-    if (run.status === "executed" && path) {
-      laterSucceededPaths.add(path);
+    const hasSource = run.toolName === "fs.copy" || run.toolName === "fs.move";
+    const source = run.args?.from;
+    const mutationKey =
+      path && (!hasSource || (typeof source === "string" && source.trim()))
+        ? JSON.stringify([run.toolName, path, hasSource ? source : undefined])
+        : undefined;
+    if (run.status === "executed" && mutationKey) {
+      laterSucceededMutations.add(mutationKey);
     }
     if (run.status !== "failed" && run.status !== "blocked") {
       continue;
     }
-    if (path && laterSucceededPaths.has(path)) {
-      // A later successful write to the same path recovered this failure.
+    if (mutationKey && laterSucceededMutations.has(mutationKey)) {
       continue;
     }
     failures.push({
@@ -194,8 +198,6 @@ export function buildFailedFileMutationsFooter(failures: readonly FailedFileMuta
     return `- \`${failure.toolName}\`${target}: ${failure.error}`;
   });
   const heading =
-    failures.length === 1
-      ? "One file change did not complete:"
-      : `${failures.length} file changes did not complete:`;
+    failures.length === 1 ? "One file change did not complete:" : `${failures.length} file changes did not complete:`;
   return [heading, ...lines].join("\n");
 }

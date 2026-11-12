@@ -1,4 +1,5 @@
 // @vitest-environment happy-dom
+import { useState } from "react";
 import { act, create, type ReactTestInstance, type ReactTestRenderer } from "react-test-renderer";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -235,6 +236,53 @@ describe("semantic channel step completion", () => {
 });
 
 describe("structured field interaction", () => {
+  it.each([["newline", "\n"], ["comma", ","]])("keeps a typed %s between sender identities", async (_name, separator) => {
+    const senderField: ChannelSetupFieldDefinition = {
+      key: "allowedSenders", label: "Allowed sender identities", type: "sender-list",
+      required: false, explanation: "Enter approved senders",
+    };
+    const update = vi.fn<(senders: string[]) => void>();
+    let replaceSenders!: (senders: string[]) => void;
+    function Harness() {
+      const [senders, setSenders] = useState<string[]>([]);
+      replaceSenders = setSenders;
+      return (
+        <ChannelStructuredField
+          field={senderField}
+          value={senders}
+          id="senders"
+          describedBy="help"
+          disabled={false}
+          inputClassName="fixture"
+          onChange={(value) => {
+            const next = value as string[];
+            update(next);
+            setSenders(next);
+          }}
+        />
+      );
+    }
+    const r = await render(<Harness />);
+    const textarea = () => r.root.findByType("textarea");
+    const type = async (value: string) => {
+      await act(async () => textarea().props.onChange({ target: { value } }));
+    };
+    try {
+      await type("first");
+      expect(update).toHaveBeenLastCalledWith(["first"]);
+      await type(textarea().props.value + separator);
+      expect(textarea().props.value).toBe("first" + separator);
+      await type(textarea().props.value + "second");
+      expect(update).toHaveBeenLastCalledWith(["first", "second"]);
+      await act(async () => replaceSenders(["restored"]));
+      expect(textarea().props.value).toBe("restored");
+      await act(async () => replaceSenders(["first", "second"]));
+      expect(textarea().props.value).toBe("first\nsecond");
+    } finally {
+      await act(async () => r.unmount());
+    }
+  });
+
   it("preserves long and negative IDs, aliases, thread metadata, and unknown saved keys", async () => {
     const onChange = vi.fn();
     const rows = [

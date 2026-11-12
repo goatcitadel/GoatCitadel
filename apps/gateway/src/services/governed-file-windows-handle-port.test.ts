@@ -283,46 +283,52 @@ describe.runIf(process.platform === "win32")("governed file handle port live Win
     await expect(readFile(join(root, "empty.txt"))).resolves.toEqual(empty);
   }, 120_000);
 
-  it("captures, publishes, and restores through pinned relative handles", async () => {
-    const root = await scratch("goat-governed-port-roundtrip-");
-    await mkdir(join(root, "config"));
-    const entryPath = join(root, "config", "budgets.json");
-    const original = Buffer.from('{\n  "mode": "balanced"\n}\n');
-    await writeFile(entryPath, original);
+  it.each([
+    { name: "nonempty", original: Buffer.from('{\n  "mode": "balanced"\n}\n') },
+    { name: "empty", original: Buffer.alloc(0) },
+  ])(
+    "captures, publishes, and restores a $name file through pinned relative handles",
+    async ({ original }) => {
+      const root = await scratch("goat-governed-port-roundtrip-");
+      await mkdir(join(root, "config"));
+      const entryPath = join(root, "config", "budgets.json");
+      await writeFile(entryPath, original);
 
-    const capture = await captureGovernedFileEntry(root, "config/budgets.json", { deadlineMs: 60_000 });
-    expect(capture.present).toBe(true);
-    expect(capture.content).toEqual(original);
-    expect(capture.sha256).toBe(sha256(original));
+      const capture = await captureGovernedFileEntry(root, "config/budgets.json", { deadlineMs: 60_000 });
+      expect(capture.present).toBe(true);
+      expect(capture.content).toEqual(original);
+      expect(capture.sha256).toBe(sha256(original));
 
-    const replacement = Buffer.from('{\n  "mode": "saver"\n}\n');
-    const published = await publishGovernedFileEntry(
-      {
-        rootPath: root,
-        relativePath: "config/budgets.json",
-        expectedParent: { volumeSerial: capture.parent.volumeSerial, fileId: capture.parent.fileId },
-        expectedPrior: { present: true, sha256: capture.sha256 as string },
-        content: replacement,
-      },
-      { deadlineMs: 60_000 },
-    );
-    expect(published.publishedSha256).toBe(sha256(replacement));
-    expect(published.priorSha256).toBe(capture.sha256);
-    await expect(readFile(entryPath)).resolves.toEqual(replacement);
+      const replacement = Buffer.from('{\n  "mode": "saver"\n}\n');
+      const published = await publishGovernedFileEntry(
+        {
+          rootPath: root,
+          relativePath: "config/budgets.json",
+          expectedParent: { volumeSerial: capture.parent.volumeSerial, fileId: capture.parent.fileId },
+          expectedPrior: { present: true, sha256: capture.sha256 as string },
+          content: replacement,
+        },
+        { deadlineMs: 60_000 },
+      );
+      expect(published.publishedSha256).toBe(sha256(replacement));
+      expect(published.priorSha256).toBe(capture.sha256);
+      await expect(readFile(entryPath)).resolves.toEqual(replacement);
 
-    const restored = await restoreGovernedFileEntry(
-      {
-        rootPath: root,
-        relativePath: "config/budgets.json",
-        expectedParent: { volumeSerial: capture.parent.volumeSerial, fileId: capture.parent.fileId },
-        expectedPrior: { present: true, sha256: sha256(replacement) },
-        capturedContent: capture.content as Buffer,
-      },
-      { deadlineMs: 60_000 },
-    );
-    expect(restored.publishedSha256).toBe(capture.sha256);
-    await expect(readFile(entryPath)).resolves.toEqual(original);
-  }, 180_000);
+      const restored = await restoreGovernedFileEntry(
+        {
+          rootPath: root,
+          relativePath: "config/budgets.json",
+          expectedParent: { volumeSerial: capture.parent.volumeSerial, fileId: capture.parent.fileId },
+          expectedPrior: { present: true, sha256: sha256(replacement) },
+          capturedContent: capture.content as Buffer,
+        },
+        { deadlineMs: 60_000 },
+      );
+      expect(restored.publishedSha256).toBe(capture.sha256);
+      await expect(readFile(entryPath)).resolves.toEqual(original);
+    },
+    180_000,
+  );
 
   it("overwrites only the captured identity and truncates through the existing handle", async () => {
     const root = await scratch("goat-governed-port-overwrite-");

@@ -6,6 +6,7 @@ import {
   extractRequestedCoworkSectionBulletCount,
   normalizeCoworkRoleLabel,
   normalizeCoworkSectionBody,
+  normalizeRequestedRoleOnlyCoworkHeadings,
   promptKeepsRequestedRoleOrderOnly,
   repairRequestedRoleOrderOnlyCoworkOutput,
 } from "./chat-agent-cowork-sections.js";
@@ -81,6 +82,20 @@ describe("chat agent cowork section helpers", () => {
         "- Check: This sentence keeps validation clear.",
       ].join("\n"),
     );
+  });
+
+  it.each([
+    ["````sh", "````"],
+    ["~~~sh", "~~~"],
+  ])("retains headings inside %s examples during role repair", (open, close) => {
+    const code = [open, "## QA", "Planner", "echo ready", close].join("\n");
+    const repaired = repairRequestedRoleOrderOnlyCoworkOutput({
+      prompt: "Keep exactly these sections in order: `Planner`, `QA`",
+      responseText: `## Planner\nUse this example.\n${code}\n## QA\nCheck the output.`,
+      requiredRoles: ["planner", "qa"],
+    });
+    expect(repaired).toBe(`Planner\nUse this example.\n${code}\n\nQA\nCheck the output.`);
+    expect(normalizeRequestedRoleOnlyCoworkHeadings(repaired ?? "")).toContain(code);
   });
 
   it("returns undefined instead of fabricating role-only repairs when required inputs are missing", () => {

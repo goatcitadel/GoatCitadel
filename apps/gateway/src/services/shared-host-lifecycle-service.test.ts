@@ -50,6 +50,45 @@ describe("SharedHostLifecycleService", () => {
     await expect(draining).resolves.toMatchObject({ outcome: "quiesced", snapshot: { state: "quiesced" } });
   });
 
+  it.each(["force", "pause"] as const)("returns closing for a concurrent %s drain", async (mode) => {
+    const onEvent = vi.fn();
+    const lifecycle = new SharedHostLifecycleService({ enabled: true, onEvent });
+    lifecycle.markAccepting();
+    const admitted = lifecycle.tryReserve("api", "in-flight");
+    if (!admitted.admitted) throw new Error("expected admission");
+
+    const input = { timeoutMs: 500, reason: "maintenance", actorId: "ops" };
+    const force = lifecycle.drain({ ...input, mode: "force" });
+    const concurrent = lifecycle.drain({ ...input, mode });
+    admitted.reservation.release();
+
+    const results = await Promise.all([force, concurrent]);
+    expect(results).toEqual([
+      expect.objectContaining({ outcome: "closing", snapshot: expect.objectContaining({ state: "closing" }) }),
+      expect.objectContaining({ outcome: "closing", snapshot: expect.objectContaining({ state: "closing" }) }),
+    ]);
+    expect(onEvent.mock.calls.filter(([event]) => event.to === "closing")).toHaveLength(1);
+  });
+
+  it("returns the closing state when a pause and force drain reach their deadline together", async () => {
+    vi.useFakeTimers();
+    const lifecycle = new SharedHostLifecycleService({ enabled: true });
+    lifecycle.markAccepting();
+    const admitted = lifecycle.tryReserve("api", "in-flight");
+    if (!admitted.admitted) throw new Error("expected admission");
+    const input = { timeoutMs: 10, reason: "maintenance", actorId: "ops" };
+    const pause = lifecycle.drain({ ...input, mode: "pause" });
+    const force = lifecycle.drain({ ...input, mode: "force" });
+
+    vi.advanceTimersByTime(10);
+    const results = await Promise.all([pause, force]);
+    admitted.reservation.release();
+    expect(results.map(({ outcome, snapshot }) => [outcome, snapshot.state])).toEqual([
+      ["closing", "closing"],
+      ["closing", "closing"],
+    ]);
+  });
+
   it("keeps pause drains truthful on timeout and force-aborts outstanding reservations before closing", async () => {
     const transitions: string[] = [];
     const lifecycle = new SharedHostLifecycleService({

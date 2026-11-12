@@ -129,6 +129,7 @@ export class ChatTurnTraceRepository {
   private readonly patchStmt;
   private readonly patchIfStatusStmt;
   private readonly listBySessionStmt;
+  private readonly listLineageFromStmt;
   private readonly listCompletedSinceStmt;
   private readonly listActiveStmt;
   private readonly listActivePageStmt;
@@ -224,6 +225,26 @@ export class ChatTurnTraceRepository {
         reasoning_text = COALESCE(@reasoningText, reasoning_text),
         finished_at = @finishedAt
       WHERE turn_id = @turnId AND status = @expectedStatus
+    `);
+    this.listLineageFromStmt = db.prepare(`
+      WITH RECURSIVE lineage(turn_id, parent_turn_id, depth) AS (
+        SELECT turn_id, parent_turn_id, 1
+        FROM chat_turn_traces
+        WHERE session_id = @sessionId AND turn_id = @startTurnId
+        UNION ALL
+        SELECT parent.turn_id, parent.parent_turn_id, lineage.depth + 1
+        FROM lineage
+        JOIN chat_turn_traces parent ON parent.turn_id = lineage.parent_turn_id
+        WHERE parent.session_id = @sessionId AND lineage.depth < @limit
+      ), first_visit AS (
+        SELECT turn_id, MIN(depth) AS depth
+        FROM lineage
+        GROUP BY turn_id
+      )
+      SELECT trace.*
+      FROM first_visit
+      JOIN chat_turn_traces trace ON trace.turn_id = first_visit.turn_id
+      ORDER BY first_visit.depth ASC
     `);
     this.listBySessionStmt = db.prepare(`
       SELECT * FROM chat_turn_traces
@@ -460,6 +481,12 @@ export class ChatTurnTraceRepository {
       }),
     );
     return rows.map(mapRow);
+  }
+
+  /** Returns the requested turn followed by its same-session ancestors, nearest first. */
+  public listLineageFrom(sessionId: string, startTurnId: string, limit = 1_000): ChatTurnTraceRecord[] {
+    const rows = this.listLineageFromStmt.all({ sessionId, startTurnId, limit: Math.max(1, Math.min(1_000, limit)) });
+    return toChatTurnTraceRows(rows).map(mapRow);
   }
 
   public getByTurnIds(turnIds: Array<string | undefined>): Map<string, ChatTurnTraceRecord> {

@@ -396,7 +396,8 @@ function isMemoryCitationProvenanceRecord(value: unknown): boolean {
     (value.retrievalStrategy === undefined ||
       value.retrievalStrategy === "lexical_recency" ||
       value.retrievalStrategy === "semantic_hints" ||
-      value.retrievalStrategy === "semantic_vector") &&
+      value.retrievalStrategy === "semantic_vector" ||
+      value.retrievalStrategy === "hybrid_rank") &&
     (value.matchSignals === undefined || isMemoryRetrievalMatchSignalsRecord(value.matchSignals)) &&
     (value.sourceTimestamp === undefined || typeof value.sourceTimestamp === "string")
   );

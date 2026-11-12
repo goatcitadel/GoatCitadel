@@ -68,7 +68,14 @@ export function composeToolsMcpRouteDependencies(
   const mcpDiagnosticsDeps: mcpDiagnosticsService.McpDiagnosticsHost = {
     requireFeatureEnabled: (flag) => gateway.requireFeatureEnabled(flag as keyof RuntimeSettings["features"]),
     listMcpTemplates: async () => await gateway.listMcpTemplates(),
-    requireMcpServer: async (serverId) => await mcpAdminDeps.requireMcpServer(serverId),
+    requireMcpServer: async (serverId) => {
+      const server = await mcpAdminDeps.requireMcpServer(serverId);
+      const binding = server.requesterResolution;
+      if (server.connectionMode !== "requester_scoped" || !binding) return server;
+      const resolverRegistration =
+        gateway.mcpRequesterScopedRuntime?.requesterScopeDiagnostics.resolveRegistrationPosture(binding);
+      return { ...server, resolverRegistration };
+    },
     pickConnectorDiagnosticAction: (checks) => connectorDiagnosticsHelpers.pickConnectorDiagnosticAction(checks),
     recordConnectorHealthRun: async (report) =>
       await connectorDiagnosticsHelpers.recordConnectorHealthRun({ gatewaySql: storage.gatewaySql }, report),

@@ -86,6 +86,32 @@ it("keeps the server lock when the server read fails", async () => {
   expect(refresh).not.toHaveBeenCalled();
 });
 
+it.each(["before", "after"])("never displays another server's outcome after switching %s settlement", async (when) => {
+  await loseDelete();
+  api.fetchMcpServer.mockRejectedValue(notFound);
+  let settle!: () => void;
+  attempts.read.mockImplementation(
+    () =>
+      new Promise((resolve) => {
+        settle = () => resolve({ status: "completed", claimExpired: false });
+      }),
+  );
+  const render = (serverId: string) => <McpOutcomeCheck target={{ kind: "server", serverId }} refresh={refresh} />;
+  await act(async () => {
+    view = create(render("server-1"));
+  });
+  await act(async () => view.root.findByType("button").props.onClick());
+  if (when === "before") await act(async () => view.update(render("server-2")));
+  await act(async () => settle());
+  if (when === "after") {
+    expect(text(view.root)).toContain("recorded this MCP change as processed");
+    await act(async () => view.update(render("server-2")));
+  }
+  expect(text(view.root)).toBe("");
+  expect(readMcpServerAttempt("server-1").phase).toBe("idle");
+  expect(api.fetchMcpServer).toHaveBeenCalledExactlyOnceWith("server-1");
+});
+
 it("does not accept a missing server as proof for a lost non-delete write", async () => {
   writeMcpServerAttempt("server-1", { phase: "saving" });
   attempts.paths.push("/api/v1/mcp/servers/server-1/connect-reviewed");

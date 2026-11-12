@@ -270,6 +270,7 @@ export function useChatSubmissionComposition({
     workspaceId,
     selectedSession: session.threadController.selectedSession,
     selectedSessionId: selection.selectedSessionId,
+    selection,
     selectedTurnId,
     currentSurface: executionSurfaceMode,
     prefs: executionRoutePrefs,
@@ -328,6 +329,7 @@ export function useChatSubmissionComposition({
     [onWorkTrustSummaryChange, coordination.lastPublishedWorkTrustSummaryRef],
   );
   const commands = useChatCommandExecution({
+    workspaceId,
     openBtwSideChat: btwSideChat.openSideChat,
     notices,
     scopedErrors,

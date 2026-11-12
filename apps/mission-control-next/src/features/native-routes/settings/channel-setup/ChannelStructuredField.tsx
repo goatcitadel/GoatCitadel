@@ -1,5 +1,10 @@
 import type { ChannelSetupFieldDefinition } from "@goatcitadel/contracts";
+import { useState } from "react";
 import { readChannelTargetRows, type ChannelTargetRow } from "./channel-wizard-model";
+
+function parseSenders(value: string): string[] {
+  return value.split(/[\n,]+/u).map((item) => item.trim()).filter(Boolean);
+}
 
 export function ChannelStructuredField({
   field, value, id, describedBy, invalid, disabled, inputClassName, onChange,
@@ -7,17 +12,28 @@ export function ChannelStructuredField({
   field: ChannelSetupFieldDefinition; value: unknown; id: string; describedBy: string; invalid?: boolean;
   disabled: boolean; inputClassName: string; onChange: (value: unknown) => void;
 }) {
+  const [senderDraft, setSenderDraft] = useState<{ id: string; normalized: string; text: string }>();
   const actionClass = "min-h-10 rounded-md border border-line px-3 py-2 text-sm";
   if (field.type === "sender-list") {
     const entries = Array.isArray(value) ? value.filter((item): item is string => typeof item === "string") :
-      typeof value === "string" ? value.split(/[\n,]+/u).map((item) => item.trim()).filter(Boolean) : [];
+      typeof value === "string" ? parseSenders(value) : [];
+    const normalized = entries.join("\n");
+    const currentDraft = senderDraft?.id === id && senderDraft.normalized === normalized ? senderDraft : undefined;
+    if (senderDraft && !currentDraft) setSenderDraft(undefined);
     return <div>
       <textarea id={id} aria-describedby={describedBy} aria-invalid={invalid || undefined} required={field.required} className={inputClassName} disabled={disabled}
-        rows={3} value={entries.join("\n")} placeholder={field.placeholder ?? "One sender ID per line"}
-        onChange={(event) => onChange(event.target.value.split(/[\n,]+/u).map((item) => item.trim()).filter(Boolean))} />
+        rows={3} value={currentDraft?.text ?? normalized} placeholder={field.placeholder ?? "One sender ID per line"}
+        onChange={(event) => {
+          const text = event.target.value;
+          const next = parseSenders(text);
+          // The wizard receives normalized identities while the field keeps the separator being typed.
+          setSenderDraft({ id, text, normalized: next.join("\n") });
+          onChange(next);
+        }} />
       <p className="mt-1 text-xs text-fg-muted">{entries.length} explicit sender{entries.length === 1 ? "" : "s"} configured.</p>
     </div>;
   }
+  if (senderDraft) setSenderDraft(undefined);
   const addressKey = field.targetAddressKey ?? "chatId";
   const threadKey = addressKey === "channel" ? "threadTs" : "threadId";
   const rows = readChannelTargetRows(value, addressKey);

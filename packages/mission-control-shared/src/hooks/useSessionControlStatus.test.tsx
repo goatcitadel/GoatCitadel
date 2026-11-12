@@ -175,6 +175,42 @@ describe("useSessionControlStatus", () => {
     }
   });
 
+  it("ignores a saved reload from a previous selection", async () => {
+    apiMocks.fetchSessionControlDetail.mockImplementation(async (sessionId: string) => {
+      const detail = sessionId === "session-1" ? externalDetail() : operatorDetail();
+      return { ...detail, control: { ...detail.control, sessionId } };
+    });
+    let latest!: HookValue;
+    let renderer!: ReactTestRenderer;
+    const staleOwners: string[] = [];
+    const view = (sessionId: string) => (
+      <Harness
+        sessionId={sessionId}
+        onValue={(value) => {
+          latest = value;
+          const owner = value.data?.control.sessionId;
+          if (owner && owner !== sessionId) staleOwners.push(owner);
+        }}
+      />
+    );
+    await act(async () => {
+      renderer = create(view("session-1"));
+    });
+    const oldReload = latest.reload;
+    await act(async () => renderer.update(view("session-2")));
+    expect(latest.data?.control.ownerKind).toBe("operator");
+
+    await act(async () => {
+      await oldReload();
+    });
+
+    expect(latest.data?.control.sessionId).toBe("session-2");
+    expect(latest.data?.control.ownerKind).toBe("operator");
+    expect(apiMocks.fetchSessionControlDetail).toHaveBeenCalledTimes(2);
+    expect(staleOwners).toEqual([]);
+    await act(async () => renderer.unmount());
+  });
+
   it("loads the control detail for the selected session", async () => {
     apiMocks.fetchSessionControlDetail.mockResolvedValueOnce(operatorDetail());
     let latest: HookValue | undefined;

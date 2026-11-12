@@ -22,27 +22,23 @@ function toolRun(overrides: Partial<ChatToolRunRecord>): ChatToolRunRecord {
 
 describe("classifyAnswerGap", () => {
   it("returns none when visible text is present regardless of other signals", () => {
-    expect(
-      classifyAnswerGap({ hasVisibleText: true, hasReasoningText: true, toolCallCount: 3 }),
-    ).toBe("none");
+    expect(classifyAnswerGap({ hasVisibleText: true, hasReasoningText: true, toolCallCount: 3 })).toBe("none");
   });
 
   it("prefers tool_use_without_answer when tool calls exist and no visible text", () => {
-    expect(
-      classifyAnswerGap({ hasVisibleText: false, hasReasoningText: true, toolCallCount: 2 }),
-    ).toBe("tool_use_without_answer");
+    expect(classifyAnswerGap({ hasVisibleText: false, hasReasoningText: true, toolCallCount: 2 })).toBe(
+      "tool_use_without_answer",
+    );
   });
 
   it("returns reasoning_only when reasoning exists but no tools and no visible text", () => {
-    expect(
-      classifyAnswerGap({ hasVisibleText: false, hasReasoningText: true, toolCallCount: 0 }),
-    ).toBe("reasoning_only");
+    expect(classifyAnswerGap({ hasVisibleText: false, hasReasoningText: true, toolCallCount: 0 })).toBe(
+      "reasoning_only",
+    );
   });
 
   it("returns empty when nothing is present", () => {
-    expect(
-      classifyAnswerGap({ hasVisibleText: false, hasReasoningText: false, toolCallCount: 0 }),
-    ).toBe("empty");
+    expect(classifyAnswerGap({ hasVisibleText: false, hasReasoningText: false, toolCallCount: 0 })).toBe("empty");
   });
 });
 
@@ -144,6 +140,35 @@ describe("collectFailedFileMutations", () => {
       toolRun({ toolRunId: "r2", toolName: "fs.write", status: "executed", args: { path: "/b.txt" } }),
     ]);
     expect(failures).toEqual([{ toolName: "fs.write", path: "/a.txt", error: "transient" }]);
+  });
+
+  it.each([
+    ["fs.delete", "fs.write"],
+    ["fs.write", "fs.delete"],
+  ])("keeps a failed %s visible after %s succeeds on the same path", (failedTool, successfulTool) => {
+    const failures = collectFailedFileMutations([
+      toolRun({ toolRunId: "r1", toolName: failedTool, status: "failed", args: { path: "/a.txt" }, error: "failed" }),
+      toolRun({ toolRunId: "r2", toolName: successfulTool, args: { path: "/a.txt" } }),
+    ]);
+
+    expect(failures).toEqual([{ toolName: failedTool, path: "/a.txt", error: "failed" }]);
+  });
+
+  it.each(["fs.copy", "fs.move"])("only treats the same %s source and destination as a retry", (toolName) => {
+    const failed = toolRun({
+      toolRunId: "r1",
+      toolName,
+      status: "failed",
+      args: { from: "/a.txt", to: "/result.txt" },
+      error: "failed",
+    });
+    const success = toolRun({
+      toolRunId: "r2",
+      toolName,
+      args: { from: "/b.txt", to: "/result.txt" },
+    });
+    expect(collectFailedFileMutations([failed, success])).toEqual([{ toolName, path: "/result.txt", error: "failed" }]);
+    expect(collectFailedFileMutations([failed, { ...success, args: failed.args }])).toEqual([]);
   });
 
   it("reports a failed write after an earlier success to the same path", () => {

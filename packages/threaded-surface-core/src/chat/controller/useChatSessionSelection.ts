@@ -63,6 +63,7 @@ export function useChatSessionSelection({ initialModeOverride }: Input) {
   return {
     selectedSessionId,
     selectedSessionIdRef,
+    selectedSessionIntentRef,
     selectedSessionRevisionRef,
     historyView,
     setSelectedSessionId,

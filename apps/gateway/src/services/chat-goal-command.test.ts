@@ -232,6 +232,37 @@ describe("handleGoalCommand", () => {
       expect.objectContaining({ ok: false, message: expect.stringContaining("Verifier did not emit GOAL_STATUS.") }),
     );
   });
+
+  it("does not accept a coder's pass marker when the current QA step has no verdict", async () => {
+    const deps = fakeDeps();
+    const coderOutput = "Implementation finished.\nGOAL_STATUS: pass";
+    deps.runChatDelegation.mockResolvedValueOnce({
+      runId: "run-without-qa-verdict",
+      steps: [
+        { ...qaStep(coderOutput, "coder-child"), role: "coder" },
+        qaStep(undefined, "qa-child"),
+      ],
+      stitchedOutput: coderOutput,
+    });
+
+    const result = await handleGoalCommand(deps, "session-1", ["Verify release", "--max-iterations=1"]);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("1: unknown");
+  });
+
+  it("reports a missing current QA result separately from the previous iteration's failure", async () => {
+    const deps = fakeDeps();
+    deps.runChatDelegation
+      .mockResolvedValueOnce({ runId: "run-with-failure", steps: [qaStep("GOAL_STATUS: fail")] })
+      .mockResolvedValueOnce({ runId: "run-without-output", steps: [qaStep(undefined)] });
+
+    const result = await handleGoalCommand(deps, "session-1", ["Verify release", "--max-iterations=2"]);
+
+    expect(result.ok).toBe(false);
+    expect(result.message).toContain("1: fail");
+    expect(result.message).toContain("2: unknown");
+  });
 });
 
 function fakeDeps() {
@@ -254,7 +285,7 @@ function goalMemory(itemId: string, content: string, status = "active") {
   };
 }
 
-function qaStep(output: string, childSessionId = "child-1") {
+function qaStep(output?: string, childSessionId = "child-1") {
   return {
     role: "qa",
     status: "completed",

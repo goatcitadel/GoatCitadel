@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { McpServerRecord } from "@goatcitadel/contracts";
 import {
   listMcpRequesterScopePostures,
+  runMcpServerHealthCheck,
   type McpRequesterScopeDiagnosticsReadPort,
   type McpRequesterScopePostureHost,
 } from "./mcp-diagnostics-service.js";
@@ -67,6 +68,62 @@ function hostFor(
 ): McpRequesterScopePostureHost {
   return { listMcpServers: () => servers, requesterScopeDiagnostics: port };
 }
+
+function healthHost(
+  server: McpServerRecord,
+  resolverRegistration: ReturnType<McpRequesterScopeDiagnosticsReadPort["resolveRegistrationPosture"]> = "registered",
+) {
+  return {
+    requireFeatureEnabled: () => undefined,
+    listMcpTemplates: async () => [],
+    requireMcpServer: async () => ({ ...server, resolverRegistration }),
+    pickConnectorDiagnosticAction: () => undefined,
+    recordConnectorHealthRun: async () => undefined,
+  };
+}
+
+describe("runMcpServerHealthCheck", () => {
+  it("reports a registered requester-scoped server as awaiting requester context without requiring a static URL", async () => {
+    const report = await runMcpServerHealthCheck(healthHost(requesterScopedServer()), "tenant-mcp");
+
+    expect(report.status).toBe("warn");
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({ status: "warn", message: expect.stringMatching(/requester context/i) }),
+    );
+    expect(report.checks.some((check) => check.key === "url")).toBe(false);
+  });
+
+  it.each([
+    ["resolver_missing", /register the configured requester resolver/i],
+    ["resolver_binding_drift", /reconcile the configured resolver version and generation/i],
+  ] as const)("reports %s as an error without requiring a static URL", async (posture, action) => {
+    const host = healthHost(requesterScopedServer(), posture);
+
+    const report = await runMcpServerHealthCheck(host, "tenant-mcp");
+
+    expect(report.status).toBe("error");
+    expect(report.checks).toContainEqual(
+      expect.objectContaining({ status: "fail", message: expect.stringMatching(/resolver/i) }),
+    );
+    expect(report.checks.some((check) => check.key === "url")).toBe(false);
+    expect(report.recommendedNextAction).toMatch(action);
+  });
+
+  it("still fails a static HTTP server without a URL", async () => {
+    const host = healthHost(
+      requesterScopedServer({
+        connectionMode: undefined,
+        requesterResolution: undefined,
+        status: "connected",
+      }),
+    );
+
+    const report = await runMcpServerHealthCheck(host, "tenant-mcp");
+
+    expect(report.status).toBe("error");
+    expect(report.checks).toContainEqual(expect.objectContaining({ key: "url", status: "fail" }));
+  });
+});
 
 const LAST_OUTCOME: McpRequesterScopeLastOutcome = Object.freeze({
   serverId: "tenant-mcp",

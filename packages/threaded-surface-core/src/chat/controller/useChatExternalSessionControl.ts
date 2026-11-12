@@ -6,7 +6,10 @@ import { useChatControllerCoordination } from "./useChatControllerCoordination";
 import { useChatSessionSelection } from "./useChatSessionSelection";
 
 type Input = {
-  selection: Pick<ReturnType<typeof useChatSessionSelection>, "selectedSessionId">;
+  selection: Pick<
+    ReturnType<typeof useChatSessionSelection>,
+    "selectedSessionId" | "selectedSessionIntentRef" | "selectedSessionRevisionRef"
+  >;
   coordination: Pick<ReturnType<typeof useChatControllerCoordination>, "sessionControlSendLockedRef">;
   refreshChatSessionAggregate: (sessionId: string) => Promise<void>;
 };
@@ -18,7 +21,9 @@ export function useChatExternalSessionControl({ selection, coordination, refresh
   // fails ordinary operator Chat send closed while an external client owns the
   // generation. Operator reads, approvals, revoke, and emergency takeover stay
   // available; the control secret is never fetched or surfaced here.
-  const sessionControlStatus = useSessionControlStatus(selection.selectedSessionId);
+  const { selectedSessionId, selectedSessionIntentRef, selectedSessionRevisionRef } = selection;
+  const selectionRevision = selectedSessionRevisionRef.current;
+  const sessionControlStatus = useSessionControlStatus(selectedSessionId);
   const reloadSessionControl = sessionControlStatus.reload;
   const sessionControlBannerModel = useMemo(
     () => deriveSessionControlBannerViewModel(sessionControlStatus.data),
@@ -28,56 +33,64 @@ export function useChatExternalSessionControl({ selection, coordination, refresh
   useEffect(() => {
     coordination.sessionControlSendLockedRef.current = sessionControlSendLocked;
   }, [sessionControlSendLocked, coordination.sessionControlSendLockedRef]);
-  const [sessionControlActionPending, setSessionControlActionPending] =
-    useState<SessionControlBannerActionPending | null>(null);
-  const [sessionControlActionError, setSessionControlActionError] = useState<string | null>(null);
+  const [action, setAction] = useState<{
+    revision: number;
+    pending?: SessionControlBannerActionPending;
+    error?: string;
+  }>();
+  const currentAction = action?.revision === selectionRevision ? action : undefined;
   const runSessionControlRevoke = useCallback(
-    (mode: SessionControlBannerActionPending) => {
-      if (!selection.selectedSessionId || !sessionControlBannerModel.externalControlActive) {
-        return;
-      }
-      const targetSessionId = selection.selectedSessionId;
-      setSessionControlActionPending(mode);
-      setSessionControlActionError(null);
-      void revokeSessionControl(targetSessionId, {
-        target: "current_controller",
-        expectedGeneration: sessionControlBannerModel.generation,
-        mode,
-      })
-        .then(async () => {
-          await reloadSessionControl();
-          await refreshChatSessionAggregate(targetSessionId);
-        })
-        .catch(() => {
-          setSessionControlActionError(
-            "The control action was rejected. The session state may have changed — reload and retry.",
-          );
-        })
-        .finally(() => {
-          setSessionControlActionPending(null);
+    async (mode: SessionControlBannerActionPending) => {
+      const current = () =>
+        selectedSessionIntentRef.current === selectedSessionId &&
+        selectedSessionRevisionRef.current === selectionRevision;
+      if (!selectedSessionId || !sessionControlBannerModel.externalControlActive || !current()) return;
+
+      setAction({ revision: selectionRevision, pending: mode });
+      try {
+        await revokeSessionControl(selectedSessionId, {
+          target: "current_controller",
+          expectedGeneration: sessionControlBannerModel.generation,
+          mode,
         });
+        if (!current()) return;
+        await reloadSessionControl();
+        if (!current()) return;
+        await refreshChatSessionAggregate(selectedSessionId);
+        if (current()) setAction(undefined);
+      } catch {
+        if (current())
+          setAction({
+            revision: selectionRevision,
+            error: "The control action was rejected. The session state may have changed — reload and retry.",
+          });
+      }
     },
     [
       refreshChatSessionAggregate,
       reloadSessionControl,
-      selection.selectedSessionId,
+      selectedSessionId,
+      selectedSessionIntentRef,
+      selectedSessionRevisionRef,
+      selectionRevision,
       sessionControlBannerModel.externalControlActive,
       sessionControlBannerModel.generation,
     ],
   );
-  const handleSessionControlRevoke = useCallback(() => runSessionControlRevoke("revoke"), [runSessionControlRevoke]);
-  const handleSessionControlEmergencyTakeover = useCallback(
-    () => runSessionControlRevoke("emergency_takeover"),
-    [runSessionControlRevoke],
-  );
+  const handleSessionControlRevoke = useCallback(() => {
+    void runSessionControlRevoke("revoke");
+  }, [runSessionControlRevoke]);
+  const handleSessionControlEmergencyTakeover = useCallback(() => {
+    void runSessionControlRevoke("emergency_takeover");
+  }, [runSessionControlRevoke]);
 
   return {
     sessionControlSendLocked,
     sessionControlBannerModel,
     handleSessionControlRevoke,
     handleSessionControlEmergencyTakeover,
-    sessionControlActionPending,
-    sessionControlActionError,
+    sessionControlActionPending: currentAction?.pending ?? null,
+    sessionControlActionError: currentAction?.error ?? null,
     sessionControlStatus,
   };
 }

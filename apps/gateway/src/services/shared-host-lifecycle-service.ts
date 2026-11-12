@@ -229,26 +229,22 @@ export class SharedHostLifecycleService implements SharedHostLifecycleAdmissionP
     }
 
     if (this.state === "quiesced") {
-      if (input.mode === "force") {
-        this.transition("closing");
-        await this.flushSignals();
-        return { outcome: "closing", snapshot: this.snapshot() };
-      }
-      await this.flushSignals();
-      return { outcome: "quiesced", snapshot: this.snapshot() };
+      if (input.mode === "force") this.transition("closing");
+      return await this.finishDrain("quiesced");
     }
     if (this.state === "closing") {
-      await this.flushSignals();
-      return { outcome: "closing", snapshot: this.snapshot() };
+      return await this.finishDrain("closing");
     }
 
     const deadlineAt = Date.parse(this.drainState?.deadlineAt ?? this.timestamp());
     const drained = this.active.size === 0 || (await this.waitForZero(Math.max(0, deadlineAt - this.now().getTime())));
+    const stateAfterWait = this.snapshot().state;
+    if (stateAfterWait === "closed") return { outcome: "already_closed", snapshot: this.snapshot() };
+    if (stateAfterWait === "closing") return await this.finishDrain("closing");
     if (drained) {
       this.ensureQuiescedAfterDrain();
       if (input.mode === "force") this.transition("closing");
-      await this.flushSignals();
-      return { outcome: input.mode === "force" ? "closing" : "quiesced", snapshot: this.snapshot() };
+      return await this.finishDrain("quiesced");
     }
 
     this.drainState = {
@@ -266,11 +262,17 @@ export class SharedHostLifecycleService implements SharedHostLifecycleAdmissionP
       for (const reservation of this.active.values()) {
         if (!reservation.controller.signal.aborted) reservation.controller.abort(reason);
       }
-      await this.flushSignals();
-      return { outcome: "closing", snapshot: this.snapshot() };
+      return await this.finishDrain("closing");
     }
+    return await this.finishDrain("timed_out");
+  }
+
+  private async finishDrain(fallback: SharedHostDrainResult["outcome"]): Promise<SharedHostDrainResult> {
     await this.flushSignals();
-    return { outcome: "timed_out", snapshot: this.snapshot() };
+    const snapshot = this.snapshot();
+    const outcome =
+      snapshot.state === "closed" ? "already_closed" : snapshot.state === "closing" ? "closing" : fallback;
+    return { outcome, snapshot };
   }
 
   public markClosing(): SharedHostLifecycleSnapshot {

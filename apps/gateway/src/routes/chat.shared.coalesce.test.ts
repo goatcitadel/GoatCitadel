@@ -62,6 +62,21 @@ describe("coalesceStreamingDeltas", () => {
     expect(combined).toBe("abc");
   });
 
+  it("flushes buffered partial output before propagating the upstream error", async () => {
+    vi.useFakeTimers();
+    const failure = new Error("Upstream stopped while streaming.");
+    const partial = { type: "assistant.delta", delta: "Partial answer", eventId: "e1", sequence: 1 };
+    async function* source() {
+      yield partial;
+      throw failure;
+    }
+
+    const stream = coalesceStreamingDeltas(source(), { windowMs: 1000 });
+    await expect(stream.next()).resolves.toEqual({ done: false, value: partial });
+    await expect(stream.next()).rejects.toBe(failure);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
   it("passes through non-delta event types immediately", async () => {
     async function* source() {
       yield { type: "tool_call.start", id: "x" };

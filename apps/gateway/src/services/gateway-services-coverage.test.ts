@@ -58,7 +58,13 @@ describe("gateway service coverage helpers", () => {
       suggested_repair_class: "skill_install_candidate",
       confidence: 2,
       repeat_count: 0,
-      recovery_options_json: JSON.stringify(["install_skill", "install_skill", "unknown", "replay_failed_turn"]),
+      recovery_options_json: JSON.stringify([
+        "install_skill",
+        "install_skill",
+        "unknown",
+        "create_capability_proposal",
+        "replay_failed_turn",
+      ]),
       replay_run_id: null,
       replay_status: "completed",
       repair_candidate_id: "cand-1",
@@ -73,7 +79,7 @@ describe("gateway service coverage helpers", () => {
       causeClass: "skill_missing",
       confidence: 1,
       repeatCount: 1,
-      recoveryOptions: ["install_skill", "replay_failed_turn"],
+      recoveryOptions: ["install_skill", "create_capability_proposal", "replay_failed_turn"],
       replayStatus: "completed",
       repairCandidateId: "cand-1",
     });
