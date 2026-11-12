@@ -244,7 +244,7 @@ export async function loadChatTurnSessionState(
 }> {
   await deps.ensureChatMessageProjection(sessionId);
   const { chatTurnTraces } = deps.storage;
-  const listedTraces = await chatTurnTraces.listBySession(sessionId, 1_000);
+  const listedTraces = await chatTurnTraces.listBySession(sessionId, 2_000);
   const listedConversationTraces = options.isConversationTrace
     ? listedTraces.filter(options.isConversationTrace)
     : listedTraces;
