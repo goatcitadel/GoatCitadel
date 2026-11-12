@@ -23,6 +23,7 @@ export const chatSessionsRouteMethods = [
   "listManagedProjectFiles",
   "downloadManagedProjectFile",
   "restoreManagedProjectFile",
+  "publishManagedProjectFile",
   "getChatSessionBinding",
   "getChatSessionStatus",
   "getChatSessionWorkbench",

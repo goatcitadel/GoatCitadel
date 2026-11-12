@@ -26,6 +26,14 @@ export interface ManagedProjectFileRestoreRequest {
   expectedModeRevision: string;
 }
 
+export interface ManagedProjectFilePublishRequest extends ManagedProjectFileRestoreRequest {
+  overwriteRevision?: string;
+}
+
+export type ManagedProjectFilePublishResult =
+  | { status: "overwrite_required"; path: string; overwriteRevision: string }
+  | { status: "published"; path: string; contentSha256: string };
+
 export function isManagedProjectFileTool(toolName: string): boolean {
   return toolName.startsWith("project.files.");
 }

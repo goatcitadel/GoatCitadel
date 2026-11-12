@@ -8,6 +8,7 @@ import { resolveAuthenticatedOperatorAdmissionContext } from "./session-control-
 import {
   managedDownloadSchema,
   managedListQuerySchema,
+  managedPublishSchema,
   managedRestoreSchema,
 } from "../services/chat-managed-project-files.js";
 import {
@@ -403,6 +404,29 @@ export function registerChatSessionRoutes(fastify: FastifyInstance): void {
         await markMutationCommitted(request);
         return reply.header("Cache-Control", "no-store").send(receipt);
       } catch (error) {
+        return sendRouteError(reply, error, request.log);
+      }
+    },
+  );
+
+  fastify.post(
+    "/api/v1/chat/sessions/:sessionId/managed-files/publish",
+    { preValidation: requireLocalChatApprovalOperator },
+    async (request, reply) => {
+      const params = chatApprovalModeParamsSchema.safeParse(request.params);
+      const input = managedPublishSchema.safeParse(request.body);
+      if (!params.success || !input.success)
+        return reply.code(400).send({ error: "Invalid managed file publish request." });
+      try {
+        const result = await fastify.services.chatSessions.publishManagedProjectFile(
+          params.data.sessionId,
+          request.authActorId,
+          input.data,
+        );
+        if (result.status === "published") await markMutationCommitted(request);
+        return reply.header("Cache-Control", "no-store").send(result);
+      } catch (error) {
+        await markMutationCommittedFromError(request, error);
         return sendRouteError(reply, error, request.log);
       }
     },

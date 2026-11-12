@@ -2,6 +2,8 @@ import type {
   ChatApprovalModeState,
   ChatApprovalModeUpdate,
   ManagedProjectFileReceipt,
+  ManagedProjectFilePublishRequest,
+  ManagedProjectFilePublishResult,
   ManagedProjectFileRestoreRequest,
   ManagedProjectFileRevision,
 } from "@goatcitadel/contracts";
@@ -45,9 +47,21 @@ export function updateChatApprovalMode(
 export function fetchChatManagedFiles(
   sessionId: string,
   options: { prefix?: string; signal?: AbortSignal } = {},
-): Promise<{ items: ManagedProjectFileRevision[] }> {
+): Promise<{ items: ManagedProjectFileRevision[]; publishAvailable?: boolean }> {
   const suffix = options.prefix ? `?${new URLSearchParams({ prefix: options.prefix })}` : "";
   return request(`${sessionPath(sessionId)}/managed-files${suffix}`, { signal: options.signal, cache: "no-store" });
+}
+
+export function publishChatManagedFile(
+  sessionId: string,
+  input: ManagedProjectFilePublishRequest,
+  signal?: AbortSignal,
+): Promise<ManagedProjectFilePublishResult> {
+  return request(`${sessionPath(sessionId)}/managed-files/publish`, {
+    method: "POST",
+    body: JSON.stringify(input),
+    signal,
+  });
 }
 
 export function restoreChatManagedFile(

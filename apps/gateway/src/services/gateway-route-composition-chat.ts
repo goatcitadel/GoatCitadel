@@ -34,6 +34,8 @@ import * as chatToolArtifactService from "./chat-tool-artifact-service.js";
 import * as chatWorkbenchService from "./chat-workbench-service.js";
 import { DocumentEditingService } from "./document-editing-service.js";
 import { createManagedProjectFileOperator } from "./chat-managed-project-files.js";
+import { createManagedProjectPublisher } from "./managed-project-file-publisher.js";
+import { resolveProjectRootForToolContext } from "./tool-path-resolution.js";
 import { createWorkflowSkillCaptureForGateway } from "./workflow-skill-capture-composition.js";
 import { resolveEffectiveRuntimeScopeFromStorage } from "./effective-runtime-scope-service.js";
 import { createSessionControlRouteService } from "./session-control-route-service.js";
@@ -58,7 +60,7 @@ export function composeChatRouteDependencies(
   | "chatSupport"
   | "chatTools"
 > {
-  const { storage } = gateway;
+  const { storage, config } = gateway;
   const agents = createAgentsRoutePort({
     storage,
     normalizeWorkspaceId: (workspaceId) => gateway.normalizeWorkspaceId(workspaceId),
@@ -179,6 +181,13 @@ export function composeChatRouteDependencies(
   const managedFiles = createManagedProjectFileOperator({
     storage,
     chatAutoApprovalEnabled,
+    publisher: createManagedProjectPublisher(() => config.toolPolicy.sandbox),
+    resolvePublishRoot: (projectWorkspacePath) =>
+      resolveProjectRootForToolContext({
+        workspaceRoot: path.resolve(config.rootDir, config.assistant.workspaceDir),
+        repoRoot: config.rootDir,
+        projectWorkspacePath,
+      }),
     checkPolicy: async (sessionId, scope, actorId, toolName, args) => {
       const { citadelId } = await resolveChatRuntimeScope(gateway, { sessionId, ...scope });
       await storage.citadels.getAccessSnapshot(citadelId);
@@ -215,6 +224,7 @@ export function composeChatRouteDependencies(
     listManagedProjectFiles: managedFiles.list,
     downloadManagedProjectFile: managedFiles.download,
     restoreManagedProjectFile: managedFiles.restore,
+    publishManagedProjectFile: managedFiles.publish,
     getChatApprovalMode: (sessionId) =>
       chatSessionService.getChatApprovalMode(
         {

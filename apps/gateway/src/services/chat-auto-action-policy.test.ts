@@ -568,7 +568,7 @@ describe("Chat Auto durable execution boundary", () => {
     expect(await probe(save, false)).toMatchObject({ allowed: false });
   });
 
-  it("scopes managed list, download, and restore to local operators and their active project", async () => {
+  it("scopes managed file actions to local operators and their active project", async () => {
     const { raw, storage, projectId } = await setup();
     const path = "z-managed/example.html";
     const scope = { workspaceId, projectId, path };
@@ -602,7 +602,18 @@ describe("Chat Auto durable execution boundary", () => {
       effectId: "other-project-save",
       contentBase64: "",
     });
-    const deps = { storage, chatAutoApprovalEnabled: true, checkPolicy: vi.fn(async () => {}) };
+    const publish = vi.fn(async () => ({
+      status: "overwrite_required" as const,
+      path,
+      overwriteRevision: `1900000000000.${"a".repeat(64)}`,
+    }));
+    const deps = {
+      storage,
+      chatAutoApprovalEnabled: true,
+      checkPolicy: vi.fn(async () => {}),
+      publisher: { available: () => true, publish },
+      resolvePublishRoot: () => "original-project",
+    };
     const { modeRevision } = await getChatApprovalMode(deps, sessionId);
     const operator = createManagedProjectFileOperator(deps);
     const app = Fastify();
@@ -615,6 +626,7 @@ describe("Chat Auto durable execution boundary", () => {
         listManagedProjectFiles: operator.list,
         downloadManagedProjectFile: operator.download,
         restoreManagedProjectFile: operator.restore,
+        publishManagedProjectFile: operator.publish,
       },
     } as never);
     registerChatSessionRoutes(app);
@@ -624,6 +636,32 @@ describe("Chat Auto durable execution boundary", () => {
     try {
       expect((await app.inject({ url })).statusCode).toBe(403);
       expect((await app.inject({ url, headers: { ...headers, forwarded: "for=192.0.2.1" } })).statusCode).toBe(403);
+      const publishRequest = { method: "POST" as const, url: `${url}/publish`, payload };
+      expect((await app.inject(publishRequest)).statusCode).toBe(403);
+      expect(
+        (
+          await app.inject({
+            ...publishRequest,
+            headers,
+            payload: {
+              ...payload,
+              expectedRevision: first.revisionId,
+            },
+          })
+        ).statusCode,
+      ).toBe(409);
+      expect(publish).not.toHaveBeenCalled();
+      const reviewed = await app.inject({ ...publishRequest, headers });
+      expect(reviewed.statusCode).toBe(200);
+      expect(reviewed.json()).toMatchObject({ status: "overwrite_required", path });
+      expect(publish).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          projectRoot: "original-project",
+          sessionId,
+          actorId: operatorId,
+          file: expect.objectContaining({ projectId, revisionId: second.revisionId }),
+        }),
+      );
       const initial = (await app.inject({ url, headers })).json().items as { path: string }[];
       expect(initial).toHaveLength(200);
       expect(initial.map((file) => file.path)).not.toContain(path);

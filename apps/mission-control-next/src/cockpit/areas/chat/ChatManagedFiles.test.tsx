@@ -12,6 +12,7 @@ vi.mock("@goatcitadel/mission-control-shared/api/chat-managed-files", async (imp
   downloadChatManagedFile: vi.fn(),
   fetchChatApprovalMode: vi.fn(),
   fetchChatManagedFiles: vi.fn(),
+  publishChatManagedFile: vi.fn(),
   restoreChatManagedFile: vi.fn(),
   updateChatApprovalMode: vi.fn(),
 }));
@@ -81,7 +82,7 @@ function button(name: string) {
 }
 
 async function click(name: string) {
-  await vi.waitFor(() => expect(button(name)?.disabled).toBe(false));
+  await vi.waitFor(() => expect(button(name)?.disabled, name).toBe(false));
   await act(async () => button(name)!.click());
 }
 
@@ -97,6 +98,36 @@ it("opts in with the current mode revision and names the managed destination", a
     expect.any(AbortSignal),
   );
   await vi.waitFor(() => expect(container.textContent).toContain("the managed workspace for Launch"));
+});
+
+it("publishes an existing destination only after explicit overwrite confirmation", async () => {
+  vi.mocked(api.fetchChatManagedFiles).mockResolvedValue({ items: [file], publishAvailable: true });
+  vi.mocked(api.publishChatManagedFile)
+    .mockResolvedValueOnce({ status: "overwrite_required", path: file.path, overwriteRevision: "first-review" })
+    .mockResolvedValueOnce({ status: "overwrite_required", path: file.path, overwriteRevision: "fresh-review" })
+    .mockResolvedValueOnce({ status: "published", path: file.path, contentSha256: file.contentSha256! });
+  await render();
+  await click("Managed files");
+  await click("Publish notes/brief.txt");
+  await click("Cancel");
+  expect(api.publishChatManagedFile).toHaveBeenCalledTimes(1);
+  expect(button("Overwrite and publish")).toBeUndefined();
+  await click("Publish notes/brief.txt");
+  await click("Overwrite and publish");
+  expect(api.publishChatManagedFile).toHaveBeenNthCalledWith(
+    3,
+    "session",
+    {
+      path: file.path,
+      expectedRevision: file.revisionId,
+      expectedModeRevision: mode.modeRevision,
+      overwriteRevision: "fresh-review",
+    },
+    expect.any(AbortSignal),
+  );
+  await vi.waitFor(() =>
+    expect(document.body.textContent).toContain("Published notes/brief.txt to the original project folder."),
+  );
 });
 
 it("restores only the eligible head and refreshes after a conflict or new turn", async () => {

@@ -1,11 +1,16 @@
 import { useEffect, useLayoutEffect, useRef, useState, useSyncExternalStore } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import type { ChatApprovalMode, ManagedProjectFileRevision } from "@goatcitadel/contracts";
+import type {
+  ChatApprovalMode,
+  ManagedProjectFilePublishRequest,
+  ManagedProjectFileRevision,
+} from "@goatcitadel/contracts";
 import {
   chatApprovalModeQueryKey,
   downloadChatManagedFile,
   fetchChatApprovalMode,
   fetchChatManagedFiles,
+  publishChatManagedFile,
   restoreChatManagedFile,
   updateChatApprovalMode,
 } from "@goatcitadel/mission-control-shared/api/chat-managed-files";
@@ -20,6 +25,7 @@ import {
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
+import { ManagedFileOverwriteReview } from "./ManagedFileOverwriteReview";
 
 interface ManagedFilesProps {
   sessionId: string;
@@ -58,6 +64,7 @@ function ManagedFilesControls({
   const [pending, setPending] = useState<string>();
   const [status, setStatus] = useState<string>();
   const [error, setError] = useState<string>();
+  const [overwriteReview, setOverwriteReview] = useState<ManagedProjectFilePublishRequest>();
   const attempt = useRef<AbortController | null>(null);
   useLayoutEffect(
     () => () => {
@@ -95,7 +102,7 @@ function ManagedFilesControls({
 
   if (!current) return null;
 
-  function run(label: string, failure: string, work: (signal: AbortSignal) => Promise<string>) {
+  function run(label: string, failure: string, work: (signal: AbortSignal) => Promise<string | undefined>) {
     if (attempt.current) return;
     const controller = new AbortController();
     attempt.current = controller;
@@ -185,6 +192,23 @@ function ManagedFilesControls({
     });
   }
 
+  function publish(input: ManagedProjectFilePublishRequest) {
+    setOverwriteReview(undefined);
+    run(
+      "publish",
+      "Could not verify the publish. Check the original project folder before trying again.",
+      async (signal) => {
+        const result = await publishChatManagedFile(sessionId, input, signal);
+        signal.throwIfAborted();
+        if (result.status === "overwrite_required") {
+          setOverwriteReview({ ...input, overwriteRevision: result.overwriteRevision });
+          return undefined;
+        }
+        return `Published ${result.path} to the original project folder.`;
+      },
+    );
+  }
+
   const eligibleFiles =
     files.data?.items.filter(
       (file) => file.workspaceId === workspaceId && file.projectId === projectId && !file.deleted,
@@ -237,9 +261,12 @@ function ManagedFilesControls({
       {!open || !auto ? announcement : null}
       <Dialog
         open={open && Boolean(auto)}
-        onOpenChange={setOpen}
+        onOpenChange={(next) => {
+          if (!next) setOverwriteReview(undefined);
+          setOpen(next);
+        }}
         title="Managed project files"
-        description="Download a saved version to publish it separately to your original project folder."
+        description="Publish a saved version to the original project folder, or download a copy."
       >
         <form
           className="mb-3 space-y-2"
@@ -330,7 +357,39 @@ function ManagedFilesControls({
                   >
                     Download
                   </Button>
+                  {files.data?.publishAvailable ? (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      aria-label={`Publish ${file.path}`}
+                      disabled={fileActionsDisabled || !canMutate || turnActive || overwriteReview?.path === file.path}
+                      onClick={() =>
+                        state &&
+                        publish({
+                          path: file.path,
+                          expectedRevision: file.revisionId,
+                          expectedModeRevision: state.modeRevision,
+                        })
+                      }
+                    >
+                      Publish
+                    </Button>
+                  ) : null}
                 </div>
+                {overwriteReview?.path === file.path ? (
+                  <ManagedFileOverwriteReview
+                    path={file.path}
+                    disabled={
+                      fileActionsDisabled ||
+                      !canMutate ||
+                      turnActive ||
+                      overwriteReview.expectedRevision !== file.revisionId ||
+                      overwriteReview.expectedModeRevision !== state?.modeRevision
+                    }
+                    onCancel={() => setOverwriteReview(undefined)}
+                    onConfirm={() => publish(overwriteReview)}
+                  />
+                ) : null}
               </li>
             ))}
           </ul>

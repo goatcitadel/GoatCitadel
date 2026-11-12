@@ -221,7 +221,7 @@ export async function publishGovernedFileEntry(
 ): Promise<GovernedFilePublishEvidence> {
   const root = canonicalLocalDrivePath(input.rootPath);
   const relative = canonicalEntryRelativePath(input.relativePath);
-  if (!Buffer.isBuffer(input.content) || input.content.byteLength < 1 || input.content.byteLength > MAX_ENTRY_BYTES) {
+  if (!Buffer.isBuffer(input.content) || input.content.byteLength > MAX_ENTRY_BYTES) {
     throw invalid("entry content byte bound");
   }
   const expectedParent = canonicalIdentity(input.expectedParent);

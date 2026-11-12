@@ -14,6 +14,7 @@ import {
   validateGovernedFileHandlePortResponse,
   type GovernedFileCaptureEvidence,
 } from "./governed-file-windows-handle-port.js";
+import { createManagedProjectPublisher } from "./managed-project-file-publisher.js";
 
 const SCHEMA = "goatcitadel.governed-file-windows-handle-port.v1";
 const ROOT = "C:\\GoatCitadel\\config";
@@ -224,6 +225,63 @@ describe.runIf(process.platform === "win32")("governed file handle port live Win
     cleanupRoots.push(root);
     return root;
   }
+
+  it("publishes exact managed bytes only after a fresh overwrite review", async () => {
+    const root = await scratch("goat-managed-publish-");
+    const publisher = createManagedProjectPublisher(() => ({ writeJailRoots: [root] }) as never);
+    const target = join(root, "target.txt");
+    const original = Buffer.from("original\r\n");
+    const newer = Buffer.from("newer\r\n");
+    const content = Buffer.from("\uFEFFmanaged café\r\n");
+    const file = {
+      path: "target.txt",
+      workspaceId: "workspace",
+      projectId: "project",
+      revisionId: "managed",
+      previousRevisionId: null,
+      contentSha256: sha256(content),
+      byteLength: content.length,
+      deleted: false,
+      canRestore: false,
+    };
+    const request = { path: file.path, expectedRevision: file.revisionId, expectedModeRevision: "a".repeat(64) };
+    const input = {
+      file,
+      request,
+      content,
+      projectRoot: root,
+      sessionId: "session",
+      actorId: "operator",
+      revalidatePolicy: async () => {},
+    };
+    await writeFile(target, original);
+    const review = await publisher.publish(input);
+    expect(review.status).toBe("overwrite_required");
+    await expect(readFile(target)).resolves.toEqual(original);
+    if (review.status !== "overwrite_required") throw new Error("Expected overwrite review");
+
+    const confirmed = { ...input, request: { ...request, overwriteRevision: review.overwriteRevision } };
+    await expect(publisher.publish({ ...confirmed, actorId: "another-operator" })).rejects.toThrow(/review it again/i);
+    await writeFile(target, newer);
+    await expect(publisher.publish(confirmed)).rejects.toThrow(/review it again/i);
+    await expect(readFile(target)).resolves.toEqual(newer);
+    const fresh = await publisher.publish(input);
+    if (fresh.status !== "overwrite_required") throw new Error("Expected fresh overwrite review");
+    await expect(
+      publisher.publish({ ...input, request: { ...request, overwriteRevision: fresh.overwriteRevision } }),
+    ).resolves.toEqual({ status: "published", path: file.path, contentSha256: file.contentSha256 });
+    await expect(readFile(target)).resolves.toEqual(content);
+    const empty = Buffer.alloc(0);
+    await expect(
+      publisher.publish({
+        ...input,
+        request: { ...request, path: "empty.txt" },
+        file: { ...file, path: "empty.txt", byteLength: 0, contentSha256: sha256(empty) },
+        content: empty,
+      }),
+    ).resolves.toMatchObject({ status: "published", contentSha256: sha256(empty) });
+    await expect(readFile(join(root, "empty.txt"))).resolves.toEqual(empty);
+  }, 120_000);
 
   it("captures, publishes, and restores through pinned relative handles", async () => {
     const root = await scratch("goat-governed-port-roundtrip-");
