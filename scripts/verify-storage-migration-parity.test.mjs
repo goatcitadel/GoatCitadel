@@ -1015,10 +1015,10 @@ test("current registries and checked-in manifest cover every migration exactly",
   // manifest so an accidental registry-plus-manifest edit cannot self-certify.
   assert.equal(sqlite.migrations.length, 280);
   assert.deepEqual([sqlite.firstVersion, sqlite.lastVersion], [1, 280]);
-  assert.equal(postgres.migrations.length, 231);
-  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 231]);
+  assert.equal(postgres.migrations.length, 232);
+  assert.deepEqual([postgres.firstVersion, postgres.lastVersion], [1, 232]);
   assert.equal(sqlite.migrations.at(-1)?.name, "managed_project_file_revisions");
-  assert.equal(postgres.migrations.at(-1)?.name, "managed_project_file_revisions");
+  assert.equal(postgres.migrations.at(-1)?.name, "approval_mode_managed_file_schema_convergence");
   assert.equal(sqlite.migrations.find((record) => record.version === 279)?.name, "chat_session_approval_modes");
   assert.equal(sqlite.migrations.find((record) => record.version === 278)?.name, "chat_artifact_render_receipts");
   assert.equal(sqlite.migrations.find((record) => record.version === 277)?.name, "model_comparison_execution_claims");
@@ -1244,6 +1244,11 @@ test("current registries and checked-in manifest cover every migration exactly",
   assert.equal(
     postgres.migrations.find((record) => record.version === 231)?.runtimeIntegritySha256,
     "6398f01c5a09d4089955e775dc16cb420d08cf06639c689f73a11cf951bc1dc2",
+  );
+  assert.equal(postgres.migrations.find((record) => record.version === 231)?.name, "managed_project_file_revisions");
+  assert.equal(
+    postgres.migrations.find((record) => record.version === 232)?.runtimeIntegritySha256,
+    "a0e564660459fcfb4846661dc4905abbaac38835a88dd6ab47d46719627d8139",
   );
   assert.equal(postgres.migrations.find((record) => record.version === 63)?.name, "citadel_tables_backfill");
   assert.equal(
