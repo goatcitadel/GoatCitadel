@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { SessionControlDetailResponse } from "@goatcitadel/contracts";
 import { fetchSessionControlDetail } from "../api/session-control-operator";
 import { RETAINED_RELOAD_WINDOW_MS } from "./retained-reload";
@@ -22,24 +22,34 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
   const [loading, setLoading] = useState(Boolean(sessionId));
   const [error, setError] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
+  const scope = useMemo(() => ({ sessionId }), [sessionId]);
+  const activeScope = useRef<typeof scope | null>(null);
+  useLayoutEffect(() => {
+    activeScope.current = scope;
+    return () => {
+      activeScope.current = null;
+    };
+  }, [scope]);
   // CH-47: the session last loaded and when, so a retained Chat shown again keeps its status.
   const lastLoadedRef = useRef<{ sessionId: string; at: number } | null>(null);
 
   const reload = useCallback(async () => {
-    if (!sessionId) {
+    const { sessionId } = scope;
+    if (!sessionId || activeScope.current !== scope) {
       return;
     }
     const loadId = loadSequenceRef.current + 1;
     loadSequenceRef.current = loadId;
+    const isCurrent = () => activeScope.current === scope && loadSequenceRef.current === loadId;
     setError(null);
     try {
       const next = await fetchSessionControlDetail(sessionId);
-      if (loadSequenceRef.current === loadId) {
+      if (isCurrent()) {
         setData(next);
         lastLoadedRef.current = { sessionId, at: Date.now() };
       }
     } catch {
-      if (loadSequenceRef.current === loadId) {
+      if (isCurrent()) {
         // H1 fail-closed: RETAIN the last successful projection on a transient
         // re-poll failure and surface a non-fatal caveat instead of nulling it.
         // Nulling here would drop a known external-control lock — the deriver maps
@@ -50,11 +60,11 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
         setError("The session control status is unavailable.");
       }
     } finally {
-      if (loadSequenceRef.current === loadId) {
+      if (isCurrent()) {
         setLoading(false);
       }
     }
-  }, [sessionId]);
+  }, [scope]);
 
   useEffect(() => {
     if (!sessionId) {
@@ -89,5 +99,6 @@ export function useSessionControlStatus(sessionId: string | null): SessionContro
   useRefreshSubscription("chat", reload);
   useRefreshSubscription("system", reload, { staleMs: 120_000, pollIntervalMs: 60_000 });
 
-  return useMemo(() => ({ data, loading, error, reload }), [data, loading, error, reload]);
+  const selectedData = data?.control.sessionId === sessionId ? data : null;
+  return useMemo(() => ({ data: selectedData, loading, error, reload }), [selectedData, loading, error, reload]);
 }

@@ -17,9 +17,9 @@ function createDeps(
   const deleteMessages = input.deleteMessages ?? vi.fn(() => 0);
   const deleteTraces = input.deleteTraces ?? vi.fn(() => 0);
   const setActiveLeaf = input.setActiveLeaf ?? vi.fn();
-  const clearBranch = input.clearBranch ?? vi.fn();
+  const clearBranch = input.clearBranch ?? vi.fn(async () => true);
   return {
-    getSession: vi.fn(() => ({ sessionId: "session-1" })),
+    getSession: vi.fn(async () => ({ sessionId: "session-1" })),
     loadChatTurnSessionState: vi.fn(async () => ({
       traces,
       tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
@@ -40,7 +40,7 @@ function createDeps(
       runImmediateTransaction: (callback) => callback(),
       chatMessages: { deleteByMessageIds: deleteMessages },
       chatTurnTraces: { deleteByTurnIds: deleteTraces },
-      chatSessionBranchState: { setActiveLeaf, clear: clearBranch },
+      chatSessionBranchState: { setActiveLeaf, clearIfCurrent: clearBranch },
       chatSessionMeta: { get: vi.fn(() => ({ lifecycleStatus: "active" })) },
     },
     withChatTurnWriteLease: vi.fn(async (_sessionId, _operation, task) => task()),
@@ -48,6 +48,56 @@ function createDeps(
 }
 
 describe("chat turn undo service", () => {
+  it("waits for asynchronous session validation before attempting the write lease", async () => {
+    const deps = createDeps();
+    const error = new Error("session lookup failed");
+    let fail!: (error: Error) => void;
+    const lookup = new Promise<never>((_resolve, reject) => {
+      fail = reject;
+    });
+    void lookup.catch(() => undefined);
+    deps.getSession = () => lookup;
+
+    const undo = undoChatTurns(deps, "session-1");
+    fail(error);
+    await expect(undo).rejects.toBe(error);
+    expect(deps.withChatTurnWriteLease).not.toHaveBeenCalled();
+  });
+
+  it.each(["other-leaf", "retained-parent"])("preserves a concurrent branch selection of %s", async (selected) => {
+    const traces = [
+      { turnId: "retained-parent", userMessageId: "parent-user", status: "completed" },
+      { turnId: "old-leaf", parentTurnId: "retained-parent", userMessageId: "leaf-user", status: "completed" },
+    ] as ChatTurnTraceRecord[];
+    const deleteMessages = vi.fn();
+    const deleteTraces = vi.fn();
+    let activeLeaf: string | undefined = "old-leaf";
+    const deps = createDeps({
+      traces,
+      activeLeafTurnId: activeLeaf,
+      deleteMessages,
+      deleteTraces,
+      setActiveLeaf: vi.fn((_sessionId, next: string) => {
+        activeLeaf = next;
+      }),
+    });
+    deps.storage.chatSessionBranchState.clearIfCurrent = vi.fn(async (_sessionId, expected) => {
+      if (activeLeaf !== expected) return false;
+      activeLeaf = undefined;
+      return true;
+    });
+    deps.storage.runImmediateTransaction = async (callback) => {
+      activeLeaf = selected;
+      return await callback();
+    };
+
+    await expect(undoChatTurns(deps, "session-1")).rejects.toThrow(/selected branch changed/i);
+    expect(activeLeaf).toBe(selected);
+    expect(deleteMessages).not.toHaveBeenCalled();
+    expect(deleteTraces).not.toHaveBeenCalled();
+    expect(deps.publishRealtime).not.toHaveBeenCalled();
+  });
+
   it("returns an empty result when the session has no active leaf", async () => {
     const deps = createDeps();
 
@@ -63,7 +113,7 @@ describe("chat turn undo service", () => {
     const deleteMessages = vi.fn(() => 4);
     const deleteTraces = vi.fn(() => 2);
     const setActiveLeaf = vi.fn();
-    const clearBranch = vi.fn();
+    const clearBranch = vi.fn(async () => true);
     const traces = [
       {
         turnId: "turn-1",
@@ -108,7 +158,7 @@ describe("chat turn undo service", () => {
     expect(deleteMessages).toHaveBeenCalledWith("session-1", ["user-2", "assistant-2", "user-3", "assistant-3"]);
     expect(deleteTraces).toHaveBeenCalledWith("session-1", ["turn-2", "turn-3"]);
     expect(setActiveLeaf).toHaveBeenCalledWith("session-1", "turn-1", expect.any(String));
-    expect(clearBranch).not.toHaveBeenCalled();
+    expect(clearBranch).toHaveBeenCalledWith("session-1", "turn-3");
     expect(deps.recordDevDiagnostic).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "chat.turns_undone",
@@ -124,7 +174,7 @@ describe("chat turn undo service", () => {
   });
 
   it("clears branch state when undo removes the full selected path", async () => {
-    const clearBranch = vi.fn();
+    const clearBranch = vi.fn(async () => true);
     const traces = [
       {
         turnId: "turn-1",
@@ -146,7 +196,7 @@ describe("chat turn undo service", () => {
       activeLeafTurnId: undefined,
     });
 
-    expect(clearBranch).toHaveBeenCalledWith("session-1");
+    expect(clearBranch).toHaveBeenCalledWith("session-1", "turn-1");
   });
 
   it("clamps counts below one to a single tail turn", async () => {

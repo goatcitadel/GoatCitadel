@@ -151,10 +151,28 @@ export async function resolveChatActiveLeafTurnId(
   sessionId: string,
   traces: ChatTurnTraceRecord[],
 ): Promise<string | undefined> {
-  const branchState = await deps.storage.chatSessionBranchState.get(sessionId);
-  if (branchState && traces.some((trace) => trace.turnId === branchState.activeLeafTurnId)) {
-    return branchState.activeLeafTurnId;
-  }
+  return (await resolveChatActiveLeaf(deps, sessionId, traces))?.turnId;
+}
+
+async function resolveChatActiveLeaf(
+  { storage: { chatSessionBranchState, chatTurnTraces } }: ChatTurnTraceHydrationDependencies,
+  sessionId: string,
+  traces: ChatTurnTraceRecord[],
+  isConversationTrace?: LoadChatTurnSessionStateOptions["isConversationTrace"],
+): Promise<ChatTurnTraceRecord | undefined> {
+  const resolveLeaf = async (leafTurnId: string | undefined): Promise<ChatTurnTraceRecord | undefined> => {
+    if (!leafTurnId) return undefined;
+    const visible = traces.find((trace) => trace.turnId === leafTurnId);
+    if (visible) return visible;
+    // An exact same-session leaf can sit outside the bounded or stale list.
+    const exact = (await chatTurnTraces.getByTurnIds([leafTurnId])).get(leafTurnId);
+    return exact?.sessionId === sessionId && (!isConversationTrace || isConversationTrace(exact)) ? exact : undefined;
+  };
+
+  const observed = await chatSessionBranchState.get(sessionId);
+  const persisted = await resolveLeaf(observed?.activeLeafTurnId);
+  if (persisted) return persisted;
+
   const newest = [...traces]
     .sort((left, right) => {
       const leftStarted = Date.parse(left.startedAt) || 0;
@@ -166,6 +184,13 @@ export async function resolveChatActiveLeafTurnId(
     })
     .at(0);
   if (!newest) {
+    if (
+      isConversationTrace &&
+      observed &&
+      !(await chatSessionBranchState.clearIfCurrent(sessionId, observed.activeLeafTurnId))
+    ) {
+      return await resolveLeaf((await chatSessionBranchState.get(sessionId))?.activeLeafTurnId);
+    }
     return undefined;
   }
   const newestLeafTurnId = resolveNewestLeafTurnId(
@@ -181,12 +206,16 @@ export async function resolveChatActiveLeafTurnId(
     ),
     buildChatTurnChildrenMap(traces),
   );
-  await deps.storage.chatSessionBranchState.setActiveLeaf(
+  const updated = await chatSessionBranchState.setActiveLeafIfCurrent(
     sessionId,
+    observed?.activeLeafTurnId,
     newestLeafTurnId,
     newest.finishedAt ?? newest.startedAt,
   );
-  return newestLeafTurnId;
+  if (!updated) {
+    return await resolveLeaf((await chatSessionBranchState.get(sessionId))?.activeLeafTurnId);
+  }
+  return traces.find((trace) => trace.turnId === newestLeafTurnId) ?? newest;
 }
 
 export interface LoadChatTurnSessionStateDeps extends ChatTurnTraceHydrationDependencies {
@@ -214,8 +243,30 @@ export async function loadChatTurnSessionState(
   activeLeafTurnId?: string;
 }> {
   await deps.ensureChatMessageProjection(sessionId);
-  const rawTraces = await deps.storage.chatTurnTraces.listBySession(sessionId, 2_000);
-  const conversationTraces = options.isConversationTrace ? rawTraces.filter(options.isConversationTrace) : rawTraces;
+  const { chatTurnTraces } = deps.storage;
+  const listedTraces = await chatTurnTraces.listBySession(sessionId, 1_000);
+  const listedConversationTraces = options.isConversationTrace
+    ? listedTraces.filter(options.isConversationTrace)
+    : listedTraces;
+  const activeLeaf = await resolveChatActiveLeaf(
+    deps,
+    sessionId,
+    listedConversationTraces,
+    options.isConversationTrace,
+  );
+  const activeLeafTurnId = activeLeaf?.turnId;
+  let rawTraces =
+    activeLeaf && !listedConversationTraces.includes(activeLeaf)
+      ? [...listedTraces.filter((trace) => trace.turnId !== activeLeaf.turnId), activeLeaf].sort((left, right) =>
+          right.startedAt.localeCompare(left.startedAt),
+        )
+      : listedTraces;
+  const conversationTraces =
+    rawTraces === listedTraces
+      ? listedConversationTraces
+      : options.isConversationTrace
+        ? rawTraces.filter(options.isConversationTrace)
+        : rawTraces;
   const turnLineageById = new Map(
     conversationTraces.map((trace) => [
       trace.turnId,
@@ -225,26 +276,26 @@ export async function loadChatTurnSessionState(
       },
     ]),
   );
-  const branchStateBeforeResolution = options.isConversationTrace
-    ? await deps.storage.chatSessionBranchState.get(sessionId)
-    : undefined;
-  const conversationTurnIds = new Set(conversationTraces.map((trace) => trace.turnId));
-  const activeLeafTurnId = await resolveChatActiveLeafTurnId(deps, sessionId, conversationTraces);
-  if (
-    options.isConversationTrace &&
-    !activeLeafTurnId &&
-    branchStateBeforeResolution &&
-    !conversationTurnIds.has(branchStateBeforeResolution.activeLeafTurnId)
-  ) {
-    await deps.storage.chatSessionBranchState.clear(sessionId);
-  }
-  const selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
   const rawTraceById = new Map(rawTraces.map((trace) => [trace.turnId, trace]));
+  let selectedPathTurnIds = activeLeafTurnId ? buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId) : [];
+  const missingAncestorId = selectedPathTurnIds[0];
+  if (activeLeafTurnId && missingAncestorId && !rawTraceById.has(missingAncestorId)) {
+    const olderTraces = await chatTurnTraces.listLineageFrom(sessionId, missingAncestorId);
+    const added: ChatTurnTraceRecord[] = [];
+    for (const trace of olderTraces) {
+      if (trace.sessionId !== sessionId || (options.isConversationTrace && !options.isConversationTrace(trace))) break;
+      if (rawTraceById.has(trace.turnId)) continue;
+      rawTraceById.set(trace.turnId, trace);
+      turnLineageById.set(trace.turnId, { turnId: trace.turnId, parentTurnId: trace.parentTurnId });
+      added.push(trace);
+    }
+    if (added.length) {
+      rawTraces = [...rawTraces, ...added].sort((left, right) => right.startedAt.localeCompare(left.startedAt));
+      selectedPathTurnIds = buildSelectedPathTurnIds(turnLineageById, activeLeafTurnId);
+    }
+  }
   const pathParentTurnIds = selectedPathTurnIds.map((turnId) => rawTraceById.get(turnId)?.parentTurnId);
-  const siblingTracesByParent = await deps.storage.chatTurnTraces.listSiblingsByParentTurnIds(
-    sessionId,
-    pathParentTurnIds,
-  );
+  const siblingTracesByParent = await chatTurnTraces.listSiblingsByParentTurnIds(sessionId, pathParentTurnIds);
   const visibleTurnIds = new Set(selectedPathTurnIds);
   for (const siblings of siblingTracesByParent.values()) {
     for (const sibling of siblings) {
@@ -288,7 +339,7 @@ export async function loadChatTurnSessionState(
     messages,
     messagesById,
     childrenByTurnId: buildChatTurnChildrenMap(
-      options.isConversationTrace ? traces.filter((trace) => conversationTurnIds.has(trace.turnId)) : traces,
+      options.isConversationTrace ? traces.filter((trace) => turnLineageById.has(trace.turnId)) : traces,
     ),
     activeLeafTurnId,
   };

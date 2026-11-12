@@ -34,6 +34,7 @@ import { ExternalSideEffectRunRepository } from "../external-side-effect-run-rep
 import { RemoteActionTokenRepository } from "../remote-action-token-repo.js";
 import { ToolGrantRepository } from "../tool-grant-repo.js";
 import { Storage } from "../index.js";
+import { ChatSessionBranchStateRepository } from "../chat-session-branch-state-repo.js";
 import { ChatSessionLifecycleRepository } from "../chat-session-lifecycle-repo.js";
 import {
   assertSingleObservabilityChain,
@@ -4446,6 +4447,16 @@ test(
         pool: { max: 1, connectionTimeoutMs: 10_000 },
       });
       syncClient.prepare("SELECT 1 AS ready").get();
+
+      const branchState = new ChatSessionBranchStateRepository(syncClient);
+      const branchSessionId = `branch-state-${suffix}`;
+      assert.equal(branchState.setActiveLeafIfCurrent(branchSessionId, undefined, "observed"), true);
+      assert.equal(branchState.setActiveLeafIfCurrent(branchSessionId, undefined, "stale"), false);
+      assert.equal(branchState.setActiveLeafIfCurrent(branchSessionId, "observed", "selected"), true);
+      assert.equal(branchState.clearIfCurrent(branchSessionId, "observed"), false);
+      assert.equal(branchState.get(branchSessionId)?.activeLeafTurnId, "selected");
+      assert.equal(branchState.clearIfCurrent(branchSessionId, "selected"), true);
+      assert.equal(branchState.get(branchSessionId), undefined);
 
       const durableRuns = new DurableRunRepository(syncClient);
       const linkedRunId = `a-linked-${suffix}`;

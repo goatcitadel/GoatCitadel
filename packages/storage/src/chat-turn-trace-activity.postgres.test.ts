@@ -4,6 +4,39 @@ import { createRemoteWorkerPostgresTestScope } from "./remote-worker-test-fixtur
 import { ChatTurnTraceRepository } from "./chat-turn-trace-repo.js";
 
 const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
+test("PostgreSQL reads only bounded same-session turn lineage", { skip: !connectionString }, async () => {
+  const scope = await createRemoteWorkerPostgresTestScope(connectionString!, "turn_lineage");
+  try {
+    const repo = new ChatTurnTraceRepository(scope.db);
+    const create = (turnId: string, sessionId: string, parentTurnId: string) =>
+      repo.create({
+        turnId,
+        sessionId,
+        parentTurnId,
+        userMessageId: `user-${turnId}`,
+        mode: "chat",
+        webMode: "off",
+        memoryMode: "off",
+        thinkingLevel: "standard",
+        startedAt: "2026-10-05T10:00:00.000Z",
+      });
+    create("a-1", "session-a", "b-1");
+    create("a-2", "session-a", "a-1");
+    create("b-1", "session-b", "a-2");
+    assert.deepEqual(
+      repo.listLineageFrom("session-a", "a-2", 1).map((trace) => trace.turnId),
+      ["a-2"],
+    );
+    assert.deepEqual(
+      repo.listLineageFrom("session-a", "a-2", 4).map((trace) => trace.turnId),
+      ["a-2", "a-1"],
+    );
+    assert.deepEqual(repo.listLineageFrom("session-a", "b-1"), []);
+  } finally {
+    await scope.teardown();
+  }
+});
+
 test("PostgreSQL summarizes turn activity per session", { skip: !connectionString }, async () => {
   const scope = await createRemoteWorkerPostgresTestScope(connectionString!, "turn_activity");
   try {

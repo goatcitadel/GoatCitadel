@@ -29,10 +29,7 @@ import { describe, expect, it, vi } from "vitest";
 import type { ChatTurnTraceRecord } from "@goatcitadel/contracts";
 import { NotFoundError } from "@goatcitadel/contracts";
 import { undoChatTurns, type ChatTurnUndoDependencies } from "./chat-turn-undo-service.js";
-import {
-  ChatTurnExecutionRegistry,
-  ChatTurnWriteConflictError,
-} from "./chat-turn-execution-registry.js";
+import { ChatTurnExecutionRegistry, ChatTurnWriteConflictError } from "./chat-turn-execution-registry.js";
 
 const SESSION_ID = "session-race";
 
@@ -67,8 +64,7 @@ function createDeps(input: {
   // The in-lease lifecycle re-check reads `storage.chatSessionMeta.get(sessionId)`.
   // Default to an active session; tests override via `lifecycleStatus` (static) or
   // `getSessionMeta` (dynamic — e.g. flips to archived mid-lease).
-  const getSessionMeta =
-    input.getSessionMeta ?? (() => ({ lifecycleStatus: input.lifecycleStatus ?? "active" }));
+  const getSessionMeta = input.getSessionMeta ?? (() => ({ lifecycleStatus: input.lifecycleStatus ?? "active" }));
   // Use the REAL registry to enforce the per-session lease; spy on it so we can assert
   // ordering (lease acquired before any mutation).
   const leaseSpy = vi.fn(
@@ -77,11 +73,13 @@ function createDeps(input: {
   );
 
   const deps: ChatTurnUndoDependencies = {
-    getSession: input.getSession ?? vi.fn(() => ({ sessionId: SESSION_ID })),
+    getSession: input.getSession ?? vi.fn(async () => ({ sessionId: SESSION_ID })),
     loadChatTurnSessionState: vi.fn(async () => ({
       traces,
       tracesById: new Map(traces.map((trace) => [trace.turnId, trace])),
-      turnLineageById: new Map(traces.map((trace) => [trace.turnId, { turnId: trace.turnId, parentTurnId: trace.parentTurnId }])),
+      turnLineageById: new Map(
+        traces.map((trace) => [trace.turnId, { turnId: trace.turnId, parentTurnId: trace.parentTurnId }]),
+      ),
       messages: [],
       messagesById: new Map(),
       childrenByTurnId: new Map(),
@@ -93,7 +91,7 @@ function createDeps(input: {
       runImmediateTransaction: (callback) => callback(),
       chatMessages: { deleteByMessageIds: deleteMessages },
       chatTurnTraces: { deleteByTurnIds: deleteTraces },
-      chatSessionBranchState: { setActiveLeaf: vi.fn(), clear: vi.fn() },
+      chatSessionBranchState: { setActiveLeaf: vi.fn(), clearIfCurrent: vi.fn(async () => true) },
       chatSessionMeta: { get: vi.fn(getSessionMeta) },
     },
     withChatTurnWriteLease: leaseSpy as ChatTurnUndoDependencies["withChatTurnWriteLease"],
@@ -192,7 +190,7 @@ describe("chat-turn write lease — race against session archive/switch", () => 
   it("rejects a write against a missing/deleted session before taking the lease or mutating", async () => {
     const registry = new ChatTurnExecutionRegistry();
     // A deleted session: getSession throws NotFoundError (the pre-lease existence gate).
-    const getSession = vi.fn(() => {
+    const getSession = vi.fn(async () => {
       throw new NotFoundError({ message: `chat session ${SESSION_ID} not found` });
     });
     const { deps, deleteMessages, deleteTraces, leaseSpy } = createDeps({ registry, getSession });

@@ -1,4 +1,4 @@
-import React from "react";
+import React, { useRef } from "react";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatSessionRecord, ChatStreamChunk } from "@goatcitadel/contracts";
@@ -30,10 +30,17 @@ type Controller = ReturnType<typeof useBtwSideChatController>;
 let latest: Controller | null = null;
 
 function Harness({ parent = "parent-1" }: { parent?: string } = {}) {
+  const selectedSessionIntentRef = useRef<string | null>(parent);
+  const selectedSessionRevisionRef = useRef(0);
+  if (selectedSessionIntentRef.current !== parent) {
+    selectedSessionIntentRef.current = parent;
+    selectedSessionRevisionRef.current += 1;
+  }
   latest = useBtwSideChatController({
     workspaceId: "workspace-1",
     selectedSession: null,
     selectedSessionId: parent,
+    selection: { selectedSessionIntentRef, selectedSessionRevisionRef },
     selectedTurnId: null,
     currentSurface: "chat",
     prefs: null,

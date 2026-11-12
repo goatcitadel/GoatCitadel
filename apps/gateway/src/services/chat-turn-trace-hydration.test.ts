@@ -149,11 +149,88 @@ describe("chat turn trace hydration", () => {
     ];
 
     expect(await resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("new-leaf");
-    expect(storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledWith(
+    expect(storage.chatSessionBranchState.setActiveLeafIfCurrent).toHaveBeenCalledWith(
       "session-1",
+      "missing",
       "new-leaf",
       "2026-05-14T00:04:00.000Z",
     );
+  });
+
+  it("keeps an active leaf that entered storage after the bounded thread snapshot", async () => {
+    const earlier = createTrace({ turnId: "earlier", parentTurnId: undefined });
+    const selected = createTrace({ turnId: "selected", parentTurnId: earlier.turnId, userMessageId: "selected-user" });
+    const storage = createStorage({
+      traces: [earlier],
+      exactTraces: [selected],
+      messages: new Map([["selected-user", { messageId: "selected-user", timestamp: selected.startedAt }]]),
+    });
+    storage.chatSessionBranchState.get = vi.fn(() => ({
+      sessionId: "session-1",
+      activeLeafTurnId: selected.turnId,
+    })) as never;
+
+    const state = await loadChatTurnSessionState(
+      { storage, ensureChatMessageProjection: async () => undefined },
+      "session-1",
+    );
+
+    expect(state.activeLeafTurnId).toBe(selected.turnId);
+    expect(state.turnLineageById.get(selected.turnId)?.parentTurnId).toBe(earlier.turnId);
+    expect(state.messagesById.has("selected-user")).toBe(true);
+    expect(storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
+    expect(storage.chatSessionBranchState.setActiveLeafIfCurrent).not.toHaveBeenCalled();
+  });
+
+  it("hydrates the selected branch's older ancestors outside the recent snapshot", async () => {
+    const root = createTrace({ turnId: "old-root", parentTurnId: undefined, userMessageId: "root-user" });
+    const middle = createTrace({ turnId: "old-middle", parentTurnId: root.turnId, userMessageId: "middle-user" });
+    const selected = createTrace({ turnId: "selected", parentTurnId: middle.turnId, userMessageId: "selected-user" });
+    const unrelated = createTrace({ turnId: "recent", parentTurnId: undefined, userMessageId: "recent-user" });
+    const storage = createStorage({
+      traces: [unrelated],
+      exactTraces: [selected],
+      olderTraces: [middle, root],
+      messages: new Map(
+        [root, middle, selected, unrelated].map((trace) => [
+          trace.userMessageId,
+          { messageId: trace.userMessageId, timestamp: trace.startedAt },
+        ]),
+      ),
+    });
+    storage.chatSessionBranchState.get = vi.fn(() => ({
+      sessionId: "session-1",
+      activeLeafTurnId: selected.turnId,
+    })) as never;
+
+    const state = await loadChatTurnSessionState(
+      { storage, ensureChatMessageProjection: async () => undefined },
+      "session-1",
+    );
+
+    expect(state.activeLeafTurnId).toBe(selected.turnId);
+    expect(state.turnLineageById.get(middle.turnId)?.parentTurnId).toBe(root.turnId);
+    expect([...state.messagesById.keys()]).toEqual(["root-user", "middle-user", "selected-user"]);
+  });
+
+  it("keeps a concurrent branch selection when fallback initialization loses its compare-and-set", async () => {
+    const selected = createTrace({ turnId: "selected", parentTurnId: undefined });
+    const earlier = createTrace({ turnId: "earlier", parentTurnId: undefined });
+    const storage = createStorage({ exactTraces: [selected] });
+    storage.chatSessionBranchState.get = vi.fn().mockReturnValueOnce(undefined).mockReturnValue({
+      sessionId: "session-1",
+      activeLeafTurnId: selected.turnId,
+    }) as never;
+    storage.chatSessionBranchState.setActiveLeafIfCurrent = vi.fn(() => false) as never;
+
+    expect(await resolveChatActiveLeafTurnId({ storage }, "session-1", [earlier])).toBe(selected.turnId);
+    expect(storage.chatSessionBranchState.setActiveLeafIfCurrent).toHaveBeenCalledWith(
+      "session-1",
+      undefined,
+      earlier.turnId,
+      earlier.startedAt,
+    );
+    expect(storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
   });
 
   it("uses turn id ordering as the active-leaf tie breaker for equal start times", async () => {
@@ -172,8 +249,9 @@ describe("chat turn trace hydration", () => {
     ];
 
     expect(await resolveChatActiveLeafTurnId({ storage }, "session-1", traces)).toBe("turn-b");
-    expect(storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledWith(
+    expect(storage.chatSessionBranchState.setActiveLeafIfCurrent).toHaveBeenCalledWith(
       "session-1",
+      undefined,
       "turn-b",
       "2026-05-14T00:00:00.000Z",
     );
@@ -221,7 +299,7 @@ describe("chat turn trace hydration", () => {
     expect(state.childrenByTurnId).toEqual(new Map());
     expect(state.messagesById).toEqual(new Map());
     expect(storage.chatMessages.listByMessageIds).toHaveBeenCalledWith([]);
-    expect(storage.chatSessionBranchState.clear).toHaveBeenCalledWith("session-1");
+    expect(storage.chatSessionBranchState.clearIfCurrent).toHaveBeenCalledWith("session-1", "heartbeat-turn");
     expect(storage.chatSessionBranchState.setActiveLeaf).not.toHaveBeenCalled();
   });
 
@@ -262,12 +340,13 @@ describe("chat turn trace hydration", () => {
     expect(state.activeLeafTurnId).toBe("conversation-turn");
     expect([...state.messagesById.keys()]).toEqual(["conversation-user", "conversation-assistant"]);
     expect(storage.chatMessages.listByMessageIds).toHaveBeenCalledWith(["conversation-user", "conversation-assistant"]);
-    expect(storage.chatSessionBranchState.setActiveLeaf).toHaveBeenCalledWith(
+    expect(storage.chatSessionBranchState.setActiveLeafIfCurrent).toHaveBeenCalledWith(
       "session-1",
+      "heartbeat-turn",
       "conversation-turn",
       "2026-07-15T00:00:00.000Z",
     );
-    expect(storage.chatSessionBranchState.clear).not.toHaveBeenCalled();
+    expect(storage.chatSessionBranchState.clearIfCurrent).not.toHaveBeenCalled();
   });
 });
 
@@ -291,7 +370,14 @@ function createTrace(patch: Partial<ChatTurnTraceRecord> = {}): ChatTurnTraceRec
   };
 }
 
-function createStorage(options: { traces?: ChatTurnTraceRecord[]; messages?: Map<string, unknown> } = {}) {
+function createStorage(
+  options: {
+    traces?: ChatTurnTraceRecord[];
+    exactTraces?: ChatTurnTraceRecord[];
+    olderTraces?: ChatTurnTraceRecord[];
+    messages?: Map<string, unknown>;
+  } = {},
+) {
   return {
     chatExecutionPlans: {
       get: vi.fn((planId: string) => ({ planId, steps: [] })),
@@ -299,6 +385,8 @@ function createStorage(options: { traces?: ChatTurnTraceRecord[]; messages?: Map
     chatSessionBranchState: {
       get: vi.fn(() => undefined),
       setActiveLeaf: vi.fn(),
+      setActiveLeafIfCurrent: vi.fn(() => true),
+      clearIfCurrent: vi.fn(() => true),
       clear: vi.fn(),
     },
     chatMessages: {
@@ -324,6 +412,15 @@ function createStorage(options: { traces?: ChatTurnTraceRecord[]; messages?: Map
     },
     chatTurnTraces: {
       listBySession: vi.fn(() => options.traces ?? []),
+      listLineageFrom: vi.fn(() => options.olderTraces ?? []),
+      getByTurnIds: vi.fn(
+        (ids: string[]) =>
+          new Map(
+            (options.exactTraces ?? options.traces ?? [])
+              .filter((trace) => ids.includes(trace.turnId))
+              .map((trace) => [trace.turnId, trace]),
+          ),
+      ),
       listSiblingsByParentTurnIds: vi.fn(() => new Map()),
     },
     runtimeDecisionTraces: undefined,

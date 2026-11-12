@@ -10,10 +10,12 @@ import { resetChatSessionCreationForTests } from "@goatcitadel/mission-control-s
 import { useChatComposerInteractions } from "./useChatComposerInteractions";
 import { useChatMultimodalControls } from "./useChatMultimodalControls";
 import { useChatComposerSendIntent } from "./controller/useChatComposerSendIntent";
+import { useBtwSideChatController } from "./useBtwSideChatController";
 
 (globalThis as typeof globalThis & { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 const transport = vi.hoisted(() => ({
   createChatSession: vi.fn(), fetchChatSessionStatus: vi.fn(),
+  createChatSideChat: vi.fn(), fetchChatThread: vi.fn(), preflightChatRoute: vi.fn(), streamAgentChatMessage: vi.fn(),
   generateLlmImage: vi.fn(), uploadChatAttachment: vi.fn(), fetchVoiceStatus: vi.fn(), fetchVoiceRuntimeStatus: vi.fn(),
   startVoiceTalkSession: vi.fn(), stopVoiceTalkSession: vi.fn(), stopRealtimeVoiceSession: vi.fn(),
 }));
@@ -28,6 +30,7 @@ const session: ChatSessionRecord = {
   updatedAt: "2026-11-04T00:00:00Z", lastActivityAt: "2026-11-04T00:00:00Z", tokenTotal: 0, costUsdTotal: 0,
 };
 const foreign: ChatSessionRecord = { ...session, sessionId: "existing-other-chat", sessionKey: "existing-other-chat" };
+const child: ChatSessionRecord = { ...session, sessionId: "side-chat", sessionKey: "side-chat" };
 const attachment: ChatAttachmentRecord = {
   attachmentId: "generated-receipt", sessionId: session.sessionId, workspaceId: "workspace",
   fileName: "generated.png", mimeType: "image/png", mediaType: "image", sizeBytes: 5, sha256: "fixture-sha",
@@ -44,6 +47,7 @@ const recoveryUpdates = vi.fn();
 let renderer: ReactTestRenderer | undefined;
 let latest: {
   composer: ReturnType<typeof useChatComposerInteractions>;
+  btw: ReturnType<typeof useBtwSideChatController>;
   media: ReturnType<typeof useChatMultimodalControls>;
   send: ReturnType<typeof useChatComposerSendIntent>;
   draft: string;
@@ -125,12 +129,17 @@ function Harness({ workspaceId = "workspace", provider = "openai", confirmation 
     // Exact production wiring: the real uploader catches transport errors itself.
     uploadAttachments: composer.uploadAttachments,
   });
+  const btw = useBtwSideChatController({
+    workspaceId, selectedSession, selectedSessionId: selectedId, selection, selectedTurnId: null,
+    currentSurface: "chat", prefs: null, fullWebAccess: false, ensureSession,
+    pushLocalNotice: notice, setUiError: setError,
+  });
   const sendInput = {
     workspaceId, profileDependentAdmissionBlockReason: undefined,
     notices: { pushLocalNotice: notice }, setFollowThreadOutput: noop,
     knowledgeActions: { requiresThreadKnowledge: false, attachPendingKnowledgeSources: asyncNoop },
     orchestration: { handleSend: ordinarySend, setQueuedOutbound: noop, editingTurnId: null },
-    scopedErrors: { setUiError: setError }, draft, openBtwSideChat: asyncNoop, setDraft,
+    scopedErrors: { setUiError: setError }, draft, openBtwSideChat: btw.openSideChat, setDraft,
     coordination: { activeStreamRef: { current: null } }, goalActions: { handleSteerMidTurn: asyncNoop },
     oneShotContext: { consumeModelCouncilArming: noop, modelCouncilEnabledRef: { current: false },
       consumeWorkspaceSnapshotRequest: noop, workspaceSnapshotRequestRef: { current: null } },
@@ -144,7 +153,7 @@ function Harness({ workspaceId = "workspace", provider = "openai", confirmation 
     } },
   } as unknown as Parameters<typeof useChatComposerSendIntent>[0];
   const send = useChatComposerSendIntent(sendInput);
-  latest = { composer, media, send, draft, sending, pending, recovery, setDraft, select, selectedId, creation: creation.current, hydrateThread,
+  latest = { composer, btw, media, send, draft, sending, pending, recovery, setDraft, select, selectedId, creation: creation.current, hydrateThread,
     selectionRevision: () => selection.selectedSessionRevisionRef.current, adoptRecord: () => setSessions({ items: [session, foreign] }) };
   return null;
 }
@@ -171,6 +180,15 @@ beforeEach(() => {
   Object.values(transport).forEach((mock) => mock.mockReset());
   transport.createChatSession.mockResolvedValue(session);
   transport.fetchChatSessionStatus.mockResolvedValue({ sessionId: session.sessionId, workspaceId: session.workspaceId });
+  transport.createChatSideChat.mockResolvedValue({
+    item: { sideChatId: "side-record", parentSessionId: session.sessionId, childSessionId: child.sessionId },
+    childSession: child,
+  });
+  transport.fetchChatThread.mockResolvedValue({
+    sessionId: child.sessionId, selectedTurnId: null, activeLeafTurnId: null, turns: [],
+  });
+  transport.preflightChatRoute.mockResolvedValue({ decision: "primary" });
+  transport.streamAgentChatMessage.mockResolvedValue(undefined);
   transport.generateLlmImage.mockResolvedValue({ operation: "generate", data: [{ b64Json: "aW1hZ2U=" }] });
   transport.uploadChatAttachment.mockResolvedValue(attachment);
   ordinarySend.mockClear(); notice.mockClear(); recoveryUpdates.mockClear(); sidebarCalls.mockClear(); sessionCreated.mockClear();
@@ -182,6 +200,47 @@ afterEach(async () => {
   expect(globalThis.fetch).not.toHaveBeenCalled();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("real first-session creation ownership through side chats", () => {
+  it.each(["own parent", "another parent", "a coalesced selection round trip"] as const)(
+    "settles the first /btw through %s", async (transition) => {
+      await act(async () => { renderer = create(<Harness />); });
+      expect(latest.selectedId).toBeNull();
+      await act(async () => { latest.setDraft("/btw A side question"); });
+      let pending!: Promise<void>;
+      await act(async () => {
+        pending = latest.send.handleSendWithKnowledge();
+        await vi.waitFor(() => expect(sidebarCalls).toHaveBeenCalledTimes(1));
+      });
+      expect(latest.selectedId).toBe(session.sessionId);
+      expect(transport.createChatSideChat).not.toHaveBeenCalled();
+      if (transition !== "own parent") {
+        await act(async () => {
+          latest.select(foreign.sessionId);
+          if (transition === "a coalesced selection round trip") latest.select(session.sessionId);
+        });
+      }
+      await act(async () => { sidebarGate.resolve(undefined); await pending; });
+      if (transition === "own parent") {
+        expect(transport.createChatSideChat).toHaveBeenCalledExactlyOnceWith(
+          session.sessionId, { createdFromSurface: "chat", sourceTurnId: undefined }, { originSurface: "chat" },
+        );
+        expect(transport.streamAgentChatMessage).toHaveBeenCalledExactlyOnceWith(
+          child.sessionId, expect.objectContaining({ content: "A side question" }), expect.any(Function),
+          { originSurface: "chat" },
+        );
+        expect(latest.btw.panelProps).toMatchObject({
+          open: true, parentSessionId: session.sessionId, childSessionId: child.sessionId, sending: false, error: null,
+        });
+      } else {
+        expect(transport.createChatSideChat).not.toHaveBeenCalled();
+        expect(transport.streamAgentChatMessage).not.toHaveBeenCalled();
+        expect(latest.btw.panelProps).toMatchObject({ open: false, childSessionId: null, error: null });
+      }
+      expect(ordinarySend).not.toHaveBeenCalled();
+    },
+  );
 });
 
 describe("real first-session creation ownership through uploads and media", () => {

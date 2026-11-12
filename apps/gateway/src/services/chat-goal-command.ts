@@ -293,11 +293,12 @@ async function runGoalLoop(
     const iterationCostUsd = await estimateDelegationRunCostUsd(deps, response.steps, seenChildSessions);
     totalCostUsd += iterationCostUsd;
     const qaStep = [...response.steps].reverse().find((step) => step.role === "qa");
-    latestOutput = qaStep?.output ?? response.stitchedOutput ?? latestOutput;
+    const verifierOutput = qaStep?.status === "completed" ? qaStep.output : undefined;
+    latestOutput = verifierOutput ?? latestOutput;
     const stepBlocked = response.steps.some((step) => step.status === "failed" || step.status === "skipped");
     const verdict = stepBlocked
       ? { status: "blocked" as const, reason: qaStep?.error }
-      : parseGoalVerifierVerdict(latestOutput);
+      : parseGoalVerifierVerdict(verifierOutput);
     if (verdict.status === "unknown") {
       consecutiveUnknownVerdicts += 1;
     } else {

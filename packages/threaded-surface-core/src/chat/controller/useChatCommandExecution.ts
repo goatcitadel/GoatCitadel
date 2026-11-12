@@ -1,13 +1,8 @@
 import type { ChatMode } from "@goatcitadel/contracts";
-import {
-  fetchMcpServers,
-  fetchMcpTemplates,
-  fetchSkills,
-  parseChatCommand,
-  steerChatSession,
-} from "@goatcitadel/mission-control-shared/api/client";
+import { parseChatCommand } from "@goatcitadel/mission-control-shared/api/client";
+import { getGatewayCallerScopeRevision } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { useProjectAccess } from "@goatcitadel/mission-control-shared/hooks/use-current-access";
 import { useCallback } from "react";
-import { formatCommandResult } from "../chat-page-derivations";
 import { parseBtwCommand, parseQueueCommand } from "../chat-page-pure-helpers";
 import { useBtwSideChatController } from "../useBtwSideChatController";
 import { useChatChangePlanState } from "../useChatChangePlanState";
@@ -17,7 +12,8 @@ import { useChatNoticesAndPresetRefresh } from "./useChatNoticesAndPresetRefresh
 import { useChatScopedErrors } from "./useChatScopedErrors";
 import { useChatSessionSelection } from "./useChatSessionSelection";
 
-type Input = {
+export type ChatCommandExecutionInput = {
+  workspaceId: string;
   openBtwSideChat: ReturnType<typeof useBtwSideChatController>["openSideChat"];
   notices: Pick<ReturnType<typeof useChatNoticesAndPresetRefresh>, "pushLocalNotice">;
   scopedErrors: Pick<ReturnType<typeof useChatScopedErrors>, "setUiError">;
@@ -29,11 +25,15 @@ type Input = {
   selectedTurnId: string | null;
   executionSurfaceMode: ChatMode;
   changePlanState: Pick<ReturnType<typeof useChatChangePlanState>, "setChatChangePlanSnapshot">;
-  selection: Pick<ReturnType<typeof useChatSessionSelection>, "setSelectedSessionId">;
+  selection: Pick<
+    ReturnType<typeof useChatSessionSelection>,
+    "selectedSessionIntentRef" | "selectedSessionRevisionRef" | "setSelectedSessionId"
+  >;
 };
 
 /** Routes local commands through their existing session, timer, variable and Gateway owners. */
 export function useChatCommandExecution({
+  workspaceId,
   openBtwSideChat,
   notices,
   scopedErrors,
@@ -43,7 +43,7 @@ export function useChatCommandExecution({
   executionSurfaceMode,
   changePlanState,
   selection,
-}: Input) {
+}: ChatCommandExecutionInput) {
   const { thread } = sessionData;
   const { pushLocalNotice } = notices;
   const { setUiError } = scopedErrors;
@@ -51,7 +51,8 @@ export function useChatCommandExecution({
   const { setPrefs } = sessionData;
   const { setChatChangePlanSnapshot } = changePlanState;
   const { loadSidebar } = sessionData;
-  const { setSelectedSessionId } = selection;
+  const { selectedSessionIntentRef, selectedSessionRevisionRef, setSelectedSessionId } = selection;
+  const { current: isCurrentAccess } = useProjectAccess(workspaceId);
   const { setInstalledSkills } = sessionData;
   const { setMcpServers } = sessionData;
   const { setMcpTemplates } = sessionData;
@@ -63,47 +64,25 @@ export function useChatCommandExecution({
         await openBtwSideChat(btwCommand.text);
         return;
       }
+      const selectionRevision = selectedSessionRevisionRef.current;
+      const callerRevision = getGatewayCallerScopeRevision();
+      const current = () =>
+        isCurrentAccess() &&
+        callerRevision === getGatewayCallerScopeRevision() &&
+        selectionRevision === selectedSessionRevisionRef.current &&
+        sessionId === selectedSessionIntentRef.current;
+      if (!current()) return;
+
       const queueCommand = parseQueueCommand(commandText);
       if (queueCommand) {
-        if (queueCommand.kind === "steer") {
-          if (!queueCommand.text) {
-            pushLocalNotice("Usage: /queue steer <instruction>", "warning");
-            return;
-          }
-          try {
-            const response = await steerChatSession(sessionId, { instruction: queueCommand.text });
-            pushLocalNotice(
-              response.accepted
-                ? "Steering instruction queued."
-                : (response.reason ?? "Steering instruction not accepted."),
-              response.accepted ? "success" : "warning",
-            );
-          } catch (cause) {
-            setUiError(cause instanceof Error ? cause.message : "Failed to send steering instruction.");
-          }
-          return;
-        }
-        if (!queueCommand.text) {
-          pushLocalNotice(`Usage: /queue ${queueCommand.kind} <message>`, "warning");
-          return;
-        }
-        setQueuedOutbound((current) => [
-          ...current,
-          {
-            id: `queue-${Date.now()}`,
-            action: "send",
-            sessionId,
-            content: queueCommand.text,
-            attachments: [],
-            createdAt: new Date().toISOString(),
-            paused: queueCommand.kind === "collect",
-          },
-        ]);
-        pushLocalNotice(
-          queueCommand.kind === "collect" ? "Message collected in the queue." : "Follow-up queued for the next turn.",
-          "success",
-        );
-        return;
+        const { runChatQueueCommand } = await import("./chat-command-result.js");
+        return await runChatQueueCommand(queueCommand, {
+          current,
+          sessionId,
+          pushLocalNotice,
+          setUiError,
+          setQueuedOutbound,
+        });
       }
       const commandPolicyTurn =
         thread?.turns.find(
@@ -114,35 +93,20 @@ export function useChatCommandExecution({
         surface: executionSurfaceMode,
         ...(commandPolicyRunId ? { policyRunId: commandPolicyRunId } : {}),
       });
-      if (result.prefs) setPrefs(result.prefs);
-      const changePlan = result.changePlan;
-      if (changePlan) {
-        setChatChangePlanSnapshot((current) => {
-          if (current.ownerSessionId !== sessionId) return current;
-          return {
-            ownerSessionId: sessionId,
-            items: [changePlan, ...current.items.filter((item) => item.planId !== changePlan.planId)].slice(0, 12),
-          };
-        });
-      }
-      pushLocalNotice(formatCommandResult(result), result.ok ? "success" : "warning");
-      if (result.command === "/project" || result.command === "/new") {
-        await loadSidebar();
-      }
-      if (result.command === "/plan" && result.prefs) {
-        setPrefs(result.prefs);
-      }
-      if (result.session) {
-        setSelectedSessionId(result.session.sessionId);
-      }
-      if (result.command === "/skill" || result.command === "/skills") {
-        setInstalledSkills(await fetchSkills().then((payload) => payload.items));
-      }
-      if (result.command === "/mcp") {
-        const [servers, templates] = await Promise.all([fetchMcpServers(), fetchMcpTemplates()]);
-        setMcpServers(servers.items);
-        setMcpTemplates(templates.items);
-      }
+      if (!current()) return;
+      const { publishChatCommandResult } = await import("./chat-command-result.js");
+      await publishChatCommandResult(result, {
+        current,
+        sessionId,
+        setPrefs,
+        setChatChangePlanSnapshot,
+        pushLocalNotice,
+        loadSidebar,
+        setSelectedSessionId,
+        setInstalledSkills,
+        setMcpServers,
+        setMcpTemplates,
+      });
     },
     [
       thread?.turns,
@@ -160,6 +124,9 @@ export function useChatCommandExecution({
       setMcpServers,
       setMcpTemplates,
       executionSurfaceMode,
+      isCurrentAccess,
+      selectedSessionIntentRef,
+      selectedSessionRevisionRef,
       setSelectedSessionId,
     ],
   );

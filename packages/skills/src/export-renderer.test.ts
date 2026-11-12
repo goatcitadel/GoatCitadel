@@ -23,6 +23,26 @@ const skill: LoadedSkill = {
 };
 
 describe("skill export renderer", () => {
+  it("reports when two selected skills would export to the same path", () => {
+    const underscore = { ...skill, skillId: "workspace:daily_notes", name: "daily_notes" };
+    const hyphen = { ...skill, skillId: "workspace:daily-notes", name: "daily-notes" };
+
+    expect(() =>
+      renderSkillExportPreview(
+        { skillIds: [underscore.skillId, hyphen.skillId], target: "generic-markdown" },
+        [underscore, hyphen],
+      ),
+    ).toThrow(/both.*daily-notes\/SKILL\.md/i);
+  });
+
+  it("reports when a selected skill name cannot produce a relative export path", () => {
+    const nonLatin = { ...skill, skillId: "workspace:notes", name: "日誌" };
+
+    expect(() =>
+      renderSkillExportPreview({ skillIds: [nonLatin.skillId], target: "generic-markdown" }, [nonLatin]),
+    ).toThrow(/relative export path/i);
+  });
+
   it("lists preview-only export targets", () => {
     expect(listSkillExportTargets().map((target) => target.target)).toEqual(["codex", "claude", "generic-markdown"]);
     expect(listSkillExportTargets().every((target) => target.previewOnly)).toBe(true);

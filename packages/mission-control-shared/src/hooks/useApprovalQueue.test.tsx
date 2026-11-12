@@ -511,6 +511,49 @@ describe("useApprovalQueue", () => {
     expect(hook.result.historyItems.map((item) => item.approvalId)).toContain("approved-1");
   });
 
+  it.each(["refresh", "next page"] as const)("retains a decision received during an older %s", async (kind) => {
+    const original = approval({ approvalId: "pending-1", createdAt: "2026-01-01T11:00:00.000Z" });
+    const resolved = { ...original, status: "approved", resolvedAt: "2026-01-01T12:00:00.000Z" };
+    const stale = deferred<{ items: ApprovalRequest[] }>();
+    apiMocks.fetchApprovals.mockImplementation(async (status: ApprovalRequest["status"]) =>
+      status === "pending" ? { items: [original], nextCursor: "older-pending" } : { items: [] },
+    );
+    apiMocks.resolveApproval.mockResolvedValueOnce({ approval: resolved, replay: { snapshots: [] }, effects: [] });
+    const hook = await renderApprovalQueue();
+    try {
+      expect(hook.result.pendingItems).toEqual([original]);
+      const refresh = vi.mocked(useRefreshSubscription).mock.calls.at(-1)![1];
+      apiMocks.fetchApprovals.mockClear().mockImplementation(
+        (input: ApprovalRequest["status"] | { status: ApprovalRequest["status"] }) =>
+          (typeof input === "string" ? input : input.status) === "pending"
+            ? stale.promise
+            : Promise.resolve({ items: [] }),
+      );
+      let read!: Promise<unknown>;
+      await act(async () => {
+        read = kind === "refresh" ? Promise.resolve(refresh()) : hook.result.loadMoreVisibleApprovals();
+      });
+      expect(apiMocks.fetchApprovals).toHaveBeenCalledWith(
+        kind === "refresh" ? "pending" : { status: "pending", cursor: "older-pending" },
+      );
+      await act(async () => {
+        await expect(hook.result.onResolve(original.approvalId, "approve")).resolves.toBe(true);
+      });
+      expect(hook.result.pendingItems).toEqual([]);
+      await act(async () => {
+        stale.resolve({ items: [original] });
+        await read;
+      });
+      expect(hook.result.pendingItems).toEqual([]);
+      expect(hook.result.historyItems).toEqual([resolved]);
+      expect(hook.result.loadMorePending).toBe(false);
+      expect(hook.result.hasMoreVisibleApprovals).toBe(true);
+    } finally {
+      stale.resolve({ items: [original] });
+      await act(async () => hook.renderer.unmount());
+    }
+  });
+
   it("resolves, replays, and bulk-rejects approvals", async () => {
     apiMocks.resolveApproval.mockResolvedValue({
       approval: approval({

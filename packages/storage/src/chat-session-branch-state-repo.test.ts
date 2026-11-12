@@ -44,6 +44,30 @@ describe("ChatSessionBranchStateRepository", () => {
     assert.equal(repo.get("sess-1")?.updatedAt, "2026-03-07T00:02:00.000Z");
   });
 
+  it("does not clobber a newer leaf while refreshing an idempotent write", () => {
+    const repo = createRepo();
+    repo.setActiveLeaf("sess-1", "turn-1", "2026-03-07T00:00:00.000Z");
+    const get = repo.get.bind(repo);
+    repo.get = (sessionId) => {
+      const observed = get(sessionId);
+      repo.setActiveLeaf(sessionId, "turn-2", "2026-03-07T00:01:00.000Z");
+      return observed;
+    };
+
+    assert.equal(repo.setActiveLeafIfCurrent("sess-1", "turn-1", "turn-1", "2026-03-07T00:02:00.000Z"), false);
+    assert.equal(get("sess-1")?.activeLeafTurnId, "turn-2");
+  });
+
+  it("clears only the observed leaf", () => {
+    const repo = createRepo();
+    repo.setActiveLeaf("sess-1", "turn-2");
+
+    assert.equal(repo.clearIfCurrent("sess-1", "turn-1"), false);
+    assert.equal(repo.get("sess-1")?.activeLeafTurnId, "turn-2");
+    assert.equal(repo.clearIfCurrent("sess-1", "turn-2"), true);
+    assert.equal(repo.get("sess-1"), undefined);
+  });
+
   it("sets active leaves directly and reports unreadable post-write rows", () => {
     const repo = createRepo();
 

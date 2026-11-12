@@ -145,8 +145,24 @@ function extractSections(bodyMarkdown: string): {
   const lines = bodyMarkdown.split(/\r?\n/);
   const sections: Array<{ heading: string; lines: string[] }> = [];
   let current: { heading: string; lines: string[] } | null = null;
+  let fence: string | undefined;
 
   for (const line of lines) {
+    const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    if (fence) {
+      const marker = fenceMatch?.[1];
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length && !fenceMatch?.[2]?.trim()) {
+        fence = undefined;
+      }
+      current?.lines.push(line);
+      continue;
+    }
+    const opening = fenceMatch?.[1];
+    if (opening && (opening[0] === "~" || !fenceMatch?.[2]?.includes("`"))) {
+      fence = opening;
+      current?.lines.push(line);
+      continue;
+    }
     const heading = parseSectionHeading(line);
     if (heading) {
       if (current) {

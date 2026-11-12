@@ -2,6 +2,30 @@ import { describe, expect, it } from "vitest";
 import { parseRichAgentMarkdown } from "./agent-markdown.js";
 
 describe("parseRichAgentMarkdown", () => {
+  it.each([
+    { open: "```bash", shorter: "``", close: "```" },
+    { open: "   ~~~~text", shorter: "~~~", close: "   ~~~~~" },
+  ])("keeps heading-like lines inside a fenced example opened by $open", ({ open, shorter, close }) => {
+    const example = [open, "## Quick Reference", shorter, "## Next Steps", close].join("\n");
+    const parsed = parseRichAgentMarkdown(
+      [
+        "---",
+        "name: Sample Agent",
+        "description: Maintains a daily checklist",
+        "---",
+        "## Identity & Memory",
+        "Keep the example intact.",
+        example,
+        "## Core Mission",
+        "Summarize the checklist.",
+      ].join("\n"),
+    );
+
+    expect(parsed.sectionOrder).toEqual(["identity-memory", "core-mission"]);
+    expect(parsed.sectionMap["identity-memory"]?.content).toBe(`Keep the example intact.\n${example}`);
+    expect(parsed.sectionMap["core-mission"]?.content).toBe("Summarize the checklist.");
+  });
+
   it("parses Agency-style frontmatter and canonical sections", () => {
     const parsed = parseRichAgentMarkdown(`---
 name: Frontend Developer

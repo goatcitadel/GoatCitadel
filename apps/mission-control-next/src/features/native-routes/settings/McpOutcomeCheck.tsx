@@ -6,6 +6,7 @@ import { checkMcpServerOutcome, useMcpServerMutation } from "./mcp-server-attemp
 
 type ButtonLike = ComponentType<{ disabled?: boolean; onClick: () => void; children: ReactNode }>;
 type Target = { kind: "server"; serverId: string } | { kind: "create" };
+type Props = { target: Target; refresh?: () => Promise<unknown> | void; buttonComponent?: ButtonLike };
 // The canonical MCP owner reads. A registration reads the inventory. A server write reads that server, where its
 // connection and auth state live; a missing server proves the outcome only when the lost write was a delete.
 const inventoryReadback = async () => {
@@ -25,15 +26,16 @@ const serverReadback = (serverId: string, method: string | undefined) => async (
  * The one action that can settle an uncertain MCP write: it reads the Gateway's record of that exact attempt, then the
  * canonical owner read, before unlocking. `refresh` only updates the view afterwards and is never part of the proof.
  */
-export function McpOutcomeCheck({
+export function McpOutcomeCheck(props: Props) {
+  const { target } = props;
+  return <TargetOutcomeCheck key={target.kind === "server" ? `server:${target.serverId}` : "create"} {...props} />;
+}
+
+function TargetOutcomeCheck({
   target,
   refresh,
   buttonComponent: Button = NativeButton as unknown as ButtonLike,
-}: {
-  target: Target;
-  refresh?: () => Promise<unknown> | void;
-  buttonComponent?: ButtonLike;
-}) {
+}: Props) {
   const server = useMcpServerMutation(target.kind === "server" ? target.serverId : "");
   const creation = useMcpCreationMutation();
   const attempt = target.kind === "server" ? server : creation;

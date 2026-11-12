@@ -50,6 +50,16 @@ function citation(): ChatCitationRecord {
   };
 }
 
+it("loads only bounded lineage from the same session and deduplicates a cycle", () => {
+  const { repo } = createStore();
+  repo.create(baseTrace({ turnId: "middle", parentTurnId: "root" }));
+  repo.create(baseTrace({ turnId: "root", parentTurnId: "middle", userMessageId: "root-user" }));
+  repo.create(baseTrace({ turnId: "foreign", sessionId: "session-b", userMessageId: "foreign-user", parentTurnId: "root" }));
+  assert.deepEqual(repo.listLineageFrom("session-a", "middle", 1).map((trace) => trace.turnId), ["middle"]);
+  assert.deepEqual(repo.listLineageFrom("session-a", "middle", 4).map((trace) => trace.turnId), ["middle", "root"]);
+  assert.deepEqual(repo.listLineageFrom("session-a", "foreign"), []);
+});
+
 function capabilitySuggestion(): ChatCapabilityUpgradeSuggestion {
   return {
     kind: "skill_import",

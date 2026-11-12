@@ -11,17 +11,20 @@ import type { McpRequesterScopeLastOutcome } from "./mcp-requester-resolution-se
 export interface McpDiagnosticsHost {
   requireFeatureEnabled(flag: string): void | Promise<void>;
   listMcpTemplates(): Promise<Array<McpServerTemplateRecord & { installed: boolean }>>;
-  requireMcpServer(serverId: string): Promise<{
-    enabled: boolean;
-    status: string;
-    transport: string;
-    command?: string;
-    url?: string;
-    policy: {
-      blockedToolPatterns: string[];
-      allowedToolPatterns: string[];
-    };
-  }>;
+  requireMcpServer(serverId: string): Promise<
+    Pick<McpServerRecord, "connectionMode" | "requesterResolution"> & {
+      enabled: boolean;
+      status: string;
+      transport: string;
+      command?: string;
+      url?: string;
+      resolverRegistration?: McpRequesterScopeResolverRegistrationPosture;
+      policy: {
+        blockedToolPatterns: string[];
+        allowedToolPatterns: string[];
+      };
+    }
+  >;
   pickConnectorDiagnosticAction(checks: ConnectorDiagnosticReport["checks"]): string | undefined;
   recordConnectorHealthRun(report: ConnectorDiagnosticReport): Promise<void>;
 }
@@ -151,7 +154,7 @@ export function listMcpRequesterScopePostures(host: McpRequesterScopePostureHost
 }
 
 export async function listMcpTemplateDiscovery(host: McpDiagnosticsHost): Promise<McpTemplateDiscoveryResult[]> {
-  await host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
+  await requireConnectorDiagnostics(host);
   return (await host.listMcpTemplates()).map((template: McpServerTemplateRecord & { installed: boolean }) => {
     const checks: McpTemplateDiscoveryResult["dependencyChecks"] = [];
     if (template.transport === "stdio") {
@@ -208,7 +211,7 @@ export async function runMcpServerHealthCheck(
   host: McpDiagnosticsHost,
   serverId: string,
 ): Promise<ConnectorDiagnosticReport> {
-  await host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
+  await requireConnectorDiagnostics(host);
   const server = await host.requireMcpServer(serverId);
   const checks: ConnectorDiagnosticReport["checks"] = [];
   checks.push({
@@ -216,23 +219,29 @@ export async function runMcpServerHealthCheck(
     status: server.enabled ? "pass" : "warn",
     message: server.enabled ? "MCP server is enabled." : "Server is disabled.",
   });
-  checks.push({
-    key: "status",
-    status: server.status === "connected" ? "pass" : server.status === "connecting" ? "warn" : "fail",
-    message: `Server status is ${server.status}.`,
-  });
-  if (server.transport === "stdio") {
-    checks.push({
-      key: "command",
-      status: server.command?.trim() ? "pass" : "fail",
-      message: server.command?.trim() ? `Command ${server.command} configured.` : "Missing stdio command.",
-    });
+  const requesterHealth =
+    resolveMcpServerConnectionMode(server) === "requester_scoped" ? getMcpRequesterHealth(server) : undefined;
+  if (requesterHealth) {
+    checks.push(requesterHealth.check);
   } else {
     checks.push({
-      key: "url",
-      status: server.url?.trim() ? "pass" : "fail",
-      message: server.url?.trim() ? `URL ${server.url} configured.` : "Missing server URL.",
+      key: "status",
+      status: server.status === "connected" ? "pass" : server.status === "connecting" ? "warn" : "fail",
+      message: `Server status is ${server.status}.`,
     });
+    if (server.transport === "stdio") {
+      checks.push({
+        key: "command",
+        status: server.command?.trim() ? "pass" : "fail",
+        message: server.command?.trim() ? `Command ${server.command} configured.` : "Missing stdio command.",
+      });
+    } else {
+      checks.push({
+        key: "url",
+        status: server.url?.trim() ? "pass" : "fail",
+        message: server.url?.trim() ? `URL ${server.url} configured.` : "Missing server URL.",
+      });
+    }
   }
   checks.push({
     key: "policy",
@@ -252,9 +261,55 @@ export async function runMcpServerHealthCheck(
         ? "warn"
         : "ok",
     checks,
-    recommendedNextAction: host.pickConnectorDiagnosticAction(checks),
+    recommendedNextAction: requesterHealth?.nextAction ?? host.pickConnectorDiagnosticAction(checks),
     checkedAt: new Date().toISOString(),
   };
   await host.recordConnectorHealthRun(report);
   return report;
+}
+
+function requireConnectorDiagnostics(host: McpDiagnosticsHost): void | Promise<void> {
+  return host.requireFeatureEnabled("connectorDiagnosticsV1Enabled");
+}
+
+function getMcpRequesterHealth({
+  requesterResolution,
+  resolverRegistration,
+}: {
+  requesterResolution?: McpServerRecord["requesterResolution"];
+  resolverRegistration?: McpRequesterScopeResolverRegistrationPosture;
+}): { check: ConnectorDiagnosticReport["checks"][number]; nextAction: string } {
+  const key = "requester_resolver";
+  if (!requesterResolution) {
+    return {
+      check: { key, status: "fail", message: "Requester resolver configuration is missing." },
+      nextAction: "Configure the requester resolver binding and rerun the health check.",
+    };
+  }
+  switch (resolverRegistration) {
+    case "registered":
+      return {
+        check: { key, status: "warn", message: "Resolver is registered. Connectivity requires requester context." },
+        nextAction: "Check connectivity from a session with the intended requester context.",
+      };
+    case "resolver_missing":
+      return {
+        check: { key, status: "fail", message: "The configured requester resolver is not registered." },
+        nextAction: "Register the configured requester resolver and rerun the health check.",
+      };
+    case "resolver_binding_drift":
+      return {
+        check: {
+          key,
+          status: "fail",
+          message: "The registered requester resolver does not match the configured binding.",
+        },
+        nextAction: "Reconcile the configured resolver version and generation with its registration.",
+      };
+    default:
+      return {
+        check: { key, status: "warn", message: "Requester resolver registration could not be verified." },
+        nextAction: "Check the Gateway's requester resolver configuration.",
+      };
+  }
 }

@@ -337,8 +337,7 @@ export async function* coalesceStreamingDeltas(
           new Promise<{ kind: "timeout" }>((resolve) => {
             timer = setTimeout(() => resolve({ kind: "timeout" }), remainingMs);
           }),
-        ]);
-        if (timer) clearTimeout(timer);
+        ]).finally(() => clearTimeout(timer));
         if (outcome.kind === "timeout") {
           const drained = flush();
           if (drained) yield drained;
@@ -391,6 +390,10 @@ export async function* coalesceStreamingDeltas(
 
     const tail = flush();
     if (tail) yield tail;
+  } catch (error) {
+    const tail = flush();
+    if (tail) yield tail;
+    throw error;
   } finally {
     if (!sourceDone) {
       // A consumer can close while next() is waiting on a provider. Do not

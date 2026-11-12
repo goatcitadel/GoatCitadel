@@ -213,10 +213,31 @@ export function hasCoworkSynthesisSection(response: string): boolean {
   );
 }
 
+function* scanCoworkMarkdownLines(response: string) {
+  let fence: string | undefined;
+  for (const line of response.split(/\r?\n/)) {
+    const match = /^ {0,3}(`{3,}|~{3,})(.*)$/u.exec(line);
+    const marker = match?.[1];
+    if (fence) {
+      yield { line, fenced: true };
+      if (marker && marker[0] === fence[0] && marker.length >= fence.length && !match?.[2]?.trim()) {
+        fence = undefined;
+      }
+    } else {
+      if (marker && (marker[0] === "~" || !match?.[2]?.includes("`"))) fence = marker;
+      yield { line, fenced: Boolean(fence) };
+    }
+  }
+}
+
 export function parseCoworkMarkdownSections(response: string): Array<{ heading: string; bodyLines: string[] }> {
   const sections: Array<{ heading: string; bodyLines: string[] }> = [];
   let current: { heading: string; bodyLines: string[] } | undefined;
-  for (const line of response.split(/\r?\n/)) {
+  for (const { line, fenced } of scanCoworkMarkdownLines(response)) {
+    if (fenced) {
+      current?.bodyLines.push(line);
+      continue;
+    }
     const headingMatch = line.match(/^\s*#{1,6}\s+(.+?)\s*$/);
     const bareHeadingMatch =
       headingMatch ??
@@ -344,5 +365,9 @@ export function repairRequestedRoleOrderOnlyCoworkOutput(input: {
 }
 
 export function normalizeRequestedRoleOnlyCoworkHeadings(response: string): string {
-  return response.replace(/^##\s+([^\n]+)$/gm, "$1").trim();
+  return Array.from(scanCoworkMarkdownLines(response), ({ line, fenced }) =>
+    fenced ? line : line.replace(/^##\s+(.+)$/, "$1"),
+  )
+    .join("\n")
+    .trim();
 }

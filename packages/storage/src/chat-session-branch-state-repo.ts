@@ -19,6 +19,7 @@ export class ChatSessionBranchStateRepository {
   private readonly compareAndSetStmt;
   private readonly insertIfMissingStmt;
   private readonly deleteStmt;
+  private readonly clearIfCurrentStmt;
 
   public constructor(private readonly db: DatabaseClient) {
     this.getStmt = db.prepare(`
@@ -43,16 +44,16 @@ export class ChatSessionBranchStateRepository {
     `);
     this.insertIfMissingStmt = db.prepare(`
       INSERT INTO chat_session_branch_state (session_id, active_leaf_turn_id, updated_at)
-      SELECT @sessionId, @nextActiveLeafTurnId, @updatedAt
-      WHERE NOT EXISTS (
-        SELECT 1
-        FROM chat_session_branch_state
-        WHERE session_id = @sessionId
-      )
+      VALUES (@sessionId, @nextActiveLeafTurnId, @updatedAt)
+      ON CONFLICT(session_id) DO NOTHING
     `);
     this.deleteStmt = db.prepare(`
       DELETE FROM chat_session_branch_state
       WHERE session_id = ?
+    `);
+    this.clearIfCurrentStmt = db.prepare(`
+      DELETE FROM chat_session_branch_state
+      WHERE session_id = @sessionId AND active_leaf_turn_id = @expectedActiveLeafTurnId
     `);
   }
 
@@ -86,14 +87,9 @@ export class ChatSessionBranchStateRepository {
   ): boolean {
     const current = this.get(sessionId);
     if (current?.activeLeafTurnId === nextActiveLeafTurnId) {
-      if (current.updatedAt !== now) {
-        this.upsertStmt.run({
-          sessionId,
-          activeLeafTurnId: nextActiveLeafTurnId,
-          updatedAt: now,
-        });
-      }
-      return true;
+      if (current.updatedAt === now) return true;
+      // A same-leaf timestamp refresh may race a different selection.
+      expectedActiveLeafTurnId = nextActiveLeafTurnId;
     }
 
     if (!expectedActiveLeafTurnId) {
@@ -111,6 +107,11 @@ export class ChatSessionBranchStateRepository {
       nextActiveLeafTurnId,
       updatedAt: now,
     }) as { changes?: number };
+    return (result.changes ?? 0) > 0;
+  }
+
+  public clearIfCurrent(sessionId: string, expectedActiveLeafTurnId: string): boolean {
+    const result = this.clearIfCurrentStmt.run({ sessionId, expectedActiveLeafTurnId });
     return (result.changes ?? 0) > 0;
   }
 
