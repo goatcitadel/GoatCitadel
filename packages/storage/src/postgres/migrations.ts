@@ -15347,6 +15347,44 @@ export const POSTGRES_MIGRATIONS: PostgresMigration[] = [
     sql: MANAGED_PROJECT_FILE_SCHEMA_SQL,
     integritySha256: "6398f01c5a09d4089955e775dc16cb420d08cf06639c689f73a11cf951bc1dc2",
   },
+  {
+    // Preserve the original v230/v231 ledgers and converge their additive DDL with the v2 render.
+    version: 232,
+    name: "approval_mode_managed_file_schema_convergence",
+    sql: `
+DO $approval_file_schema_convergence$
+DECLARE
+  target RECORD;
+BEGIN
+  FOR target IN
+    SELECT relation, column_name
+    FROM (VALUES
+      ('chat_session_approval_modes'::pg_catalog.regclass, 'last_change_aggregate_revision'),
+      ('chat_session_approval_modes'::pg_catalog.regclass, 'project_revision'),
+      ('managed_project_file_revisions'::pg_catalog.regclass, 'byte_length')
+    ) AS columns(relation, column_name)
+    JOIN pg_catalog.pg_attribute ON attrelid = relation AND attname = column_name
+    WHERE attnum > 0 AND NOT attisdropped AND atttypid = 'pg_catalog.int4'::pg_catalog.regtype
+  LOOP
+    EXECUTE pg_catalog.format('ALTER TABLE %s ALTER COLUMN %I TYPE BIGINT', target.relation, target.column_name);
+  END LOOP;
+
+  IF pg_catalog.to_regclass('idx_managed_project_file_revisions_effect_id_unique') IS NULL
+    AND EXISTS (
+      SELECT 1 FROM pg_catalog.pg_constraint
+      WHERE conrelid = 'managed_project_file_revisions'::pg_catalog.regclass
+        AND conname = 'managed_project_file_revisions_effect_id_key' AND contype = 'u'
+    )
+  THEN
+    ALTER TABLE managed_project_file_revisions
+      RENAME CONSTRAINT managed_project_file_revisions_effect_id_key
+      TO idx_managed_project_file_revisions_effect_id_unique;
+  END IF;
+END
+$approval_file_schema_convergence$;
+    `,
+    integritySha256: "a0e564660459fcfb4846661dc4905abbaac38835a88dd6ab47d46719627d8139",
+  },
 ];
 
 function buildWorkspacePathBridgePosixFlavorPostgresSql(): string {
