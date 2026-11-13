@@ -100,6 +100,22 @@ function ManagedFilesControls({
     }
   }, [queryClient, scope, sendError]);
 
+  if (modeQuery.isError && (!state || current)) {
+    return (
+      <section
+        aria-label="Chat approval mode"
+        className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-subtle px-3 py-1.5"
+      >
+        <span role="status" className="text-sm text-fg-secondary">
+          Approval mode unavailable
+        </span>
+        <Button size="sm" disabled={modeQuery.isFetching} onClick={() => void modeQuery.refetch()}>
+          Retry
+        </Button>
+      </section>
+    );
+  }
+
   if (!current) return null;
 
   function run(label: string, failure: string, work: (signal: AbortSignal) => Promise<string | undefined>) {
@@ -213,8 +229,7 @@ function ManagedFilesControls({
     files.data?.items.filter(
       (file) => file.workspaceId === workspaceId && file.projectId === projectId && !file.deleted,
     ) ?? [];
-  const mutatingDisabled =
-    !canMutate || turnActive || pending !== undefined || modeQuery.isFetching || modeQuery.isError;
+  const mutatingDisabled = !canMutate || turnActive || pending !== undefined || modeQuery.isFetching;
   const fileActionsDisabled = pending !== undefined || modeQuery.isFetching || files.isFetching || files.isError;
   const message = error ?? status;
   const announcement = message ? (
@@ -226,11 +241,7 @@ function ManagedFilesControls({
     <section aria-label="Chat approval mode" className="border-t border-line-subtle px-3 py-1.5">
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
         <span className="text-sm text-fg-secondary">
-          {modeQuery.isError
-            ? "Approval mode unavailable"
-            : auto
-              ? "Auto · Managed project workspace"
-              : "Standard approvals"}
+          {auto ? "Auto · Managed project workspace" : "Standard approvals"}
         </span>
         <Button
           size="sm"
@@ -241,11 +252,7 @@ function ManagedFilesControls({
         >
           {auto ? "Use Standard mode" : "Use Auto mode"}
         </Button>
-        {modeQuery.isError ? (
-          <Button size="sm" onClick={() => void modeQuery.refetch()}>
-            Retry
-          </Button>
-        ) : null}
+
         {auto ? (
           <Button size="sm" variant="ghost" onClick={() => setOpen(true)}>
             Managed files

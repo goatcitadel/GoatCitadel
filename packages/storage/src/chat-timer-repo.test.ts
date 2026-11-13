@@ -73,4 +73,55 @@ describe("ChatTimerRepository", () => {
     assert.equal(storage.chatTimers.get(reply.timerId).cancelledByMessageId, "user-message-2");
     storage.close();
   });
+
+  it("keeps actionable timers and recent fired notices visible after history exceeds the read limit", () => {
+    const storage = new Storage({ dbPath: ":memory:", transcriptsDir: "data/transcripts", auditDir: "data/audit" });
+    try {
+      const sessionId = "session-1";
+      const workspaceId = "workspace-1";
+      storage.chatSessionMeta.ensure(sessionId, undefined, workspaceId);
+      const timers = storage.chatTimers;
+      const create = (timerId: string, dueAt: string) =>
+        timers.create({
+          timerId,
+          workspaceId,
+          sessionId,
+          dueAt,
+          timezone: "UTC",
+          message: timerId,
+          cancelOnNextReply: false,
+          createdBy: "operator",
+        });
+      for (let index = 0; index < 101; index += 1) {
+        const timer = create(`past-${index}`, "2020-01-01T00:00:00.000Z");
+        assert.equal(timers.claimDue("worker", 1)[0]?.timerId, timer.timerId);
+        timers.markFired(
+          timer.timerId,
+          "worker",
+          {
+            noticeMessageId: `notice-${index}`,
+            notificationEventId: `event-${index}`,
+            notificationDeliveryStatus: "no_targets",
+          },
+          new Date(Date.UTC(2020, 0, 1, 0, 0, index)).toISOString(),
+        );
+      }
+      const active = create("future", "2099-01-01T00:00:00.000Z");
+      const listed = timers.listBySession(sessionId);
+      const notices = timers.listFiredBySession(sessionId);
+      assert.equal(listed.length, 100);
+      assert.equal(notices.length, 100);
+      assert.deepEqual(
+        {
+          active: listed.some((timer) => timer.timerId === active.timerId),
+          newest: notices.at(-1)?.timerId,
+          oldestIncluded: notices.some((timer) => timer.timerId === "past-0"),
+        },
+        { active: true, newest: "past-100", oldestIncluded: false },
+      );
+      assert.equal(timers.cancel(active.timerId, active.revision).status, "cancelled");
+    } finally {
+      storage.close();
+    }
+  });
 });

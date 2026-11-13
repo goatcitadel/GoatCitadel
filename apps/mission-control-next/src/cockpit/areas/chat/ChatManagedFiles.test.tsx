@@ -217,3 +217,14 @@ it("finds a saved file outside the initial page by its scoped path", async () =>
     signal: expect.any(AbortSignal),
   });
 });
+
+it("offers retry after the first approval mode read fails and only exposes matching controls", async () => {
+  vi.mocked(api.fetchChatApprovalMode).mockRejectedValueOnce(new Error("temporary Gateway failure"));
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("Approval mode unavailable"));
+  expect(button("Use Auto mode")).toBeUndefined();
+  expect(button("Managed files")).toBeUndefined();
+  await click("Retry");
+  await vi.waitFor(() => expect(button("Managed files")).toBeDefined());
+  expect(api.fetchChatApprovalMode).toHaveBeenCalledTimes(2);
+});
