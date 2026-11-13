@@ -68,6 +68,7 @@ import {
   buildPostgresSchemaShapeValidationSql,
   POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL,
   POSTGRES_SCHEMA_SHAPE_VALIDATION_SQL,
+  postgresHasCustomAttributeOptionsSql,
   type PostgresSchemaShapeManifest,
   type PostgresSchemaShapeIssueRow,
 } from "./schema-shape.js";
@@ -293,7 +294,7 @@ const POSTGRES_REMOTE_WORKER_MESH_PROVENANCE_DEPENDENCY_PREFLIGHT_SQL = `
       OR target.attcompression OPERATOR(pg_catalog.<>) ''
       OR target.attstattarget OPERATOR(pg_catalog.<>) -1
       OR target.attacl IS NOT NULL
-      OR target.attoptions IS NOT NULL
+      OR ${postgresHasCustomAttributeOptionsSql("target.attoptions")}
       OR target.attfdwoptions IS NOT NULL
       OR target.default_expression IS DISTINCT FROM '''legacy''::text'
       OR EXISTS (

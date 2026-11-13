@@ -41,7 +41,52 @@ import {
   runConcurrentObservabilityWorkers,
 } from "../approval-observability-concurrency.test-support.js";
 
+import { buildPostgresSchemaShapeManifest, buildPostgresSchemaShapeReplacementValidationSql } from "./schema-shape.js";
+
 const connectionString = process.env.GOATCITADEL_TEST_POSTGRES_URL?.trim();
+
+test(
+  "bootstrap replacement accepts server column version metadata and rejects custom column options",
+  {
+    skip: !connectionString && "Set GOATCITADEL_TEST_POSTGRES_URL to a disposable PostgreSQL instance.",
+  },
+  async () => {
+    assert.ok(connectionString);
+    const schema = `bootstrap_options_${randomUUID().replaceAll("-", "")}`;
+    const pool = new Pool({ connectionString, max: 1 });
+    const ddl = "CREATE TABLE option_probe (value TEXT NOT NULL)";
+    const manifest = buildPostgresSchemaShapeManifest([{ version: 1, name: "option_probe", sql: ddl }]);
+    try {
+      await pool.query(`CREATE SCHEMA ${schema}`);
+      await pool.query(`CREATE TABLE ${schema}.option_probe (value TEXT NOT NULL)`);
+      const sql = buildPostgresSchemaShapeReplacementValidationSql("$1", "$2", "$3");
+      const identity = (await pool.query<{ oid: string }>("SELECT oid FROM pg_namespace WHERE nspname = $1", [schema]))
+        .rows[0]!;
+      const issues = async () =>
+        (
+          await pool.query<{ issue: string }>(sql, [
+            JSON.stringify(manifest.tables),
+            JSON.stringify(manifest.indexes),
+            identity.oid,
+          ])
+        ).rows.map(({ issue }) => issue);
+      assert.deepEqual(await issues(), []);
+      await pool.query(`ALTER TABLE ${schema}.option_probe ALTER COLUMN value SET (n_distinct = 5)`);
+      assert.deepEqual(await issues(), [
+        "column option_probe.value has unexpected physical posture",
+        "table option_probe has unexpected relation posture",
+      ]);
+      await pool.query(`ALTER TABLE ${schema}.option_probe ALTER COLUMN value RESET (n_distinct)`);
+      assert.deepEqual(await issues(), []);
+    } finally {
+      try {
+        await pool.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE`);
+      } finally {
+        await pool.end();
+      }
+    }
+  },
+);
 
 function escapePostgresLiteral(value: string): string {
   return value.replaceAll("'", "''");
