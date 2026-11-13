@@ -106,9 +106,7 @@ function ManagedFilesControls({
         aria-label="Chat approval mode"
         className="flex flex-wrap items-center gap-x-3 gap-y-1 border-t border-line-subtle px-3 py-1.5"
       >
-        <span role="status" className="text-sm text-fg-secondary">
-          Approval mode unavailable
-        </span>
+        <span className="text-sm text-fg-secondary">Approval mode unavailable</span>
         <Button size="sm" disabled={modeQuery.isFetching} onClick={() => void modeQuery.refetch()}>
           Retry
         </Button>

@@ -82,7 +82,10 @@ function button(name: string) {
 }
 
 async function click(name: string) {
-  await vi.waitFor(() => expect(button(name)?.disabled, name).toBe(false));
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(button(name)?.disabled, name).toBe(false);
+  });
   await act(async () => button(name)!.click());
 }
 
