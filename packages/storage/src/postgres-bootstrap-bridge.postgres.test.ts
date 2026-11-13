@@ -464,6 +464,7 @@ describe("Postgres dynamic-bootstrap replacement locking", () => {
 
         await adminPool.query(`
           ALTER TABLE ${schemaName}.external_source_configs
+            DROP CONSTRAINT external_source_configs_input_flavor_posix_check,
             ADD CONSTRAINT external_source_configs_input_flavor_posix_check
             CHECK(input_flavor IN ('windows_native', 'windows_forward', 'msys', 'wsl', 'posix')) NOT VALID
         `);
@@ -481,11 +482,12 @@ describe("Postgres dynamic-bootstrap replacement locking", () => {
         assert.deepEqual(unvalidated.rows[0], { convalidated: false, migration_140: 0 });
         await adminPool.query(`
           ALTER TABLE ${schemaName}.external_source_configs
-            DROP CONSTRAINT external_source_configs_input_flavor_posix_check
+            VALIDATE CONSTRAINT external_source_configs_input_flavor_posix_check
         `);
 
         await adminPool.query(`
           ALTER TABLE ${schemaName}.chat_routed_context_snapshots
+            DROP CONSTRAINT chat_routed_context_snapshots_schema_version_v2_check,
             ADD CONSTRAINT chat_routed_context_snapshots_schema_version_v2_check
             CHECK(schema_version IN ('CHAT.ROUTED-CONTEXT-SNAPSHOT.V1', 'chat.routed-context-snapshot.v2'))
         `);
@@ -504,7 +506,9 @@ describe("Postgres dynamic-bootstrap replacement locking", () => {
         assert.equal(caseDrift.rows[0]?.migration_140, 0);
         await adminPool.query(`
           ALTER TABLE ${schemaName}.chat_routed_context_snapshots
-            DROP CONSTRAINT chat_routed_context_snapshots_schema_version_v2_check
+            DROP CONSTRAINT chat_routed_context_snapshots_schema_version_v2_check,
+            ADD CONSTRAINT chat_routed_context_snapshots_schema_version_v2_check
+            CHECK(schema_version IN ('chat.routed-context-snapshot.v1', 'chat.routed-context-snapshot.v2'))
         `);
 
         const converged = await runPostgresMigrations(migrationClient, POSTGRES_MIGRATIONS);
