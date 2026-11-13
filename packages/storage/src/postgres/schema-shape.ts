@@ -5,6 +5,18 @@ import { quotePostgresIdentifier, type PostgresMigrationSchemaIdentity } from ".
 
 const POSTGRES_IDENTIFIER_MAX_BYTES = 63;
 
+// PostgreSQL 16.16 stores its internal attribute version in attoptions.
+// Keep rejecting user options, including arrays that mix them with pg_attver.
+export function postgresHasCustomAttributeOptionsSql(options: "attribute.attoptions" | "target.attoptions"): string {
+  return `(${options} IS NOT NULL AND NOT CASE
+    WHEN pg_catalog.cardinality(${options}) OPERATOR(pg_catalog.=) 1
+      AND (${options})[1] OPERATOR(pg_catalog.~) '^pg_attver=[1-9][0-9]{0,19}$'
+    THEN pg_catalog.substring((${options})[1], 11)::pg_catalog.numeric
+      OPERATOR(pg_catalog.<=) 18446744073709551615
+    ELSE false
+  END)`;
+}
+
 export interface PostgresSchemaShapeColumn {
   name: string;
   type: string;
@@ -459,7 +471,7 @@ export const POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL = `
       OR attribute.attstorage OPERATOR(pg_catalog.<>) column_type.typstorage
       OR attribute.attcompression OPERATOR(pg_catalog.<>) ''
       OR attribute.attacl IS NOT NULL
-      OR attribute.attoptions IS NOT NULL
+      OR ${postgresHasCustomAttributeOptionsSql("attribute.attoptions")}
       OR attribute.attfdwoptions IS NOT NULL
       OR attribute.atthasmissing
       OR attribute.attmissingval IS NOT NULL
@@ -867,7 +879,7 @@ export const POSTGRES_SCHEMA_SHAPE_REPLACEMENT_VALIDATION_SQL = `
         WHERE attribute.attrelid OPERATOR(pg_catalog.=) relation.oid
           AND attribute.attnum OPERATOR(pg_catalog.>) 0
           AND NOT attribute.attisdropped
-          AND (attribute.attacl IS NOT NULL OR attribute.attoptions IS NOT NULL)
+          AND (attribute.attacl IS NOT NULL OR ${postgresHasCustomAttributeOptionsSql("attribute.attoptions")})
       )
   ),
   unexpected_toast_posture_issues AS (

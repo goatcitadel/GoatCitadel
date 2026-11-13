@@ -82,7 +82,10 @@ function button(name: string) {
 }
 
 async function click(name: string) {
-  await vi.waitFor(() => expect(button(name)?.disabled, name).toBe(false));
+  await vi.waitFor(async () => {
+    await act(async () => {});
+    expect(button(name)?.disabled, name).toBe(false);
+  });
   await act(async () => button(name)!.click());
 }
 
@@ -216,4 +219,15 @@ it("finds a saved file outside the initial page by its scoped path", async () =>
     prefix: "notes",
     signal: expect.any(AbortSignal),
   });
+});
+
+it("offers retry after the first approval mode read fails and only exposes matching controls", async () => {
+  vi.mocked(api.fetchChatApprovalMode).mockRejectedValueOnce(new Error("temporary Gateway failure"));
+  await render();
+  await vi.waitFor(() => expect(container.textContent).toContain("Approval mode unavailable"));
+  expect(button("Use Auto mode")).toBeUndefined();
+  expect(button("Managed files")).toBeUndefined();
+  await click("Retry");
+  await vi.waitFor(() => expect(button("Managed files")).toBeDefined());
+  expect(api.fetchChatApprovalMode).toHaveBeenCalledTimes(2);
 });

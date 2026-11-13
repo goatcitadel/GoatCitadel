@@ -70,6 +70,11 @@ describe("ChatTimerPanel", () => {
     );
     expect(text(renderer)).toContain("never invokes a provider or model");
     expect(text(renderer)).toContain("Cancel only after my next message commits successfully");
+    const dueAt = new Date("2026-07-29T00:30:00.000Z");
+    const timezone = "America/Los_Angeles";
+    expect(text(renderer).replace(/\s+/g, " ")).toContain(
+      `${dueAt.toLocaleString(undefined, { timeZone: timezone })} · ${timezone}`,
+    );
     renderer.root
       .findAllByType("button")
       .find((button) => button.children.includes("Create timer"))

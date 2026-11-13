@@ -75,6 +75,7 @@ export function useIntegrationConnectionMutation(id: string) {
   );
   return {
     ...attempt,
+    ownerKey: id,
     pending: attempt.phase === "saving",
     locked: ["saving", "uncertain"].includes(attempt.phase),
     /** Settles this key's lost write; see checkIntegrationAttemptOutcome. */

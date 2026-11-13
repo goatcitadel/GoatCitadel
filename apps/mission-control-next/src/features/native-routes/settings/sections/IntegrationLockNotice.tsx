@@ -7,15 +7,17 @@ import { SettingsNotice } from "../SettingsShared";
  * An integration write lock and, when its lost attempt is identified, the check that can settle it. `readback` must be
  * the lock owner's own canonical read (which throws on failure); the section's reload then refreshes the view.
  */
-export function IntegrationLockNotice({
-  mutation,
-  readback,
-  reload,
-}: {
+type IntegrationLockNoticeProps = {
   mutation: ReturnType<typeof useIntegrationConnectionMutation>;
   readback: () => Promise<unknown>;
   reload: () => Promise<unknown> | void;
-}) {
+};
+
+export function IntegrationLockNotice(props: IntegrationLockNoticeProps) {
+  return <OwnerLockNotice key={props.mutation.ownerKey} {...props} />;
+}
+
+function OwnerLockNotice({ mutation, readback, reload }: IntegrationLockNoticeProps) {
   const [settled, setSettled] = useState<string | null>(null);
   if (mutation.phase !== "uncertain")
     return settled ? <SettingsNotice notice={{ tone: "info", message: settled }} /> : null;

@@ -90,7 +90,15 @@ export class ChatTimerRepository {
   public listBySession(sessionId: string, limit = 100): ChatTimerRecord[] {
     return (
       this.db
-        .prepare("SELECT * FROM chat_timers WHERE session_id = ? ORDER BY due_at ASC, timer_id ASC LIMIT ?")
+        .prepare(
+          `SELECT * FROM (
+            SELECT * FROM chat_timers WHERE session_id = ?
+            ORDER BY CASE WHEN status IN ('active', 'claimed') THEN 0 ELSE 1 END,
+              CASE WHEN status NOT IN ('active', 'claimed') THEN updated_at END DESC,
+              due_at ASC, timer_id ASC
+            LIMIT ?
+          ) AS visible_timers ORDER BY due_at ASC, timer_id ASC`,
+        )
         .all(sessionId, Math.max(1, Math.min(200, limit))) as ChatTimerRow[]
     ).map(mapTimer);
   }
@@ -99,10 +107,12 @@ export class ChatTimerRepository {
     return (
       this.db
         .prepare(
-          "SELECT * FROM chat_timers WHERE session_id = ? AND status = 'fired' AND notice_message_id IS NOT NULL ORDER BY fired_at ASC, timer_id ASC LIMIT ?",
+          "SELECT * FROM chat_timers WHERE session_id = ? AND status = 'fired' AND notice_message_id IS NOT NULL ORDER BY fired_at DESC, timer_id DESC LIMIT ?",
         )
         .all(sessionId, Math.max(1, Math.min(200, limit))) as ChatTimerRow[]
-    ).map(mapTimer);
+    )
+      .reverse()
+      .map(mapTimer);
   }
 
   public countActiveBySession(sessionId: string): number {

@@ -86,7 +86,8 @@ export function ChatTimerPanel({ panel }: { panel: PanelState }) {
                 <div>
                   <strong>{timer.message}</strong>
                   <span>
-                    {timer.status} · {new Date(timer.dueAt).toLocaleString()} · {timer.timezone}
+                    {timer.status} · {new Date(timer.dueAt).toLocaleString(undefined, { timeZone: timer.timezone })} ·{" "}
+                    {timer.timezone}
                   </span>
                 </div>
                 {timer.status === "active" ? (

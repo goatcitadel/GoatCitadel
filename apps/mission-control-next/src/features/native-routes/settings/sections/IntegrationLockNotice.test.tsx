@@ -14,6 +14,7 @@ afterEach(async () => {
 
 function lockedMutation(checkOutcome: (readback: () => Promise<unknown>) => Promise<string | undefined>) {
   return {
+    ownerKey: "original",
     phase: "uncertain" as const,
     message: "Outcome uncertain.",
     transport: { attemptKey: "6f1c2b3a-4d5e-4f60-8a7b-9c0d1e2f3a4b", method: "POST" as const, routePattern: "/x" },
@@ -61,3 +62,50 @@ it("fails the check when the owner's readback fails, so the lock is kept", async
   await act(async () => button.props.onClick());
   expect(failed).toBe(true);
 });
+
+it.each(["before", "after"] as const)(
+  "hides a settled outcome when the target switches %s the check resolves",
+  async (timing) => {
+    const message = "The Gateway recorded the original connection change.";
+    let resolveOutcome!: (value: string) => void;
+    const outcome = new Promise<string>((resolve) => {
+      resolveOutcome = resolve;
+    });
+    const checkOutcome = vi.fn(() => outcome);
+    const render = (target: string, settled = false) => {
+      const locked = lockedMutation(checkOutcome);
+      const mutation =
+        target === "original" && !settled
+          ? locked
+          : {
+              ...locked,
+              phase: "idle" as const,
+              pending: false,
+              locked: false,
+            };
+      return <IntegrationLockNotice mutation={{ ...mutation, ownerKey: target }} readback={vi.fn()} reload={vi.fn()} />;
+    };
+    await act(async () => {
+      view = create(render("original"));
+    });
+    const button = view.root.findAllByType("button").find((node) => text(node) === "Check outcome")!;
+    await act(async () => {
+      button.props.onClick();
+    });
+    if (timing === "after") {
+      await act(async () => {
+        resolveOutcome(message);
+        view.update(render("original", true));
+      });
+      expect(text(view.root)).toContain(message);
+    }
+    await act(async () => {
+      view.update(render("replacement"));
+    });
+    if (timing === "before")
+      await act(async () => {
+        resolveOutcome(message);
+      });
+    expect(view.toJSON()).toBeNull();
+  },
+);
