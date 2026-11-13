@@ -2416,11 +2416,12 @@ test(
     const originalConfigure = client.configureMigrationTransaction.bind(client);
     let configureCalls = 0;
     client.configureMigrationTransaction = async (pinnedClient, migrationSchema, historyRepairBridge) => {
-      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
+      // PostgreSQL can lock the schema during configuration, so simulate the change before that lock.
       configureCalls += 1;
       if (configureCalls === 2) {
         await adminPool.query(`ALTER SCHEMA ${schemaName} RENAME TO ${movedSchemaName}`);
       }
+      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
     };
 
     try {
@@ -2429,7 +2430,7 @@ test(
         runPostgresMigrations(client, [
           { version: 1, name: "schema_rename_probe", sql: `CREATE TABLE ${effectTable} (effect_id INTEGER)` },
         ]),
-        /no schema has been selected to create in/,
+        /migration schema .* changed after preflight/,
       );
       assert.equal(configureCalls, 2);
       const state = await adminPool.query<{ ledger_rows: number; effect: string | null }>(
@@ -2457,7 +2458,7 @@ test(
 );
 
 test(
-  "real Postgres rolls back replacement-schema migration effects before commit",
+  "real Postgres rejects a replacement migration schema before executing effects",
   { skip: connectionString ? false : "set GOATCITADEL_TEST_POSTGRES_URL to run the real Postgres lane" },
   async () => {
     assert.ok(connectionString);
@@ -2477,7 +2478,7 @@ test(
     const originalConfigure = client.configureMigrationTransaction.bind(client);
     let configureCalls = 0;
     client.configureMigrationTransaction = async (pinnedClient, migrationSchema, historyRepairBridge) => {
-      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
+      // PostgreSQL can lock the schema during configuration, so simulate the change before that lock.
       configureCalls += 1;
       if (configureCalls === 2) {
         await adminPool.query(`
@@ -2490,6 +2491,7 @@ test(
           );
         `);
       }
+      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
     };
 
     try {
@@ -2549,11 +2551,11 @@ test(
     const originalConfigure = client.configureMigrationTransaction.bind(client);
     let renamed = false;
     client.configureMigrationTransaction = async (pinnedClient, migrationSchema, historyRepairBridge) => {
-      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
       if (!renamed) {
         renamed = true;
         await adminPool.query(`ALTER SCHEMA ${schemaName} RENAME TO ${movedSchemaName}`);
       }
+      await originalConfigure(pinnedClient, migrationSchema, historyRepairBridge);
     };
 
     try {
