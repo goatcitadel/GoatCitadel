@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   fetchMeshCapabilityInvocationActivity,
   fetchMeshCapabilityPublications,
@@ -24,60 +24,60 @@ export interface MeshCapabilityOpsState {
  * and vice versa — neither read is ever substituted with client inference.
  */
 export function useMeshCapabilityOps(workspaceId: string): MeshCapabilityOpsState {
-  const [inspection, setInspection] = useState<MeshCapabilityPublicationInspectionResponse | null>(null);
-  const [invocationActivity, setInvocationActivity] = useState<readonly MeshCapabilityInvocationActivityItem[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [activityError, setActivityError] = useState<string | null>(null);
+  const scope = useMemo(() => ({ workspaceId }), [workspaceId]);
+  const activeScope = useRef<typeof scope | null>(null);
   const loadSequenceRef = useRef(0);
+  const [result, setResult] = useState<
+    Pick<MeshCapabilityOpsState, "inspection" | "invocationActivity" | "error" | "activityError"> & {
+      scope: typeof scope;
+    }
+  >();
 
-  const reload = useCallback(async () => {
-    const loadId = loadSequenceRef.current + 1;
-    loadSequenceRef.current = loadId;
-    const [inspectionResult, activityResult] = await Promise.allSettled([
-      fetchMeshCapabilityPublications(workspaceId),
-      fetchMeshCapabilityInvocationActivity(workspaceId),
-    ]);
-    if (loadSequenceRef.current !== loadId) {
-      return;
-    }
-    if (inspectionResult.status === "fulfilled") {
-      setInspection(inspectionResult.value);
-      setError(null);
-    } else {
-      setInspection(null);
-      setError("The mesh capability publication inspection is unavailable.");
-    }
-    if (activityResult.status === "fulfilled") {
-      setInvocationActivity(activityResult.value);
-      setActivityError(null);
-    } else {
-      setInvocationActivity([]);
-      setActivityError("Recent mesh invocation activity is unavailable.");
-    }
-    setLoading(false);
-  }, [workspaceId]);
-
-  useEffect(() => {
-    setLoading(true);
-    setInspection(null);
-    setInvocationActivity([]);
-    setError(null);
-    setActivityError(null);
-    void reload();
+  useLayoutEffect(() => {
+    activeScope.current = scope;
     return () => {
+      activeScope.current = null;
       loadSequenceRef.current += 1;
     };
-  }, [reload]);
+  }, [scope]);
 
+  const reload = useCallback(async () => {
+    if (activeScope.current !== scope) return;
+    const loadId = ++loadSequenceRef.current;
+    const [inspectionResult, activityResult] = await Promise.allSettled([
+      fetchMeshCapabilityPublications(scope.workspaceId),
+      fetchMeshCapabilityInvocationActivity(scope.workspaceId),
+    ]);
+    if (loadSequenceRef.current !== loadId) return;
+    setResult({
+      scope,
+      inspection: inspectionResult.status === "fulfilled" ? inspectionResult.value : null,
+      invocationActivity: activityResult.status === "fulfilled" ? activityResult.value : [],
+      error:
+        inspectionResult.status === "rejected" ? "The mesh capability publication inspection is unavailable." : null,
+      activityError: activityResult.status === "rejected" ? "Recent mesh invocation activity is unavailable." : null,
+    });
+  }, [scope]);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
   useRefreshSubscription("system", reload, {
     staleMs: 60_000,
     pollIntervalMs: 60_000,
   });
   useRefreshSubscription("approvals", reload);
 
+  const current = result?.scope === scope ? result : undefined;
   return useMemo(
-    () => ({ inspection, invocationActivity, loading, error, activityError, reload }),
-    [inspection, invocationActivity, loading, error, activityError, reload],
+    () => ({
+      inspection: current?.inspection ?? null,
+      invocationActivity: current?.invocationActivity ?? [],
+      error: current?.error ?? null,
+      activityError: current?.activityError ?? null,
+      loading: !current,
+      reload,
+    }),
+    [current, reload],
   );
 }
