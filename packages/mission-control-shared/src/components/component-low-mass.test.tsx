@@ -161,19 +161,34 @@ describe("small shared shell components", () => {
 
     const hint = create(<HelpHint label="Explain" text="Detailed help" symbol="i" className="hint-extra" />);
     const hintButton = hint.root.findByType("button");
+    const hintWrap = hint.root.findByProps({ className: "help-hint-wrap" });
+    const tooltip = () => hint.root.findByProps({ role: "tooltip" });
     expect(hintButton.props["aria-label"]).toBe("Explain");
+    expect(hintButton.props["aria-describedby"]).toBe(tooltip().props.id);
+    expect(tooltip().props.hidden).toBe(true);
     act(() => {
-      hintButton.props.onMouseEnter();
+      hintWrap.props.onMouseEnter();
     });
-    expect(textOf(hint.toJSON())).toContain("Detailed help");
+    expect(tooltip().props.hidden).toBe(false);
+    expect(tooltip().children).toContain("Detailed help");
     act(() => {
-      hintButton.props.onMouseLeave();
+      hintWrap.props.onMouseLeave({
+        currentTarget: { contains: () => false, ownerDocument: { activeElement: null } },
+      });
+    });
+    expect(tooltip().props.hidden).toBe(true);
+    act(() => {
       hintButton.props.onFocus();
+    });
+    expect(tooltip().props.hidden).toBe(false);
+    act(() => {
       hintButton.props.onBlur();
+    });
+    expect(tooltip().props.hidden).toBe(true);
+    act(() => {
       hintButton.props.onClick();
     });
-    expect(textOf(hint.toJSON())).toContain("Detailed help");
-
+    expect(tooltip().props.hidden).toBe(false);
     const onModeChange = vi.fn();
     const modeSwitch = create(<ChatModeSwitch value="chat" onChange={onModeChange} />);
     expect(modeSwitch.root.findAllByType("button")).toHaveLength(1);
