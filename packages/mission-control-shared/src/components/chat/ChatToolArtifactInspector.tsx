@@ -17,7 +17,7 @@ function formatBytes(value?: number): string | null {
   return `${(value / (1024 * 1024)).toFixed(1)} MB`;
 }
 
-export function ChatToolArtifactInspector(props: {
+interface ChatToolArtifactInspectorProps {
   artifactId: string;
   workspaceId: string;
   artifactPath?: string;
@@ -29,8 +29,20 @@ export function ChatToolArtifactInspector(props: {
    * the diff renders with +/- coloring INSTEAD OF the raw fetched-artifact text dump.
    */
   run?: ChatToolRunRecord;
-}) {
-  const { artifactId, workspaceId, artifactPath, originalByteLength, run } = props;
+}
+
+export function ChatToolArtifactInspector(props: ChatToolArtifactInspectorProps) {
+  const { artifactId, workspaceId } = props;
+  return <ScopedArtifactInspector key={JSON.stringify([workspaceId, artifactId])} {...props} />;
+}
+
+function ScopedArtifactInspector({
+  artifactId,
+  workspaceId,
+  artifactPath,
+  originalByteLength,
+  run,
+}: ChatToolArtifactInspectorProps) {
   const diff = run ? extractUnifiedDiffFromToolRun(run) : null;
   const [open, setOpen] = useState(false);
   const [loading, setLoading] = useState(false);
