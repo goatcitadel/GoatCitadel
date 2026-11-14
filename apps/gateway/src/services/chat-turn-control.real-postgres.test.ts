@@ -11,6 +11,8 @@ import {
   runPostgresMigrations,
   type AsyncStorage,
 } from "@goatcitadel/storage";
+import { createSideChatTestDeps, expectSideChatConvergence } from "../test/chat-side-chat-test-support.js";
+import { createChatSession } from "./chat-session-service.js";
 import { claimArtifactRetry, closeChatTurnToolUse, readChatTurnControl } from "./chat-turn-control.js";
 import {
   getChatApprovalMode,
@@ -75,6 +77,13 @@ describe.skipIf(!url)("Chat turn control on isolated real PostgreSQL", { timeout
       await fs.rm(root, { recursive: true, force: true });
     await lease?.release();
   });
+  it("returns one canonical side chat across independent PostgreSQL clients", async () => {
+    const firstDeps = createSideChatTestDeps(storage);
+    const secondDeps = createSideChatTestDeps(second);
+    const parent = await createChatSession(firstDeps, { title: "Concurrent PostgreSQL parent" });
+    await expectSideChatConvergence(firstDeps, secondDeps, parent.sessionId);
+  });
+
   async function seed() {
     const turnId = randomUUID(),
       sessionId = `session-${turnId}`;
