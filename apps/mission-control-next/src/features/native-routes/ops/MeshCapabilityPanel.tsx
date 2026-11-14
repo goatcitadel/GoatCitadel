@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import {
   requestMeshCapabilityActivation,
@@ -28,11 +28,13 @@ import "./mesh-capabilities.css";
  * inspection route yet, so that portion stays read-only and says so honestly.
  */
 export function MeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
+  return <WorkspaceMeshCapabilityPanel key={workspaceId} workspaceId={workspaceId} />;
+}
+
+function WorkspaceMeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
   const ops = useMeshCapabilityOps(workspaceId);
   const mountedRef = useRef(true);
-  const activeWorkspaceRef = useRef(workspaceId);
   const actionRequestRef = useRef(0);
-  activeWorkspaceRef.current = workspaceId;
   const [pendingAction, setPendingAction] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [revokeReasons, setRevokeReasons] = useState<Record<string, string>>({});
@@ -41,7 +43,7 @@ export function MeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
     response: MeshCapabilityActivationRequestResponse;
   } | null>(null);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     mountedRef.current = true;
     return () => {
       mountedRef.current = false;
@@ -49,24 +51,15 @@ export function MeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
     };
   }, []);
 
-  useEffect(() => {
-    actionRequestRef.current += 1;
-    setPendingAction(null);
-    setActionError(null);
-    setRevokeReasons({});
-    setLastActivation(null);
-  }, [workspaceId]);
-
   const reload = ops.reload;
   const runAction = useCallback(
     async (key: string, operation: (isCurrent: () => boolean) => Promise<void>) => {
-      if (!mountedRef.current || activeWorkspaceRef.current !== workspaceId) {
+      if (!mountedRef.current) {
         return;
       }
       const requestId = actionRequestRef.current + 1;
       actionRequestRef.current = requestId;
-      const isCurrent = () =>
-        mountedRef.current && activeWorkspaceRef.current === workspaceId && actionRequestRef.current === requestId;
+      const isCurrent = () => mountedRef.current && actionRequestRef.current === requestId;
       setPendingAction(key);
       setActionError(null);
       try {
@@ -87,7 +80,7 @@ export function MeshCapabilityPanel({ workspaceId }: { workspaceId: string }) {
         }
       }
     },
-    [reload, workspaceId],
+    [reload],
   );
 
   const handleRequestActivation = useCallback(
