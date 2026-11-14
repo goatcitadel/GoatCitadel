@@ -42,8 +42,16 @@ function recents(items: RecentCrossProjectSession[]) {
   };
 }
 
-function Harness({ onValue }: { onValue: (value: HookValue) => void }) {
-  const value = useCrossProjectRecentSessions("workspace-1");
+function Harness({
+  onValue,
+  workspaceId = "workspace-1",
+  enabled = true,
+}: {
+  onValue: (value: HookValue) => void;
+  workspaceId?: string;
+  enabled?: boolean;
+}) {
+  const value = useCrossProjectRecentSessions(workspaceId, { enabled });
   onValue(value);
   return null;
 }
@@ -81,6 +89,58 @@ describe("useCrossProjectRecentSessions", () => {
   afterEach(() => {
     renderer?.unmount();
     renderer = null;
+  });
+
+  it("clears previous workspace recents immediately and reports replacement failure", async () => {
+    const replacement = deferred<ReturnType<typeof recents>>();
+    const onValue = vi.fn<(value: HookValue) => void>();
+    await act(async () => {
+      renderer = create(<Harness onValue={onValue} />);
+    });
+    expect(onValue.mock.lastCall?.[0].items.map((item) => item.sessionId)).toEqual(["session-refresh"]);
+
+    apiMocks.fetchCrossProjectRecentSessions.mockReturnValueOnce(replacement.promise);
+    onValue.mockClear();
+    await act(async () => {
+      renderer?.update(<Harness workspaceId="workspace-2" onValue={onValue} />);
+    });
+    expect(onValue.mock.calls[0]?.[0]).toEqual({ items: [], loading: true, error: null });
+    expect(onValue.mock.lastCall?.[0]).toEqual({ items: [], loading: true, error: null });
+
+    await act(async () => {
+      replacement.reject(new Error("Workspace two unavailable"));
+    });
+    expect(onValue.mock.lastCall?.[0]).toEqual({ items: [], loading: false, error: "Workspace two unavailable" });
+  });
+
+  it("ignores late results from previous workspaces and disabled reads", async () => {
+    const previous = deferred<ReturnType<typeof recents>>();
+    const replacement = deferred<ReturnType<typeof recents>>();
+    const onValue = vi.fn<(value: HookValue) => void>();
+    apiMocks.fetchCrossProjectRecentSessions
+      .mockReturnValueOnce(previous.promise)
+      .mockReturnValueOnce(replacement.promise);
+    await act(async () => {
+      renderer = create(<Harness onValue={onValue} />);
+    });
+    await act(async () => {
+      renderer?.update(<Harness workspaceId="workspace-2" onValue={onValue} />);
+    });
+    await act(async () => {
+      previous.resolve(recents([session("stale", "2026-04-22T00:00:00.000Z")]));
+    });
+    expect(onValue.mock.lastCall?.[0]).toEqual({ items: [], loading: true, error: null });
+    await act(async () => {
+      renderer?.update(<Harness workspaceId="workspace-2" enabled={false} onValue={onValue} />);
+    });
+    await act(async () => {
+      replacement.resolve({
+        ...recents([session("disabled-result", "2026-04-22T00:00:00.000Z")]),
+        workspaceId: "workspace-2",
+      });
+    });
+    expect(onValue.mock.lastCall?.[0]).toEqual({ items: [], loading: false, error: null });
+    expect(apiMocks.fetchCrossProjectRecentSessions).toHaveBeenCalledTimes(2);
   });
 
   it("keeps loading truthful when a refresh load commits before the initial load resolves (MCSHARED-011)", async () => {

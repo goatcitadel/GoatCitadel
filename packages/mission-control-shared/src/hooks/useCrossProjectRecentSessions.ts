@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { RecentCrossProjectSession } from "@goatcitadel/contracts";
 import { fetchCrossProjectRecentSessions } from "../api/chat.js";
 import { useRefreshSubscription } from "./useRefreshSubscription.js";
@@ -11,44 +11,42 @@ export function useCrossProjectRecentSessions(
   loading: boolean;
   error: string | null;
 } {
-  const [items, setItems] = useState<RecentCrossProjectSession[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
   const loadSequenceRef = useRef(0);
-  const enabled = options?.enabled ?? true;
+  const enabled = (options?.enabled ?? true) && Boolean(workspaceId);
   const limit = options?.limit ?? 8;
+  const scope = useMemo(() => ({ workspaceId, limit, enabled }), [workspaceId, limit, enabled]);
+  const [result, setResult] = useState<{
+    scope: typeof scope;
+    items: RecentCrossProjectSession[];
+    error: string | null;
+  }>();
 
   const load = useCallback(async () => {
-    if (!workspaceId) {
-      return;
-    }
-    const loadId = loadSequenceRef.current + 1;
-    loadSequenceRef.current = loadId;
+    if (!scope.enabled) return;
+    const loadId = ++loadSequenceRef.current;
     try {
-      const response = await fetchCrossProjectRecentSessions(workspaceId, limit);
-      if (loadSequenceRef.current !== loadId) {
-        return;
-      }
-      setItems(response.items);
-      setError(null);
-    } catch (fetchError) {
-      if (loadSequenceRef.current !== loadId) {
-        return;
-      }
-      setError((fetchError as Error).message);
-    } finally {
+      const response = await fetchCrossProjectRecentSessions(scope.workspaceId, scope.limit);
       if (loadSequenceRef.current === loadId) {
-        setLoading(false);
+        setResult({ scope, items: response.items, error: null });
+      }
+    } catch (fetchError) {
+      if (loadSequenceRef.current === loadId) {
+        const error = fetchError instanceof Error ? fetchError.message : String(fetchError);
+        setResult((previous) => ({
+          scope,
+          items: previous?.scope === scope ? previous.items : [],
+          error,
+        }));
       }
     }
-  }, [workspaceId, limit]);
+  }, [scope]);
 
   useEffect(() => {
-    if (!enabled) {
-      return;
-    }
     void load();
-  }, [load, enabled]);
+    return () => {
+      loadSequenceRef.current += 1;
+    };
+  }, [load]);
 
   useRefreshSubscription("projects", load, {
     enabled,
@@ -56,5 +54,8 @@ export function useCrossProjectRecentSessions(
     pollIntervalMs: 15000,
   });
 
-  return { items, loading, error };
+  // Hide previous results during render, before the new scope's effect runs.
+  return result?.scope === scope
+    ? { items: result.items, loading: false, error: result.error }
+    : { items: [], loading: enabled, error: null };
 }
