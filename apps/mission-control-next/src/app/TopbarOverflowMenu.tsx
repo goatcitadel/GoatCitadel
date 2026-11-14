@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { MoreHorizontal } from "lucide-react";
 
 export interface TopbarOverflowItem {
@@ -25,7 +25,16 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
   const [open, setOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement | null>(null);
   const triggerRef = useRef<HTMLButtonElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
+  const openingEdge = useRef<"first" | "last">("first");
   const menuId = useId();
+
+  useLayoutEffect(() => {
+    if (!open) return;
+    const buttons = menuRef.current?.querySelectorAll<HTMLButtonElement>('[role="menuitem"]');
+    if (!buttons?.length) return;
+    buttons[openingEdge.current === "first" ? 0 : buttons.length - 1]?.focus();
+  }, [open]);
 
   useEffect(() => {
     if (!open || typeof document === "undefined" || typeof document.addEventListener !== "function") {
@@ -52,7 +61,14 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
   };
 
   return (
-    <div className="mc-next-topbar-more" ref={containerRef}>
+    <div
+      className="mc-next-topbar-more"
+      ref={containerRef}
+      data-shell-escape-owner={open ? "overflow-menu" : undefined}
+      onBlur={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget)) setOpen(false);
+      }}
+    >
       <button
         ref={triggerRef}
         type="button"
@@ -62,10 +78,18 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
         aria-controls={open ? menuId : undefined}
         aria-label={`${label} controls`}
         title={`${label} controls`}
-        onClick={() => setOpen((current) => !current)}
+        onClick={() => {
+          openingEdge.current = "first";
+          setOpen((current) => !current);
+        }}
         onKeyDown={(event) => {
-          if (event.key === "ArrowDown" && !open) {
+          if (open && event.key === "Escape") {
             event.preventDefault();
+            event.stopPropagation();
+            closeAndFocusTrigger();
+          } else if (!open && (event.key === "ArrowDown" || event.key === "ArrowUp")) {
+            event.preventDefault();
+            openingEdge.current = event.key === "ArrowUp" ? "last" : "first";
             setOpen(true);
           }
         }}
@@ -75,6 +99,7 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
       </button>
       {open ? (
         <div
+          ref={menuRef}
           id={menuId}
           role="menu"
           className="mc-next-topbar-more-menu"
@@ -84,7 +109,20 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
               event.preventDefault();
               event.stopPropagation();
               closeAndFocusTrigger();
+              return;
             }
+            if (!["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) return;
+            const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="menuitem"]'));
+            if (!buttons.length) return;
+            event.preventDefault();
+            const index = buttons.findIndex((button) => button === document.activeElement);
+            const next =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? buttons.length - 1
+                  : (Math.max(index, 0) + (event.key === "ArrowDown" ? 1 : -1) + buttons.length) % buttons.length;
+            buttons[next]?.focus();
           }}
         >
           {items.map((item) => (
@@ -92,11 +130,12 @@ export function TopbarOverflowMenu({ items, label = "More" }: { items: TopbarOve
               key={item.id}
               type="button"
               role="menuitem"
+              tabIndex={-1}
               className={`mc-next-topbar-more-item${item.active ? " active" : ""}`}
               aria-label={item.ariaLabel ?? item.label}
               onClick={() => {
+                closeAndFocusTrigger();
                 item.onSelect();
-                setOpen(false);
               }}
             >
               {item.icon ? (

@@ -106,6 +106,11 @@ export function useShellKeyboardManager(options: ShellKeyboardManagerOptions): v
 
       // Escape — palette first, then delegated dismiss.
       if (event.key === "Escape") {
+        // Let the focused overflow menu close before dismissing other shell controls.
+        if (event.target instanceof Element && event.target.closest('[data-shell-escape-owner="overflow-menu"]')) {
+          clearGPrefix();
+          return;
+        }
         if (opts.isPaletteOpen && opts.onClosePalette) {
           event.preventDefault();
           event.stopPropagation();

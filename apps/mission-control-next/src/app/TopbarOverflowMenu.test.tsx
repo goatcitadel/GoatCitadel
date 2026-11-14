@@ -1,7 +1,10 @@
 // @vitest-environment happy-dom
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
+import { act as domAct } from "react";
+import { createRoot } from "react-dom/client";
 import { describe, expect, it, vi } from "vitest";
 import { TopbarOverflowMenu, type TopbarOverflowItem } from "./TopbarOverflowMenu";
+import { useShellKeyboardManager } from "./use-shell-keyboard-manager";
 
 function buildItems(overrides: Partial<TopbarOverflowItem>[] = []): TopbarOverflowItem[] {
   const base: TopbarOverflowItem[] = [
@@ -92,10 +95,7 @@ describe("TopbarOverflowMenu", () => {
     act(() => {
       renderer = create(
         <TopbarOverflowMenu
-          items={buildItems([
-            { ariaLabel: "Open Start Here" },
-            { active: true, ariaLabel: "Switch to light theme" },
-          ])}
+          items={buildItems([{ ariaLabel: "Open Start Here" }, { active: true, ariaLabel: "Switch to light theme" }])}
         />,
       );
     });
@@ -109,4 +109,38 @@ describe("TopbarOverflowMenu", () => {
     expect(items[1]!.props["aria-label"]).toBe("Switch to light theme");
     expect(String(items[1]!.props.className)).toContain("active");
   });
+});
+
+function pressKey(key: string) {
+  document.activeElement?.dispatchEvent(new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true }));
+}
+
+it("moves focus from the trigger into the menu and returns it on Escape", async () => {
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const dismiss = vi.fn(() => true);
+  function ShellFixture() {
+    useShellKeyboardManager({ isPaletteOpen: false, onOpenPalette: vi.fn(), onDismissTopmost: dismiss });
+    return <TopbarOverflowMenu items={buildItems()} />;
+  }
+  try {
+    await domAct(async () => root.render(<ShellFixture />));
+    const trigger = container.querySelector<HTMLButtonElement>('[aria-haspopup="menu"]')!;
+    trigger.focus();
+    await domAct(async () => pressKey("ArrowDown"));
+    const items = container.querySelectorAll('[role="menuitem"]');
+    expect(document.activeElement).toBe(items[0]);
+    await domAct(async () => pressKey("ArrowDown"));
+    expect(document.activeElement).toBe(items[1]);
+    await domAct(async () => pressKey("ArrowUp"));
+    expect(document.activeElement).toBe(items[0]);
+    await domAct(async () => pressKey("Escape"));
+    expect(container.querySelector('[role="menu"]')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
+    expect(dismiss).not.toHaveBeenCalled();
+  } finally {
+    await domAct(async () => root.unmount());
+    container.remove();
+  }
 });
