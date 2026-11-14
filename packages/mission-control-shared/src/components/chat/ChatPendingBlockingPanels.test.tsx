@@ -117,6 +117,51 @@ describe("chat pending blocking panels", () => {
     expect(document.activeElement).not.toBe(input);
   });
 
+  it("keeps option help open on the first click and lets Escape close it before dismissing the prompt", async () => {
+    const onDismiss = vi.fn();
+    await act(async () => {
+      root?.render(
+        <ChatPendingUserInputPanel
+          pending={false}
+          pendingUserInput={{
+            turnId: "turn-1",
+            promptId: "prompt-help",
+            kind: "single_select",
+            title: "Pick path",
+            question: "Which path?",
+            dismissible: true,
+            options: [{ optionId: "safe", label: "Safe", description: "Use safe path", helpText: "Lower risk" }],
+          }}
+          onSubmit={vi.fn()}
+          onDismiss={onDismiss}
+        />,
+      );
+    });
+
+    const help = container!.querySelector<HTMLButtonElement>("button.chat-user-input-help-hint")!;
+    const visibleHelp = () => container!.querySelector('[role="tooltip"]:not([hidden])');
+    await act(async () => {
+      help.dispatchEvent(new MouseEvent("mouseover", { bubbles: true }));
+      help.focus();
+    });
+    expect(visibleHelp()?.textContent).toBe("Lower risk");
+    await act(async () => help.click());
+    expect(visibleHelp()?.textContent).toBe("Lower risk");
+
+    const escape = () => help.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    await act(async () => {
+      escape();
+    });
+    expect(visibleHelp()).toBeNull();
+    expect(document.activeElement).toBe(help);
+    expect(onDismiss).not.toHaveBeenCalled();
+
+    await act(async () => help.click());
+    expect(visibleHelp()?.textContent).toBe("Lower risk");
+    await act(async () => help.blur());
+    expect(visibleHelp()).toBeNull();
+  });
+
   it("submits selected and typed user-input prompt responses", async () => {
     const onSubmit = vi.fn();
 

@@ -1,3 +1,4 @@
+import { useLayoutEffect } from "react";
 import fs from "node:fs";
 import { fileURLToPath } from "node:url";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -209,6 +210,36 @@ describe("MeshCapabilityPanel", () => {
     expect(text).toContain("1 added, 0 removed");
     expect(text).toContain("unknown");
     renderer!.unmount();
+  });
+
+  it("hides a settled activation receipt on the first commit for a different workspace", async () => {
+    inspection([entry()]);
+    apiMocks.requestMeshCapabilityActivation.mockResolvedValueOnce(activationResponse("workspace-a-approval"));
+    let renderer!: ReactTestRenderer;
+    let firstCommit: string | undefined;
+    function Harness({ workspaceId }: { workspaceId: string }) {
+      useLayoutEffect(() => {
+        if (workspaceId === "workspace-b") {
+          firstCommit = collectText(renderer.root);
+        }
+      }, [workspaceId]);
+      return <MeshCapabilityPanel workspaceId={workspaceId} />;
+    }
+
+    await act(async () => {
+      renderer = create(<Harness workspaceId="workspace-a" />);
+    });
+    await act(async () => {
+      findButton(renderer.root, "Request activation").props.onClick();
+    });
+    expect(collectText(renderer.root)).toContain("workspace-a-approv");
+
+    await act(async () => {
+      renderer.update(<Harness workspaceId="workspace-b" />);
+    });
+    expect(firstCommit).toBeDefined();
+    expect(firstCommit).not.toContain("Approval requested");
+    await act(async () => renderer.unmount());
   });
 
   it("ignores a prior-workspace activation receipt without clearing the newer workspace action", async () => {
