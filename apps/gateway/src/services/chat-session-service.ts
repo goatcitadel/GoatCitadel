@@ -681,6 +681,20 @@ async function upsertChatSessionForPeer(
   peer: string,
   input: ChatSessionCreateInput,
 ): Promise<ChatSessionRecord> {
+  const sessionId = await persistChatSessionForPeer(deps, peer, input);
+  await deps.ensureChatSessionRuntimeGrants(sessionId);
+  deps.operatorSummaryCache.invalidate();
+  if (input.mode) {
+    await updateChatSessionPrefs(deps, sessionId, buildChatModePrefsPatch(input.mode));
+  }
+  return publishChatSessionCreated(deps, sessionId, input.origin);
+}
+
+async function persistChatSessionForPeer(
+  deps: ChatSessionDependencies,
+  peer: string,
+  input: ChatSessionCreateInput,
+): Promise<string> {
   const workspaceId = deps.normalizeWorkspaceId(input.workspaceId);
   const route = {
     channel: "mission",
@@ -739,21 +753,23 @@ async function upsertChatSessionForPeer(
       await deps.storage.chatSessionProjects.assign(resolution.sessionId, input.projectId, now);
     }
   });
-  await deps.ensureChatSessionRuntimeGrants(resolution.sessionId);
-  deps.operatorSummaryCache.invalidate();
-  if (input.mode) {
-    await updateChatSessionPrefs(deps, resolution.sessionId, buildChatModePrefsPatch(input.mode));
-  }
-  const created = await deps.requireChatSession(resolution.sessionId);
-  if (!created) {
-    throw new Error(`Failed to create chat session ${resolution.sessionId}`);
-  }
+  return resolution.sessionId;
+}
+
+async function publishChatSessionCreated(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  origin: ChatSessionCreateInput["origin"],
+): Promise<ChatSessionRecord> {
+  const created = await deps.requireChatSession(sessionId);
+  if (!created) throw new Error(`Failed to create chat session ${sessionId}`);
   await deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_created",
     sessionId: created.sessionId,
     sessionKey: created.sessionKey,
   });
   if (deps.hooksService) {
+    const workspaceId = deps.normalizeWorkspaceId(created.workspaceId);
     await runtimeLifecycleHookDispatcher.enqueueObserveHook(deps.hooksService, {
       workspaceId,
       trigger: "session.start",
@@ -762,7 +778,7 @@ async function upsertChatSessionForPeer(
       payload: {
         workspaceId,
         sessionId: created.sessionId,
-        origin: input.origin ?? "operator",
+        origin: origin ?? "operator",
         mode: created.mode,
       },
     });
@@ -795,47 +811,56 @@ export async function createChatSideChat(
   parentSessionId: string,
   input: { createdFromSurface?: ChatSessionRecord["mode"]; sourceTurnId?: string } = {},
 ): Promise<{ item: ChatSideChatRecord; childSession: ChatSessionRecord }> {
-  const parent = await deps.requireChatSession(parentSessionId);
-  const parentWorkspaceId = deps.normalizeWorkspaceId(parent.workspaceId);
-  const existing = await deps.storage.chatSideChats.getByParentSession(parent.sessionId);
-  if (existing && deps.normalizeWorkspaceId(existing.workspaceId) === parentWorkspaceId) {
-    const existingChildSession = await deps.requireChatSession(existing.childSessionId);
-    if (deps.normalizeWorkspaceId(existingChildSession.workspaceId) !== parentWorkspaceId) {
-      throw new Error("Side chat child workspace does not match parent session workspace.");
+  const { storage, normalizeWorkspaceId, requireChatSession } = deps;
+  const { item, prefs } = await storage.runImmediateTransaction(async () => {
+    // SQLite's write transaction and PostgreSQL's parent row lock serialize the first open.
+    const meta = await storage.chatSessionMeta.getForUpdate(parentSessionId);
+    if (!meta) throw new NotFoundError({ entity: "Canonical Chat session metadata", id: parentSessionId });
+    const parent = await requireChatSession(parentSessionId);
+    const parentWorkspaceId = normalizeWorkspaceId(meta.workspaceId);
+    const existing = await storage.chatSideChats.getByParentSession(parent.sessionId);
+    if (existing && normalizeWorkspaceId(existing.workspaceId) === parentWorkspaceId) {
+      return { item: existing };
     }
-    return {
-      item: existing,
-      childSession: existingChildSession,
-    };
-  }
 
-  const parentTitle = parent.title?.trim() || `Chat ${parent.sessionId.slice(-6)}`;
-  const childSession = await createChatSession(deps, {
-    workspaceId: parentWorkspaceId,
-    projectId: parent.projectId,
-    title: `Side chat - ${trimTitleForSideChat(parentTitle)}`,
-    mode: "chat",
-    origin: "operator",
-    includeInHistory: false,
-  });
-  const now = new Date().toISOString();
-  const item = await deps.storage.chatSideChats.upsert(
-    {
+    const parentTitle = parent.title?.trim() || `Chat ${parent.sessionId.slice(-6)}`;
+    const peer = `chat_${randomUUID().replaceAll("-", "").slice(0, 12)}`;
+    const childSessionId = await persistChatSessionForPeer(deps, peer, {
+      workspaceId: parentWorkspaceId,
+      projectId: parent.projectId,
+      title: `Side chat - ${trimTitleForSideChat(parentTitle)}`,
+      origin: "operator",
+      includeInHistory: false,
+    });
+    const prefs = await persistChatSessionPrefs(deps, childSessionId, buildChatModePrefsPatch("chat"));
+    const item = await storage.chatSideChats.upsert({
       sideChatId: `btw_${randomUUID().replaceAll("-", "").slice(0, 18)}`,
       parentSessionId: parent.sessionId,
-      childSessionId: childSession.sessionId,
+      childSessionId,
       workspaceId: parentWorkspaceId,
       createdFromSurface: input.createdFromSurface ?? parent.mode ?? "chat",
       sourceTurnId: input.sourceTurnId,
-    },
-    now,
-  );
+    });
+    return { item, prefs };
+  });
+
+  if (!prefs) {
+    const childSession = await requireChatSession(item.childSessionId);
+    if (normalizeWorkspaceId(childSession.workspaceId) !== normalizeWorkspaceId(item.workspaceId)) {
+      throw new Error("Side chat child workspace does not match parent session workspace.");
+    }
+    return { item, childSession };
+  }
+
+  await deps.ensureChatSessionRuntimeGrants(item.childSessionId);
   deps.operatorSummaryCache.invalidate();
+  await publishChatSessionPrefsUpdated(deps, prefs);
+  const childSession = await publishChatSessionCreated(deps, item.childSessionId, "operator");
   await deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_side_chat_created",
-    sessionId: parent.sessionId,
+    sessionId: item.parentSessionId,
     sideChatId: item.sideChatId,
-    childSessionId: childSession.sessionId,
+    childSessionId: item.childSessionId,
   });
   return { item, childSession };
 }
@@ -1357,6 +1382,17 @@ export async function updateChatSessionPrefs(
   expectedRevision?: number,
 ): Promise<ChatSessionPrefsRecord> {
   await deps.getSession(sessionId);
+  const prefs = await persistChatSessionPrefs(deps, sessionId, input, expectedRevision);
+  await publishChatSessionPrefsUpdated(deps, prefs);
+  return prefs;
+}
+
+async function persistChatSessionPrefs(
+  deps: ChatSessionDependencies,
+  sessionId: string,
+  input: ChatSessionPrefsPatch,
+  expectedRevision?: number,
+): Promise<ChatSessionPrefsRecord> {
   const { expectedRevision: inputExpectedRevision, ...prefsInput } = input;
   const normalizedInput = applyChatModePresetToPatch(prefsInput);
   const { basePatch, autonomyPatch } = splitChatPrefsPatch(normalizedInput);
@@ -1440,16 +1476,18 @@ export async function updateChatSessionPrefs(
       revision: changed ? resolvedExpectedRevision + 1 : resolvedExpectedRevision,
     };
   });
-  const hydrated = {
+  return {
     ...(await deps.hydrateChatPrefsWithAutonomy(sessionId, result.value)),
     revision: result.revision,
   };
+}
+
+async function publishChatSessionPrefsUpdated(deps: ChatSessionDependencies, prefs: ChatSessionPrefsRecord) {
   await deps.publishRealtime("chat_session_updated", "chat", {
     type: "chat_session_prefs_updated",
-    sessionId,
-    prefs: hydrated,
+    sessionId: prefs.sessionId,
+    prefs,
   });
-  return hydrated;
 }
 
 async function buildSessionSearchHits(

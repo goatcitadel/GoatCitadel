@@ -29,6 +29,7 @@ import {
   updateChatSession,
   updateChatSessionPrefs,
 } from "./chat-session-service.js";
+import { createSideChatTestDeps, expectSideChatConvergence } from "../test/chat-side-chat-test-support.js";
 import { projectChatSessionForPublic } from "./chat-secret-projection.js";
 import { handleChatGoalClearRequest, handleChatGoalSetRequest } from "./chat-steer-route.js";
 
@@ -51,45 +52,7 @@ function createStorage(): { storage: Storage; cleanup: () => void } {
 }
 
 function createDeps(storage: Storage): ChatSessionDependencies {
-  const asyncStorage = createSqliteAsyncStorage(storage);
-  const deps = {
-    storage: asyncStorage,
-    operatorSummaryCache: {
-      invalidate: vi.fn(),
-    },
-    normalizeWorkspaceId: (workspaceId?: string) => workspaceId ?? "default",
-    ensureChatSessionRuntimeGrants: vi.fn(),
-    requireChatSession: vi.fn() as never,
-    getSession: (sessionId: string) => asyncStorage.sessions.getBySessionId(sessionId),
-    publishRealtime: vi.fn(),
-    clearChatTurnWriteLease: vi.fn(),
-    removeChatSessionStoredFile: vi.fn(),
-    getChatSessionModelDefaults: () => ({
-      providerId: undefined,
-      model: undefined,
-      thinkingLevel: "standard" as const,
-    }),
-    ensureChatSessionModelDefaults: (_sessionId, prefs) => prefs,
-    hydrateChatPrefsWithAutonomy: (_sessionId, prefs) => prefs,
-    patchSessionAutonomyPrefs: vi.fn(),
-  };
-  deps.requireChatSession = vi.fn(async (sessionId: string) => {
-    const workspaceId = storage.chatSessionMeta.get(sessionId)?.workspaceId ?? "default";
-    const session = (
-      await listChatSessions(deps, {
-        workspaceId,
-        scope: "all",
-        view: "all",
-        includeHidden: true,
-        limit: 1000,
-      })
-    ).find((record) => record.sessionId === sessionId);
-    if (!session) {
-      throw new Error(`Session ${sessionId} not found`);
-    }
-    return session;
-  }) as never;
-  return deps;
+  return createSideChatTestDeps(createSqliteAsyncStorage(storage));
 }
 
 describe("chat session service", () => {
@@ -740,6 +703,41 @@ describe("chat session service", () => {
       });
       expect(replaced.title).toBe("Safe replacement title");
       expect(replaced.folderName).toBe("Safe replacement folder");
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("creates and publishes only one side chat under concurrent first opens", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const parent = await createChatSession(deps, { title: "Concurrent parent" });
+      await expectSideChatConvergence(deps, deps, parent.sessionId);
+    } finally {
+      cleanup();
+    }
+  });
+
+  it("rolls back the hidden child when saving the side-chat link fails", async () => {
+    const { storage, cleanup } = createStorage();
+    try {
+      const deps = createDeps(storage);
+      const parent = await createChatSession(deps, { title: "Rollback parent" });
+      const write = vi.spyOn(storage.chatSideChats, "upsert").mockImplementationOnce(() => {
+        throw new Error("fixture link write failed");
+      });
+      try {
+        await expect(createChatSideChat(deps, parent.sessionId)).rejects.toThrow("fixture link write failed");
+      } finally {
+        write.mockRestore();
+      }
+      expect(await listChatSessions(deps, { includeHidden: true })).toHaveLength(1);
+      expect(await getChatSideChat(deps, parent.sessionId)).toEqual({ item: null });
+      expect(
+        vi.mocked(deps.publishRealtime).mock.calls.filter(([, , event]) => event.type === "chat_session_created"),
+      ).toHaveLength(1);
+      await expectSideChatConvergence(deps, deps, parent.sessionId);
     } finally {
       cleanup();
     }
