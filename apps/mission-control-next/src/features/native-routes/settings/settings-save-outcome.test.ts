@@ -235,14 +235,14 @@ describe("findActiveSettingsChange", () => {
 describe("settingsSaveFinished", () => {
   const attempt = { attemptKey: "key-1", method: "PATCH" as const, routePattern: "/api/v1/settings" };
 
-  it("is finished only when the Gateway recorded the request as committed or released", async () => {
+  it("is over when the Gateway recorded the request as committed or released, or never received it", async () => {
     for (const [record, finished] of [
       [{ status: "completed" }, true],
       [{ status: "failed" }, true],
       [{ status: "pending", claimExpired: false }, false],
       [{ status: "pending", claimExpired: true }, false],
       [{ status: "unknown_after_send" }, false],
-      [{ status: "absent" }, false],
+      [{ status: "absent" }, true],
     ] as const) {
       attempts.read.mockResolvedValue(record);
       expect(await settingsSaveFinished(attempt)).toBe(finished);

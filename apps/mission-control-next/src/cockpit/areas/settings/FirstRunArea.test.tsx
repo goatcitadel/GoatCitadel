@@ -11,6 +11,7 @@ import { __resetSessionDraftsForTests } from "../../../features/native-routes/li
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
 import { __resetApprovalModeUncertaintyForTests, retainApprovalModeUncertainty } from "./approval-mode-state";
+import { resetSettingsAttempt, settingsAttempt, withSettingsAttemptRead } from "./settings-attempt.test-support";
 import { FirstRunArea } from "./FirstRunArea";
 
 const api = vi.hoisted(() => ({
@@ -27,6 +28,11 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({ ...api, isApi
 vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", () => ({
   useUiPreferences: () => ({ activeWorkspaceId: api.workspace }),
 }));
+vi.mock("@goatcitadel/mission-control-shared/api/mutation-attempts", async (importOriginal) =>
+  withSettingsAttemptRead(
+    await importOriginal<typeof import("@goatcitadel/mission-control-shared/api/mutation-attempts")>(),
+  ),
+);
 const guided = vi.hoisted(() => ({ rendered: vi.fn() }));
 vi.mock("./CockpitGuidedModelSetup", () => ({
   CockpitGuidedModelSetup: (props: { onEnterChat: () => void; enterChatLabel?: string }) => {
@@ -76,6 +82,7 @@ const deferred = <T,>() => {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  resetSettingsAttempt();
   api.workspace = "workspace-a";
   owner = onboardingFixture();
   api.fetchOnboardingState.mockImplementation(async () => structuredClone(owner));
@@ -256,6 +263,35 @@ describe("native first-run setup", () => {
     );
     expect(container.textContent).not.toContain("Resolve the pending or uncertain approval-rule save");
     // Nothing holds Finish any more: once the current rule is reviewed, it can be pressed.
+    await safety();
+    await click("Keep current rule");
+    await vi.waitFor(() => expect(button("Finish setup and open Chat").disabled).toBe(false));
+  });
+  it("releases Finish when the Gateway never received the unconfirmed approval-rule save", async () => {
+    retainApprovalModeUncertainty({
+      message: "GoatCitadel didn't answer, so this save isn't confirmed yet.",
+      // Not the saved rule, so the settings read cannot settle it; the Gateway has no record of the request.
+      submitted: owner.settings.toolApprovalMode === "approve_all" ? "approve_risky" : "approve_all",
+      baseRevision: owner.settings.revision,
+      previous: owner.settings.toolApprovalMode,
+      installation: getGatewayApiBaseUrl(),
+      transport: {
+        attemptKey: settingsAttempt.key,
+        method: "PATCH",
+        routePattern: "/api/v1/settings",
+        installation: getGatewayApiBaseUrl(),
+      },
+      checking: false,
+    });
+    settingsAttempt.read.mockResolvedValue({ status: "absent" });
+    api.fetchChangePlans.mockResolvedValue({ items: [] });
+    await render();
+    expect(container.textContent).toContain("Your last approval-rule save isn't confirmed yet.");
+    await click("Refresh checks");
+    await vi.waitFor(() =>
+      expect(container.textContent).not.toContain("Your last approval-rule save isn't confirmed yet."),
+    );
+    expect(container.textContent).not.toContain("Resolve the pending or uncertain approval-rule save");
     await safety();
     await click("Keep current rule");
     await vi.waitFor(() => expect(button("Finish setup and open Chat").disabled).toBe(false));

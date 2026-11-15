@@ -556,12 +556,8 @@ describe("approval save review lifetime", () => {
         expect(control.locked).toBe(false);
       });
 
-      it("keeps the lock when the Gateway has no record yet, an expired claim or an unknown outcome", async () => {
-        for (const record of [
-          { status: "absent" },
-          { status: "pending", claimExpired: true },
-          { status: "unknown_after_send" },
-        ]) {
+      it("keeps the lock when the Gateway reports an expired claim or an unknown outcome", async () => {
+        for (const record of [{ status: "pending", claimExpired: true }, { status: "unknown_after_send" }]) {
           __resetApprovalModeUncertaintyForTests();
           settingsAttempt.read.mockResolvedValue(record);
           await lose();
@@ -570,6 +566,33 @@ describe("approval save review lifetime", () => {
         }
       });
 
+      it("concludes not saved and unlocks when the Gateway never received the request", async () => {
+        // The first read of the check, made after the client's own request failed, finds no record: it never arrived.
+        settingsAttempt.read.mockResolvedValue({ status: "absent" });
+        await prepare();
+        api.patchSettings.mockRejectedValue(new Error("Failed to fetch"));
+        api.fetchChangePlans.mockResolvedValue({ items: [] });
+        await act(async () => void control.requestSave());
+        await vi.waitFor(() =>
+          expect(control.notice).toBe(
+            "Your approval rule was not saved. Your draft is kept, so you can save it again.",
+          ),
+        );
+        expect(control.uncertain).toBeUndefined();
+        expect(control.locked).toBe(false);
+        expect(control.draft.isDirty).toBe(true);
+        expect(settingsAttempt.read.mock.invocationCallOrder[0]).toBeLessThan(
+          api.fetchChangePlans.mock.invocationCallOrder[0]!,
+        );
+      });
+
+      it("keeps the lock when the Gateway's record cannot be read", async () => {
+        settingsAttempt.read.mockRejectedValue(new Error("Failed to fetch"));
+        await lose();
+        expect(control.uncertain?.message).toBe(UNCONFIRMED);
+        expect(control.locked).toBe(true);
+        expect(control.notice ?? "").not.toContain("not saved");
+      });
       it("never says not saved without the request's identity, but still finds a saved rule", async () => {
         settingsAttempt.capture = false;
         await lose();

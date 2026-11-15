@@ -192,17 +192,25 @@ export function sendTrackedSettingsSave<T>(
 }
 
 /**
- * Whether the Gateway's own record says the save has finished (committed, or released after an error). Running,
- * unknown, never-recorded and unreadable all read as "not finished": the request may still be in flight, so nothing
- * read after it can say "not saved".
- */
-export async function settingsSaveFinished(attempt: TrackedAttempt): Promise<boolean> {
+ * Whether the Gateway's own record shows that the save is no longer in flight there. The Gateway writes the attempt's
+ * record when the request arrives, before its handler does any work (the idempotency plugin's preHandler claim), so
+ * the record reads one of:
+ * - committed or released: the handler finished;
+ * - absent: the request never arrived. This is valid only because the check runs after the client already saw its own
+ *   request fail (it starts in the failure path) and this read is the FIRST read of the check, made fresh. A request
+ *   that did arrive would read running, committed or released. A request still in transit could in principle arrive
+ *   later; the save carries the revision it was based on, so the Gateway refuses it if the setting moved meanwhile;
+ * - running, expired, unknown or unreadable: the request may still apply, so nothing read after it can say "not saved".
+ */ export async function settingsSaveFinished(attempt: TrackedAttempt): Promise<boolean> {
   if (!sentToConnectedGateway(attempt)) return false;
   try {
     const verdict = classifyMutationAttempt(
       await withFreshReads(() => fetchMutationAttempt(attempt.attemptKey, attempt.method, attempt.routePattern)),
     );
-    return sentToConnectedGateway(attempt) && (verdict === "committed" || verdict === "failed_confirm_by_readback");
+    return (
+      sentToConnectedGateway(attempt) &&
+      (verdict === "committed" || verdict === "failed_confirm_by_readback" || verdict === "resend_same_key")
+    );
   } catch {
     return false;
   }

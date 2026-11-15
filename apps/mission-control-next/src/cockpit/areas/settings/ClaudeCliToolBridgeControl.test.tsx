@@ -668,12 +668,8 @@ describe("cockpit Claude Code CLI tool setting", () => {
         }
       });
 
-      it("keeps the lock when the Gateway has no record yet, an expired claim or an unknown outcome", async () => {
-        for (const record of [
-          { status: "absent" },
-          { status: "pending", claimExpired: true },
-          { status: "unknown_after_send" },
-        ]) {
+      it("keeps the lock when the Gateway reports an expired claim or an unknown outcome", async () => {
+        for (const record of [{ status: "pending", claimExpired: true }, { status: "unknown_after_send" }]) {
           __resetSettingsChangesForTests();
           __resetSessionDraftsForTests();
           lostSetup();
@@ -690,6 +686,28 @@ describe("cockpit Claude Code CLI tool setting", () => {
         }
       });
 
+      it("concludes not saved and unlocks when the Gateway never received the request", async () => {
+        // The first read of the check, made after the client's own request failed, finds no record: it never arrived.
+        lostSetup();
+        settingsAttempt.read.mockResolvedValue({ status: "absent" });
+        const mounted = mount();
+        const container = await loseSave(mounted);
+        try {
+          await vi.waitFor(() =>
+            expect(container.textContent).toContain(
+              "Your change was not saved. Your draft is kept, so you can save it again.",
+            ),
+          );
+          expect(container.textContent).toContain("Unsaved draft: Off");
+          expect(checkbox(container).disabled).toBe(false);
+          // The attempt was read before anything else was.
+          expect(settingsAttempt.read.mock.invocationCallOrder[0]).toBeLessThan(
+            api.fetchChangePlans.mock.invocationCallOrder[0]!,
+          );
+        } finally {
+          (await mounted).unmount();
+        }
+      });
       it("keeps the lock when the Gateway's record cannot be read", async () => {
         lostSetup();
         settingsAttempt.read.mockRejectedValue(new Error("Failed to fetch"));
