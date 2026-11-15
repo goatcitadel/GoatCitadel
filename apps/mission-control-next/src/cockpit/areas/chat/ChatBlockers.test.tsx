@@ -393,6 +393,39 @@ function blockerProps(overrides: Record<string, unknown> = {}) {
 const findButton = (label: string) =>
   [...container.querySelectorAll("button")].find((entry) => entry.textContent === label);
 
+it("names the file a document approval would write (U-CH-046)", async () => {
+  api.fetchApproval.mockResolvedValue({
+    approvalId: "approval/1",
+    kind: "documents.create",
+    status: "pending",
+    riskLevel: "caution",
+    payload: {},
+    preview: { toolName: "documents.create", path: "notes/ut14-note.txt" },
+    createdAt: "2026-10-01T00:00:00Z",
+  });
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <ChatBlockers
+          props={blockerProps({
+            pendingApproval: {
+              approvalId: "approval/1",
+              kind: "documents.create",
+              toolName: "documents.create",
+              riskLevel: "caution",
+            },
+          })}
+        />
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() =>
+    expect(container.querySelector('section[aria-label="Pending approval"]')?.textContent).toContain(
+      "Path: notes/ut14-note.txt",
+    ),
+  );
+});
+
 it("shows a failed record read as an error with Try again and Deny, not as checking (CH-02)", async () => {
   api.fetchApproval.mockRejectedValue(new Error("fixture outage"));
   const onDenyPending = vi.fn();

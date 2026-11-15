@@ -13,6 +13,7 @@ import { approvalExpiryLabel } from "../inbox/approval-preview";
 import { nullWhenMissing } from "../inbox/inbox-record-read";
 import { DeferredChatLeaf } from "./DeferredChatLeaves";
 import { presentApprovalAction } from "./chat-vocabulary";
+import { approvalTargetLine } from "../inbox/approval-target";
 import { presentApprovalStatus } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { Button } from "../../ui/Button";
@@ -141,6 +142,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   const questionScope = input ? JSON.stringify([workspaceId, props.selectedSessionId, input.promptId]) : "";
   // The persisted record outranks the retained prompt: once it is decided, the card reports the decision
   // instead of asking for one while Chat waits for the queue to clear it.
+  const targetLine = approvalTargetLine(reviewedApproval?.kind, reviewedApproval?.preview);
   const decided = reviewedApproval && reviewedApproval.status !== "pending" ? reviewedApproval : undefined;
   const expiry = decided ? null : approvalExpiryLabel(approval?.expiresAt);
   function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
@@ -174,6 +176,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
                 {decided ? `Approval decided: ${presentApprovalStatus(decided.status).label}` : "Approval needed"}
               </h3>
               <p className="mt-1 text-fg-secondary">{presentApprovalAction(approval.toolName, approval.kind)}</p>
+              {targetLine ? <p className="mt-1 text-xs text-fg-secondary wrap-anywhere">{targetLine}</p> : null}
             </div>
             {approval.riskLevel ? <RiskBadge risk={approval.riskLevel} /> : null}
           </div>
@@ -276,16 +279,15 @@ export function ChatBlockers({ props }: { props: Blockers }) {
           identity={questionScope}
           label="Answer controls"
           fallback={
-            <section
-              aria-label="Pending question"
-              className="mt-3 border-l-2 border-status-waiting pl-3 text-sm"
-            >
+            <section aria-label="Pending question" className="mt-3 border-l-2 border-status-waiting pl-3 text-sm">
               <h3 className="font-semibold text-fg">{input.title || "Your input is needed"}</h3>
               {isBackgroundChatUserInputPrompt(input) ? (
                 <p className="mt-1 text-xs text-fg-muted">Optional · Work continues</p>
               ) : null}
               <p className="mt-1 text-fg-secondary">{input.question}</p>
-              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">Loading answer controls…</p>
+              <p aria-busy="true" className="mt-2 text-xs text-fg-muted">
+                Loading answer controls…
+              </p>
             </section>
           }
         >
