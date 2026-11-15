@@ -461,6 +461,23 @@ describe("cockpit text composer", () => {
     expect(committed.onApplyDraftCommand).not.toHaveBeenCalled();
   });
 
+  it("describes the open suggestion list and keeps the textbox role (U-CH-004)", async () => {
+    const commandSuggestions = [
+      { key: "status", command: "/status", description: "Show status", applyValue: "/status" },
+    ];
+    await act(async () => root.render(<ChatTextComposer props={composerProps({ draft: "/", commandSuggestions })} />));
+    const draft = container.querySelector<HTMLTextAreaElement>("#cockpit-chat-draft")!;
+    const hint = () => document.getElementById("cockpit-composer-suggestions-hint");
+    expect(draft.hasAttribute("role")).toBe(false);
+    expect(draft.getAttribute("aria-describedby")).toContain("cockpit-composer-suggestions-hint");
+    expect(hint()?.textContent).toBe(
+      "Suggestions are open. Use the up and down arrows to choose one and Enter to insert it.",
+    );
+    expect(hint()?.hasAttribute("aria-live")).toBe(false);
+    await act(async () => root.render(<ChatTextComposer props={composerProps({ draft: "hello" })} />));
+    expect(hint()?.textContent).toBe("");
+  });
+
   it("Escape closes the slash menu and keeps the draft", async () => {
     const commandSuggestions = [
       { key: "status", command: "/status", description: "Show status", applyValue: "/status" },

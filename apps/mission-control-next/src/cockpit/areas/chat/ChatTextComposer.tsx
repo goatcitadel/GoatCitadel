@@ -3,9 +3,11 @@ export type { ComposerProps } from "./ChatTextComposer.types";
 import { getWorkflowSkillCaptureDisplay } from "@goatcitadel/mission-control-shared/components/chat/workflow-skill-capture-display";
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Button } from "../../ui/Button";
-import { ChatComposerPhoneActions, ChatComposerTools, composerControlsProps, useComposerSources } from "./ChatComposerTools";
+import { ChatComposerPhoneActions, ChatComposerTools } from "./ChatComposerTools";
+import { composerControlsProps, useComposerSources } from "./ChatComposerTools";
 import { ChatModelOptionsButton, type ModelOptionsRequest } from "./ChatComposerControls";
 import { ChatComposerModePills, ChatComposerPlusMenu } from "./ChatComposerPlusMenu";
+import { ComposerSuggestionsHint, composerDescribedBy } from "./ChatComposerSuggestionsHint";
 import { ChatComposerPalette } from "./ChatComposerPalette";
 import { channelReplyBlock, channelReplyPlaceholder, channelReplySubmitLabel } from "./channel-composer";
 import { ChatRunVariables } from "./ChatRunVariables";
@@ -280,6 +282,7 @@ export function ChatTextComposer({
         <label htmlFor="cockpit-chat-draft" className="sr-only">
           Message
         </label>
+        <ComposerSuggestionsHint open={ownsSuggestions} />
         <div
           className={
             phone
@@ -306,7 +309,7 @@ export function ChatTextComposer({
               Boolean(props.sessionControlBanner) ||
               channelReplyBlock(props.channelReply) !== null
             }
-            aria-describedby={visibleReason ? REASON_ID : undefined}
+            aria-describedby={composerDescribedBy(visibleReason ? REASON_ID : null, ownsSuggestions)}
             onChange={(event) => {
               setDismissedDraft(null);
               props.onDraftChange(event.target.value);
