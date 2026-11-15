@@ -1,7 +1,9 @@
+import { useEffect } from "react";
 import { useQuery, type UseQueryResult } from "@tanstack/react-query";
 import type { ChangePlanRecord } from "@goatcitadel/contracts";
 import { fetchSettings } from "@goatcitadel/mission-control-shared/api/client";
 import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-shared/api/types";
+import { useCockpitRoute } from "../../app/use-cockpit-route";
 import { Button } from "../../ui/Button";
 import { Switch } from "../../ui/Switch";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
@@ -11,12 +13,25 @@ import {
   GovernedSettingDraftState,
   GovernedSettingLoadState,
 } from "./GovernedSettingParts";
-import { FEATURE_SWITCHES, FEATURE_SWITCHES_ANCHOR, type FeatureSwitchDefinition } from "./feature-switches";
+import {
+  FEATURE_SWITCHES,
+  FEATURE_SWITCHES_ANCHOR,
+  isFeatureSwitchHash,
+  type FeatureSwitchDefinition,
+} from "./feature-switches";
 
 const onOff = (value: boolean) => (value ? "On" : "Off");
 
 /** The Features section of Settings › Advanced: one governed switch per feature that ships turned off. */
 export function FeatureSwitchesSettings() {
+  const { hash } = useCockpitRoute();
+  // A "Turn it on" link from another screen arrives at the top of Advanced; bring its switch into view.
+  useEffect(() => {
+    const id = hash.replace(/^#/u, "");
+    if (!isFeatureSwitchHash(id)) return;
+    const frame = requestAnimationFrame(() => document.getElementById(id)?.scrollIntoView?.({ block: "start" }));
+    return () => cancelAnimationFrame(frame);
+  }, [hash]);
   const settings = useQuery({
     queryKey: ["system", "settings-feature-switches"],
     queryFn: fetchSettings,

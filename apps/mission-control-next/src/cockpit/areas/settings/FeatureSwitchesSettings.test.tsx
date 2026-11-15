@@ -65,6 +65,23 @@ afterEach(() => {
 });
 
 describe("cockpit Features switches", () => {
+  it("brings the switch a link names into view", async () => {
+    window.history.replaceState(null, "", "/settings/advanced?shell=cockpit#feature-switch-scheduler-review");
+    api.fetchSettings.mockResolvedValue({ revision: 4, features: { cronReviewQueueV1Enabled: false } });
+    const scroll = vi.fn();
+    const original = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = scroll;
+    try {
+      const { container, unmount } = await mount();
+      await vi.waitFor(() => expect(scroll).toHaveBeenCalled());
+      expect(scroll.mock.contexts[0]).toBe(container.querySelector("#feature-switch-scheduler-review"));
+      unmount();
+    } finally {
+      Element.prototype.scrollIntoView = original;
+      window.history.replaceState(null, "", "/");
+    }
+  });
+
   it("lists every switch with its plain name and saves one flag through the settings patch", async () => {
     api.fetchSettings.mockResolvedValue({ revision: 4, features: { memoryLifecycleAdminV1Enabled: false } });
     api.patchSettings.mockResolvedValue({
