@@ -209,6 +209,13 @@ describe("sticky prompt", () => {
     await frame();
 
     const sticky = container.querySelector<HTMLButtonElement>("[data-chat-sticky-prompt]")!;
+    // A solid strip with its own edge, and a scroller that pads under it (U-CH-028).
+    const strip = sticky.parentElement!;
+    expect(strip.className).toContain("bg-canvas");
+    expect(strip.className).toContain("border-b");
+    expect(strip.className).not.toContain("pointer-events-none");
+    expect(sticky.className).not.toContain("shadow-overlay");
+    expect(scroller.className).toContain("scroll-pt-12");
     expect(sticky.getAttribute("aria-label")).toBe(
       "Back to message 2: Summarise the quarterly report and list every risk the auditors raised in…",
     );
