@@ -911,6 +911,7 @@ export class SkillHubLifecycleService {
       settle: (disposition, observedTreeSha256, result) =>
         this.settle(intent, artifact.artifactId, disposition, observedTreeSha256, result),
       commit: (staged) => this.applyCanonicalMutation(intent, candidate, artifact.artifactId, staged),
+      reloadSkills: this.options.reloadSkills,
       afterStage: this.options.afterRuntimeProjection,
     });
   }

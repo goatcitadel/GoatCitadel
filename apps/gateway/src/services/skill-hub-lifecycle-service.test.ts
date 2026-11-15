@@ -18,6 +18,7 @@ import {
   type AsyncStorage,
   type SkillHubSnapshotCreateInput,
 } from "@goatcitadel/storage";
+import { SkillsService } from "@goatcitadel/skills";
 import { ApprovalEffectsService } from "./approval-resolution-effects-service.js";
 import { CapabilityPluginStore } from "./capability-plugin-store.js";
 import { NodeSkillHubArtifactFilesystem, SkillHubArtifactStore } from "./skill-hub-artifact-store.js";
@@ -834,7 +835,8 @@ describe("SkillHubLifecycleService", () => {
       expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:demo")).toBeUndefined();
       await expect(fs.stat(runtimeDir)).rejects.toThrow();
       expect(await scratchEntries(extraRoot)).toEqual([]);
-      expect(reloadSkills).toHaveBeenCalledTimes(1);
+      // Once after the folder was moved aside and before the record went, once after the settlement.
+      expect(reloadSkills).toHaveBeenCalledTimes(2);
 
       // Kept: the revoked candidate and its fence, every intent, settlement, evidence envelope and journey event.
       expect(harness.storage.candidateSkillVersions.get("version-demo-1").lifecycleState).toBe("revoked");
@@ -852,7 +854,68 @@ describe("SkillHubLifecycleService", () => {
 
       const replay = await harness.lifecycle.applyApprovedOperation(request);
       expect(replay.replayed).toBe(true);
-      expect(reloadSkills).toHaveBeenCalledTimes(2);
+      expect(reloadSkills).toHaveBeenCalledTimes(3);
+    }, 90_000);
+
+    it("drops the skill from the loaded list before its record goes, so no list writes it back", async () => {
+      const { harness, extraRoot, runtimeDir } = await revokedHarness();
+      const loader = new SkillsService([{ source: "extra", dir: extraRoot }], { warn: vi.fn(), error: vi.fn() });
+      await loader.reload();
+      expect(loader.list().map((skill) => skill.skillId)).toEqual(["extra:demo"]);
+      // What any skills list would see at the moment the removal's record deletion commits.
+      let loadedAtCommit: string[] | undefined;
+      const storage = new Proxy(harness.asyncStorage, {
+        get(target, key, receiver) {
+          if (key !== "runImmediateTransaction") return Reflect.get(target, key, receiver);
+          return async <T>(work: () => T | Promise<T>) => {
+            const result = await target.runImmediateTransaction(work);
+            if (!loadedAtCommit && harness.storage.skillHubOperations.findSettlementByOperationId("operation-remove")) {
+              loadedAtCommit = loader.list().map((skill) => skill.skillId);
+            }
+            return result;
+          };
+        },
+      });
+      harness.lifecycle = new SkillHubLifecycleService({
+        rootDir: harness.rootDir,
+        candidateRoot: "data/capability-candidates",
+        skillsExtraRoot: "skills/extra",
+        artifactStore: harness.artifactStore,
+        storage,
+        filesystem: sharedFilesystem,
+        reloadSkills: () => loader.reload(),
+      });
+
+      const result = await harness.lifecycle.applyApprovedOperation(
+        await approve(harness, removeTemplate(harness, "operation-remove")),
+      );
+
+      expect(result.settlement.disposition).toBe("applied");
+      expect(loadedAtCommit).toEqual([]);
+      expect(harness.storage.skillLifecycle.find("extra:demo")).toBeUndefined();
+      expect(harness.storage.skillAggregateRevisions.get("runtime_skill", "extra:demo")).toBeUndefined();
+      await expect(fs.stat(runtimeDir)).rejects.toThrow();
+
+      // Nothing was written back, so the same source installs and switches on again as a new lineage.
+      const lineage = { targetCandidateId: "candidate-demo-r1", targetVersionId: "version-demo-1-r1" };
+      const reinstalled = await approveAndApply(harness, {
+        ...template(harness, "install_inactive", "operation-reinstall", {
+          expectedCandidateAbsent: true,
+          expectedRuntimeAbsent: true,
+        }),
+        ...lineage,
+      });
+      expect(reinstalled.settlement.disposition).toBe("applied");
+      const reactivated = await approveAndApply(harness, {
+        ...template(harness, "activate", "operation-reactivate", {
+          expectedCandidateAbsent: false,
+          expectedCandidateRevision: 1,
+          expectedRuntimeAbsent: true,
+        }),
+        ...lineage,
+      });
+      expect(reactivated.settlement.disposition).toBe("applied");
+      expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("approved");
     }, 90_000);
 
     it("leaves a folder that no longer matches the check's files and asks for a manual step", async () => {
@@ -916,18 +979,25 @@ describe("SkillHubLifecycleService", () => {
     }, 90_000);
 
     it("puts the folder back when the commit fails after it was moved", async () => {
+      const loaded: { loader?: SkillsService } = {};
       const { harness, extraRoot, runtimeDir } = await revokedHarness({
         afterRuntimeProjection: async () => {
           // A concurrent change to the skill's record between the move and the commit.
           harness.storage.skillAggregateRevisions.advanceExpectedRevision("runtime_skill", "extra:demo", 2);
         },
+        reloadSkills: () => loaded.loader!.reload(),
       });
+      const loader = new SkillsService([{ source: "extra", dir: extraRoot }], { warn: vi.fn(), error: vi.fn() });
+      loaded.loader = loader;
+      await loader.reload();
       const request = await approve(harness, removeTemplate(harness, "operation-remove"));
 
       await expect(harness.lifecycle.applyApprovedOperation(request)).rejects.toThrow(/changed since revision/);
       await expect(fs.stat(path.join(runtimeDir, "SKILL.md"))).resolves.toBeTruthy();
       expect(await scratchEntries(extraRoot)).toEqual([]);
       expect(harness.storage.skillLifecycle.find("extra:demo")?.lifecycleState).toBe("revoked");
+      // Read again after the folder came back, so the skill is loaded as it was.
+      expect(loader.list().map((skill) => skill.skillId)).toEqual(["extra:demo"]);
     }, 90_000);
 
     it("refuses a removal while an installed plugin still lists the skill", async () => {

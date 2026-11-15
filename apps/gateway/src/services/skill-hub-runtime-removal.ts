@@ -155,6 +155,12 @@ export interface RuntimeRemovalContext {
   ): Promise<SkillHubLifecycleApplyResult>;
   /** Deletes the runtime record and its fence and settles `applied`, in one transaction. */
   commit(staged: boolean): Promise<SkillHubLifecycleApplyResult>;
+  /**
+   * Reads the skills folder again, so the loaded list matches what is on disk. Called once the folder is moved aside
+   * and before the record goes, so no skills list can see a loaded skill without its record, and again after a failed
+   * commit put the folder back.
+   */
+  reloadSkills?: () => Promise<unknown>;
   /** Test-only crash seam after the folder was moved and before the commit. */
   afterStage?: (operationId: string) => Promise<void> | void;
 }
@@ -204,6 +210,9 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
   await context.afterStage?.(intent.operationId);
   try {
     signal.throwIfAborted();
+    // The loader skips the recovery folder, so after this read the skill is no longer loaded: a skills list in the
+    // window between the commit and the caller's final reload cannot write the record or its fence back.
+    await context.reloadSkills?.();
     return await context.commit(staging.staged);
   } catch (error) {
     if (staging.staged) {
@@ -215,6 +224,7 @@ export async function runRuntimeRemoval(context: RuntimeRemovalContext): Promise
         signal,
         error,
       );
+      await context.reloadSkills?.();
     }
     throw error;
   }

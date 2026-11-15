@@ -641,7 +641,7 @@ export class CapabilitySystemService {
     }
     const done = (async () => {
       for (const skill of skills) {
-        if (await this.options.storage.skillLifecycle.find(skill.skillId)) {
+        if (importedSkillFolderGone(skill) || (await this.options.storage.skillLifecycle.find(skill.skillId))) {
           continue;
         }
         await this.options.storage.skillLifecycle.upsert(buildSkillLifecycleRecord(skill));
@@ -664,10 +664,11 @@ export class CapabilitySystemService {
   ): Promise<SkillListItem[]> {
     await this.ensureSkillLifecycleBackfill();
     const stateMap = await this.options.readSkillStates();
-    const all: SkillListItem[] = await Promise.all(
-      this.options.listLoadedSkills().map(async (skill) => {
+    const resolved = await Promise.all(
+      this.options.listLoadedSkills().map(async (skill): Promise<SkillListItem | undefined> => {
         const state = stateMap.get(skill.skillId);
         const lifecycle = await this.resolveSkillLifecycle(skill);
+        if (!lifecycle) return undefined;
         return {
           ...skill,
           revision:
@@ -688,6 +689,7 @@ export class CapabilitySystemService {
         };
       }),
     );
+    const all = resolved.filter((item): item is SkillListItem => item !== undefined);
     const chosen = filterSkillItemsByEffectiveSet(all, effectiveSkills);
     if (!workspaceId) {
       return chosen;
@@ -699,9 +701,15 @@ export class CapabilitySystemService {
     return [...chosen, ...candidates.skills];
   }
 
-  private async resolveSkillLifecycle(skill: LoadedSkill): Promise<SkillLifecycleRecord> {
+  /**
+   * The skill's lifecycle record, written when the loaded skill needs one. Nothing for an imported skill that has no
+   * record and whose folder is gone: the loader read it before a governed removal moved its folder aside and deleted
+   * its record, and writing a record back would bring a removed skill back as a candidate.
+   */
+  private async resolveSkillLifecycle(skill: LoadedSkill): Promise<SkillLifecycleRecord | undefined> {
     const { skillLifecycle } = this.options.storage;
     const existing = await skillLifecycle.find(skill.skillId);
+    if (!existing && importedSkillFolderGone(skill)) return undefined;
     const projected = buildSkillLifecycleRecord(skill, existing?.createdAt);
     if (skill.source !== "extra") {
       if (!existing) {
@@ -5885,6 +5893,11 @@ function summarizeCodeModeRunForComparison(run: CodeModeRunRecord): CodeModeRunC
     createdAt: run.createdAt,
     finishedAt: run.finishedAt,
   };
+}
+
+/** An imported skill the loader still lists whose folder is no longer on disk. */
+function importedSkillFolderGone(skill: LoadedSkill): boolean {
+  return skill.source === "extra" && !fsSync.existsSync(skill.dir);
 }
 
 function buildSkillLifecycleRecord(skill: LoadedSkill, existingCreatedAt?: string): SkillLifecycleRecord {
