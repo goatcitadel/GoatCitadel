@@ -46,6 +46,18 @@ describe("status vocabulary", () => {
   });
 });
 
+describe("humanizeToken acronyms", () => {
+  it.each([
+    ["mesh_mcp_server", "Mesh MCP server"],
+    ["url", "URL"],
+    ["oauth_token", "OAuth token"],
+    ["api_key", "API key"],
+    ["repo_search", "Repo search"],
+  ])("humanizeToken(%s) is %s (U-GL-007)", (value, label) => {
+    expect(humanizeToken(value)).toBe(label);
+  });
+});
+
 describe("presentTaskStatus", () => {
   it("labels every task status and keeps unknown values readable", async () => {
     const { presentTaskStatus } = await import("./status-vocabulary");
