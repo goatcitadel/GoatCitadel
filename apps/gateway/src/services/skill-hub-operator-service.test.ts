@@ -549,6 +549,42 @@ describe("SkillHubOperatorService", () => {
     expect(neverItem.actions.remove.blockers).toContain("RUNTIME_NOT_REVOKED");
   });
 
+  it("asks again for a removal that settled instead of handing the old approval back", async () => {
+    const checked = snapshot({ snapshotId: "snapshot-v1" });
+    const settledOperationIds = new Set<string>();
+    const harness = createHarness({
+      snapshots: [checked],
+      candidates: [
+        candidateVersion({
+          versionId: "version-v1",
+          upstreamSnapshotId: "snapshot-v1",
+          sourceFingerprint: checked.contentTreeSha256,
+          lifecycleState: "revoked",
+        }),
+      ],
+      lifecycle: { ...activeLifecycle(checked), lifecycleState: "revoked" },
+      settledOperationIds,
+    });
+    const ask = () =>
+      harness.service.createApproval({
+        workspaceId: "workspace-1",
+        snapshotId: "snapshot-v1",
+        operationKind: "remove",
+        actorId: "operator-1",
+      });
+
+    const first = await ask();
+    expect((await ask()).reused).toBe(true);
+
+    // The approval was approved and its removal settled for a manual step.
+    harness.approvals[0] = { ...harness.approvals[0]!, status: "approved" };
+    settledOperationIds.add(first.approval.operationId);
+    const again = await ask();
+    expect(again.reused).toBe(false);
+    expect(again.approval.operationId).not.toBe(first.approval.operationId);
+    expect(harness.createApproval).toHaveBeenCalledTimes(2);
+  });
+
   it("lets the same source install again after a removal, on a new lineage", async () => {
     const checked = snapshot({ snapshotId: "snapshot-v1" });
     const removed = candidateVersion({
@@ -808,6 +844,7 @@ function createHarness(input: {
   lifecycle?: SkillLifecycleRecord;
   approvals?: ApprovalRequest[];
   removedCandidateIds?: string[];
+  settledOperationIds?: Set<string>;
   catalogEntry?: CapabilityCatalogEntry;
   beforeCreateApproval?: () => Promise<void>;
   transformCreatedApproval?: (approval: ApprovalRequest) => ApprovalRequest;
@@ -862,7 +899,18 @@ function createHarness(input: {
       }),
     },
     skillHubOperations: {
-      findSettlementByOperationId: vi.fn(async () => undefined),
+      findSettlementByOperationId: vi.fn(async (operationId: string) =>
+        input.settledOperationIds?.has(operationId)
+          ? {
+              settlementId: `settlement-${operationId}`,
+              disposition: "manual_reconciliation",
+              resultSha256: "9".repeat(64),
+              evidenceEnvelopeId: "evidence-1",
+              journeyEventId: "journey-1",
+              settledAt: "2026-07-14T01:05:00.000Z",
+            }
+          : undefined,
+      ),
       listAppliedRemovalCandidateIds: vi.fn(async () => input.removedCandidateIds ?? []),
     },
     skillLifecycle: { find: vi.fn(async () => input.lifecycle) },

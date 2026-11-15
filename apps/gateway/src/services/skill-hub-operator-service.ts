@@ -852,14 +852,26 @@ export class SkillHubOperatorService {
   }
 
   private async findReusableApproval(workspaceId: string, fingerprint: string): Promise<ApprovalRequest | undefined> {
-    return (await this.options.storage.approvals.list(undefined, 500, workspaceId)).find((approval) => {
+    for (const approval of await this.options.storage.approvals.list(undefined, 500, workspaceId)) {
       const intent = readOperatorIntent(approval);
-      return Boolean(
-        intent &&
-        intent.idempotencyKey.startsWith(`skill-hub:lifecycle:${fingerprint}:`) &&
-        ["pending", "approved"].includes(approval.status),
-      );
-    });
+      if (
+        !intent ||
+        !intent.idempotencyKey.startsWith(`skill-hub:lifecycle:${fingerprint}:`) ||
+        !["pending", "approved"].includes(approval.status)
+      ) {
+        continue;
+      }
+      // A removal that already settled (even one left for a manual step) is finished: asking again is a new request,
+      // so an operator who fixed the folder by hand is not handed the old, settled approval back.
+      if (
+        intent.operationKind === "remove" &&
+        (await this.options.storage.skillHubOperations.findSettlementByOperationId(intent.operationId))
+      ) {
+        continue;
+      }
+      return approval;
+    }
+    return undefined;
   }
 
   private async nextAttempt(workspaceId: string, fingerprint: string): Promise<number> {
