@@ -7,8 +7,8 @@ import type {
   OperatorInboxResponse,
   OperatorInboxSourceCoverage,
 } from "@goatcitadel/contracts";
-import { isInstallWideApproval, NotFoundError, redactSecretText } from "@goatcitadel/contracts";
-import { withoutControls } from "./plugin-plain-text.js";
+import { isInstallWideApproval, NotFoundError } from "@goatcitadel/contracts";
+import { previewLine } from "./inbox-preview-text.js";
 import { redactUrlForError } from "@goatcitadel/policy-engine";
 import { redactLocalHomePaths } from "./user-facing-failure-text.js";
 import type { AsyncStorage } from "@goatcitadel/storage";
@@ -119,25 +119,6 @@ function skillLifecycleApproval(
 }
 
 const SHELL_TOOLS = new Set(["shell.exec", "shell.exec_background"]);
-/** The most of a command's or code's first line an Inbox row names; the whole row is bounded again after the label. */
-const MAX_PREVIEW_LINE = 180;
-
-/**
- * One safe line of text a model wrote as a command or as code: secrets and the home folder taken out first (so a cut
- * can never leave half a token), then the first non-empty line with control and bidi characters removed and capped,
- * followed by how many lines were left out.
- */
-function previewLine(label: string, text: string): string | undefined {
-  const lines = redactLocalHomePaths(redactSecretText(text).value)
-    .split(/\r\n|[\r\n\u2028\u2029]/u)
-    .map(withoutControls)
-    .filter(Boolean);
-  const [first, ...rest] = lines;
-  if (!first) return undefined;
-  const line = first.length > MAX_PREVIEW_LINE ? `${first.slice(0, MAX_PREVIEW_LINE - 1)}…` : first;
-  const more = rest.length ? ` (and ${rest.length} more ${rest.length === 1 ? "line" : "lines"})` : "";
-  return bounded(`${label}: ${line}${more}`);
-}
 
 function approvalTargetSummary(preview: unknown, kind: string): string {
   const record = preview && typeof preview === "object" ? (preview as Record<string, unknown>) : {};
@@ -157,7 +138,7 @@ function approvalTargetSummary(preview: unknown, kind: string): string {
   // A shell approval's kind is its tool name; a preview that carries no tool name still names its command.
   const shellTool = SHELL_TOOLS.has(kind) || (typeof record.toolName === "string" && SHELL_TOOLS.has(record.toolName));
   if (shellTool && typeof record.command === "string") {
-    const command = previewLine("Command", record.command);
+    const command = previewLine("Command", record.command, { shell: true });
     if (command) return command;
   }
   if (kind === "code_mode.run" && typeof record.codePreview === "string") {

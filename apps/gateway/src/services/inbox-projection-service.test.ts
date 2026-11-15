@@ -304,9 +304,9 @@ describe("Gateway inbox projection", () => {
     expect(JSON.stringify(projection)).not.toContain(token);
     expect(summary("lines")).toBe("Command: echo one (and 2 more lines)");
     expect(summary("oneextra")).toBe("Command: echo one (and 1 more line)");
-    expect(summary("long")!.length).toBeLessThanOrEqual(240);
-    expect(summary("bidi")).not.toMatch(/[\p{Cc}\u202A-\u202E\u2066-\u2069\u2028\u2029]/u);
-    expect(summary("home")).not.toContain("someone");
+    expect(summary("long")).toBe(`Command: echo ${"x".repeat(175)} (cut short)`);
+    expect(summary("bidi")).toBe("Command: echo gnp.exe ok (and 1 more line)");
+    expect(summary("home")).toBe("Command: cat ~\\notes.txt");
     expect(summary("code")).toBe('Code: const text = await docs.extract_text({ path: "saturday-plan.pdf" });');
     expect(summary("other")).not.toContain("do-not-project-command");
   });
