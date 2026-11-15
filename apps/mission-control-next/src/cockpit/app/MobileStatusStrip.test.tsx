@@ -51,10 +51,11 @@ describe("MobileStatusStrip", () => {
     expect(strip.textContent).toContain("Reconnecting to updates");
     await vi.waitFor(() => expect(strip.textContent).toContain("unverified"));
     const healthDot = strip.querySelector<HTMLElement>("[data-health-tone]")!;
-    expect(healthDot.title).toContain(
+    expect(healthDot.hasAttribute("title")).toBe(false);
+    expect(healthDot.textContent).toContain(
       "The default model, managed local runtimes, integrations, channels and workers are checked on System › Health.",
     );
-    expect(healthDot.textContent).toMatch(/^\d+ checks? unverified$/);
+    expect(healthDot.textContent).toMatch(/^\d+ checks? unverified/);
     expect(healthDot.querySelector("svg")).not.toBeNull();
     const stream = strip.querySelector<HTMLElement>("[data-stream-state]")!;
     expect(stream.title).toBe("Reconnecting to updates");
