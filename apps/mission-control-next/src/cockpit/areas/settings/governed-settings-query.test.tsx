@@ -151,7 +151,11 @@ describe("one shared settings read for the governed controls (U-GL-050)", () => 
   });
 
   it("a read made to confirm a save is never joined to an older in-flight shared read", async () => {
-    const stale = Promise.withResolvers<Server>();
+    let resolveStale: (value: Server) => void = () => undefined;
+    const stale = {
+      promise: new Promise<Server>((resolve) => (resolveStale = resolve)),
+      resolve: (value: Server) => resolveStale(value),
+    };
     let latestRead: Server = settingsAt(2);
     let probe: ReturnType<typeof useGovernedSettingsQuery> | undefined;
     function Probe() {
