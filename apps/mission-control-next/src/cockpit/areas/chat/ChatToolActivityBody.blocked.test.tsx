@@ -46,7 +46,7 @@ describe("ChatToolActivityBody blocked tools", () => {
   });
 
   it("offers no link when you denied, withdrew or let the approval expire", async () => {
-    for (const approvalOutcome of ["denied", "withdrawn", "expired"]) {
+    for (const approvalOutcome of ["denied", "withdrawn", "expired"] as const) {
       await render(
         <ChatToolActivityBody turn={turnWith({ result: { approvalOutcome } })} showTechnicalDetails={false} />,
       );

@@ -151,7 +151,7 @@ export function ChatToolActivityBody({
             ) : null}
             {blockedByRule(tool) ? (
               <div className="w-full">
-                <NativeOwnerLink href={toolHref(tool.toolName)} scope={turn.sessionId} className="text-sm">
+                <NativeOwnerLink href={toolHref(tool.toolName)} scope={tool.sessionId} className="text-sm">
                   See why it's blocked
                 </NativeOwnerLink>
               </div>
