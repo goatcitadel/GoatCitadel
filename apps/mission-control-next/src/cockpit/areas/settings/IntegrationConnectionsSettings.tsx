@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import type { IntegrationConnection } from "@goatcitadel/contracts";
 import { fetchIntegrationConnections } from "@goatcitadel/mission-control-shared/api/client";
@@ -23,7 +23,14 @@ import { consumeGoogleOAuthReturnFragment } from "../../../features/native-route
 import { Callout } from "../../ui/Callout";
 
 const PAGE_SIZE = 20;
-export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: string }) {
+export function IntegrationConnectionsSettings({
+  workspaceId,
+  addCatalogId,
+}: {
+  workspaceId: string;
+  /** A catalog entry a Set up link asked to add: opens management on its add form, once. */
+  addCatalogId?: string;
+}) {
   const connections = useQuery({
     queryKey: ["settings", "integration-connections"],
     queryFn: () => fetchIntegrationConnections(),
@@ -49,6 +56,12 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
   };
   const leave = useDraftLeave();
   const ready = !connections.isError && Array.isArray(connections.data?.items);
+  const handledAdd = useRef<string | null>(null);
+  useEffect(() => {
+    if (!addCatalogId || !ready || handledAdd.current === addCatalogId) return;
+    handledAdd.current = addCatalogId;
+    setManagementOpen(true);
+  }, [addCatalogId, ready]);
   const control = useIntegrationEnabled({
     workspaceId,
     available: ready && !connections.isFetching,
@@ -82,7 +95,13 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
       >
         {managementOpen ? "Hide connection management" : "Add and manage integrations"}
       </Button>
-      {managementOpen ? <IntegrationManagementSettings workspaceId={workspaceId} selection={selection} /> : null}
+      {managementOpen ? (
+        <IntegrationManagementSettings
+          workspaceId={workspaceId}
+          selection={selection}
+          createRequest={addCatalogId ? { catalogId: addCatalogId } : null}
+        />
+      ) : null}
       <McpDraftLeave {...leave.dialogProps} />
       <Button
         size="sm"
@@ -155,7 +174,7 @@ export function IntegrationConnectionsSettings({ workspaceId }: { workspaceId: s
               />
             ))}
           </ul>
-          {!filtered.length ? (
+          {!filtered.length && !managementOpen ? (
             <p className="text-sm text-fg-muted">
               No saved integrations match this view. Use Add and manage integrations to set up a connection.
             </p>

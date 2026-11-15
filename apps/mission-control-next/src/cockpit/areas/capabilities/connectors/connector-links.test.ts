@@ -104,3 +104,21 @@ describe("web search key links", () => {
     expect(connectorSettingsHref(firecrawl)).toBe("/capabilities/connectors/advanced#web-search");
   });
 });
+
+describe("add an integration links", () => {
+  it("opens the add form for a catalog row that is not saved yet", () => {
+    const gmail = item({
+      id: "integration:automation.gmail",
+      source: "integration",
+      kind: "built_in",
+      reason: "not_installed",
+      catalogId: "automation.gmail",
+    });
+    expect(connectorSettingsHref(gmail)).toBe(
+      "/capabilities/connectors/advanced?addIntegration=automation.gmail#integration-connections",
+    );
+    expect(connectorSettingsHref({ ...gmail, reason: "ready" })).toBe(
+      "/capabilities/connectors/advanced#integration-connections",
+    );
+  });
+});

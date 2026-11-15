@@ -14,6 +14,9 @@ export const CHAT_CONNECTORS_SETTINGS_HREF = MCP_SERVERS_HREF;
 /** Where an operator lets this workspace's AI use an app the workspace hides. */
 export const WORKSPACE_CAPABILITIES_HREF = "/settings/citadel#workspace-capabilities";
 
+/** The address parameter that opens Advanced setup's add form on one catalog entry. */
+export const ADD_INTEGRATION_PARAM = "addIntegration";
+
 /** The Connectors tab, without a panel open. */
 export const CONNECTORS_HREF = "/capabilities/connectors";
 
@@ -49,8 +52,21 @@ export function connectorSettingsHref(item: CapabilityConnectorItem): string {
         ? `${CONNECTOR_SETUP_PATH}#${webSearchKeyAnchor(item.id.slice("web-search:".length) as "search.brave" | "search.parallel")}`
         : connectorSetupHref("web-search");
     case "integration":
-      return item.kind === "channel" ? channelAdvancedSetupHref() : connectorSetupHref("integrations");
+      if (item.kind === "channel") return channelAdvancedSetupHref();
+      return addsIntegration(item)
+        ? `${CONNECTOR_SETUP_PATH}?${ADD_INTEGRATION_PARAM}=${encodeURIComponent(item.catalogId!)}#integration-connections`
+        : connectorSetupHref("integrations");
   }
+}
+
+/** A catalog row with nothing saved yet: its Advanced setup link opens the add form on it. */
+export function addsIntegration(item: CapabilityConnectorItem): boolean {
+  return (
+    item.source === "integration" &&
+    item.kind !== "channel" &&
+    item.reason === "not_installed" &&
+    Boolean(item.catalogId)
+  );
 }
 
 const TEMPLATE_ID_PREFIX = "mcp-template:";

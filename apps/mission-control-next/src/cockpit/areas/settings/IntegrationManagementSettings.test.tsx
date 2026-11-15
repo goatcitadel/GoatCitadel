@@ -94,6 +94,21 @@ afterEach(async () => {
   vi.unstubAllGlobals();
 });
 describe("native integration management", () => {
+  it("opens the add form on the catalog entry a Set up link asked for", async () => {
+    api.fetchIntegrationCatalog.mockResolvedValue({
+      items: [
+        { catalogId: saved.catalogId, kind: saved.kind, key: saved.key, label: "Fixture", operatorActions: [] },
+        { catalogId: "automation.gmail", kind: "automation", key: "gmail", label: "Gmail", operatorActions: [] },
+      ],
+    });
+    await act(async () => {
+      view = create(
+        <IntegrationManagementSettings workspaceId="default" createRequest={{ catalogId: "automation.gmail" }} />,
+      );
+    });
+    expect(view.root.findByProps({ "aria-label": "Integration catalog" }).props.value).toBe("automation.gmail");
+  });
+
   it("reviews a disabled new connection without writes and confirms exact owner readback", async () => {
     await act(async () => {
       view = create(<IntegrationManagementSettings workspaceId="default" />);

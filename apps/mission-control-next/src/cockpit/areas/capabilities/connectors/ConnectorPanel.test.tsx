@@ -250,6 +250,20 @@ describe("Connector panel", () => {
     expect(target.hash).toBe("#mcp-servers");
   });
 
+  it("names the add form on the Advanced setup link of an integration that is not saved yet", async () => {
+    const gmail = item({
+      id: "integration:automation.gmail",
+      name: "Gmail and Google Calendar",
+      kind: "built_in",
+      source: "integration",
+      reason: "not_installed",
+      catalogId: "automation.gmail",
+    });
+    await renderPanel(gmail.id, [gmail]);
+    expect(link("Add Gmail and Google Calendar in Advanced setup")).toBeDefined();
+    expect(link("Advanced setup")).toBeUndefined();
+  });
+
   it("explains when Chat can't use connectors yet, with a link to its switch", async () => {
     const blocked = { ...LINEAR, chat: { available: false, blockedBy: "mcp_in_chat_off" } } as const;
     await renderPanel(LINEAR.id, [blocked]);

@@ -14,16 +14,24 @@ import {
   selectedSettingsSection,
   useSettingsSectionHash,
 } from "../../settings/SettingsSectionTabs";
-import { CONNECTORS_HREF } from "./connector-links";
+import { ADD_INTEGRATION_PARAM, CONNECTORS_HREF } from "./connector-links";
 
 const PAGE = buildConnectorSetupPage();
 
-function SectionControls({ section, workspaceId }: { section: string; workspaceId: string }) {
+function SectionControls({
+  section,
+  workspaceId,
+  addCatalogId,
+}: {
+  section: string;
+  workspaceId: string;
+  addCatalogId?: string;
+}) {
   switch (section) {
     case "mcp":
       return <McpServersSettings workspaceId={workspaceId} />;
     case "integrations":
-      return <IntegrationConnectionsSettings workspaceId={workspaceId} />;
+      return <IntegrationConnectionsSettings workspaceId={workspaceId} addCatalogId={addCatalogId} />;
     case "web-search":
       return <WebSearchSettings />;
     default:
@@ -41,6 +49,7 @@ export function ConnectorSetupPage() {
   const { activeCitadelId, activeWorkspaceId } = useUiPreferences();
   const hash = useSettingsSectionHash();
   const selected = selectedSettingsSection(PAGE, undefined, hash);
+  const addCatalogId = new URLSearchParams(search).get(ADD_INTEGRATION_PARAM) || undefined;
   const headingId = useId();
   const openSection = (entry: SettingsIndexEntry) => navigate(`${CONNECTOR_SETUP_PATH}${search}#${entry.anchor}`);
   return (
@@ -61,7 +70,13 @@ export function ConnectorSetupPage() {
       {/* Another workspace or Citadel is another set of saved connections: its editors start afresh. */}
       <div key={JSON.stringify([activeCitadelId, activeWorkspaceId])} className="min-w-0">
         <SettingsSectionTabs page={PAGE} value={selected} onChange={openSection}>
-          {(entry) => <SectionControls section={entry.section} workspaceId={activeWorkspaceId ?? ""} />}
+          {(entry) => (
+            <SectionControls
+              section={entry.section}
+              workspaceId={activeWorkspaceId ?? ""}
+              addCatalogId={addCatalogId}
+            />
+          )}
         </SettingsSectionTabs>
       </div>
     </section>
