@@ -281,6 +281,10 @@ function readLivePostmasterPid(dataDir: string): number | undefined {
   }
 }
 
+function postmasterPidFileExists(dataDir: string): boolean {
+  return fsSync.existsSync(path.join(dataDir, "postmaster.pid"));
+}
+
 async function tryStartNativeBundledPostgres(
   config: GatewayRuntimeConfig,
 ): Promise<BundledPostgresRuntimeHandle | undefined> {
@@ -1173,9 +1177,16 @@ async function assertBundledPostgresPortIsNotHeld(config: GatewayRuntimeConfig):
     return;
   }
   const dataDir = path.resolve(config.rootDir, config.assistant.database.bundledPostgres.dataDir);
-  const ownPostmasterAlive = readLivePostmasterPid(dataDir) !== undefined;
+  // Doubtful cases count as this install's own so the start keeps its old behaviour (wait and
+  // retry) instead of a new refusal: a live postmaster, a postmaster.pid left behind (its pid may
+  // belong to a container or a database that is still shutting down), or a container with this
+  // root's name in any state (the start path reuses it by that name), or one mounting the data dir.
+  const ownPostmasterAlive = readLivePostmasterPid(dataDir) !== undefined || postmasterPidFileExists(dataDir);
   const ownContainerRunning =
-    !ownPostmasterAlive && canUseDocker() ? hasRunningBundledDockerContainerForDataDir(config) : false;
+    !ownPostmasterAlive && canUseDocker()
+      ? inspectDockerContainerState(buildBundledDockerContainerName(config.rootDir)) !== "missing" ||
+        hasRunningBundledDockerContainerForDataDir(config)
+      : false;
   if (!portHeldByAnotherProgram({ acceptsConnections, ownPostmasterAlive, ownContainerRunning })) {
     return;
   }
