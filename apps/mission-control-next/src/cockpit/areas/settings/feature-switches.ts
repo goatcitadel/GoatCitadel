@@ -73,6 +73,11 @@ export function featureSwitchHref(flag: FeatureSwitchFlag): string {
   return `/settings/advanced#feature-switch-${SLUGS[flag]}`;
 }
 
+/** The section anchor and each switch's own anchor, as they appear after the `#` of a link. */
+export function isFeatureSwitchHash(hash: string): boolean {
+  return hash === FEATURE_SWITCHES_ANCHOR || FEATURE_SWITCHES.some((entry) => entry.anchor === hash);
+}
+
 export function featureSwitchLabel(flag: FeatureSwitchFlag): string {
   return CHANGE_PLAN_RUNTIME_FEATURE_FLAG_LABELS[flag]?.label ?? flag;
 }

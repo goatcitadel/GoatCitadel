@@ -79,6 +79,16 @@ function fixture(owner: SettingsApprovalOwner): ChangePlanRecord {
       },
       target: { ...base.target, resourceId: "feature:chatThinkingStreamV1Enabled" },
     };
+  if (owner === "feature-switch")
+    return {
+      ...base,
+      origin: { surface: "settings", workspaceId: "default" },
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "memoryLifecycleAdminV1Enabled", enabled: true },
+      },
+      target: { ...base.target, resourceId: "feature:memoryLifecycleAdminV1Enabled" },
+    };
   if (owner === "filesystem-write-access")
     return {
       ...base,
@@ -122,11 +132,26 @@ const owners: SettingsApprovalOwner[] = [
   "claude-cli-tool-bridge",
   "claude-cli-warm-continuation",
   "chat-thinking-stream",
+  "feature-switch",
   "public-web-address",
   "browser-errand-approvals",
 ];
 
 describe("native Settings exact approval owner binding", () => {
+  it("binds a Features switch plan only for a listed flag", () => {
+    const plan = fixture("feature-switch");
+    expect(settingsApprovalOwnerBinding(plan, "feature-switch", "workspace-a")?.href).toContain("approvalId=");
+    const foreign: ChangePlanRecord = {
+      ...plan,
+      request: {
+        kind: "runtime_configuration",
+        change: { operation: "feature_flag", flag: "productSourceEvolutionV1Enabled", enabled: true },
+      },
+      target: { ...plan.target, resourceId: "feature:productSourceEvolutionV1Enabled" },
+    };
+    expect(settingsApprovalOwnerBinding(foreign, "feature-switch", "workspace-a")).toBeNull();
+  });
+
   it.each(owners)("accepts %s's actual owner namespace and exact Inbox query selection", (owner) => {
     const plan = fixture(owner);
     const id = "approval /?# exact";

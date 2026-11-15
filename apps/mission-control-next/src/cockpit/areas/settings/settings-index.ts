@@ -59,7 +59,8 @@ const CONTROL_TERMS: Record<string, string> = {
   "citadel-capabilities": "citadel skills integrations mcp selection reset inheritance",
   // copy-guard: not copy (search keywords; operators search the word they know from the CLI and docs)
   access: "gateway sign-in signin authentication auth token basic password loopback install token device revoke",
-  runtime: "managed command path alias enabled auto start daemon voice transcription install runtime",
+  runtime:
+    "managed command path alias enabled auto start daemon voice transcription install runtime features feature switch memory administration maintenance skills in chat connectors in chat connector diagnostics scheduler review engineering learnings backup fallback subagents utility model background jobs",
 };
 
 function indexEntry(entry: SettingsDestinationEntry): SettingsIndexEntry {

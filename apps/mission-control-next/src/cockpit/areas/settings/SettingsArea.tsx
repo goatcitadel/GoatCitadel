@@ -50,6 +50,8 @@ import {
 } from "./settings-controls";
 import { RulesPrecedenceLink } from "./RulesPrecedence";
 import { ClaudeCliBackgroundJobsNotice } from "./ClaudeCliBackgroundJobsNotice";
+import { FeatureSwitchesSettings } from "./FeatureSwitchesSettings";
+import { isFeatureSwitchHash } from "./feature-switches";
 import { LLAMA_SETUP_HREF, MANAGED_RUNTIME_HREF, SettingsOwnerPointer } from "./SettingsOwnerPointer";
 
 const PAGES = buildSettingsIndex();
@@ -142,6 +144,7 @@ export function SettingsArea() {
             <ManagedRuntimeSettings />
             <DaemonDiagnostics />
             <VoiceRuntimeSettings />
+            <FeatureSwitchesSettings />
             <SettingsOwnerPointer text="llama.cpp setup is on" label="Models › Local AI" href={LLAMA_SETUP_HREF} />
           </>
         );
@@ -225,6 +228,7 @@ export function SettingsArea() {
               "notification-routing",
               "settings-approval-skip",
             ].includes(hash) &&
+            !isFeatureSwitchHash(hash) &&
             !page.entries.some((entry) => entry.anchor === hash || entry.section === hash)
           ? "This link does not match a section on this settings page. Choose a section from Settings."
           : undefined;
