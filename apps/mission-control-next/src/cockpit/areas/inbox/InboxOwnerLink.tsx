@@ -12,6 +12,17 @@ const AREA_NAMES: Readonly<Record<string, string>> = {
   settings: "Settings",
 };
 
+/** Items whose own detail opens in the Inbox; their link leads to the conversation or run they came from. */
+const DECISION_KINDS: readonly string[] = [
+  "approval",
+  "user_input",
+  "change_plan",
+  "memory_proposal",
+  "document_proposal",
+  "capability_proposal",
+  "improvement_proposal",
+];
+
 export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
   const className = "inline-flex min-h-9 items-center text-sm font-medium text-accent hover:underline";
   if (!item.href.startsWith("/") || item.href.startsWith("//")) return null;
@@ -29,14 +40,22 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
   }
   const carried = new URLSearchParams(window.location.search);
   let area: string | undefined;
-  let label: string | undefined;
-  if (item.kind === "approval" && item.source.approvalId) {
-    destination.pathname = "/inbox/approvals/" + encodeURIComponent(item.source.approvalId);
-    destination.searchParams.set("approvalId", item.source.approvalId);
-    destination.searchParams.delete("item");
+  if (DECISION_KINDS.includes(item.kind)) {
+    // The Inbox already shows these items (Details), so the link goes where the request came from: its conversation or run.
+    const { sessionId, runId } = item.source;
+    if (sessionId) {
+      destination.pathname = "/chat";
+      destination.search = "";
+      area = "Chat";
+    } else if (runId && (item.kind === "approval" || item.kind === "user_input")) {
+      destination.pathname = "/work/runs/" + encodeURIComponent(runId);
+      destination.search = "";
+      destination.searchParams.set("runId", runId);
+      area = "Work";
+    } else return null;
+    // The page's own selection (an open approval or item) is not this link's context.
     carried.delete("item");
-    // The Inbox itself owns approvals; this link focuses the exact record.
-    label = "Open approval";
+    carried.delete("approvalId");
   } else if (item.kind === "task_deliverable" && item.source.taskId) {
     destination.pathname = "/work/tasks/" + encodeURIComponent(item.source.taskId);
     destination.searchParams.set("taskId", item.source.taskId);
@@ -45,23 +64,6 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
     destination.pathname = "/work/runs/" + encodeURIComponent(item.source.runId);
     destination.searchParams.set("runId", item.source.runId);
     area = "Work";
-  } else if (
-    [
-      "user_input",
-      "change_plan",
-      "memory_proposal",
-      "document_proposal",
-      "capability_proposal",
-      "improvement_proposal",
-    ].includes(item.kind)
-  ) {
-    // These native detail owners re-read the exact canonical record before offering any action.
-    destination.pathname = "/inbox";
-    destination.searchParams.set("item", item.id);
-    // A linked-item selector replaces a previously selected approval, not its unrelated page context.
-    destination.searchParams.delete("approvalId");
-    carried.delete("approvalId");
-    area = "Inbox";
   }
   for (const key of ["sessionId", "turnId", "runId", "taskId"] as const) {
     const value = item.source[key];
@@ -86,7 +88,7 @@ export function InboxOwnerLink({ item, workspaceId }: { item: OperatorInboxItem;
       className={className}
       data-inbox-owner
     >
-      {label ?? (resolvedArea ? `Open in ${resolvedArea}` : "Open source")}
+      {resolvedArea ? `Open in ${resolvedArea}` : "Open source"}
     </NativeOwnerLink>
   );
 }

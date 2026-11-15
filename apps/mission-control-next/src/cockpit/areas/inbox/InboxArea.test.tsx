@@ -70,7 +70,7 @@ const projection: OperatorInboxResponse = {
       summary: "An operator decision is required.",
       createdAt: "2026-09-28T00:00:00Z",
       riskLevel: "danger",
-      source: { workspaceId: "default", approvalId: "test" },
+      source: { workspaceId: "default", approvalId: "test", sessionId: "session-1" },
       href: "/ops/approvals?approvalId=test&shell=classic",
     },
   ],
@@ -191,8 +191,8 @@ describe("viewed Updates presentation", () => {
     const client = new QueryClient();
     await renderUpdates(client);
     const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]")!;
-    expect(link.getAttribute("href")).toBe("/inbox?approvalId=test&shell=cockpit&workspaceId=default");
-    expect(link.textContent).toContain("Open approval");
+    expect(link.getAttribute("href")).toBe("/chat?sessionId=session-1&workspaceId=default&shell=cockpit");
+    expect(link.textContent).toContain("Open in Chat");
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", bubbles: true })));
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
     expect(document.activeElement).toBe(link);
@@ -201,8 +201,8 @@ describe("viewed Updates presentation", () => {
       link.click();
     });
     expect(switchShellMock).not.toHaveBeenCalled();
-    expect(window.location.pathname).toBe("/inbox");
-    expect(new URLSearchParams(window.location.search).get("approvalId")).toBe("test");
+    expect(window.location.pathname).toBe("/chat");
+    expect(new URLSearchParams(window.location.search).get("sessionId")).toBe("session-1");
     expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
     expect(assign).not.toHaveBeenCalled();
     assign.mockRestore();
@@ -545,8 +545,8 @@ describe("InboxArea", () => {
     expect(container.textContent).toContain("Review file write");
     // The empty group with an incomplete count is hidden; the coverage line above says more may exist (IN-10).
     expect(container.querySelector('[data-inbox-count="needs_attention"]')).toBeNull();
-    const link = container.querySelector('a[href="/inbox?approvalId=test&shell=cockpit&workspaceId=default"]');
-    expect(link?.textContent).toContain("Open approval");
+    const link = container.querySelector('a[href="/chat?sessionId=session-1&workspaceId=default&shell=cockpit"]');
+    expect(link?.textContent).toContain("Open in Chat");
     const details = [...container.querySelectorAll("button")].find((button) => button.textContent === "Review");
     if (!details) throw new Error("Missing details control");
     const input = document.createElement("input");
@@ -610,7 +610,7 @@ describe("InboxArea", () => {
 
     await act(async () => window.dispatchEvent(new KeyboardEvent("keydown", { key: "e", bubbles: true })));
     expect(document.activeElement?.getAttribute("href")).toBe(
-      "/inbox?approvalId=test&shell=cockpit&workspaceId=default",
+      "/chat?sessionId=session-1&workspaceId=default&shell=cockpit",
     );
   });
 
@@ -733,7 +733,7 @@ it("keeps triage selection and owner focus beyond the window without resolving a
       ...projection.items[0]!,
       id: "approval:row-" + i,
       title: "Review " + i,
-      source: { workspaceId: "default", approvalId: "row-" + i },
+      source: { workspaceId: "default", approvalId: "row-" + i, sessionId: "session-" + i },
       href: "/ops/approvals?shell=classic&approvalId=row-" + i,
     }),
   );
@@ -763,7 +763,7 @@ it("keeps triage selection and owner focus beyond the window without resolving a
   });
   await vi.waitFor(() =>
     expect(document.activeElement?.getAttribute("href")).toBe(
-      "/inbox?shell=cockpit&approvalId=row-124&workspaceId=default",
+      "/chat?sessionId=session-124&workspaceId=default&shell=cockpit",
     ),
   );
   expect(apiMocks.resolveApproval).not.toHaveBeenCalled();
@@ -1004,7 +1004,8 @@ it("opens an exact approval link even outside the Inbox projection", async () =>
   await renderUpdates(client);
   await vi.waitFor(() => expect(document.body.textContent).toContain("Review the file write."));
   expect(apiMocks.fetchApproval).toHaveBeenCalledWith("test", expect.objectContaining({ workspaceId: "default" }));
-  expect(container.querySelector("[data-inbox-owner]")?.getAttribute("href")).toContain("approvalId=test");
+  // The approval came from no known conversation or run, so there is nowhere else to open it (U-IN-014).
+  expect(container.querySelector("[data-inbox-owner]")).toBeNull();
   expect(switchShellMock).not.toHaveBeenCalled();
   client.clear();
 });
@@ -1029,7 +1030,7 @@ it.each(["workspace", "history"])("reopens the exact linked approval after a new
   client.clear();
 });
 
-it("selects the canonical linked item without an inherited approval and retains source linkage context", async () => {
+it("links a change plan to its conversation without an inherited approval and retains source linkage context", async () => {
   window.history.replaceState(
     { retained: "source-history" },
     "",
@@ -1064,8 +1065,8 @@ it("selects the canonical linked item without an inherited approval and retains 
   await renderUpdates(client);
   const link = container.querySelector<HTMLAnchorElement>("a[data-inbox-owner]")!;
   const target = new URL(link.href);
-  expect(target.pathname).toBe("/inbox");
-  expect(target.searchParams.get("item")).toBe("change_plan:plan-a");
+  expect(target.pathname).toBe("/chat");
+  expect(target.searchParams.has("item")).toBe(false);
   expect(target.searchParams.has("approvalId")).toBe(false);
   expect(target.searchParams.get("workspaceId")).toBe("default");
   expect(target.searchParams.get("citadelId")).toBe("citadel-a");
