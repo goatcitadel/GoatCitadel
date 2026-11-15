@@ -940,6 +940,18 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
+  it("keeps a Plan first turn off the quick web profile so the model is offered no tools", async () => {
+    const harness = createHost("chat", { planningMode: "advisory", toolAutonomy: "safe_auto" });
+
+    const prepared = await prepareAgentChatTurn(harness.host, "session-1", {
+      content: "please look up the best way to eat sushi",
+    });
+
+    expect(prepared.normalized.normalizationProfile).toBe("live");
+    expect(prepared.effectiveToolAutonomy).toBe("manual");
+    expect(harness.readGuidance()).toContain("Planning mode is active");
+  });
+
   it("ingests attachment references and applies autonomy overrides after code inputs normalize to Chat", async () => {
     const harness = createHost("code", { mode: "code", toolAutonomy: "safe_auto" });
     vi.mocked(harness.host.storage.chatAttachments.listByIds).mockReturnValue([
@@ -1521,29 +1533,21 @@ describe("prepareAgentChatTurn personality overlay", () => {
     );
   });
 
-  it("skips orchestration for normal Chat turns and resolves advisory planning turns", async () => {
+  it("skips orchestration for normal Chat turns and for Plan first turns (U-CH-045)", async () => {
     const harness = createHost("chat");
     const normalPrepared = createPreparedTurnForOrchestration({ planningMode: "off" });
     const advisoryPrepared = createPreparedTurnForOrchestration({ planningMode: "advisory" });
 
     await expect(resolvePreparedTurnOrchestration(harness.host, normalPrepared as never)).resolves.toBeUndefined();
-    const advisory = await resolvePreparedTurnOrchestration(harness.host, advisoryPrepared as never);
+    await expect(resolvePreparedTurnOrchestration(harness.host, advisoryPrepared as never)).resolves.toBeUndefined();
 
-    expect(advisory).toEqual(
-      expect.objectContaining({
-        routerInput: expect.objectContaining({
-          task: expect.objectContaining({
-            mode: "chat",
-            objective: "Draft a launch note",
-          }),
-        }),
-        orchestrationPlan: expect.objectContaining({
-          routeDecision: expect.objectContaining({
-            modePolicy: "chat",
-          }),
-        }),
-      }),
-    );
+    expect(advisoryPrepared.modelRouterDecision).toMatchObject({
+      orchestration: {
+        decision: "bypassed",
+        reason: "Plan first asks the model to write the plan, so no separate orchestration plan is drafted.",
+      },
+    });
+    expect(harness.host.createChatCompletion).not.toHaveBeenCalled();
   });
 
   it("records the direct Chat bypass without planner work for long summaries", async () => {

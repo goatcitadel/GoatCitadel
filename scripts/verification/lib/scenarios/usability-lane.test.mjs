@@ -416,7 +416,7 @@ test("Chat and Projects Chromium contracts retain exact fixture sessions and com
     { kind: "assert-text", value: "Planning mode is on" },
     { kind: "fill", label: "Message composer", value: "Plan this deterministic usability turn." },
     { kind: "click", name: "Send", exact: true },
-    { kind: "assert-text", value: "Chat plan" },
+    { kind: "assert-text", value: "Verification stub reply." },
     { kind: "api", probe: "planning-turn-completed" },
     { kind: "click", name: "Turn planning off", exact: true },
     { kind: "api", probe: "delegate-suggest-accept" },

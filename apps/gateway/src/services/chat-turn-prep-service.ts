@@ -602,7 +602,7 @@ function resolveToolsUnavailableReason(input: {
   advisoryPlanning: boolean;
   missingRequiredProjectBinding: boolean;
 }): BaseAgentToolsUnavailableReason | undefined {
-  if (input.effectiveToolAutonomy !== "manual" || input.quickWebTurn) return undefined;
+  if (input.effectiveToolAutonomy !== "manual" || (input.quickWebTurn && !input.advisoryPlanning)) return undefined;
   if (input.capabilityProfileToolAutonomy !== undefined) return "capability_profile";
   if (input.advisoryPlanning) return "advisory_planning";
   if (input.missingRequiredProjectBinding) return "project_binding_required";
@@ -995,6 +995,11 @@ export async function prepareAgentChatTurn(
         toolAutonomy: boundCapabilityProfile.selection.toolAutonomy,
       }
     : { ...persistedPrefs, subagentPolicy: "off" };
+  // Plan first writes its plan from the model alone: a simple-lookup message must not switch the turn to the quick
+  // web profile, which keeps web tools under manual autonomy.
+  if (prefs.planningMode === "advisory" && normalized.normalizationProfile === "quick_web") {
+    normalized = { ...normalized, normalizationProfile: "live" };
+  }
   const effectiveProviderRoute = boundCapabilityProfile
     ? undefined
     : admitChatRouteWard(await host.resolveChatTurnEffectiveRoute?.(sessionId, input));
@@ -1883,16 +1888,27 @@ export async function resolvePreparedTurnOrchestration(
   if (enforcePreparedRoutedContextOrchestrationBypass(prepared)) {
     return undefined;
   }
-  const mode = prepared.effectiveMode;
   // Execution stays inside the admitted turn: ask uses the durable prompt and
-  // auto uses the governed agent.fanout path. Advisory planning remains distinct.
-  if (prepared.prefs.planningMode !== "advisory") {
-    prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
-      decision: "bypassed",
-      reason: "Separate orchestration is bypassed: non-advisory Chat execution stays inside the admitted turn.",
-    });
-    return undefined;
-  }
+  // auto uses the governed agent.fanout path. Plan first (advisory) is answered by the model itself, with no tools.
+  prepared.modelRouterDecision = withModelRouterOrchestrationDecision(prepared.modelRouterDecision, {
+    decision: "bypassed",
+    reason:
+      prepared.prefs.planningMode === "advisory"
+        ? "Plan first asks the model to write the plan, so no separate orchestration plan is drafted."
+        : "Separate orchestration is bypassed: non-advisory Chat execution stays inside the admitted turn.",
+  });
+  return undefined;
+}
+
+/**
+ * The fixed-template plan draft Plan first used before it asked the model. Live turns no longer reach it
+ * (see resolvePreparedTurnOrchestration); it stays so the template path and its tests remain available.
+ */
+export async function resolveTemplatePlanOrchestration(
+  host: ChatTurnPrepHost,
+  prepared: PreparedAgentChatTurn,
+): Promise<PreparedChatExecutionPlanResolution | undefined> {
+  const mode = prepared.effectiveMode;
   const runtime = host.llmService.getRuntimeConfig({
     useCache: true,
   });

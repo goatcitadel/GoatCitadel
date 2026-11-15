@@ -6179,53 +6179,19 @@ export function validateUniversalRunDetailTrace(trace, expected) {
 }
 
 export function validateCanonicalPlanningTurn(turn, sessionId, objective) {
-  const plan = turn?.trace?.executionPlan;
+  // Plan first asks the model: the answer is the model reply, and the turn stays advisory (no drafted
+  // execution plan, no tool run, no delegation).
   if (
-    !plan ||
-    plan.sessionId !== sessionId ||
-    plan.turnId !== turn.turnId ||
-    plan.planId !== turn.trace.executionPlanId ||
-    plan.mode !== "chat" ||
-    plan.planningMode !== "advisory" ||
-    plan.advisoryOnly !== true ||
-    plan.objective !== objective ||
-    !Array.isArray(plan.steps) ||
-    plan.steps.length === 0
+    !turn ||
+    (turn.sessionId !== undefined && turn.sessionId !== sessionId) ||
+    (turn.userMessage?.content !== undefined && turn.userMessage.content !== objective) ||
+    turn.trace?.executionPlan ||
+    turn.trace?.executionPlanId ||
+    (turn.trace?.toolRuns ?? []).length > 0
   )
-    throw new Error("planning turn lost the exact advisory plan and Chat correlation");
-  const ids = new Set(plan.steps.map((step) => step.stepId));
-  if (
-    ids.size !== plan.steps.length ||
-    plan.steps.some(
-      (step, index) =>
-        step.index !== index || !step.objective || (step.dependsOnStepIds ?? []).some((id) => !ids.has(id)),
-    )
-  )
-    throw new Error("planning turn has invalid ordered steps or dependencies");
-  const lines = plan.steps.map((step) =>
-    [
-      `${step.index + 1}. ${step.objective}`,
-      step.successCriteria ? `Success: ${step.successCriteria}` : undefined,
-      step.expectedOutput ? `Output: ${step.expectedOutput}` : undefined,
-      step.suggestedTools?.length ? `Suggested tools: ${step.suggestedTools.join(", ")}` : undefined,
-      step.dependsOnStepIds?.length ? `Depends on: ${step.dependsOnStepIds.join(", ")}` : undefined,
-      step.delegatedRole ? `Delegated role: ${step.delegatedRole}` : undefined,
-    ]
-      .filter(Boolean)
-      .join("\n   "),
-  );
-  const expected = [
-    "## Chat plan",
-    "",
-    `Objective: ${objective}`,
-    "",
-    plan.summary,
-    "",
-    "Planned steps:",
-    ...lines,
-  ].join("\n");
-  if (turn.assistantMessage?.content !== expected)
-    throw new Error("planning response differs from its persisted exact plan");
+    throw new Error("planning turn drafted a template plan or ran work instead of staying an advisory model answer");
+  if (turn.assistantMessage?.content !== DETERMINISTIC_LLM_DEFAULT_REPLY)
+    throw new Error("planning response differs from the model reply");
   return true;
 }
 

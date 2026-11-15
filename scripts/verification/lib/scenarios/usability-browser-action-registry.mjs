@@ -163,7 +163,7 @@ const STEPS = [
     text("Planning mode is on"),
     fill("Message composer", "Plan this deterministic usability turn."),
     click("Send"),
-    text("Chat plan"),
+    text("Verification stub reply."),
     api("planning-turn-completed"),
     click("Turn planning off"),
     api("delegate-suggest-accept"),

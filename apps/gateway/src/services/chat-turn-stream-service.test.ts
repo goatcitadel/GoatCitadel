@@ -1162,6 +1162,41 @@ describe("streamPreparedAgentChatTurn", () => {
     expect(dispose).toHaveBeenCalledTimes(1);
   });
 
+  it("answers a Plan first turn through the ordinary runtime with no orchestration, plan record or delegation", async () => {
+    const host = createHost();
+    host.turnRuntime.runStream = vi.fn(async function* () {
+      yield {
+        type: "message_done",
+        sessionId: "session-1",
+        turnId: "turn-1",
+        messageId: "assistant-1",
+        content: "1. Clear the shelf.\n2. Sort the books.\n3. Put them back.",
+      };
+    }) as never;
+    const prepared = createPreparedTurn() as any;
+    prepared.prefs.planningMode = "advisory";
+    prepared.effectiveToolAutonomy = "manual";
+
+    for await (const _chunk of streamPreparedAgentChatTurn(
+      host,
+      "session-1",
+      { content: "Plan three steps to tidy a small bookshelf." } as never,
+      prepared,
+      "chat_thread_turn_appended",
+      undefined,
+    )) {
+      // Drain the turn.
+    }
+
+    expect(host.turnRuntime.runStream).toHaveBeenCalledTimes(1);
+    const runnerInput = vi.mocked(host.turnRuntime.runStream).mock.calls[0]?.[0] as any;
+    expect(runnerInput.toolAutonomy).toBe("manual");
+    expect(host.createChatCompletion).not.toHaveBeenCalled();
+    expect(host.agentSendChatMessage).not.toHaveBeenCalled();
+    expect(host.storage.chatExecutionPlans.create).not.toHaveBeenCalled();
+    expect(host.storage.chatDelegationRuns.create).not.toHaveBeenCalled();
+  });
+
   it("never registers an agent.fanout executor for a turn floored to subagentPolicy off (delegated-child shape)", async () => {
     const host = createHost();
     const register = vi.fn(() => vi.fn());

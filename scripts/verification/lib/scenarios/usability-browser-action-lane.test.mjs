@@ -84,23 +84,28 @@ test("verification entrypoints load before contracts build output exists", async
       ].join("\n"),
       "utf8",
     );
-    await fs.writeFile(requireBlocker, [
-      "const Module = require('node:module');",
-      "const originalLoad = Module._load;",
-      "Module._load = function (request, parent, isMain) {",
-      "  const resolved = Module._resolveFilename(request, parent, isMain);",
-      "  if (String(resolved).split(String.fromCharCode(92)).join('/').includes('/packages/contracts/dist/'))",
-      "    throw new Error('Contracts build output is unavailable during verification startup.');",
-      "  return originalLoad.apply(this, arguments);",
-      "};",
-    ].join("\n"), "utf8");
+    await fs.writeFile(
+      requireBlocker,
+      [
+        "const Module = require('node:module');",
+        "const originalLoad = Module._load;",
+        "Module._load = function (request, parent, isMain) {",
+        "  const resolved = Module._resolveFilename(request, parent, isMain);",
+        "  if (String(resolved).split(String.fromCharCode(92)).join('/').includes('/packages/contracts/dist/'))",
+        "    throw new Error('Contracts build output is unavailable during verification startup.');",
+        "  return originalLoad.apply(this, arguments);",
+        "};",
+      ].join("\n"),
+      "utf8",
+    );
     const blocked = new URL("../../../../packages/contracts/dist/index.js", import.meta.url).href;
     assert.throws(
       () =>
         execFileSync(
           process.execPath,
           [
-            "--require", requireBlocker,
+            "--require",
+            requireBlocker,
             "--experimental-loader",
             pathToFileURL(loader).href,
             "--input-type=module",
@@ -111,20 +116,30 @@ test("verification entrypoints load before contracts build output exists", async
         ),
       (error) => error.status === 1 && error.stderr.includes("Contracts build output is unavailable"),
     );
-    const requireTarget = fileURLToPath(new URL("../../../../packages/contracts/dist/gateway-startup-reads.js", import.meta.url));
+    const requireTarget = fileURLToPath(
+      new URL("../../../../packages/contracts/dist/gateway-startup-reads.js", import.meta.url),
+    );
     assert.throws(
-      () => execFileSync(process.execPath, [
-        "--require", requireBlocker,
-        "--input-type=module", "-e",
-        `const {createRequire}=await import('node:module'); createRequire(${JSON.stringify(import.meta.url)})(${JSON.stringify(requireTarget)});`,
-      ], { encoding: "utf8", timeout: 30_000 }),
+      () =>
+        execFileSync(
+          process.execPath,
+          [
+            "--require",
+            requireBlocker,
+            "--input-type=module",
+            "-e",
+            `const {createRequire}=await import('node:module'); createRequire(${JSON.stringify(import.meta.url)})(${JSON.stringify(requireTarget)});`,
+          ],
+          { encoding: "utf8", timeout: 30_000 },
+        ),
       (error) => error.status === 1 && error.stderr.includes("Contracts build output is unavailable"),
     );
     const entry = new URL("../scenarios.mjs", import.meta.url).href;
     const output = execFileSync(
       process.execPath,
       [
-        "--require", requireBlocker,
+        "--require",
+        requireBlocker,
         "--experimental-loader",
         pathToFileURL(loader).href,
         "--input-type=module",
@@ -201,52 +216,43 @@ test("profile-free blocker proof retains authenticated actor, cryptographic admi
   );
 });
 
-test("planning completion requires the exact persisted advisory response and ordered dependencies", () => {
-  const plan = {
-    planId: "plan-1",
-    sessionId: "session-1",
-    turnId: "turn-1",
-    mode: "chat",
-    planningMode: "advisory",
-    advisoryOnly: true,
-    objective: "Plan the fixture.",
-    summary: "Deterministic plan.",
-    steps: [{ stepId: "step-1", index: 0, objective: "Inspect fixture." }],
-  };
+test("planning completion requires the model reply with no drafted plan, tool run or delegation", () => {
   const turn = {
     turnId: "turn-1",
-    trace: { executionPlanId: "plan-1", executionPlan: plan },
-    assistantMessage: {
-      content:
-        "## Chat plan\n\nObjective: Plan the fixture.\n\nDeterministic plan.\n\nPlanned steps:\n1. Inspect fixture.",
-    },
+    sessionId: "session-1",
+    userMessage: { content: "Plan the fixture." },
+    trace: { toolRuns: [] },
+    assistantMessage: { content: "Verification stub reply." },
   };
   validateCanonicalPlanningTurn(turn, "session-1", "Plan the fixture.");
-  assert.throws(() => validateCanonicalPlanningTurn(turn, "other", "Plan the fixture."), /exact advisory plan/u);
-  assert.throws(() => validateCanonicalPlanningTurn(turn, "session-1", "Different objective."), /exact advisory plan/u);
+  assert.throws(() => validateCanonicalPlanningTurn(turn, "other", "Plan the fixture."), /drafted a template plan/u);
+  assert.throws(() => validateCanonicalPlanningTurn(turn, "session-1", "Different."), /drafted a template plan/u);
   assert.throws(
     () =>
       validateCanonicalPlanningTurn(
-        { ...turn, assistantMessage: { content: "Verification stub reply." } },
+        { ...turn, trace: { executionPlanId: "plan-1", executionPlan: { planId: "plan-1" } } },
         "session-1",
         "Plan the fixture.",
       ),
-    /differs from its persisted exact plan/u,
+    /drafted a template plan/u,
   );
   assert.throws(
     () =>
       validateCanonicalPlanningTurn(
-        {
-          ...turn,
-          trace: {
-            ...turn.trace,
-            executionPlan: { ...plan, steps: [{ ...plan.steps[0], dependsOnStepIds: ["foreign"] }] },
-          },
-        },
+        { ...turn, trace: { toolRuns: [{ toolName: "fs.write" }] } },
         "session-1",
         "Plan the fixture.",
       ),
-    /dependencies/u,
+    /drafted a template plan/u,
+  );
+  assert.throws(
+    () =>
+      validateCanonicalPlanningTurn(
+        { ...turn, assistantMessage: { content: "## Chat plan" } },
+        "session-1",
+        "Plan the fixture.",
+      ),
+    /differs from the model reply/u,
   );
 });
 
@@ -782,7 +788,10 @@ test("prompt-pack compare proof classifies exact execution, memory-distiller, an
       validatePromptPackBenchmarkDispatchRecords(
         benchmarkRecords.map((record, index) =>
           index === 0
-            ? { ...record, promptMetadata: { ...record.promptMetadata, roles: ["system", "system", "assistant", "user"] } }
+            ? {
+                ...record,
+                promptMetadata: { ...record.promptMetadata, roles: ["system", "system", "assistant", "user"] },
+              }
             : record,
         ),
         0,
