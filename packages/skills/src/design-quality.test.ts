@@ -251,6 +251,50 @@ async function createFixture(
   return root;
 }
 
+describe("installs without the source files", () => {
+  const SOURCE_CHECKS = [
+    "mission-control.tokens",
+    "mission-control.raw-color-budget",
+    "design-quality.proof-lanes",
+    "skills.routing-hints.design-quality",
+    "mission-control.anti-slop.scan",
+    "mission-control.craft-floor.scan",
+  ];
+
+  it("reports the source-file checks as not checked, and leaves the bundled skill checks as they are", async () => {
+    const root = await createFixture();
+    await fs.rm(path.join(root, "apps"), { recursive: true, force: true });
+
+    const snapshot = readDesignQualityEvidence(root);
+
+    for (const id of SOURCE_CHECKS) {
+      const found = snapshot.checks.find((item) => item.id === id);
+      expect(found, id).toMatchObject({
+        status: "unknown",
+        severity: "P3",
+        nextAction: "Not checked: this install does not hold GoatCitadel's source files, which this check reads.",
+      });
+    }
+    expect(snapshot.summary.blockingCount).toBe(0);
+    expect(snapshot.summary.unknownCount).toBe(SOURCE_CHECKS.length);
+    expect(snapshot.warnings).toContain(
+      "Source checks were skipped because this install does not hold GoatCitadel's source files.",
+    );
+    expect(snapshot.checks.find((item) => item.id === "impeccable.modules")).toMatchObject({ status: "passing" });
+    expect(hasBlockingDesignQualityFindings(snapshot)).toBe(false);
+  });
+
+  it("keeps every check's own status when the source files are present", async () => {
+    const snapshot = readDesignQualityEvidence(await createFixture());
+
+    expect(snapshot.summary.unknownCount).toBe(0);
+    expect(snapshot.checks.find((item) => item.id === "mission-control.tokens")).toMatchObject({ status: "passing" });
+    expect(snapshot.warnings).not.toContain(
+      "Source checks were skipped because this install does not hold GoatCitadel's source files.",
+    );
+  });
+});
+
 describe("craft-floor advisory scan", () => {
   it("reports cockpit and shared-component hits as an advisory with per-rule counts", async () => {
     const root = await createFixture();
