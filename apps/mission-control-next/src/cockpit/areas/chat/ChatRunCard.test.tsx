@@ -43,6 +43,12 @@ describe("ChatRunCard", () => {
     expect(markup).not.toContain("0 of 4 steps done");
   });
 
+  it("says a one-step plan that did not run in the singular", () => {
+    const markup = renderToStaticMarkup(<ChatRunCard props={runWith(["pending"])} />);
+    expect(markup).toContain("Plan written; its 1 step did not run.");
+    expect(markup).not.toContain("none of its");
+  });
+
   it("still counts finished steps for a completed run that did work", () => {
     const markup = renderToStaticMarkup(
       <ChatRunCard props={runWith(["completed", "pending"])} durableRunId="durable-1" />,

@@ -58,7 +58,11 @@ export function ChatRunCard({
       {run?.steps.length ? (
         <p className="mt-2 text-xs text-fg-muted">
           {planOnly ? (
-            `Plan written; none of its ${plural(run.steps.length, "step")} ran.`
+            run.steps.length === 1 ? (
+              "Plan written; its 1 step did not run."
+            ) : (
+              `Plan written; none of its ${plural(run.steps.length, "step")} ran.`
+            )
           ) : (
             <>
               {completed} of {run.steps.length} steps done · Latest:{" "}
