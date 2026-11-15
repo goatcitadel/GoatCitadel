@@ -43,7 +43,12 @@ export function SheetDrawerRuntime({
             <div className="mb-3 flex items-center justify-between gap-4">
               <Drawer.Title className="font-display text-md font-semibold text-fg">{title}</Drawer.Title>
               <Drawer.Close asChild>
-                <IconButton ref={sdkClose} label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
+                <IconButton
+                  ref={sdkClose}
+                  label={closeLabel}
+                  nameOnFocus={false}
+                  icon={<X aria-hidden="true" className="size-4" />}
+                />
               </Drawer.Close>
             </div>
             {children}

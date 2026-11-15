@@ -15,7 +15,10 @@ import {
 } from "react";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { getGatewayAccessRevision, subscribeGatewayAccessChange } from "@goatcitadel/mission-control-shared/api/access-scope";
+import {
+  getGatewayAccessRevision,
+  subscribeGatewayAccessChange,
+} from "@goatcitadel/mission-control-shared/api/access-scope";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { IconButton } from "../ui/IconButton";
 import {
@@ -224,7 +227,9 @@ export function InspectorPanel() {
         handoff={handoff}
       >
         <p data-inspector-body="true" role={failed ? "alert" : "status"} className="text-sm text-fg-muted">
-          {failed ? "Inspector controls could not load. Close the inspector to keep using the app." : "Loading inspector…"}
+          {failed
+            ? "Inspector controls could not load. Close the inspector to keep using the app."
+            : "Loading inspector…"}
         </p>
       </PendingDialog>
     );
@@ -248,7 +253,12 @@ export function InspectorPanel() {
         </h2>
         <div className="flex shrink-0 gap-1">
           {controls ? <controls.InspectorExpandButton onExpand={() => setExpanded(true)} /> : null}
-          <IconButton label="Close inspector" icon={<X className="size-4" aria-hidden="true" />} onClick={close} />
+          <IconButton
+            label="Close inspector"
+            nameOnFocus={false}
+            icon={<X className="size-4" aria-hidden="true" />}
+            onClick={close}
+          />
         </div>
       </header>
       {failed ? (

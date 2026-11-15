@@ -57,7 +57,7 @@ export function DialogRuntime({
             </div>
             {actions}
             <DialogPrimitive.Close asChild>
-              <IconButton label={closeLabel} icon={<X aria-hidden="true" className="size-4" />} />
+              <IconButton label={closeLabel} nameOnFocus={false} icon={<X aria-hidden="true" className="size-4" />} />
             </DialogPrimitive.Close>
           </div>
           {children}
