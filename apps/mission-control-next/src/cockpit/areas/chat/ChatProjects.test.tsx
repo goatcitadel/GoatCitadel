@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { beforeEach, afterEach, expect, it, vi } from "vitest";
 import type { ChatProjectRecord } from "@goatcitadel/contracts";
+import { PROJECT_WORKSPACE_PATH_RULE } from "@goatcitadel/contracts";
 import { ChatProjects } from "./ChatProjects";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import { commitCockpitNavigation } from "../../app/cockpit-history";
@@ -59,7 +60,7 @@ const project = (changes: Partial<ChatProjectRecord> = {}): ChatProjectRecord =>
   projectId: "project-a",
   workspaceId: "workspace-a",
   name: "Project Alpha",
-  workspacePath: "F:/authorized/alpha",
+  workspacePath: "projects/alpha",
   description: "Alpha description",
   color: "teal",
   revision: 2,
@@ -175,7 +176,7 @@ it("reads only the scoped canonical list, creates all public fields, and opens t
   expect(api.create).not.toHaveBeenCalled();
   expect(host.textContent).toContain("required");
   await input("Project name", "New Alpha");
-  await input("Workspace path", "F:/authorized/new");
+  await input("Workspace path", "projects/new");
   await input("Project description", "Preserved context");
   await input("Project color", "blue");
   await click("Create project");
@@ -183,7 +184,7 @@ it("reads only the scoped canonical list, creates all public fields, and opens t
     workspaceId: "workspace-a",
     citadelId: "citadel-a",
     name: "New Alpha",
-    workspacePath: "F:/authorized/new",
+    workspacePath: "projects/new",
     description: "Preserved context",
     color: "blue",
   });
@@ -227,7 +228,7 @@ it("keeps a conflicting edit draft, exposes fresh fields and only retries after 
   await render();
   await click("Edit project");
   await input("Project name", "My draft");
-  const savedPath = `F:/authorized/${"long-directory-segment".repeat(12)}/canonical`;
+  const savedPath = `projects/${"long-directory-segment".repeat(12)}/canonical`;
   const conflictError = `Revision conflict at ${savedPath}`;
   api.update.mockImplementationOnce(async () => {
     records = [project({ name: "Concurrent edit", workspacePath: savedPath, revision: 7 })];
@@ -241,7 +242,7 @@ it("keeps a conflicting edit draft, exposes fresh fields and only retries after 
   expect(host.textContent).toContain("Current saved project: Concurrent edit");
   expect(host.textContent).toContain(savedPath);
   expect(host.querySelector('[role="alert"]')?.textContent).toContain(conflictError);
-  expect([...host.querySelectorAll("input")].some((item) => item.value === "F:/authorized/alpha")).toBe(true);
+  expect([...host.querySelectorAll("input")].some((item) => item.value === "projects/alpha")).toBe(true);
   expect([...host.querySelectorAll("input")].some((item) => item.value === "My draft")).toBe(true);
   await click("Use current version with my draft");
   await click("Save project");
@@ -276,7 +277,7 @@ it("does not publish a late create into another workspace", async () => {
   await render();
   await click("New project");
   await input("Project name", "Delayed");
-  await input("Workspace path", "F:/authorized/late");
+  await input("Workspace path", "projects/late");
   await click("Create project");
   scope.activeWorkspaceId = "workspace-b";
   await render();
@@ -379,4 +380,68 @@ it("renders rows as hairline-separated items, not bordered cards", async () => {
     // The last row drops its hairline so the list has no trailing rule.
     expect(row.className).toContain("[li:last-child_&]:border-b-0");
   }
+});
+it("refuses a drive-letter folder with the plain rule and sends nothing", async () => {
+  await render();
+  await click("New project");
+  await input("Project name", "Drive");
+  await input("Workspace path", "C:/Windows/Temp/x");
+  await click("Create project");
+  expect(api.create).not.toHaveBeenCalled();
+  expect(host.textContent).toContain(PROJECT_WORKSPACE_PATH_RULE);
+  await input("Workspace path", "../../outside");
+  await click("Create project");
+  expect(api.create).not.toHaveBeenCalled();
+  expect(host.textContent).toContain(PROJECT_WORKSPACE_PATH_RULE);
+  await input("Workspace path", "projects/review");
+  await click("Create project");
+  expect(api.create).toHaveBeenCalledTimes(1);
+});
+it("explains the folder field and joins a Gateway refusal to the draft sentence with one full stop", async () => {
+  await render();
+  await click("New project");
+  expect(host.textContent).toContain("A folder inside the workspace folder, written relative to it.");
+  expect(document.querySelector<HTMLInputElement>('input[placeholder="projects/website"]')).not.toBeNull();
+  api.create.mockRejectedValueOnce(new Error("Something was refused"));
+  await input("Project name", "Refused");
+  await input("Workspace path", "projects/refused");
+  await click("Create project");
+  const text = host.textContent ?? "";
+  expect(text).toContain("Your draft is preserved. Check the saved project before retrying.");
+  expect(text).not.toMatch(/\.\.\s*Your draft/);
+  expect(text).not.toMatch(/refused\s+Your draft/i);
+  expect(text).toMatch(/\.\s*Your draft is preserved/);
+});
+it("warns about a saved folder outside the workspace folder and still saves other edits", async () => {
+  records = [project({ workspacePath: "C:/legacy" })];
+  window.history.replaceState(null, "", "/chat/projects/project-a");
+  await render();
+  expect(host.textContent).toContain(
+    "This project's folder is outside the workspace folder. Edit the project and choose a folder inside it, for example projects/website.",
+  );
+  await click("Edit project");
+  await input("Project description", "Only the description");
+  await click("Save project");
+  expect(api.update).toHaveBeenCalledWith(
+    "project-a",
+    expect.objectContaining({ workspacePath: "C:/legacy", description: "Only the description" }),
+  );
+});
+it("shows a kept project draft on the project page and clears it when saved", async () => {
+  window.history.replaceState(null, "", "/chat/projects/project-a");
+  await render();
+  expect(host.textContent).not.toContain("Unsaved draft");
+  await click("Edit project");
+  await input("Project description", "Typed but not saved");
+  await click("Cancel");
+  await click("Keep draft and close");
+  expect([...host.querySelectorAll("button")].some((item) => item.textContent === "Edit project · Unsaved draft")).toBe(
+    true,
+  );
+  expect(host.textContent).toContain("You have an unsaved draft of this project. Open Edit project to finish it.");
+  await click("Edit project · Unsaved draft");
+  expect([...host.querySelectorAll("input")].some((item) => item.value === "Typed but not saved")).toBe(true);
+  await click("Save project");
+  expect(api.update).toHaveBeenCalledTimes(1);
+  expect(host.textContent).not.toContain("Unsaved draft");
 });
