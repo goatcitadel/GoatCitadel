@@ -5,6 +5,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -41,6 +42,8 @@ type ChatApprovalRendererProps = Omit<DecisionProps, "approval" | "workspaceId">
   recovery?: RecordRecovery;
   /** Called when the settled decision's follow-on work changes, so Chat re-reads its thread and queue. */
   onFollowOnChange?: () => void;
+  /** GoatCitadel is unreachable: a decision could not be sent, so the buttons wait for the connection. */
+  connectionLost?: boolean;
 };
 
 type RecordRecovery = {
@@ -106,8 +109,10 @@ export function ChatApprovalRenderer({
   recordPending,
   recovery,
   onFollowOnChange,
+  connectionLost,
   ...decisionProps
 }: ChatApprovalRendererProps) {
+  const pausedNoteId = useId();
   const callerRevision = useSyncExternalStore(
     subscribeGatewayCallerScope,
     getGatewayCallerScopeRevision,
@@ -233,7 +238,17 @@ export function ChatApprovalRenderer({
               {record.status === "pending" ? "Loading approval controls…" : "Loading follow-on work…"}
             </p>
           ) : code.kind === "decision" ? (
-            <>
+            <fieldset
+              disabled={connectionLost}
+              aria-describedby={connectionLost ? pausedNoteId : undefined}
+              className="m-0 min-w-0 border-0 p-0"
+            >
+              {connectionLost ? (
+                <p id={pausedNoteId} className="mb-2 text-fg-secondary">
+                  GoatCitadel is unreachable, so this decision can't be sent. Approve and Deny come back when the
+                  connection returns.
+                </p>
+              ) : null}
               <code.ApprovalDecisionBar key={scope} {...decisionProps} approval={record} />
               {decisionProps.sessionId ? (
                 <DeferredOutsideRootWriteGrantOptions
@@ -244,7 +259,7 @@ export function ChatApprovalRenderer({
                   onResolved={decisionProps.onResolved}
                 />
               ) : null}
-            </>
+            </fieldset>
           ) : (
             <code.ApprovalSettlement
               key={scope}

@@ -49,7 +49,14 @@ function errandScreenshotAttachmentId(preview: Record<string, unknown> | undefin
   return typeof id === "string" && id.trim() ? id.trim() : undefined;
 }
 
-export function ChatBlockers({ props }: { props: Blockers }) {
+export function ChatBlockers({
+  props,
+  gatewayUnavailable,
+}: {
+  props: Blockers;
+  /** The Gateway cannot be reached, so decisions cannot be sent. */
+  gatewayUnavailable?: boolean;
+}) {
   const { activeWorkspaceId } = useUiPreferences();
   const workspaceId = activeWorkspaceId ?? "default";
   const { search, hash } = useCockpitRoute();
@@ -273,6 +280,7 @@ export function ChatBlockers({ props }: { props: Blockers }) {
               props.onRefreshThread();
             }}
             onFollowOnChange={props.onRefreshThread}
+            connectionLost={gatewayUnavailable}
           />
           {expired ? (
             <div className="mt-2 flex flex-wrap items-center gap-2">

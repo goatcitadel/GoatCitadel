@@ -169,6 +169,7 @@ function renderDirect({
   sessionId = "session-a",
   approval = record,
   onResolved = resolved,
+  connectionLost = false,
 } = {}) {
   root.render(
     <QueryClientProvider client={client}>
@@ -183,6 +184,7 @@ function renderDirect({
         recordPending={false}
         onResolved={onResolved}
         onInvalidated={invalidated}
+        connectionLost={connectionLost}
       />
     </QueryClientProvider>,
   );
@@ -256,12 +258,39 @@ it.each([{}, { outsideRootWrite: {} }, { outsideRootWrite: { kind: "outside_root
     expect(api.resolveApproval).not.toHaveBeenCalled();
   },
 );
+it("pauses decisions while GoatCitadel is unreachable and resumes them by itself (U-CH-027)", async () => {
+  await act(async () => renderDirect({ connectionLost: true }));
+  await act(async () => {
+    await Promise.all([...bodyLoads]);
+  });
+  expect(host.textContent).toContain(
+    "GoatCitadel is unreachable, so this decision can't be sent. Approve and Deny come back when the connection returns.",
+  );
+  for (const label of ["Approve once", "Deny"]) {
+    expect(button(label)?.closest("fieldset")?.disabled).toBe(true);
+  }
+  expect(host.querySelector("fieldset")?.getAttribute("aria-describedby")).toBeTruthy();
+  await act(async () => renderDirect({ connectionLost: false }));
+  expect(host.querySelector("fieldset")?.disabled).toBe(false);
+  expect(host.querySelector("fieldset")?.hasAttribute("aria-describedby")).toBe(false);
+  expect(host.textContent).not.toContain("GoatCitadel is unreachable");
+  expect(button("Approve once")).toBeDefined();
+  expect(api.resolveApproval).not.toHaveBeenCalled();
+});
 it("loads grant code when current pending candidates are valid", async () => {
-  record = { ...record, preview: { targets: ["C:/Scratch/report/out.txt"], outsideRootWrite: {
-    kind: "outside_root_write", targets: ["C:/Scratch/report/out.txt"],
-    candidates: [{ rootId: "owr_0123456789abcdef", path: "C:/Scratch/report" }],
-    durations: ["15m", "1h", "8h"], defaultDuration: "1h",
-  } } };
+  record = {
+    ...record,
+    preview: {
+      targets: ["C:/Scratch/report/out.txt"],
+      outsideRootWrite: {
+        kind: "outside_root_write",
+        targets: ["C:/Scratch/report/out.txt"],
+        candidates: [{ rootId: "owr_0123456789abcdef", path: "C:/Scratch/report" }],
+        durations: ["15m", "1h", "8h"],
+        defaultDuration: "1h",
+      },
+    },
+  };
   await act(async () => renderDirect());
   await vi.waitFor(() => expect(host.textContent).toContain("Or approve and open a folder"));
   expect(grantLoads.count).toBe(1);
