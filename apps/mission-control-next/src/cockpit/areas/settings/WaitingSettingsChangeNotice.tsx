@@ -12,7 +12,8 @@ function isUnreadable(waiting: WaitingSettingsNotice): waiting is { planId: stri
 
 /**
  * Says an earlier change to this setting is still open and leads to it: its own approval opens in place (the
- * existing approval from the Gateway's conflict, never a new one), or Inbox when it cannot be read.
+ * existing approval from the Gateway's conflict, never a new one), or Inbox when it cannot be read. The sentences are
+ * plain paragraphs, not live regions: the cockpit's live-region budget only goes down.
  */
 export function WaitingSettingsChangeNotice({
   waiting,
@@ -31,7 +32,7 @@ export function WaitingSettingsChangeNotice({
 
   if (isUnreadable(waiting))
     return (
-      <p role="status" className="mt-3 text-sm text-status-waiting">
+      <p className="mt-3 text-sm text-status-waiting">
         One change to this {subject} is already waiting.{" "}
         <NativeOwnerLink href="/inbox?workspaceId=default" scope={waiting.planId}>
           Open Inbox
@@ -42,7 +43,7 @@ export function WaitingSettingsChangeNotice({
   if (approvalId)
     return (
       <div className="mt-3 flex flex-wrap items-center gap-2 text-sm text-status-waiting">
-        <p role="status">One change to this {subject} is already waiting for your approval.</p>
+        <p>One change to this {subject} is already waiting for your approval.</p>
         <SettingsApprovalDialog
           approvalId={approvalId}
           {...(waiting.title ? { title: waiting.title } : {})}
@@ -52,7 +53,7 @@ export function WaitingSettingsChangeNotice({
       </div>
     );
   return (
-    <p role="status" className="mt-3 text-sm text-status-waiting">
+    <p className="mt-3 text-sm text-status-waiting">
       One change to this {subject} is still being applied. Refresh in a moment to see it.
     </p>
   );
