@@ -1,5 +1,5 @@
 import { useRef, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import type { DocsIngestInput } from "@goatcitadel/contracts";
 import {
   knowledgeDocsIngest,
@@ -60,6 +60,7 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
   );
   const [resultAuthorized, setResultAuthorized] = useState(false);
   const pending = useRef(false);
+  const client = useQueryClient();
   const resultRequest = useRef(0);
   const gatewayUrl = getGatewayApiBaseUrl();
   const currentReview = useRef({ review, workspaceId, gatewayUrl });
@@ -105,6 +106,9 @@ function KnowledgeActions({ workspaceId }: { workspaceId: string }) {
         rows: receipt.state === "completed" && Array.isArray(result.items) ? result.items.map(record) : undefined,
         documentId: receipt.state === "completed" && typeof document.docId === "string" ? document.docId : undefined,
       });
+      // A completed ingest adds a stored source, so the Knowledge sources list reads again.
+      if (receipt.state === "completed")
+        void client.invalidateQueries({ queryKey: ["library", "knowledge-documents"] });
     } catch (cause) {
       if (
         operation.current() &&
