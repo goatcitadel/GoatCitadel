@@ -1,6 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { DesktopUpdateStatus } from "@goatcitadel/contracts";
 import { summarizeHealthChecks } from "./health-overview";
+import { firstRunModelSummary } from "../settings/first-run-summaries";
+import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { deriveSystemHealthChecks, hasDeferredHealthChecks } from "./system-health";
 import type { SystemHealthSources } from "./system-health-sources";
 
@@ -88,5 +90,55 @@ describe("complete cockpit health projection", () => {
     expect(ids).not.toContain("channels");
     expect(ids).not.toContain("remote_workers");
     expect(ids).toContain("models");
+  });
+});
+
+describe("Default model check", () => {
+  const defaultModel = (sources: SystemHealthSources) =>
+    deriveSystemHealthChecks(sources, null).find((item) => item.id === "default_model");
+
+  it("counts a missing default model as needing attention and points to setup", () => {
+    const onboarding = onboardingFixture();
+    onboarding.settings.llm.activeProviderId = "";
+    onboarding.settings.llm.activeModel = "";
+    const check = defaultModel({ ...missing, onboarding: { state: "current", value: onboarding } });
+    expect(check).toMatchObject({
+      title: "Default model",
+      status: { label: "Not set up", tone: "waiting" },
+      detail: "No model is set up, so Chat can't answer yet. Open setup to choose one.",
+      inspectPath: "/settings/first-run",
+    });
+    expect(summarizeHealthChecks([check!]).label).not.toContain("no problems");
+  });
+
+  it("reads a ready default model as Ready with its name", () => {
+    const onboarding = onboardingFixture();
+    const check = defaultModel({ ...missing, onboarding: { state: "current", value: onboarding } });
+    expect(check?.status).toEqual({ label: "Ready", tone: "done" });
+    expect(check?.detail).toBe(`New Chats use ${firstRunModelSummary(onboarding)}.`);
+    expect(check?.inspectPath).toBe("/settings/models");
+  });
+
+  it("needs review when the model is chosen but its provider is not ready", () => {
+    const onboarding = onboardingFixture();
+    onboarding.setupReadiness!.items = [
+      { id: "provider", label: "Provider", status: "needs_input", value: "Provider A", detail: "No key" },
+    ] as never;
+    const check = defaultModel({ ...missing, onboarding: { state: "current", value: onboarding } });
+    expect(check?.status).toEqual({ label: "Needs review", tone: "waiting" });
+    expect(check?.detail).toBe(
+      `New Chats use ${firstRunModelSummary(onboarding)}, but its provider is not ready. Check the connection in Settings › Models.`,
+    );
+  });
+
+  it("keeps an unreadable model setup Unknown, never Not set up", () => {
+    const check = defaultModel({ ...missing, onboarding: { state: "unavailable", detail: "Unavailable" } });
+    expect(check?.status).toEqual({ label: "Unknown", tone: "neutral" });
+    expect(check?.inspectPath).toBe("/settings/first-run");
+  });
+
+  it("adds no check when the source is absent or deferred", () => {
+    expect(defaultModel(missing)).toBeUndefined();
+    expect(defaultModel({ ...missing, onboarding: { state: "deferred" } })).toBeUndefined();
   });
 });

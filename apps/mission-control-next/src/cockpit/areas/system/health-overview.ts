@@ -14,6 +14,7 @@ export interface HealthCheck {
     | "service"
     | "backups"
     | "models"
+    | "default_model"
     | "channels"
     | "integrations"
     | "updates"

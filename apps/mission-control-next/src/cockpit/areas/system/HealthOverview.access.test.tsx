@@ -4,6 +4,7 @@ import { createRoot, type Root } from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+import { onboardingFixture } from "../../../features/native-routes/settings/onboarding.test-support";
 import { HealthOverview } from "./HealthOverview";
 const api = vi.hoisted(() => ({
   fetchHealthSummary: vi.fn(),
@@ -12,6 +13,7 @@ const api = vi.hoisted(() => ({
   fetchIntegrationConnections: vi.fn(),
   fetchChannelRuntimeStatus: vi.fn(),
   fetchRemoteWorkerRegistry: vi.fn(),
+  fetchOnboardingState: vi.fn(),
 }));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => api);
 vi.mock("@goatcitadel/mission-control-shared/api/remote-workers", () => ({
@@ -41,6 +43,7 @@ beforeEach(() => {
   api.fetchNpuStatus.mockResolvedValue({ enabled: false });
   api.fetchIntegrationConnections.mockResolvedValue({ items: [] });
   api.fetchRemoteWorkerRegistry.mockResolvedValue({ items: [] });
+  api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
   container = document.createElement("div");
   document.body.appendChild(container);
   root = createRoot(container);
@@ -103,9 +106,9 @@ it("reports no confirmed checks when every current owner is unavailable", async 
   Object.values(api).forEach((request) => request.mockRejectedValue(new TypeError("Failed to fetch")));
   await render();
   await tick(10);
-  expect(container.textContent).toContain("No health checks could be confirmed · 8 unverified");
+  expect(container.textContent).toContain("No health checks could be confirmed · 9 unverified");
   expect(container.textContent).not.toContain("All reachable checks report no problems");
-  expect(container.textContent).toContain("6 health sources are unavailable");
+  expect(container.textContent).toContain("7 health sources are unavailable");
 });
 
 it("shows stale prior observations after actual API transport rejection and clears them on recovery", async () => {

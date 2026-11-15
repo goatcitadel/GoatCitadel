@@ -4,6 +4,8 @@ import { channelAdvancedSetupHref, connectorSetupHref } from "../../app/routes";
 import type { BackupTrustState } from "./backup-trust";
 import type { HealthCheck } from "./health-overview";
 import { backupHealthCheck, BACKUP_INSPECT_PATH, RUNTIME_INSPECT_PATH, deriveHealthChecks } from "./health-overview";
+import { firstRunModelSummary } from "../settings/first-run-summaries";
+import { projectFirstRunState } from "../settings/first-run-state";
 import { retainedHealthObservations, staleHealthSources, type SystemHealthSources } from "./system-health-sources";
 
 export const HEALTH_SOURCE_LABELS: Readonly<Record<keyof SystemHealthSources, string>> = {
@@ -13,6 +15,7 @@ export const HEALTH_SOURCE_LABELS: Readonly<Record<keyof SystemHealthSources, st
   connections: "Connections",
   channels: "Channels",
   workers: "Worker registry",
+  onboarding: "Model setup",
 };
 
 function unknown(id: HealthCheck["id"], title: string, detail: string, inspectPath: string): HealthCheck {
@@ -46,6 +49,7 @@ export function deriveSystemHealthChecks(
     connections: ["integrations", "channels"],
     channels: ["channels"],
     workers: ["remote_workers"],
+    onboarding: ["default_model"],
   };
   return checks.map((check) => {
     const missing = stale.filter((source) => affected[source.name].includes(check.id));
@@ -123,6 +127,38 @@ function deriveCurrentSystemHealthChecks(
       status: unhealthy.length
         ? { label: "Needs review", tone: "failed" }
         : { label: "Reported healthy", tone: "done" },
+    } satisfies HealthCheck;
+  })();
+
+  const defaultModel = (() => {
+    const source = sources.onboarding;
+    if (!source || source.state === "deferred") return null;
+    if (source.state !== "current")
+      return unknown("default_model", "Default model", "Model setup could not be read.", "/settings/first-run");
+    const state = source.value;
+    if (!state.settings.llm.activeProviderId || !state.settings.llm.activeModel)
+      return {
+        id: "default_model",
+        title: "Default model",
+        inspectPath: "/settings/first-run",
+        detail: "No model is set up, so Chat can't answer yet. Open setup to choose one.",
+        status: { label: "Not set up", tone: "waiting" },
+      } satisfies HealthCheck;
+    const summary = firstRunModelSummary(state);
+    if (!projectFirstRunState(state).modelReady)
+      return {
+        id: "default_model",
+        title: "Default model",
+        inspectPath: "/settings/models",
+        detail: `New Chats use ${summary}, but its provider is not ready. Check the connection in Settings › Models.`,
+        status: { label: "Needs review", tone: "waiting" },
+      } satisfies HealthCheck;
+    return {
+      id: "default_model",
+      title: "Default model",
+      inspectPath: "/settings/models",
+      detail: `New Chats use ${summary}.`,
+      status: { label: "Ready", tone: "done" },
     } satisfies HealthCheck;
   })();
 
@@ -271,7 +307,9 @@ function deriveCurrentSystemHealthChecks(
             );
 
   // A deferred check runs on System › Health; it is left out here, never counted as missing proof.
-  return [...base, models, channels, integrations, updateCheck, workers].filter((check) => check !== null);
+  return [...base, models, defaultModel, channels, integrations, updateCheck, workers].filter(
+    (check) => check !== null,
+  );
 }
 
 /** Deferred sources are explicitly inspected on System › Health. */

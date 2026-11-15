@@ -1,5 +1,6 @@
 import type {
   ChannelRuntimeStatus,
+  OnboardingState,
   IntegrationConnection,
   LlamaCppRuntimeStatus,
   NpuRuntimeStatus,
@@ -23,7 +24,10 @@ export type HealthSource<T> =
     }
   | { state: "deferred" };
 
-export async function readHealthSource<T>(work: () => Promise<T>, previous?: HealthSource<T>): Promise<HealthSource<T>> {
+export async function readHealthSource<T>(
+  work: () => Promise<T>,
+  previous?: HealthSource<T>,
+): Promise<HealthSource<T>> {
   // Only the caller's installation/workspace/access-scoped query record can suppress this read.
   if (previous?.state === "unavailable" && previous.retryable === false) return previous;
   try {
@@ -75,11 +79,13 @@ export interface SystemHealthSources {
     checked: Array<{ connection: IntegrationConnection; runtime: HealthSource<ChannelRuntimeStatus> }>;
   }>;
   workers: HealthSource<RemoteWorkerRegistryPage>;
+  /** Model setup progress. Optional: absent means this caller does not read it. */
+  onboarding?: HealthSource<OnboardingState>;
 }
 
 export function staleHealthSources(sources: SystemHealthSources) {
   const stale = Object.entries(sources).flatMap(([name, source]) =>
-    source.state === "unavailable" && source.lastKnown
+    source?.state === "unavailable" && source.lastKnown
       ? [{ name: name as keyof SystemHealthSources, observedAt: source.lastKnown.observedAt }]
       : [],
   );
@@ -104,6 +110,7 @@ export function retainedHealthObservations(sources: SystemHealthSources): System
     npu: retained(sources.npu),
     connections: retained(sources.connections),
     workers: retained(sources.workers),
+    ...(sources.onboarding ? { onboarding: retained(sources.onboarding) } : {}),
     channels:
       channels.state === "current"
         ? {
@@ -134,6 +141,7 @@ export async function loadSystemHealthDigest(
     connections: { state: "deferred" },
     channels: { state: "deferred" },
     workers: { state: "deferred" },
+    onboarding: { state: "deferred" },
   };
 }
 
