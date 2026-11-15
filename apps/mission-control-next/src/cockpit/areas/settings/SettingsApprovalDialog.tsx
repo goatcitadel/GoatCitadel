@@ -5,6 +5,7 @@ import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals
 import { presentRiskLevel } from "@goatcitadel/mission-control-shared/content/status-vocabulary";
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useProjectAccess } from "../../../features/native-routes/projects/use-project-access";
+import { registerApprovalHandledInPlace } from "../../data/approvals-handled-in-place";
 import { queryKeys } from "../../data/query-keys";
 import { ApprovalDecisionBar } from "../inbox/ApprovalDecisionBar";
 import { ApprovalReviewSummary } from "../inbox/ApprovalReviewSummary";
@@ -108,6 +109,9 @@ export function SettingsApprovalDialog({
     () => reopenAsks.get(approvalId) ?? 0,
     () => 0,
   );
+
+  // While this dialog is mounted the approval is decided here, so its Inbox notification would only sit on top of it.
+  useEffect(() => registerApprovalHandledInPlace(approvalId), [approvalId]);
 
   // Opens once per approval, and again after each ask to reopen it (which clears it from `offered`).
   useEffect(() => {

@@ -9,6 +9,7 @@ import type { OperatorInboxResponse, RealtimeEvent } from "@goatcitadel/contract
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { useCockpitRealtime } from "./realtime";
 import { queryKeys } from "./query-keys";
+import { __resetApprovalsHandledInPlaceForTests, registerApprovalHandledInPlace } from "./approvals-handled-in-place";
 import { setGatewayCallerScope } from "@goatcitadel/mission-control-shared/api/access-scope";
 
 const mocks = vi.hoisted(() => ({
@@ -130,7 +131,12 @@ it("keeps replay silent and drops a live attention read if access changes while 
   await emit(event, true);
   expect(mocks.loadAttention).not.toHaveBeenCalled();
   let release!: () => void;
-  mocks.loadAttention.mockImplementationOnce(() => new Promise<void>((resolve) => { release = resolve; }));
+  mocks.loadAttention.mockImplementationOnce(
+    () =>
+      new Promise<void>((resolve) => {
+        release = resolve;
+      }),
+  );
   await act(async () => {
     onEvent(event, { replayed: false });
     await vi.waitFor(() => expect(mocks.loadAttention).toHaveBeenCalledOnce());
@@ -524,6 +530,18 @@ describe("cockpit owner-backed notifications", () => {
     expect(mocks.warning).not.toHaveBeenCalled();
     expect(mocks.sound).not.toHaveBeenCalled();
     expect(mocks.desktop).not.toHaveBeenCalled();
+  });
+});
+describe("approval notifications for an approval a dialog is already offering", () => {
+  afterEach(() => __resetApprovalsHandledInPlaceForTests());
+  it("shows no Inbox toast on top of a dialog that is deciding the approval, and shows it once that dialog is gone", async () => {
+    const release = registerApprovalHandledInPlace("a");
+    await render();
+    await emit();
+    expect(mocks.warning).not.toHaveBeenCalled();
+    release();
+    await emit({ ...event, eventId: "later", sequence: 3 });
+    expect(mocks.warning).toHaveBeenCalledOnce();
   });
 });
 describe("approval notifications settled in place", () => {

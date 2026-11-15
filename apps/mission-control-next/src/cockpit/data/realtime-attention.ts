@@ -8,6 +8,7 @@ import { playOperatorAttentionSound } from "@goatcitadel/mission-control-shared/
 import type { UiNotificationPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { showBrowserNotification } from "../../app/browser-notification";
 import { requestCockpitToast } from "../ui/toast-runtime";
+import { isApprovalHandledInPlace } from "./approvals-handled-in-place";
 import { inboxItemLocation, resolveInboxNotificationItem } from "./inbox-notification";
 import { queryKeys } from "./query-keys";
 
@@ -124,7 +125,7 @@ export function createRealtimeAttention({
           const item = resolveInboxNotificationItem(projection, event, notification, scopeWorkspaceId);
           if (!item || delivered.has(item.id)) return;
           const approvalId = item.kind === "approval" ? item.source.approvalId : undefined;
-          if (approvalId && settledApprovalIds.has(approvalId)) return;
+          if (approvalId && (settledApprovalIds.has(approvalId) || isApprovalHandledInPlace(approvalId))) return;
           const focused = pageFocused();
           const preferences = readPreferences();
           const deliveryDecision = decideNotificationDelivery(notification, {
@@ -144,11 +145,7 @@ export function createRealtimeAttention({
             requestCockpitToast(
               (toast) => {
                 const show =
-                  notification.tone === "error"
-                    ? toast.error
-                    : notification.tone === "warning"
-                      ? toast.warning
-                      : toast;
+                  notification.tone === "error" ? toast.error : notification.tone === "warning" ? toast.warning : toast;
                 show(item.title, {
                   id,
                   description: item.summary,
@@ -160,7 +157,7 @@ export function createRealtimeAttention({
                 const currentPreferences = readPreferences();
                 return (
                   isCurrentWorkspace() &&
-                  !(approvalId && settledApprovalIds.has(approvalId)) &&
+                  !(approvalId && (settledApprovalIds.has(approvalId) || isApprovalHandledInPlace(approvalId))) &&
                   currentPreferences.toastsEnabled &&
                   !(currentPreferences.onlyWhenUnfocused && pageFocused()) &&
                   decideNotificationDelivery(notification, {
