@@ -100,14 +100,16 @@ export function GatewayAccessGate({
   useEffect(() => {
     const stored = readStoredGatewayAuthState();
     setAuthMode(access.authMode === "basic" ? "basic" : stored?.mode === "basic" ? "basic" : "token");
-    setToken(stored?.token ?? "");
-    setUsername(stored?.username ?? "");
-    setPassword(stored?.password ?? "");
+    // After a refusal the client has already cleared storage; keep what was typed (in this box only) so it can be fixed.
+    const keepTyped = access.rejectedStoredAuth === true;
+    setToken((current) => stored?.token ?? (keepTyped ? current : ""));
+    setUsername((current) => stored?.username ?? (keepTyped ? current : ""));
+    setPassword((current) => stored?.password ?? (keepTyped ? current : ""));
     setRemember(getGatewayAuthStorageMode() === "persistent");
     setFormError(null);
     setDeviceApprovalError(null);
     setDeviceLabel(inferPendingDeviceLabel());
-  }, [access.authMode, access.status]);
+  }, [access.authMode, access.status, access.rejectedStoredAuth]);
 
   useEffect(() => {
     if (access.status !== "needs-auth" || pendingDeviceApproval?.status !== "pending") {

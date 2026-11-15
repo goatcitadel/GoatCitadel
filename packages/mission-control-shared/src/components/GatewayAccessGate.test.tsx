@@ -318,6 +318,42 @@ describe("GatewayAccessGate", () => {
     expect(onRetry).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps the typed token after the gateway refuses it", async () => {
+    shellMocks.readStoredGatewayAuthState.mockReturnValue(undefined);
+    const render = (access: never) => (
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={access}
+        busy={false}
+        onRetry={() => undefined}
+      />
+    );
+    const renderer = create(render(needsAuthAccess({ authMode: undefined })));
+    await flushAsync();
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-token" }).props.onChange({ target: { value: "wrong-token" } });
+    });
+    await act(async () => {
+      renderer.update(
+        render(
+          needsAuthAccess({
+            authMode: "token",
+            rejectedStoredAuth: true,
+            message: "That token was refused. Check it and try again.",
+          }),
+        ),
+      );
+    });
+    expect(renderer.root.findByProps({ id: "gateway-access-token" }).props.value).toBe("wrong-token");
+    expect(renderer.root.findByProps({ id: "gateway-access-token" }).props.type).toBe("password");
+
+    // A fresh needs-auth state that is not a refusal still starts empty.
+    await act(async () => {
+      renderer.update(render(needsAuthAccess({ authMode: "token", rejectedStoredAuth: false })));
+    });
+    expect(renderer.root.findByProps({ id: "gateway-access-token" }).props.value).toBe("");
+  });
+
   it("supports basic credentials when requested by the gateway", async () => {
     const onRetry = vi.fn();
     const renderer = create(
