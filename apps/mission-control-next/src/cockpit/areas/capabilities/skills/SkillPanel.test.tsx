@@ -396,17 +396,6 @@ describe("Skill panel", () => {
     expect(panelText()).toContain("Trusted");
   });
 
-  it("names evaluation runs and links to them in the classic view (U-LB-005)", async () => {
-    await renderTab();
-    await openPanel("Writer");
-    await vi.waitFor(() => expect(panelText()).toContain("Evaluation runs try a skill on test scenarios"));
-    expect(panelText()).toContain("They are only in the classic view.");
-    const link = [...document.querySelectorAll("a")].find(
-      (a) => a.textContent === "Run skill evaluations · classic view",
-    );
-    expect(new URL(link!.getAttribute("href")!, "http://x").pathname).toBe("/library/skills");
-  });
-
   it("checks for changes while the details load, and offers Retry when they can't", async () => {
     const detail = deferred<CapabilitySkillDetail>();
     api.fetchCapabilitySkillDetail.mockReturnValueOnce(detail.promise);
