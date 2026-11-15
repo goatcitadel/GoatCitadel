@@ -245,8 +245,31 @@ it.each(["unknown", "error"] as const)("does not carry after an attempt ends as 
     attempt.state = state;
     publishChatSessionCreation(creationKey(), attempt);
   });
+  expect(observed.draft).toBe("typed");
   await act(async () => renderer!.update(<Harness session="s3" />));
   expect(observed.draft).toBe("own");
+  // The text stays with the conversation it was typed in, after the debounce, and is stored nowhere else.
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 450)));
+  expect(values.get(createDraftStorageKey("a", "s1"))).toBe("typed");
+  expect(values.get(createDraftStorageKey("a", "s3"))).toBe("own");
+  expect([...values.entries()].filter(([, value]) => value === "typed").map(([key]) => key)).toEqual([
+    createDraftStorageKey("a", "s1"),
+  ]);
+});
+
+it("carries text typed during creation when confirm and select land in a single commit", async () => {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await act(async () => observed.setDraft("typed during creation"));
+  await act(async () => {
+    attempt.sessionId = "s-new";
+    attempt.state = "confirmed";
+    publishChatSessionCreation(creationKey(), attempt);
+    renderer!.update(<Harness session="s-new" />);
+  });
+  expect(observed.draft).toBe("typed during creation");
 });
 
 it("keeps an attachment added during creation with the conversation it was added in", async () => {
