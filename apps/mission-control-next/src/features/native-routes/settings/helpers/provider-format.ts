@@ -235,12 +235,25 @@ type DesktopMobileContinuityItem = {
   actionLabel: string;
 };
 
+export function deviceAccessGrantStatus(
+  grant: Pick<DeviceAccessGrantRecord, "expiresAt" | "revokedAt">,
+  now: number,
+): "active" | "expired" | "revoked" | "unavailable" {
+  if (grant.revokedAt) return "revoked";
+  if (grant.expiresAt === undefined) return "active";
+  const expiry = Date.parse(grant.expiresAt);
+  if (!Number.isFinite(expiry)) return "unavailable";
+  return expiry <= now ? "expired" : "active";
+}
+
 export function deriveDesktopMobileContinuityItems(input: {
   settings: AccessSettingsSnapshot;
   grants: DeviceAccessGrantRecord[] | null;
   daemon: DaemonStatusSnapshot | null;
+  now?: number;
 }): DesktopMobileContinuityItem[] {
-  const activeGrants = input.grants?.filter((grant) => !grant.revokedAt);
+  const now = input.now ?? Date.now();
+  const activeGrants = input.grants?.filter((grant) => deviceAccessGrantStatus(grant, now) === "active");
   const mobileGrants = activeGrants?.filter((grant) => ["mobile", "tablet"].includes(grant.deviceType)).length;
   const desktopGrants = activeGrants?.filter((grant) => grant.deviceType === "desktop").length;
   const grantsUnavailable = input.grants === null;
