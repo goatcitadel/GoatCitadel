@@ -299,3 +299,27 @@ it.each<[string, ApprovalRequest, boolean | undefined]>([
     preferences.activeWorkspaceId = "default";
   }
 });
+
+it("still refuses an opted-in Settings approval when the bar's own workspace is not the default one", async () => {
+  preferences.activeWorkspaceId = "verification";
+  try {
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ApprovalDecisionBar
+            compact
+            reviewedInPlace
+            installationSetting
+            approval={settingsApproval}
+            workspaceId="ws-c"
+            onResolved={vi.fn()}
+            onInvalidated={vi.fn()}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    expect(document.body.textContent).toContain("The selected workspace changed");
+  } finally {
+    preferences.activeWorkspaceId = "default";
+  }
+});

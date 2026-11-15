@@ -1,6 +1,6 @@
 import type { ApprovalRequest } from "@goatcitadel/contracts";
 import { expect, it } from "vitest";
-import { isInstallationSettingsApproval } from "./installation-settings-approval";
+import { isInstallationSettingsApproval, scopeDiffers } from "./installation-settings-approval";
 
 type Shape = Pick<ApprovalRequest, "kind" | "linkage" | "payload">;
 const exact: Shape = {
@@ -23,4 +23,10 @@ it.each<[string, Shape]>([
   ["no linkage", { ...exact, linkage: undefined }],
 ])("is false for %s", (_label, shape) => {
   expect(isInstallationSettingsApproval(shape)).toBe(false);
+});
+
+it("skips the workspace comparison only when the bar's own workspace is the default one", () => {
+  expect(scopeDiffers(true, exact, "ws-b", "default")).toBe(false);
+  expect(scopeDiffers(true, exact, "ws-b", "ws-c")).toBe(true);
+  expect(scopeDiffers(false, exact, "ws-b", "default")).toBe(true);
 });

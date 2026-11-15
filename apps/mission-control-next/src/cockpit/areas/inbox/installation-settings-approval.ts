@@ -22,7 +22,8 @@ export function isInstallationSettingsApproval(
 
 /**
  * Whether the selected workspace differs from the one the approval is decided in. This is the one check an install-wide
- * Settings approval skips, and only when the caller opted in and the record itself has the exact shape above.
+ * Settings approval skips, and only when the caller opted in, the record has the exact shape above and the bar itself
+ * reads and decides in the default workspace.
  */
 export function scopeDiffers(
   installationSetting: boolean,
@@ -30,6 +31,6 @@ export function scopeDiffers(
   activeWorkspaceId: string,
   workspaceId: string,
 ): boolean {
-  if (installationSetting && isInstallationSettingsApproval(approval)) return false;
+  if (installationSetting && workspaceId === "default" && isInstallationSettingsApproval(approval)) return false;
   return activeWorkspaceId !== workspaceId;
 }
