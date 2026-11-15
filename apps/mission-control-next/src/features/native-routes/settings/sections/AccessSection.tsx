@@ -30,13 +30,20 @@ export function AccessSection({ activeWorkspaceName, route, navigate }: Settings
   const load = useCallback(async () => {
     const [settings, grants, daemon] = await Promise.all([
       fetchSettings(),
-      nativeLoad("Device grants", fetchDeviceAccessGrants("all"), null),
+      nativeLoad(
+        "Device grants",
+        fetchDeviceAccessGrants("all").then((response) => {
+          if (!Array.isArray(response?.items)) throw new Error("Device grant list is missing.");
+          return response.items;
+        }),
+        null,
+      ),
       nativeLoad("Daemon status", fetchDaemonStatus(), null),
     ]);
     return {
       settings,
       issues: nativeLoadIssues([grants, daemon]),
-      grants: grants.data?.items ?? null,
+      grants: grants.data,
       daemon: daemon.data,
     };
   }, []);
