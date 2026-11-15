@@ -5,6 +5,7 @@ import type { MissionThreadedRenderSurfaceInput } from "@goatcitadel/threaded-su
 import { PanelRight } from "lucide-react";
 import { Button } from "../../ui/Button";
 import { IconButton } from "../../ui/IconButton";
+import { useCockpitTitleDetail } from "../../app/cockpit-title-detail";
 import { ChatSessionOverflow, ChatSessionTitle } from "./ChatSessionControls";
 import { SelectedThreadActivity } from "./SelectedThreadActivity";
 import { useChatOutageRecovery } from "./use-chat-outage-recovery";
@@ -56,6 +57,7 @@ export function ChatSessionHeader({
     onDismissError: active?.onDismissError,
     onRefreshThread: active?.onRefreshThread,
   });
+  useCockpitTitleDetail(active?.sessionTitle);
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const rail = input.sessionRail;
   const createConversation = () => void rail.onCreateSession();
