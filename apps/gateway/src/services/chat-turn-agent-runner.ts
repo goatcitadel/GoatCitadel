@@ -2219,8 +2219,13 @@ export class ChatTurnAgentRunner {
       extractPrimaryUserTaskContent(executionIntentContent) ||
       executionIntentContent;
     const localResearchContinuation = resolveLocalResearchContinuation(input.content, input.historyMessages);
+    // Plan first offers the model no tools on any path, whatever autonomy or frozen profile the turn carries, and
+    // asks for a plan rather than the artifact, so no "file or artifact was not produced" guard applies to it.
+    const planFirstNoTools = input.planningMode === "advisory";
     const presentationArtifactIntent =
-      !suppressPromptLabCodeArtifactTools && detectPresentationArtifactIntent(executionIntentContent);
+      !planFirstNoTools &&
+      !suppressPromptLabCodeArtifactTools &&
+      detectPresentationArtifactIntent(executionIntentContent);
     const intents = {
       liveData:
         detectLiveDataIntent(intentDetectionContent) ||
@@ -2242,6 +2247,7 @@ export class ChatTurnAgentRunner {
       presentationArtifact: presentationArtifactIntent,
       presentationPdf: presentationArtifactIntent && detectPresentationPdfOutputIntent(executionIntentContent),
       documentArtifact:
+        !planFirstNoTools &&
         !suppressPromptLabCodeArtifactTools &&
         executionProfile !== "sustained_local_coding" &&
         !presentationArtifactIntent &&
@@ -2458,8 +2464,6 @@ export class ChatTurnAgentRunner {
       input.capabilityProfile && this.deps.listCapabilityCatalog
         ? await this.deps.listCapabilityCatalog("callable", input.capabilityProfile.identity.workspaceId)
         : undefined;
-    // Plan first offers the model no tools on any path, whatever autonomy or frozen profile the turn carries.
-    const planFirstNoTools = input.planningMode === "advisory";
     const admittedToolSchema = planFirstNoTools
       ? ({
           tools: [],
@@ -3004,11 +3008,13 @@ export class ChatTurnAgentRunner {
       };
     };
 
-    if (intents.missingLogPayload) {
+    // Plan first skips the canned answers below: each would replace the plan the model is asked to write.
+    if (intents.missingLogPayload && !planFirstNoTools) {
       assistantContent = buildMissingLogInputTemplate();
     }
     if (
       !assistantContent &&
+      !planFirstNoTools &&
       localFileIntent &&
       detectLocalFileAccessCheckIntent(input.content) &&
       !hasAvailableLocalFileTools(toolSchema.canonicalToModel)
@@ -3099,13 +3105,13 @@ export class ChatTurnAgentRunner {
       }
     }
     const delegatedOrchestrationPrompt = looksLikeDelegatedOrchestrationPrompt(input.content);
-    if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
+    if (!assistantContent && !planFirstNoTools && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
       const clarificationFollowUp = buildClarificationFollowUpIfNeeded(input.content, input.historyMessages);
       if (clarificationFollowUp) {
         assistantContent = clarificationFollowUp;
       }
     }
-    if (!assistantContent && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
+    if (!assistantContent && !planFirstNoTools && !promptLabHarnessTurn && !delegatedOrchestrationPrompt) {
       const clarificationPrompt = buildClarificationPromptIfNeeded(input.content);
       if (clarificationPrompt) {
         assistantContent = clarificationPrompt;
