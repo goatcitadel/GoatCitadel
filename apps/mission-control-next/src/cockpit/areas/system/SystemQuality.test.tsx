@@ -8,6 +8,11 @@ import { createUnavailableQualitySnapshot } from "../../../features/native-route
 import { SystemQuality } from "./SystemQuality";
 import { QualityExports } from "./quality/QualityExports";
 
+const preferences = vi.hoisted(() => ({ showTechnicalDetails: false }));
+vi.mock("@goatcitadel/mission-control-shared/state/ui-preferences", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@goatcitadel/mission-control-shared/state/ui-preferences")>()),
+  useUiPreferences: () => preferences,
+}));
 const api = vi.hoisted(() => ({ snapshot: vi.fn(), evalExport: vi.fn(), qualityExport: vi.fn(), packReport: vi.fn() }));
 vi.mock("@goatcitadel/mission-control-shared/api/ops-quality", () => ({
   fetchOpsQualitySnapshot: api.snapshot,
@@ -186,6 +191,7 @@ beforeEach(() => {
   client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
 });
 afterEach(() => {
+  preferences.showTechnicalDetails = false;
   act(() => root.unmount());
   client.clear();
   container.remove();
@@ -204,7 +210,7 @@ async function mount() {
   await act(async () => {
     await new Promise((resolve) => setTimeout(resolve, 5));
   });
-  await vi.waitFor(() => expect(container.textContent).toContain("At most 200 packs"));
+  await vi.waitFor(() => expect(container.textContent).toContain("Results checked"));
 }
 async function click(label: string) {
   const button = [...container.querySelectorAll("button")].find((item) => item.textContent?.trim() === label);
@@ -246,10 +252,35 @@ describe("native Quality owner evidence", () => {
     data.warnings = ["Shared limitation", "Shared limitation"];
     data.securityQualityGates.warnings = ["Shared limitation", "Local gate warning", "Local gate warning"];
     api.snapshot.mockResolvedValue(data);
-    // Warnings state scope and limits, so they stay visible with Technical details off.
+    preferences.showTechnicalDetails = true;
     await mount();
     expect(container.textContent?.split("Shared limitation").length).toBe(2);
     expect(container.textContent?.split("Local gate warning").length).toBe(2);
+  });
+  it("states the page limits once in operator words and keeps the Gateway notes in technical details (U-SY-006)", async () => {
+    const data = snapshot();
+    data.warnings = ["Quality projection endpoint carries P0 gates only"];
+    api.snapshot.mockResolvedValue(data);
+    await mount();
+    const visible = container.textContent ?? "";
+    expect(visible).toContain("This page shows saved test results. It does not run tests or call models.");
+    for (const word of ["projection", "endpoint", "P0", "At most 200 packs"]) expect(visible).not.toContain(word);
+    preferences.showTechnicalDetails = true;
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <SystemQuality />
+        </QueryClientProvider>,
+      ),
+    );
+    const details = [...container.querySelectorAll("details")].find(
+      (item) => item.querySelector("summary")?.textContent === "Notes from GoatCitadel",
+    );
+    expect(details?.textContent).toContain("At most 200 packs and 25 evaluations.");
+    expect(details?.textContent).toContain("Quality projection endpoint carries P0 gates only");
+    await click("Evaluations");
+    expect(container.textContent?.split("At most 200 packs").length).toBe(2);
+    expect(container.textContent?.split("Quality projection endpoint").length).toBe(2);
   });
   it("uses the bounded installation-wide owner and keeps partial sources unavailable", async () => {
     const data = snapshot();
