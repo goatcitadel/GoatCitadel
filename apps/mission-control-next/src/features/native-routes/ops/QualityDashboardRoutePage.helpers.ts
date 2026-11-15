@@ -12,21 +12,31 @@ export function formatScore(value: number): string {
   return value <= 1 ? `${Math.round(value * 100)}%` : value.toFixed(2);
 }
 
-export function formatPromptPackExport(exportInfo: PromptPackExportRecord | null | undefined): string {
+export function presentPromptPackExport(exportInfo: PromptPackExportRecord | null | undefined): {
+  path: string | undefined;
+  description: string;
+} {
   if (!exportInfo) {
-    return "Export metadata is unavailable.";
+    return { path: undefined, description: "Export metadata is unavailable." };
   }
-  const path = exportInfo.latestSnapshotPath ?? exportInfo.latestPath ?? exportInfo.path;
-  const size = exportInfo.latestSnapshotSizeBytes ?? exportInfo.sizeBytes;
-  const updated = exportInfo.latestSnapshotUpdatedAt ?? exportInfo.updatedAt;
-  return [
+  const snapshotPath = exportInfo.latestSnapshotExists ? exportInfo.latestSnapshotPath : undefined;
+  const path = snapshotPath || (exportInfo.exists ? exportInfo.latestPath || exportInfo.path : undefined);
+  if (!path) {
+    return { path: undefined, description: "No export file is available to copy." };
+  }
+  const size = snapshotPath ? exportInfo.latestSnapshotSizeBytes : exportInfo.sizeBytes;
+  const updated = snapshotPath ? exportInfo.latestSnapshotUpdatedAt : exportInfo.updatedAt;
+  return {
     path,
-    exportInfo.snapshotCount !== undefined ? `${exportInfo.snapshotCount} snapshots` : undefined,
-    size !== undefined ? formatBytes(size) : undefined,
-    updated ? `updated ${formatDateTime(updated)}` : undefined,
-  ]
-    .filter((item): item is string => Boolean(item))
-    .join(" · ");
+    description: [
+      path,
+      exportInfo.snapshotCount !== undefined ? `${exportInfo.snapshotCount} snapshots` : undefined,
+      size !== undefined ? formatBytes(size) : undefined,
+      updated ? `updated ${formatDateTime(updated)}` : undefined,
+    ]
+      .filter(Boolean)
+      .join(" · "),
+  };
 }
 
 export function formatSecurityEvalStatus(status: PromptPackSecurityEvalPackRecord["status"]): string {

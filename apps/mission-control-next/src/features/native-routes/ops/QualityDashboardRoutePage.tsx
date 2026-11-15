@@ -1,6 +1,6 @@
 import {
   formatScore,
-  formatPromptPackExport,
+  presentPromptPackExport,
   formatSecurityEvalStatus,
   formatSecurityGateStatus,
   formatSecurityExecutionState,
@@ -61,10 +61,10 @@ export function QualityDashboardRoutePage({ navigate, route }: NativeRoutePagesP
   const paretoModels = evalRuns.flatMap((run) => run.results.filter((result) => result.paretoOptimal));
   const selectedPackEvidence = useQualityPromptPackEvidence(panel === "pack", selectedPack, quality?.generatedAt);
   const selectedReport = selectedPackEvidence.report;
-  const selectedExport = selectedPackEvidence.exportInfo;
+  const selectedExport = presentPromptPackExport(selectedPackEvidence.exportInfo);
   const copyPromptPackExportPath = () =>
     clipboard.copyPath(
-      selectedExport?.latestSnapshotPath ?? selectedExport?.latestPath ?? selectedExport?.path,
+      selectedExport.path,
       selectedPack?.name ?? "selected pack",
     );
 
@@ -516,8 +516,8 @@ export function QualityDashboardRoutePage({ navigate, route }: NativeRoutePagesP
                     },
                     {
                       title: "Export snapshot",
-                      meta: selectedExport?.exists ? "available" : "not recorded",
-                      body: formatPromptPackExport(selectedExport),
+                      meta: selectedExport.path ? "available" : "not recorded",
+                      body: selectedExport.description,
                     },
                   ]}
                 />
@@ -525,7 +525,7 @@ export function QualityDashboardRoutePage({ navigate, route }: NativeRoutePagesP
                   <NativeButton
                     variant="secondary"
                     onClick={() => void copyPromptPackExportPath()}
-                    disabled={!selectedExport}
+                    disabled={!selectedExport.path}
                   >
                     <ClipboardCopy size={16} />
                     Copy prompt-pack export path
