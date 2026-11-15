@@ -93,7 +93,8 @@ export function executionProfileFromNormalizationProfile(
   return normalizationProfile === "quick_web" ? "quick_web" : "standard";
 }
 
-const CODING_ACTION_RE = /\b(?:build|create|implement|debug|fix|repair|modify|patch|write|generate|run|execute|test|validate)\b/iu;
+const CODING_ACTION_RE =
+  /\b(?:build|create|implement|debug|fix|repair|modify|patch|write|generate|run|execute|test|validate)\b/iu;
 const CODING_TARGET_RE =
   /\b(?:codebase|repository|repo|project|module|script|test suite|production code)\b|\b[\w.-]+\.(?:ps1|psm1|py|ts|tsx|js|jsx|mjs|cjs|rs|go|java|cs|sh|bat|cmd)\b/iu;
 const CODING_ITERATION_RE =
@@ -105,15 +106,26 @@ const CODE_FILE_ACTION_RE =
 /** Server-owned admission hint. A local route and durable execution are required separately. */
 export function detectSustainedCodingIntent(content: string): boolean {
   const text = content.trim();
-  if (!text || !CODING_ACTION_RE.test(text) || !CODING_TARGET_RE.test(text) ||
-      !(CODING_ITERATION_RE.test(text) || DIRECT_CODING_ACTION_RE.test(text) || CODE_FILE_ACTION_RE.test(text))) {
+  if (
+    !text ||
+    !CODING_ACTION_RE.test(text) ||
+    !CODING_TARGET_RE.test(text) ||
+    !(CODING_ITERATION_RE.test(text) || DIRECT_CODING_ACTION_RE.test(text) || CODE_FILE_ACTION_RE.test(text))
+  ) {
     return false;
   }
-  if (/^\s*(?:build|create|write|generate)\s+(?:a|an|the)?\s*(?:report|document|presentation|summary)\b/iu.test(text) &&
-      !CODE_FILE_ACTION_RE.test(text)) return false;
+  if (
+    /^\s*(?:build|create|write|generate)\s+(?:a|an|the)?\s*(?:report|document|presentation|summary)\b/iu.test(text) &&
+    !CODE_FILE_ACTION_RE.test(text)
+  )
+    return false;
   // A request to discuss a project is not authorization to edit or run it.
-  if (/^\s*(?:explain|compare|review|plan|describe|summari[sz]e|how|why)\b/iu.test(text) &&
-      !/\b(?:please\s+)?(?:implement|fix|repair|build|run\s+the\s+tests?|create\s+(?:the|a)\s+(?:project|script|module))\b/iu.test(text)) {
+  if (
+    /^\s*(?:explain|compare|review|plan|describe|summari[sz]e|how|why)\b/iu.test(text) &&
+    !/\b(?:please\s+)?(?:implement|fix|repair|build|run\s+the\s+tests?|create\s+(?:the|a)\s+(?:project|script|module))\b/iu.test(
+      text,
+    )
+  ) {
     return false;
   }
   return true;
@@ -124,10 +136,19 @@ export function resolveSustainedLocalCodingProfile(input: {
   providerId?: string;
   durableEnabled: boolean;
   normalizationProfile?: ChatNormalizationProfile;
+  /** A turn that is not a sustained local coding run: server-only work, or Plan first (see advisoryPlanning). */
   serverOnlyTurn?: boolean;
+  /** Plan first offers no tools, so the coding-completion checks could never pass: it stays standard. */
+  advisoryPlanning?: boolean;
 }): ChatTurnExecutionProfile {
-  if (input.normalizationProfile === "quick_web" || input.normalizationProfile === "prompt_pack_harness" ||
-      input.serverOnlyTurn || !input.durableEnabled || !detectSustainedCodingIntent(input.content)) {
+  if (
+    input.advisoryPlanning ||
+    input.normalizationProfile === "quick_web" ||
+    input.normalizationProfile === "prompt_pack_harness" ||
+    input.serverOnlyTurn ||
+    !input.durableEnabled ||
+    !detectSustainedCodingIntent(input.content)
+  ) {
     return executionProfileFromNormalizationProfile(input.normalizationProfile);
   }
   const providerId = input.providerId?.trim().toLowerCase();

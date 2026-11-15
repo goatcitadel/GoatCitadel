@@ -387,7 +387,10 @@ export function buildPlanningModeSystemInstruction(planningMode: ChatPlanningMod
     "Planning mode is active for this session.",
     "Respond with an advisory plan, specification, or options analysis only.",
     "Do not claim to have executed tools, delegated work, or changed files in this turn.",
+    "Do not claim to have read files, run searches or looked anything up in this turn; no tools are available.",
     "If tools would help, explain which tool or follow-up action the operator should explicitly run next.",
+    "Write the plan as a numbered list. For each step, say what it does, how you will know it is done, and which earlier step it waits on, by its number.",
+    "Use plain words. Do not name internal tools, ids or workflow templates.",
   ].join("\n");
 }
 

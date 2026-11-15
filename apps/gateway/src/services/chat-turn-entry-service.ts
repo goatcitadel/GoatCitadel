@@ -910,6 +910,7 @@ async function runAgentSendChatMessageLlmPath(
       normalizationProfile: prepared.normalized.normalizationProfile,
       executionProfile: prepared.executionProfile,
       toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
+      planningMode: prepared.prefs.planningMode,
       operatorId: prepared.capabilityProfile ? prepared.capabilityProfile.identity.operatorId : input.operatorId,
       authActorId: prepared.capabilityProfile ? prepared.capabilityProfile.identity.authActorId : input.authActorId,
       authActorSource: prepared.capabilityProfile
@@ -1012,6 +1013,7 @@ async function runAgentSendChatMessageLlmPath(
         normalizationProfile: prepared.normalized.normalizationProfile,
         executionProfile: prepared.executionProfile,
         toolAutonomy: prepared.effectiveToolAutonomy,
+        planningMode: prepared.prefs.planningMode,
         operatorId: input.operatorId,
         authActorId: input.authActorId,
         authActorSource: input.authActorSource,
