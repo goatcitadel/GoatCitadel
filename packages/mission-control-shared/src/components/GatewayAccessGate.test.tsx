@@ -89,10 +89,6 @@ function findButtonByText(root: ReturnType<typeof create>["root"], text: string)
   return root.findAllByType("button").find((button) => button.children.join("") === text);
 }
 
-function findButtonById(root: ReturnType<typeof create>["root"], id: string) {
-  return root.findAllByType("button").find((button) => button.props.id === id);
-}
-
 function submitConnect(root: ReturnType<typeof create>["root"]) {
   return root.findByProps({ id: "gateway-access-form" }).props.onSubmit({ preventDefault: vi.fn() });
 }
@@ -243,7 +239,7 @@ describe("GatewayAccessGate", () => {
 
     await act(async () => {
       tokenInput.props.onChange({ target: { value: "fresh-token" } });
-      findButtonById(renderer.root, "gateway-access-remember")!.props.onClick();
+      renderer.root.findByProps({ id: "gateway-access-remember" }).props.onChange({ target: { checked: false } });
     });
     await act(async () => {
       submitConnect(renderer.root);
@@ -354,6 +350,40 @@ describe("GatewayAccessGate", () => {
     expect(renderer.root.findByProps({ id: "gateway-access-token" }).props.value).toBe("");
   });
 
+  it("uses a native tick box for Remember credentials (U-GL-054)", async () => {
+    const renderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={needsAuthAccess()}
+        busy={false}
+        onRetry={() => undefined}
+      />,
+    );
+    await flushAsync();
+    const box = renderer.root.findByProps({ id: "gateway-access-remember" });
+    expect(box.type).toBe("input");
+    expect(box.props.type).toBe("checkbox");
+    expect(box.props.checked).toBe(false);
+    expect(
+      renderer.root.findAllByType("label").some((label) => label.props.htmlFor === "gateway-access-remember"),
+    ).toBe(true);
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-token" }).props.onChange({ target: { value: "fresh-token" } });
+      box.props.onChange({ target: { checked: true } });
+    });
+    await act(async () => {
+      submitConnect(renderer.root);
+    });
+    expect(shellMocks.persistGatewayAuthState).toHaveBeenLastCalledWith(expect.anything(), "persistent");
+    await act(async () => {
+      box.props.onChange({ target: { checked: false } });
+    });
+    await act(async () => {
+      submitConnect(renderer.root);
+    });
+    expect(shellMocks.persistGatewayAuthState).toHaveBeenLastCalledWith(expect.anything(), "session");
+  });
+
   it("supports basic credentials when requested by the gateway", async () => {
     const onRetry = vi.fn();
     const renderer = create(
@@ -376,7 +406,7 @@ describe("GatewayAccessGate", () => {
     await act(async () => {
       renderer.root.findByProps({ id: "gateway-access-username" }).props.onChange({ target: { value: "operator" } });
       renderer.root.findByProps({ id: "gateway-access-password" }).props.onChange({ target: { value: "secret" } });
-      findButtonById(renderer.root, "gateway-access-remember")!.props.onClick();
+      renderer.root.findByProps({ id: "gateway-access-remember" }).props.onChange({ target: { checked: true } });
     });
     await act(async () => {
       submitConnect(renderer.root);

@@ -12,7 +12,7 @@ import {
 } from "../api/shell-client";
 import { deriveShellGatewayAccessState } from "../state/gateway-shell-state";
 import { StatusChip } from "./StatusChip";
-import { GCSelect, GCSwitch } from "./ui";
+import { GCSelect } from "./ui";
 
 type GatewayAccessView =
   | GatewayAccessPreflightResult
@@ -415,12 +415,15 @@ export function GatewayAccessGate({
             )}
 
             <div className="controls-row gateway-access-row">
-              <GCSwitch
-                id="gateway-access-remember"
-                checked={remember}
-                onCheckedChange={setRemember}
-                label="Remember credentials on this browser"
-              />
+              <label className="gateway-access-check" htmlFor="gateway-access-remember">
+                <input
+                  type="checkbox"
+                  id="gateway-access-remember"
+                  checked={remember}
+                  onChange={(event) => setRemember(event.target.checked)}
+                />{" "}
+                Remember credentials on this browser
+              </label>
             </div>
 
             <div className="controls-row gateway-access-row">
