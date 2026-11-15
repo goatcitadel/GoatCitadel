@@ -118,6 +118,38 @@ it("keeps text typed while New creates the conversation, for the same caller and
   expect(values.get(createDraftStorageKey("a", "s1"))).toBeUndefined();
 });
 
+async function carryWith(refuseDestination: boolean) {
+  await act(async () => {
+    renderer = create(<Harness />);
+  });
+  const attempt = await pressNew();
+  await act(async () => observed.setDraft("typed during creation"));
+  // The source conversation has its stored copy of the same text.
+  values.set(createDraftStorageKey("a", "s1"), "typed during creation");
+  const storage = (globalThis.window as unknown as { localStorage: { setItem: (k: string, v: string) => void } })
+    .localStorage;
+  const original = storage.setItem;
+  storage.setItem = (key, value) => {
+    if (refuseDestination && key === createDraftStorageKey("a", "s-new")) throw new Error("quota");
+    original(key, value);
+  };
+  await confirm(attempt, "s-new");
+  await act(async () => renderer!.update(<Harness session="s-new" />));
+  await act(async () => new Promise((resolve) => setTimeout(resolve, 5)));
+  expect(observed.draft).toBe("typed during creation");
+}
+
+it("keeps the source copy of carried text when the destination write is refused", async () => {
+  await carryWith(true);
+  expect(values.get(createDraftStorageKey("a", "s1"))).toBe("typed during creation");
+  expect(values.get(createDraftStorageKey("a", "s-new"))).toBeUndefined();
+});
+
+it("writes carried text under the destination first, then removes the matching source copy", async () => {
+  await carryWith(false);
+  expect(values.get(createDraftStorageKey("a", "s-new"))).toBe("typed during creation");
+  expect(values.get(createDraftStorageKey("a", "s1"))).toBeUndefined();
+});
 it("does not carry a draft the box already held when New started", async () => {
   await act(async () => {
     renderer = create(<Harness />);

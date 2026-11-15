@@ -251,13 +251,16 @@ export function useChatSessionRestoration({
       if (stored === null && carried) {
         const text = draftRef.current;
         setDraft(text);
-        // The text was saved under the conversation it was typed in; it belongs to the new one.
+        // The text was saved under the conversation it was typed in; it belongs to the new one. It is written under
+        // the new key first and the matching source copy is removed only once that write held, so a refused write
+        // leaves the text on disk where it was.
         setTimeout(() => {
           try {
+            window.localStorage.setItem(draftStorageKey, text);
             if (window.localStorage.getItem(previousOwner!.key) === text)
               window.localStorage.removeItem(previousOwner!.key);
           } catch {
-            // Storage may be unavailable; the new conversation still has the text.
+            // Storage refused the write or is unavailable: the source copy stays, the new conversation still has the text.
           }
         }, 0);
         return;
