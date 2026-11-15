@@ -22,7 +22,7 @@ import { ChatBlockNote, ConnectionLines, ConnectorHeader, HiddenNote, TechnicalR
 import { ConnectorResumeControls } from "./ConnectorResumeControls";
 import { ConnectorServerControls } from "./ConnectorServerControls";
 import { WhatAsksFirst } from "./WhatAsksFirst";
-import { connectorSettingsHref, savedConnectorForTemplate } from "./connector-links";
+import { addsIntegration, connectorSettingsHref, savedConnectorForTemplate } from "./connector-links";
 import { isActiveInstallState } from "./connector-install-store";
 import { approvalPostureInEffect } from "./connector-view";
 import { useConnectorInstall } from "./use-connector-install";
@@ -152,7 +152,7 @@ function ConnectorDetails({
       {savedServer ? <ConnectorServerControls item={item} panelId={panelId} onRemoved={onRemoved} /> : null}
 
       <NativeOwnerLink scope={item.id} href={connectorSettingsHref(item)} className="text-sm">
-        Advanced setup
+        {addsIntegration(item) ? `Add ${item.name} in Advanced setup` : "Advanced setup"}
       </NativeOwnerLink>
 
       <TechnicalDetails>

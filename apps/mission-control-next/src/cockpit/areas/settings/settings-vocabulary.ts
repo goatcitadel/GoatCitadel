@@ -87,6 +87,13 @@ export const INTEGRATION_CONNECTION_STATUS_LABELS: Record<IntegrationConnectionS
   error: "Error",
   paused: "Paused",
 };
+/** A saved status is what was written down, not what was checked, so "connected" is not claimed. */
+export const SAVED_CONNECTION_STATUS_LABELS: Record<IntegrationConnectionStatus, string> = {
+  connected: "Set up, not checked",
+  disconnected: "Not connected",
+  error: "Reported an error",
+  paused: "Paused",
+};
 export const CONNECTOR_DIAGNOSTIC_STATUS_LABELS: Record<ConnectorDiagnosticReport["status"], string> = {
   ok: "Passed",
   warn: "Passed with warnings",

@@ -32,3 +32,7 @@ it("opens Integrations when Google sign-in lands on Advanced setup, even from an
   // After the fragment is consumed it becomes `#integration-connections`.
   expect(selectedSettingsSection(setup, undefined, "integration-connections")).toBe("integrations");
 });
+
+it("opens Web & Search for a key field anchor", () => {
+  expect(selectedSettingsSection(setup, undefined, "web-search-key-brave")).toBe("web-search");
+});

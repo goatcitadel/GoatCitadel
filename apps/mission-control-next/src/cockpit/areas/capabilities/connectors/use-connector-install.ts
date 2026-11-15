@@ -320,17 +320,21 @@ function startInstall(item: CapabilityConnectorItem, enableChatConnectors: boole
   void install(flow.id, token, templateId, enableChatConnectors);
 }
 
-function resumeServer(item: CapabilityConnectorItem, from: "sign_in" | "connect", context: RunContext) {
+function resumeServer(
+  item: CapabilityConnectorItem,
+  from: "sign_in" | "connect" | "sign_in_only",
+  context: RunContext,
+) {
   const { serverId } = item;
   if (!serverId) return;
   const existing = findInstallFlow(item);
   if (existing && isActiveInstallState(existing.state)) return;
   if (existing) forgetInstallFlow(existing.id);
   const flow = createInstallFlow([serverKey(serverId)]);
-  const token = beginRun(flow.id, { ...context, name: item.name, oauth: true });
+  const token = beginRun(flow.id, { ...context, name: item.name, oauth: true, signInOnly: from === "sign_in_only" });
   // Known from the row before the server is read, so a Stop that early says truly whether it is switched on.
   patchRun(flow.id, { enabled: item.state !== "turned_off" });
-  updateInstallFlow(flow.id, { serverId, state: WORKING[from] });
+  updateInstallFlow(flow.id, { serverId, state: WORKING[from === "sign_in_only" ? "sign_in" : from] });
   void (from === "connect" ? connectServer(flow.id, token, serverId) : startSignIn(flow.id, token, serverId));
 }
 
@@ -414,8 +418,8 @@ export interface ConnectorInstall {
   /** The saved server once the install created it (or the item's own server): the panel finds its row by it (R80). */
   serverId: string | undefined;
   start(options: { enableChatConnectors: boolean }): void;
-  /** For a saved server: "sign_in" runs sign-in, then switch on and connect; "connect" runs connect only. */
-  resume(from: "sign_in" | "connect"): void;
+  /** For a saved server: "sign_in" runs sign-in, then switch on and connect; "connect" runs connect only; "sign_in_only" signs in and stops (a requester-scoped server never joins the global connection). */
+  resume(from: "sign_in" | "connect" | "sign_in_only"): void;
   submitManualCode(code: string, state: string): void;
   /** While signing in: asks for a new sign-in request in place of the one waiting (R94). */
   restartSignIn(): void;

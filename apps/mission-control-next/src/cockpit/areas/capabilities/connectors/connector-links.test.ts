@@ -93,3 +93,32 @@ describe("savedConnectorForTemplate", () => {
     expect(savedConnectorForTemplate(undefined, "mcp-template:linear")).toBeUndefined();
   });
 });
+
+describe("web search key links", () => {
+  it("links Brave Search's Advanced setup to its key field", () => {
+    const brave = item({ id: "web-search:search.brave", source: "web_search" });
+    expect(connectorSettingsHref(brave)).toBe("/capabilities/connectors/advanced#web-search-key-brave");
+    const parallel = item({ id: "web-search:search.parallel", source: "web_search" });
+    expect(connectorSettingsHref(parallel)).toBe("/capabilities/connectors/advanced#web-search-key-parallel");
+    const firecrawl = item({ id: "web-search:search.firecrawl", source: "web_search" });
+    expect(connectorSettingsHref(firecrawl)).toBe("/capabilities/connectors/advanced#web-search");
+  });
+});
+
+describe("add an integration links", () => {
+  it("opens the add form for a catalog row that is not saved yet", () => {
+    const gmail = item({
+      id: "integration:automation.gmail",
+      source: "integration",
+      kind: "built_in",
+      reason: "not_installed",
+      catalogId: "automation.gmail",
+    });
+    expect(connectorSettingsHref(gmail)).toBe(
+      "/capabilities/connectors/advanced?addIntegration=automation.gmail#integration-connections",
+    );
+    expect(connectorSettingsHref({ ...gmail, reason: "ready" })).toBe(
+      "/capabilities/connectors/advanced#integration-connections",
+    );
+  });
+});
