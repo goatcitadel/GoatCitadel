@@ -11,10 +11,12 @@ const apiMocks = vi.hoisted(() => ({
     | ((rejection: { authMode: "token" | "basic"; path: string; status: 401; hadStoredAuth: boolean }) => void)
     | undefined,
   subscribeGatewayAuthRejection: vi.fn(),
+  readStoredGatewayAuthState: vi.fn(),
 }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/shell-client", () => ({
   consumeGatewayAccessBootstrapFromLocation: apiMocks.consumeGatewayAccessBootstrapFromLocation,
+  readStoredGatewayAuthState: apiMocks.readStoredGatewayAuthState,
   getGatewayApiBaseUrl: apiMocks.getGatewayApiBaseUrl,
   preflightGatewayAccess: apiMocks.preflightGatewayAccess,
   fetchGatewayCurrentAccess: apiMocks.fetchGatewayCurrentAccess,
@@ -211,7 +213,7 @@ describe("a refused credential", () => {
       clearGatewayAuthState(); // the real client-core function: bumps the access revision
       return refusal("token");
     });
-    await act(async () => harness.latest().retryGatewayAccess());
+    await act(async () => harness.latest().retryGatewayAccess({ submittedMode: "token" }));
     expect(harness.latest().gatewayAccess).toMatchObject({
       status: "needs-auth",
       message: "That token was refused. Check it and try again.",
@@ -226,6 +228,57 @@ describe("a refused credential", () => {
     );
     expect(describeRefusedCredential(undefined)).toBe("That token was refused. Check it and try again.");
     expect(describeRefusedCredential("none")).toBe("That token was refused. Check it and try again.");
+    expect(describeRefusedCredential("token", "saved")).toBe("Your saved token was refused. Enter it again.");
+    expect(describeRefusedCredential("basic", "saved")).toBe(
+      "Your saved username and password were refused. Enter them again.",
+    );
+  });
+
+  async function refuseWith(options: { stored?: unknown; gatewayMode: "token" | "basic"; submission?: unknown }) {
+    apiMocks.preflightGatewayAccess.mockResolvedValueOnce({ status: "ready", message: "ready", healthDetail: "ok" });
+    apiMocks.fetchGatewayCurrentAccess.mockResolvedValue({
+      actorId: "operator-a",
+      actorSource: "token",
+      operatorAccess: true,
+    });
+    const harness = await renderHarness();
+    apiMocks.readStoredGatewayAuthState.mockReturnValue(options.stored);
+    apiMocks.preflightGatewayAccess.mockImplementation(async () => {
+      clearGatewayAuthState();
+      return refusal(options.gatewayMode);
+    });
+    await act(async () => harness.latest().retryGatewayAccess(options.submission as never));
+    const message = harness.latest().gatewayAccess.message;
+    await harness.unmount();
+    return message;
+  }
+
+  it("says a saved token was refused when nothing was typed this time", async () => {
+    expect(await refuseWith({ stored: { mode: "token", token: "x" }, gatewayMode: "token" })).toBe(
+      "Your saved token was refused. Enter it again.",
+    );
+  });
+
+  it("says a saved username and password were refused", async () => {
+    expect(await refuseWith({ stored: { mode: "basic", username: "u", password: "p" }, gatewayMode: "token" })).toBe(
+      "Your saved username and password were refused. Enter them again.",
+    );
+  });
+
+  it("follows the credential that was submitted, not the mode the Gateway reports (U-GL-053)", async () => {
+    expect(
+      await refuseWith({
+        stored: { mode: "basic", username: "u", password: "p" },
+        gatewayMode: "token",
+        submission: { submittedMode: "basic" },
+      }),
+    ).toBe("That username and password were refused. Check them and try again.");
+  });
+
+  it("falls back to the Gateway's mode when nothing is known, and ignores a click event as a submission", async () => {
+    expect(await refuseWith({ gatewayMode: "basic", submission: { type: "click" } })).toBe(
+      "Your saved username and password were refused. Enter them again.",
+    );
   });
 
   it("does not call anything else a refusal, and lets a newer attempt win", async () => {

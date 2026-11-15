@@ -24,12 +24,17 @@ type GatewayAccessView =
       rejectedStoredAuth?: undefined;
     };
 
+/** What the sign-in page just sent, so a refusal can be worded for it. Carries no credential. */
+export interface GatewayAccessSubmission {
+  submittedMode: "token" | "basic";
+}
+
 interface GatewayAccessGateProps {
   gatewayBaseUrl: string;
   access: GatewayAccessView;
   busy: boolean;
   autoRetryPending?: boolean;
-  onRetry: () => void | Promise<void>;
+  onRetry: (submission?: GatewayAccessSubmission) => void | Promise<void>;
   /** Heading once connected; the classic view keeps its own wording when omitted. */
   title?: string;
   subtitle?: string;
@@ -229,7 +234,7 @@ export function GatewayAccessGate({
         },
         remember ? "persistent" : "session",
       );
-      await onRetry();
+      await onRetry({ submittedMode: "token" });
       return;
     }
 
@@ -246,7 +251,7 @@ export function GatewayAccessGate({
       },
       remember ? "persistent" : "session",
     );
-    await onRetry();
+    await onRetry({ submittedMode: "basic" });
   };
 
   const handleRequestApproval = async () => {
@@ -426,18 +431,30 @@ export function GatewayAccessGate({
                 Remember credentials on this browser
               </label>
             </div>
-
-            <div className="controls-row gateway-access-row">
-              <label htmlFor="gateway-access-device-label">Request label</label>
-              <input
-                className="gc-input"
-                id="gateway-access-device-label"
-                value={deviceLabel}
-                onChange={(event) => setDeviceLabel(event.target.value)}
-                autoComplete="off"
-              />
-            </div>
           </form>
+        ) : null}
+
+        {needsAuth ? (
+          // Outside the sign-in form: Enter here asks for approval, and never sends the token.
+          <div className="controls-row gateway-access-row">
+            <label htmlFor="gateway-access-device-label">Request label</label>
+            <input
+              className="gc-input"
+              id="gateway-access-device-label"
+              value={deviceLabel}
+              onChange={(event) => setDeviceLabel(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key !== "Enter") {
+                  return;
+                }
+                event.preventDefault();
+                if (!busy && !deviceApprovalBusy && pendingDeviceApproval?.status !== "pending") {
+                  void handleRequestApproval();
+                }
+              }}
+              autoComplete="off"
+            />
+          </div>
         ) : null}
 
         {needsAuth && pendingDeviceApproval ? (

@@ -11,9 +11,11 @@ import {
   getGatewayApiBaseUrl,
   preflightGatewayAccess,
   fetchGatewayCurrentAccess,
+  readStoredGatewayAuthState,
   subscribeGatewayAuthRejection,
   type GatewayAccessPreflightResult,
 } from "@goatcitadel/mission-control-shared/api/shell-client";
+import type { GatewayAccessSubmission } from "@goatcitadel/mission-control-shared/components/GatewayAccessGate";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
 
 /*
@@ -36,10 +38,24 @@ const AUTO_RETRY_BASE_MS = 2_000;
 const AUTO_RETRY_MAX_MS = 15_000;
 
 /** What the sign-in page says when the Gateway answered and said no. It never reveals anything about the credential. */
-export function describeRefusedCredential(authMode: "basic" | "token" | "none" | undefined): string {
+export function describeRefusedCredential(
+  authMode: "basic" | "token" | "none" | undefined,
+  source: "typed" | "saved" = "typed",
+): string {
+  if (source === "saved") {
+    return authMode === "basic"
+      ? "Your saved username and password were refused. Enter them again."
+      : "Your saved token was refused. Enter it again.";
+  }
   return authMode === "basic"
     ? "That username and password were refused. Check them and try again."
     : "That token was refused. Check it and try again.";
+}
+
+/** A click event or anything else passed by a caller is not a submission. */
+function readSubmittedMode(submission: unknown): "basic" | "token" | undefined {
+  const mode = (submission as GatewayAccessSubmission | undefined)?.submittedMode;
+  return mode === "basic" || mode === "token" ? mode : undefined;
 }
 
 export type GatewayAccessViewState =
@@ -56,7 +72,7 @@ export interface UseGatewayAccessResult {
   gatewayBusy: boolean;
   callerScope?: string;
   autoRetryPending: boolean;
-  retryGatewayAccess: () => Promise<void>;
+  retryGatewayAccess: (submission?: GatewayAccessSubmission) => Promise<void>;
 }
 
 export function useGatewayAccess(options?: { batchStartupReads?: boolean }): UseGatewayAccessResult {
@@ -72,58 +88,67 @@ export function useGatewayAccess(options?: { batchStartupReads?: boolean }): Use
   const attemptRef = useRef(0);
   const autoRetryDelayRef = useRef(AUTO_RETRY_BASE_MS);
 
-  const retryGatewayAccess = useCallback(async () => {
-    const generation = ++requestGeneration.current;
-    const attempt = ++attemptRef.current;
-    setGatewayBusy(true);
-    try {
-      const bootstrap = consumeGatewayAccessBootstrapFromLocation();
-      const revision = getGatewayAccessRevision();
-      const next = await preflightGatewayAccess({ bootstrap });
-      if (next.status === "needs-auth" && next.rejectedStoredAuth === true && attempt === attemptRef.current) {
-        // The client clears a refused credential during the check, which moves the access revision and the
-        // generation; the answer is still this attempt's, so report it instead of dropping it.
-        setGatewayAccess({ ...next, message: describeRefusedCredential(next.authMode) });
-        setGatewayBusy(false);
-        return;
-      }
-      if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
-      if (next.status === "ready") {
-        const caller = next.onboardingState?.currentAccess ?? (await fetchGatewayCurrentAccess());
-        if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
-        const scope = JSON.stringify([
-          getGatewayApiBaseUrl(),
-          caller.actorSource,
-          caller.actorId,
-          caller.operatorAccess,
-          caller.deviceId,
-          caller.grantId,
-        ]);
-        setGatewayCallerScope(scope);
-        if (batchStartupReads && caller.operatorAccess)
-          beginStartupReadWindow({
-            installation: getGatewayApiBaseUrl(),
-            accessRevision: revision,
-            caller: scope,
-            callerRevision: getGatewayCallerScopeRevision(),
+  const retryGatewayAccess = useCallback(
+    async (submission?: GatewayAccessSubmission) => {
+      const generation = ++requestGeneration.current;
+      const attempt = ++attemptRef.current;
+      // Read before the check: the client clears a refused credential during it.
+      const submittedMode = readSubmittedMode(submission);
+      const sentMode = submittedMode ?? readStoredGatewayAuthState()?.mode;
+      setGatewayBusy(true);
+      try {
+        const bootstrap = consumeGatewayAccessBootstrapFromLocation();
+        const revision = getGatewayAccessRevision();
+        const next = await preflightGatewayAccess({ bootstrap });
+        if (next.status === "needs-auth" && next.rejectedStoredAuth === true && attempt === attemptRef.current) {
+          // The client clears a refused credential during the check, which moves the access revision and the
+          // generation; the answer is still this attempt's, so report it instead of dropping it.
+          setGatewayAccess({
+            ...next,
+            message: describeRefusedCredential(sentMode ?? next.authMode, submittedMode ? "typed" : "saved"),
           });
-        setCallerScope(scope);
+          setGatewayBusy(false);
+          return;
+        }
+        if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
+        if (next.status === "ready") {
+          const caller = next.onboardingState?.currentAccess ?? (await fetchGatewayCurrentAccess());
+          if (generation !== requestGeneration.current || revision !== getGatewayAccessRevision()) return;
+          const scope = JSON.stringify([
+            getGatewayApiBaseUrl(),
+            caller.actorSource,
+            caller.actorId,
+            caller.operatorAccess,
+            caller.deviceId,
+            caller.grantId,
+          ]);
+          setGatewayCallerScope(scope);
+          if (batchStartupReads && caller.operatorAccess)
+            beginStartupReadWindow({
+              installation: getGatewayApiBaseUrl(),
+              accessRevision: revision,
+              caller: scope,
+              callerRevision: getGatewayCallerScopeRevision(),
+            });
+          setCallerScope(scope);
+        }
+        setGatewayAccess(next);
+      } catch (error) {
+        if (generation !== requestGeneration.current) return;
+        setGatewayAccess({
+          status:
+            error && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)
+              ? "access-blocked"
+              : "unreachable",
+          message: describeApiError(error, "Gateway preflight failed.").summary,
+          healthDetail: getGatewayApiBaseUrl(),
+        });
+      } finally {
+        if (generation === requestGeneration.current) setGatewayBusy(false);
       }
-      setGatewayAccess(next);
-    } catch (error) {
-      if (generation !== requestGeneration.current) return;
-      setGatewayAccess({
-        status:
-          error && typeof error === "object" && "status" in error && (error.status === 401 || error.status === 403)
-            ? "access-blocked"
-            : "unreachable",
-        message: describeApiError(error, "Gateway preflight failed.").summary,
-        healthDetail: getGatewayApiBaseUrl(),
-      });
-    } finally {
-      if (generation === requestGeneration.current) setGatewayBusy(false);
-    }
-  }, [batchStartupReads]);
+    },
+    [batchStartupReads],
+  );
 
   useEffect(() => {
     void retryGatewayAccess();

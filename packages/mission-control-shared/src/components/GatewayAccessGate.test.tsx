@@ -384,6 +384,65 @@ describe("GatewayAccessGate", () => {
     expect(shellMocks.persistGatewayAuthState).toHaveBeenLastCalledWith(expect.anything(), "session");
   });
 
+  it("tells the host which kind of credential was submitted, without the credential", async () => {
+    const onRetry = vi.fn();
+    const renderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={needsAuthAccess({ authMode: "token" })}
+        busy={false}
+        onRetry={onRetry}
+      />,
+    );
+    await flushAsync();
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-mode" }).props.onChange("basic");
+    });
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-username" }).props.onChange({ target: { value: "operator" } });
+      renderer.root.findByProps({ id: "gateway-access-password" }).props.onChange({ target: { value: "secret" } });
+    });
+    await act(async () => {
+      submitConnect(renderer.root);
+    });
+    expect(onRetry).toHaveBeenCalledWith({ submittedMode: "basic" });
+  });
+
+  it("keeps the Request label field out of the sign-in form and never submits the token from it", async () => {
+    shellMocks.createGatewayDeviceAccessRequest.mockResolvedValue(pendingDeviceApproval({ status: "pending" }));
+    shellMocks.pollGatewayDeviceAccessRequestStatus.mockResolvedValue({
+      status: "pending",
+      message: "Waiting",
+      expiresAt: "2026-01-01T12:05:00.000Z",
+    });
+    const onRetry = vi.fn();
+    const renderer = create(
+      <GatewayAccessGate
+        gatewayBaseUrl="http://localhost:8787"
+        access={needsAuthAccess()}
+        busy={false}
+        onRetry={onRetry}
+      />,
+    );
+    await flushAsync();
+    await act(async () => {
+      renderer.root.findByProps({ id: "gateway-access-token" }).props.onChange({ target: { value: "abc" } });
+    });
+    const form = renderer.root.findByProps({ id: "gateway-access-form" });
+    expect(form.findAllByProps({ id: "gateway-access-device-label" })).toHaveLength(0);
+    const preventDefault = vi.fn();
+    await act(async () => {
+      renderer.root
+        .findByProps({ id: "gateway-access-device-label" })
+        .props.onKeyDown({ key: "Enter", preventDefault });
+    });
+    await flushAsync();
+    expect(preventDefault).toHaveBeenCalled();
+    expect(shellMocks.createGatewayDeviceAccessRequest).toHaveBeenCalledTimes(1);
+    expect(shellMocks.persistGatewayAuthState).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+  });
+
   it("supports basic credentials when requested by the gateway", async () => {
     const onRetry = vi.fn();
     const renderer = create(
