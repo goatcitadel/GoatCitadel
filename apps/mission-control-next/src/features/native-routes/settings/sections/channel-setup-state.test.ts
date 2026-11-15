@@ -101,3 +101,52 @@ it("offers no check for a lost channel write it could not identify", async () =>
   expect(attempts.read).not.toHaveBeenCalled();
   expect(readChannelMutationState().uncertain).toBeTruthy();
 });
+
+it("does not lock channel changes when the Gateway plainly refuses", async () => {
+  const operation = beginChannelOperation()!;
+  const refusal = { status: 422, body: { error: "Secure channel credential storage is unavailable." } };
+  await expect(
+    operation.write(
+      () => Promise.reject(refusal),
+      () => undefined,
+    ),
+  ).rejects.toBe(refusal);
+  operation.finish();
+  expect(readChannelMutationState()).toEqual({ pending: false });
+  expect(beginChannelOperation()).toBeDefined();
+});
+
+it("keeps the lock for a refusal that says it was committed, and for a lost or failed answer", async () => {
+  for (const failure of [
+    { status: 422, body: { error: "x", mutationCommitted: true } },
+    { status: 503, body: {} },
+    { status: 408, body: {} },
+    new Error("response lost"),
+  ]) {
+    __resetChannelMutationStateForTests();
+    const operation = beginChannelOperation()!;
+    await expect(
+      operation.write(
+        () => Promise.reject(failure),
+        () => undefined,
+      ),
+    ).rejects.toBe(failure);
+    operation.finish();
+    expect(readChannelMutationState().uncertain).toBeDefined();
+    expect(beginChannelOperation()).toBeUndefined();
+  }
+});
+it("locks as uncertain when the read-back after an applied write is refused", async () => {
+  const operation = beginChannelOperation()!;
+  const refusal = { status: 404, body: { error: "That record no longer exists." } };
+  // The write itself went through; only the check that follows it was refused.
+  await expect(
+    operation.write(
+      () => Promise.resolve("written"),
+      () => Promise.reject(refusal),
+    ),
+  ).rejects.toBe(refusal);
+  operation.finish();
+  expect(readChannelMutationState().uncertain).toBeDefined();
+  expect(beginChannelOperation()).toBeUndefined();
+});
