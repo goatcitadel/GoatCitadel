@@ -31,6 +31,14 @@ async function readRecoveryEvidence(item: OperatorInboxItem): Promise<RunRecover
   return { run, deadLetter: deadLetter ?? undefined };
 }
 
+/** The notice takes the outcome's own tone, so a recovery that ended in failure is not coloured as done. */
+function recoveryNoticeClass(status: string): string {
+  const tone = presentRunStatus(status).tone;
+  if (tone === "failed") return "text-status-failed";
+  if (tone === "done") return "text-status-done";
+  return "text-fg-secondary";
+}
+
 export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxItem; workspaceId: string }) {
   const queryClient = useQueryClient();
   const { activeWorkspaceId } = useUiPreferences();
@@ -43,6 +51,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
   const [completed, setCompleted] = useState(false);
   // A sentence that sends the operator to the run carries its own link (IN-04), so the notice and error are nodes.
   const [notice, setNotice] = useState<ReactNode>("");
+  const [noticeStatus, setNoticeStatus] = useState("");
   const [error, setError] = useState<ReactNode>("");
   const openRun = (runId: string, purpose: string) => (
     <>
@@ -99,6 +108,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           : await retryDurableRun(item.source.runId!, { reason: "operator_inbox_retry" });
       setReviewed(null);
       setCompleted(true);
+      setNoticeStatus(result.status);
       setNotice(
         <>
           Recovery requested. Run status: {presentRunStatus(result.status).label}.{" "}
@@ -229,7 +239,7 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
         </p>
       ) : null}
       {notice ? (
-        <p role="status" className="text-status-done">
+        <p role="status" className={recoveryNoticeClass(noticeStatus)}>
           {notice}
         </p>
       ) : null}
@@ -244,8 +254,24 @@ export function InboxRunRecovery({ item, workspaceId }: { item: OperatorInboxIte
           if (!open && !pending) setReviewed(null);
         }}
         title={`${label} from Inbox`}
-        description="This request may rerun steps or external effects. Review the current run and its prior effects before continuing."
+        description="This can run steps again, and their effects outside GoatCitadel. Check what the run did before you continue."
       >
+        {reviewed ? (
+          <>
+            <p className="text-fg-secondary">
+              Workflow: {presentWorkflow(reviewed.run.workflowKey)}. Status:{" "}
+              {presentRunStatus(reviewed.run.status).label}. Attempts: {reviewed.run.attemptCount} of{" "}
+              {reviewed.run.maxAttempts}.
+            </p>
+            <NativeOwnerLink
+              href={`/work/runs/${encodeURIComponent(reviewed.run.runId)}`}
+              scope={[workspaceId, item.id, reviewed.run.runId]}
+              className="w-fit text-sm font-medium text-accent hover:underline"
+            >
+              Open run
+            </NativeOwnerLink>
+          </>
+        ) : null}
         <div className="flex flex-wrap gap-2">
           <Button
             size="sm"
