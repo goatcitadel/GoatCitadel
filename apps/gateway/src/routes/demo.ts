@@ -10,8 +10,11 @@ import type {
   TaskRecord,
   WorkspaceRecord,
 } from "@goatcitadel/contracts";
+import { FeatureDisabledError } from "@goatcitadel/contracts";
 import { projectChatSessionForPublic } from "../services/chat-secret-projection.js";
 
+export const DEMO_MEMORY_SEED_OFF_NOTE =
+  "Memory sample skipped: memory administration is turned off on this installation.";
 const DEMO_WORKSPACE_SLUG = "goatcitadel-demo";
 const DEMO_WORKSPACE_NAME = "GoatCitadel Demo";
 const DEMO_PROJECT_NAME = "Adoption Tour";
@@ -178,7 +181,11 @@ async function bootstrapDemo(fastify: FastifyInstance): Promise<DemoBootstrapRes
       created.memorySeed = true;
     }
   } catch (error) {
-    notes.push(`Memory seed skipped: ${(error as Error).message}`);
+    notes.push(
+      error instanceof FeatureDisabledError && error.details?.flag === "memoryLifecycleAdminV1Enabled"
+        ? DEMO_MEMORY_SEED_OFF_NOTE
+        : `Memory seed skipped: ${(error as Error).message}`,
+    );
   }
 
   const hasPartialNote = notes.some((note) => /skipped|unavailable|without durable-run linkage/i.test(note));
