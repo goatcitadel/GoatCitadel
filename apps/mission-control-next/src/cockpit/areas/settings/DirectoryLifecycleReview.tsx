@@ -1,5 +1,6 @@
 import { Dialog } from "../../ui/Dialog";
 import { Button } from "../../ui/Button";
+import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import {
   CHECKING_FOR_CHANGES,
   type useDirectoryLifecycle,
@@ -17,28 +18,24 @@ export function DirectoryLifecycleReview({ lifecycle }: { lifecycle: ReturnType<
         if (!open) lifecycle.cancel();
       }}
       title={`${action} ${kind}?`}
-      description="Review the saved record and version before archiving or restoring it."
+      description="Review the saved record before archiving or restoring it."
     >
       {review ? (
         <div className="space-y-3 text-sm text-fg-secondary">
           <dl className="cockpit-definition-grid grid gap-x-3 gap-y-2">
             <dt>Name</dt>
             <dd className="break-words text-fg">{review.record.name}</dd>
-            <dt>Record ID</dt>
-            <dd className="break-all font-mono">{directoryRecordId(review)}</dd>
-            <dt>Version</dt>
-            <dd className="break-all font-mono">{review.record.revision}</dd>
-            {review.kind === "workspace" ? (
-              <>
-                <dt>Citadel</dt>
-                <dd className="break-all font-mono">{review.scope}</dd>
-              </>
-            ) : null}
             <dt>Change</dt>
             <dd>
-              {review.record.lifecycleStatus} → {review.action === "archive" ? "archived" : "active"}
+              {review.record.lifecycleStatus === "active" ? "Active" : "Archived"} →{" "}
+              {review.action === "archive" ? "Archived" : "Active"}
             </dd>
           </dl>
+          <TechnicalDetails>
+            <p className="break-all font-mono text-xs">Record {directoryRecordId(review)}</p>
+            <p className="break-all font-mono text-xs">Version {review.record.revision}</p>
+            {review.kind === "workspace" ? <p className="break-all font-mono text-xs">Citadel {review.scope}</p> : null}
+          </TechnicalDetails>
           <p>
             {review.action === "archive"
               ? "The record stays in the archived directory. Stored work is retained; any retained edit draft for this record will be discarded after GoatCitadel confirms the change."
