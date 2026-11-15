@@ -3,6 +3,7 @@ import {
   type DraftLeaveDialogProps,
 } from "../../features/native-routes/library/DraftLeaveDialog";
 import { Button } from "./Button";
+import { Callout } from "./Callout";
 import { Dialog } from "./Dialog";
 
 /**
@@ -21,9 +22,9 @@ export function UnsavedChangesDialog(props: DraftLeaveDialogProps) {
       }}
     >
       {state.error ? (
-        <p role="alert" className="mb-3 text-sm text-status-failed">
-          {state.error}
-        </p>
+        <div className="mb-3">
+          <Callout tone="error">{state.error}</Callout>
+        </div>
       ) : null}
       <div className="flex flex-wrap gap-2">
         {state.canSave ? (

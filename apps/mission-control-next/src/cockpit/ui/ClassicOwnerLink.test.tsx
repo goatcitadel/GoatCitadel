@@ -232,7 +232,9 @@ describe("explicit classic owner navigation", () => {
       renderer = create(view("a"));
     });
     await act(async () => renderer.root.findByType("a").props.onClick({ button: 0, preventDefault: vi.fn() }));
-    expect(renderer.root.findByProps({ role: "alert" }).children).toEqual(["Access failed"]);
+    // The shared error callout holds the sentence in its last block, after the icon.
+    const callout = renderer.root.findByProps({ role: "alert" });
+    expect(callout.findAllByType("div").at(-1)!.children).toEqual(["Access failed"]);
     await act(async () => renderer.update(view("b")));
     await act(async () => renderer.update(view("a")));
     expect(renderer.root.findAllByProps({ role: "alert" })).toHaveLength(0);

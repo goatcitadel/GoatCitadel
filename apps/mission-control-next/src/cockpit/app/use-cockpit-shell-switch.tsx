@@ -3,6 +3,7 @@ import { buildClassicOwnerUrl } from "../../app/classic-owner-url";
 import { useUnsettledChatContextMutation } from "@goatcitadel/mission-control-shared/state/scoped-operation-attempts";
 import { CHAT_CONTEXT_HANDOFF_WARNING, useShellHandoff } from "../../app/use-shell-handoff";
 import { buildShellSwitchUrl } from "../../shell-preference";
+import { Callout } from "../ui/Callout";
 import { UnsavedChangesDialog } from "../ui/UnsavedChangesDialog";
 export function useCockpitShellSwitch(sessionId?: string | null) {
   const { activeWorkspaceId, activeCitadelId } = useUiPreferences();
@@ -37,11 +38,7 @@ export function ShellSwitchFeedback({
             Opening view…
           </span>
         ) : null}
-        {owner.error ? (
-          <span role="alert" className="block text-sm text-status-failed">
-            {owner.error}
-          </span>
-        ) : null}
+        {owner.error ? <Callout tone="error">{owner.error}</Callout> : null}
       </>
     ) : null;
   return (
