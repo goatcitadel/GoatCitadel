@@ -1,5 +1,5 @@
 // @vitest-environment happy-dom
-import { act } from "react";
+import { Activity, act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { useCockpitTitleDetail, useCockpitTitleDetailValue } from "./cockpit-title-detail";
@@ -75,4 +75,24 @@ it("follows a changed detail and ignores an empty one", async () => {
     ),
   );
   expect(shown()).toBe("none");
+});
+
+it("is cleared while the page that set it is kept hidden, as Chat is when another area is open", async () => {
+  const render = (mode: "visible" | "hidden") =>
+    act(async () =>
+      root.render(
+        <>
+          <Reader />
+          <Activity mode={mode}>
+            <Setter detail="Weekly plan" />
+          </Activity>
+        </>,
+      ),
+    );
+  await render("visible");
+  expect(shown()).toBe("Weekly plan");
+  await render("hidden");
+  expect(shown()).toBe("none");
+  await render("visible");
+  expect(shown()).toBe("Weekly plan");
 });
