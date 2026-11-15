@@ -16,6 +16,16 @@ const KIND_ORDER: readonly DeliverableKind[] = ["artifact", "file", "url"];
 const CONTROL_CLASS = "min-h-10 w-full rounded-md border border-line-control bg-sunken px-3 text-fg";
 
 /**
+ * What to say once a deliverable is recorded. Done is promised only when a finished read of the task's list holds a
+ * deliverable; while that list is still being read nothing is promised, and a failed or paused read says so.
+ */
+function recordedOutcome(listed: boolean, reading: boolean): string {
+  if (listed) return "Deliverable recorded. You can now mark the task Done.";
+  if (reading) return "Deliverable recorded.";
+  return "Deliverable recorded, but the list couldn't be refreshed. Reload the page to see it and mark the task Done.";
+}
+
+/**
  * Records a deliverable on a task nobody's run is handling. Done needs at least one, and this is where an operator
  * adds it. The Gateway owns the record; this form only asks for it and says what came of the request.
  */
@@ -44,12 +54,7 @@ export function TaskDeliverableForm({ task, workspaceId }: { task: TaskRecord; w
       void queryClient.invalidateQueries({ queryKey: ["tasks", "work-task", workspaceId, task.taskId] });
     },
   });
-  // Done is promised only once a finished read of the list holds a deliverable; a failed or paused read promises none.
-  const recordedLine = listed
-    ? "Deliverable recorded. You can now mark the task Done."
-    : list.isFetching
-      ? "Deliverable recorded."
-      : "Deliverable recorded, but the list couldn't be refreshed. Reload the page to see it and mark the task Done.";
+  const recordedLine = recordedOutcome(listed, list.isFetching);
   const trimmedTitle = title.trim();
   const trimmedPath = path.trim();
   const trimmedNote = note.trim();
