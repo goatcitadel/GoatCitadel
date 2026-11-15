@@ -549,8 +549,46 @@ it("leaves a message the operator has typed alone and says so (U-CH-031)", async
     await act(async () => findButton("Ask again")!.click());
     expect(onDraftChange).not.toHaveBeenCalled();
     expect(container.textContent).toContain("Your message box already has text. Clear it to ask again.");
+    const note = container.querySelector(
+      "#" + CSS.escape(findButton("Ask again")!.getAttribute("aria-describedby") ?? "none"),
+    );
+    expect(note?.textContent).toContain("Clear it to ask again.");
   } finally {
     composer.remove();
+  }
+});
+
+it("does not call the request Ask again just restored the operator's own text (U-CH-031)", async () => {
+  api.fetchApproval.mockResolvedValue(sweptExpiredRecord);
+  const onDraftChange = vi.fn();
+  const first = await renderExpired({ thread: expiredThread, onDraftChange, draft: "" });
+  const second = document.createElement("textarea");
+  try {
+    await vi.waitFor(() => expect(findButton("Ask again")).toBeDefined());
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledExactlyOnceWith("Create the note");
+    // The box now holds the restored request; a second click leaves it and says nothing about typed text.
+    await act(async () =>
+      root.render(
+        <QueryClientProvider client={client}>
+          <ChatBlockers
+            props={blockerProps({
+              pendingApproval: { approvalId: "approval/1", kind: "documents.create", riskLevel: "caution" },
+              composerRef: { current: second },
+              onDraftChange,
+              thread: expiredThread,
+              draft: "Create the note",
+            })}
+          />
+        </QueryClientProvider>,
+      ),
+    );
+    await act(async () => findButton("Ask again")!.click());
+    expect(onDraftChange).toHaveBeenCalledOnce();
+    expect(container.textContent).not.toContain("already has text");
+  } finally {
+    first.remove();
+    second.remove();
   }
 });
 

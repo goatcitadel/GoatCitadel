@@ -6,7 +6,7 @@ import { fetchApproval } from "@goatcitadel/mission-control-shared/api/approvals
 import { useUiPreferences } from "@goatcitadel/mission-control-shared/state/ui-preferences";
 import { isBackgroundChatUserInputPrompt } from "@goatcitadel/contracts";
 import type { MissionThreadedActiveSessionSurfaceProps } from "@goatcitadel/threaded-surface-core";
-import { lazy, useEffect, useRef, useState } from "react";
+import { lazy, useEffect, useId, useRef, useState } from "react";
 import { AttachmentImage } from "../../ui/AttachmentImage";
 import { ChatApprovalRenderer } from "./ChatApprovalRenderer";
 import { approvalExpiryLabel } from "../inbox/approval-preview";
@@ -159,7 +159,10 @@ export function ChatBlockers({ props }: { props: Blockers }) {
   );
   const expired = Boolean(approval) && (sweptExpired || (!decided && hasExpired(expiresAt, now)));
   const [askBlocked, setAskBlocked] = useState(false);
-  const draftHasText = Boolean(props.draft?.trim());
+  // The text Ask again itself put in the box: it is the request, not something the operator typed.
+  const restored = useRef<string | undefined>(undefined);
+  const blockedNoteId = useId();
+  const draftHasText = Boolean(props.draft?.trim()) && props.draft !== restored.current;
   const originalRequest = props.thread?.turns.find((turn) => turn.turnId === reviewedApproval?.linkage?.turnId)
     ?.userMessage.content;
   function askAgain() {
@@ -168,7 +171,11 @@ export function ChatBlockers({ props }: { props: Blockers }) {
       setAskBlocked(true);
       return;
     }
-    if (originalRequest) props.onDraftChange?.(originalRequest);
+    setAskBlocked(false);
+    if (originalRequest && props.draft !== originalRequest) {
+      restored.current = originalRequest;
+      props.onDraftChange?.(originalRequest);
+    }
     props.composerRef?.current?.focus();
   }
   function continuationHref(destination: "/inbox", selectedApprovalId?: string) {
@@ -299,10 +306,18 @@ export function ChatBlockers({ props }: { props: Blockers }) {
               <p>
                 The action did not run.
                 {originalRequest ? " Ask again to put your request back in the message box." : ""}
-                {askBlocked && draftHasText ? " Your message box already has text. Clear it to ask again." : ""}
+                {askBlocked && draftHasText ? (
+                  <span id={blockedNoteId}> Your message box already has text. Clear it to ask again.</span>
+                ) : null}
               </p>
               {originalRequest ? (
-                <Button type="button" size="sm" variant="secondary" onClick={askAgain}>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="secondary"
+                  aria-describedby={askBlocked && draftHasText ? blockedNoteId : undefined}
+                  onClick={askAgain}
+                >
                   Ask again
                 </Button>
               ) : null}
