@@ -1,6 +1,6 @@
 import type {
   BackupCreateResponse,
-  BackupManifestRecord,
+  BackupListedRecord,
   CompanionSessionExchangeInput,
   CompanionSessionRefreshInput,
   DatabaseCutoverRequest,
@@ -41,7 +41,7 @@ export interface AuthAdminRoutePort {
   getCompanionSessionRecord(sessionId: string): unknown;
   getDeviceAccessRequestStatus(requestId: string, secret: string): unknown;
   getRetentionPolicy(): Promise<RetentionPolicy>;
-  listBackups(limit: number): Promise<BackupManifestRecord[]>;
+  listBackups(limit: number): Promise<BackupListedRecord[]>;
   listCompanionAuditEvents(input?: CompanionAuditListOptions): unknown;
   listCompanionSessions(input?: CompanionSessionListOptions): unknown;
   listDeviceAccessGrants(): Promise<DeviceAccessGrantContractRecord[]>;
