@@ -5,6 +5,7 @@ import {
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
   groupGuidedProviders,
+  guidedSavedDefaultsRevision,
   guidedConnectionHint,
   guidedProviderOptionLabel,
   pendingPlanForSelection,
@@ -478,5 +479,16 @@ describe("plan reads reconciled by revision", () => {
     const other = plan("b", 1);
     expect(withHeldPlan([plan("a", 1), other], plan("a", 2))).toEqual([other, plan("a", 2)]);
     expect(withHeldPlan([plan("a", 3)], plan("a", 2))).toEqual([plan("a", 3)]);
+  });
+});
+
+describe("guided saved defaults revision", () => {
+  it("names only the saved provider, model and thinking level", () => {
+    expect(
+      guidedSavedDefaultsRevision({ activeProviderId: "a", activeModel: "m", defaultThinkingLevel: undefined }),
+    ).toBe('["a","m",null]');
+    expect(
+      guidedSavedDefaultsRevision({ activeProviderId: "a", activeModel: "m", defaultThinkingLevel: "standard" }),
+    ).toBe('["a","m","standard"]');
   });
 });

@@ -537,3 +537,15 @@ export const withHeldPlan = (held: readonly ChangePlanRecord[], plan: ChangePlan
   ...held.filter((candidate) => candidate.planId !== plan.planId),
   ...mergePlansByRevision([plan], held),
 ];
+
+/**
+ * The revision a guided model draft compares against: only what is saved. The suggested fallback provider moves as
+ * provider checks finish, and that is not a change to the saved defaults.
+ */
+export function guidedSavedDefaultsRevision(saved: {
+  activeProviderId: string;
+  activeModel: string;
+  defaultThinkingLevel: ChatThinkingLevel | undefined;
+}): string {
+  return JSON.stringify([saved.activeProviderId, saved.activeModel, saved.defaultThinkingLevel ?? null]);
+}

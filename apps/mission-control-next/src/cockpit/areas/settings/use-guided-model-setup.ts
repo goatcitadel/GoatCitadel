@@ -9,6 +9,7 @@ import {
   clampGuidedThinkingLevel,
   GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
+  guidedSavedDefaultsRevision,
   guidedConnectionHint,
   localRuntimeSetupGuide,
   pendingPlanForSelection,
@@ -56,15 +57,16 @@ export function useGuidedModelSetup({
   const activeProviderId = onboarding.settings?.llm?.activeProviderId ?? "";
   const activeModel = onboarding.settings?.llm?.activeModel ?? "";
   const fallbackProvider = pickDefaultGuidedProvider(providers, activeProviderId);
+  const defaultThinkingLevel = catalog.config?.defaultThinkingLevel;
   const canonicalSelection = {
     providerId: activeProviderId || fallbackProvider?.providerId || "",
     model: activeModel || fallbackProvider?.defaultModel || "",
-    thinkingLevel: catalog.config?.defaultThinkingLevel ?? ("standard" as ChatThinkingLevel),
+    thinkingLevel: defaultThinkingLevel ?? ("standard" as ChatThinkingLevel),
   };
   const modelDraft = useSessionDraft(
     "onboarding:" + workspaceId + ":model",
     canonicalSelection,
-    JSON.stringify(canonicalSelection),
+    guidedSavedDefaultsRevision({ activeProviderId, activeModel, defaultThinkingLevel }),
     { label: "First Chat model", available: !catalog.loading },
   );
   const { providerId, model, thinkingLevel: requestedThinkingLevel } = modelDraft.value;

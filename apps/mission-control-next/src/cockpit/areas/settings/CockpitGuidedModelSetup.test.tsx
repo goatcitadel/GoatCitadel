@@ -356,4 +356,33 @@ describe("shared guided model setup", () => {
     expect(onNoticeChange).toHaveBeenCalledWith("Change applied and verified.");
     expect(container.querySelector('[role="status"]')).toBeNull();
   });
+  it("does not say the saved defaults changed when only the suggested provider moved", async () => {
+    onboarding.settings.llm.activeProviderId = "";
+    onboarding.settings.llm.activeModel = "";
+    catalog("missing");
+    await mount();
+    await act(async () => {
+      const select = container.querySelector("select")!;
+      select.value = "test";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    catalog("ready"); // the provider's check finished; it is now the suggested default
+    await mount();
+    expect(container.textContent).not.toContain("Saved model defaults changed");
+  });
+  it("says the saved defaults changed once they really changed", async () => {
+    catalog("ready");
+    await mount();
+    await act(async () => {
+      const select = container.querySelectorAll("select")[1]!;
+      select.value = "other-model";
+      select.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    onboarding = {
+      ...onboarding,
+      settings: { ...onboarding.settings, llm: { ...onboarding.settings.llm, activeModel: "third-model" } },
+    };
+    await mount();
+    expect(container.textContent).toContain("Saved model defaults changed");
+  });
 });

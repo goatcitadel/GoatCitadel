@@ -7,7 +7,8 @@ import type { ToolApprovalMode } from "@goatcitadel/contracts";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { __resetSettingsChangesForTests } from "../../../features/native-routes/settings/use-settings-change";
 import { __resetApprovalModeUncertaintyForTests } from "./approval-mode-state";
-import { ApprovalModeControl } from "./ApprovalModeControl";
+import { ApprovalModeControl, ApprovalModeEditor } from "./ApprovalModeControl";
+import { useApprovalModeControl } from "./use-approval-mode-control";
 import { SHELL_HISTORY_POSITION } from "../../../app/shell-transition";
 import { CockpitNavigationProvider } from "../../app/CockpitNavigationProvider";
 import {
@@ -46,6 +47,22 @@ async function render() {
       <QueryClientProvider client={client}>
         <CockpitNavigationProvider>
           <ApprovalModeControl />
+        </CockpitNavigationProvider>
+      </QueryClientProvider>,
+    ),
+  );
+  await vi.waitFor(() => expect(container.textContent).not.toContain("Loading approval settings"));
+}
+function SafeOnly() {
+  const control = useApprovalModeControl({ scope: "first-run", safeOnly: true });
+  return <ApprovalModeEditor control={control} safeOnly />;
+}
+async function renderSafeOnly() {
+  await act(async () =>
+    root.render(
+      <QueryClientProvider client={client}>
+        <CockpitNavigationProvider>
+          <SafeOnly />
         </CockpitNavigationProvider>
       </QueryClientProvider>,
     ),
@@ -294,6 +311,14 @@ describe("cockpit tool approval rule", () => {
     expect(described).toContain(
       "Skip normal prompts is unavailable here. Remote Hardened keeps normal prompt skipping unavailable.",
     );
+  });
+
+  it("explains Skip normal prompts on first run instead of only saying it is unavailable", async () => {
+    await renderSafeOnly();
+    expect(container.textContent).toContain(
+      "Skip normal prompts lets allowed tools run without asking you first. Setup keeps it off, so you see each risky step before it runs. You can turn it on later in Settings › Safety.",
+    );
+    expect(container.textContent).not.toContain("Guided setup requires an approval rule");
   });
 
   it("fails closed when the owner profile is missing", async () => {
