@@ -693,6 +693,8 @@ export interface ChatTurnAgentRunnerInput {
   /** Server-owned profile chosen before the capability catalog is frozen. */
   executionProfile?: ChatTurnExecutionProfile;
   toolAutonomy: "safe_auto" | "manual";
+  /** Plan first: the model writes the plan with no tools, so the tool-settings conflict answer does not apply. */
+  planningMode?: "off" | "advisory";
   /** Server-authored intent signal; attached bytes are resolved only after capability freeze. */
   routedContextRequested?: boolean;
   operatorId?: string;
@@ -3106,7 +3108,13 @@ export class ChatTurnAgentRunner {
       await persistCodingProgress("Reconcile uncertain mutation effects before retrying.");
     }
 
-    if (!assistantContent && !approvalPayload && !pendingUserInput && !durableFanoutWaiting) {
+    if (
+      !assistantContent &&
+      !approvalPayload &&
+      !pendingUserInput &&
+      !durableFanoutWaiting &&
+      input.planningMode !== "advisory"
+    ) {
       const settingsConflict = buildLiveDataSettingsConflictMessage({
         mode: input.mode,
         webLookupIntent: intents.webLookup,

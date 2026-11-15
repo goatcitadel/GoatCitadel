@@ -1216,6 +1216,7 @@ export async function executeDelegatedPlanStep(
       subagentPolicy: "off",
       retrievalMode: prepared.autonomy.retrievalMode,
       toolAutonomy: prepared.effectiveToolAutonomy,
+      planningMode: prepared.prefs.planningMode,
       normalizationProfile: prepared.normalized.normalizationProfile,
       operatorId: input.operatorId,
       authActorId: input.authActorId,
@@ -2387,6 +2388,7 @@ export async function* streamPreparedAgentChatTurn(
                 normalizationProfile: prepared.normalized.normalizationProfile,
                 executionProfile: prepared.executionProfile,
                 toolAutonomy: prepared.capabilityProfile?.selection.toolAutonomy ?? prepared.effectiveToolAutonomy,
+                planningMode: prepared.prefs.planningMode,
                 routedContextRequested: Boolean(prepared.routedContextSnapshot),
                 operatorId: prepared.capabilityProfile
                   ? prepared.capabilityProfile.identity.operatorId

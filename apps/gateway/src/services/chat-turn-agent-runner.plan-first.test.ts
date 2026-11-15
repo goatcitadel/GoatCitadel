@@ -75,4 +75,46 @@ describe("ChatTurnAgentRunner Plan first turn", () => {
     expect(invokeTool).not.toHaveBeenCalled();
     expect(result.turnTrace.toolRuns ?? []).toEqual([]);
   });
+
+  it("asks the model for the plan when the request mentions a web lookup, instead of the settings-conflict answer", async () => {
+    const plan = "1. Pick the area. 2. List candidate places. 3. Compare them.";
+    const createChatCompletion = vi
+      .fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>()
+      .mockResolvedValue({
+        model: "glm-5",
+        choices: [{ index: 0, finish_reason: "stop", message: { role: "assistant", content: plan } }],
+      });
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool: vi.fn() as never,
+    });
+    const prompt = "Look online and tell me the 5 most interesting things that happened today.";
+
+    const result = await runner.run({ ...planFirstInput(prompt), planningMode: "advisory" });
+
+    expect(createChatCompletion).toHaveBeenCalledTimes(1);
+    expect(createChatCompletion.mock.calls[0]?.[0].tools ?? []).toEqual([]);
+    expect(result.assistantContent).toBe(plan);
+    expect(result.assistantContent).not.toContain("tool autonomy");
+  });
+
+  it("keeps the settings-conflict answer for a web lookup with manual autonomy when Plan first is off", async () => {
+    const createChatCompletion = vi.fn<(request: ChatCompletionRequest) => Promise<ChatCompletionResponse>>();
+    const runner = new ChatTurnAgentRunner({
+      storage: createMockStorage() as never,
+      listToolCatalog: () => createToolCatalog(["browser.search"]),
+      createChatCompletion,
+      invokeTool: vi.fn() as never,
+    });
+
+    const result = await runner.run({
+      ...planFirstInput("Look online and tell me the 5 most interesting things that happened today."),
+      planningMode: "off",
+    });
+
+    expect(createChatCompletion).not.toHaveBeenCalled();
+    expect(result.assistantContent).toContain("tool autonomy is set to Manual");
+  });
 });
