@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect } from "react";
 import { RESPONSIVE_QUERIES } from "@goatcitadel/mission-control-shared/hooks/responsive-breakpoints";
 import { useMediaQuery } from "@goatcitadel/mission-control-shared/hooks/useMediaQuery";
 import { isModifiedClick } from "../lib/modified-click";
+import { useOverflowEdges } from "./use-overflow-edges";
 
 export interface OverflowTab {
   id: string;
@@ -30,28 +31,10 @@ export function OverflowTabs({
 }) {
   const phone = useMediaQuery(RESPONSIVE_QUERIES.phone);
   const picker = phone && tabs.length >= PICKER_MIN_TABS;
-  const row = useRef<HTMLElement>(null);
-  const [edges, setEdges] = useState({ start: false, end: false });
-  useEffect(() => {
-    const element = row.current;
-    if (!element) return undefined;
-    const measure = () =>
-      setEdges({
-        start: element.scrollLeft > 1,
-        end: element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
-      });
-    measure();
-    element.addEventListener("scroll", measure, { passive: true });
-    const observer = typeof ResizeObserver === "function" ? new ResizeObserver(measure) : null;
-    observer?.observe(element);
-    return () => {
-      element.removeEventListener("scroll", measure);
-      observer?.disconnect();
-    };
-  }, [tabs.length, picker]);
+  const { ref: row, ...edges } = useOverflowEdges<HTMLElement>([tabs.length, picker]);
   useEffect(() => {
     row.current?.querySelector('[aria-current="page"]')?.scrollIntoView?.({ block: "nearest", inline: "nearest" });
-  }, [current, picker]);
+  }, [row, current, picker]);
   if (picker) {
     const selected = tabs.find((tab) => tab.id === current);
     return (

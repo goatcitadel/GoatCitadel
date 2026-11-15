@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { GeneratedArtifactViewer } from "@goatcitadel/mission-control-shared/components/chat/GeneratedArtifactViewer";
 import { plural } from "@goatcitadel/mission-control-shared/content/format";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
+import { useOverflowEdges } from "../../ui/use-overflow-edges";
 import {
   presentMemoryMode,
   presentPlanningMode,
@@ -39,6 +40,7 @@ export function ChatInspector({
   initialTab?: ChatInspectorTab;
 }) {
   const [tab, setTab] = useState<ChatInspectorTab>(initialTab);
+  const { ref: tabStrip, ...edges } = useOverflowEdges<HTMLDivElement>([]);
   useEffect(() => setTab(initialTab), [initialTab]);
   const active = input.activeSessionSurfaceProps;
   const dock = input.contextDockProps;
@@ -90,9 +92,12 @@ export function ChatInspector({
   return (
     <div className="space-y-4">
       <div
+        ref={tabStrip}
         role="tablist"
         aria-label="Conversation inspector"
-        className="flex gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-sunken p-1"
+        data-overflow-start={edges.start || undefined}
+        data-overflow-end={edges.end || undefined}
+        className="cockpit-overflow-fade flex gap-1 overflow-x-auto whitespace-nowrap rounded-md bg-sunken p-1"
       >
         {TABS.map((entry) => (
           <button
