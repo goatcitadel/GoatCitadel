@@ -233,4 +233,45 @@ describe("Chat turn actions", () => {
       "2 tools in this answer may change things outside the chat.",
     );
   });
+  it("lists Save as skill under More and calls it, and lists nothing without a handler", async () => {
+    const onSaveAsSkill = vi.fn();
+    const render = (extra: Partial<TurnActionHandlers>) =>
+      act(async () =>
+        root.render(
+          <ChatTurnActions
+            turn={turn}
+            actions={{ ...handlers(), ...extra }}
+            streaming={false}
+            readOnly={false}
+            hasAnswer
+            onCopy={vi.fn()}
+          />,
+        ),
+      );
+    const openMore = () =>
+      act(async () => {
+        const more = container.querySelector('button[aria-label="More message actions"]') as HTMLElement;
+        more.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, cancelable: true, button: 0 }));
+        more.dispatchEvent(new PointerEvent("pointerup", { bubbles: true, cancelable: true, button: 0 }));
+        more.click();
+      });
+    const items = () => [...document.body.querySelectorAll('[role="menuitem"]')] as HTMLElement[];
+    await render({});
+    await openMore();
+    await vi.waitFor(() => expect(items().length).toBeGreaterThan(0));
+    expect(items().map((item) => item.textContent)).not.toContain("Save as skill…");
+    await act(async () => root.unmount());
+    root = createRoot(container);
+    await render({ onSaveAsSkill });
+    await openMore();
+    await vi.waitFor(() => expect(items().length).toBeGreaterThan(0));
+    const labelsInMenu = items().map((item) => item.textContent);
+    expect(labelsInMenu.indexOf("Save as skill…")).toBe(labelsInMenu.indexOf("Save answer") + 1);
+    await act(async () =>
+      items()
+        .find((item) => item.textContent === "Save as skill…")!
+        .click(),
+    );
+    expect(onSaveAsSkill).toHaveBeenCalledOnce();
+  });
 });

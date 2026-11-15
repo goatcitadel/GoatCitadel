@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useSessionViewState } from "../../../hooks/use-session-view-state";
 import { useStableHandler } from "../../threaded-surface/useStableHandler";
 import { useSessionDraft } from "./session-drafts";
@@ -36,6 +36,10 @@ type WorkflowCaptureProps = {
   draftEmpty: boolean;
   onPrepare: (prompt: string) => void;
   onReviewPlan?: (plan: ChangePlanRecord) => void;
+  /** Open on mount: the operator chose Save as skill from the answer's menu. */
+  initialOpen?: boolean;
+  /** Called after the summary closes, once any unsaved draft was reviewed. */
+  onClosed?: () => void;
 };
 function CaptureControl({
   turn,
@@ -44,21 +48,21 @@ function CaptureControl({
   draftEmpty,
   onPrepare,
   onReviewPlan,
-}: {
-  turn: ChatThreadTurnRecord;
-  sessionId: string;
-  workspaceId: string;
-  draftEmpty: boolean;
-  onPrepare: (prompt: string) => void;
-  onReviewPlan?: (plan: ChangePlanRecord) => void;
-}) {
+  initialOpen = false,
+  onClosed,
+}: WorkflowCaptureProps) {
   const operation = useLibraryOperation(JSON.stringify(["workflow-capture", workspaceId, sessionId, turn.turnId]));
   // The Chat transcript is virtualized and can recreate this row while the operator
   // works; keep the disclosure in the same presentation-scoped state as its receipts.
   const [open, setOpen] = useSessionViewState(
     JSON.stringify(["workflow-capture-open", operation.presentationScope]),
-    false,
+    initialOpen,
   );
+  // The stored open state outlives the block, so a menu request opens it again after an earlier close.
+  useEffect(() => {
+    if (initialOpen) setOpen(true);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only the request on mount seeds the state
+  }, []);
   const leave = useDraftLeave();
   const captureDraft = useSessionDraft(
     JSON.stringify(["workflow-capture-draft", operation.presentationScope]),
@@ -128,7 +132,11 @@ function CaptureControl({
         <summary
           onClick={(event) => {
             event.preventDefault();
-            if (open) leave.request(() => setOpen(false), [captureDraft.key]);
+            if (open)
+              leave.request(() => {
+                setOpen(false);
+                onClosed?.();
+              }, [captureDraft.key]);
             else setOpen(true);
           }}
         >

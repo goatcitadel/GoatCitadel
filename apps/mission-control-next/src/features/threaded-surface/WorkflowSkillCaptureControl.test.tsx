@@ -8,7 +8,13 @@ import { WorkflowSkillCaptureControl } from "./WorkflowSkillCaptureControl";
 import { __resetSessionViewStateForTests } from "../../hooks/use-session-view-state";
 import { __resetSessionDraftsForTests } from "../native-routes/library/session-drafts";
 
-const api = vi.hoisted(() => ({ prepare: vi.fn(), stage: vi.fn(), plan: vi.fn(), fetchPlan: vi.fn(), proposals: vi.fn(async () => ({ items: [] })) }));
+const api = vi.hoisted(() => ({
+  prepare: vi.fn(),
+  stage: vi.fn(),
+  plan: vi.fn(),
+  fetchPlan: vi.fn(),
+  proposals: vi.fn(async () => ({ items: [] })),
+}));
 vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
   prepareWorkflowSkillCapture: api.prepare,
   fetchCapabilityProposals: api.proposals,
@@ -39,54 +45,116 @@ afterEach(async () => {
 
 describe("skill capture preparation", () => {
   it("retains the exact candidate and review receipt and suppresses duplicate writes after remount", async () => {
-    const host = document.createElement("div"); document.body.append(host);
-    const root = createRoot(host); roots.push(root);
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
     let resolveStage!: (value: unknown) => void;
     let resolvePlan!: (value: unknown) => void;
-    api.stage.mockImplementation(() => new Promise(resolve => { resolveStage = resolve; }));
-    api.plan.mockImplementation(() => new Promise(resolve => { resolvePlan = resolve; }));
-    const turn = {...sourceTurn, turnId:"capture-turn", userMessage:{...sourceTurn.userMessage, content:WORKFLOW_SKILL_CAPTURE_MARKER + "{}"}};
+    api.stage.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveStage = resolve;
+        }),
+    );
+    api.plan.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolvePlan = resolve;
+        }),
+    );
+    const turn = {
+      ...sourceTurn,
+      turnId: "capture-turn",
+      userMessage: { ...sourceTurn.userMessage, content: WORKFLOW_SKILL_CAPTURE_MARKER + "{}" },
+    };
     const onReviewPlan = vi.fn();
-    const props = {turn, sessionId:"session-receipt", workspaceId:"default", draftEmpty:true, onPrepare:vi.fn(), onReviewPlan};
-    const button = (label:string) => [...host.querySelectorAll("button")].find(item=>item.textContent === label)!;
-    await act(async()=>root.render(<WorkflowSkillCaptureControl {...props} />));
-    await act(async()=>button("Save reviewed candidate").click());
-    await vi.waitFor(()=>expect(api.stage).toHaveBeenCalledOnce());
-    await act(async()=>root.render(null));
-    await act(async()=>root.render(<WorkflowSkillCaptureControl {...props} />));
+    const props = {
+      turn,
+      sessionId: "session-receipt",
+      workspaceId: "default",
+      draftEmpty: true,
+      onPrepare: vi.fn(),
+      onReviewPlan,
+    };
+    const button = (label: string) => [...host.querySelectorAll("button")].find((item) => item.textContent === label)!;
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
+    await act(async () => button("Save reviewed candidate").click());
+    await vi.waitFor(() => expect(api.stage).toHaveBeenCalledOnce());
+    await act(async () => root.render(null));
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
     expect(button("Saving…").disabled).toBe(true);
-    await act(async()=>button("Saving…").click());
+    await act(async () => button("Saving…").click());
     expect(api.stage).toHaveBeenCalledOnce();
-    await act(async()=>resolveStage({candidateId:"candidate-1",versionId:"version-1",proposalId:"proposal-1", revision:1, activationPerformed:false, evaluation:"structure_and_safety_passed", behavioralValidation:"not_run"}));
+    await act(async () =>
+      resolveStage({
+        candidateId: "candidate-1",
+        versionId: "version-1",
+        proposalId: "proposal-1",
+        revision: 1,
+        activationPerformed: false,
+        evaluation: "structure_and_safety_passed",
+        behavioralValidation: "not_run",
+      }),
+    );
     expect(button("Save reviewed candidate").disabled).toBe(true);
-    await act(async()=>button("Review activation").click());
-    expect(api.plan).toHaveBeenCalledWith(expect.objectContaining({request:{kind:"capability_candidate",proposalId:"proposal-1",versionId:"version-1"}}));
-    await act(async()=>root.render(null));
-    await act(async()=>root.render(<WorkflowSkillCaptureControl {...props} />));
+    await act(async () => button("Review activation").click());
+    expect(api.plan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        request: { kind: "capability_candidate", proposalId: "proposal-1", versionId: "version-1" },
+      }),
+    );
+    await act(async () => root.render(null));
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
     expect(button("Review activation").disabled).toBe(true);
-    await act(async()=>resolvePlan({planId:"plan-1",status:"draft",origin:{sessionId:"session-receipt",workspaceId:"default"}}));
+    await act(async () =>
+      resolvePlan({
+        planId: "plan-1",
+        status: "draft",
+        origin: { sessionId: "session-receipt", workspaceId: "default" },
+      }),
+    );
     expect(host.textContent).toContain("The activation review is attached to this turn.");
-    await act(async()=>root.render(null));
-    await act(async()=>root.render(<WorkflowSkillCaptureControl {...props} />));
+    await act(async () => root.render(null));
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
     expect(host.textContent).toContain("Candidate saved.");
     expect(host.textContent).toContain("The activation review is attached to this turn.");
     expect(api.stage).toHaveBeenCalledOnce();
     expect(api.plan).toHaveBeenCalledOnce();
     expect(onReviewPlan).not.toHaveBeenCalled();
-    api.fetchPlan.mockResolvedValueOnce({planId:"plan-1",status:"awaiting_input",origin:{sessionId:"session-receipt",workspaceId:"default"}});
-    await act(async()=>button("Open activation review").click());
-    expect(api.fetchPlan).toHaveBeenCalledWith("plan-1",{workspaceId:"default",sessionId:"session-receipt",turnId:"capture-turn"});
-    expect(onReviewPlan).toHaveBeenCalledWith(expect.objectContaining({planId:"plan-1"}));
+    api.fetchPlan.mockResolvedValueOnce({
+      planId: "plan-1",
+      status: "awaiting_input",
+      origin: { sessionId: "session-receipt", workspaceId: "default" },
+    });
+    await act(async () => button("Open activation review").click());
+    expect(api.fetchPlan).toHaveBeenCalledWith("plan-1", {
+      workspaceId: "default",
+      sessionId: "session-receipt",
+      turnId: "capture-turn",
+    });
+    expect(onReviewPlan).toHaveBeenCalledWith(expect.objectContaining({ planId: "plan-1" }));
   });
   it("retains capture guidance through unmount and failed preparation", async () => {
-    const host = document.createElement("div"); document.body.append(host);
-    const root = createRoot(host); roots.push(root);
-    const props = { turn: sourceTurn, sessionId: "session-retained", workspaceId: "default", draftEmpty: true, onPrepare: vi.fn() };
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const props = {
+      turn: sourceTurn,
+      sessionId: "session-retained",
+      workspaceId: "default",
+      draftEmpty: true,
+      onPrepare: vi.fn(),
+    };
     await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
     await act(async () => host.querySelector("summary")!.click());
     const field = host.querySelector("textarea")!;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(field, "Keep approval and provenance checks.");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        field,
+        "Keep approval and provenance checks.",
+      );
       field.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => root.render(null));
@@ -94,7 +162,9 @@ describe("skill capture preparation", () => {
     expect(host.querySelector("textarea")?.value).toBe("Keep approval and provenance checks.");
     expect(host.querySelector("summary")?.textContent).toContain("Unsaved");
     api.prepare.mockRejectedValueOnce(new Error("Preparation unavailable"));
-    await act(async () => [...host.querySelectorAll("button")].find(b => b.textContent === "Prepare skill draft")!.click());
+    await act(async () =>
+      [...host.querySelectorAll("button")].find((b) => b.textContent === "Prepare skill draft")!.click(),
+    );
     expect(host.querySelector('[role="alert"]')?.textContent).toContain("Preparation unavailable");
     expect(host.querySelector("textarea")?.value).toBe("Keep approval and provenance checks.");
   });
@@ -133,26 +203,67 @@ describe("skill capture preparation", () => {
   });
   it.each([
     ["Save as skill", sourceTurn],
-    ["Review skill draft", { ...sourceTurn, turnId: "capture-open", userMessage: { ...sourceTurn.userMessage, content: WORKFLOW_SKILL_CAPTURE_MARKER + "{}" } }],
+    [
+      "Review skill draft",
+      {
+        ...sourceTurn,
+        turnId: "capture-open",
+        userMessage: { ...sourceTurn.userMessage, content: WORKFLOW_SKILL_CAPTURE_MARKER + "{}" },
+      },
+    ],
   ] as const)("keeps %s open with its guidance when the virtualized row remounts", async (label, turn) => {
     // The Chat transcript is virtualized; a row can be recreated while the operator works.
     const host = document.createElement("div");
     document.body.append(host);
     const root = createRoot(host);
     roots.push(root);
-    const props = { turn: turn as ChatThreadTurnRecord, sessionId: "session-open", workspaceId: "default", draftEmpty: true, onPrepare: vi.fn() };
+    const props = {
+      turn: turn as ChatThreadTurnRecord,
+      sessionId: "session-open",
+      workspaceId: "default",
+      draftEmpty: true,
+      onPrepare: vi.fn(),
+    };
     await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
     const summary = () => [...host.querySelectorAll("summary")].find((item) => item.textContent?.startsWith(label))!;
     await act(async () => summary().click());
     expect(summary().closest("details")!.open).toBe(true);
     const textarea = host.querySelector("textarea")!;
     await act(async () => {
-      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(textarea, "Keep the approval boundaries.");
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")!.set!.call(
+        textarea,
+        "Keep the approval boundaries.",
+      );
       textarea.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => root.render(null));
     await act(async () => root.render(<WorkflowSkillCaptureControl {...props} />));
     expect(summary().closest("details")!.open).toBe(true);
     expect(host.querySelector("textarea")!.value).toBe("Keep the approval boundaries.");
+  });
+  it("opens on request from the answer's menu and tells its owner when the operator closes it", async () => {
+    const host = document.createElement("div");
+    document.body.append(host);
+    const root = createRoot(host);
+    roots.push(root);
+    const onClosed = vi.fn();
+    const props = {
+      turn: sourceTurn,
+      sessionId: "session-menu",
+      workspaceId: "default",
+      draftEmpty: true,
+      onPrepare: vi.fn(),
+      onClosed,
+    };
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} initialOpen />));
+    expect(host.querySelector("details")!.open).toBe(true);
+    expect(host.textContent).toContain("Prepare skill draft");
+    await act(async () => host.querySelector("summary")!.click());
+    expect(host.querySelector("details")!.open).toBe(false);
+    expect(onClosed).toHaveBeenCalledOnce();
+    // A second request after the close opens it again.
+    await act(async () => root.render(null));
+    await act(async () => root.render(<WorkflowSkillCaptureControl {...props} initialOpen />));
+    expect(host.querySelector("details")!.open).toBe(true);
   });
 });

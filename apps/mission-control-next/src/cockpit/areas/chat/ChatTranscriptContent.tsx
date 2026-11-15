@@ -32,6 +32,7 @@ import { ChatStreamErrorNotice } from "./ChatStreamErrorNotice";
 import { ChatTranscriptNotices } from "./ChatTranscriptNotices";
 import { ChatTurnDetails } from "./ChatTurnDetails";
 import { turnReadsDraft, type TurnActions } from "./use-turn-actions";
+import { useTurnSkillCapture } from "./use-turn-skill-capture";
 
 const ChatChangePlanCard = lazy(async () => ({
   default: (await import("@goatcitadel/mission-control-shared/components/chat/ChatChangePlanCard")).ChatChangePlanCard,
@@ -42,12 +43,6 @@ const ChatTurnFailureCard = lazy(async () => ({
 }));
 const ChatTurnThinking = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).ChatTurnThinking }));
 const TurnReceipt = lazy(async () => ({ default: (await import("./ChatTurnAnnotations")).TurnReceipt }));
-
-const WorkflowSkillCaptureControl = lazy(() =>
-  import("../../../features/native-routes/library/WorkflowSkillCaptureControl").then((module) => ({
-    default: module.WorkflowSkillCaptureControl,
-  })),
-);
 
 const TURN_NAME_WORDS = 8;
 
@@ -132,6 +127,8 @@ export const Turn = memo(function Turn({
   // own desk question, so no turn offers them. The session says so before the Messaging overview has loaded.
   const inChannel = useInChannelConversation() || channel !== undefined;
   const resendable = !fromChannel && !inChannel;
+  const eligibleForSkill = !actions.historicalReadOnly && !fromChannel && !streaming && turnReadsDraft(turn);
+  const skillCapture = useTurnSkillCapture(turn, actions, eligibleForSkill, draftEmpty);
   const source = channel ? describeChannelMessageSource(channel, turn.userMessage.sourceAuthority) : null;
   return (
     <article
@@ -296,30 +293,13 @@ export const Turn = memo(function Turn({
           latest={isLatest}
           actions={{
             ...actions,
+            onSaveAsSkill: skillCapture.onSaveAsSkill,
             onOpenRunDetails: onInspectTurn ?? actions.onOpenRunDetails,
             onOpenGeneratedArtifact: onOpenArtifact ?? actions.onOpenGeneratedArtifact,
           }}
         />
       ) : null}
-      {!actions.historicalReadOnly &&
-      !fromChannel &&
-      !streaming &&
-      actions.selectedSessionId &&
-      turnReadsDraft(turn) ? (
-        <Suspense fallback={<p aria-busy="true">Loading skill capture…</p>}>
-          <WorkflowSkillCaptureControl
-            turn={turn}
-            sessionId={actions.selectedSessionId}
-            workspaceId={actions.workspaceId}
-            draftEmpty={draftEmpty}
-            onPrepare={(prompt) => {
-              actions.onDraftChange(prompt);
-              actions.composerRef.current?.focus();
-            }}
-            onReviewPlan={actions.onReviewPlan}
-          />
-        </Suspense>
-      ) : null}
+      {skillCapture.control}
     </article>
   );
 });

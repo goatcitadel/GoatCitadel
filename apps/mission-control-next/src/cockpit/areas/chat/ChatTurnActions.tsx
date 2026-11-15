@@ -17,7 +17,10 @@ export type TurnActionHandlers = Pick<
   | "onEditTurn"
   | "onOpenRunDetails"
   | "onCreateGeneratedArtifact"
->;
+> & {
+  /** Opens Save as skill for this answer. Set only when the answer can become a skill. */
+  onSaveAsSkill?: () => void;
+};
 
 const INLINE = "inline-flex min-h-8 items-center px-1 text-accent hover:underline";
 const PHONE =
@@ -74,6 +77,7 @@ export function ChatTurnActions({
       : null,
     { label: "Run details", run: () => actions.onOpenRunDetails(turn.turnId) },
     canSave ? { label: "Save answer", run: () => actions.onCreateGeneratedArtifact(turn.turnId) } : null,
+    actions.onSaveAsSkill ? { label: "Save as skill…", run: actions.onSaveAsSkill } : null,
   ].filter((item): item is { label: string; run: () => void } => Boolean(item));
 
   return (
