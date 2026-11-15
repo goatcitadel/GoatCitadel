@@ -237,12 +237,13 @@ type DesktopMobileContinuityItem = {
 
 export function deriveDesktopMobileContinuityItems(input: {
   settings: AccessSettingsSnapshot;
-  grants: DeviceAccessGrantRecord[];
+  grants: DeviceAccessGrantRecord[] | null;
   daemon: DaemonStatusSnapshot | null;
 }): DesktopMobileContinuityItem[] {
-  const activeGrants = input.grants.filter((grant) => !grant.revokedAt);
-  const mobileGrants = activeGrants.filter((grant) => ["mobile", "tablet"].includes(grant.deviceType));
-  const desktopGrants = activeGrants.filter((grant) => grant.deviceType === "desktop");
+  const activeGrants = input.grants?.filter((grant) => !grant.revokedAt);
+  const mobileGrants = activeGrants?.filter((grant) => ["mobile", "tablet"].includes(grant.deviceType)).length;
+  const desktopGrants = activeGrants?.filter((grant) => grant.deviceType === "desktop").length;
+  const grantsUnavailable = input.grants === null;
   const authConfigured =
     (input.settings.auth?.mode === "token" && input.settings.auth?.tokenConfigured) ||
     (input.settings.auth?.mode === "basic" && input.settings.auth?.basicConfigured);
@@ -259,20 +260,24 @@ export function deriveDesktopMobileContinuityItems(input: {
     {
       id: "mobile-trust",
       label: "Mobile approval path",
-      description: mobileGrants.length
-        ? `${mobileGrants.length} active mobile/tablet device grant(s) can reach the gateway under this auth posture.`
-        : "No active mobile/tablet grants are visible; approve a companion device before claiming mobile approvals.",
-      meta: mobileGrants.length ? "Access-gated" : "No mobile grant",
-      actionLabel: mobileGrants.length ? "Ready" : "Needs grant",
+      description: grantsUnavailable
+        ? "Mobile device grants could not be checked."
+        : mobileGrants
+          ? `${mobileGrants} active mobile/tablet device grant(s) can reach the gateway under this auth posture.`
+          : "No active mobile/tablet grants are visible; approve a companion device before claiming mobile approvals.",
+      meta: grantsUnavailable ? "Unavailable" : mobileGrants ? "Access-gated" : "No mobile grant",
+      actionLabel: grantsUnavailable ? "Check device grants" : mobileGrants ? "Ready" : "Needs grant",
     },
     {
       id: "desktop-device-trust",
       label: "Desktop handoff trust",
-      description: desktopGrants.length
-        ? `${desktopGrants.length} active desktop device grant(s) are visible for browser or shell handoff.`
-        : "Desktop continuity currently relies on the local session and daemon, not an additional device grant.",
-      meta: desktopGrants.length ? "Device trust" : "Local session",
-      actionLabel: desktopGrants.length ? "Granted" : "Local only",
+      description: grantsUnavailable
+        ? "Desktop device grants could not be checked."
+        : desktopGrants
+          ? `${desktopGrants} active desktop device grant(s) are visible for browser or shell handoff.`
+          : "Desktop continuity currently relies on the local session and daemon, not an additional device grant.",
+      meta: grantsUnavailable ? "Unavailable" : desktopGrants ? "Device trust" : "Local session",
+      actionLabel: grantsUnavailable ? "Check device grants" : desktopGrants ? "Granted" : "Local only",
     },
     {
       id: "install-token",
