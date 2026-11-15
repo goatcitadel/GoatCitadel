@@ -110,14 +110,15 @@ describe("native integration connections", () => {
   it("does not promote a configured connected record to verified connectivity", async () => {
     items = [{ ...connection("one"), enabled: true, status: "connected" }];
     await mount();
-    expect(text(view.root)).toContain("Connectivity unverified");
-    expect(text(view.root)).toContain("Configured status: Connected");
+    expect(text(view.root)).toContain("Not checked yet");
+    expect(text(view.root)).toContain("Saved status: Set up, not checked. Choose Manage to run diagnostics.");
+    expect(text(view.root)).not.toContain("Configured status");
   });
   it("shows global scope, saved status, and an explicit exact owner review before changing enabled state", async () => {
     await mount();
     expect(text(view.root)).toContain("across all workspaces");
     expect(button("Add and manage integrations").props["aria-expanded"]).toBe(false);
-    expect(text(view.root)).toContain("Configured status: Paused");
+    expect(text(view.root)).toContain("Saved status: Paused.");
     await click(button("Review enable"));
     expect(modal().props.open).toBe(true);
     expect(modal().props.message).toContain("Personal Citadel policy applies");
