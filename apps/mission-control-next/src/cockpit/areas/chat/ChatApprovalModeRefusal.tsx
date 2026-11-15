@@ -21,7 +21,7 @@ export function ApprovalModeRefusalRow({ refusal, scope }: { refusal: ApprovalMo
           ? "Auto mode and Managed files need sign-in. Set up sign-in in Settings › Access to use them in project conversations."
           : "Auto mode and Managed files work only from a signed-in browser on the computer that runs GoatCitadel."}
       </p>
-      <NativeOwnerLink href="/settings/access#device-access" scope={scope} className="text-sm">
+      <NativeOwnerLink href="/settings/access" scope={scope} className="text-sm">
         {needsSignIn ? "Set up sign-in" : "Review access"}
       </NativeOwnerLink>
     </section>

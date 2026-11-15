@@ -252,9 +252,7 @@ it("says Auto mode needs sign-in, links to Settings › Access and offers no Ret
       "Auto mode and Managed files need sign-in. Set up sign-in in Settings › Access to use them in project conversations.",
     ),
   );
-  expect(container.querySelector('a[href="/settings/access?shell=cockpit#device-access"]')?.textContent).toBe(
-    "Set up sign-in",
-  );
+  expect(container.querySelector('a[href="/settings/access?shell=cockpit"]')?.textContent).toBe("Set up sign-in");
   expect(button("Retry")).toBeUndefined();
   expect(container.textContent).not.toContain("Approval mode unavailable");
 });
@@ -268,8 +266,6 @@ it("names a local signed-in connection, not sign-in, when the caller is signed i
       "Auto mode and Managed files work only from a signed-in browser on the computer that runs GoatCitadel.",
     ),
   );
-  expect(container.querySelector('a[href="/settings/access?shell=cockpit#device-access"]')?.textContent).toBe(
-    "Review access",
-  );
+  expect(container.querySelector('a[href="/settings/access?shell=cockpit"]')?.textContent).toBe("Review access");
   expect(button("Retry")).toBeUndefined();
 });
