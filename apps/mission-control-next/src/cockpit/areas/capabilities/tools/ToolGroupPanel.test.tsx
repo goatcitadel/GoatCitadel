@@ -43,9 +43,13 @@ vi.mock("../../settings/SettingsApprovalDialog", () => ({
   SettingsApprovalDialog: (props: {
     approvalId: string;
     summary?: string;
+    installationSetting?: boolean;
     onResolved: (status: undefined) => void;
   }) => (
-    <section data-in-place-approval={props.approvalId}>
+    <section
+      data-in-place-approval={props.approvalId}
+      data-installation-setting={String(props.installationSetting === true)}
+    >
       <p>{props.summary}</p>
       <button onClick={() => props.onResolved(undefined)}>Resolve in place</button>
     </section>
@@ -485,6 +489,10 @@ describe("Tool group panel", () => {
         }),
       );
       expect(container.querySelector('[data-in-place-approval="approval-1"]')).not.toBeNull();
+      // A runtime-settings plan made under the default workspace, so it can be decided from any selected workspace.
+      expect(
+        container.querySelector('[data-in-place-approval="approval-1"]')?.getAttribute("data-installation-setting"),
+      ).toBe("true");
       expect(text()).toContain("Switch Git on");
       expect(text()).toContain("Waiting on you in Inbox");
       expect([...container.querySelectorAll("a")].some((link) => link.textContent === "Open in Inbox")).toBe(true);

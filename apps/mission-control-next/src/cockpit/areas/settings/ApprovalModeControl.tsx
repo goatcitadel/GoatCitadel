@@ -45,6 +45,12 @@ export function ApprovalModeEditor({
   const recoveryHref = `/settings/safety${parameters.size ? `?${parameters}` : ""}#approval-mode`;
   const approval = change.change?.receipt.requiredAction;
   const confirmed = settingsChangeIsConfirmed(change.change);
+  // One owner for an approval: a change already waiting is reopened by the notice below, so this save's own dialog
+  // stays out of the way when both name the same approval.
+  const waitingApprovalId =
+    control.waiting && !("unreadable" in control.waiting) && control.waiting.stage === "approval"
+      ? control.waiting.approvalId
+      : undefined;
   return (
     <section
       id="approval-mode"
@@ -175,9 +181,10 @@ export function ApprovalModeEditor({
             {approval?.kind === "approval" && !confirmed ? (
               <>
                 {/* The approval opens here; the Inbox copy stays one link away for whoever prefers it. */}
-                {approval.approvalId ? (
+                {approval.approvalId && approval.approvalId !== waitingApprovalId ? (
                   <SettingsApprovalDialog
                     approvalId={approval.approvalId}
+                    installationSetting
                     summary={`Change the approval rule to ${describeToolApprovalMode(draft.value)}`}
                     dangerReview
                     onResolved={change.refresh}

@@ -21,8 +21,17 @@ vi.mock("@goatcitadel/mission-control-shared/api/client", () => ({
 }));
 
 vi.mock("./SettingsApprovalDialog", () => ({
-  SettingsApprovalDialog: (props: { approvalId: string; summary?: string; dangerReview?: boolean }) => (
-    <section data-in-place-approval={props.approvalId} data-danger-review={String(props.dangerReview === true)}>
+  SettingsApprovalDialog: (props: {
+    approvalId: string;
+    summary?: string;
+    dangerReview?: boolean;
+    installationSetting?: boolean;
+  }) => (
+    <section
+      data-in-place-approval={props.approvalId}
+      data-danger-review={String(props.dangerReview === true)}
+      data-installation-setting={String(props.installationSetting === true)}
+    >
       {props.summary}
     </section>
   ),
@@ -373,6 +382,8 @@ describe("global filesystem tool access", () => {
     expect(button("Continue approved change")).toBeUndefined();
     // File access can be danger (write or delete becoming available), so its dialog keeps the two-step review.
     expect(container.querySelector("[data-in-place-approval]")?.getAttribute("data-danger-review")).toBe("true");
+    // A runtime-settings plan made under the default workspace, so it can be decided from any selected workspace.
+    expect(container.querySelector("[data-in-place-approval]")?.getAttribute("data-installation-setting")).toBe("true");
     // The page never approves for the operator: the save went out once and the control stays locked.
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
     expect(toolSelect("fs.copy").disabled).toBe(true);

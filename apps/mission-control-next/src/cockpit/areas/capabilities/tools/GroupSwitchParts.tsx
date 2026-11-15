@@ -185,6 +185,7 @@ export function GroupSwitchNotes({
           title="Approve this tool change?"
           summary={`Switch ${group.label} ${control.waitingEnabled === false ? "off" : "on"}`}
           reviewLabel="Review the change"
+          installationSetting
           onResolved={() => control.checkApproval()}
         />
       ) : null}

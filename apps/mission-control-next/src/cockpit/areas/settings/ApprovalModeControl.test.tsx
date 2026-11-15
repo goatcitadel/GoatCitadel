@@ -41,11 +41,21 @@ vi.mock("../../ui/Dialog", () => ({
     ) : null,
 }));
 vi.mock("./SettingsApprovalDialog", () => ({
-  SettingsApprovalDialog: (props: { approvalId: string; summary?: string; dangerReview?: boolean }) => (
-    <section data-in-place-approval={props.approvalId} data-danger-review={String(props.dangerReview === true)}>
+  SettingsApprovalDialog: (props: {
+    approvalId: string;
+    summary?: string;
+    dangerReview?: boolean;
+    installationSetting?: boolean;
+  }) => (
+    <section
+      data-in-place-approval={props.approvalId}
+      data-danger-review={String(props.dangerReview === true)}
+      data-installation-setting={String(props.installationSetting === true)}
+    >
       {props.summary}
     </section>
   ),
+  reopenSettingsApproval: vi.fn(),
 }));
 const dialog = () => container.querySelector<HTMLElement>('[role="dialog"]');
 let owner: { revision: number; toolApprovalMode: ToolApprovalMode; deploymentProfile?: string };
@@ -215,6 +225,8 @@ describe("cockpit tool approval rule", () => {
     expect(container.textContent).toContain("Change the approval rule to");
     // The rule can be danger (skipping prompts), so its dialog keeps the two-step review.
     expect(container.querySelector("[data-in-place-approval]")?.getAttribute("data-danger-review")).toBe("true");
+    // A runtime-settings plan made under the default workspace, so it can be decided from any selected workspace.
+    expect(container.querySelector("[data-in-place-approval]")?.getAttribute("data-installation-setting")).toBe("true");
     expect(container.querySelector('a[href^="/inbox?"]')?.textContent).toBe("Open in Inbox");
     expect(
       [...container.querySelectorAll("button")].some((item) => item.textContent === "Continue approved change"),
@@ -406,6 +418,19 @@ describe("cockpit tool approval rule", () => {
     expect(button("Save approval rule").disabled).toBe(true);
     expect(container.textContent).toContain("Unsaved approval rule draft");
     expect(api.patchSettings).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens an earlier waiting change's approval once, never twice", async () => {
+    pending("approve_risky");
+    api.patchSettings.mockRejectedValue({
+      status: 409,
+      body: { code: "WRITE_CONFLICT", details: { resourceKind: "change_plan", resourceId: "approval-plan" } },
+    });
+    await render();
+    await choose("approve_risky");
+    await click("Save approval rule");
+    await vi.waitFor(() => expect(container.querySelector("[data-in-place-approval]")).not.toBeNull());
+    expect(container.querySelectorAll("[data-in-place-approval]")).toHaveLength(1);
   });
 
   it("locks mismatched completed settings instead of claiming success", async () => {
