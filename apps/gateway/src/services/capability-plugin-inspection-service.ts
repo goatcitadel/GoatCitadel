@@ -71,7 +71,10 @@ export const ASKS_FIRST = {
 const SKILL_BLOCKED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const SKILL_UNREADABLE_MESSAGE = "GoatCitadel can't check this skill.";
 const SKILL_REMOVED_EARLIER_MESSAGE =
-  "This skill was removed with an earlier install. It can't come back until skills can be removed.";
+  "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.";
+/** A left-over that was never switched on has no row in Skills to remove it from. */
+const SKILL_LEFT_INSTALLED_MESSAGE =
+  "This skill was left behind by an earlier install, and GoatCitadel can't remove it from here.";
 const SKILL_NAME_TAKEN_MESSAGE = "A skill with this name is already installed.";
 /** A Claude Code skill's own refusals, in plain words. */
 const DIALECT_BLOCKED_MESSAGES: Readonly<Record<string, string>> = {
@@ -402,8 +405,8 @@ export class CapabilityPluginInspectionService {
 
   /**
    * Whether the reviewed skill can be installed now, read from its check by id. Checking the same copy again replays
-   * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused: it
-   * can't come back until skills can be removed. Another installed skill of that name refuses it too. A plugin
+   * the same check, so a skill an earlier install of this plugin added, then its uninstall revoked, is refused until it
+   * is removed in Capabilities › Skills. Another installed skill of that name refuses it too. A plugin
    * skill named like a skill that ships with GoatCitadel is refused first, with its own line. A check that can't be
    * read is never taken as installable.
    */
@@ -431,7 +434,12 @@ export class CapabilityPluginInspectionService {
     // Removed earlier only when what's left of it is revoked (through this check or another), or nothing of it runs; a
     // live one is installed now.
     if (runtimeLive) return blocked(NAME_TAKEN_BLOCKER, SKILL_NAME_TAKEN_MESSAGE);
-    if (leftOver) return blocked(leftOver, SKILL_REMOVED_EARLIER_MESSAGE);
+    if (leftOver) {
+      return blocked(
+        leftOver,
+        check.revoked || check.runtimeRevoked ? SKILL_REMOVED_EARLIER_MESSAGE : SKILL_LEFT_INSTALLED_MESSAGE,
+      );
+    }
     if (blockers.includes(NAME_TAKEN_BLOCKER)) return blocked(NAME_TAKEN_BLOCKER, SKILL_REMOVED_EARLIER_MESSAGE);
     return blocked(blockers[0] ?? "SKILL_CHECK_BLOCKED", SKILL_BLOCKED_MESSAGE);
   }

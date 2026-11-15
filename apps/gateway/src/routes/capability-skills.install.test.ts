@@ -63,6 +63,7 @@ function realActions(overrides: Partial<CapabilitySkillActionSources> = {}): Cap
       workspaceId: "default",
     })),
     listPluginRecords: vi.fn(async () => []),
+    readSkillLifecycle: vi.fn(async () => undefined),
     ...overrides,
   });
 }
@@ -454,6 +455,116 @@ describe("capability skill check and install routes", () => {
 
       expect(response.statusCode).toBe(503);
       expect(response.body).toContain("Skills can't be installed right now.");
+    });
+  });
+  describe("POST removals", () => {
+    const REMOVAL_URL = "/api/v1/capabilities/skills/removals";
+    const REMOVAL_BODY = { workspaceId: "default", skillId: "extra:meeting-notes" };
+    const leftBehind = {
+      lifecycleState: "revoked" as const,
+      provenance: { source: "extra", sourceRef: "skill-hub-review-1" },
+    };
+
+    it.each([
+      [{ status: "approved", approvalId: "approval-1", workspaceId: "default" }],
+      [{ status: "waiting", approvalId: "approval-1", workspaceId: "default" }],
+    ] as const)("answers %o with 202", async (outcome) => {
+      const requestRemoval = vi.fn(async () => outcome);
+      const { server, requireOperatorAuth } = await build({ actions: { requestRemoval } });
+
+      const response = await server.inject({ method: "POST", url: REMOVAL_URL, payload: REMOVAL_BODY });
+
+      expect(response.statusCode).toBe(202);
+      expect(response.json()).toEqual(outcome);
+      expect(response.headers["cache-control"]).toBe("no-store");
+      expect(response.headers["x-ratelimit-limit"]).toBe("20");
+      expect(requireOperatorAuth).toHaveBeenCalledTimes(1);
+      expect(requestRemoval).toHaveBeenCalledExactlyOnceWith({ ...REMOVAL_BODY, actorId: "operator-1" });
+    });
+
+    it("refuses a caller without operator access", async () => {
+      const requestRemoval = vi.fn();
+      const { server } = await build({ actions: { requestRemoval } }, { operator: false });
+
+      const response = await server.inject({ method: "POST", url: REMOVAL_URL, payload: REMOVAL_BODY });
+
+      expect(response.statusCode).toBe(403);
+      expect(requestRemoval).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ["a body that tries to choose the skip", { ...REMOVAL_BODY, skip: true }],
+      ["a resolution note", { ...REMOVAL_BODY, resolutionNote: "Applied without asking." }],
+      ["a check id", { ...REMOVAL_BODY, snapshotId: "skill-hub-review-1" }],
+      ["an empty skill id", { ...REMOVAL_BODY, skillId: "" }],
+      ["no workspace", { skillId: "extra:meeting-notes" }],
+    ])("rejects %s", async (_label, payload) => {
+      const requestRemoval = vi.fn();
+      const { server } = await build({ actions: { requestRemoval } });
+
+      const response = await server.inject({ method: "POST", url: REMOVAL_URL, payload });
+
+      expect(response.statusCode).toBe(400);
+      expect(requestRemoval).not.toHaveBeenCalled();
+    });
+
+    it("keeps the plain words of a skill that can't be removed, and of one added in another workspace", async () => {
+      const notRemovable = realActions({ readSkillLifecycle: vi.fn(async () => undefined) });
+      const first = await build({ actions: notRemovable as unknown as Record<string, unknown> });
+      const refused = await first.server.inject({ method: "POST", url: REMOVAL_URL, payload: REMOVAL_BODY });
+      expect(refused.statusCode).toBe(409);
+      expect(refused.json()).toEqual({
+        error: "This skill can't be removed.",
+        code: "STATE_CONFLICT",
+        details: { reason: "not_removable" },
+      });
+      await first.server.close();
+
+      const otherWorkspace = realActions({
+        readSkillLifecycle: vi.fn(async () => leftBehind),
+        findSkillHubSnapshot: vi.fn(async () => ({ sourceProvider: "local", sourceRef: "x", workspaceId: "other" })),
+      });
+      const second = await build({ actions: otherWorkspace as unknown as Record<string, unknown> });
+      const crossed = await second.server.inject({ method: "POST", url: REMOVAL_URL, payload: REMOVAL_BODY });
+      expect(crossed.statusCode).toBe(409);
+      expect(crossed.json()).toEqual({
+        error: "This skill was added in another workspace. Remove it there.",
+        code: "STATE_CONFLICT",
+        details: { reason: "other_workspace" },
+      });
+    });
+
+    it("passes the guard's blockers through as the plain 409, with no Skill Hub wording", async () => {
+      const actions = realActions({
+        readSkillLifecycle: vi.fn(async () => leftBehind),
+        createSkillHubApproval: vi.fn(async (): Promise<never> => {
+          throw new ConflictError({
+            code: "STATE_CONFLICT",
+            message: "Skill Hub remove is blocked: CANDIDATE_NOT_REVOKED.",
+            details: { blockers: ["CANDIDATE_NOT_REVOKED"], snapshotId: "skill-hub-review-1" },
+          });
+        }),
+      });
+      const { server } = await build({ actions: actions as unknown as Record<string, unknown> });
+
+      const response = await server.inject({ method: "POST", url: REMOVAL_URL, payload: REMOVAL_BODY });
+
+      expect(response.statusCode).toBe(409);
+      expect(response.json()).toEqual({
+        error: "GoatCitadel's checks don't allow this step right now.",
+        code: "STATE_CONFLICT",
+        details: { reason: "blocked", blockers: ["CANDIDATE_NOT_REVOKED"] },
+      });
+      expect(response.body).not.toContain("Skill Hub");
+    });
+
+    it("answers 503 when the removal isn't composed", async () => {
+      const { server } = await build(undefined);
+
+      const response = await server.inject({ method: "POST", url: REMOVAL_URL, payload: REMOVAL_BODY });
+
+      expect(response.statusCode).toBe(503);
+      expect(response.body).toContain("Skills can't be removed right now.");
     });
   });
 });

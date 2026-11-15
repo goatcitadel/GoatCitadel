@@ -68,12 +68,21 @@ const operationBodySchema = z
   })
   .strict();
 
+// A removal names the skill by its id in the workspace; no field chooses the skip, and an extra key is refused.
+const removalBodySchema = z
+  .object({ workspaceId: z.string().min(1).max(200), skillId: z.string().min(1).max(256) })
+  .strict();
+
+/** The `details.reason` of the removal's own 409s, which keep their plain message. */
+const PLAIN_REMOVAL_REASONS: ReadonlySet<string> = new Set(["not_removable", "other_workspace"]);
+
 const UNREADABLE_MESSAGE = "Skill use counts can't be read right now.";
 const UNAVAILABLE_LIST_MESSAGE = "Skills can't be read right now.";
 const UNAVAILABLE_SWITCH_MESSAGE = "Skills can't be switched right now.";
 const NOT_SWITCHABLE_MESSAGE = "This skill can't be switched from here.";
 const UNAVAILABLE_CHECK_MESSAGE = "Skills can't be checked right now.";
 const UNAVAILABLE_INSTALL_MESSAGE = "Skills can't be installed right now.";
+const UNAVAILABLE_REMOVE_MESSAGE = "Skills can't be removed right now.";
 const UNAVAILABLE_INSTALLS_MESSAGE = "Skill installs can't be read right now.";
 const UNAVAILABLE_DISCOVER_MESSAGE = "Skills to install can't be listed right now.";
 const STEP_BLOCKED_MESSAGE = "GoatCitadel's checks don't allow this step right now.";
@@ -280,6 +289,28 @@ export const capabilitySkillsRoutes: FastifyPluginAsync = async (fastify) => {
       return sendRouteError(reply, plainStepRefusal(error, request.log), request.log);
     }
   });
+
+  /**
+   * Asks to remove one revoked skill a plugin left behind. It always asks Skill Hub's approval owner, which creates the
+   * removal's usual danger approval; when the operator's setting to skip approvals applies (never on `remote_hardened`),
+   * the request approves that approval at once as the operator, and the approval's own effect removes the skill. 202
+   * with `approved` or `waiting`, and the approval's workspace. A skill that isn't a removable left-over, one added in
+   * another workspace, or one an installed plugin still lists is a 409 with its own `details.reason` or code.
+   */
+  fastify.post("/api/v1/capabilities/skills/removals", operatorStep, async (request, reply) => {
+    const body = removalBodySchema.safeParse(request.body);
+    if (!body.success) return reply.code(400).send({ error: body.error.flatten() });
+    try {
+      markNoStore(reply);
+      const outcome = await requireActions(fastify, UNAVAILABLE_REMOVE_MESSAGE).requestRemoval({
+        ...body.data,
+        actorId: actorIdFor(request),
+      });
+      return reply.code(202).send(outcome);
+    } catch (error) {
+      return sendRouteError(reply, plainStepRefusal(error, request.log), request.log);
+    }
+  });
 };
 
 /** The operator who asked; without an actor from sign-in, the caller's address. */
@@ -306,6 +337,8 @@ function sendSourceRefusal(reply: FastifyReply, refusal: CapabilitySkillSourceRe
  * Anything else passes through as its owner wrote it.
  */
 function plainStepRefusal(error: unknown, log: FastifyBaseLogger): unknown {
+  // The removal's own refusals are already plain, with no skill id, and carry their own reason.
+  if (error instanceof ConflictError && PLAIN_REMOVAL_REASONS.has(String(error.details?.reason))) return error;
   if (error instanceof ConflictError) {
     const listed = error.details?.blockers;
     if (!Array.isArray(listed)) {

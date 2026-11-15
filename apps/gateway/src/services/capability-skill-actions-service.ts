@@ -1,4 +1,5 @@
 import {
+  ConflictError,
   NotFoundError,
   SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
   SKILL_LIFECYCLE_APPROVAL_KIND,
@@ -10,9 +11,12 @@ import {
   type CapabilitySkillActionOutcome,
   type CapabilitySkillInstall,
   type CapabilitySkillOperationRequest,
+  type CapabilitySkillRemovalOutcome,
+  type CapabilitySkillRemovalRequest,
   type CapabilitySkillReviewRequest,
   type CapabilitySkillStateRequest,
   type DeploymentProfile,
+  type SkillLifecycleRecord,
   type SkillRuntimeState,
 } from "@goatcitadel/contracts";
 import { ApprovalExpiredAfterCommitError } from "./approval-lifecycle-service.js";
@@ -21,6 +25,7 @@ import { buildCapabilitySkillInstall } from "./capability-skill-install-projecti
 import { allowsOperatorApprovalSkip } from "./operator-approval-skip.js";
 import {
   PLUGIN_SKILL_STEP_DECLINED_NOTE,
+  PluginOwnedError,
   PluginSkillNeedsInstallError,
   pluginSkillSource,
 } from "./plugin-owned-refusal.js";
@@ -54,6 +59,8 @@ const UNTRUSTED_GIT_HOST_MESSAGE = "GoatCitadel installs skills only from GitHub
 const SOURCE_REFUSED_MESSAGE = "GoatCitadel can't check a skill from this source.";
 const CHECK_FAILED_MESSAGE = "This skill didn't pass GoatCitadel's checks.";
 const UNREADABLE_CHECK_MESSAGE = "This skill's check can't be read right now.";
+const NOT_REMOVABLE_MESSAGE = "This skill can't be removed.";
+const OTHER_WORKSPACE_MESSAGE = "This skill was added in another workspace. Remove it there.";
 /** The review's own refusal codes are upper snake case; anything else names the request field it came in on. */
 const REVIEW_CODE = /^[A-Z][A-Z0-9_]*$/u;
 /** The request fields a refused source comes in on: the address (unsafe, unreadable, not allowed) or the pack. */
@@ -123,7 +130,12 @@ export interface CapabilitySkillActionSources {
   ): Promise<{ sourceProvider: string; sourceRef: string; workspaceId: string } | undefined>;
   /** The plugin records, read through the Plugins tab's one store: which plugin lists a check as its skill. */
   listPluginRecords(): Promise<readonly PluginSkillListing[]>;
+  /** One loaded skill's runtime record (its state and where it came from), or undefined for a skill the list doesn't hold. */
+  readSkillLifecycle(workspaceId: string, skillId: string): Promise<CapabilitySkillLifecycleRead | undefined>;
 }
+
+/** What a removal reads of a skill's runtime record. */
+export type CapabilitySkillLifecycleRead = Pick<SkillLifecycleRecord, "lifecycleState" | "provenance">;
 
 /** What a plugin record says about its skills, for a step on one of them. */
 export type PluginSkillListing = Pick<
@@ -289,6 +301,74 @@ export class CapabilitySkillActionsService {
   }
 
   /**
+   * Asks to remove one revoked skill a plugin left behind: Skill Hub's approval owner creates the check's `remove`
+   * approval with the operator as requester (with the plugin's pass when the check came from a plugin that is now
+   * uninstalled), and the same skip rule as an install step applies: the operator's setting, never on
+   * `remote_hardened`. Removing is not treated as only taking power away here, so a switched-off install still asks.
+   * Only that approval's effect removes anything. Refused before any approval, as a 409: a skill whose record isn't a
+   * revoked Skill Hub install (`not_removable`), one added in another workspace (`other_workspace`), and one an
+   * installed plugin still lists (`PLUGIN_OWNED`).
+   */
+  public async requestRemoval(
+    input: CapabilitySkillRemovalRequest & { actorId: string },
+  ): Promise<CapabilitySkillRemovalOutcome> {
+    const record = await this.sources.readSkillLifecycle(input.workspaceId, input.skillId);
+    const snapshotId =
+      record?.lifecycleState === "revoked" && record.provenance?.source === "extra"
+        ? record.provenance.sourceRef
+        : undefined;
+    const snapshot = snapshotId ? await this.sources.findSkillHubSnapshot(snapshotId) : undefined;
+    if (!snapshotId || !snapshot) throw notRemovable();
+    if (snapshot.workspaceId !== input.workspaceId) {
+      throw new ConflictError({
+        code: "STATE_CONFLICT",
+        message: OTHER_WORKSPACE_MESSAGE,
+        details: { reason: "other_workspace" },
+      });
+    }
+    const plugins = await this.sources.listPluginRecords();
+    const owner = plugins.find((plugin) =>
+      plugin.pieces.some((piece) => piece.kind === "skill" && piece.skillSnapshotId === snapshotId),
+    );
+    if (owner) throw new PluginOwnedError({ pluginId: owner.pluginId, name: owner.name });
+    const source = pluginSkillSource(snapshot);
+    const step: CreateSkillHubOperatorApprovalInput = {
+      workspaceId: input.workspaceId,
+      snapshotId,
+      operationKind: "remove",
+      actorId: input.actorId,
+    };
+    const { approval } = source?.pluginId
+      ? await this.sources.createSkillHubApproval(step, { pluginPass: { pluginId: source.pluginId } })
+      : await this.sources.createSkillHubApproval(step);
+    const { approvalId } = approval;
+    const { workspaceId } = input;
+    // The same request hands back the approval it already made; an approved one is never resolved again.
+    if (approval.status === "approved") return { status: "approved", approvalId, workspaceId };
+    if (!(await allowsOperatorApprovalSkip(this.sources.deploymentProfile(), () => this.readSkipSetting()))) {
+      return { status: "waiting", approvalId, workspaceId };
+    }
+    try {
+      await this.sources.resolveApproval(approvalId, {
+        decision: "approve",
+        resolvedBy: input.actorId,
+        resolutionNote: OPERATOR_SKILL_SKIP_NOTES.setting,
+      });
+    } catch (error) {
+      // Nothing was approved, so the removal still waits for the operator's approval.
+      this.reportFailure?.("resolve", error);
+      return { status: "waiting", approvalId, workspaceId };
+    }
+    await this.recordSkip({
+      approvalId,
+      kind: SKILL_HUB_LIFECYCLE_APPROVAL_KIND,
+      reason: "setting",
+      actorId: input.actorId,
+    });
+    return { status: "approved", approvalId, workspaceId };
+  }
+
+  /**
    * Removes one switched-on skill a plugin's uninstall takes away: Skill Hub's approval owner creates the check's
    * `revoke` approval with the plugin's pass and the operator as requester, and this resolves that same approval as the
    * operator, so its own effect revokes the skill. Revoking only takes power away (Phase 3, Q1 A), so the skip setting
@@ -348,11 +428,15 @@ export class CapabilitySkillActionsService {
   ): Promise<CapabilitySkillActionOutcome | undefined> {
     try {
       const listings = await this.sources.listPluginRecords();
-      if (listings.some((plugin) =>
-        plugin.pluginId === pass.pluginId &&
-        plugin.installPlanId === pass.installPlanId &&
-        listsSkillStep(plugin, input),
-      )) return undefined;
+      if (
+        listings.some(
+          (plugin) =>
+            plugin.pluginId === pass.pluginId &&
+            plugin.installPlanId === pass.installPlanId &&
+            listsSkillStep(plugin, input),
+        )
+      )
+        return undefined;
     } catch (error) {
       this.reportFailure?.("plugin_records", error);
       return { status: "waiting", approvalId };
@@ -462,6 +546,14 @@ export class CapabilitySkillActionsService {
 }
 
 /** Whether a plugin record lets this check take its steps: in this workspace, installing or installed, and listing it. */
+function notRemovable(): ConflictError {
+  return new ConflictError({
+    code: "STATE_CONFLICT",
+    message: NOT_REMOVABLE_MESSAGE,
+    details: { reason: "not_removable" },
+  });
+}
+
 function listsSkillStep(
   plugin: PluginSkillListing,
   input: Pick<CapabilitySkillOperationRequest, "workspaceId" | "snapshotId">,

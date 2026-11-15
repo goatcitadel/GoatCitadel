@@ -35,7 +35,7 @@ const SKILL_STEPS_URL = "/api/v1/capabilities/skills/operations";
 const STEP_WAIT = { timeout: 120_000, interval: 250 } as const;
 const HOOK_SECRET = "whsec-meeting-tools-uninstall-0123456789";
 const REMOVED_EARLIER =
-  "This skill was removed with an earlier install. It can't come back until skills can be removed.";
+  "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.";
 const PROMPT_PACK_MD = [
   "# Meeting checks",
   "",
@@ -299,7 +299,7 @@ describe("uninstalling a plugin over the real Gateway", { timeout: 300_000 }, ()
       error: "That plugin check wasn't found, or it ran out of time. Check the plugin again.",
     });
 
-    // Checking the same copy again replays the same check, whose skill can't come back yet.
+    // Checking the same copy again replays the same check, whose skill was left behind.
     const again = await inspect("reference-plugin");
     expect(again.installable).toBe(false);
     expect(again.pieces.find((piece) => piece.kind === "skill")?.check).toEqual({

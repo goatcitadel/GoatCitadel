@@ -38,6 +38,10 @@ import {
   type PendingSkillStep,
   type SkillRemovalDecision,
 } from "./plugin-uninstall-skills.js";
+
+/** A skill an uninstall revokes stays until the operator removes it; until then the plugin can't be installed again. */
+const LEFT_SKILL_IMPACT =
+  "A skill it added stays until you remove it in Capabilities › Skills. Until then the plugin can't be installed again.";
 import {
   completedSummary,
   connectorUnknownStop,
@@ -183,7 +187,7 @@ export class PluginUninstallChangePlanAdapter implements EvolutionControlPlaneAd
       impact: boundedSentences([
         "Anything that was there before the plugin stays.",
         HOSTS_STAY,
-        ...(leftSkills ? ["A skill it added can't be installed again until skills can be removed."] : []),
+        ...(leftSkills ? [LEFT_SKILL_IMPACT] : []),
       ]),
       risk: "caution" as const,
       status: "awaiting_confirmation" as const,

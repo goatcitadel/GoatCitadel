@@ -14,6 +14,7 @@ import {
   CapabilitySkillSourceRefusedError,
   OPERATOR_SKILL_SKIP_NOTES,
   type CapabilitySkillActionSources,
+  type CapabilitySkillLifecycleRead,
   type OperatorSkillSkipReason,
   type PluginSkillListing,
 } from "./capability-skill-actions-service.js";
@@ -71,6 +72,7 @@ function sources(overrides: Partial<CapabilitySkillActionSources> = {}) {
       workspaceId: "default",
     })),
     listPluginRecords: vi.fn(async () => []),
+    readSkillLifecycle: vi.fn(async (): Promise<CapabilitySkillLifecycleRead | undefined> => undefined),
     ...overrides,
   } satisfies CapabilitySkillActionSources;
 }
@@ -469,17 +471,24 @@ describe("CapabilitySkillActionsService.checkSource", () => {
   it("returns the older check for an idempotent review replay after 100 newer checks", async () => {
     const older = hubItem({ snapshotId: "check-older" });
     const newer = Array.from({ length: 100 }, (_, index) => hubItem({ snapshotId: `check-newer-${index}` }));
-    const listSkillHub = vi.fn(async ({ workspaceId, limit, snapshotIds }: {
-      workspaceId: string;
-      limit?: number;
-      snapshotIds?: readonly string[];
-    }) => ({
-      items: workspaceId !== "default"
-        ? []
-        : snapshotIds
-          ? [...newer, older].filter((item) => snapshotIds.includes(item.snapshotId))
-          : [...newer, older].slice(0, limit),
-    }));
+    const listSkillHub = vi.fn(
+      async ({
+        workspaceId,
+        limit,
+        snapshotIds,
+      }: {
+        workspaceId: string;
+        limit?: number;
+        snapshotIds?: readonly string[];
+      }) => ({
+        items:
+          workspaceId !== "default"
+            ? []
+            : snapshotIds
+              ? [...newer, older].filter((item) => snapshotIds.includes(item.snapshotId))
+              : [...newer, older].slice(0, limit),
+      }),
+    );
     const parts = sources({
       reviewSkillHubSource: vi.fn(async () => ({ snapshot: { snapshotId: older.snapshotId }, replayed: true })),
       listSkillHub,
@@ -822,4 +831,184 @@ describe("CapabilitySkillActionsService.revokeForPluginUninstall", () => {
     expect(reportFailure).toHaveBeenCalledExactlyOnceWith("resolve", failure);
     expect(failing.appendApprovalAudit).not.toHaveBeenCalled();
   });
+});
+
+describe("CapabilitySkillActionsService.requestRemoval", () => {
+  const removal = { workspaceId: "default", skillId: "extra:meeting-notes", actorId: ACTOR };
+  const leftBehind = {
+    lifecycleState: "revoked" as const,
+    provenance: { source: "extra", sourceRef: "skill-hub-review-1" },
+  };
+  const pluginCheck = {
+    sourceProvider: "goatcitadel_plugin",
+    sourceRef: `plugin:meeting-tools/notes@commit:${"c".repeat(40)}`,
+    workspaceId: "default",
+  };
+  const removalSources = (overrides: Partial<CapabilitySkillActionSources> = {}) =>
+    sources({
+      readSkillLifecycle: vi.fn(async () => leftBehind),
+      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("remove", "pending") })),
+      findSkillHubSnapshot: vi.fn(async () => pluginCheck),
+      ...overrides,
+    });
+
+  it("asks for a remove approval with the plugin's pass and waits for the operator", async () => {
+    const parts = removalSources();
+
+    const outcome = await new CapabilitySkillActionsService(parts).requestRemoval(removal);
+
+    expect(outcome).toEqual({ status: "waiting", approvalId: "approval-remove", workspaceId: "default" });
+    expect(parts.readSkillLifecycle).toHaveBeenCalledExactlyOnceWith("default", "extra:meeting-notes");
+    expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith(
+      { workspaceId: "default", snapshotId: "skill-hub-review-1", operationKind: "remove", actorId: ACTOR },
+      { pluginPass: { pluginId: "meeting-tools" } },
+    );
+    expect(parts.resolveApproval).not.toHaveBeenCalled();
+  });
+
+  it("asks without a pass for a skill that did not come with a plugin", async () => {
+    const parts = removalSources({
+      findSkillHubSnapshot: vi.fn(async () => ({
+        sourceProvider: "local",
+        sourceRef: "skills/import-packs/himalaya",
+        workspaceId: "default",
+      })),
+    });
+
+    await new CapabilitySkillActionsService(parts).requestRemoval(removal);
+
+    expect(parts.createSkillHubApproval).toHaveBeenCalledExactlyOnceWith({
+      workspaceId: "default",
+      snapshotId: "skill-hub-review-1",
+      operationKind: "remove",
+      actorId: ACTOR,
+    });
+  });
+
+  it.each([
+    ["trusted_local", "on", "approved"],
+    ["local_dev", "on", "approved"],
+    ["trusted_local", "off", "waiting"],
+    ["remote_hardened", "on", "waiting"],
+  ] as const)(
+    "%s with the setting %s is %s, the same rule as the other skill steps",
+    async (profile, setting, status) => {
+      const parts = removalSources({
+        deploymentProfile: vi.fn((): DeploymentProfile => profile),
+        readApprovalSkipSetting: vi.fn(async () => setting === "on"),
+      });
+
+      const outcome = await new CapabilitySkillActionsService(parts).requestRemoval(removal);
+
+      expect(outcome).toEqual({ status, approvalId: "approval-remove", workspaceId: "default" });
+      if (status === "approved") {
+        expect(parts.resolveApproval).toHaveBeenCalledExactlyOnceWith("approval-remove", {
+          decision: "approve",
+          resolvedBy: ACTOR,
+          resolutionNote: OPERATOR_SKILL_SKIP_NOTES.setting,
+        });
+        expect(parts.appendApprovalAudit).toHaveBeenCalledExactlyOnceWith("operator_approval_skipped", {
+          approvalId: "approval-remove",
+          kind: "skill_hub.lifecycle",
+          reason: "setting",
+          actorId: ACTOR,
+        });
+      } else {
+        expect(parts.resolveApproval).not.toHaveBeenCalled();
+      }
+      expect(parts.readApprovalSkipSetting).toHaveBeenCalledTimes(profile === "remote_hardened" ? 0 : 1);
+    },
+  );
+
+  it("never resolves an approval the owner already approved, and keeps waiting when resolving fails", async () => {
+    const approved = removalSources({
+      readApprovalSkipSetting: vi.fn(async () => true),
+      createSkillHubApproval: vi.fn(async () => ({ approval: hubApproval("remove", "approved") })),
+    });
+    await expect(new CapabilitySkillActionsService(approved).requestRemoval(removal)).resolves.toEqual({
+      status: "approved",
+      approvalId: "approval-remove",
+      workspaceId: "default",
+    });
+    expect(approved.resolveApproval).not.toHaveBeenCalled();
+
+    const failure = new Error("approval store locked");
+    const reportFailure = vi.fn();
+    const failing = removalSources({
+      readApprovalSkipSetting: vi.fn(async () => true),
+      resolveApproval: vi.fn(async () => {
+        throw failure;
+      }),
+    });
+    await expect(new CapabilitySkillActionsService(failing, reportFailure).requestRemoval(removal)).resolves.toEqual({
+      status: "waiting",
+      approvalId: "approval-remove",
+      workspaceId: "default",
+    });
+    expect(reportFailure).toHaveBeenCalledExactlyOnceWith("resolve", failure);
+    expect(failing.appendApprovalAudit).not.toHaveBeenCalled();
+  });
+
+  it("refuses a skill added in another workspace, before any approval", async () => {
+    const parts = removalSources({
+      findSkillHubSnapshot: vi.fn(async () => ({ ...pluginCheck, workspaceId: "other" })),
+    });
+
+    await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
+      httpStatus: 409,
+      code: "STATE_CONFLICT",
+      message: "This skill was added in another workspace. Remove it there.",
+      details: { reason: "other_workspace" },
+    });
+    expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+  });
+
+  it.each<[string, Awaited<ReturnType<CapabilitySkillActionSources["readSkillLifecycle"]>>]>([
+    ["has no runtime record", undefined],
+    ["is switched on", { ...leftBehind, lifecycleState: "approved" }],
+    ["came from a bundled folder", { ...leftBehind, provenance: { source: "bundled", sourceRef: "research" } }],
+    ["names no check", { ...leftBehind, provenance: { source: "extra" } }],
+  ])("refuses a skill that %s", async (_case, record) => {
+    const parts = removalSources({ readSkillLifecycle: vi.fn(async () => record) });
+
+    await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
+      httpStatus: 409,
+      code: "STATE_CONFLICT",
+      message: "This skill can't be removed.",
+      details: { reason: "not_removable" },
+    });
+    expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+  });
+
+  it("refuses a skill whose check is gone", async () => {
+    const parts = removalSources({ findSkillHubSnapshot: vi.fn(async () => undefined) });
+
+    await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
+      code: "STATE_CONFLICT",
+      details: { reason: "not_removable" },
+    });
+    expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+  });
+
+  it.each(["installing", "installed", "uninstalling"] as const)(
+    "refuses a skill a plugin still lists while the plugin is %s",
+    async (state) => {
+      const listed: PluginSkillListing = {
+        pluginId: "meeting-tools",
+        name: "Meeting tools",
+        installPlanId: "plan-meeting-tools",
+        workspaceId: "default",
+        state,
+        pieces: [{ pieceId: "notes", kind: "skill", owned: true, skillSnapshotId: "skill-hub-review-1" }],
+      };
+      const parts = removalSources({ listPluginRecords: vi.fn(async () => [listed]) });
+
+      await expect(new CapabilitySkillActionsService(parts).requestRemoval(removal)).rejects.toMatchObject({
+        httpStatus: 409,
+        code: "PLUGIN_OWNED",
+        message: "From Meeting tools. Uninstall it to remove this.",
+      });
+      expect(parts.createSkillHubApproval).not.toHaveBeenCalled();
+    },
+  );
 });

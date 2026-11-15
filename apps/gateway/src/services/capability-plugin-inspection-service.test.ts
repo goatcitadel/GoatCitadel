@@ -363,19 +363,19 @@ describe("CapabilityPluginInspectionService", () => {
         installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"] },
       },
       "SOURCE_ALREADY_INSTALLED",
-      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+      "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.",
     ],
     [
       "left by an earlier install, with nothing of it running",
       { installInactive: { allowed: false, blockers: ["SOURCE_ALREADY_INSTALLED"] } },
       "SOURCE_ALREADY_INSTALLED",
-      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+      "This skill was left behind by an earlier install, and GoatCitadel can't remove it from here.",
     ],
     [
       "revoked, seen through a check of a changed copy (no version of its own)",
       { runtimeRevoked: true, installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS"] } },
       "RUNTIME_ALREADY_EXISTS",
-      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+      "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.",
     ],
     [
       "revoked through another check, with its source still installed",
@@ -384,7 +384,7 @@ describe("CapabilityPluginInspectionService", () => {
         installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "SOURCE_ALREADY_INSTALLED"] },
       },
       "SOURCE_ALREADY_INSTALLED",
-      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+      "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.",
     ],
     [
       "revoked through another check, with its version still listed",
@@ -393,7 +393,7 @@ describe("CapabilityPluginInspectionService", () => {
         installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS", "CANDIDATE_ALREADY_EXISTS"] },
       },
       "CANDIDATE_ALREADY_EXISTS",
-      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+      "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.",
     ],
     [
       "installed by an earlier install and still running, not revoked",
@@ -405,7 +405,7 @@ describe("CapabilityPluginInspectionService", () => {
       "revoked, with only its name left installed",
       { revoked: true, installInactive: { allowed: false, blockers: ["RUNTIME_ALREADY_EXISTS"] } },
       "RUNTIME_ALREADY_EXISTS",
-      "This skill was removed with an earlier install. It can't come back until skills can be removed.",
+      "This skill was left behind by an earlier install. Remove it in Capabilities › Skills, then check the plugin again.",
     ],
     [
       "taken by another installed skill of that name",

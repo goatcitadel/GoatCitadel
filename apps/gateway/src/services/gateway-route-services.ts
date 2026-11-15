@@ -308,7 +308,7 @@ export interface GatewayRouteServices {
   capabilitySkills?: {
     usage: Pick<CapabilitySkillUsageService, "read">;
     skills: Pick<CapabilitySkillsService, "list" | "detail" | "installs">;
-    actions: Pick<CapabilitySkillActionsService, "setState" | "checkSource" | "requestStep">;
+    actions: Pick<CapabilitySkillActionsService, "setState" | "checkSource" | "requestStep" | "requestRemoval">;
     discover: Pick<CapabilitySkillDiscoverService, "list">;
   };
   /**

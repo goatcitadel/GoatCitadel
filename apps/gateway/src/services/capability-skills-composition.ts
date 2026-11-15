@@ -224,6 +224,8 @@ export function composeCapabilitySkills({
       createSkillHubApproval: (...args) => skillHub.createSkillHubApproval(...args),
       findSkillHubSnapshot: (snapshotId) => skillHubSnapshots.find(snapshotId),
       listPluginRecords: () => pluginRecords.list(),
+      readSkillLifecycle: async (workspaceId, skillId) =>
+        (await skills.listSkills("ALL", workspaceId)).find((skill) => skill.skillId === skillId)?.lifecycle,
     },
     reportFailedStep,
   );
