@@ -2,7 +2,6 @@ import { type MouseEvent, type ReactNode } from "react";
 import { useShellHandoff } from "../../app/use-shell-handoff";
 import { buildClassicOwnerUrl } from "../../app/classic-owner-url";
 import { getGatewayApiBaseUrl } from "@goatcitadel/mission-control-shared/api/client-core";
-import { Callout } from "./Callout";
 import { UnsavedChangesDialog } from "./UnsavedChangesDialog";
 
 /** Explicit owner handoff keeps the document's drafts and mutation admission stores. */
@@ -57,7 +56,9 @@ export function ClassicOwnerLink({
         {opening ? (openingLabel ?? "Opening the classic view…") : (children ?? label)}
       </a>
       {handoff.error ? (
-        <Callout tone="error">{errorLabel ?? "The classic view could not open. Your drafts are still here."}</Callout>
+        <span role="alert" className="block text-sm text-status-failed">
+          {errorLabel ?? "The classic view could not open. Your drafts are still here."}
+        </span>
       ) : null}
       <UnsavedChangesDialog {...handoff.dialogProps} />
     </>
