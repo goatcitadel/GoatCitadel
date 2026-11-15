@@ -118,7 +118,8 @@ export function AssistantMessageBody({
   }, [role, content, pacedContent, running, streamTurnId]);
 
   // A finished streamed answer keeps the blocks it was rendered in, so nothing is re-parsed or replaced on finish.
-  return role === "assistant" && (running || canSettleInBlocks(displayContent)) ? (
+  // Only a message that has a stream identity can have streamed; others keep the one-shot render.
+  return role === "assistant" && (running || (streamTurnId !== undefined && canSettleInBlocks(displayContent))) ? (
     <StreamingMarkdown
       content={displayContent}
       streamPresentationMode={streamPresentationMode}
