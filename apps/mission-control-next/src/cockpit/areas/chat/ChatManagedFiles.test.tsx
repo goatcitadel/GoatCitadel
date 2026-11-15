@@ -6,6 +6,10 @@ import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { ChatManagedFiles } from "./ChatManagedFiles";
 import * as api from "@goatcitadel/mission-control-shared/api/chat-managed-files";
+import { ApiRequestError } from "@goatcitadel/mission-control-shared/api/http-internal";
+
+let access: { data?: { actorSource: string } } = { data: { actorSource: "none" } };
+vi.mock("../../../app/use-current-access", () => ({ useCurrentAccess: () => access }));
 
 vi.mock("@goatcitadel/mission-control-shared/api/chat-managed-files", async (importOriginal) => ({
   ...(await importOriginal<typeof api>()),
@@ -40,7 +44,15 @@ let root: Root;
 let container: HTMLDivElement;
 let queryClient: QueryClient;
 
+const forbidden = new ApiRequestError("API error 403", {
+  kind: "http",
+  method: "GET",
+  path: "/api/v1/chat/sessions/session/approval-mode",
+  status: 403,
+});
+
 beforeEach(() => {
+  access = { data: { actorSource: "none" } };
   vi.resetAllMocks();
   vi.mocked(api.fetchChatApprovalMode).mockResolvedValue(mode);
   vi.mocked(api.fetchChatManagedFiles).mockResolvedValue({ items: [file] });
@@ -230,4 +242,34 @@ it("offers retry after the first approval mode read fails and only exposes match
   await click("Retry");
   await vi.waitFor(() => expect(button("Managed files")).toBeDefined());
   expect(api.fetchChatApprovalMode).toHaveBeenCalledTimes(2);
+});
+
+it("says Auto mode needs sign-in, links to Settings › Access and offers no Retry when sign-in is off", async () => {
+  vi.mocked(api.fetchChatApprovalMode).mockRejectedValue(forbidden);
+  await render();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain(
+      "Auto mode and Managed files need sign-in. Set up sign-in in Settings › Access to use them in project conversations.",
+    ),
+  );
+  expect(container.querySelector('a[href="/settings/access?shell=cockpit#gateway-auth"]')?.textContent).toBe(
+    "Set up sign-in",
+  );
+  expect(button("Retry")).toBeUndefined();
+  expect(container.textContent).not.toContain("Approval mode unavailable");
+});
+
+it("names a local signed-in connection, not sign-in, when the caller is signed in but not local", async () => {
+  access = { data: { actorSource: "token" } };
+  vi.mocked(api.fetchChatApprovalMode).mockRejectedValue(forbidden);
+  await render();
+  await vi.waitFor(() =>
+    expect(container.textContent).toContain(
+      "Auto mode and Managed files work only from a signed-in browser on the computer that runs GoatCitadel.",
+    ),
+  );
+  expect(container.querySelector('a[href="/settings/access?shell=cockpit#gateway-auth"]')?.textContent).toBe(
+    "Review access",
+  );
+  expect(button("Retry")).toBeUndefined();
 });

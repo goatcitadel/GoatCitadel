@@ -22,9 +22,11 @@ import {
   getGatewayCallerScopeRevision,
   subscribeGatewayCallerScope,
 } from "@goatcitadel/mission-control-shared/api/access-scope";
+import { useCurrentAccess } from "../../../app/use-current-access";
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { Field } from "../../ui/Field";
+import { ApprovalModeRefusalRow, approvalModeRefusal } from "./ChatApprovalModeRefusal";
 import { ManagedFileOverwriteReview } from "./ManagedFileOverwriteReview";
 
 interface ManagedFilesProps {
@@ -58,6 +60,7 @@ function ManagedFilesControls({
   sendError,
 }: ManagedFilesProps & { scope: string }) {
   const queryClient = useQueryClient();
+  const access = useCurrentAccess();
   const [open, setOpen] = useState(false);
   const [pathInput, setPathInput] = useState("");
   const [prefix, setPrefix] = useState("");
@@ -101,6 +104,8 @@ function ManagedFilesControls({
   }, [queryClient, scope, sendError]);
 
   if (modeQuery.isError && (!state || current)) {
+    const refusal = approvalModeRefusal(modeQuery.error, access.data?.actorSource);
+    if (refusal) return <ApprovalModeRefusalRow refusal={refusal} scope={scope} />;
     return (
       <section
         aria-label="Chat approval mode"
