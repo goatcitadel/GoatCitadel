@@ -10,6 +10,8 @@ import {
   GUIDED_CATALOG_LOADING_READINESS,
   GUIDED_THINKING_LEVELS,
   guidedSavedDefaultsRevision,
+  guidedSaveRevision,
+  guidedSavedSelection,
   guidedConnectionHint,
   localRuntimeSetupGuide,
   pendingPlanForSelection,
@@ -226,18 +228,15 @@ export function useGuidedModelSetup({
       setDialogPlan(updated.requiredAction && !TERMINAL_CHANGE_PLAN_STATUSES.has(updated.status) ? updated : null);
       if (updated.status === "completed") {
         if (updated.request.kind === "installation_default_model") {
-          const saved = {
-            providerId: updated.request.providerId,
-            model: updated.request.model,
-            thinkingLevel: updated.request.thinkingLevel ?? ("standard" as ChatThinkingLevel),
-          };
+          const saved = guidedSavedSelection(updated.request);
           const savedProvider = providers.find((provider) => provider.providerId === saved.providerId);
           const submitted = submittedGuidedSelection(
             submittedDraftRef.current,
             saved,
             supportedGuidedThinkingLevels(savedProvider?.capabilities),
           );
-          modelDraft.acceptSaved(saved, JSON.stringify(saved), submitted);
+          // Same revision as the saved defaults use, so a newer draft is compared with what this save wrote.
+          modelDraft.acceptSaved(saved, guidedSaveRevision(updated.request, defaultThinkingLevel), submitted);
         }
         setNotice(updated.result?.summary ?? "Change applied and verified.");
         await Promise.all([catalog.reload(), reloadOnboarding()]);
@@ -247,7 +246,7 @@ export function useGuidedModelSetup({
       }
       return updated;
     },
-    [catalog, providers, reloadOnboarding, setNotice, modelDraft],
+    [catalog, providers, reloadOnboarding, setNotice, modelDraft, defaultThinkingLevel],
   );
 
   const runAction = useCallback(
