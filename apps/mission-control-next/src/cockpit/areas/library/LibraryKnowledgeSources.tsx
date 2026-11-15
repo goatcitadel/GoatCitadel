@@ -28,18 +28,20 @@ export function LibraryKnowledgeSources({ workspaceId }: { workspaceId: string }
     staleTime: 0,
   });
   const items = documents.data?.items;
+  // After "Try again" the old failure gives way to the reading text until the new read answers.
+  const rereading = documents.isFetching && !documents.data;
   return (
     <Section
       title="Knowledge sources"
       description="What the AI can retrieve. Sources are shared by every workspace on this installation."
     >
-      {documents.error ? (
+      {documents.error && !rereading ? (
         <Callout announce={false} tone="error">
           Could not load knowledge sources. {describeApiError(documents.error).summary}{" "}
           <Button onClick={() => void documents.refetch()}>Try again</Button>
         </Callout>
       ) : null}
-      {documents.isPending ? <p>Reading knowledge sources…</p> : null}
+      {documents.isPending || rereading ? <p>Reading knowledge sources…</p> : null}
       {items && !items.length ? (
         <EmptyState
           title="No knowledge sources yet"

@@ -142,3 +142,14 @@ it("says the read failed instead of showing an empty list, and tries again", asy
   await act(async () => retry.click());
   await vi.waitFor(() => expect(sources().textContent).toContain("No knowledge sources yet"));
 });
+it("shows it is reading again after Try again, not the old failure", async () => {
+  vi.mocked(fetchMemoryFiles).mockResolvedValue({ items: [] } as Awaited<ReturnType<typeof fetchMemoryFiles>>);
+  vi.mocked(fetchKnowledgeDocuments).mockRejectedValueOnce(new Error("Gateway down"));
+  await render();
+  await vi.waitFor(() => expect(sources().textContent).toContain("Could not load knowledge sources."));
+  vi.mocked(fetchKnowledgeDocuments).mockReturnValue(new Promise(() => undefined));
+  const retry = [...sources().querySelectorAll("button")].find((node) => node.textContent === "Try again")!;
+  await act(async () => retry.click());
+  await vi.waitFor(() => expect(sources().textContent).toContain("Reading knowledge sources…"));
+  expect(sources().textContent).not.toContain("Could not load knowledge sources.");
+});

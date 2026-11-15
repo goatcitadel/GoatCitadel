@@ -37,3 +37,17 @@ it("passes the namespace through", async () => {
   await listKnowledgeDocuments(storage, { namespace: "workspace:a", limit: 50 });
   expect(listDocuments).toHaveBeenCalledWith("workspace:a", 51);
 });
+
+it("shows only the file name for a file ingest whose title is its host path", async () => {
+  const { storage } = readerWith([
+    { ...doc(2), sourceType: "file" as const, title: "file:C:\\Users\\someone\\private\\plan.md" },
+    { ...doc(1), sourceType: "file" as const, title: "file:/home/someone/notes/todo.txt" },
+  ]);
+  const result = await listKnowledgeDocuments(storage, { limit: 5 });
+  expect(result.items.map((item) => item.title)).toEqual(["plan.md", "todo.txt"]);
+  expect(JSON.stringify(result)).not.toContain("someone");
+});
+it("keeps a title the operator gave", async () => {
+  const { storage } = readerWith([{ ...doc(1), sourceType: "file" as const, title: "Launch notes" }]);
+  expect((await listKnowledgeDocuments(storage, { limit: 5 })).items[0]!.title).toBe("Launch notes");
+});

@@ -15,6 +15,7 @@ import { fetchSettings } from "@goatcitadel/mission-control-shared/api/settings"
 import { fetchApproval, fetchApprovalReplay } from "@goatcitadel/mission-control-shared/api/approvals";
 import { resolveApproval } from "@goatcitadel/mission-control-shared/api/client";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { notifyGatewayAccessChanged } from "@goatcitadel/mission-control-shared/api/access-scope";
 import { __resetSessionDraftsForTests } from "../../../features/native-routes/library/session-drafts";
 import { LibraryMemoryEditor } from "./LibraryMemoryEditor";
 import { __resetInboxApprovalAttemptsForTests } from "../inbox/inbox-approval-attempts";
@@ -198,6 +199,26 @@ it("requests an edit once with one click and opens the requested change", async 
   expect(names).not.toContain("Review memory changes");
   expect(names.filter((name) => name === "Request edit approval")).toHaveLength(0);
   expect(patchMemoryItem).toHaveBeenCalledTimes(1);
+});
+it("closes the dialog when no request was made because access changed during the read", async () => {
+  await render();
+  let finish!: () => void;
+  vi.mocked(fetchMemoryItems).mockImplementationOnce(
+    () =>
+      new Promise((resolve) => {
+        finish = () => resolve({ items: [item], total: 1, snapshotAt: "now" });
+      }),
+  );
+  await click("Request edit approval");
+  expect(document.querySelector('[role="dialog"]')?.textContent).toContain("Memory change requested");
+  await act(async () => {
+    notifyGatewayAccessChanged(false);
+    finish();
+  });
+  await vi.waitFor(() => expect(container.querySelector("textarea")).toBeTruthy());
+  await vi.waitFor(() => expect(client.isFetching()).toBe(0));
+  expect(document.querySelector('[role="dialog"]')).toBeNull();
+  expect(patchMemoryItem).not.toHaveBeenCalled();
 });
 it("withholds stale writes and keeps the error through settled canonical refresh", async () => {
   await render();

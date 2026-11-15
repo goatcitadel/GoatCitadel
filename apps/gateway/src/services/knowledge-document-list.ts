@@ -1,6 +1,16 @@
 import type { KnowledgeDocumentListResponse } from "@goatcitadel/contracts";
 import type { AsyncStorage } from "@goatcitadel/storage";
 
+/**
+ * A file ingest without a title is stored as `file:` plus the host path it was read from (ingestion-backends.ts,
+ * the fallback title). The list shows only the file name, never the folder it sits in.
+ */
+function displayTitle(doc: { sourceType: string; title: string }): string {
+  if (doc.sourceType !== "file" || !doc.title.startsWith("file:")) return doc.title;
+  const name = doc.title.slice("file:".length).split(/[\\/]/u).filter(Boolean).at(-1);
+  return name ?? doc.title;
+}
+
 type KnowledgeDocumentReader = Pick<AsyncStorage["knowledge"], "listDocuments">;
 
 /**
@@ -17,7 +27,7 @@ export async function listKnowledgeDocuments(
       docId: doc.docId,
       namespace: doc.namespace,
       sourceType: doc.sourceType,
-      title: doc.title,
+      title: displayTitle(doc),
       createdAt: doc.createdAt,
     })),
     truncated: documents.length > input.limit,

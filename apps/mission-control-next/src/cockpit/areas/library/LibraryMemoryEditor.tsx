@@ -129,8 +129,9 @@ function MemoryEditor({
   async function refresh() {
     await client.invalidateQueries({ queryKey: ["library"] });
   }
-  async function submit(review: MemoryReview) {
-    if (!available || !enabled || operation.locked || !sameMemoryItem(review.item, item)) return;
+  /** Resolves true once the request has an outcome to show; false when no request was made. */
+  async function submit(review: MemoryReview): Promise<boolean> {
+    if (!available || !enabled || operation.locked || !sameMemoryItem(review.item, item)) return false;
     setBusy(true);
     try {
       const result = await operation.run(
@@ -166,19 +167,21 @@ function MemoryEditor({
             throw new Error("Approval receipt does not match the reviewed memory item. Check Inbox before retrying.");
         },
       );
-      if (!result) return;
+      if (!result) return false;
       const approval = result.pendingApproval;
       setOutcome({
         error: !approval && review.action === "save",
         text: noApprovalNeededMessage(review.action),
         request: approval ?? undefined,
       });
+      return true;
     } catch (cause) {
-      if (operation.current())
-        setOutcome({
-          error: true,
-          text: `${describeApiError(cause).summary} Submission is not confirmed; check Inbox and refresh before retrying. Your draft is retained.`,
-        });
+      if (!operation.current()) return false;
+      setOutcome({
+        error: true,
+        text: `${describeApiError(cause).summary} Submission is not confirmed; check Inbox and refresh before retrying. Your draft is retained.`,
+      });
+      return true;
     } finally {
       setBusy(false);
     }
@@ -190,7 +193,8 @@ function MemoryEditor({
     setOutcome(undefined);
     setReview(next);
     try {
-      await submit(next);
+      // A dialog that says a change was requested must not stay open when no request was made.
+      if (!(await submit(next))) setReview(undefined);
     } finally {
       requesting.current = false;
     }
