@@ -234,7 +234,9 @@ describe("a model choice is sent once, when the popover is closed", () => {
   it("says when the choice applies", async () => {
     await render(controls({ ...three, onRequestModelChoice: vi.fn() }));
     await open();
-    expect(dialog()?.textContent).toContain("Your choice applies when you close this.");
+    expect(dialog()?.textContent).toContain(
+      "Your choice applies when you press Done or click outside. Escape cancels it.",
+    );
     await act(async () => doneButton().click());
     await vi.waitFor(() => expect(dialog()).toBeNull());
   });

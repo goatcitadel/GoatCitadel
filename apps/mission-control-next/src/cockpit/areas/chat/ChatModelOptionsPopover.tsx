@@ -290,7 +290,7 @@ export function ChatModelOptionsPopover({
           <h3 className="text-sm font-semibold">Model and reasoning</h3>
           <div className="flex flex-wrap items-center gap-3">{modelOptions}</div>
           <p className="text-fg-muted">Effort support depends on the selected model.</p>
-          <p className="text-fg-muted">Your choice applies when you close this.</p>
+          <p className="text-fg-muted">Your choice applies when you press Done or click outside. Escape cancels it.</p>
           {/* The composer's mode toggles explain themselves here in visible text, not only in a tooltip (CH-R07). */}
           <dl className="space-y-1 border-t border-line-subtle pt-2 text-fg-secondary">
             <div>
