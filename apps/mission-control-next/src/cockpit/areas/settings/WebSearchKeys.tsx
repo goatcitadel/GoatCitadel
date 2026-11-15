@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useQueryClient, type UseQueryResult } from "@tanstack/react-query";
 import type { WebSearchCredentialStatus } from "@goatcitadel/contracts";
 import { describeApiError } from "@goatcitadel/mission-control-shared/api/describe-api-error";
@@ -13,7 +13,10 @@ import { Callout } from "../../ui/Callout";
 import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";
 import { StatusBadge } from "../../ui/StatusBadge";
+import { revealTarget } from "../../app/reveal-target";
+import { useSettingsSectionHash } from "./SettingsSectionTabs";
 import { presentChangeStatusLabel } from "./settings-vocabulary";
+import { isWebSearchKeyAnchor, webSearchKeyAnchor } from "./web-search-state";
 
 export const WEB_SEARCH_CREDENTIALS_QUERY_KEY = ["settings", "web-search-credentials"] as const;
 
@@ -36,6 +39,14 @@ export function WebSearchKeys({ settings }: { settings: UseQueryResult<RuntimeSe
     queryKey: WEB_SEARCH_CREDENTIALS_QUERY_KEY,
     queryFn: ({ signal }) => fetchWebSearchCredentials({ signal }),
   });
+  const hash = useSettingsSectionHash();
+  const revealed = useRef<string | null>(null);
+  const loaded = credentials.data !== undefined;
+  // An "open" link to one key lands on that key's field, once per address.
+  useEffect(() => {
+    if (!loaded || !isWebSearchKeyAnchor(hash) || revealed.current === hash) return;
+    if (revealTarget(document.getElementById(hash))) revealed.current = hash;
+  }, [loaded, hash]);
   return (
     <div className="mt-4 border-t border-line-subtle pt-4">
       <h4 className="text-sm font-semibold text-fg">API keys</h4>
@@ -112,7 +123,7 @@ function WebSearchKeyRow({
   }
 
   return (
-    <li className="min-w-0 py-3">
+    <li id={webSearchKeyAnchor(status.targetId)} className="min-w-0 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h5 className="text-sm font-semibold text-fg">{status.label}</h5>
         <StatusBadge status={sourceBadge(status)} />

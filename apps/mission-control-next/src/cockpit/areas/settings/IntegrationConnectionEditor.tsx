@@ -3,6 +3,7 @@ import type { IntegrationSettingsOwner } from "../../../features/native-routes/s
 import { Button } from "../../ui/Button";
 import { Dialog } from "../../ui/Dialog";
 import { IntegrationFormFields, integrationInputClass } from "./IntegrationFormFields";
+import { COMPANION_DEVICE_NOTE, integrationOptionLabel, needsCompanionDevice } from "./integration-catalog-order";
 
 export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSettingsOwner }) {
   const creating = s.panel === "create";
@@ -62,11 +63,14 @@ export function IntegrationConnectionEditor({ owner: s }: { owner: IntegrationSe
           >
             {s.createableCatalog.map((item) => (
               <option key={item.catalogId} value={item.catalogId}>
-                {item.label}
+                {integrationOptionLabel(item)}
               </option>
             ))}
           </select>
         </label>
+      ) : null}
+      {creating && s.selectedCatalog && needsCompanionDevice(s.selectedCatalog) ? (
+        <p className="text-xs text-fg-muted">{COMPANION_DEVICE_NOTE}</p>
       ) : null}
       <label className="block text-sm">
         Connection label

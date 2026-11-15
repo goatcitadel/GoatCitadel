@@ -29,8 +29,19 @@ vi.mock("../../settings/McpServersSettings", () => ({
   McpServersSettings: ({ workspaceId }: { workspaceId: string }) => <OwnerProbe name={`MCP owner ${workspaceId}`} />,
 }));
 vi.mock("../../settings/IntegrationConnectionsSettings", () => ({
-  IntegrationConnectionsSettings: ({ workspaceId }: { workspaceId: string }) => (
-    <OwnerProbe name={`Integration owner ${workspaceId}`} />
+  IntegrationConnectionsSettings: ({
+    workspaceId,
+    onAddHandled,
+  }: {
+    workspaceId: string;
+    onAddHandled?: () => void;
+  }) => (
+    <>
+      <OwnerProbe name={`Integration owner ${workspaceId}`} />
+      <button type="button" onClick={() => onAddHandled?.()}>
+        Finish add request
+      </button>
+    </>
   ),
 }));
 vi.mock("../../settings/WebSearchSettings", () => ({
@@ -85,6 +96,23 @@ afterEach(() => {
 });
 
 describe("Capabilities › Connectors › Advanced setup", () => {
+  it("drops the add request from the address once it is handled, replacing the entry", async () => {
+    await render(
+      "/capabilities/connectors/advanced?shell=cockpit&addIntegration=automation.gmail#integration-connections",
+    );
+    await vi.waitFor(() => expect(mounted()).toEqual(["Integration owner workspace-a"]));
+    const entries = window.history.length;
+    await act(async () =>
+      [...container.querySelectorAll("button")].find((item) => item.textContent === "Finish add request")!.click(),
+    );
+    expect(window.location.search).toBe("?shell=cockpit");
+    expect(window.location.hash).toBe("#integration-connections");
+    expect(window.history.length).toBe(entries);
+    // Switching tabs inside Advanced setup keeps no add request to reopen.
+    await activate("MCP servers");
+    expect(window.location.search).not.toContain("addIntegration");
+  });
+
   it("names itself, links back to Connectors and opens on MCP servers for this workspace", async () => {
     await render("/capabilities/connectors/advanced?shell=cockpit");
     await vi.waitFor(() => expect(mounted()).toEqual(["MCP owner workspace-a"]));
