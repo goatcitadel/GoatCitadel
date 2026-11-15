@@ -24,11 +24,28 @@ vi.mock("../../ui/NativeOwnerLink", () => ({
     </a>
   ),
 }));
-vi.mock("./ProviderCatalogSettings", () => ({ ProviderCatalogSettings: () => <p>Expert catalog owner</p> }));
+vi.mock("./ProviderCatalogSettings", () => ({
+  ProviderCatalogSettings: ({ providerId }: { providerId?: string | null }) => (
+    <p>Expert catalog owner for {String(providerId)}</p>
+  ),
+}));
 vi.mock("./ProviderConnectionSettings", () => ({
   ProviderConnectionSettings: () => <p>Standalone connection editor</p>,
 }));
-vi.mock("./ProviderManagementSettings", () => ({ ProviderManagementSettings: () => <p>One provider page</p> }));
+vi.mock("./ProviderManagementSettings", () => ({
+  ProviderManagementSettings: ({
+    onSelectedProviderChange,
+  }: {
+    onSelectedProviderChange?: (providerId: string) => void;
+  }) => (
+    <>
+      <p>One provider page</p>
+      <button type="button" onClick={() => onSelectedProviderChange?.("provider-b")}>
+        Pick provider B
+      </button>
+    </>
+  ),
+}));
 vi.mock("./ProviderRoutingSettings", () => ({ ProviderRoutingSettings: () => null }));
 vi.mock("./ProviderAdviceSettings", () => ({ ProviderAdviceSettings: () => null }));
 // Like the real owner after a completed change: it reports the result, then re-reads onboarding.
@@ -115,14 +132,14 @@ describe("Models settings", () => {
       ),
     );
     await settleUntil(() => button("Report change") !== undefined);
-    expect(container.textContent).not.toContain("Expert catalog owner");
+    expect(container.textContent).not.toContain("Expert catalog owner for null");
     const expand = button("Advanced provider configuration")!;
     expect(expand).toBeDefined();
     expect(expand.getAttribute("aria-expanded")).toBe("false");
     await act(async () => expand.click());
-    expect(container.textContent).toContain("Expert catalog owner");
+    expect(container.textContent).toContain("Expert catalog owner for null");
     expect(container.textContent!.indexOf("Chat model")).toBeLessThan(
-      container.textContent!.indexOf("Expert catalog owner"),
+      container.textContent!.indexOf("Expert catalog owner for null"),
     );
     setSectionDirty(key, true, "Provider profile");
     await act(async () => expand.click());
@@ -131,13 +148,13 @@ describe("Models settings", () => {
       [...document.querySelectorAll("button")].find((item) => item.textContent === "Cancel")!.click(),
     );
     expect(expand.getAttribute("aria-expanded")).toBe("true");
-    expect(container.textContent).toContain("Expert catalog owner");
+    expect(container.textContent).toContain("Expert catalog owner for null");
     await act(async () => expand.click());
     await act(async () =>
       [...document.querySelectorAll("button")].find((item) => item.textContent === "Discard changes")!.click(),
     );
     expect(expand.getAttribute("aria-expanded")).toBe("false");
-    expect(container.textContent).not.toContain("Expert catalog owner");
+    expect(container.textContent).not.toContain("Expert catalog owner for null");
     setSectionDirty("unrelated:editor", true, "Other editor");
     await act(async () => expand.click());
     await act(async () => expand.click());
@@ -178,7 +195,7 @@ describe("Models settings", () => {
     const text = container.textContent!;
     expect(text).toContain("One provider page");
     expect(text).not.toContain("Standalone connection editor");
-    expect(text.indexOf("One provider page")).toBeLessThan(text.indexOf("Expert catalog owner"));
+    expect(text.indexOf("One provider page")).toBeLessThan(text.indexOf("Expert catalog owner for null"));
   });
   it("shows one setup status instead of a second step list, linking to Get started", async () => {
     api.fetchOnboardingState.mockResolvedValue({ ...onboardingFixture(), completed: false });
@@ -219,5 +236,13 @@ describe("Models settings", () => {
     await render();
     await act(async () => button("Continue setup")!.click());
     expect(navigate).toHaveBeenCalledWith("/settings/first-run");
+  });
+  it("passes one provider choice from the editor to the catalog", async () => {
+    api.fetchOnboardingState.mockResolvedValue(onboardingFixture());
+    await render();
+    await act(async () => button("Advanced provider configuration")!.click());
+    expect(container.textContent).toContain("Expert catalog owner for null");
+    await act(async () => button("Pick provider B")!.click());
+    expect(container.textContent).toContain("Expert catalog owner for provider-b");
   });
 });

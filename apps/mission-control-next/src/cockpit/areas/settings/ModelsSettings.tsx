@@ -54,6 +54,8 @@ export function ModelsSettings() {
   const [notice, setNotice] = useState<string | null>(null);
   const [codexOAuthStatus, setCodexOAuthStatus] = useState<StatusPresentation>();
   const { mode } = useUiPreferences();
+  // One choice of provider for the editor and the catalog beside it.
+  const [advancedProviderId, setAdvancedProviderId] = useState<string | null>(null);
   const [expertOpen, setExpertOpen] = useState(mode === "advanced");
   const leave = useDraftLeave();
   const onboarding = useQuery({
@@ -127,8 +129,12 @@ export function ModelsSettings() {
         </p>
         {expertOpen ? (
           <div id="expert-provider-controls" className="mt-4 grid gap-4">
-            <ProviderManagementSettings onCodexOAuthStatusChange={setCodexOAuthStatus} />
-            <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} />
+            <ProviderManagementSettings
+              onCodexOAuthStatusChange={setCodexOAuthStatus}
+              selectedProviderId={advancedProviderId}
+              onSelectedProviderChange={setAdvancedProviderId}
+            />
+            <ProviderCatalogSettings codexOAuthStatus={codexOAuthStatus} providerId={advancedProviderId} />
             <ProviderRoutingSettings />
             <ProviderAdviceSettings />
           </div>
