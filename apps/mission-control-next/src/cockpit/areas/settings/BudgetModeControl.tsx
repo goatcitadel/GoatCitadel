@@ -4,6 +4,7 @@ import type { RuntimeSettingsResponse } from "@goatcitadel/mission-control-share
 import { Button } from "../../ui/Button";
 import { Field } from "../../ui/Field";
 import { cockpitInputClass } from "../../ui/input-class";
+import { NativeOwnerLink } from "../../ui/NativeOwnerLink";
 import { TechnicalDetails } from "../../ui/TechnicalDetails";
 import { useGovernedRuntimeSetting } from "./use-governed-runtime-setting";
 import {
@@ -115,6 +116,13 @@ export function BudgetModeControl() {
               </div>
             ))}
           </dl>
+          <NativeOwnerLink
+            href="/system/spend"
+            scope="budget-mode"
+            className="mt-2 inline-block text-sm font-medium text-accent hover:underline"
+          >
+            See what you spent in System › Spend
+          </NativeOwnerLink>
           <GovernedSettingDraftState
             governed={governed}
             unsaved="Unsaved preference draft"
